@@ -38,7 +38,7 @@ import {
   Tag,
 } from "@crewlethq/ui";
 import { PropertiesRail } from "~/app/frame/PropertiesRail.tsx";
-import { DataGrid } from "~/app/frame/DataGrid.tsx";
+import { DataGrid, type GridColumn } from "~/app/frame/DataGrid.tsx";
 import { DateCell, StatusCell, TextCell } from "~/app/frame/cells.tsx";
 import { usePageLabels } from "~/app/Shell.tsx";
 import { ObjectHeader, type Fact } from "~/app/frame/ObjectHeader.tsx";
@@ -416,6 +416,104 @@ export function RunPeek({ turnId }: { turnId: string }) {
   );
 }
 
+// The run list's columns, which close over nothing on the screen — a module
+// constant, so a sandbox push that moved one live box draws that row.
+const RUN_COLUMNS: GridColumn<SandboxRun>[] = [
+  {
+    key: "status",
+    header: "Status",
+    shrink: true,
+    sortValue: (r) => r.status,
+    // A BADGE, NOT `StatusCell`: the engine's seven words are a
+    // vocabulary rather than two lifecycle states, and this is the
+    // pill the Inbox and Live now draw for the same run — a third
+    // rendering of one status is a third thing to keep in step.
+    cell: (r) => <RunStatus status={r.status} />,
+  },
+  {
+    key: "seat",
+    header: "Seat",
+    sortValue: (r) => r.role || r.agent_handle,
+    // NOT `SeatCell` or `SeatChip`: both are anchors and every row
+    // here is one, and an anchor inside an anchor is markup no
+    // browser agrees about. The seat is one ⌘-click away from the
+    // run's own page, where it is a link again.
+    cell: (r) =>
+      r.role || r.agent_handle ? (
+        <TextCell icon="memory">{r.role || r.agent_handle}</TextCell>
+      ) : (
+        <EmptyValue label="No seat" />
+      ),
+  },
+  {
+    key: "task",
+    header: "Task",
+    cell: (r) =>
+      r.task_description ? (
+        <TextCell>{r.task_description}</TextCell>
+      ) : (
+        <EmptyValue label="No task recorded" />
+      ),
+  },
+  {
+    key: "agent",
+    header: "Coding agent",
+    shrink: true,
+    sortValue: (r) => r.coding_agent,
+    cell: (r) =>
+      r.coding_agent ? (
+        <Tag appearance="outline" monospace>
+          {r.coding_agent}
+        </Tag>
+      ) : (
+        <EmptyValue label="Not recorded" />
+      ),
+  },
+  {
+    key: "where",
+    header: "Runs in",
+    shrink: true,
+    sortValue: (r) => r.placement,
+    cell: (r) =>
+      r.placement ? (
+        <Tag appearance="outline" monospace>
+          {r.placement}
+        </Tag>
+      ) : (
+        // NOT "—" FOR A LIVE ROW'S SAKE: the projection carries no
+        // placement, so this is genuinely "the store has not
+        // written this run yet" rather than a run with nowhere to
+        // run, and the dash says the first on hover.
+        <EmptyValue label="The durable row has not been written yet" />
+      ),
+  },
+  {
+    key: "box",
+    header: "Box",
+    shrink: true,
+    sortValue: (r) => (r.box_exists ? 1 : 0),
+    cell: (r) => (
+      <StatusCell
+        glyph={r.box_exists ? "●" : "○"}
+        label={r.box_exists ? "up" : "reclaimed"}
+        tone={r.box_exists ? "info" : "neutral"}
+        title={
+          r.box_exists
+            ? "the sandbox is still there"
+            : "the sandbox has been reclaimed; the run's record remains"
+        }
+      />
+    ),
+  },
+  {
+    key: "updated",
+    header: "Updated",
+    shrink: true,
+    sortValue: (r) => tsKey(r.updated_at || r.started_at),
+    cell: (r) => <DateCell at={r.updated_at || r.started_at} />,
+  },
+];
+
 export function Runs({ runId }: { runId?: string }) {
   const nav = useNavigator();
   const live = useSandboxes();
@@ -553,101 +651,7 @@ export function Runs({ runId }: { runId?: string }) {
             rowHref={(r) => peekHref({ kind: "run", id: r.turn_id })}
             isSelected={(r) => r.turn_id === focused}
             defaultSort="-updated"
-            columns={[
-              {
-                key: "status",
-                header: "Status",
-                shrink: true,
-                sortValue: (r) => r.status,
-                // A BADGE, NOT `StatusCell`: the engine's seven words are a
-                // vocabulary rather than two lifecycle states, and this is the
-                // pill the Inbox and Live now draw for the same run — a third
-                // rendering of one status is a third thing to keep in step.
-                cell: (r) => <RunStatus status={r.status} />,
-              },
-              {
-                key: "seat",
-                header: "Seat",
-                sortValue: (r) => r.role || r.agent_handle,
-                // NOT `SeatCell` or `SeatChip`: both are anchors and every row
-                // here is one, and an anchor inside an anchor is markup no
-                // browser agrees about. The seat is one ⌘-click away from the
-                // run's own page, where it is a link again.
-                cell: (r) =>
-                  r.role || r.agent_handle ? (
-                    <TextCell icon="memory">{r.role || r.agent_handle}</TextCell>
-                  ) : (
-                    <EmptyValue label="No seat" />
-                  ),
-              },
-              {
-                key: "task",
-                header: "Task",
-                cell: (r) =>
-                  r.task_description ? (
-                    <TextCell>{r.task_description}</TextCell>
-                  ) : (
-                    <EmptyValue label="No task recorded" />
-                  ),
-              },
-              {
-                key: "agent",
-                header: "Coding agent",
-                shrink: true,
-                sortValue: (r) => r.coding_agent,
-                cell: (r) =>
-                  r.coding_agent ? (
-                    <Tag appearance="outline" monospace>
-                      {r.coding_agent}
-                    </Tag>
-                  ) : (
-                    <EmptyValue label="Not recorded" />
-                  ),
-              },
-              {
-                key: "where",
-                header: "Runs in",
-                shrink: true,
-                sortValue: (r) => r.placement,
-                cell: (r) =>
-                  r.placement ? (
-                    <Tag appearance="outline" monospace>
-                      {r.placement}
-                    </Tag>
-                  ) : (
-                    // NOT "—" FOR A LIVE ROW'S SAKE: the projection carries no
-                    // placement, so this is genuinely "the store has not
-                    // written this run yet" rather than a run with nowhere to
-                    // run, and the dash says the first on hover.
-                    <EmptyValue label="The durable row has not been written yet" />
-                  ),
-              },
-              {
-                key: "box",
-                header: "Box",
-                shrink: true,
-                sortValue: (r) => (r.box_exists ? 1 : 0),
-                cell: (r) => (
-                  <StatusCell
-                    glyph={r.box_exists ? "●" : "○"}
-                    label={r.box_exists ? "up" : "reclaimed"}
-                    tone={r.box_exists ? "info" : "neutral"}
-                    title={
-                      r.box_exists
-                        ? "the sandbox is still there"
-                        : "the sandbox has been reclaimed; the run's record remains"
-                    }
-                  />
-                ),
-              },
-              {
-                key: "updated",
-                header: "Updated",
-                shrink: true,
-                sortValue: (r) => tsKey(r.updated_at || r.started_at),
-                cell: (r) => <DateCell at={r.updated_at || r.started_at} />,
-              },
-            ]}
+            columns={RUN_COLUMNS}
           />
         </Card>
       </QueryState>

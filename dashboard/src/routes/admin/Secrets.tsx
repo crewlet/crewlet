@@ -49,7 +49,7 @@ import {
   ShieldGlyph,
 } from "@crewlethq/icons/glyphs";
 import { QueryState } from "~/components/common.tsx";
-import { DataGrid } from "~/app/frame/DataGrid.tsx";
+import { DataGrid, type GridColumn } from "~/app/frame/DataGrid.tsx";
 import { DateCell, KeyCell, TextCell } from "~/app/frame/cells.tsx";
 import { ObjectHeader, type Fact } from "~/app/frame/ObjectHeader.tsx";
 import { PropertiesRail } from "~/app/frame/PropertiesRail.tsx";
@@ -432,6 +432,24 @@ export function CredentialPeek({ name }: { name: string }) {
   );
 }
 
+/**
+ * A row action, inside a row that is a link.
+ *
+ * THE DEFAULT ACTION OF THE ROW IS NOT THIS BUTTON'S. Edit and Remove sit
+ * inside the anchor each row now is, so without this an operator aiming at
+ * the X would also peek the row it belongs to — and the browser would follow
+ * the href on its way past. `Button` passes the event through for exactly
+ * this case; see its own comment. At module scope because it closes over
+ * nothing, and the column list that calls it must not move with a render.
+ */
+function rowAction(run: () => void): (e: React.MouseEvent) => void {
+  return (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    run();
+  };
+}
+
 export function Secrets({ name }: { name?: string }) {
   const toast = useToast();
   const { rows, loading, failure, unknown, readersOf, reload } = useCredentials();
@@ -469,23 +487,90 @@ export function Secrets({ name }: { name?: string }) {
     [openPeek],
   );
 
-  /**
-   * A row action, inside a row that is a link.
-   *
-   * THE DEFAULT ACTION OF THE ROW IS NOT THIS BUTTON'S. Edit and Remove sit
-   * inside the anchor each row now is, so without this an operator aiming at
-   * the X would also peek the row it belongs to — and the browser would follow
-   * the href on its way past. `Button` passes the event through for exactly
-   * this case; see its own comment.
-   */
-  function rowAction(run: () => void): (e: React.MouseEvent) => void {
-    return (e) => {
-      e.preventDefault();
-      e.stopPropagation();
-      run();
-    };
-  }
-
+  // THE COLUMNS HOLD STILL until the reference index moves (`readersOf`): every
+  // row is memoised on this list, so one built inline drew every row on every render.
+  const columns = useMemo<GridColumn<SecretRow>[]>(
+    () => [
+      {
+        key: "name",
+        header: "Name",
+        sortValue: (s) => s.name,
+        cell: (s) => <KeyCell value={s.name} />,
+      },
+      {
+        key: "read",
+        header: "Read by",
+        shrink: true,
+        // AN UNANSWERED CHECK SORTS AS ITS OWN THING, below every
+        // count: -1 rather than 0, so "not known" never sits among
+        // the rows nothing reads.
+        sortValue: (s) => readersOf(s.name)?.length ?? -1,
+        cell: (s) => <Readers paths={readersOf(s.name)} />,
+      },
+      {
+        key: "source",
+        header: "Source",
+        shrink: true,
+        sortValue: (s) => s.source,
+        cell: (s) => <Tag appearance="outline">{s.source}</Tag>,
+      },
+      {
+        key: "key",
+        header: "Key id",
+        shrink: true,
+        sortValue: (s) => s.key_id,
+        cell: (s) => <KeyCell value={s.key_id} />,
+      },
+      {
+        key: "by",
+        header: "Set by",
+        sortValue: (s) => s.updated_by,
+        // NOT `value || "—"`. An operator name is either recorded or
+        // it is not, and the dash says which rather than standing in
+        // for an empty string the reader would read as a name.
+        cell: (s) =>
+          s.updated_by ? (
+            <TextCell>{authorLabel(s.updated_by, s.operator_id)}</TextCell>
+          ) : (
+            <EmptyValue label="Nobody recorded" />
+          ),
+      },
+      {
+        key: "at",
+        header: "Updated",
+        shrink: true,
+        sortValue: (s) => tsKey(s.updated_at),
+        cell: (s) => <DateCell at={s.updated_at} />,
+      },
+      {
+        key: "act",
+        header: "",
+        label: "Actions",
+        shrink: true,
+        cell: (s) => (
+          <span className="row gap-1">
+            <IconButton
+              size="sm"
+              variant="ghost"
+              icon={<EditGlyph size="sm" />}
+              label={`Edit ${s.name}`}
+              title={`Edit ${s.name}`}
+              onClick={rowAction(() => setWriting({ editing: s.name }))}
+            />
+            <IconButton
+              size="sm"
+              variant="ghost"
+              icon={<CloseGlyph size="sm" />}
+              label={`Remove ${s.name}`}
+              title={`Remove ${s.name}`}
+              onClick={rowAction(() => setRemoving(s.name))}
+            />
+          </span>
+        ),
+      },
+    ],
+    [readersOf],
+  );
   // `#/admin/credentials/{name}` ADDRESSES ONE ROW, and this screen accepted
   // the segment and dropped it: a reader who followed a link to one credential
   // got the whole table with no sign of which one they had asked for — and it
@@ -578,85 +663,7 @@ export function Secrets({ name }: { name?: string }) {
             onRowActivate={openCredential}
             isSelected={(s) => s.name === addressed}
             defaultSort="name"
-            columns={[
-              {
-                key: "name",
-                header: "Name",
-                sortValue: (s) => s.name,
-                cell: (s) => <KeyCell value={s.name} />,
-              },
-              {
-                key: "read",
-                header: "Read by",
-                shrink: true,
-                // AN UNANSWERED CHECK SORTS AS ITS OWN THING, below every
-                // count: -1 rather than 0, so "not known" never sits among
-                // the rows nothing reads.
-                sortValue: (s) => readersOf(s.name)?.length ?? -1,
-                cell: (s) => <Readers paths={readersOf(s.name)} />,
-              },
-              {
-                key: "source",
-                header: "Source",
-                shrink: true,
-                sortValue: (s) => s.source,
-                cell: (s) => <Tag appearance="outline">{s.source}</Tag>,
-              },
-              {
-                key: "key",
-                header: "Key id",
-                shrink: true,
-                sortValue: (s) => s.key_id,
-                cell: (s) => <KeyCell value={s.key_id} />,
-              },
-              {
-                key: "by",
-                header: "Set by",
-                sortValue: (s) => s.updated_by,
-                // NOT `value || "—"`. An operator name is either recorded or
-                // it is not, and the dash says which rather than standing in
-                // for an empty string the reader would read as a name.
-                cell: (s) =>
-                  s.updated_by ? (
-                    <TextCell>{authorLabel(s.updated_by, s.operator_id)}</TextCell>
-                  ) : (
-                    <EmptyValue label="Nobody recorded" />
-                  ),
-              },
-              {
-                key: "at",
-                header: "Updated",
-                shrink: true,
-                sortValue: (s) => tsKey(s.updated_at),
-                cell: (s) => <DateCell at={s.updated_at} />,
-              },
-              {
-                key: "act",
-                header: "",
-                label: "Actions",
-                shrink: true,
-                cell: (s) => (
-                  <span className="row gap-1">
-                    <IconButton
-                      size="sm"
-                      variant="ghost"
-                      icon={<EditGlyph size="sm" />}
-                      label={`Edit ${s.name}`}
-                      title={`Edit ${s.name}`}
-                      onClick={rowAction(() => setWriting({ editing: s.name }))}
-                    />
-                    <IconButton
-                      size="sm"
-                      variant="ghost"
-                      icon={<CloseGlyph size="sm" />}
-                      label={`Remove ${s.name}`}
-                      title={`Remove ${s.name}`}
-                      onClick={rowAction(() => setRemoving(s.name))}
-                    />
-                  </span>
-                ),
-              },
-            ]}
+            columns={columns}
           />
         </Card>
       </QueryState>

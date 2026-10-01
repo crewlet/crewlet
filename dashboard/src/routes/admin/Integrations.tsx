@@ -1996,6 +1996,73 @@ function SurfaceDeliveries({ surface, name }: { surface: string; name: string })
   );
   const rows = deliveries.data?.events ?? [];
 
+  // THE COLUMNS HOLD STILL until the chart's answer about a recipient moves: every
+  // row is memoised on this list, so one built inline drew every delivery on
+  // every render.
+  const columns = useMemo<GridColumn<EventRecord>[]>(
+    () => [
+      {
+        key: "at",
+        header: "Arrived",
+        shrink: true,
+        sortValue: (e) => tsKey(e.timestamp),
+        cell: (e) => <DateCell at={e.timestamp} />,
+      },
+      {
+        key: "event",
+        header: "Event",
+        shrink: true,
+        sortValue: (e) => e.type,
+        // `webhook:` and `forge:` are the engine's own filing
+        // prefixes, and the provider's event name is what an
+        // operator is matching against their own console.
+        cell: (e) => (
+          <code className="inline nowrap">{e.type.replace(/^(webhook|forge):/, "")}</code>
+        ),
+      },
+      {
+        key: "summary",
+        header: "What it said",
+        cell: (e) => <TextCell>{e.summary}</TextCell>,
+      },
+      {
+        key: "for",
+        header: "Addressed to",
+        shrink: true,
+        sortValue: (e) => e.tags?.recipient ?? "",
+        cell: (e) =>
+          e.tags?.recipient ? (
+            // THE SEAT AS IT LOOKS EVERYWHERE ELSE — the mark and the
+            // name, linking to the seat. A delivery is addressed to a
+            // colleague, and a colleague should not be a chip on this
+            // grid and an avatar on the next.
+            <SeatCell handle={e.tags.recipient} {...who(e.tags.recipient)} />
+          ) : (
+            // NOT THE CELL'S OWN "nobody" DASH: a company-wide
+            // delivery is routed by the notification spine rather than
+            // addressed in the URL, and calling that unaddressed would
+            // read as a delivery that reached no one.
+            <span className="t-caption">the company</span>
+          ),
+      },
+      {
+        key: "key",
+        header: "Provider id",
+        shrink: true,
+        sortValue: (e) => e.tags?.delivery_key ?? "",
+        cell: (e) =>
+          e.tags?.delivery_key ? (
+            <KeyCell value={e.tags.delivery_key} />
+          ) : (
+            // A DASH THAT SAYS WHICH ABSENCE THIS IS. Not every
+            // provider sends an id of its own, and a blank cell and an
+            // id nobody sent are different facts.
+            <EmptyValue label="This provider sent no delivery id" />
+          ),
+      },
+    ],
+    [who],
+  );
   return (
     <Card padding="none">
       <Card.Header
@@ -2043,67 +2110,7 @@ function SurfaceDeliveries({ surface, name }: { surface: string; name: string })
               if (!("button" in event)) nav.to(["activity", "events", e.id]);
             }}
             empty={{ title: "No delivery matches" }}
-            columns={[
-              {
-                key: "at",
-                header: "Arrived",
-                shrink: true,
-                sortValue: (e) => tsKey(e.timestamp),
-                cell: (e) => <DateCell at={e.timestamp} />,
-              },
-              {
-                key: "event",
-                header: "Event",
-                shrink: true,
-                sortValue: (e) => e.type,
-                // `webhook:` and `forge:` are the engine's own filing
-                // prefixes, and the provider's event name is what an
-                // operator is matching against their own console.
-                cell: (e) => (
-                  <code className="inline nowrap">{e.type.replace(/^(webhook|forge):/, "")}</code>
-                ),
-              },
-              {
-                key: "summary",
-                header: "What it said",
-                cell: (e) => <TextCell>{e.summary}</TextCell>,
-              },
-              {
-                key: "for",
-                header: "Addressed to",
-                shrink: true,
-                sortValue: (e) => e.tags?.recipient ?? "",
-                cell: (e) =>
-                  e.tags?.recipient ? (
-                    // THE SEAT AS IT LOOKS EVERYWHERE ELSE — the mark and the
-                    // name, linking to the seat. A delivery is addressed to a
-                    // colleague, and a colleague should not be a chip on this
-                    // grid and an avatar on the next.
-                    <SeatCell handle={e.tags.recipient} {...who(e.tags.recipient)} />
-                  ) : (
-                    // NOT THE CELL'S OWN "nobody" DASH: a company-wide
-                    // delivery is routed by the notification spine rather than
-                    // addressed in the URL, and calling that unaddressed would
-                    // read as a delivery that reached no one.
-                    <span className="t-caption">the company</span>
-                  ),
-              },
-              {
-                key: "key",
-                header: "Provider id",
-                shrink: true,
-                sortValue: (e) => e.tags?.delivery_key ?? "",
-                cell: (e) =>
-                  e.tags?.delivery_key ? (
-                    <KeyCell value={e.tags.delivery_key} />
-                  ) : (
-                    // A DASH THAT SAYS WHICH ABSENCE THIS IS. Not every
-                    // provider sends an id of its own, and a blank cell and an
-                    // id nobody sent are different facts.
-                    <EmptyValue label="This provider sent no delivery id" />
-                  ),
-              },
-            ]}
+            columns={columns}
           />
         )}
       </QueryState>
@@ -2462,6 +2469,94 @@ export function SetupPasses({ entry, kinds }: { entry: Entry; kinds: string[] })
     [entry],
   );
 
+  const several = kinds.length > 1;
+  // THE COLUMNS HOLD STILL, above the early returns a hook may not follow: every
+  // row is memoised on this list, and one built in the render — as this was —
+  // drew every pass again on every four-second tick while one runs. Keyed on
+  // whether there is more than one surface rather than on `kinds`, an array a
+  // parent may build afresh.
+  const columns = useMemo<GridColumn<SetupRun>[]>(
+    () => [
+      {
+        key: "ran",
+        header: "Ran",
+        shrink: true,
+        sortValue: (run) => tsKey(run.started_at),
+        cell: (run) => <DateCell at={run.started_at} />,
+      },
+      // THE SURFACE ONLY WHERE THERE IS MORE THAN ONE. A column whose every
+      // value is the tool's own name is a column that says nothing.
+      ...(several
+        ? [
+            {
+              key: "surface",
+              header: "Surface",
+              shrink: true,
+              sortValue: (run: SetupRun) => named.get(run.key) ?? run.key,
+              cell: (run: SetupRun) => <TextCell>{named.get(run.key) ?? run.key}</TextCell>,
+            },
+          ]
+        : []),
+      {
+        key: "state",
+        header: "How it ended",
+        shrink: true,
+        sortValue: (run) => run.state,
+        cell: (run) => {
+          const state = passState(run);
+          return (
+            <StatusCell
+              glyph={state.glyph}
+              label={state.label}
+              // `app/frame/cells.tsx` still speaks OUR tone names, and it is
+              // another port's file, so the spelling is turned back at this one
+              // seam rather than this screen keeping a second vocabulary for
+              // the one cell that needs it. It goes when that file takes
+              // uilet's `Tone` — see `app/frame/tone.ts`, which is this same
+              // translation in the other direction.
+              tone={cellTone(state.tone)}
+              title={state.title}
+            />
+          );
+        },
+      },
+      {
+        key: "took",
+        header: "Took",
+        shrink: true,
+        align: "right",
+        // A RUNNING PASS SORTS LAST rather than as zero: it has no duration
+        // yet, and a column sorted by "shortest" that put every live pass at
+        // the top would be ordering on a measurement nobody made.
+        sortValue: (run) => passMs(run) ?? -1,
+        cell: (run) => <DurationCell ms={passMs(run)} />,
+      },
+      {
+        key: "findings",
+        header: "Findings",
+        shrink: true,
+        align: "right",
+        sortValue: (run) => run.findings?.length ?? 0,
+        // ZERO IS THE GOOD ANSWER HERE, and it has to look like one: a
+        // converged third-party app reports an EMPTY slice rather than saying it
+        // is fine (`integration.Classify`), so "found nothing" and "nothing
+        // recorded" must not draw the same mark. That is the whole of
+        // [NumberCell].
+        cell: (run) => (
+          <NumberCell
+            value={run.findings?.length ?? 0}
+            title="what this pass observed that was not fine"
+          />
+        ),
+      },
+      {
+        key: "detail",
+        header: "What it concluded",
+        cell: (run) => <TextCell>{concludedLine(run)}</TextCell>,
+      },
+    ],
+    [several, named],
+  );
   if (guarded) {
     // NOT AN EMPTY HISTORY. `/setup` takes a grant for every route, reads
     // included, so this reader is being refused rather than told nothing has
@@ -2487,86 +2582,6 @@ export function SetupPasses({ entry, kinds }: { entry: Entry; kinds: string[] })
       </Card>
     );
   }
-
-  const columns: GridColumn<SetupRun>[] = [
-    {
-      key: "ran",
-      header: "Ran",
-      shrink: true,
-      sortValue: (run) => tsKey(run.started_at),
-      cell: (run) => <DateCell at={run.started_at} />,
-    },
-    // THE SURFACE ONLY WHERE THERE IS MORE THAN ONE. A column whose every
-    // value is the tool's own name is a column that says nothing.
-    ...(kinds.length > 1
-      ? [
-          {
-            key: "surface",
-            header: "Surface",
-            shrink: true,
-            sortValue: (run: SetupRun) => named.get(run.key) ?? run.key,
-            cell: (run: SetupRun) => <TextCell>{named.get(run.key) ?? run.key}</TextCell>,
-          },
-        ]
-      : []),
-    {
-      key: "state",
-      header: "How it ended",
-      shrink: true,
-      sortValue: (run) => run.state,
-      cell: (run) => {
-        const state = passState(run);
-        return (
-          <StatusCell
-            glyph={state.glyph}
-            label={state.label}
-            // `app/frame/cells.tsx` still speaks OUR tone names, and it is
-            // another port's file, so the spelling is turned back at this one
-            // seam rather than this screen keeping a second vocabulary for
-            // the one cell that needs it. It goes when that file takes
-            // uilet's `Tone` — see `app/frame/tone.ts`, which is this same
-            // translation in the other direction.
-            tone={cellTone(state.tone)}
-            title={state.title}
-          />
-        );
-      },
-    },
-    {
-      key: "took",
-      header: "Took",
-      shrink: true,
-      align: "right",
-      // A RUNNING PASS SORTS LAST rather than as zero: it has no duration
-      // yet, and a column sorted by "shortest" that put every live pass at
-      // the top would be ordering on a measurement nobody made.
-      sortValue: (run) => passMs(run) ?? -1,
-      cell: (run) => <DurationCell ms={passMs(run)} />,
-    },
-    {
-      key: "findings",
-      header: "Findings",
-      shrink: true,
-      align: "right",
-      sortValue: (run) => run.findings?.length ?? 0,
-      // ZERO IS THE GOOD ANSWER HERE, and it has to look like one: a
-      // converged third-party app reports an EMPTY slice rather than saying it
-      // is fine (`integration.Classify`), so "found nothing" and "nothing
-      // recorded" must not draw the same mark. That is the whole of
-      // [NumberCell].
-      cell: (run) => (
-        <NumberCell
-          value={run.findings?.length ?? 0}
-          title="what this pass observed that was not fine"
-        />
-      ),
-    },
-    {
-      key: "detail",
-      header: "What it concluded",
-      cell: (run) => <TextCell>{concludedLine(run)}</TextCell>,
-    },
-  ];
 
   return (
     <Card padding="none">

@@ -32,7 +32,7 @@ import { PageNote } from "~/app/frame/PageNote.tsx";
 import { ObjectHeader, type Fact } from "~/app/frame/ObjectHeader.tsx";
 import { usePageCoverage, usePageLabels } from "~/app/Shell.tsx";
 import { QueryState } from "~/components/common.tsx";
-import { DataGrid } from "~/app/frame/DataGrid.tsx";
+import { DataGrid, type GridColumn } from "~/app/frame/DataGrid.tsx";
 import { KeyCell, SeatCell, TextCell } from "~/app/frame/cells.tsx";
 import { Button, EmptyState, EmptyValue, Tag } from "@crewlethq/ui";
 import { ArrowForwardGlyph, DashboardGlyph } from "@crewlethq/icons/glyphs";
@@ -120,6 +120,80 @@ export function SavedViews({ id }: { id?: string }) {
   // ONE VIEW IS THE BOARD RUNNING IT. There is no second renderer: a view is
   // a set of parameters for the tracker, so the page for one is the tracker
   // with `view=` set, and a copy here would be a second board to keep correct.
+  // THE COLUMNS HOLD STILL until the chart's answer about an owner moves, above
+  // the early return a hook may not follow: every row is memoised on this list,
+  // and one built inline drew every view on every render.
+  const columns = useMemo<GridColumn<WorkView>[]>(
+    () => [
+      {
+        key: "name",
+        header: "View",
+        sortValue: (v) => v.name,
+        cell: (v) => <TextCell icon="view_column">{v.name}</TextCell>,
+      },
+      {
+        key: "key",
+        header: "Key",
+        shrink: true,
+        sortValue: (v) => v.key,
+        cell: (v) => <KeyCell value={v.key} />,
+      },
+      {
+        key: "type",
+        header: "Shape",
+        shrink: true,
+        sortValue: (v) => v.type,
+        cell: (v) => <Tag appearance="outline">{v.type}</Tag>,
+      },
+      {
+        key: "owner",
+        header: "Owner",
+        sortValue: (v) => v.owner ?? "",
+        // A SEAT IS AN AVATAR AND A NAME, not a handle in a chip: this
+        // column named a person and rendered them differently from
+        // every other column in the product that does.
+        //
+        // AND AN ABSENT OWNER IS NOT AN ABSENT PERSON, which is why
+        // `SeatCell`'s own dash is not what draws here: empty means the
+        // view is SHARED, a setting somebody chose.
+        cell: (v) =>
+          v.owner ? (
+            <SeatCell handle={v.owner} {...who(v.owner)} />
+          ) : (
+            <span className="t-caption">shared</span>
+          ),
+      },
+      {
+        key: "container",
+        header: "Container",
+        sortValue: containerRef,
+        cell: (v) => <KeyCell value={containerRef(v)} />,
+      },
+      {
+        key: "marks",
+        header: "Marks",
+        // A HEADED COLUMN ANSWERS ON EVERY ROW. None of the three marks is
+        // set on a view somebody just saved, so this cell drew an empty
+        // span for most rows — and in a company where nobody has pinned or
+        // protected anything, for ALL of them: a column headed "Marks"
+        // blank the whole way down reads as a screen that failed to load
+        // its own data rather than as three settings nobody has turned on.
+        // `cells.tsx`'s rule is that an absence renders a mark saying
+        // WHICH absence it is, and the dash names all three rather than
+        // saying "no marks", because "none of the three" is the only form
+        // of it a reader can act on.
+        cell: (v) => {
+          const marks = viewMarks(v);
+          return marks.length > 0 ? (
+            <span className="row gap-1">{marks}</span>
+          ) : (
+            <EmptyValue label="Not the default, not protected, not pinned by you" />
+          );
+        },
+      },
+    ],
+    [who],
+  );
   if (id) {
     if (views.loading && !views.data) return <PageNote>Loading the saved view…</PageNote>;
     // A FAILED READ IS NOT A MISSING VIEW. The inventory is the ONLY answer
@@ -211,74 +285,7 @@ export function SavedViews({ id }: { id?: string }) {
           rowKey={(v) => v.id as string}
           rowHref={(v) => href(["work", "views", v.id as string])}
           defaultSort="name"
-          columns={[
-            {
-              key: "name",
-              header: "View",
-              sortValue: (v) => v.name,
-              cell: (v) => <TextCell icon="view_column">{v.name}</TextCell>,
-            },
-            {
-              key: "key",
-              header: "Key",
-              shrink: true,
-              sortValue: (v) => v.key,
-              cell: (v) => <KeyCell value={v.key} />,
-            },
-            {
-              key: "type",
-              header: "Shape",
-              shrink: true,
-              sortValue: (v) => v.type,
-              cell: (v) => <Tag appearance="outline">{v.type}</Tag>,
-            },
-            {
-              key: "owner",
-              header: "Owner",
-              sortValue: (v) => v.owner ?? "",
-              // A SEAT IS AN AVATAR AND A NAME, not a handle in a chip: this
-              // column named a person and rendered them differently from
-              // every other column in the product that does.
-              //
-              // AND AN ABSENT OWNER IS NOT AN ABSENT PERSON, which is why
-              // `SeatCell`'s own dash is not what draws here: empty means the
-              // view is SHARED, a setting somebody chose.
-              cell: (v) =>
-                v.owner ? (
-                  <SeatCell handle={v.owner} {...who(v.owner)} />
-                ) : (
-                  <span className="t-caption">shared</span>
-                ),
-            },
-            {
-              key: "container",
-              header: "Container",
-              sortValue: containerRef,
-              cell: (v) => <KeyCell value={containerRef(v)} />,
-            },
-            {
-              key: "marks",
-              header: "Marks",
-              // A HEADED COLUMN ANSWERS ON EVERY ROW. None of the three marks is
-              // set on a view somebody just saved, so this cell drew an empty
-              // span for most rows — and in a company where nobody has pinned or
-              // protected anything, for ALL of them: a column headed "Marks"
-              // blank the whole way down reads as a screen that failed to load
-              // its own data rather than as three settings nobody has turned on.
-              // `cells.tsx`'s rule is that an absence renders a mark saying
-              // WHICH absence it is, and the dash names all three rather than
-              // saying "no marks", because "none of the three" is the only form
-              // of it a reader can act on.
-              cell: (v) => {
-                const marks = viewMarks(v);
-                return marks.length > 0 ? (
-                  <span className="row gap-1">{marks}</span>
-                ) : (
-                  <EmptyValue label="Not the default, not protected, not pinned by you" />
-                );
-              },
-            },
-          ]}
+          columns={columns}
           loadedNote={`${saved.length} saved`}
         />
       </QueryState>

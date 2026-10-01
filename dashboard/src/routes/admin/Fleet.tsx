@@ -54,7 +54,7 @@ import {
   WarningGlyph,
 } from "@crewlethq/icons/glyphs";
 import { QueryState } from "~/components/common.tsx";
-import { DataGrid } from "~/app/frame/DataGrid.tsx";
+import { DataGrid, type GridColumn } from "~/app/frame/DataGrid.tsx";
 import {
   DateCell,
   DurationCell,
@@ -99,6 +99,68 @@ export function Fleet({ node }: { node?: string }) {
   return node ? <NodeScreen id={node} /> : <FleetScreen />;
 }
 
+// The fleet's two lease tables, which close over nothing on the screen — module
+// constants, so a fifteen-second poll that moved one lease draws that row.
+const SEAT_LEASE_COLUMNS: GridColumn<FleetSeatLease>[] = [
+  {
+    key: "handle",
+    header: "Seat",
+    sortValue: (s) => s.handle,
+    // NOT `SeatCell`, and not the seat chip this column used to
+    // draw: both are links and every row here is one now, and an
+    // anchor inside an anchor is markup no browser agrees about.
+    cell: (s) => <TextCell icon="memory">{s.handle}</TextCell>,
+  },
+  {
+    key: "node",
+    header: "Held by",
+    sortValue: (s) => s.node,
+    // The NODE, not the lease's `owner` — that is the fencing
+    // token (a node id plus a per-process suffix), and showing
+    // it here would make one node look like several across a
+    // restart.
+    //
+    // UNLINKED, for the same reason the seat above is: the row is
+    // an anchor. The node is a row in the table above, which is
+    // where this screen sends a reader who wants it.
+    cell: (s) => <KeyCell value={s.node} />,
+  },
+  {
+    key: "ttl",
+    header: "Lease",
+    align: "right",
+    shrink: true,
+    sortValue: (s) => s.expires_in ?? null,
+    cell: (s) => <DurationCell ms={leaseMs(s.expires_in)} />,
+  },
+];
+
+const DUTY_LEASE_COLUMNS: GridColumn<FleetDutyLease>[] = [
+  {
+    key: "name",
+    header: "Duty",
+    sortValue: (d) => d.duty,
+    cell: (d) => <KeyCell value={d.duty} />,
+  },
+  {
+    key: "node",
+    header: "Held by",
+    sortValue: (d) => d.node,
+    // A LINK, unlike the seat table beside it: a duty is not an
+    // object the frame can address, so this row is not an anchor
+    // and the node it names is the only thing in it to open.
+    cell: (d) => <KeyCell value={d.node} path={["admin", "fleet", d.node]} />,
+  },
+  {
+    key: "ttl",
+    header: "Lease",
+    align: "right",
+    shrink: true,
+    sortValue: (d) => d.expires_in ?? null,
+    cell: (d) => <DurationCell ms={leaseMs(d.expires_in)} />,
+  },
+];
+
 // ---------------------------------------------------------------------------
 // The fleet
 // ---------------------------------------------------------------------------
@@ -122,7 +184,124 @@ function FleetScreen() {
   // activation pointer names. Epoch 0 means it has not reported at all, which
   // is a different thing from being behind and is called out on the row.
   const behind = nodes.filter((n) => data && (n.config_epoch ?? 0) < data.target_epoch);
+  // WHAT THE NODE COLUMNS READ OFF THE ANSWER, as the two values they are.
+  const thisNode = data?.this_node;
+  const target = data?.target_epoch;
 
+  // THE COLUMNS HOLD STILL until the two facts they read off the answer move —
+  // which node this is, and the epoch the fleet activated — rather than on the
+  // answer itself, which every poll that moved one lease replaces.
+  const nodeColumns = useMemo<GridColumn<FleetNode>[]>(
+    () => [
+      {
+        key: "id",
+        header: "Node",
+        // A NODE ID NEVER WRAPS. It is one identifier, and without
+        // this the grid gave the column a share of the width and
+        // broke `demo-node` down the page one character at a time —
+        // four lines of a name that is one word.
+        shrink: true,
+        sortValue: (n) => n.id,
+        cell: (n) => (
+          <span className="row gap-1">
+            <InlineCode>{n.id}</InlineCode>
+            {n.id === thisNode && <Tag variant="brand">this one</Tag>}
+            {n.draining && <Tag variant="warning">draining</Tag>}
+          </span>
+        ),
+      },
+      {
+        key: "roles",
+        header: "Roles",
+        sortValue: (n) => n.roles.join(","),
+        // ROLES, NOT "DUTIES", which is what this column said while the
+        // panel below it lists the fleet-wide duty leases. They are
+        // different facts — `ingress`, `seats` and `workers` are what
+        // this node MAY run, and a duty is a singleton somebody has to
+        // hold — so a node reading "duties: seats, workers" beside a
+        // duties panel naming a different node was one word describing
+        // two things.
+        cell: (n) => <TagsCell tags={n.roles} />,
+      },
+      {
+        key: "seats",
+        header: "Seats",
+        align: "right",
+        sortValue: (n) => n.seats,
+        // A COUNT on the node row; WHICH seats is the placement table
+        // below, and the node's own page, which can name them.
+        cell: (n) => <NumberCell value={n.seats} />,
+      },
+      {
+        key: "inflight",
+        header: "In flight",
+        align: "right",
+        // ABSENT IS NOT ZERO, and the engine is careful to send it
+        // absent: the presence heartbeat carries it only for a node
+        // that publishes one at all. `?? 0` drew a confident idle row
+        // for a process that was simply not saying — the one reading an
+        // operator must never be given for free.
+        sortValue: (n) => n.in_flight ?? null,
+        cell: (n) => <NumberCell value={n.in_flight} />,
+      },
+      {
+        key: "posture",
+        header: "Posture",
+        shrink: true,
+        sortValue: (n) => n.posture ?? "",
+        // A TAG RATHER THAN A `StatusCell`: the control plane's
+        // postures are a vocabulary the node itself chooses a word
+        // from — `serve`, `hold`, whatever it reports — and a glyph
+        // would claim a binary this column does not have.
+        cell: (n) =>
+          n.posture ? (
+            <Tag variant={n.posture === "serve" ? "success" : "warning"}>{n.posture}</Tag>
+          ) : (
+            <EmptyValue label="This node has published no presence heartbeat" />
+          ),
+      },
+      {
+        key: "config",
+        header: "Config",
+        shrink: true,
+        sortValue: (n) => n.config_status ?? "",
+        cell: (n) => (
+          <span className="row gap-1">
+            <Tag variant={STATUS_TONE[n.config_status ?? ""] ?? "neutral"}>
+              {n.config_status || "unknown"}
+            </Tag>
+            {target !== undefined && (n.config_epoch ?? 0) < target && (
+              <span
+                className="t-caption"
+                title={`applied epoch ${n.config_epoch ?? 0}, target ${target}`}
+              >
+                behind
+              </span>
+            )}
+          </span>
+        ),
+      },
+      {
+        key: "lease",
+        header: "Lease",
+        shrink: true,
+        sortValue: (n) => n.expires_in ?? null,
+        cell: (n) => (
+          <span title="time until this node's lease expires">
+            <DurationCell ms={leaseMs(n.expires_in)} />
+          </span>
+        ),
+      },
+      {
+        key: "up",
+        header: "Up since",
+        shrink: true,
+        sortValue: (n) => n.started_at ?? "",
+        cell: (n) => <DateCell at={n.started_at} />,
+      },
+    ],
+    [thisNode, target],
+  );
   return (
     <>
       <PageActions>
@@ -225,114 +404,7 @@ function FleetScreen() {
             // different pages.
             rowHref={(n) => peekHref({ kind: "node", id: n.id })}
             onRowActivate={peekRow<FleetNode>((n) => openPeek({ kind: "node", id: n.id }))}
-            columns={[
-              {
-                key: "id",
-                header: "Node",
-                // A NODE ID NEVER WRAPS. It is one identifier, and without
-                // this the grid gave the column a share of the width and
-                // broke `demo-node` down the page one character at a time —
-                // four lines of a name that is one word.
-                shrink: true,
-                sortValue: (n) => n.id,
-                cell: (n) => (
-                  <span className="row gap-1">
-                    <InlineCode>{n.id}</InlineCode>
-                    {n.id === data?.this_node && <Tag variant="brand">this one</Tag>}
-                    {n.draining && <Tag variant="warning">draining</Tag>}
-                  </span>
-                ),
-              },
-              {
-                key: "roles",
-                header: "Roles",
-                sortValue: (n) => n.roles.join(","),
-                // ROLES, NOT "DUTIES", which is what this column said while the
-                // panel below it lists the fleet-wide duty leases. They are
-                // different facts — `ingress`, `seats` and `workers` are what
-                // this node MAY run, and a duty is a singleton somebody has to
-                // hold — so a node reading "duties: seats, workers" beside a
-                // duties panel naming a different node was one word describing
-                // two things.
-                cell: (n) => <TagsCell tags={n.roles} />,
-              },
-              {
-                key: "seats",
-                header: "Seats",
-                align: "right",
-                sortValue: (n) => n.seats,
-                // A COUNT on the node row; WHICH seats is the placement table
-                // below, and the node's own page, which can name them.
-                cell: (n) => <NumberCell value={n.seats} />,
-              },
-              {
-                key: "inflight",
-                header: "In flight",
-                align: "right",
-                // ABSENT IS NOT ZERO, and the engine is careful to send it
-                // absent: the presence heartbeat carries it only for a node
-                // that publishes one at all. `?? 0` drew a confident idle row
-                // for a process that was simply not saying — the one reading an
-                // operator must never be given for free.
-                sortValue: (n) => n.in_flight ?? null,
-                cell: (n) => <NumberCell value={n.in_flight} />,
-              },
-              {
-                key: "posture",
-                header: "Posture",
-                shrink: true,
-                sortValue: (n) => n.posture ?? "",
-                // A TAG RATHER THAN A `StatusCell`: the control plane's
-                // postures are a vocabulary the node itself chooses a word
-                // from — `serve`, `hold`, whatever it reports — and a glyph
-                // would claim a binary this column does not have.
-                cell: (n) =>
-                  n.posture ? (
-                    <Tag variant={n.posture === "serve" ? "success" : "warning"}>{n.posture}</Tag>
-                  ) : (
-                    <EmptyValue label="This node has published no presence heartbeat" />
-                  ),
-              },
-              {
-                key: "config",
-                header: "Config",
-                shrink: true,
-                sortValue: (n) => n.config_status ?? "",
-                cell: (n) => (
-                  <span className="row gap-1">
-                    <Tag variant={STATUS_TONE[n.config_status ?? ""] ?? "neutral"}>
-                      {n.config_status || "unknown"}
-                    </Tag>
-                    {data && (n.config_epoch ?? 0) < data.target_epoch && (
-                      <span
-                        className="t-caption"
-                        title={`applied epoch ${n.config_epoch ?? 0}, target ${data.target_epoch}`}
-                      >
-                        behind
-                      </span>
-                    )}
-                  </span>
-                ),
-              },
-              {
-                key: "lease",
-                header: "Lease",
-                shrink: true,
-                sortValue: (n) => n.expires_in ?? null,
-                cell: (n) => (
-                  <span title="time until this node's lease expires">
-                    <DurationCell ms={leaseMs(n.expires_in)} />
-                  </span>
-                ),
-              },
-              {
-                key: "up",
-                header: "Up since",
-                shrink: true,
-                sortValue: (n) => n.started_at ?? "",
-                cell: (n) => <DateCell at={n.started_at} />,
-              },
-            ]}
+            columns={nodeColumns}
           />
         </Card>
 
@@ -368,39 +440,7 @@ function FleetScreen() {
               onRowActivate={peekRow<FleetSeatLease>((s) =>
                 openPeek({ kind: "seat", id: s.handle }),
               )}
-              columns={[
-                {
-                  key: "handle",
-                  header: "Seat",
-                  sortValue: (s) => s.handle,
-                  // NOT `SeatCell`, and not the seat chip this column used to
-                  // draw: both are links and every row here is one now, and an
-                  // anchor inside an anchor is markup no browser agrees about.
-                  cell: (s) => <TextCell icon="memory">{s.handle}</TextCell>,
-                },
-                {
-                  key: "node",
-                  header: "Held by",
-                  sortValue: (s) => s.node,
-                  // The NODE, not the lease's `owner` — that is the fencing
-                  // token (a node id plus a per-process suffix), and showing
-                  // it here would make one node look like several across a
-                  // restart.
-                  //
-                  // UNLINKED, for the same reason the seat above is: the row is
-                  // an anchor. The node is a row in the table above, which is
-                  // where this screen sends a reader who wants it.
-                  cell: (s) => <KeyCell value={s.node} />,
-                },
-                {
-                  key: "ttl",
-                  header: "Lease",
-                  align: "right",
-                  shrink: true,
-                  sortValue: (s) => s.expires_in ?? null,
-                  cell: (s) => <DurationCell ms={leaseMs(s.expires_in)} />,
-                },
-              ]}
+              columns={SEAT_LEASE_COLUMNS}
             />
           </Card>
 
@@ -417,31 +457,7 @@ function FleetScreen() {
                 title: "No singleton duties are leased",
                 hint: "The retention sweep and the scheduler are fleet singletons — exactly one node runs each.",
               }}
-              columns={[
-                {
-                  key: "name",
-                  header: "Duty",
-                  sortValue: (d) => d.duty,
-                  cell: (d) => <KeyCell value={d.duty} />,
-                },
-                {
-                  key: "node",
-                  header: "Held by",
-                  sortValue: (d) => d.node,
-                  // A LINK, unlike the seat table beside it: a duty is not an
-                  // object the frame can address, so this row is not an anchor
-                  // and the node it names is the only thing in it to open.
-                  cell: (d) => <KeyCell value={d.node} path={["admin", "fleet", d.node]} />,
-                },
-                {
-                  key: "ttl",
-                  header: "Lease",
-                  align: "right",
-                  shrink: true,
-                  sortValue: (d) => d.expires_in ?? null,
-                  cell: (d) => <DurationCell ms={leaseMs(d.expires_in)} />,
-                },
-              ]}
+              columns={DUTY_LEASE_COLUMNS}
             />
           </Card>
         </div>
@@ -740,6 +756,44 @@ export function nodeFacts({
   ];
 }
 
+// A node's own duties and seats, as its page and its rail draw them. Module
+// constants: they close over nothing, so a poll that moved one lease draws
+// that row.
+const NODE_SEAT_COLUMNS: GridColumn<FleetSeatLease>[] = [
+  {
+    key: "handle",
+    header: "Seat",
+    sortValue: (s) => s.handle,
+    // NOT `SeatCell`: it is a link and this row is one already.
+    cell: (s) => <TextCell icon="memory">{s.handle}</TextCell>,
+  },
+  {
+    key: "ttl",
+    header: "Lease",
+    align: "right",
+    shrink: true,
+    sortValue: (s) => s.expires_in ?? null,
+    cell: (s) => <DurationCell ms={leaseMs(s.expires_in)} />,
+  },
+];
+
+const NODE_DUTY_COLUMNS: GridColumn<FleetDutyLease>[] = [
+  {
+    key: "name",
+    header: "Duty",
+    sortValue: (d) => d.duty,
+    cell: (d) => <KeyCell value={d.duty} />,
+  },
+  {
+    key: "ttl",
+    header: "Lease",
+    align: "right",
+    shrink: true,
+    sortValue: (d) => d.expires_in ?? null,
+    cell: (d) => <DurationCell ms={leaseMs(d.expires_in)} />,
+  },
+];
+
 /**
  * What a node is doing, on its page and in the rail alike: whether it has
  * applied the revision the fleet activated, the leases it holds, and the
@@ -840,23 +894,7 @@ function NodePanels({ node, answer }: { node: FleetNode; answer: FleetAnswer }) 
           }}
           rowHref={(s) => peekHref({ kind: "seat", id: s.handle })}
           onRowActivate={peekRow<FleetSeatLease>((s) => openPeek({ kind: "seat", id: s.handle }))}
-          columns={[
-            {
-              key: "handle",
-              header: "Seat",
-              sortValue: (s) => s.handle,
-              // NOT `SeatCell`: it is a link and this row is one already.
-              cell: (s) => <TextCell icon="memory">{s.handle}</TextCell>,
-            },
-            {
-              key: "ttl",
-              header: "Lease",
-              align: "right",
-              shrink: true,
-              sortValue: (s) => s.expires_in ?? null,
-              cell: (s) => <DurationCell ms={leaseMs(s.expires_in)} />,
-            },
-          ]}
+          columns={NODE_SEAT_COLUMNS}
         />
       </Card>
 
@@ -873,22 +911,7 @@ function NodePanels({ node, answer }: { node: FleetNode; answer: FleetAnswer }) 
             title: "No fleet singletons are held here",
             hint: "Exactly one node runs each — the trim, the maintenance sweep, the scheduler — so most nodes hold none.",
           }}
-          columns={[
-            {
-              key: "name",
-              header: "Duty",
-              sortValue: (d) => d.duty,
-              cell: (d) => <KeyCell value={d.duty} />,
-            },
-            {
-              key: "ttl",
-              header: "Lease",
-              align: "right",
-              shrink: true,
-              sortValue: (d) => d.expires_in ?? null,
-              cell: (d) => <DurationCell ms={leaseMs(d.expires_in)} />,
-            },
-          ]}
+          columns={NODE_DUTY_COLUMNS}
         />
       </Card>
     </>

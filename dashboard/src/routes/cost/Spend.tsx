@@ -55,7 +55,7 @@ import {
 // the six split dimensions under that control is six queries nobody asked for
 // and six history entries to press Back through. See the report.
 import { Segmented } from "~/ui/primitives.tsx";
-import { DataGrid } from "~/app/frame/DataGrid.tsx";
+import { DataGrid, type GridColumn } from "~/app/frame/DataGrid.tsx";
 import {
   ClockText,
   DateCell,
@@ -80,6 +80,8 @@ import type { Offer, TimeRange } from "~/lib/range.ts";
 import { TimeRangePicker } from "~/ui/TimeRange.tsx";
 import { useOrgBudget, useTokens } from "~/lib/store-hooks.ts";
 import { useQuery } from "~/lib/useQuery.ts";
+import { useShared } from "~/lib/share.ts";
+import { rerunCounts, runsOf } from "~/lib/reruns.ts";
 import { fmtCount, fmtDate, fmtDateTime, fmtExact, fmtPct, relTime, tsKey } from "~/lib/format.ts";
 import { PageActions } from "~/app/frame/PageActions.tsx";
 import { PageNote } from "~/app/frame/PageNote.tsx";
@@ -301,13 +303,11 @@ export function Spend() {
   // same count the Turns table takes, for the same reason. An empty work key
   // is the ABSENCE of an identity, so counting those together would report
   // every unledgered turn as a re-run of every other.
-  const reruns = useMemo(() => {
-    const counts = new Map<string, number>();
-    for (const t of turns) {
-      if (t.work_key) counts.set(t.work_key, (counts.get(t.work_key) ?? 0) + 1);
-    }
-    return counts;
-  }, [turns]);
+  //
+  // A PLAIN RECORD, SHARED (`~/lib/share.ts`), because the turn table's columns
+  // close over it: counted afresh on every rollup push it was a new value each
+  // time, and every turn's row drew again for counts that had not moved.
+  const reruns = useShared(useMemo(() => rerunCounts(turns), [turns]));
   // WHAT `[` AND `]` WALK — BOTH tables, in the order this screen draws them.
   //
   // There is ONE publisher per screen and the last caller owns the stepper, so
@@ -358,13 +358,160 @@ export function Spend() {
     [tokens],
   );
 
-  const phaseKeys = useMemo(
-    () => [...new Set((tokens?.by_phase ?? []).map((p) => p.phase))],
-    [tokens],
+  // SHARED, for `reruns`'s reason: the seat table's columns close over it.
+  const phaseKeys = useShared(
+    useMemo(() => [...new Set((tokens?.by_phase ?? []).map((p) => p.phase))], [tokens]),
   );
 
   const org = orgBudget?.org;
 
+  // THE COLUMN LISTS HOLD STILL until what they read moves — the phases a seat's
+  // bar is split into, and the re-run counts — rather than on the rollup, which
+  // is pushed after every phase that completes anywhere: built inline, each push
+  // drew every seat and every turn of both tables.
+  const seatColumns = useMemo<GridColumn<AgentSpendRow>[]>(
+    () => [
+      {
+        key: "seat",
+        header: "Seat",
+        sortValue: (a) => a.role,
+        // NOT `SeatCell`, and not the seat chip this column used to draw:
+        // both are anchors, and this row is one now whose target is that
+        // very seat — a second link over the name would swallow the plain
+        // click the peek opens on and send the reader to the page the
+        // rail was built to save them from.
+        cell: (a) => <TextCell icon="memory">{a.role}</TextCell>,
+      },
+      {
+        key: "total",
+        header: "Tokens",
+        align: "right",
+        sortValue: (a) => a.total_tokens,
+        // THE CELL, so a token count is spelled here the way it is spelled
+        // everywhere else in the product. `fmtCount`'s threshold is 10,000
+        // — a four-digit count stays exact and only what nobody reads digit
+        // by digit is abbreviated — and the window's exact total is in the
+        // stat row at the top of this screen.
+        cell: (a) => <TokenCell value={a.total_tokens} />,
+      },
+      {
+        key: "share",
+        header: "Share",
+        width: "180px",
+        // NOT `MeterCell`: this is a BREAKDOWN across every phase, not one
+        // fraction of one whole, and a single bar cannot say which phase
+        // the tokens went to.
+        cell: (a) => (
+          <StackedBar
+            segments={phaseKeys.map((p) => ({
+              id: p,
+              label: p,
+              value: a.by_phase?.[p]?.total_tokens ?? 0,
+              color: phaseColor(p),
+            }))}
+          />
+        ),
+      },
+      {
+        key: "calls",
+        header: "Calls",
+        align: "right",
+        sortValue: (a) => a.calls,
+        cell: (a) => <NumberCell value={a.calls} />,
+      },
+      {
+        key: "avg",
+        header: "Per call",
+        align: "right",
+        sortValue: (a) => (a.calls ? a.total_tokens / a.calls : 0),
+        // A DASH THAT SAYS WHICH ABSENCE THIS IS. A seat with no calls has
+        // no average rather than an average of nothing, and the cell's own
+        // "nothing recorded" would be the wrong sentence for a row whose
+        // tokens are right beside it.
+        cell: (a) =>
+          a.calls > 0 ? (
+            <TokenCell value={Math.round(a.total_tokens / a.calls)} />
+          ) : (
+            <EmptyValue label="No calls to average over" />
+          ),
+      },
+    ],
+    [phaseKeys],
+  );
+  const turnColumns = useMemo<GridColumn<TurnSpendRow>[]>(
+    () => [
+      {
+        key: "started",
+        header: "Started",
+        shrink: true,
+        sortValue: (t) => tsKey(t.started_at),
+        // RELATIVE IN THE CELL, absolute in its title — the same trade the
+        // turn log makes for the same column. A spend table is scanned for
+        // what ran recently, and a wall-clock stamp is what somebody wants
+        // only once they have found the row.
+        cell: (t) => <DateCell at={t.started_at} />,
+      },
+      {
+        key: "seat",
+        header: "Seat",
+        sortValue: (t) => t.role,
+        // NOT `SeatCell` or the chip this drew: both are anchors and every
+        // row here is one. The seat is a link again in the turn's own peek.
+        cell: (t) => <TextCell icon="memory">{t.role}</TextCell>,
+      },
+      {
+        key: "total",
+        header: "Tokens",
+        align: "right",
+        sortValue: (t) => t.total_tokens,
+        cell: (t) => <TokenCell value={t.total_tokens} />,
+      },
+      {
+        key: "calls",
+        header: "Calls",
+        align: "right",
+        sortValue: (t) => t.calls,
+        // A BARE `{t.calls}` RENDERED AN ABSENT COUNT AS NOTHING AT ALL —
+        // an empty cell reads as a column that does not apply to this row,
+        // where the cell says "nothing recorded" and still spells a real
+        // zero as `0`.
+        cell: (t) => <NumberCell value={t.calls} />,
+      },
+      {
+        key: "turn",
+        header: "Turn",
+        shrink: true,
+        // UNLINKED: the row is already a link to this turn, and `KeyCell`
+        // is the one spelling of an identifier every grid here uses.
+        //
+        // THE RE-RUN MARKER BESIDE IT, because this table is scanned by
+        // comparing a row against its neighbours: a turn id names one
+        // RUN (`adr/0017`), so a trigger that failed without acting and
+        // was redelivered is two rows here, each with its own real bill.
+        // Unmarked they read as the company having paid for the work
+        // twice, which is exactly the conclusion an expensive-looking
+        // pair invites.
+        cell: (t) => (
+          <span className="row gap-1">
+            <KeyCell value={t.turn_id.slice(0, 8)} />
+            {t.work_key && runsOf(reruns, t.work_key) > 1 && (
+              <Tag
+                appearance="outline"
+                title={
+                  `one of ${runsOf(reruns, t.work_key)} runs of the same trigger in this ` +
+                  `window — each attempt spent what this row says, and the turn's own ` +
+                  `page links them`
+                }
+              >
+                re-run
+              </Tag>
+            )}
+          </span>
+        ),
+      },
+    ],
+    [reruns],
+  );
   return (
     <>
       <PageActions>
@@ -553,72 +700,7 @@ export function Spend() {
             openPeek({ kind: "seat", id: seatAddress(a) }),
           )}
           empty={{ title: "No seat has spent tokens in this window" }}
-          columns={[
-            {
-              key: "seat",
-              header: "Seat",
-              sortValue: (a) => a.role,
-              // NOT `SeatCell`, and not the seat chip this column used to draw:
-              // both are anchors, and this row is one now whose target is that
-              // very seat — a second link over the name would swallow the plain
-              // click the peek opens on and send the reader to the page the
-              // rail was built to save them from.
-              cell: (a) => <TextCell icon="memory">{a.role}</TextCell>,
-            },
-            {
-              key: "total",
-              header: "Tokens",
-              align: "right",
-              sortValue: (a) => a.total_tokens,
-              // THE CELL, so a token count is spelled here the way it is spelled
-              // everywhere else in the product. `fmtCount`'s threshold is 10,000
-              // — a four-digit count stays exact and only what nobody reads digit
-              // by digit is abbreviated — and the window's exact total is in the
-              // stat row at the top of this screen.
-              cell: (a) => <TokenCell value={a.total_tokens} />,
-            },
-            {
-              key: "share",
-              header: "Share",
-              width: "180px",
-              // NOT `MeterCell`: this is a BREAKDOWN across every phase, not one
-              // fraction of one whole, and a single bar cannot say which phase
-              // the tokens went to.
-              cell: (a) => (
-                <StackedBar
-                  segments={phaseKeys.map((p) => ({
-                    id: p,
-                    label: p,
-                    value: a.by_phase?.[p]?.total_tokens ?? 0,
-                    color: phaseColor(p),
-                  }))}
-                />
-              ),
-            },
-            {
-              key: "calls",
-              header: "Calls",
-              align: "right",
-              sortValue: (a) => a.calls,
-              cell: (a) => <NumberCell value={a.calls} />,
-            },
-            {
-              key: "avg",
-              header: "Per call",
-              align: "right",
-              sortValue: (a) => (a.calls ? a.total_tokens / a.calls : 0),
-              // A DASH THAT SAYS WHICH ABSENCE THIS IS. A seat with no calls has
-              // no average rather than an average of nothing, and the cell's own
-              // "nothing recorded" would be the wrong sentence for a row whose
-              // tokens are right beside it.
-              cell: (a) =>
-                a.calls > 0 ? (
-                  <TokenCell value={Math.round(a.total_tokens / a.calls)} />
-                ) : (
-                  <EmptyValue label="No calls to average over" />
-                ),
-            },
-          ]}
+          columns={seatColumns}
         />
         {phaseKeys.length > 0 && (
           <Card.Footer variant="meta">
@@ -643,77 +725,7 @@ export function Spend() {
           rowHref={(t) => peekHref({ kind: "turn", id: t.turn_id })}
           onRowActivate={peekRow<TurnSpendRow>((t) => openPeek({ kind: "turn", id: t.turn_id }))}
           empty={{ title: "No turns in this window" }}
-          columns={[
-            {
-              key: "started",
-              header: "Started",
-              shrink: true,
-              sortValue: (t) => tsKey(t.started_at),
-              // RELATIVE IN THE CELL, absolute in its title — the same trade the
-              // turn log makes for the same column. A spend table is scanned for
-              // what ran recently, and a wall-clock stamp is what somebody wants
-              // only once they have found the row.
-              cell: (t) => <DateCell at={t.started_at} />,
-            },
-            {
-              key: "seat",
-              header: "Seat",
-              sortValue: (t) => t.role,
-              // NOT `SeatCell` or the chip this drew: both are anchors and every
-              // row here is one. The seat is a link again in the turn's own peek.
-              cell: (t) => <TextCell icon="memory">{t.role}</TextCell>,
-            },
-            {
-              key: "total",
-              header: "Tokens",
-              align: "right",
-              sortValue: (t) => t.total_tokens,
-              cell: (t) => <TokenCell value={t.total_tokens} />,
-            },
-            {
-              key: "calls",
-              header: "Calls",
-              align: "right",
-              sortValue: (t) => t.calls,
-              // A BARE `{t.calls}` RENDERED AN ABSENT COUNT AS NOTHING AT ALL —
-              // an empty cell reads as a column that does not apply to this row,
-              // where the cell says "nothing recorded" and still spells a real
-              // zero as `0`.
-              cell: (t) => <NumberCell value={t.calls} />,
-            },
-            {
-              key: "turn",
-              header: "Turn",
-              shrink: true,
-              // UNLINKED: the row is already a link to this turn, and `KeyCell`
-              // is the one spelling of an identifier every grid here uses.
-              //
-              // THE RE-RUN MARKER BESIDE IT, because this table is scanned by
-              // comparing a row against its neighbours: a turn id names one
-              // RUN (`adr/0017`), so a trigger that failed without acting and
-              // was redelivered is two rows here, each with its own real bill.
-              // Unmarked they read as the company having paid for the work
-              // twice, which is exactly the conclusion an expensive-looking
-              // pair invites.
-              cell: (t) => (
-                <span className="row gap-1">
-                  <KeyCell value={t.turn_id.slice(0, 8)} />
-                  {t.work_key && (reruns.get(t.work_key) ?? 0) > 1 && (
-                    <Tag
-                      appearance="outline"
-                      title={
-                        `one of ${reruns.get(t.work_key)} runs of the same trigger in this ` +
-                        `window — each attempt spent what this row says, and the turn's own ` +
-                        `page links them`
-                      }
-                    >
-                      re-run
-                    </Tag>
-                  )}
-                </span>
-              ),
-            },
-          ]}
+          columns={turnColumns}
         />
       </Card>
     </>

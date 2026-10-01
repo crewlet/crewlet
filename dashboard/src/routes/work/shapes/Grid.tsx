@@ -86,6 +86,7 @@
  */
 
 import { useMemo } from "react";
+import { useShared } from "~/lib/share.ts";
 import { Button, EmptyValue, Tag, useClipboard } from "@crewlethq/ui";
 import { ContentCopyGlyph } from "@crewlethq/icons/glyphs";
 
@@ -594,30 +595,42 @@ export function WorkGrid({
    */
   foot?: string;
 }) {
-  const ctx = useMemo<ColumnContext>(() => {
-    // THE PAGE IS WHAT CAN RESOLVE AN EDGE. A dependency names the blocking
-    // task's id and the key a reader recognises is on that task's own row, so
-    // only something holding the rows can turn one into the other — and a
-    // grouped answer's rows are under its groups rather than in `items`. Built
-    // once per answer rather than per row, because a lookup rebuilt inside a
-    // cell is quadratic over a page of a hundred.
-    const keys = new Map<string, string>();
-    const add = (list: WorkSummary[]) => {
-      for (const row of list) keys.set(row.id, row.key);
-    };
-    add(rows);
-    for (const group of groups) {
-      add(group.rows);
-      for (const sub of group.subgroups ?? []) add(sub.rows);
-    }
-    return {
+  // THE PAGE IS WHAT CAN RESOLVE AN EDGE. A dependency names the blocking
+  // task's id and the key a reader recognises is on that task's own row, so
+  // only something holding the rows can turn one into the other — and a
+  // grouped answer's rows are under its groups rather than in `items`. Built
+  // once per answer rather than per row, because a lookup rebuilt inside a
+  // cell is quadratic over a page of a hundred.
+  //
+  // A PLAIN RECORD, SHARED (`~/lib/share.ts`), because the columns close over
+  // it: built from the rows it was a new value on every poll that moved any of
+  // them — a status, an assignee — and every row of the list drew again for
+  // the one that changed. Shared, it moves only when an id or a key does.
+  const keys = useShared(
+    useMemo(() => {
+      const out: Record<string, string> = {};
+      const add = (list: WorkSummary[]) => {
+        for (const row of list) out[row.id] = row.key;
+      };
+      add(rows);
+      for (const group of groups) {
+        add(group.rows);
+        for (const sub of group.subgroups ?? []) add(sub.rows);
+      }
+      return out;
+    }, [rows, groups]),
+  );
+  const ctx = useMemo<ColumnContext>(
+    () => ({
       chrome,
       detail,
       workspace,
       removals,
-      keyOf: (id: string) => keys.get(id),
-    };
-  }, [rows, groups, chrome, detail, workspace, removals]);
+      // OWN KEYS ONLY: a record inherits `toString` and its kind.
+      keyOf: (id: string) => (Object.hasOwn(keys, id) ? keys[id] : undefined),
+    }),
+    [keys, chrome, detail, workspace, removals],
+  );
 
   const columns = useMemo(() => buildColumns(shape, ctx), [shape, ctx]);
 

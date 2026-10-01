@@ -21,7 +21,7 @@
 import { useMemo } from "react";
 import { PageNote } from "~/app/frame/PageNote.tsx";
 import { QueryState } from "~/components/common.tsx";
-import { DataGrid } from "~/app/frame/DataGrid.tsx";
+import { DataGrid, type GridColumn } from "~/app/frame/DataGrid.tsx";
 import { MeterCell, TextCell, TokenCell } from "~/app/frame/cells.tsx";
 import { peekHref, rowPeekHandler, usePeekControls } from "~/app/frame/DetailRail.tsx";
 import { usePeekNeighbours } from "~/app/frame/PeekHost.tsx";
@@ -30,6 +30,10 @@ import { DatabaseGlyph } from "@crewlethq/icons/glyphs";
 import { useQuery } from "~/lib/useQuery.ts";
 import { fmtExact } from "~/lib/format.ts";
 import { seatAddress } from "~/lib/seats.ts";
+import type { BudgetsAnswer } from "~/protocol/index.ts";
+
+/** One seat's row of the budgets answer. */
+type BudgetSeat = BudgetsAnswer["seats"][number];
 
 /**
  * What a headroom bar's colour says.
@@ -47,6 +51,80 @@ function headroomTone(used: number, max: number): "accent" | "caution" | "critic
   const pct = (used / max) * 100;
   return pct >= 100 ? "critical" : pct >= 75 ? "caution" : "accent";
 }
+
+// The budget table's columns, which close over nothing on the screen — a
+// module constant, so a thirty-second poll that moved one seat's counter draws
+// that seat's row.
+const BUDGET_COLUMNS: GridColumn<BudgetSeat>[] = [
+  {
+    key: "seat",
+    header: "Seat",
+    sortValue: (s) => s.role,
+    // NOT `SeatCell`, and not the seat chip this column used to
+    // draw: both are anchors, and this row is one now whose target
+    // is that same seat — a second link over the name would take
+    // the plain click the peek opens on.
+    cell: (s) => <TextCell icon="memory">{s.role}</TextCell>,
+  },
+  {
+    key: "used",
+    header: "Durable used",
+    align: "right",
+    sortValue: (s) => s.durable_used,
+    // THE CELL, so a token count is spelled here the way it is
+    // spelled on the spend table and everywhere else — the two are
+    // read one after the other and a figure that changed shape
+    // between them would read as a different quantity.
+    cell: (s) => <TokenCell value={s.durable_used} />,
+  },
+  {
+    key: "max",
+    header: "Budget",
+    align: "right",
+    sortValue: (s) => s.max_tokens,
+    // NOT A DASH, and therefore not the cell's absent branch: no
+    // cap is a SETTING somebody chose, not a number that went
+    // unrecorded, and the word is the only thing that says so.
+    cell: (s) =>
+      s.max_tokens > 0 ? (
+        <TokenCell value={s.max_tokens} />
+      ) : (
+        <span className="muted">unlimited</span>
+      ),
+  },
+  {
+    key: "headroom",
+    header: "Headroom",
+    // 120px rather than 160: the cell's bar is a fixed 64px, and
+    // the rest was a gap the eye had to cross to reach the seat's
+    // own row again.
+    width: "120px",
+    // `MeterCell` REFUSES A MAX OF ZERO itself, with the one dash
+    // that is right here — there is nothing to measure an
+    // unlimited seat against, which is a different absence from a
+    // budget nobody recorded.
+    // A REFUSING SEAT OUTRANKS THE RATIO. A refused charge
+    // increments nothing, so the counter stops short of the cap by
+    // the size of the round that would not fit: the seat that is
+    // being turned away right now draws the calmest bar on the
+    // table unless the stamp, not the fraction, decides the tone.
+    cell: (s) => (
+      <MeterCell
+        used={s.durable_used}
+        max={s.max_tokens}
+        tone={s.refused_at ? "critical" : headroomTone(s.durable_used, s.max_tokens)}
+        // The column heading names it for a sighted reader; a
+        // screen reader lands on the bar alone, so it carries the
+        // seat and the reading it is drawing.
+        label={
+          s.refused_at
+            ? `${s.role}: refusing charges since ${s.refused_at}, ${fmtExact(s.durable_used)} of ${fmtExact(s.max_tokens)} tokens spent`
+            : `${s.role}: ${fmtExact(s.durable_used)} of ${fmtExact(s.max_tokens)} tokens spent`
+        }
+      />
+    ),
+  },
+];
 
 export function Budgets() {
   const budgets = useQuery("budgets", undefined, { pollMs: 30_000 });
@@ -119,76 +197,7 @@ export function Budgets() {
                 rowPeekHandler(go)?.(e);
               }}
               empty={{ title: "No per-seat budgets are configured" }}
-              columns={[
-                {
-                  key: "seat",
-                  header: "Seat",
-                  sortValue: (s) => s.role,
-                  // NOT `SeatCell`, and not the seat chip this column used to
-                  // draw: both are anchors, and this row is one now whose target
-                  // is that same seat — a second link over the name would take
-                  // the plain click the peek opens on.
-                  cell: (s) => <TextCell icon="memory">{s.role}</TextCell>,
-                },
-                {
-                  key: "used",
-                  header: "Durable used",
-                  align: "right",
-                  sortValue: (s) => s.durable_used,
-                  // THE CELL, so a token count is spelled here the way it is
-                  // spelled on the spend table and everywhere else — the two are
-                  // read one after the other and a figure that changed shape
-                  // between them would read as a different quantity.
-                  cell: (s) => <TokenCell value={s.durable_used} />,
-                },
-                {
-                  key: "max",
-                  header: "Budget",
-                  align: "right",
-                  sortValue: (s) => s.max_tokens,
-                  // NOT A DASH, and therefore not the cell's absent branch: no
-                  // cap is a SETTING somebody chose, not a number that went
-                  // unrecorded, and the word is the only thing that says so.
-                  cell: (s) =>
-                    s.max_tokens > 0 ? (
-                      <TokenCell value={s.max_tokens} />
-                    ) : (
-                      <span className="muted">unlimited</span>
-                    ),
-                },
-                {
-                  key: "headroom",
-                  header: "Headroom",
-                  // 120px rather than 160: the cell's bar is a fixed 64px, and
-                  // the rest was a gap the eye had to cross to reach the seat's
-                  // own row again.
-                  width: "120px",
-                  // `MeterCell` REFUSES A MAX OF ZERO itself, with the one dash
-                  // that is right here — there is nothing to measure an
-                  // unlimited seat against, which is a different absence from a
-                  // budget nobody recorded.
-                  // A REFUSING SEAT OUTRANKS THE RATIO. A refused charge
-                  // increments nothing, so the counter stops short of the cap by
-                  // the size of the round that would not fit: the seat that is
-                  // being turned away right now draws the calmest bar on the
-                  // table unless the stamp, not the fraction, decides the tone.
-                  cell: (s) => (
-                    <MeterCell
-                      used={s.durable_used}
-                      max={s.max_tokens}
-                      tone={s.refused_at ? "critical" : headroomTone(s.durable_used, s.max_tokens)}
-                      // The column heading names it for a sighted reader; a
-                      // screen reader lands on the bar alone, so it carries the
-                      // seat and the reading it is drawing.
-                      label={
-                        s.refused_at
-                          ? `${s.role}: refusing charges since ${s.refused_at}, ${fmtExact(s.durable_used)} of ${fmtExact(s.max_tokens)} tokens spent`
-                          : `${s.role}: ${fmtExact(s.durable_used)} of ${fmtExact(s.max_tokens)} tokens spent`
-                      }
-                    />
-                  ),
-                },
-              ]}
+              columns={BUDGET_COLUMNS}
             />
           </QueryState>
         )}

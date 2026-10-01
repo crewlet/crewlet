@@ -29,7 +29,7 @@
 import { useCallback, useMemo } from "react";
 import { QueryState, Section } from "~/components/common.tsx";
 import { Callout, Card, EmptyState, Skeleton, StatCard, StatGroup, Tag } from "@crewlethq/ui";
-import { DataGrid } from "~/app/frame/DataGrid.tsx";
+import { DataGrid, type GridColumn } from "~/app/frame/DataGrid.tsx";
 import { ClockText, DateCell, NumberCell, TextCell } from "~/app/frame/cells.tsx";
 import { usePageLabels } from "~/app/Shell.tsx";
 import { ObjectHeader, type Fact } from "~/app/frame/ObjectHeader.tsx";
@@ -381,6 +381,63 @@ export function Conversations({ channelId }: { channelId?: string }) {
   const channelName = addressedChannel ? channelTitle(addressedChannel, seatName) : "";
   usePageLabels(addressed && channelName ? { [addressed]: channelName } : {});
 
+  // THE COLUMNS HOLD STILL until the roster's names move (`seatName`): every row
+  // is memoised on this list, so one built inline drew every channel on every
+  // render.
+  const columns = useMemo<GridColumn<A2AChannel>[]>(
+    () => [
+      {
+        key: "state",
+        header: "State",
+        shrink: true,
+        sortValue: (c) => (c.closed_at ? "closed" : "open"),
+        cell: (c) => <ChannelState channel={c} />,
+      },
+      {
+        key: "from",
+        header: "Asked by",
+        sortValue: (c) => seatName(c.requester),
+        // NOT `SeatCell`, and not the `SeatChip` this column used to
+        // draw: both are anchors and every row here is one now, and
+        // an anchor inside an anchor is markup no browser agrees
+        // about. The seat is a link again in the peek's own facts.
+        cell: (c) => <TextCell icon="memory">{seatName(c.requester)}</TextCell>,
+      },
+      {
+        key: "to",
+        header: "Asked",
+        sortValue: (c) => seatName(c.target),
+        cell: (c) => <TextCell icon="memory">{seatName(c.target)}</TextCell>,
+      },
+      {
+        key: "messages",
+        header: "Messages",
+        align: "right",
+        shrink: true,
+        sortValue: (c) => c.messages,
+        // A CELL RATHER THAN THE BARE NUMBER it used to render: a
+        // channel with nothing on it yet is a real zero and must
+        // read as one, and the tabular face is what lets a column of
+        // counts be compared down the page.
+        cell: (c) => <NumberCell value={c.messages} />,
+      },
+      {
+        key: "opened",
+        header: "Opened",
+        shrink: true,
+        sortValue: (c) => tsKey(c.opened_at),
+        cell: (c) => <DateCell at={c.opened_at} />,
+      },
+      {
+        key: "last",
+        header: "Last message",
+        shrink: true,
+        sortValue: (c) => tsKey(c.last_at),
+        cell: (c) => <DateCell at={c.last_at} />,
+      },
+    ],
+    [seatName],
+  );
   return (
     <>
       <PageNote>
@@ -441,57 +498,7 @@ export function Conversations({ channelId }: { channelId?: string }) {
               rowHref={(c) => peekHref({ kind: "channel", id: c.id })}
               isSelected={(c) => c.id === focused}
               defaultSort="-last"
-              columns={[
-                {
-                  key: "state",
-                  header: "State",
-                  shrink: true,
-                  sortValue: (c) => (c.closed_at ? "closed" : "open"),
-                  cell: (c) => <ChannelState channel={c} />,
-                },
-                {
-                  key: "from",
-                  header: "Asked by",
-                  sortValue: (c) => seatName(c.requester),
-                  // NOT `SeatCell`, and not the `SeatChip` this column used to
-                  // draw: both are anchors and every row here is one now, and
-                  // an anchor inside an anchor is markup no browser agrees
-                  // about. The seat is a link again in the peek's own facts.
-                  cell: (c) => <TextCell icon="memory">{seatName(c.requester)}</TextCell>,
-                },
-                {
-                  key: "to",
-                  header: "Asked",
-                  sortValue: (c) => seatName(c.target),
-                  cell: (c) => <TextCell icon="memory">{seatName(c.target)}</TextCell>,
-                },
-                {
-                  key: "messages",
-                  header: "Messages",
-                  align: "right",
-                  shrink: true,
-                  sortValue: (c) => c.messages,
-                  // A CELL RATHER THAN THE BARE NUMBER it used to render: a
-                  // channel with nothing on it yet is a real zero and must
-                  // read as one, and the tabular face is what lets a column of
-                  // counts be compared down the page.
-                  cell: (c) => <NumberCell value={c.messages} />,
-                },
-                {
-                  key: "opened",
-                  header: "Opened",
-                  shrink: true,
-                  sortValue: (c) => tsKey(c.opened_at),
-                  cell: (c) => <DateCell at={c.opened_at} />,
-                },
-                {
-                  key: "last",
-                  header: "Last message",
-                  shrink: true,
-                  sortValue: (c) => tsKey(c.last_at),
-                  cell: (c) => <DateCell at={c.last_at} />,
-                },
-              ]}
+              columns={columns}
             />
           </Card>
         </QueryState>

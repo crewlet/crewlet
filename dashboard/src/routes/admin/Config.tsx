@@ -48,7 +48,7 @@ import { QueryState, RECORD_MAX_HEIGHT } from "~/components/common.tsx";
 // is four queries nobody asked for and four Back presses to undo. See the
 // note on `useRovingGroup`; this is the trade the pattern itself names.
 import { Segmented } from "~/ui/primitives.tsx";
-import { DataGrid } from "~/app/frame/DataGrid.tsx";
+import { DataGrid, type GridColumn } from "~/app/frame/DataGrid.tsx";
 import { DateCell, KeyCell, TextCell } from "~/app/frame/cells.tsx";
 import { usePageLabels } from "~/app/Shell.tsx";
 import { ObjectHeader, type Fact } from "~/app/frame/ObjectHeader.tsx";
@@ -429,6 +429,51 @@ export function RevisionPeek({ id }: { id: string }) {
   );
 }
 
+// The revision history's columns, which close over nothing on the screen —
+// so a module constant, and every row is drawn once per change of its own
+// revision rather than on every render of the screen.
+const REVISION_COLUMNS: GridColumn<RevisionMeta>[] = [
+  {
+    key: "at",
+    header: "When",
+    shrink: true,
+    sortValue: (r) => tsKey(r.created_at),
+    cell: (r) => <DateCell at={r.created_at} />,
+  },
+  {
+    key: "id",
+    header: "Revision",
+    cell: (r) => (
+      <span className="row gap-1">
+        <KeyCell value={r.revision_id.slice(0, 10)} />
+        {r.is_active && <Tag variant="success">active</Tag>}
+      </span>
+    ),
+  },
+  {
+    key: "summary",
+    header: "Summary",
+    sortValue: (r) => r.summary,
+    // NOT `value || "—"`. A revision imported without a
+    // message has no summary, and the dash says so rather
+    // than standing in for an empty string.
+    cell: (r) =>
+      r.summary ? <TextCell>{r.summary}</TextCell> : <EmptyValue label="No summary was written" />,
+  },
+  {
+    key: "author",
+    header: "By",
+    shrink: true,
+    sortValue: (r) => r.created_by,
+    cell: (r) =>
+      r.created_by ? (
+        <TextCell>{authorLabel(r.created_by, r.operator_id)}</TextCell>
+      ) : (
+        <EmptyValue label="Nobody recorded" />
+      ),
+  },
+];
+
 export function ConfigScreen({ revision: revisionPath }: { revision?: string }) {
   const [lens, setLens] = useTab("lens", LENSES);
   const [chosen, setRevision] = useParam("revision", "");
@@ -800,51 +845,7 @@ export function ConfigScreen({ revision: revisionPath }: { revision?: string }) 
                 rowHref={(r) => peekHref({ kind: "revision", id: r.revision_id })}
                 onRowActivate={openRevision}
                 isSelected={(r) => r.revision_id === revision}
-                columns={[
-                  {
-                    key: "at",
-                    header: "When",
-                    shrink: true,
-                    sortValue: (r) => tsKey(r.created_at),
-                    cell: (r) => <DateCell at={r.created_at} />,
-                  },
-                  {
-                    key: "id",
-                    header: "Revision",
-                    cell: (r) => (
-                      <span className="row gap-1">
-                        <KeyCell value={r.revision_id.slice(0, 10)} />
-                        {r.is_active && <Tag variant="success">active</Tag>}
-                      </span>
-                    ),
-                  },
-                  {
-                    key: "summary",
-                    header: "Summary",
-                    sortValue: (r) => r.summary,
-                    // NOT `value || "—"`. A revision imported without a
-                    // message has no summary, and the dash says so rather
-                    // than standing in for an empty string.
-                    cell: (r) =>
-                      r.summary ? (
-                        <TextCell>{r.summary}</TextCell>
-                      ) : (
-                        <EmptyValue label="No summary was written" />
-                      ),
-                  },
-                  {
-                    key: "author",
-                    header: "By",
-                    shrink: true,
-                    sortValue: (r) => r.created_by,
-                    cell: (r) =>
-                      r.created_by ? (
-                        <TextCell>{authorLabel(r.created_by, r.operator_id)}</TextCell>
-                      ) : (
-                        <EmptyValue label="Nobody recorded" />
-                      ),
-                  },
-                ]}
+                columns={REVISION_COLUMNS}
               />
             </Card>
           </QueryState>

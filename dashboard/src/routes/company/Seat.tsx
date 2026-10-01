@@ -73,7 +73,7 @@ import {
 import { phaseColor } from "~/ui/charts.tsx";
 // ONE PHASE PILL for this screen and the Model screen alike — it is uilet's
 import { PhaseTag } from "~/ui/primitives.tsx";
-import { DataGrid } from "~/app/frame/DataGrid.tsx";
+import { DataGrid, type GridColumn } from "~/app/frame/DataGrid.tsx";
 import {
   useAgents,
   useOrg,
@@ -84,6 +84,8 @@ import {
   useTokens,
 } from "~/lib/store-hooks.ts";
 import { useQuery } from "~/lib/useQuery.ts";
+import { useShared } from "~/lib/share.ts";
+import { rerunCounts, runsOf } from "~/lib/reruns.ts";
 import { useViewer } from "~/lib/viewer.ts";
 import { chartSeatPath, chartUnitPath, useChartRead, WITH_RUNTIME } from "~/lib/chartReads.ts";
 import {
@@ -133,7 +135,11 @@ import type {
   ChartUnitRead,
   ConversationEntry,
   CounterpartyProfile,
+  Episode,
   EventRecord,
+  ScheduleRow,
+  TurnRow,
+  TurnSpendRow,
 } from "~/protocol/index.ts";
 import { PageActions } from "~/app/frame/PageActions.tsx";
 import { PageNote } from "~/app/frame/PageNote.tsx";
@@ -515,6 +521,207 @@ function configuredProperties(seat: ChartSeat, human: boolean): Property[] {
   ];
 }
 
+// A seat's past turns as its memory tab draws them. A module constant: it
+// closes over nothing on the page, which renders whenever the seat's live
+// state moves.
+const EPISODE_COLUMNS: GridColumn<Episode>[] = [
+  {
+    key: "at",
+    header: "When",
+    shrink: true,
+    // THROUGH `tsKey`, never `<` on the string. The engine
+    // sends both encodings of an instant and trims
+    // trailing zeros, so a raw compare puts `:07Z` before
+    // `:07.42Z` — the later episode first, in a list read
+    // newest-first.
+    sortValue: (e) => tsKey(e.created_at),
+    cell: (e) => <DateCell at={e.created_at} />,
+  },
+  {
+    key: "task",
+    header: "What it did",
+    // `||` rather than `??`: an episode that recorded an
+    // EMPTY summary has none, and a dash that says so
+    // beats a blank cell nobody can tell from a fault.
+    cell: (e) =>
+      e.task_summary || e.content ? (
+        <TextCell>{e.task_summary || e.content}</TextCell>
+      ) : (
+        <EmptyValue label="The episode recorded no summary" />
+      ),
+  },
+  {
+    key: "outcome",
+    header: "Outcome",
+    shrink: true,
+    // NULL, not "": an outcome nothing recorded sorts
+    // last in both directions rather than ahead of every
+    // recorded one, which is what the grid does with an
+    // absent value and what the dash below claims.
+    sortValue: (e) => e.review_outcome ?? e.outcome ?? null,
+    cell: (e) =>
+      e.review_outcome || e.outcome ? (
+        <Tag variant={(e.review_outcome ?? e.outcome) === "done" ? "success" : "warning"}>
+          {e.review_outcome ?? e.outcome}
+        </Tag>
+      ) : (
+        <EmptyValue label="The turn ended without a review outcome" />
+      ),
+  },
+  {
+    key: "dur",
+    header: "Took",
+    align: "right",
+    shrink: true,
+    sortValue: (e) => e.duration_ms ?? null,
+    cell: (e) => <DurationCell ms={e.duration_ms} />,
+  },
+  {
+    key: "conv",
+    header: "Conversation",
+    cell: (e) =>
+      e.conversation_key ? (
+        <KeyCell value={e.conversation_key} />
+      ) : (
+        <EmptyValue label="Not part of a conversation" />
+      ),
+  },
+];
+
+// A seat's turns, as its turns tab draws them: a module constant, for the
+// memory tab's reason.
+const SEAT_TURN_COLUMNS: GridColumn<TurnRow>[] = [
+  {
+    key: "started",
+    header: "Started",
+    shrink: true,
+    sortValue: (t) => tsKey(t.started_at),
+    cell: (t) => <DateCell at={t.started_at} />,
+  },
+  {
+    key: "summary",
+    header: "What it did",
+    sortValue: (t) => t.summary ?? "",
+    cell: (t) => (
+      <span className="row gap-1">
+        <span className="truncate">
+          {t.summary || <span className="muted">no summary recorded</span>}
+        </span>
+        {t.task_id && (
+          <span className="mono t-caption" title="the work item this turn was about">
+            {t.task_id}
+          </span>
+        )}
+      </span>
+    ),
+  },
+  {
+    key: "iterations",
+    // SELF-ITERATE ROUNDS, and the word says so. Headed "Rounds" this
+    // column sat directly above phase rows printing TOOL rounds under
+    // the same word — "Rounds 1" over a 3r execute and a 1r review.
+    header: (
+      <span title="self-iterate rounds — the tool rounds each phase used are on the phase row">
+        Iterations
+      </span>
+    ),
+    label: "Iterations",
+    shrink: true,
+    sortValue: (t) => t.iterations,
+    cell: (t) => <NumberCell value={t.iterations} />,
+  },
+  {
+    key: "tokens",
+    header: "Tokens",
+    shrink: true,
+    sortValue: (t) => t.total_tokens,
+    cell: (t) => <TokenCell value={t.total_tokens} />,
+  },
+  {
+    key: "state",
+    header: "",
+    label: "State",
+    shrink: true,
+    cell: (t) => (
+      <span className="row gap-1">
+        {/* A RUNNING TURN IS NOT A ZERO-LENGTH ONE.
+                              `duration_ms` is 0 until a completion record
+                              exists, and `complete` is what tells a turn in
+                              flight from one that died mid-flight. */}
+        {!t.complete && (
+          <Tag variant="info" title="no completion record — running, or it died">
+            running
+          </Tag>
+        )}
+        {t.failed && <Tag variant="danger">failed</Tag>}
+      </span>
+    ),
+  },
+];
+
+// A seat's recurring work, as its schedules tab draws it: a module constant,
+// for the memory tab's reason.
+const SEAT_SCHEDULE_COLUMNS: GridColumn<ScheduleRow>[] = [
+  {
+    key: "name",
+    header: "Name",
+    cell: (row) => <TextCell icon="calendar_today">{row.name}</TextCell>,
+    sortValue: (row) => row.name,
+  },
+  {
+    // NOT A KEY CELL. A cron expression is a five-field
+    // schedule rather than an identifier — nothing is
+    // addressed by it — so it keeps the code face it reads
+    // in everywhere else in the product.
+    key: "cron",
+    header: "Cron",
+    shrink: true,
+    cell: (row) => <code className="inline nowrap">{row.cron}</code>,
+  },
+  {
+    // WHOSE SCHEDULE IT IS, which is the column the authored
+    // read could not have: a unit schedule is not this
+    // seat's and still lands in its day.
+    key: "scope",
+    header: "Scope",
+    shrink: true,
+    cell: (row) =>
+      row.scope_type === "role" ? (
+        <span className="muted">theirs</span>
+      ) : (
+        <TextCell icon="apartment">{row.scope_name ?? row.scope_id}</TextCell>
+      ),
+    sortValue: (row) => `${row.scope_type}/${row.scope_name ?? row.scope_id}`,
+  },
+  {
+    // THE ENGINE'S OWN ANSWER, and the REASON where it has
+    // none. A disabled schedule and one whose timezone was
+    // renamed both have an empty `next_run`; only the second
+    // is a defect, and the row says which in `problem`.
+    key: "next",
+    header: "Next",
+    shrink: true,
+    sortValue: (row) => tsKey(row.next_run),
+    cell: (row) =>
+      row.problem ? (
+        <Tag variant="danger" title={row.problem}>
+          cannot fire
+        </Tag>
+      ) : !row.enabled ? (
+        <Tag appearance="outline">disabled</Tag>
+      ) : row.next_run ? (
+        <DateCell at={row.next_run} />
+      ) : (
+        <EmptyValue label="Not recorded" />
+      ),
+  },
+  {
+    key: "task",
+    header: "Task",
+    cell: (row) => <TextCell>{row.task}</TextCell>,
+  },
+];
+
 export function SeatScreen({ handle }: { handle: string }) {
   const nav = useNavigator();
   const org = useOrg();
@@ -787,14 +994,12 @@ export function SeatScreen({ handle }: { handle: string }) {
   // without this they read as the seat having been asked twice.
   const attempt = useMemo(() => attempts(turns), [turns]);
   // The same count the Cost screen takes, over this seat's spend rows: how
-  // many runs each trigger got in the window.
-  const spendReruns = useMemo(() => {
-    const counts = new Map<string, number>();
-    for (const t of spend.data?.by_turn ?? []) {
-      if (t.work_key) counts.set(t.work_key, (counts.get(t.work_key) ?? 0) + 1);
-    }
-    return counts;
-  }, [spend.data]);
+  // many runs each trigger got in the window. A PLAIN RECORD, SHARED
+  // (`~/lib/share.ts`), because the cost tab's columns close over it and a
+  // count taken afresh on every poll was a new value each time.
+  const spendReruns = useShared(
+    useMemo(() => rerunCounts(spend.data?.by_turn ?? []), [spend.data]),
+  );
   // THE ENGINE'S OWN ROW FOR EACH CARD. One turn, one set of figures: the card
   // reads its start and its duration off the same record the table above draws,
   // and falls back to its phases only where there is no row. They disagreed
@@ -825,6 +1030,61 @@ export function SeatScreen({ handle }: { handle: string }) {
   // reader's side.
   const settled = useSettled(doneTurns, seatTurnKey, liveTurnKeys);
 
+  // THE COST TAB'S COLUMNS HOLD STILL until the re-run counts move, above the
+  // early return a hook may not follow: every row is memoised on this list, and
+  // one built inline drew every turn on every render of this page — and this
+  // page renders whenever the seat's live state moves.
+  const spendColumns = useMemo<GridColumn<TurnSpendRow>[]>(
+    () => [
+      {
+        key: "started",
+        header: "Started",
+        shrink: true,
+        // `tsKey`, for the reason the episodes grid above gives.
+        sortValue: (t) => tsKey(t.started_at),
+        cell: (t) => <DateCell at={t.started_at} />,
+      },
+      {
+        // NO PATH ON THE CELL: the whole row already activates
+        // to the turn, and a link inside it would fire both.
+        key: "id",
+        header: "Turn",
+        // THE RE-RUN MARKER, for the reason the Cost screen's
+        // own table gives: a turn id names one RUN, so a
+        // redelivered trigger is two rows with two real bills,
+        // and unmarked they read as the seat having been paid
+        // for twice. See `adr/0017`.
+        cell: (t) => (
+          <span className="row gap-1">
+            <KeyCell value={t.turn_id.slice(0, 8)} />
+            {t.work_key && runsOf(spendReruns, t.work_key) > 1 && (
+              <Tag
+                appearance="outline"
+                title={`one of ${runsOf(spendReruns, t.work_key)} runs of the same trigger in this window`}
+              >
+                re-run
+              </Tag>
+            )}
+          </span>
+        ),
+      },
+      {
+        key: "tokens",
+        header: "Tokens",
+        align: "right",
+        sortValue: (t) => t.total_tokens,
+        cell: (t) => <TokenCell value={t.total_tokens} />,
+      },
+      {
+        key: "calls",
+        header: "Calls",
+        align: "right",
+        sortValue: (t) => t.calls,
+        cell: (t) => <NumberCell value={t.calls} />,
+      },
+    ],
+    [spendReruns],
+  );
   if (!seat) {
     return (
       <>
@@ -1411,66 +1671,7 @@ export function SeatScreen({ handle }: { handle: string }) {
                       id: [row.scope_type, row.scope_id, row.name].join("/"),
                     })
                   }
-                  columns={[
-                    {
-                      key: "name",
-                      header: "Name",
-                      cell: (row) => <TextCell icon="calendar_today">{row.name}</TextCell>,
-                      sortValue: (row) => row.name,
-                    },
-                    {
-                      // NOT A KEY CELL. A cron expression is a five-field
-                      // schedule rather than an identifier — nothing is
-                      // addressed by it — so it keeps the code face it reads
-                      // in everywhere else in the product.
-                      key: "cron",
-                      header: "Cron",
-                      shrink: true,
-                      cell: (row) => <code className="inline nowrap">{row.cron}</code>,
-                    },
-                    {
-                      // WHOSE SCHEDULE IT IS, which is the column the authored
-                      // read could not have: a unit schedule is not this
-                      // seat's and still lands in its day.
-                      key: "scope",
-                      header: "Scope",
-                      shrink: true,
-                      cell: (row) =>
-                        row.scope_type === "role" ? (
-                          <span className="muted">theirs</span>
-                        ) : (
-                          <TextCell icon="apartment">{row.scope_name ?? row.scope_id}</TextCell>
-                        ),
-                      sortValue: (row) => `${row.scope_type}/${row.scope_name ?? row.scope_id}`,
-                    },
-                    {
-                      // THE ENGINE'S OWN ANSWER, and the REASON where it has
-                      // none. A disabled schedule and one whose timezone was
-                      // renamed both have an empty `next_run`; only the second
-                      // is a defect, and the row says which in `problem`.
-                      key: "next",
-                      header: "Next",
-                      shrink: true,
-                      sortValue: (row) => tsKey(row.next_run),
-                      cell: (row) =>
-                        row.problem ? (
-                          <Tag variant="danger" title={row.problem}>
-                            cannot fire
-                          </Tag>
-                        ) : !row.enabled ? (
-                          <Tag appearance="outline">disabled</Tag>
-                        ) : row.next_run ? (
-                          <DateCell at={row.next_run} />
-                        ) : (
-                          <EmptyValue label="Not recorded" />
-                        ),
-                    },
-                    {
-                      key: "task",
-                      header: "Task",
-                      cell: (row) => <TextCell>{row.task}</TextCell>,
-                    },
-                  ]}
+                  columns={SEAT_SCHEDULE_COLUMNS}
                 />
               </Card>
             )}
@@ -1577,77 +1778,7 @@ export function SeatScreen({ handle }: { handle: string }) {
                   rows={turnList.data?.turns ?? []}
                   rowKey={(t) => t.turn_id}
                   rowHref={(t) => peekHref({ kind: "turn", id: t.turn_id })}
-                  columns={[
-                    {
-                      key: "started",
-                      header: "Started",
-                      shrink: true,
-                      sortValue: (t) => tsKey(t.started_at),
-                      cell: (t) => <DateCell at={t.started_at} />,
-                    },
-                    {
-                      key: "summary",
-                      header: "What it did",
-                      sortValue: (t) => t.summary ?? "",
-                      cell: (t) => (
-                        <span className="row gap-1">
-                          <span className="truncate">
-                            {t.summary || <span className="muted">no summary recorded</span>}
-                          </span>
-                          {t.task_id && (
-                            <span
-                              className="mono t-caption"
-                              title="the work item this turn was about"
-                            >
-                              {t.task_id}
-                            </span>
-                          )}
-                        </span>
-                      ),
-                    },
-                    {
-                      key: "iterations",
-                      // SELF-ITERATE ROUNDS, and the word says so. Headed "Rounds" this
-                      // column sat directly above phase rows printing TOOL rounds under
-                      // the same word — "Rounds 1" over a 3r execute and a 1r review.
-                      header: (
-                        <span title="self-iterate rounds — the tool rounds each phase used are on the phase row">
-                          Iterations
-                        </span>
-                      ),
-                      label: "Iterations",
-                      shrink: true,
-                      sortValue: (t) => t.iterations,
-                      cell: (t) => <NumberCell value={t.iterations} />,
-                    },
-                    {
-                      key: "tokens",
-                      header: "Tokens",
-                      shrink: true,
-                      sortValue: (t) => t.total_tokens,
-                      cell: (t) => <TokenCell value={t.total_tokens} />,
-                    },
-                    {
-                      key: "state",
-                      header: "",
-                      label: "State",
-                      shrink: true,
-                      cell: (t) => (
-                        <span className="row gap-1">
-                          {/* A RUNNING TURN IS NOT A ZERO-LENGTH ONE.
-                              `duration_ms` is 0 until a completion record
-                              exists, and `complete` is what tells a turn in
-                              flight from one that died mid-flight. */}
-                          {!t.complete && (
-                            <Tag variant="info" title="no completion record — running, or it died">
-                              running
-                            </Tag>
-                          )}
-                          {t.failed && <Tag variant="danger">failed</Tag>}
-                        </span>
-                      ),
-                    },
-                  ]}
+                  columns={SEAT_TURN_COLUMNS}
                 />
               </Card>
             )}
@@ -1905,73 +2036,7 @@ export function SeatScreen({ handle }: { handle: string }) {
                       title: "No episodes recorded",
                       hint: "An episode is written when a turn completes.",
                     }}
-                    columns={[
-                      {
-                        key: "at",
-                        header: "When",
-                        shrink: true,
-                        // THROUGH `tsKey`, never `<` on the string. The engine
-                        // sends both encodings of an instant and trims
-                        // trailing zeros, so a raw compare puts `:07Z` before
-                        // `:07.42Z` — the later episode first, in a list read
-                        // newest-first.
-                        sortValue: (e) => tsKey(e.created_at),
-                        cell: (e) => <DateCell at={e.created_at} />,
-                      },
-                      {
-                        key: "task",
-                        header: "What it did",
-                        // `||` rather than `??`: an episode that recorded an
-                        // EMPTY summary has none, and a dash that says so
-                        // beats a blank cell nobody can tell from a fault.
-                        cell: (e) =>
-                          e.task_summary || e.content ? (
-                            <TextCell>{e.task_summary || e.content}</TextCell>
-                          ) : (
-                            <EmptyValue label="The episode recorded no summary" />
-                          ),
-                      },
-                      {
-                        key: "outcome",
-                        header: "Outcome",
-                        shrink: true,
-                        // NULL, not "": an outcome nothing recorded sorts
-                        // last in both directions rather than ahead of every
-                        // recorded one, which is what the grid does with an
-                        // absent value and what the dash below claims.
-                        sortValue: (e) => e.review_outcome ?? e.outcome ?? null,
-                        cell: (e) =>
-                          e.review_outcome || e.outcome ? (
-                            <Tag
-                              variant={
-                                (e.review_outcome ?? e.outcome) === "done" ? "success" : "warning"
-                              }
-                            >
-                              {e.review_outcome ?? e.outcome}
-                            </Tag>
-                          ) : (
-                            <EmptyValue label="The turn ended without a review outcome" />
-                          ),
-                      },
-                      {
-                        key: "dur",
-                        header: "Took",
-                        align: "right",
-                        shrink: true,
-                        sortValue: (e) => e.duration_ms ?? null,
-                        cell: (e) => <DurationCell ms={e.duration_ms} />,
-                      },
-                      {
-                        key: "conv",
-                        header: "Conversation",
-                        cell: (e) =>
-                          e.conversation_key ? (
-                            <KeyCell value={e.conversation_key} />
-                          ) : (
-                            <EmptyValue label="Not part of a conversation" />
-                          ),
-                      },
-                    ]}
+                    columns={EPISODE_COLUMNS}
                   />
                 </Card>
 
@@ -2207,54 +2272,7 @@ export function SeatScreen({ handle }: { handle: string }) {
                   defaultSort="-started"
                   onRowActivate={(t) => nav.to(["activity", "turns", t.turn_id])}
                   empty={{ title: "No turns in the window" }}
-                  columns={[
-                    {
-                      key: "started",
-                      header: "Started",
-                      shrink: true,
-                      // `tsKey`, for the reason the episodes grid above gives.
-                      sortValue: (t) => tsKey(t.started_at),
-                      cell: (t) => <DateCell at={t.started_at} />,
-                    },
-                    {
-                      // NO PATH ON THE CELL: the whole row already activates
-                      // to the turn, and a link inside it would fire both.
-                      key: "id",
-                      header: "Turn",
-                      // THE RE-RUN MARKER, for the reason the Cost screen's
-                      // own table gives: a turn id names one RUN, so a
-                      // redelivered trigger is two rows with two real bills,
-                      // and unmarked they read as the seat having been paid
-                      // for twice. See `adr/0017`.
-                      cell: (t) => (
-                        <span className="row gap-1">
-                          <KeyCell value={t.turn_id.slice(0, 8)} />
-                          {t.work_key && (spendReruns.get(t.work_key) ?? 0) > 1 && (
-                            <Tag
-                              appearance="outline"
-                              title={`one of ${spendReruns.get(t.work_key)} runs of the same trigger in this window`}
-                            >
-                              re-run
-                            </Tag>
-                          )}
-                        </span>
-                      ),
-                    },
-                    {
-                      key: "tokens",
-                      header: "Tokens",
-                      align: "right",
-                      sortValue: (t) => t.total_tokens,
-                      cell: (t) => <TokenCell value={t.total_tokens} />,
-                    },
-                    {
-                      key: "calls",
-                      header: "Calls",
-                      align: "right",
-                      sortValue: (t) => t.calls,
-                      cell: (t) => <NumberCell value={t.calls} />,
-                    },
-                  ]}
+                  columns={spendColumns}
                 />
               </Card>
             </QueryState>

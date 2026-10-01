@@ -38,7 +38,7 @@ import { DnsGlyph, LayersGlyph } from "@crewlethq/icons/glyphs";
 import { href } from "~/app/router.tsx";
 import { PageActions } from "~/app/frame/PageActions.tsx";
 import { ObjectHeader, type Fact } from "~/app/frame/ObjectHeader.tsx";
-import { DataGrid } from "~/app/frame/DataGrid.tsx";
+import { DataGrid, type GridColumn } from "~/app/frame/DataGrid.tsx";
 import { TextCell } from "~/app/frame/cells.tsx";
 import { QueryState } from "~/components/common.tsx";
 import { useQuery } from "~/lib/useQuery.ts";
@@ -69,6 +69,86 @@ interface Position {
   generation_state?: RetentionGenerationState;
   log_diverged?: boolean;
 }
+
+// The positions table's columns, which close over nothing on the screen — so a
+// module constant, and a poll that moved one node's position draws that row.
+const POSITION_COLUMNS: GridColumn<Position>[] = [
+  {
+    key: "node",
+    header: "Node",
+    cell: (p) => <TextCell icon="dns">{p.node_id}</TextCell>,
+    sortValue: (p) => p.node_id,
+  },
+  {
+    key: "position",
+    header: "Position",
+    shrink: true,
+    sortValue: (p) => p.seq,
+    cell: (p) =>
+      p.seq < 0 ? (
+        // COUNTED AND SILENT, which is the state that pins a
+        // log: the trim waits for a node it cannot see.
+        <EmptyValue label="This node has published no position for this domain" />
+      ) : (
+        <span className="t-num">
+          {p.seq}
+          {p.applied_through !== p.seq && (
+            <span className="muted"> · applied {p.applied_through}</span>
+          )}
+        </span>
+      ),
+  },
+  {
+    key: "generation",
+    header: "Generation",
+    shrink: true,
+    sortValue: (p) => p.generation,
+    // THE GENERATION ITS POSITION IS IN, because a sequence
+    // is a number in one generation's space and the
+    // readmission refusal asks for a position "at the log's
+    // current generation".
+    cell: (p) =>
+      p.seq < 0 ? (
+        <EmptyValue label="This node has published no position for this domain" />
+      ) : (
+        <span className="t-num">{p.generation}</span>
+      ),
+  },
+  {
+    key: "behind",
+    header: "Behind",
+    shrink: true,
+    sortValue: (p) => p.lag ?? 0,
+    cell: (p) =>
+      // A POSITION FROM ANOTHER GENERATION IS NOT A
+      // DISTANCE: its sequence compares with nothing the
+      // log holds now, and subtracted it read 0.
+      p.generation_state === "left" || p.generation_state === "ahead" ? (
+        <Tag variant="warning">stale generation</Tag>
+      ) : p.lag == null ? (
+        <EmptyValue label="Not reported" />
+      ) : (
+        <span className="t-num">{p.lag}</span>
+      ),
+  },
+  {
+    key: "state",
+    header: "",
+    label: "State",
+    shrink: true,
+    cell: (p) => (
+      <span className="row gap-1">
+        {/* COUNTED AND LIVE ARE INDEPENDENT, which the
+                              fleet's own rows say too: counted-and-not-live is
+                              the node pinning the log, and live-and-not-counted
+                              is one inside its eviction fence window. */}
+        {p.counted && <Tag appearance="outline">counted</Tag>}
+        {p.live && <Tag variant="success">live</Tag>}
+        {p.log_diverged && <Tag variant="danger">log diverged</Tag>}
+      </span>
+    ),
+  },
+];
 
 export function DomainScreen({ name }: { name: string }) {
   const { data, loading, error, refusal } = useQuery("retention", undefined, {
@@ -214,83 +294,7 @@ export function DomainScreen({ name }: { name: string }) {
                   rowKey={(p) => p.node_id}
                   rowHref={(p) => href(["admin", "fleet", p.node_id])}
                   defaultSort="position"
-                  columns={[
-                    {
-                      key: "node",
-                      header: "Node",
-                      cell: (p) => <TextCell icon="dns">{p.node_id}</TextCell>,
-                      sortValue: (p) => p.node_id,
-                    },
-                    {
-                      key: "position",
-                      header: "Position",
-                      shrink: true,
-                      sortValue: (p) => p.seq,
-                      cell: (p) =>
-                        p.seq < 0 ? (
-                          // COUNTED AND SILENT, which is the state that pins a
-                          // log: the trim waits for a node it cannot see.
-                          <EmptyValue label="This node has published no position for this domain" />
-                        ) : (
-                          <span className="t-num">
-                            {p.seq}
-                            {p.applied_through !== p.seq && (
-                              <span className="muted"> · applied {p.applied_through}</span>
-                            )}
-                          </span>
-                        ),
-                    },
-                    {
-                      key: "generation",
-                      header: "Generation",
-                      shrink: true,
-                      sortValue: (p) => p.generation,
-                      // THE GENERATION ITS POSITION IS IN, because a sequence
-                      // is a number in one generation's space and the
-                      // readmission refusal asks for a position "at the log's
-                      // current generation".
-                      cell: (p) =>
-                        p.seq < 0 ? (
-                          <EmptyValue label="This node has published no position for this domain" />
-                        ) : (
-                          <span className="t-num">{p.generation}</span>
-                        ),
-                    },
-                    {
-                      key: "behind",
-                      header: "Behind",
-                      shrink: true,
-                      sortValue: (p) => p.lag ?? 0,
-                      cell: (p) =>
-                        // A POSITION FROM ANOTHER GENERATION IS NOT A
-                        // DISTANCE: its sequence compares with nothing the
-                        // log holds now, and subtracted it read 0.
-                        p.generation_state === "left" || p.generation_state === "ahead" ? (
-                          <Tag variant="warning">stale generation</Tag>
-                        ) : p.lag == null ? (
-                          <EmptyValue label="Not reported" />
-                        ) : (
-                          <span className="t-num">{p.lag}</span>
-                        ),
-                    },
-                    {
-                      key: "state",
-                      header: "",
-                      label: "State",
-                      shrink: true,
-                      cell: (p) => (
-                        <span className="row gap-1">
-                          {/* COUNTED AND LIVE ARE INDEPENDENT, which the
-                              fleet's own rows say too: counted-and-not-live is
-                              the node pinning the log, and live-and-not-counted
-                              is one inside its eviction fence window. */}
-                          {p.counted && <Tag appearance="outline">counted</Tag>}
-                          {p.live && <Tag variant="success">live</Tag>}
-                          {p.log_diverged && <Tag variant="danger">log diverged</Tag>}
-                        </span>
-                      ),
-                    },
-                  ]}
+                  columns={POSITION_COLUMNS}
                 />
               </Card>
             </>

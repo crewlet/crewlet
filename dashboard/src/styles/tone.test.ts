@@ -58,7 +58,7 @@ const ACCENT: Site[] = [
   },
   {
     file: "routes/admin/Fleet.tsx",
-    line: `{n.id === data?.this_node && <Tag variant="brand">this one</Tag>}`,
+    line: `{n.id === thisNode && <Tag variant="brand">this one</Tag>}`,
     why: "The same fact, as a row of the fleet table.",
   },
   {

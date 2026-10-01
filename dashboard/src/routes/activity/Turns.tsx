@@ -50,10 +50,12 @@ import { GroupGlyph, TimelineGlyph } from "@crewlethq/icons/glyphs";
 // exact case our own `activate="manual"` exists for — arrowing across three
 // options would ask the engine three times. See the report.
 import { Segmented } from "~/ui/primitives.tsx";
-import { DataGrid } from "~/app/frame/DataGrid.tsx";
+import { DataGrid, type GridColumn } from "~/app/frame/DataGrid.tsx";
 import { peekHref, rowPeekHandler, usePeekControls } from "~/app/frame/DetailRail.tsx";
 import { usePeekNeighbours } from "~/app/frame/PeekHost.tsx";
 import { useQuery } from "~/lib/useQuery.ts";
+import { useShared } from "~/lib/share.ts";
+import { rerunCounts, runsOf } from "~/lib/reruns.ts";
 import { useAgents, useOrg } from "~/lib/store-hooks.ts";
 import { indexOrg, seatFilter } from "~/lib/seats.ts";
 import { plural, tsKey } from "~/lib/format.ts";
@@ -254,16 +256,11 @@ function TurnList({ view, onChange }: { view: string; onChange: (v: string) => v
   // HOW MANY RUNS EACH TRIGGER GOT, over the rows this page holds. A turn id
   // names one run (see `adr/0017`), so a redelivered trigger is several rows
   // and nothing else on the screen says they are the same work.
-  const reruns = useMemo(() => {
-    const counts = new Map<string, number>();
-    for (const t of rows) {
-      // An empty work key is the ABSENCE of an identity — a trigger with
-      // nothing to collapse on — so counting them together would report
-      // every such turn as a re-run of every other.
-      if (t.work_key) counts.set(t.work_key, (counts.get(t.work_key) ?? 0) + 1);
-    }
-    return counts;
-  }, [rows]);
+  //
+  // SHARED (`~/lib/share.ts`), because the column list closes over it: counted
+  // afresh on every poll it was a new value each time, and every row drew
+  // again for counts that had not moved.
+  const reruns = useShared(useMemo(() => rerunCounts(rows), [rows]));
   // WHAT `[` AND `]` WALK: the rows this list actually loaded, windowed and
   // sorted as the reader left them. Published rather than handed to the rail,
   // because only the list knows that order — see `PeekHost`.
@@ -275,6 +272,143 @@ function TurnList({ view, onChange }: { view: string; onChange: (v: string) => v
   // chip for any of them.
   const seats = index.seats.filter((s) => s.kind !== "human" && s.handle !== "");
 
+  // THE COLUMNS HOLD STILL until the re-run counts move: every row is memoised
+  // on the column list, so a list built inline drew all two hundred rows on every
+  // render — a seat's live state moving, a poll that changed one turn.
+  const columns = useMemo<GridColumn<TurnRow>[]>(
+    () => [
+      {
+        key: "started",
+        header: "Started",
+        shrink: true,
+        sortValue: (t) => tsKey(t.started_at),
+        cell: (t) => <DateCell at={t.started_at} />,
+      },
+      {
+        key: "seat",
+        header: "Seat",
+        shrink: true,
+        sortValue: (t) => t.role ?? "",
+        // NOT `SeatCell`, and not the seat chip this column used to
+        // draw: both are links, and the row around them is one now — an
+        // anchor inside an anchor is markup no browser agrees about.
+        // The seat's own page is one click away from the turn.
+        cell: (t) =>
+          t.role ? (
+            <TextCell icon="memory">{t.role}</TextCell>
+          ) : (
+            // NOT a dash: a turn with no seat is not a turn whose seat
+            // went unrecorded, it is the engine's own work.
+            <span className="muted">the engine</span>
+          ),
+      },
+      {
+        key: "summary",
+        header: "What it did",
+        sortValue: (t) => t.summary ?? "",
+        cell: (t) => (
+          <span className="row gap-1">
+            <span className="truncate">
+              {t.summary || <span className="muted">no summary recorded</span>}
+            </span>
+            {t.task_id && (
+              // THE KEY, not a link to it — see the row's own comment.
+              // It still says which item this turn was about, and the
+              // turn's page links to it from inside.
+              <span className="mono t-caption" title="the work item this turn was about">
+                {t.task_id}
+              </span>
+            )}
+          </span>
+        ),
+      },
+      {
+        key: "state",
+        header: "",
+        label: "State",
+        shrink: true,
+        cell: (t) => (
+          <span className="row gap-1">
+            {/* A RE-RUN SAYS SO. A turn id names one run, so a trigger
+                      that failed without reaching outside the engine and was
+                      redelivered is several rows here — and two rows for one
+                      message read as the company having done the work twice.
+                      Counted over the rows this page holds, which is what the
+                      tooltip says. */}
+            {t.work_key && runsOf(reruns, t.work_key) > 1 && (
+              <Tag
+                appearance="outline"
+                title={
+                  `one of ${runsOf(reruns, t.work_key)} runs of the same trigger on this ` +
+                  `page — a turn that fails without acting is redelivered and runs again`
+                }
+              >
+                re-run
+              </Tag>
+            )}
+            {!t.complete && (
+              <Tag variant="info" title="no completion record — running, or it died mid-flight">
+                running
+              </Tag>
+            )}
+            {t.failed && (
+              <Tag variant="warning" title="at least one event of this turn was a failure">
+                failure
+              </Tag>
+            )}
+          </span>
+        ),
+      },
+      {
+        key: "iterations",
+        // SELF-ITERATE ROUNDS, and the word says so. Headed "Rounds" this
+        // column sat directly above phase rows printing TOOL rounds under
+        // the same word — "Rounds 1" over a 3r execute and a 1r review.
+        header: (
+          <span title="self-iterate rounds — the tool rounds each phase used are on the phase row">
+            Iterations
+          </span>
+        ),
+        label: "Iterations",
+        shrink: true,
+        align: "right",
+        sortValue: (t) => t.iterations,
+        cell: (t) => <NumberCell value={t.iterations} />,
+      },
+      {
+        key: "phases",
+        header: "Phases",
+        shrink: true,
+        align: "right",
+        sortValue: (t) => t.phases,
+        cell: (t) => <NumberCell value={t.phases} />,
+      },
+      {
+        key: "tokens",
+        header: "Tokens",
+        shrink: true,
+        align: "right",
+        sortValue: (t) => t.total_tokens,
+        cell: (t) => <TokenCell value={t.total_tokens} />,
+      },
+      {
+        key: "took",
+        header: "Took",
+        shrink: true,
+        align: "right",
+        sortValue: (t) => t.duration_ms,
+        // A RUNNING TURN HAS NO DURATION, and rendering its zero would
+        // make the busiest turns look like the cheapest — so the cell is
+        // handed null rather than the zero, and draws the dash that says
+        // nothing was measured. `DurationCell` is also the right
+        // spelling for a FINISHED span: `fmtElapsed`, which this column
+        // used, is the live-stopwatch format, and a turn with a
+        // completion record is not a stopwatch.
+        cell: (t) => <DurationCell ms={t.complete && t.duration_ms > 0 ? t.duration_ms : null} />,
+      },
+    ],
+    [reruns],
+  );
   return (
     <>
       <TurnLens view={view} onChange={onChange}>
@@ -398,142 +532,7 @@ function TurnList({ view, onChange }: { view: string; onChange: (v: string) => v
             rowPeekHandler(go)?.(e);
           }}
           defaultSort="-started"
-          columns={[
-            {
-              key: "started",
-              header: "Started",
-              shrink: true,
-              sortValue: (t) => tsKey(t.started_at),
-              cell: (t) => <DateCell at={t.started_at} />,
-            },
-            {
-              key: "seat",
-              header: "Seat",
-              shrink: true,
-              sortValue: (t) => t.role ?? "",
-              // NOT `SeatCell`, and not the seat chip this column used to
-              // draw: both are links, and the row around them is one now — an
-              // anchor inside an anchor is markup no browser agrees about.
-              // The seat's own page is one click away from the turn.
-              cell: (t) =>
-                t.role ? (
-                  <TextCell icon="memory">{t.role}</TextCell>
-                ) : (
-                  // NOT a dash: a turn with no seat is not a turn whose seat
-                  // went unrecorded, it is the engine's own work.
-                  <span className="muted">the engine</span>
-                ),
-            },
-            {
-              key: "summary",
-              header: "What it did",
-              sortValue: (t) => t.summary ?? "",
-              cell: (t) => (
-                <span className="row gap-1">
-                  <span className="truncate">
-                    {t.summary || <span className="muted">no summary recorded</span>}
-                  </span>
-                  {t.task_id && (
-                    // THE KEY, not a link to it — see the row's own comment.
-                    // It still says which item this turn was about, and the
-                    // turn's page links to it from inside.
-                    <span className="mono t-caption" title="the work item this turn was about">
-                      {t.task_id}
-                    </span>
-                  )}
-                </span>
-              ),
-            },
-            {
-              key: "state",
-              header: "",
-              label: "State",
-              shrink: true,
-              cell: (t) => (
-                <span className="row gap-1">
-                  {/* A RE-RUN SAYS SO. A turn id names one run, so a trigger
-                      that failed without reaching outside the engine and was
-                      redelivered is several rows here — and two rows for one
-                      message read as the company having done the work twice.
-                      Counted over the rows this page holds, which is what the
-                      tooltip says. */}
-                  {t.work_key && reruns.get(t.work_key)! > 1 && (
-                    <Tag
-                      appearance="outline"
-                      title={
-                        `one of ${reruns.get(t.work_key)} runs of the same trigger on this ` +
-                        `page — a turn that fails without acting is redelivered and runs again`
-                      }
-                    >
-                      re-run
-                    </Tag>
-                  )}
-                  {!t.complete && (
-                    <Tag
-                      variant="info"
-                      title="no completion record — running, or it died mid-flight"
-                    >
-                      running
-                    </Tag>
-                  )}
-                  {t.failed && (
-                    <Tag variant="warning" title="at least one event of this turn was a failure">
-                      failure
-                    </Tag>
-                  )}
-                </span>
-              ),
-            },
-            {
-              key: "iterations",
-              // SELF-ITERATE ROUNDS, and the word says so. Headed "Rounds" this
-              // column sat directly above phase rows printing TOOL rounds under
-              // the same word — "Rounds 1" over a 3r execute and a 1r review.
-              header: (
-                <span title="self-iterate rounds — the tool rounds each phase used are on the phase row">
-                  Iterations
-                </span>
-              ),
-              label: "Iterations",
-              shrink: true,
-              align: "right",
-              sortValue: (t) => t.iterations,
-              cell: (t) => <NumberCell value={t.iterations} />,
-            },
-            {
-              key: "phases",
-              header: "Phases",
-              shrink: true,
-              align: "right",
-              sortValue: (t) => t.phases,
-              cell: (t) => <NumberCell value={t.phases} />,
-            },
-            {
-              key: "tokens",
-              header: "Tokens",
-              shrink: true,
-              align: "right",
-              sortValue: (t) => t.total_tokens,
-              cell: (t) => <TokenCell value={t.total_tokens} />,
-            },
-            {
-              key: "took",
-              header: "Took",
-              shrink: true,
-              align: "right",
-              sortValue: (t) => t.duration_ms,
-              // A RUNNING TURN HAS NO DURATION, and rendering its zero would
-              // make the busiest turns look like the cheapest — so the cell is
-              // handed null rather than the zero, and draws the dash that says
-              // nothing was measured. `DurationCell` is also the right
-              // spelling for a FINISHED span: `fmtElapsed`, which this column
-              // used, is the live-stopwatch format, and a turn with a
-              // completion record is not a stopwatch.
-              cell: (t) => (
-                <DurationCell ms={t.complete && t.duration_ms > 0 ? t.duration_ms : null} />
-              ),
-            },
-          ]}
+          columns={columns}
         />
       </QueryState>
     </>

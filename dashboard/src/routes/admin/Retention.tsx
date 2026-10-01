@@ -35,7 +35,7 @@
  *     first is silent until a node tries to join.
  */
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   Button,
   Callout,
@@ -55,7 +55,7 @@ import {
   ScheduleGlyph,
   WarningGlyph,
 } from "@crewlethq/icons/glyphs";
-import { DataGrid } from "~/app/frame/DataGrid.tsx";
+import { DataGrid, type GridColumn } from "~/app/frame/DataGrid.tsx";
 import { ClockText, DateCell, KeyCell, StatusCell } from "~/app/frame/cells.tsx";
 import { useQuery } from "~/lib/useQuery.ts";
 import { fmtBytes, fmtDateTime, fmtDuration, relTime } from "~/lib/format.ts";
@@ -134,6 +134,186 @@ export function RetentionPanels({ thisNode }: { thisNode?: string }) {
     });
   }, [nodesSeen, domainsSeen, servedBy]);
 
+  // THE COLUMN LISTS HOLD STILL, above the early return a hook may not follow:
+  // every row is memoised on its list, and one built inline drew every row of
+  // both tables on every render of this panel.
+  const snapshotColumns = useMemo<GridColumn<RetentionSnapshot>[]>(
+    () => [
+      {
+        key: "node",
+        header: "Node",
+        sortValue: (s) => s.node_id,
+        cell: (s) => <KeyCell value={s.node_id} path={["admin", "fleet", s.node_id]} />,
+      },
+      {
+        key: "at",
+        header: "Taken",
+        sortValue: (s) => s.at ?? "",
+        cell: (s) =>
+          s.at ? (
+            <DateCell at={s.at} />
+          ) : (
+            // THE LOOP'S OWN REASON, never an empty cell: "node-4
+            // none" is not an answer, and `lagging`, `unhydrated`,
+            // `sole_node`, `insufficient_space`, `deferred` and
+            // `recent` are six different things to do about it.
+            <Tag variant="warning">{s.skip || "no snapshot"}</Tag>
+          ),
+      },
+      {
+        key: "size",
+        header: "Size",
+        align: "right",
+        // ABSENT RATHER THAN ZERO, on the sort as well as in the cell:
+        // a node holding no snapshot is not a node holding an empty one,
+        // and `s.bytes ?` would have rendered a real zero — the shape of
+        // a snapshot that failed mid-write — as "none at all".
+        sortValue: (s) => s.bytes ?? null,
+        cell: (s) =>
+          s.bytes == null ? (
+            <EmptyValue label="This node holds no snapshot" />
+          ) : (
+            <span className="t-num t-caption">{fmtBytes(s.bytes)}</span>
+          ),
+      },
+      {
+        key: "positions",
+        header: "Covers",
+        sortValue: (s) => Object.keys(s.domains ?? {}).length,
+        cell: (s) => (
+          <span className="row wrap gap-1">
+            {Object.entries(s.domains ?? {}).map(([domain, seq]) => (
+              <Tag key={domain} appearance="outline">
+                {domain} @{seq}
+              </Tag>
+            ))}
+            {!s.domains && <EmptyValue label="This node holds no snapshot" />}
+          </span>
+        ),
+      },
+    ],
+    [],
+  );
+  const nodeColumns = useMemo<GridColumn<RetentionNode>[]>(
+    () => [
+      {
+        key: "node",
+        header: "Node",
+        sortValue: (n) => n.node_id,
+        cell: (n) => (
+          <span className="row wrap gap-1">
+            {/* A LINK NOW, because the id finally has somewhere to go:
+                      a node's page says what it is running, what it holds and
+                      which revision it applied, and every one of those is the
+                      next question after "this one is behind". The row itself
+                      is deliberately NOT a peek row — it carries the evict
+                      gesture, and a button inside a link is markup no browser
+                      agrees about. */}
+            <KeyCell value={n.node_id} path={["admin", "fleet", n.node_id]} />
+            {n.node_id === thisNode && <Tag variant="brand">this one</Tag>}
+            {n.counted && !n.live && <Tag variant="warning">counted · not live</Tag>}
+            {/* THE FENCE WINDOW IS THE POINT. An eviction is not
+                      immediate — the node stays counted until effective_at so
+                      a live one is certain to have noticed — and an operator
+                      who cannot see that runs the gesture twice. */}
+            {n.evicted && !n.evicted.effective && (
+              <Tag
+                variant="warning"
+                title={`evicted by ${n.evicted.by}; takes effect ${fmtDateTime(
+                  n.evicted.effective_at,
+                )}`}
+              >
+                evicted in{" "}
+                <ClockText
+                  read={(now) => fmtDuration(Date.parse(n.evicted?.effective_at ?? "") - now)}
+                />
+              </Tag>
+            )}
+            {n.evicted?.effective && (
+              <Tag variant="danger" title={`evicted by ${n.evicted.by}`}>
+                evicted
+              </Tag>
+            )}
+          </span>
+        ),
+      },
+      {
+        key: "position",
+        header: "Position",
+        sortValue: (n) => firstDomain(n)?.seq ?? -1,
+        cell: (n) => <NodePositions node={n} />,
+      },
+      {
+        key: "counted",
+        header: "Counted",
+        shrink: true,
+        sortValue: (n) => (n.counted ? 1 : 0),
+        // ONE STATE IN ONE SPELLING. A badge on the yes branch and
+        // faint prose on the no branch read as two different kinds of
+        // fact, and this is one: whether the trim waits for this node.
+        cell: (n) => (
+          <StatusCell
+            glyph={n.counted ? "●" : "○"}
+            label={n.counted ? "yes" : "no"}
+            tone={n.counted ? "positive" : "neutral"}
+            title={
+              n.counted
+                ? "the trim waits for this node's position"
+                : "the trim no longer waits for this node"
+            }
+          />
+        ),
+      },
+      {
+        key: "reported",
+        header: "Reported",
+        shrink: true,
+        sortValue: (n) => n.at ?? "",
+        cell: (n) =>
+          n.at ? (
+            <DateCell at={n.at} />
+          ) : (
+            // NOT A ZERO AND NOT AN EM-DASH. A live node that has
+            // never published a position is COUNTED — the trim waits
+            // for it — and rendering that as "never" or as position 0
+            // are two different wrong answers.
+            <span className="muted">counted · no position yet</span>
+          ),
+      },
+      {
+        key: "gate",
+        header: "",
+        label: "Eviction",
+        shrink: true,
+        cell: (n) => {
+          const action = gateAction(n, gestures);
+          return (
+            <span className="row gap-1">
+              {/* A LIVE NODE'S EVICTION IS REFUSED unless forced, and
+                        the button alone read as though it would simply
+                        work. */}
+              {action.evict && n.live && (
+                <Tag
+                  variant="neutral"
+                  title="it holds a presence lease, so an eviction is refused unless you force it"
+                >
+                  live
+                </Tag>
+              )}
+              <Button
+                variant="tertiary"
+                size="small"
+                onClick={() => setGate({ node: n.node_id, evict: action.evict })}
+              >
+                {action.label}
+              </Button>
+            </span>
+          );
+        },
+      },
+    ],
+    [thisNode, gestures],
+  );
   if (!operator) return null;
 
   const domains = data?.domains ?? [];
@@ -232,123 +412,7 @@ export function RetentionPanels({ thisNode }: { thisNode?: string }) {
           rows={nodes}
           rowKey={(n) => n.node_id}
           defaultSort="node"
-          columns={[
-            {
-              key: "node",
-              header: "Node",
-              sortValue: (n) => n.node_id,
-              cell: (n) => (
-                <span className="row wrap gap-1">
-                  {/* A LINK NOW, because the id finally has somewhere to go:
-                      a node's page says what it is running, what it holds and
-                      which revision it applied, and every one of those is the
-                      next question after "this one is behind". The row itself
-                      is deliberately NOT a peek row — it carries the evict
-                      gesture, and a button inside a link is markup no browser
-                      agrees about. */}
-                  <KeyCell value={n.node_id} path={["admin", "fleet", n.node_id]} />
-                  {n.node_id === thisNode && <Tag variant="brand">this one</Tag>}
-                  {n.counted && !n.live && <Tag variant="warning">counted · not live</Tag>}
-                  {/* THE FENCE WINDOW IS THE POINT. An eviction is not
-                      immediate — the node stays counted until effective_at so
-                      a live one is certain to have noticed — and an operator
-                      who cannot see that runs the gesture twice. */}
-                  {n.evicted && !n.evicted.effective && (
-                    <Tag
-                      variant="warning"
-                      title={`evicted by ${n.evicted.by}; takes effect ${fmtDateTime(
-                        n.evicted.effective_at,
-                      )}`}
-                    >
-                      evicted in{" "}
-                      <ClockText
-                        read={(now) => fmtDuration(Date.parse(n.evicted?.effective_at ?? "") - now)}
-                      />
-                    </Tag>
-                  )}
-                  {n.evicted?.effective && (
-                    <Tag variant="danger" title={`evicted by ${n.evicted.by}`}>
-                      evicted
-                    </Tag>
-                  )}
-                </span>
-              ),
-            },
-            {
-              key: "position",
-              header: "Position",
-              sortValue: (n) => firstDomain(n)?.seq ?? -1,
-              cell: (n) => <NodePositions node={n} />,
-            },
-            {
-              key: "counted",
-              header: "Counted",
-              shrink: true,
-              sortValue: (n) => (n.counted ? 1 : 0),
-              // ONE STATE IN ONE SPELLING. A badge on the yes branch and
-              // faint prose on the no branch read as two different kinds of
-              // fact, and this is one: whether the trim waits for this node.
-              cell: (n) => (
-                <StatusCell
-                  glyph={n.counted ? "●" : "○"}
-                  label={n.counted ? "yes" : "no"}
-                  tone={n.counted ? "positive" : "neutral"}
-                  title={
-                    n.counted
-                      ? "the trim waits for this node's position"
-                      : "the trim no longer waits for this node"
-                  }
-                />
-              ),
-            },
-            {
-              key: "reported",
-              header: "Reported",
-              shrink: true,
-              sortValue: (n) => n.at ?? "",
-              cell: (n) =>
-                n.at ? (
-                  <DateCell at={n.at} />
-                ) : (
-                  // NOT A ZERO AND NOT AN EM-DASH. A live node that has
-                  // never published a position is COUNTED — the trim waits
-                  // for it — and rendering that as "never" or as position 0
-                  // are two different wrong answers.
-                  <span className="muted">counted · no position yet</span>
-                ),
-            },
-            {
-              key: "gate",
-              header: "",
-              label: "Eviction",
-              shrink: true,
-              cell: (n) => {
-                const action = gateAction(n, gestures);
-                return (
-                  <span className="row gap-1">
-                    {/* A LIVE NODE'S EVICTION IS REFUSED unless forced, and
-                        the button alone read as though it would simply
-                        work. */}
-                    {action.evict && n.live && (
-                      <Tag
-                        variant="neutral"
-                        title="it holds a presence lease, so an eviction is refused unless you force it"
-                      >
-                        live
-                      </Tag>
-                    )}
-                    <Button
-                      variant="tertiary"
-                      size="small"
-                      onClick={() => setGate({ node: n.node_id, evict: action.evict })}
-                    >
-                      {action.label}
-                    </Button>
-                  </span>
-                );
-              },
-            },
-          ]}
+          columns={nodeColumns}
         />
       </Card>
 
@@ -379,60 +443,7 @@ export function RetentionPanels({ thisNode }: { thisNode?: string }) {
           rows={data?.snapshots ?? []}
           rowKey={(s) => s.node_id}
           defaultSort="node"
-          columns={[
-            {
-              key: "node",
-              header: "Node",
-              sortValue: (s) => s.node_id,
-              cell: (s) => <KeyCell value={s.node_id} path={["admin", "fleet", s.node_id]} />,
-            },
-            {
-              key: "at",
-              header: "Taken",
-              sortValue: (s) => s.at ?? "",
-              cell: (s) =>
-                s.at ? (
-                  <DateCell at={s.at} />
-                ) : (
-                  // THE LOOP'S OWN REASON, never an empty cell: "node-4
-                  // none" is not an answer, and `lagging`, `unhydrated`,
-                  // `sole_node`, `insufficient_space`, `deferred` and
-                  // `recent` are six different things to do about it.
-                  <Tag variant="warning">{s.skip || "no snapshot"}</Tag>
-                ),
-            },
-            {
-              key: "size",
-              header: "Size",
-              align: "right",
-              // ABSENT RATHER THAN ZERO, on the sort as well as in the cell:
-              // a node holding no snapshot is not a node holding an empty one,
-              // and `s.bytes ?` would have rendered a real zero — the shape of
-              // a snapshot that failed mid-write — as "none at all".
-              sortValue: (s) => s.bytes ?? null,
-              cell: (s) =>
-                s.bytes == null ? (
-                  <EmptyValue label="This node holds no snapshot" />
-                ) : (
-                  <span className="t-num t-caption">{fmtBytes(s.bytes)}</span>
-                ),
-            },
-            {
-              key: "positions",
-              header: "Covers",
-              sortValue: (s) => Object.keys(s.domains ?? {}).length,
-              cell: (s) => (
-                <span className="row wrap gap-1">
-                  {Object.entries(s.domains ?? {}).map(([domain, seq]) => (
-                    <Tag key={domain} appearance="outline">
-                      {domain} @{seq}
-                    </Tag>
-                  ))}
-                  {!s.domains && <EmptyValue label="This node holds no snapshot" />}
-                </span>
-              ),
-            },
-          ]}
+          columns={snapshotColumns}
         />
       </Card>
 

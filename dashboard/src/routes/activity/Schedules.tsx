@@ -29,7 +29,7 @@ import {
   ErrorGlyph,
   ScheduleGlyph,
 } from "@crewlethq/icons/glyphs";
-import { DataGrid } from "~/app/frame/DataGrid.tsx";
+import { DataGrid, type GridColumn } from "~/app/frame/DataGrid.tsx";
 import { ClockText, DateCell, SeatCell, TextCell } from "~/app/frame/cells.tsx";
 import { ObjectHeader, type Fact } from "~/app/frame/ObjectHeader.tsx";
 import { PropertiesRail } from "~/app/frame/PropertiesRail.tsx";
@@ -37,6 +37,7 @@ import { peekHref, rowPeekHandler, usePeekControls } from "~/app/frame/DetailRai
 import { usePeekNeighbours } from "~/app/frame/PeekHost.tsx";
 import type { ObjectRef } from "~/app/frame/objects.ts";
 import { useQuery, type QueryResult } from "~/lib/useQuery.ts";
+import { useShared } from "~/lib/share.ts";
 import { useOrg } from "~/lib/store-hooks.ts";
 import { indexOrg, seatLookup } from "~/lib/seats.ts";
 import { describe as describeCron, nextFires } from "~/lib/cron.ts";
@@ -61,6 +62,9 @@ function identity(scopeType: string, scopeID: string, name: string): string {
 
 const rowID = (s: ScheduleRow) => identity(s.scope_type, s.scope_id, s.name);
 const runID = (r: ScheduleRunRow) => identity(r.scope_type, r.scope_id, r.schedule_name);
+
+/** A schedule as its row draws it: with the last fire the ledger holds for it, or null. */
+type ListedSchedule = ScheduleRow & { last: ScheduleRunRow | null };
 
 /**
  * A schedule's address, as the FRAME spells it.
@@ -409,8 +413,8 @@ export function Schedules({ scope = [] }: { scope?: string[] }) {
   // all — so this polls, slowly, because a cron's next fire moves in minutes.
   const { data, loading, error, refusal } = useQuery("schedules", undefined, { pollMs: 30_000 });
 
-  const schedules = data?.schedules ?? [];
-  const runs = data?.recent_runs ?? [];
+  const schedules = useMemo(() => data?.schedules ?? [], [data]);
+  const runs = useMemo(() => data?.recent_runs ?? [], [data]);
   // A schedule that cannot fire at all, which is a defect rather than a
   // choice: a cron nobody can parse, a timezone that no longer exists. The
   // row says so in its own `problem` field and a blank Next cell was the
@@ -428,10 +432,21 @@ export function Schedules({ scope = [] }: { scope?: string[] }) {
     ),
   );
 
-  // The last fire per schedule, from the ledger. `Recent` returns newest
+  // EACH SCHEDULE WITH ITS LAST FIRE, from the ledger. `Recent` returns newest
   // first, so the first row per identity is the latest one.
-  const lastFire = new Map<string, ScheduleRunRow>();
-  for (const run of runs) if (!lastFire.has(runID(run))) lastFire.set(runID(run), run);
+  //
+  // FOLDED INTO THE ROW rather than read by the column from a map beside it,
+  // and SHARED with the rows last drawn (`~/lib/share.ts`): a column closing
+  // over the map was a new column list whenever any schedule fired, and every
+  // schedule's row drew again for the one that did. Carried on the row, a fire
+  // draws the row it is a fire of.
+  const listed = useShared(
+    useMemo<ListedSchedule[]>(() => {
+      const lastFire = new Map<string, ScheduleRunRow>();
+      for (const run of runs) if (!lastFire.has(runID(run))) lastFire.set(runID(run), run);
+      return schedules.map((s) => ({ ...s, last: lastFire.get(rowID(s)) ?? null }));
+    }, [schedules, runs]),
+  );
 
   const chosen = detail
     ? schedules.find(
@@ -460,6 +475,216 @@ export function Schedules({ scope = [] }: { scope?: string[] }) {
   // THE THREE SEGMENTS SPELLED OUT rather than `detail` reused, because this
   // is the one place their being present has to NARROW them: a boolean says
   // the same thing to a reader and nothing at all to the compiler.
+  // THE COLUMN LISTS HOLD STILL, above the early return a hook may not follow,
+  // until the chart's answer about a seat moves (`who`): every row is memoised on
+  // its list, and a list built inline drew every schedule and every fire on
+  // every render — a thirty-second poll that moved one `next_run` among them.
+  const scheduleColumns = useMemo<GridColumn<ListedSchedule>[]>(
+    () => [
+      {
+        key: "name",
+        header: "Name",
+        sortValue: (s) => s.name,
+        cell: (s) => (
+          <span className="row gap-1">
+            <span className="truncate">{s.name}</span>
+            {!s.enabled && <Tag appearance="outline">disabled</Tag>}
+          </span>
+        ),
+      },
+      {
+        key: "scope",
+        header: "Scope",
+        shrink: true,
+        sortValue: (s) => `${s.scope_type}:${scopeLabel(s)}`,
+        // A ROLE SCOPE IS A SEAT and a unit scope is not, which is
+        // why only half of this column is a cell: `SeatCell` is the
+        // one rendering of a person in a grid, and a unit is a name
+        // with no avatar, no state and no page of people behind it.
+        cell: (s) =>
+          s.scope_type === "role" ? (
+            <SeatCell handle={scopeLabel(s)} {...who(scopeLabel(s))} />
+          ) : (
+            <Tag appearance="outline">{scopeLabel(s)}</Tag>
+          ),
+      },
+      {
+        key: "cron",
+        header: "Cron",
+        shrink: true,
+        sortValue: (s) => s.cron,
+        cell: (s) => {
+          // THE EXPRESSION AND WHAT IT MEANS. A reader who knows cron
+          // reads `0 9 * * 1-5`; a founder reads five numbers and a
+          // dash on the one screen that says when the company wakes
+          // itself up. An expression this build cannot read shows as
+          // itself with nothing claimed about it.
+          const said = describeCron(s.cron);
+          return (
+            <span className="col" style={{ gap: 1 }}>
+              <code
+                className="inline nowrap"
+                title={s.timezone ? `timezone: ${s.timezone}` : undefined}
+              >
+                {s.cron}
+              </code>
+              {said && <span className="t-caption">{said}</span>}
+            </span>
+          );
+        },
+      },
+      {
+        key: "task",
+        header: "Task",
+        cell: (s) => <TextCell>{s.task}</TextCell>,
+      },
+      {
+        // WHO A FIRE REACHES, resolved by the engine from the scope
+        // and the target — a unit schedule targeting `each` wakes
+        // every member, one targeting `lead` wakes one seat, and a
+        // role schedule's target is meaningless rather than defaulted.
+        // A CHIP LIST RATHER THAN `SeatCell`: this cell holds up to
+        // three people and a remainder, which is a composite the
+        // one-seat cell cannot be.
+        key: "runners",
+        header: "Wakes",
+        shrink: true,
+        cell: (s) =>
+          s.runners?.length ? (
+            <span className="row gap-1">
+              {s.runners.slice(0, 3).map((handle) => (
+                <SeatChip key={handle} handle={handle} {...who(handle)} />
+              ))}
+              {s.runners.length > 3 && <span className="t-caption">+{s.runners.length - 3}</span>}
+            </span>
+          ) : (
+            <EmptyValue label="Nobody — this schedule wakes no seat" />
+          ),
+      },
+      {
+        key: "next",
+        header: "Next",
+        shrink: true,
+        sortValue: (s) => tsKey(s.next_run) || Number.MAX_SAFE_INTEGER,
+        // NOT `DateCell`: this is the only column in the product that
+        // reads FORWARD, and `relTime` spells a future instant as an
+        // elapsed one.
+        cell: (s) =>
+          s.next_run ? (
+            <span className="t-caption" title={fmtDateTime(s.next_run)}>
+              <ClockText read={(now) => inTime(s.next_run, now)} />
+            </span>
+          ) : s.problem ? (
+            // THE REASON, not a blank. A schedule whose timezone was
+            // renamed shows nothing under Next and looks merely idle.
+            <Tag variant="danger" title={s.problem}>
+              {s.problem}
+            </Tag>
+          ) : (
+            <EmptyValue label="Disabled, or the calendar never reaches it" />
+          ),
+      },
+      {
+        key: "last",
+        header: "Last",
+        shrink: true,
+        sortValue: (s) => tsKey(s.last?.fired_at ?? ""),
+        cell: (s) => {
+          const run = s.last;
+          if (!run) return <EmptyValue label="This schedule has never fired" />;
+          return (
+            <span className="row gap-1">
+              <DateCell at={run.fired_at} />
+              {run.outcome && (
+                <Tag variant={OUTCOME_TONE[run.outcome] ?? "neutral"}>{run.outcome}</Tag>
+              )}
+            </span>
+          );
+        },
+      },
+    ],
+    [who],
+  );
+  const runColumns = useMemo<GridColumn<ScheduleRunRow>[]>(
+    () => [
+      {
+        key: "fired",
+        header: "Fired",
+        shrink: true,
+        sortValue: (r) => tsKey(r.fired_at),
+        cell: (r) => <DateCell at={r.fired_at} />,
+      },
+      {
+        key: "name",
+        header: "Schedule",
+        sortValue: (r) => r.schedule_name,
+        cell: (r) => <TextCell>{r.schedule_name}</TextCell>,
+      },
+      {
+        key: "scope",
+        header: "Scope",
+        shrink: true,
+        sortValue: (r) => `${r.scope_type}:${r.scope_id}`,
+        cell: (r) => <Tag appearance="outline">{r.scope_id}</Tag>,
+      },
+      {
+        // WHICH SEAT this fire woke. A unit schedule targeting `each`
+        // writes one ledger row per member, so without this column
+        // three rows read as one fire repeated.
+        key: "target",
+        header: "Woke",
+        shrink: true,
+        cell: (r) => <SeatCell handle={r.target_handle} {...who(r.target_handle)} />,
+      },
+      {
+        key: "outcome",
+        header: "Outcome",
+        shrink: true,
+        sortValue: (r) => r.outcome,
+        // A BADGE, NOT `StatusCell`: the ledger's two words are a
+        // dispatch vocabulary rather than a lifecycle, and this is
+        // the pill the Last column above draws for the same value.
+        // AN ABSENT OUTCOME IS NOT A WORD, though — a badge reading
+        // "—" claims the ledger recorded something it did not.
+        cell: (r) =>
+          r.outcome ? (
+            <Tag
+              variant={OUTCOME_TONE[r.outcome] ?? "neutral"}
+              title={
+                r.outcome === "skipped_catchup"
+                  ? "the tick was missed and fell outside the catchup window"
+                  : undefined
+              }
+            >
+              {r.outcome}
+            </Tag>
+          ) : (
+            <EmptyValue label="The ledger recorded no outcome for this fire" />
+          ),
+      },
+      {
+        // THE TICK, which is not the instant it ran: a catchup run
+        // fires now for a tick that was due earlier, and the pair is
+        // the only way to see that. ABSOLUTE rather than `DateCell`
+        // for exactly that reason — two relative times an hour apart
+        // read as one fire, and the tick's own label is the ledger's
+        // at-most-once key.
+        key: "due",
+        header: "For the tick",
+        shrink: true,
+        sortValue: (r) => tsKey(r.scheduled_at),
+        cell: (r) =>
+          r.scheduled_at ? (
+            <span className="t-caption" title={r.fire_label}>
+              {fmtDateTime(r.scheduled_at)}
+            </span>
+          ) : (
+            <EmptyValue label="The ledger recorded no tick for this fire" />
+          ),
+      },
+    ],
+    [who],
+  );
   if (scopeType && scopeId && scheduleName) {
     return (
       <OneSchedule
@@ -536,8 +761,8 @@ export function Schedules({ scope = [] }: { scope?: string[] }) {
           <Card.Header icon={<CalendarTodayGlyph size="sm" />} count={schedules.length}>
             <Card.Title>Defined</Card.Title>
           </Card.Header>
-          <DataGrid
-            rows={schedules}
+          <DataGrid<ListedSchedule>
+            rows={listed}
             rowKey={rowID}
             // A SCHEDULE HAS AN ADDRESS, and it is its whole identity: two
             // units may each declare a "standup", and a role and a unit may
@@ -549,131 +774,7 @@ export function Schedules({ scope = [] }: { scope?: string[] }) {
             rowHref={(s) => peekHref(scheduleRef(s.scope_type, s.scope_id, s.name))}
             onRowActivate={(s, e) => openSchedule(scheduleRef(s.scope_type, s.scope_id, s.name), e)}
             defaultSort="next"
-            columns={[
-              {
-                key: "name",
-                header: "Name",
-                sortValue: (s) => s.name,
-                cell: (s) => (
-                  <span className="row gap-1">
-                    <span className="truncate">{s.name}</span>
-                    {!s.enabled && <Tag appearance="outline">disabled</Tag>}
-                  </span>
-                ),
-              },
-              {
-                key: "scope",
-                header: "Scope",
-                shrink: true,
-                sortValue: (s) => `${s.scope_type}:${scopeLabel(s)}`,
-                // A ROLE SCOPE IS A SEAT and a unit scope is not, which is
-                // why only half of this column is a cell: `SeatCell` is the
-                // one rendering of a person in a grid, and a unit is a name
-                // with no avatar, no state and no page of people behind it.
-                cell: (s) =>
-                  s.scope_type === "role" ? (
-                    <SeatCell handle={scopeLabel(s)} {...who(scopeLabel(s))} />
-                  ) : (
-                    <Tag appearance="outline">{scopeLabel(s)}</Tag>
-                  ),
-              },
-              {
-                key: "cron",
-                header: "Cron",
-                shrink: true,
-                sortValue: (s) => s.cron,
-                cell: (s) => {
-                  // THE EXPRESSION AND WHAT IT MEANS. A reader who knows cron
-                  // reads `0 9 * * 1-5`; a founder reads five numbers and a
-                  // dash on the one screen that says when the company wakes
-                  // itself up. An expression this build cannot read shows as
-                  // itself with nothing claimed about it.
-                  const said = describeCron(s.cron);
-                  return (
-                    <span className="col" style={{ gap: 1 }}>
-                      <code
-                        className="inline nowrap"
-                        title={s.timezone ? `timezone: ${s.timezone}` : undefined}
-                      >
-                        {s.cron}
-                      </code>
-                      {said && <span className="t-caption">{said}</span>}
-                    </span>
-                  );
-                },
-              },
-              {
-                key: "task",
-                header: "Task",
-                cell: (s) => <TextCell>{s.task}</TextCell>,
-              },
-              {
-                // WHO A FIRE REACHES, resolved by the engine from the scope
-                // and the target — a unit schedule targeting `each` wakes
-                // every member, one targeting `lead` wakes one seat, and a
-                // role schedule's target is meaningless rather than defaulted.
-                // A CHIP LIST RATHER THAN `SeatCell`: this cell holds up to
-                // three people and a remainder, which is a composite the
-                // one-seat cell cannot be.
-                key: "runners",
-                header: "Wakes",
-                shrink: true,
-                cell: (s) =>
-                  s.runners?.length ? (
-                    <span className="row gap-1">
-                      {s.runners.slice(0, 3).map((handle) => (
-                        <SeatChip key={handle} handle={handle} {...who(handle)} />
-                      ))}
-                      {s.runners.length > 3 && (
-                        <span className="t-caption">+{s.runners.length - 3}</span>
-                      )}
-                    </span>
-                  ) : (
-                    <EmptyValue label="Nobody — this schedule wakes no seat" />
-                  ),
-              },
-              {
-                key: "next",
-                header: "Next",
-                shrink: true,
-                sortValue: (s) => tsKey(s.next_run) || Number.MAX_SAFE_INTEGER,
-                // NOT `DateCell`: this is the only column in the product that
-                // reads FORWARD, and `relTime` spells a future instant as an
-                // elapsed one.
-                cell: (s) =>
-                  s.next_run ? (
-                    <span className="t-caption" title={fmtDateTime(s.next_run)}>
-                      <ClockText read={(now) => inTime(s.next_run, now)} />
-                    </span>
-                  ) : s.problem ? (
-                    // THE REASON, not a blank. A schedule whose timezone was
-                    // renamed shows nothing under Next and looks merely idle.
-                    <Tag variant="danger" title={s.problem}>
-                      {s.problem}
-                    </Tag>
-                  ) : (
-                    <EmptyValue label="Disabled, or the calendar never reaches it" />
-                  ),
-              },
-              {
-                key: "last",
-                header: "Last",
-                shrink: true,
-                sortValue: (s) => tsKey(lastFire.get(rowID(s))?.fired_at ?? ""),
-                cell: (s) => {
-                  const run = lastFire.get(rowID(s));
-                  if (!run) return <EmptyValue label="This schedule has never fired" />;
-                  return (
-                    <span className="row gap-1">
-                      <DateCell at={run.fired_at} />
-                      {run.outcome && (
-                        <Tag variant={OUTCOME_TONE[run.outcome] ?? "neutral"}>{run.outcome}</Tag>
-                      )}
-                    </span>
-                  );
-                },
-              },
-            ]}
+            columns={scheduleColumns}
           />
         </Card>
 
@@ -698,83 +799,7 @@ export function Schedules({ scope = [] }: { scope?: string[] }) {
               title: "No runs recorded",
               hint: "A run is recorded when a schedule fires. Nothing has fired since this node started keeping the record.",
             }}
-            columns={[
-              {
-                key: "fired",
-                header: "Fired",
-                shrink: true,
-                sortValue: (r) => tsKey(r.fired_at),
-                cell: (r) => <DateCell at={r.fired_at} />,
-              },
-              {
-                key: "name",
-                header: "Schedule",
-                sortValue: (r) => r.schedule_name,
-                cell: (r) => <TextCell>{r.schedule_name}</TextCell>,
-              },
-              {
-                key: "scope",
-                header: "Scope",
-                shrink: true,
-                sortValue: (r) => `${r.scope_type}:${r.scope_id}`,
-                cell: (r) => <Tag appearance="outline">{r.scope_id}</Tag>,
-              },
-              {
-                // WHICH SEAT this fire woke. A unit schedule targeting `each`
-                // writes one ledger row per member, so without this column
-                // three rows read as one fire repeated.
-                key: "target",
-                header: "Woke",
-                shrink: true,
-                cell: (r) => <SeatCell handle={r.target_handle} {...who(r.target_handle)} />,
-              },
-              {
-                key: "outcome",
-                header: "Outcome",
-                shrink: true,
-                sortValue: (r) => r.outcome,
-                // A BADGE, NOT `StatusCell`: the ledger's two words are a
-                // dispatch vocabulary rather than a lifecycle, and this is
-                // the pill the Last column above draws for the same value.
-                // AN ABSENT OUTCOME IS NOT A WORD, though — a badge reading
-                // "—" claims the ledger recorded something it did not.
-                cell: (r) =>
-                  r.outcome ? (
-                    <Tag
-                      variant={OUTCOME_TONE[r.outcome] ?? "neutral"}
-                      title={
-                        r.outcome === "skipped_catchup"
-                          ? "the tick was missed and fell outside the catchup window"
-                          : undefined
-                      }
-                    >
-                      {r.outcome}
-                    </Tag>
-                  ) : (
-                    <EmptyValue label="The ledger recorded no outcome for this fire" />
-                  ),
-              },
-              {
-                // THE TICK, which is not the instant it ran: a catchup run
-                // fires now for a tick that was due earlier, and the pair is
-                // the only way to see that. ABSOLUTE rather than `DateCell`
-                // for exactly that reason — two relative times an hour apart
-                // read as one fire, and the tick's own label is the ledger's
-                // at-most-once key.
-                key: "due",
-                header: "For the tick",
-                shrink: true,
-                sortValue: (r) => tsKey(r.scheduled_at),
-                cell: (r) =>
-                  r.scheduled_at ? (
-                    <span className="t-caption" title={r.fire_label}>
-                      {fmtDateTime(r.scheduled_at)}
-                    </span>
-                  ) : (
-                    <EmptyValue label="The ledger recorded no tick for this fire" />
-                  ),
-              },
-            ]}
+            columns={runColumns}
           />
         </Card>
       </QueryState>
@@ -836,6 +861,57 @@ function OneSchedule({
   const org = useOrg();
   // WHO A HANDLE IS — see the same lookup on the screen this page came from.
   const who = useMemo(() => seatLookup(indexOrg(org)), [org]);
+  // THE COLUMNS HOLD STILL until the chart's answer about a seat moves: every row
+  // is memoised on this list, and one built inline drew every fire on every
+  // poll.
+  const columns = useMemo<GridColumn<ScheduleRunRow>[]>(
+    () => [
+      {
+        key: "fired",
+        header: "Fired",
+        shrink: true,
+        sortValue: (r) => tsKey(r.fired_at),
+        cell: (r) => <DateCell at={r.fired_at} />,
+      },
+      {
+        key: "target",
+        header: "Woke",
+        shrink: true,
+        cell: (r) => <SeatCell handle={r.target_handle} {...who(r.target_handle)} />,
+      },
+      {
+        key: "outcome",
+        header: "Outcome",
+        shrink: true,
+        sortValue: (r) => r.outcome,
+        cell: (r) =>
+          r.outcome ? (
+            <Tag variant={OUTCOME_TONE[r.outcome] ?? "neutral"}>{r.outcome}</Tag>
+          ) : (
+            <EmptyValue label="The ledger recorded no outcome for this fire" />
+          ),
+      },
+      {
+        // THE TICK, which is not the instant it ran: a catchup fire
+        // runs now for a tick that was due earlier, and the pair is
+        // the only way to see that — so it stays absolute where the
+        // column beside it is relative.
+        key: "due",
+        header: "For the tick",
+        shrink: true,
+        sortValue: (r) => tsKey(r.scheduled_at),
+        cell: (r) =>
+          r.scheduled_at ? (
+            <span className="t-caption" title={r.fire_label}>
+              {fmtDateTime(r.scheduled_at)}
+            </span>
+          ) : (
+            <EmptyValue label="The ledger recorded no tick for this fire" />
+          ),
+      },
+    ],
+    [who],
+  );
   return (
     <>
       <PageActions>
@@ -902,51 +978,7 @@ function OneSchedule({
             rows={runs}
             rowKey={(r) => `${r.fired_at}:${r.fire_label}:${r.target_handle}`}
             defaultSort="-fired"
-            columns={[
-              {
-                key: "fired",
-                header: "Fired",
-                shrink: true,
-                sortValue: (r) => tsKey(r.fired_at),
-                cell: (r) => <DateCell at={r.fired_at} />,
-              },
-              {
-                key: "target",
-                header: "Woke",
-                shrink: true,
-                cell: (r) => <SeatCell handle={r.target_handle} {...who(r.target_handle)} />,
-              },
-              {
-                key: "outcome",
-                header: "Outcome",
-                shrink: true,
-                sortValue: (r) => r.outcome,
-                cell: (r) =>
-                  r.outcome ? (
-                    <Tag variant={OUTCOME_TONE[r.outcome] ?? "neutral"}>{r.outcome}</Tag>
-                  ) : (
-                    <EmptyValue label="The ledger recorded no outcome for this fire" />
-                  ),
-              },
-              {
-                // THE TICK, which is not the instant it ran: a catchup fire
-                // runs now for a tick that was due earlier, and the pair is
-                // the only way to see that — so it stays absolute where the
-                // column beside it is relative.
-                key: "due",
-                header: "For the tick",
-                shrink: true,
-                sortValue: (r) => tsKey(r.scheduled_at),
-                cell: (r) =>
-                  r.scheduled_at ? (
-                    <span className="t-caption" title={r.fire_label}>
-                      {fmtDateTime(r.scheduled_at)}
-                    </span>
-                  ) : (
-                    <EmptyValue label="The ledger recorded no tick for this fire" />
-                  ),
-              },
-            ]}
+            columns={columns}
           />
         </Card>
       </QueryState>

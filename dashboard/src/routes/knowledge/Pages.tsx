@@ -34,7 +34,7 @@ import { Card, cx, EmptyState, FilterChip, Input, Select, Skeleton, Tag } from "
 // and the diff lens gates one of its own — which is exactly the case our
 // `activate="manual"` exists for. See the report.
 import { Segmented } from "~/ui/primitives.tsx";
-import { DataGrid } from "~/app/frame/DataGrid.tsx";
+import { DataGrid, type GridColumn } from "~/app/frame/DataGrid.tsx";
 import {
   ClockText,
   DateCell,
@@ -273,6 +273,108 @@ export function Pages({ container: fromPath }: { container?: string }) {
     useMemo(() => rows.map((r) => ({ kind: "page" as const, id: pageAddress(r) })), [rows]),
   );
 
+  // THE COLUMNS HOLD STILL until the chart moves (`index`, which names an author):
+  // every row is memoised on this list, so one built inline drew every page on
+  // every twenty-second poll.
+  const columns = useMemo<GridColumn<PageSummary>[]>(
+    () => [
+      {
+        key: "title",
+        header: "Title",
+        sortValue: (r) => r.title,
+        // NOT AN ANCHOR: the row is one now, and a title that was also
+        // a link would be the one part of the row where a plain click
+        // meant something different from everywhere else on it.
+        cell: (r) => <TextCell icon="description">{r.title}</TextCell>,
+      },
+      {
+        key: "container",
+        header: "Container",
+        shrink: true,
+        sortValue: (r) => r.container,
+        // A CHIP RATHER THAN A `KeyCell`, which is the one identifier
+        // cell and would otherwise be right: the containers above this
+        // grid are the filter for this very column, drawn as exactly
+        // this badge, and a column that spelled them differently would
+        // make the control and the thing it controls look like two
+        // different vocabularies.
+        cell: (r) => (
+          <Tag appearance="outline" monospace>
+            {r.container}
+          </Tag>
+        ),
+      },
+      {
+        key: "kind",
+        header: "Kind",
+        shrink: true,
+        sortValue: (r) => (r.skill ? "skill" : r.onboarding ? "onboarding" : "page"),
+        cell: (r) =>
+          r.skill ? (
+            // A TOOL SKILL IS MACHINERY, marked so a reader does not
+            // take it for guidance somebody wrote to be read: it is
+            // documentation the engine injects into a phase.
+            <Tag variant="info" title="Injected into a phase by the tool-skill registry">
+              tool skill
+            </Tag>
+          ) : r.onboarding ? (
+            <Tag variant="warning" title="Where a new seat's reading starts">
+              onboarding
+            </Tag>
+          ) : (
+            <span className="muted">page</span>
+          ),
+      },
+      {
+        key: "status",
+        header: "Status",
+        shrink: true,
+        sortValue: (r) => r.status,
+        cell: (r) => (
+          <Tag variant={STATUS_TONE[r.status] ?? "neutral"} dot>
+            {r.status}
+          </Tag>
+        ),
+      },
+      {
+        key: "version",
+        header: "Version",
+        shrink: true,
+        align: "right",
+        sortValue: (r) => r.version,
+        // A VERSION IS AN IDENTIFIER, not a quantity: v10 does not
+        // mean ten of anything, so it wears the mono face a key wears
+        // rather than the tabular one a `NumberCell` counts in.
+        cell: (r) => <KeyCell value={`v${r.version}`} />,
+      },
+      {
+        key: "author",
+        header: "Author",
+        shrink: true,
+        sortValue: (r) => r.author ?? "",
+        // HALF A CELL, and the other half is the reason: `SeatCell` is
+        // the one rendering of a person in a grid, and a page with no
+        // author was written by the ENGINE rather than by nobody. The
+        // `—` this column drew said the opposite — that the author is
+        // a thing nothing recorded — about every page the tool-skill
+        // catalogue publishes.
+        cell: (r) => {
+          if (!r.author) return <span className="muted">the engine</span>;
+          const who = index.byHandle.get(r.author);
+          return <SeatCell handle={r.author} name={who?.name} kind={who?.kind} />;
+        },
+      },
+      {
+        key: "updated",
+        header: "Updated",
+        shrink: true,
+        align: "right",
+        sortValue: (r) => tsKey(r.updated_at),
+        cell: (r) => <DateCell at={r.updated_at} />,
+      },
+    ],
+    [index],
+  );
   return (
     <>
       <PageNote>
@@ -392,102 +494,7 @@ export function Pages({ container: fromPath }: { container?: string }) {
             onRowActivate={peekRow<PageSummary>((r) =>
               openPeek({ kind: "page", id: pageAddress(r) }),
             )}
-            columns={[
-              {
-                key: "title",
-                header: "Title",
-                sortValue: (r) => r.title,
-                // NOT AN ANCHOR: the row is one now, and a title that was also
-                // a link would be the one part of the row where a plain click
-                // meant something different from everywhere else on it.
-                cell: (r) => <TextCell icon="description">{r.title}</TextCell>,
-              },
-              {
-                key: "container",
-                header: "Container",
-                shrink: true,
-                sortValue: (r) => r.container,
-                // A CHIP RATHER THAN A `KeyCell`, which is the one identifier
-                // cell and would otherwise be right: the containers above this
-                // grid are the filter for this very column, drawn as exactly
-                // this badge, and a column that spelled them differently would
-                // make the control and the thing it controls look like two
-                // different vocabularies.
-                cell: (r) => (
-                  <Tag appearance="outline" monospace>
-                    {r.container}
-                  </Tag>
-                ),
-              },
-              {
-                key: "kind",
-                header: "Kind",
-                shrink: true,
-                sortValue: (r) => (r.skill ? "skill" : r.onboarding ? "onboarding" : "page"),
-                cell: (r) =>
-                  r.skill ? (
-                    // A TOOL SKILL IS MACHINERY, marked so a reader does not
-                    // take it for guidance somebody wrote to be read: it is
-                    // documentation the engine injects into a phase.
-                    <Tag variant="info" title="Injected into a phase by the tool-skill registry">
-                      tool skill
-                    </Tag>
-                  ) : r.onboarding ? (
-                    <Tag variant="warning" title="Where a new seat's reading starts">
-                      onboarding
-                    </Tag>
-                  ) : (
-                    <span className="muted">page</span>
-                  ),
-              },
-              {
-                key: "status",
-                header: "Status",
-                shrink: true,
-                sortValue: (r) => r.status,
-                cell: (r) => (
-                  <Tag variant={STATUS_TONE[r.status] ?? "neutral"} dot>
-                    {r.status}
-                  </Tag>
-                ),
-              },
-              {
-                key: "version",
-                header: "Version",
-                shrink: true,
-                align: "right",
-                sortValue: (r) => r.version,
-                // A VERSION IS AN IDENTIFIER, not a quantity: v10 does not
-                // mean ten of anything, so it wears the mono face a key wears
-                // rather than the tabular one a `NumberCell` counts in.
-                cell: (r) => <KeyCell value={`v${r.version}`} />,
-              },
-              {
-                key: "author",
-                header: "Author",
-                shrink: true,
-                sortValue: (r) => r.author ?? "",
-                // HALF A CELL, and the other half is the reason: `SeatCell` is
-                // the one rendering of a person in a grid, and a page with no
-                // author was written by the ENGINE rather than by nobody. The
-                // `—` this column drew said the opposite — that the author is
-                // a thing nothing recorded — about every page the tool-skill
-                // catalogue publishes.
-                cell: (r) => {
-                  if (!r.author) return <span className="muted">the engine</span>;
-                  const who = index.byHandle.get(r.author);
-                  return <SeatCell handle={r.author} name={who?.name} kind={who?.kind} />;
-                },
-              },
-              {
-                key: "updated",
-                header: "Updated",
-                shrink: true,
-                align: "right",
-                sortValue: (r) => tsKey(r.updated_at),
-                cell: (r) => <DateCell at={r.updated_at} />,
-              },
-            ]}
+            columns={columns}
           />
         </Card>
       </QueryState>

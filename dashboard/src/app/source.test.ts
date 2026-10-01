@@ -533,6 +533,48 @@ function addressOffences(code: string): { line: number; says: string; text: stri
   return out;
 }
 
+/**
+ * Every `<DataGrid …>` element's own source text — its generic argument
+ * stepped over, so `<DataGrid<Row>` is read as the element it is rather than
+ * ended at the generic's `>`, which is where [elements] would end it.
+ */
+function grids(text: string): { at: number; text: string }[] {
+  const out: { at: number; text: string }[] = [];
+  const tag = "<DataGrid";
+  let i = 0;
+  while ((i = text.indexOf(tag, i)) >= 0) {
+    let j = i + tag.length;
+    if (text[j] === "<") {
+      for (let angle = 0; j < text.length; j++) {
+        if (text[j] === "<") angle++;
+        else if (text[j] === ">" && --angle === 0) {
+          j++;
+          break;
+        }
+      }
+    } else if (!/[\s/>]/.test(text[j] ?? "")) {
+      i = j;
+      continue;
+    }
+    let depth = 0;
+    for (; j < text.length; j++) {
+      const c = text[j];
+      if (c === "{") depth++;
+      else if (c === "}") depth--;
+      else if (depth === 0 && c === "/" && text[j + 1] === ">") {
+        j += 2;
+        break;
+      } else if (depth === 0 && c === ">") {
+        j += 1;
+        break;
+      }
+    }
+    out.push({ at: i, text: text.slice(i, j) });
+    i = j;
+  }
+  return out;
+}
+
 test("no screen opens an item by its key", () => {
   const offenders: string[] = [];
   let read = 0;
@@ -594,4 +636,108 @@ test("the address gate fires on each way a key leaks into an address, and on not
   ]) {
     expect(addressOffences(good), good).toEqual([]);
   }
+});
+
+/** What an element hands `columns={…}`, brace-counted, or null where it hands none. */
+function columnsOf(element: string): string | null {
+  const start = element.indexOf("columns={");
+  if (start < 0) return null;
+  let depth = 0;
+  for (let j = start + "columns=".length; j < element.length; j++) {
+    if (element[j] === "{") depth++;
+    else if (element[j] === "}" && --depth === 0) {
+      return element.slice(start + "columns={".length, j);
+    }
+  }
+  return null;
+}
+
+/**
+ * Why a grid's `columns` is not a value that holds still, or null where it is.
+ *
+ * HELD STILL means a name declared once at module scope or with `useMemo` in
+ * the file that hands it over; anything else is a new list on every render.
+ */
+export function columnsOffence(source: string, value: string): string | null {
+  const name = value.trim();
+  if (!/^[A-Za-z_$][\w$]*$/.test(name)) return "an expression, built again on every render";
+  const declared = new RegExp(
+    String.raw`^([ \t]*)(?:export\s+)?const\s+${name}\b[^=\n]*=\s*(.*)$`,
+    "gm",
+  );
+  const found = [...source.matchAll(declared)];
+  if (found.length === 0) return `\`${name}\` is not declared in this file as a held value`;
+  for (const [, indent, rest] of found) {
+    if (indent === "") continue;
+    if (/^useMemo\s*[(<]/.test(rest ?? "")) continue;
+    return `\`${name}\` is declared without useMemo, so it is a new list on every render`;
+  }
+  return null;
+}
+
+/**
+ * A GRID'S COLUMNS ARE A VALUE THAT HOLDS STILL.
+ *
+ * Every row of a grid is memoised on the column list it is handed
+ * (`app/frame/DataGrid.tsx`), and rightly: a column closing over something new
+ * may draw something new. So a list built inline — `columns={[…]}`, or a
+ * `const` declared in the render without `useMemo` — is a new list on every
+ * render of the screen, and every such render draws every row: a seat's live
+ * state moving, a clock-driven header, a filter typed above the grid, a poll
+ * that changed one row. Twenty-seven grids on twenty screens were built that
+ * way, the turns list among them, where one changed turn drew all two hundred.
+ *
+ * NOTHING ELSE CATCHES IT: an inline list type-checks, renders correctly and
+ * is wrong only in how much work every render does. So the value a grid is
+ * handed must be a name this file declares at module scope or with `useMemo`.
+ * A `useMemo` whose dependencies change on every render passes this and is
+ * the same defect — which is what the screens' own poll cases are for.
+ */
+test("every grid is handed a column list that holds still", () => {
+  const offenders: string[] = [];
+  let seen = 0;
+  for (const { path, text } of sources([".tsx"])) {
+    for (const grid of grids(text)) {
+      const value = columnsOf(grid.text);
+      if (value === null) continue;
+      seen++;
+      const offence = columnsOffence(text, value);
+      if (offence === null) continue;
+      const line = text.slice(0, grid.at).split("\n").length;
+      offenders.push(`${path}:${line} — ${offence}`);
+    }
+  }
+  expect(
+    offenders,
+    "hold the columns in a useMemo on what they read, or at module scope: an inline list draws every row on every render",
+  ).toEqual([]);
+  // THE OTHER SIDE: a renamed component or a broken scan makes the rule vacuous
+  // and still green. Thirty-odd grids today.
+  expect(seen, "nothing here reads as a DataGrid handed columns any more").toBeGreaterThan(25);
+});
+
+test("the column gate fires on each spelling it is for, and passes a held list", () => {
+  const offence = (source: string) => {
+    const [grid] = grids(source);
+    return columnsOffence(source, columnsOf(grid!.text) ?? "");
+  };
+  // INLINE, GENERIC OR NOT.
+  expect(offence('<DataGrid<Row>\n  rows={rows}\n  columns={[{ key: "a" }]}\n/>')).not.toBeNull();
+  expect(offence('<DataGrid rows={rows} columns={[{ key: "a" }]} />')).not.toBeNull();
+  // AN EXPRESSION IS BUILT EVERY RENDER TOO — a call, a ternary.
+  expect(offence("<DataGrid columns={build(ctx)} />")).not.toBeNull();
+  expect(offence("<DataGrid columns={wide ? a : b} />")).not.toBeNull();
+  // A NAME DECLARED IN THE RENDER WITHOUT `useMemo` is the same list inline.
+  expect(
+    offence(
+      "function S() {\n  const columns = [{ key: 'a' }];\n  return <DataGrid columns={columns} />;\n}",
+    ),
+  ).not.toBeNull();
+  // AND WHAT HOLDS STILL PASSES: a module constant, and a `useMemo`.
+  expect(offence("const COLUMNS = [];\nconst g = <DataGrid columns={COLUMNS} />;")).toBeNull();
+  expect(
+    offence(
+      "function S() {\n  const columns = useMemo<GridColumn<Row>[]>(() => [], []);\n  return <DataGrid<Row> rows={r} columns={columns} />;\n}",
+    ),
+  ).toBeNull();
 });

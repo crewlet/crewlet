@@ -706,11 +706,32 @@ a reason of its own draws no row. The rows were built inline in the grid's
 render, which drew all of them for anything at all: a `j` on a hundred-row grid
 drew a hundred rows, and a screen's own render drew every row of every grid on
 it — 169–268 ms for two hundred-row grids under the development build. It pays
-where a caller's column list stays the same between renders — a `useMemo`, as
-the audit, the work grid, the projects directory and the model page hold
-theirs, or a module constant, as the org builder's table does: a list built
-inline is rightly a new value to every row on every render, and draws every
-row exactly as before.
+only where a caller's column list stays the same between renders, because a
+list built inline is rightly a new value to every row on every render and
+draws every row exactly as before — which is what twenty-seven grids on twenty
+screens did: the turns list drew its two hundred rows whenever a seat's live
+state moved (62–100 ms) and whenever a poll changed one turn (106–140 ms).
+
+**So every grid's columns hold still, and a source gate says so.** A list that
+closes over nothing on its screen is a module constant; one that does is a
+`useMemo` on exactly what it reads — the chart's answer about a seat, a
+reference index, whether a pass list spans several surfaces — and never on an
+answer that every poll replaces: the fleet's node table reads the node this is
+and the activated epoch as two values rather than the answer they came in, and
+the schedules table carries each schedule's last fire ON ITS ROW rather than
+reading it from a map beside it. A value a list closes over that is derived
+afresh from rows — the re-run counts the turns, cost and seat-cost tables
+mark (`lib/reruns.ts`, which keeps only the triggers that ran more than once,
+since every new turn is otherwise a new key), the phases the spend bars are
+split into, the work grid's id-to-key lookup — goes through `useShared`, so it
+moves only when its content does. The work list's own context was a
+`useMemo` that held nothing: built from the screen's `chrome`, an object
+literal made every render, so every row of the list drew on every render and
+every poll (80–147 ms for a hundred rows) and now draws the one that changed.
+`app/source.test.ts` refuses a grid handed anything but a name its file
+declares at module scope or with `useMemo`; a `useMemo` whose dependencies
+move on every render passes it and is the same defect, which the turns, audit
+and work list suites catch by counting the rows a poll draws.
 
 **A row is never told its place.** A feed is newest first, so one new row at
 the top moves every other row down a place — and a row handed its index, as

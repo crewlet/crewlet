@@ -440,11 +440,16 @@ export function ItemsView({
   // over nothing is a rule separating nothing from nothing.
   const bands = useMemo(() => bandsOf(groups), [groups]);
 
-  const chrome: RowChrome = {
-    ...seatResolvers(index),
-    types: catalogue.data?.types,
-    statuses: detail?.statuses,
-  };
+  // HELD STILL on what it is made of. The grid's column list is built from it,
+  // and every grid row is memoised on that list: a literal here was a new
+  // value on every render — a keystroke in the filter box, an inbox push, the
+  // poll — and every row of the list drew again with it.
+  const types = catalogue.data?.types;
+  const statuses = detail?.statuses;
+  const chrome = useMemo<RowChrome>(
+    () => ({ ...seatResolvers(index), types, statuses }),
+    [index, types, statuses],
+  );
   // WHO THE FILTER MENU CAN OFFER, held still across renders. The menu builds
   // its field list behind a memo keyed on this, and a fresh array literal in
   // the JSX is a new identity every render — so that memo rebuilt every field,
