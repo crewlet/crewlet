@@ -53,6 +53,29 @@ type Decision struct {
 	Model        string
 	InputTokens  int
 	OutputTokens int
+
+	// ProviderKey is the configured entry that answered — the operator's
+	// name beside the vendor's Model — for the same reason: the judge's
+	// record is a phase record, and one naming no entry is spend a
+	// by-provider rollup files under nobody.
+	ProviderKey string
+
+	// CacheRead and CacheWrite are the prompt cache's share of InputTokens
+	// on the judge's call, carried for the same reason the tokens are: the
+	// judge's record is a phase record like any other, and a breakdown the
+	// completion reported and nothing kept is a number nobody can read.
+	CacheRead  int
+	CacheWrite int
+}
+
+// withSpend is d carrying the call cost s reports — the one copy every path
+// that hands a judgement back makes, so a spend field added here reaches all
+// of them.
+func (d Decision) withSpend(s Decision) Decision {
+	d.Asked, d.Model, d.ProviderKey = s.Asked, s.Model, s.ProviderKey
+	d.InputTokens, d.OutputTokens = s.InputTokens, s.OutputTokens
+	d.CacheRead, d.CacheWrite = s.CacheRead, s.CacheWrite
+	return d
 }
 
 // Tokens is what the judge call cost.
@@ -244,10 +267,7 @@ func Consider(ctx context.Context, j Judge, p Policy, req Request) (granted int,
 		// unparseable still made the call and still cost the tokens, and a
 		// rescue that reported neither is how a misconfigured judge stayed
 		// invisible while billing every exhausted phase.
-		refusal := Rescue("judge_failed: " + err.Error())
-		refusal.Asked, refusal.Model = decision.Asked, decision.Model
-		refusal.InputTokens, refusal.OutputTokens = decision.InputTokens, decision.OutputTokens
-		return 0, refusal
+		return 0, Rescue("judge_failed: " + err.Error()).withSpend(decision)
 	}
 	return p.Grant(decision, req.RoundsUsed), decision
 }

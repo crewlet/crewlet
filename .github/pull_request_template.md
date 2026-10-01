@@ -11,6 +11,10 @@
       "A skip is not a pass") — and neither is one `make check` never runs:
       it names those on the way out
 - [ ] Tests added/updated for the change
+- [ ] If `dashboard/` changed: the dashboard's three gates pass
+      (`make dashboard-lint dashboard-check dashboard-test`) and
+      `static/dashboard` is rebuilt and committed with `make dashboard &&
+      git add -A -- static/dashboard`
 - [ ] Docs updated (`docs/`) — config, CLI, or behavior changes are reflected
 - [ ] Every commit is signed off — `git commit -s` (see CONTRIBUTING.md,
       "Sign your work"); CI's `sign-off` job fails the build without it

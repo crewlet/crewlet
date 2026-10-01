@@ -8,6 +8,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/api/auth"
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/org"
 )
 
 // guard builds a guard over a Tier A shaped by the mutator.
@@ -296,12 +297,13 @@ func TestDisabledServesEverythingAsAnonymous(t *testing.T) {
 
 func TestTheReservedIDIsTheOneTheAPIStamps(t *testing.T) {
 	t.Parallel()
-	// Config refuses it as a token id and the API stamps it. Two copies
-	// would disagree silently, each side staying self-consistent while the
-	// reservation stopped covering what is actually written.
-	if auth.AnonymousOperator != config.ReservedOperatorID {
-		t.Errorf("the API stamps %q but config reserves %q",
-			auth.AnonymousOperator, config.ReservedOperatorID)
+	// Config refuses it as a token id, the chart refuses it as a seat
+	// binding, and the API stamps it. Two copies would disagree silently,
+	// each side staying self-consistent while the reservation stopped
+	// covering what is actually written.
+	if auth.AnonymousOperator != org.ReservedOperatorID {
+		t.Errorf("the API stamps %q but the chart reserves %q",
+			auth.AnonymousOperator, org.ReservedOperatorID)
 	}
 }
 
@@ -488,7 +490,7 @@ func TestConfigRefusesTheShapesThatWouldLockEveryoneOut(t *testing.T) {
 			name: "the reserved attribution as a token id",
 			auth: config.APIAuth{
 				AllowAnonymousRead: true,
-				Tokens:             []config.APIToken{{ID: config.ReservedOperatorID, Token: "t"}},
+				Tokens:             []config.APIToken{{ID: org.ReservedOperatorID, Token: "t"}},
 			},
 			want: "reserved",
 		},
@@ -566,5 +568,25 @@ func TestTheSocketPathTakesItsTokenFromTheQuery(t *testing.T) {
 		if res.StatusCode != http.StatusUnauthorized || seen != "" {
 			t.Errorf("%s = %d as %q, want 401 as nobody", path, res.StatusCode, seen)
 		}
+	}
+}
+
+// THE LABELS THE GUARD ACCEPTS, in order, and none under a disabled guard —
+// which accepts every caller as anonymous and no listed token at all, so a
+// listing read off the document would name credentials that authenticate
+// nobody.
+func TestTokenIDsAreTheLabelsTheGuardAccepts(t *testing.T) {
+	t.Parallel()
+	g := guard(t, withTokens(config.APIToken{ID: "ops", Token: "t-ops"},
+		config.APIToken{ID: "ci", Token: "t-ci"}))
+	if got := g.TokenIDs(); strings.Join(got, ",") != "ci,ops" {
+		t.Errorf("TokenIDs = %v, want the labels in order", got)
+	}
+	off := guard(t, func(a *config.APIAuth) {
+		a.Tokens = []config.APIToken{{ID: "ops", Token: "t-ops"}}
+		a.Disabled = true
+	})
+	if got := off.TokenIDs(); len(got) != 0 {
+		t.Errorf("a disabled guard lists %v, want none", got)
 	}
 }

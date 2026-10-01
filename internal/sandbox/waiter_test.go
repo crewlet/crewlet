@@ -151,6 +151,12 @@ func (r *waiterRig) launching(turnID string) PendingRun {
 		CodingAgent: "claude-code", PartitionKey: "chat:D1:root-1",
 		ConversationKey: "chat:D1",
 		TraceID:         "tr-1", SpanID: "sp-1", CreatedAt: r.now,
+		// The item the launching turn was on, so every case runs over a
+		// row that carries one — and a write that dropped it would show.
+		WorkItem: &rigItem,
+		// The model the launch pointed its agent at, which the run's own
+		// phase record is filed under.
+		Launch: LaunchRecord{Model: "claude-sonnet-5"},
 	}
 	if err := r.pending.BeginLaunch(ctx, run, Fence{}); err != nil {
 		r.t.Fatalf("BeginLaunch: %v", err)
@@ -164,15 +170,22 @@ func (r *waiterRig) launching(turnID string) PendingRun {
 	return r.get(turnID)
 }
 
+// rigIteration is the executor iteration every rig launch suspends in. Not 1,
+// so a record that fell back to a default would show.
+const rigIteration = 2
+
+// rigItem is the work item every rig launch is charged to.
+var rigItem = types.WorkItem{Backend: types.WorkNative, ID: "task-1", Key: "ENG-1", Project: "ENG"}
+
 // suspend writes the execute_state a real suspending turn would have written,
 // which is what opens the run to the completion poll.
 func (r *waiterRig) suspend(turnID string) {
 	r.t.Helper()
-	suspended, err := r.pending.MarkSuspended(r.t.Context(), turnID, map[string]any{
+	suspended, err := r.pending.MarkSuspended(r.t.Context(), turnID, Suspension{State: map[string]any{
 		"version":              float64(1),
 		"pending_tool_call_id": "call-1",
 		"pending_tool_name":    "run_sandbox",
-	})
+	}, Iteration: rigIteration})
 	if err != nil {
 		r.t.Fatalf("MarkSuspended: %v", err)
 	}

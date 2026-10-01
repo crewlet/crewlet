@@ -3,9 +3,11 @@ package runner
 import (
 	"encoding/json"
 	"errors"
+	"slices"
 	"strings"
 	"testing"
 
+	"github.com/crewlet/crewlet/internal/agent/phase"
 	"github.com/crewlet/crewlet/internal/providers/llm"
 )
 
@@ -300,5 +302,25 @@ func TestAnUnencodableParkedArgumentNamesItsCallAndSparesTheToolTerm(t *testing.
 	if m.messages != len(`{"path":"/a"}`) {
 		t.Errorf("message term = %d, want %d — what was counted before the failure is "+
 			"worth more than a zero", m.messages, len(`{"path":"/a"}`))
+	}
+}
+
+// THE TALLY NAMES THE PHASE THAT FAILED, and the phase still counts as one
+// that ran: its record completed, and a card reads the two together — every
+// phase that ran, and which of them broke. A phase that succeeded after an
+// earlier one failed does not clear it, since the failure is what ended the
+// turn; one nothing failed in names nothing.
+func TestTheTallyNamesThePhaseThatFailed(t *testing.T) {
+	var s Spend
+	s.record(phaseRecord{Phase: phase.Execute})
+	if s.FailedIn != "" {
+		t.Fatalf("a phase that succeeded named %q as failed", s.FailedIn)
+	}
+	s.record(phaseRecord{Phase: phase.Review, Failed: true})
+	if s.FailedIn != "review" {
+		t.Errorf("failed in %q, want review", s.FailedIn)
+	}
+	if !slices.Equal(s.Phases, []string{"execute", "review"}) {
+		t.Errorf("phases %v, want the failed phase listed as one that ran", s.Phases)
 	}
 }

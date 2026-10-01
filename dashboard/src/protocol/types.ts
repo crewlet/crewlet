@@ -12,14 +12,47 @@
  *
  *  - **Optional is not nullable is not absent.** An overlay is MERGED onto the
  *    row a client already holds, so an omitted key reads as "unchanged". That
- *    is why `afk_reason` is required-but-possibly-empty while `budget` is
- *    `| null`: one has to be able to say "no longer AFK", the other has to be
- *    able to say "nobody is measuring".
+ *    is why `stopped_reason` is required-but-possibly-null while `budget` is
+ *    `| null`: one has to be able to say "no longer stopped", the other has to
+ *    be able to say "nobody is measuring".
  *  - **A count that could not be taken is `null`, never `0`.** The integrations
  *    answer and the budgets answer both distinguish "zero" from "this process
  *    cannot say", and collapsing them is how a dashboard reports a healthy
  *    silence over a store it never reached.
  */
+
+// THE SHAPES AN ENGINE GATE HOLDS ARE NOT DECLARED HERE. They live in
+// `../contract/`, the one home of every declaration a Go test reads, and this
+// file composes them into the answers and frames it declares. RELATIVE, like
+// every contract import in this directory: it is also built alone as
+// `protocol.js`, where the `~` alias does not exist.
+import type { BUDGET_WINDOWS } from "../contract/config.ts";
+import type { BudgetState, GROUPS } from "../contract/spend.ts";
+import type { AccessAnswer } from "../contract/access.ts";
+import type { McpServersStatusAnswer } from "../contract/mcp.ts";
+import type { CredentialPoolAnswer } from "../contract/credentials.ts";
+import type { Coverage } from "../contract/coverage.ts";
+import type { EngineHealth } from "../contract/health.ts";
+import type {
+  IntegrationsAnswer,
+  ReconcileFinding,
+  ReconcileStatus,
+} from "../contract/integrations.ts";
+import type { AgentMemory, MemoryOverview } from "../contract/memory.ts";
+import type { BackupsAnswer } from "../contract/backups.ts";
+import type {
+  LinkedFromStatus,
+  PageBacklinks,
+  PageReadsAnswer,
+  SkillLoad,
+} from "../contract/pages.ts";
+import type { PushKind, SeatActivity, StoppedReason } from "../contract/wire.ts";
+import type { WorkViewShape } from "../contract/work.ts";
+import type {
+  RetentionGenerationState,
+  RetentionIdentityCause,
+  RetentionTrimFloorState,
+} from "../contract/retention.ts";
 
 // ---------------------------------------------------------------------------
 // Events
@@ -39,6 +72,24 @@ export interface FeedRow {
   parent_span_id: string;
   topic: string;
   failed: boolean;
+  /** The seat the event concerns, by the id every node derives for it — the
+   *  store's own `agent_id`, on the live row and the seeded one alike, so the
+   *  event log narrows its live rows to one seat (`seat=`) exactly as the
+   *  engine narrows the rows it pages in. Absent for an event about no seat. */
+  agent_id?: string;
+  /** The agent-to-agent channel the event belongs to — the store's own
+   *  `channel_id`, on the live row and the seeded one alike, so the event log
+   *  narrows its live rows to one channel (`channel=`) exactly as the engine
+   *  narrows the rows it pages in. Absent on every event that is not A2A. */
+  channel_id?: string;
+  /**
+   * The filterable dimensions the store promoted out of the payload — present
+   * on a row read from history (`events`), absent on a live one. A listing
+   * never carries the payload, so this is where a history row says what only
+   * its payload holds: the node that published it (`node`), and the runtime
+   * audit's person, tool and directory (`actor_seat`, `tool`, `dir`).
+   */
+  tags?: Record<string, string>;
 }
 
 /**
@@ -97,6 +148,8 @@ export interface EventsPage {
   next: { before_time: string; before_id: string } | null;
   /** True when the store itself has nothing older, as opposed to this page ending. */
   exhausted: boolean;
+  /** Which nodes the page was merged from; a node that did not answer is named. */
+  coverage?: Coverage;
 }
 
 export interface TraceAnswer {
@@ -109,6 +162,8 @@ export interface TraceAnswer {
    * from it — and the store's own doc asks the caller to say so.
    */
   truncated: boolean;
+  /** Which nodes the trace was assembled from. */
+  coverage?: Coverage;
 }
 
 // ---------------------------------------------------------------------------
@@ -137,7 +192,12 @@ export interface ToolExecution {
   output?: unknown;
   error?: string;
   failed?: boolean;
+  /** When the call was handed to the tool (RFC 3339, UTC), and how long it
+   *  took. Both absent on a row nothing timed. */
+  started_at?: string;
   duration_ms?: number;
+  /** `builtin` or `mcp:<server>` for the tool that answered, and the bare
+   *  server name for an `mcp:` one. Absent on a call no tool answered. */
   origin?: string;
   server?: string;
 }
@@ -166,6 +226,77 @@ export interface RoundNarration {
   round?: number;
   reasoning?: string;
   content?: string;
+}
+
+/** One round of a phase's tool loop, as the engine timed it (`types.PhaseRound`). */
+export interface PhaseRound {
+  /** One-based, on the scale `tool_executions[].round` shares. */
+  round: number;
+  started_at: string;
+  duration_ms: number;
+  model?: string;
+  input_tokens: number;
+  output_tokens: number;
+  cache_read_tokens: number;
+  cache_write_tokens: number;
+  tool_calls: number;
+}
+
+/** The tool call a phase is running right now (`types.RunningCall`). */
+export interface RunningCall {
+  round: number;
+  name: string;
+  arguments: string;
+  started_at: string;
+}
+
+/** A person's note a phase read mid-turn, and the round that first read it
+ *  (`types.PhaseSteer`). */
+export interface PhaseSteer {
+  round: number;
+  note_id: string;
+}
+
+/** The one work item a turn is charged to (`types.WorkItem`). */
+export interface WorkItemRef {
+  backend: string;
+  id: string;
+  key: string;
+  project: string;
+}
+
+/** Where in a turn a seat is (`livestate.Stage`). */
+export type TurnStage = "context" | "phase" | "parked";
+
+/** The turn a seat is on — running, or parked on a detached coding run. */
+export interface LiveTurn {
+  turn_id: string;
+  work_item?: WorkItemRef | null;
+  work_item_basis?: string;
+  /** When the turn began; a resumed segment keeps the turn's first start. */
+  started_at: string;
+  stage: TurnStage;
+  node?: string;
+}
+
+/** Who paused a seat, when and why (`livestate.Paused`). An INPUT to the
+ *  seat's state, not the state: the engine says whether a paused seat reads as
+ *  stopped. */
+export interface Paused {
+  /** The person — the seat their token is bound to — or the token itself. */
+  by: string;
+  at: string;
+  reason?: string;
+  /** Whether the pause also ended the turn the seat was on. */
+  stop_running: boolean;
+}
+
+/** The newest turn a seat ended (`livestate.LastTurn`). */
+export interface LastTurn {
+  turn_id: string;
+  /** The turn's newest event: its completion, or the reflection after it. */
+  ended_at: string;
+  outcome: "completed" | "failed";
 }
 
 /** The in-flight LLM call: the latest progress round, or a phase-start seed. */
@@ -209,7 +340,43 @@ export interface LiveCall {
   /** The round being written right now; absent when no round is open. */
   partial_round?: PartialRound | null;
   round_num: number;
-  rounds: number;
+  /**
+   * The round the phase is on, ONE-BASED: the rounds that have come back, and
+   * the one in flight from the frame the loop publishes as its provider call
+   * is made — the same name and quantity a finished phase record carries as
+   * `rounds_used`, so a running phase and a settled one are read from one
+   * field.
+   */
+  rounds_used: number;
+  /** Each round's own timing and tokens, as the loop recorded it. */
+  rounds?: PhaseRound[] | null;
+  /** The round cap currently GRANTED, which an extension raises mid-phase. */
+  max_rounds?: number;
+  /** The most any extension may raise that cap to. */
+  round_ceiling?: number;
+  /**
+   * When the LATEST round began its provider call: later than every entry in
+   * `rounds` while that call is out, equal to the last one's start while the
+   * round's tools run, absent before the first round opens. Only the first
+   * case is a model call in flight — see `lib/waterfall.ts`.
+   */
+  round_started_at?: string;
+  /** The tool call running RIGHT NOW; absent between calls. */
+  running_call?: RunningCall | null;
+  /**
+   * Every person's note the phase has read so far, with the round whose
+   * provider call first saw it. What the note said and who sent it are on the
+   * turn's `agent_turn_steered` rows.
+   */
+  steers?: PhaseSteer[] | null;
+  /** The share of `input_tokens` the prompt cache served and stored — a
+   *  breakdown of it, never an addition to it. */
+  cache_read_tokens?: number;
+  cache_write_tokens?: number;
+  /** The item the turn is charged to, when it is on one. */
+  work_item?: WorkItemRef | null;
+  /** The node running the call. */
+  node?: string;
   in_progress: boolean;
   failed?: boolean;
   error?: ErrorInfo | null;
@@ -218,37 +385,63 @@ export interface LiveCall {
   started_at?: string;
 }
 
-/** A live token meter: the fleet's SHARED counter, as the budget gate enforces
- *  it — every node's spend since the last deliberate reset, against the cap in
- *  the active revision. Never comparable to a spend rollup, which is a window
- *  over time rather than the life of a counter. */
-export interface Meter {
+/** One calendar window of one scope's token counter — the day, the ISO week or
+ *  the month on the company's clock — as the engine states it
+ *  (`types.BudgetWindow`). Never comparable to a spend rollup, which is a
+ *  window over time a reader chose rather than the window a ceiling is written
+ *  for. */
+export interface BudgetWindow {
+  period: (typeof BUDGET_WINDOWS)[number]["period"];
+  /** The window's label on the company clock: `2026-09-23`, `2026-W39`,
+   *  `2026-09`. */
+  window: string;
+  /** The window's half-open span, in UTC. `resets_at` is when its allowance
+   *  comes back without a ceiling being raised. */
+  starts_at: string;
+  resets_at: string;
   used: number;
-  max: number;
-  /** When this scope last turned a charge away, in UTC; empty while it is not
-   *  refusing. The gate's own record, kept in the shared counter beside the
-   *  spend, so every node reports the same one and it clears on the scope's
-   *  next admitted charge. It is what "exhausted" means: a refused charge
-   *  increments nothing, so `used >= max` is sufficient but never necessary —
-   *  a scope charged in rounds stops short of its cap for ever. */
+  /** The ceiling, ABSENT where nothing caps the window — never 0. The live
+   *  push lists capped windows only, so there it is always present. */
+  limit?: number;
+  /** When the window last turned a charge away, in UTC; absent while it has
+   *  not. The gate's own record, kept in the shared counter beside the spend,
+   *  so every node reports the same one; it clears on the scope's next
+   *  admitted charge or when the window turns over. */
   refused_at?: string;
+  /** The engine's judgement of the window. The client computes none. */
+  state: BudgetState;
+}
+
+/** A live token meter: the fleet's SHARED counters for one scope, one entry per
+ *  CAPPED window. */
+export interface BudgetMeter {
+  windows: BudgetWindow[];
 }
 
 /** The live half of a seat row, merged onto its static config row. */
 export interface Overlay {
   /**
-   * Omitted until an event says whether the seat is running, so the state the
-   * roster sent (or the one a client already holds) stands.
+   * What the seat is doing — the ONE seat-state vocabulary, computed by the
+   * engine and on every row. A screen maps it; it never derives it.
    */
-  state?: string;
+  activity?: SeatActivity;
+  /** Why a `stopped` seat cannot take work; null on a seat that is not
+   *  stopped. Always present, so a seat that started again sheds its reason. */
+  stopped_reason?: StoppedReason | null;
   runtime_id?: string;
   current_phase?: string | null;
   current_iteration?: number;
   live_call?: LiveCall | null;
   last_error?: ErrorInfo | null;
-  budget?: Meter | null;
-  /** Always present, even empty: an omitted key would read as "still AFK". */
-  afk_reason?: string;
+  budget?: BudgetMeter | null;
+  /** The turn the seat is on, or null when it is on none. Always present, for
+   *  `stopped_reason`'s reason. */
+  turn?: LiveTurn | null;
+  /** The newest turn the seat ended, or null while none is known. */
+  last_turn?: LastTurn | null;
+  /** Who paused the seat, or null while nobody has. Always present, for
+   *  `stopped_reason`'s reason: an omitted key would leave a resumed seat paused. */
+  paused?: Paused | null;
 }
 
 /** A seat row: static config identity, plus whatever overlay has been merged. */
@@ -270,19 +463,20 @@ export interface SandboxEntry {
   coding_agent: string;
   sandbox_id: string;
   task: string;
+  /** The run record's own word: `launching`, `running`,
+   *  `awaiting_clarification` or `reseed`. */
   status: string;
   started_at: string;
   question?: string;
   audience?: string;
+  /** The item the launching turn is charged to, when it is on one. */
+  work_item?: WorkItemRef | null;
+  /** The node driving the run. */
+  owner?: string;
+  /** When the run's box began being held paused while it waits on a person. */
+  paused_at?: string;
 }
 
-/** One durable coding run, as the `sandbox_runs` query answers it. */
-/** The durable statuses `sandbox.PendingRun` actually carries.
- *
- *  Not a free string: the screen's own tone map named `succeeded`, `completed`,
- *  `cancelled` and `reclaimed`, none of which the engine can write, so four of
- *  its seven entries were unreachable and three real states fell through to
- *  the neutral default. */
 /**
  * The five statuses a run record can hold.
  *
@@ -296,10 +490,15 @@ export interface SandboxEntry {
 export type SandboxStatus =
   "launching" | "running" | "awaiting_clarification" | "resumed" | "reseed";
 
+/** One durable coding run, as the `sandbox_runs` query answers it. */
 export interface SandboxRun {
   /** The RUN this job belongs to — one execution of a turn, and this
    *  record's own key. See `adr/0017`. */
   turn_id: string;
+  /** The job the row holds NOW — a turn can launch more than one — and what
+   *  `sandbox_tail` is asked by. Empty on a row an older build wrote, and on
+   *  a run the live projection knows of before its durable row is read. */
+  launch_id?: string;
   /** The unit of work behind that run. Absent on a row written before the
    *  identities were split. */
   work_key?: string;
@@ -312,6 +511,12 @@ export interface SandboxRun {
   task_description: string;
   question: string;
   audience: string;
+  /** Who the question is put to, resolved against the org chart when the run
+   *  parked. Empty on a run that is not parked. */
+  audience_handles?: string[];
+  /** True when `audience` named nobody the chart has and the question was put
+   *  to the seat's lead chain instead. */
+  audience_fallback?: boolean;
   branch: string;
   trace_id: string;
   owner: string;
@@ -321,6 +526,8 @@ export interface SandboxRun {
   started_at: string;
   updated_at: string;
   answerable_in_chat: boolean;
+  /** The item the launching turn was charged to; null when it was on none. */
+  work_item?: WorkItemRef | null;
 
   /**
    * What this run called through the MCP bridge, in order.
@@ -358,28 +565,34 @@ export interface BridgeCall {
 // Spend
 // ---------------------------------------------------------------------------
 
+/**
+ * One slice of spend, in TOKENS — the one unit every call is measured in.
+ *
+ * THE ENGINE'S BUCKET CARRIES A PRICE BESIDE THESE, AND THIS DECLARES NONE OF
+ * IT. Only a subscription coding CLI quotes what a run cost, so a currency
+ * figure covers the minority of calls that quote one while the token count
+ * beside it covers all of them — and on a screen the first reads as the
+ * company's spend. The dashboard renders tokens only, never money (rule 19 in
+ * `docs/reference/dashboard-design.md`); a field nothing declares is a field
+ * no screen can reach for, and `money.test.tsx` and the bundle scan in
+ * `internal/api/dashboardjs_test.go` hold that from both ends.
+ */
 export interface Bucket {
   input_tokens: number;
   output_tokens: number;
   total_tokens: number;
   calls: number;
   /**
-   * What the calls in this bucket were billed, and how many of them quoted
-   * anything at all.
-   *
-   * TWO NUMBERS, because only a subscription coding CLI reports a price. A
-   * `cost_usd` of 0 over `priced_calls: 0` means nobody said what this cost;
-   * over 2 it means two runs were billed nothing.
-   *
-   * NOT RENDERED. The dashboard measures spend in TOKENS — a currency shown
-   * for the minority of calls that quote one, beside a token count covering
-   * all of them, reads as the company's spend and is a fraction of it. The
-   * field stays on the wire and in the store, so putting a price back on a
-   * screen is a rendering change rather than a migration. `priced_calls` IS
-   * read: it says how much of a window has accounting of its own.
+   * The share of `input_tokens` the provider's prompt cache served and
+   * stored. A BREAKDOWN of the input, never an addition to it: every backend
+   * counts the cached prefix inside its input total, so the cache's share is
+   * `cache_read_tokens / input_tokens` and adding the two double-counts the
+   * prefix (`tokens.Bucket`). Both are zero where no backend reported a
+   * cache, which is not the same as "nothing was cached" — see
+   * `routes/spend/model.ts`' `cacheShare`.
    */
-  cost_usd: number;
-  priced_calls: number;
+  cache_read_tokens?: number;
+  cache_write_tokens?: number;
 }
 
 export interface PhaseRow extends Bucket {
@@ -396,6 +609,28 @@ export interface AgentSpendRow extends Bucket {
   handle: string;
   agent_id: string;
   by_phase: Record<string, Bucket>;
+  /** How many of the seat's turns ENDED in the window, and how many failed —
+   *  on a named window only. The live window holds phase records and cannot
+   *  count endings, so there both are absent, never zero. */
+  turns?: number;
+  failed?: number;
+}
+/** One configured provider entry (`providers.llm.<key>`): what it served, the
+ *  models it answered with, and the seats that leaned on it most. */
+export interface ProviderSpendRow extends Bucket {
+  provider_key: string;
+  /** Every model the entry answered with, biggest first. */
+  models: string[];
+  /** The three seats that spent the most through it, by handle; `seats_total`
+   *  is how many did at all. */
+  seats: string[];
+  seats_total: number;
+}
+/** How far back a named spend window can reach: the usage domain's history in
+ *  days, and the oldest company day still answerable. */
+export interface SpendHorizon {
+  days: number;
+  floor: string;
 }
 export interface TurnSpendRow extends Bucket {
   /** ONE ROW PER RUN. Each attempt at a redelivered trigger really did spend
@@ -416,15 +651,28 @@ export interface Rollup {
   /** The window this covers, as two RFC3339 instants — `until` exclusive. */
   since: string;
   until: string;
-  agent_role: string;
+  /** A NAMED window's company days — first, last (inclusive) and how many.
+   *  Absent on the live window, which is a rolling span. */
+  from?: string;
+  to?: string;
+  days?: number;
+  /** The handle this answer was narrowed to. */
+  seat?: string;
+  /** How far back a named window can reach. Absent on the live window. */
+  horizon?: SpendHorizon;
   totals: Bucket;
   by_phase: PhaseRow[];
   by_model: ModelRow[];
+  by_provider?: ProviderSpendRow[];
   by_worker: WorkerRow[];
   by_agent: AgentSpendRow[];
-  by_turn: TurnSpendRow[];
-  /** High-water mark: live completions past it are folded in, earlier ones skipped. */
-  aggregated_through: string;
+  /** The tail of recent turns — the LIVE window's only. A company day holds no
+   *  turn, so a named window has none; per-turn spend is `turns` sorted by
+   *  tokens. */
+  by_turn?: TurnSpendRow[];
+  /** How far the live window has counted; absent on a named window, whose
+   *  company days carry no per-call instant. */
+  aggregated_through?: string;
 }
 
 /**
@@ -439,24 +687,37 @@ export interface SeriesBand extends Bucket {
   /** The band's key in each point's `groups`. Empty on, and only on, `other`. */
   group: string;
   handle?: string;
+  /** How many seats spent in a UNIT band over the window. */
+  seats?: number;
   /** The residual: every group past the chart's cap, and how many it stands for. */
   other: boolean;
   folded: number;
 }
 
 export interface SeriesPoint extends Bucket {
-  /** The bucket's START, RFC 3339 in UTC — never its middle or its end. */
+  /** The bucket's START — the first instant of its company day or ISO week,
+   *  RFC 3339 in UTC. A week's start can be before the window's. */
   at: string;
+  /** The bucket's label on the company calendar: `2026-09-23` or `2026-W39`. */
+  window: string;
+  /** How many of the window's days fall in the bucket — 7 for a whole week,
+   *  fewer for the first and last a window cuts short. */
+  days: number;
   groups: Record<string, Bucket>;
   other: Bucket;
 }
 
 export interface TokenSeries {
-  group: "phase" | "model" | "seat" | "unit" | "worker" | "turn";
-  bucket: "hour" | "day";
-  /** The window COVERED, which the store may have floored below what was asked. */
+  group: (typeof GROUPS)[number]["value"];
+  bucket: "day" | "week";
+  /** The window, as instants (`until` exclusive) and as its company days. */
   since: string;
   until: string;
+  from: string;
+  to: string;
+  days: number;
+  seat?: string;
+  horizon: SpendHorizon;
   series: SeriesPoint[];
   by_group: SeriesBand[];
   /**
@@ -474,6 +735,10 @@ export interface EventBar {
   /** The bucket's START, RFC3339 — never its middle and never its end. */
   at: string;
   count: number;
+  /** How many of `count` reported a failure — a SPLIT of the bar, never an
+   *  addition to it, counted by the engine with the rule a turn's own
+   *  `failed` mark uses. */
+  failed?: number;
 }
 
 /**
@@ -493,6 +758,8 @@ export interface EventSeries {
   bars: EventBar[];
   /** The window's whole count, stated rather than left as a sum of the bars. */
   total: number;
+  /** The window's failed count — the sum of the bars' `failed`. */
+  failed?: number;
   /**
    * How many rows each category would give, over the window, with the CATEGORY
    * filter lifted and every other one applied — which is the only meaning a
@@ -500,35 +767,42 @@ export interface EventSeries {
    * rendering the closed set reads a missing key as the zero it is.
    */
   by_category: Record<string, number>;
+  /** Which nodes the bars were summed over. */
+  coverage?: Coverage;
 }
 
-/** The org-wide live meter, plus the identity of the engine run reporting it. */
+/** The org-wide live meter, plus the identity of the engine run reporting it
+ *  and the company clock its windows were cut on.
+ *
+ *  A REPORT, never the absence of one: before any node has reported the
+ *  snapshot and the push carry `null`, which the store holds as `null` — "no
+ *  reading yet". `org.windows` empty is the other fact, "nothing is capped",
+ *  and the two send a reader to opposite places ("Set one" is offered only on
+ *  the second). */
 export interface OrgBudget {
-  meter_id?: string;
-  seq?: number;
-  org?: Meter;
+  meter_id: string;
+  seq: number;
+  timezone: string;
+  org: BudgetMeter;
 }
 
+/** The `budgets` answer: every scope's day, week and month, capped or not. */
 export interface BudgetsAnswer {
-  org: {
-    max_tokens: number;
-    durable_used: number;
-    durable_updated_at: string;
-    /** When the company cap last refused a charge; empty while it is not refusing. */
-    refused_at: string;
-  };
+  /** The company clock every window is cut on (IANA, or `UTC`). */
+  timezone: string;
+  /** False means the durable counters could not be READ — never that they are
+   *  zero — and every window list is then empty. */
+  durable: boolean;
+  /** The share of a ceiling at which the engine calls a window `near`: the
+   *  one threshold a screen may draw as a mark. */
+  near_fraction: number;
+  org: { windows: BudgetWindow[] };
   seats: {
+    agent_id: string;
     role: string;
     handle: string;
-    agent_id: string;
-    max_tokens: number;
-    durable_used: number;
-    durable_updated_at: string;
-    /** When this seat's cap last refused a charge; empty while it is not refusing. */
-    refused_at: string;
+    windows: BudgetWindow[];
   }[];
-  /** False means the durable counter could not be READ — never that it is zero. */
-  durable: boolean;
 }
 
 // ---------------------------------------------------------------------------
@@ -540,11 +814,11 @@ export interface BudgetsAnswer {
  * credential field holds a whole `${VAR}` reference or the mask
  * `__redacted__`, never a value.
  *
- * WHERE EVERYTHING THE PROJECTION NO LONGER CARRIES IS READ. `/org` is
- * anonymous, so it was narrowed to a charter and a tree ([OrgProjection]); a
- * seat's email, model chain, token budget, contact identities, tool
- * credentials, integration blocks and schedules live here instead, behind the
- * operator token.
+ * WHERE EVERYTHING THE PROJECTION DOES NOT CARRY IS READ. `/org` is
+ * anonymous, so it carries a charter, a tree, the budgets and each seat's
+ * RESOLVED chain and tool sources ([OrgProjection]); a seat's email, authored
+ * `llm` fields, contact identities, tool credentials, integration blocks and
+ * schedules live here instead, behind the operator token.
  *
  * A SUPERSET, deliberately open. Only the fields a screen reads are named, and
  * the index signature keeps every other key the engine writes — including the
@@ -563,6 +837,16 @@ export interface CompanyDocument {
   [key: string]: unknown;
 }
 
+/**
+ * A `token_budget:` mapping, as `config.TokenBudget` writes it: the most one
+ * scope may spend in each calendar window on the company clock. A window with
+ * no key has no ceiling; the engine refuses a 0 rather than reading it as
+ * unlimited.
+ */
+export type TokenBudget = {
+  readonly [P in (typeof BUDGET_WINDOWS)[number]["period"]]?: number;
+};
+
 /** One seat in the company document, as `config.Role` writes it. */
 export interface ConfigRole {
   name: string;
@@ -577,8 +861,8 @@ export interface ConfigRole {
   behavioral_guidelines?: string[];
   manages?: string[];
   workers?: string[];
-  /** 0 or absent is unlimited. */
-  token_budget?: number;
+  /** This seat's own ceilings, per calendar window; absent is uncapped. */
+  token_budget?: TokenBudget;
   llm?: PhaseLLM;
   llm_review?: ProviderKeys;
   llm_subagent?: ProviderKeys;
@@ -774,9 +1058,15 @@ export type PhaseLLM =
  * projection used to be `config.Role` verbatim, so every field a role gained
  * reached anonymous readers the day it landed: contact identities, per-seat
  * credentials, placement labels and sandbox setup commands among them. What
- * is NOT here — `email`, `contact`, `llm`, `token_budget`, `schedules`,
- * `integrations`, `mcp_env` — is read through the operator-gated `config`
- * query instead, as [CompanyDocument].
+ * is NOT here — `email`, `contact`, the authored `llm_*` fields,
+ * `schedules`, `integrations`, `mcp_env` — is read through the operator-gated
+ * `config` query instead, as [CompanyDocument].
+ *
+ * `llm` and `tool_sources` are RESOLVED by the engine, never the authored
+ * fields of the same name: a client re-running the precedence between a flat
+ * `llm_<phase>`, the `llm` mapping and the company's default provider — or
+ * the grant rule between a shared server, a template and a unit's `mcp_env` —
+ * would be a second implementation of a rule the engine already applies.
  *
  * `handle` is what the DOCUMENT declares, and empty where the engine derives
  * one from the name. The handle a seat actually runs under is
@@ -792,6 +1082,22 @@ export interface OrgSeat {
   behavioral_guidelines?: string[];
   manages?: string[];
   availability?: string;
+  /** This seat's own ceilings per window, as written; absent = only the company's. */
+  token_budget?: TokenBudget;
+  /**
+   * Every phase's provider chain as a turn resolves it, keyed by phase wire
+   * name (`execute`, `review`, …): the first key is the model the phase runs
+   * on, every later one a fallback in the order tried. Provider KEYS only.
+   * Absent on a human seat and on a company configuring no provider.
+   */
+  llm?: Record<string, string[]>;
+  /**
+   * Where this seat's tools come from, in the registry's origin grammar:
+   * `builtin`, then `mcp:<server>` per server it is GRANTED, in declaration
+   * order. The grant, not what is running — the node heartbeat's MCP report
+   * says whether a server started. Absent on a human seat.
+   */
+  tool_sources?: string[];
 }
 
 /**
@@ -832,6 +1138,17 @@ export interface OrgProjection {
   mission?: string;
   vision?: string;
   policies?: string[];
+  /**
+   * The company's ONE clock (ADR-0018), as the ENGINE resolved it: the IANA
+   * zone the document writes, or `UTC` where it writes none — never empty on
+   * a running company, so a reader has nothing to default. Every day the
+   * engine cuts ("today", a due band, an overdue mark) is cut on it, so a
+   * screen deciding which DAY something falls on cuts on this rather than on
+   * the browser's own zone. Absent only on `{}`, a node running no company.
+   */
+  timezone?: string;
+  /** The company's own ceilings per window, as written; absent = uncapped. */
+  token_budget?: TokenBudget;
   roles?: OrgSeat[];
   units?: OrgUnit[];
   derived?: Derived;
@@ -979,6 +1296,9 @@ export interface ScheduleRow {
   scope_id: string;
   name: string;
   cron: string;
+  /** The zone this schedule FIRES in, resolved by the engine: its own
+   *  `timezone`, or the company's clock (ADR-0018) where it names none — so
+   *  it is never empty, and a reader defaults nothing. */
   timezone: string;
   task: string;
   /** Empty for a role schedule, where a target is meaningless rather than
@@ -989,9 +1309,11 @@ export interface ScheduleRow {
   catchup: boolean;
   /** The seats a fire actually reaches, resolved from the scope and target. */
   runners: string[];
-  /** Zero-valued when there is no next fire: disabled, an expression that
-   *  cannot be parsed, or a date the calendar never reaches. */
-  next_run: string;
+  /** ABSENT when there is no next fire: disabled, an expression that cannot
+   *  be parsed, or a date the calendar never reaches. The engine used to send
+   *  Go's zero instant here, which parses as a time two thousand years ago —
+   *  so every "when next" read it as overdue. */
+  next_run?: string;
   /** Why `next_run` is empty when the reason is a DEFECT rather than a choice
    *  — an unparseable cron, an unknown timezone. Empty for a healthy row and
    *  for a merely disabled one, so a blank cell is never the only symptom. */
@@ -1000,9 +1322,10 @@ export interface ScheduleRow {
 
 /** One fire, from the at-most-once dispatch ledger.
  *
- *  `outcome` has exactly two values — `fired` and `skipped_catchup` — because
- *  this is a DISPATCH ledger and not a turn-outcome one. Nothing here can say
- *  a turn failed; the turn says that. */
+ *  `outcome` has exactly three values — `fired`, `skipped_catchup` and
+ *  `skipped_paused` (the runner seat was paused when the fire came due) —
+ *  because this is a DISPATCH ledger and not a turn-outcome one. Nothing here
+ *  can say a turn failed; the turn says that. */
 export interface ScheduleRunRow {
   scope_type: string;
   scope_id: string;
@@ -1012,7 +1335,7 @@ export interface ScheduleRunRow {
   target_handle: string;
   scheduled_at: string;
   fired_at: string;
-  outcome: "fired" | "skipped_catchup" | "";
+  outcome: "fired" | "skipped_catchup" | "skipped_paused" | "";
   trace_id: string;
 }
 
@@ -1037,62 +1360,6 @@ export interface ScheduleRunsAnswer {
 // ---------------------------------------------------------------------------
 // Health and fleet
 // ---------------------------------------------------------------------------
-
-/**
- * What the 5-second `health` push carries — and ONLY that.
- *
- * The richer `api.Health` (node identity, applied epoch, posture, queue,
- * version, whether a company config is even active) is answered by the
- * `stream` query. The two are deliberately different names so a query can
- * never collide with a push kind; they are also deliberately different
- * shapes, and reading a `stream` field off a `health` push is how an engine
- * with NO ACTIVE CONFIG — refusing every inbound webhook — came to render
- * identically to a healthy idle one.
- */
-export interface HealthPush {
-  status: string;
-  /**
-   * Both are always on the wire. They stay optional here because the client
-   * holds one health value that is NOT a push: the `{status: "unknown"}` it
-   * falls back to while the socket is down, which asserts no count at all.
-   */
-  in_flight?: number;
-  shutting_down?: boolean;
-}
-
-export interface EngineHealth {
-  status: string;
-  node?: string;
-  configured?: boolean;
-  version?: string;
-  /**
-   * When this node's ENGINE started, which is when the node started: the API
-   * is served inside the engine's process, and the fleet view reports the same
-   * instant for this node.
-   */
-  started_at?: string;
-  queue?: string;
-  clients?: number;
-  /**
-   * How far back the event log can be read, in SECONDS: the hard bottom of
-   * paging, past which every page is empty for ever.
-   *
-   * `store.EventHistory` is the only thing that decides it, and three screens
-   * restated it as literal copy ("the store keeps 30 days") while nothing on
-   * the wire carried it — so a change to the retention would have left all
-   * three lying with nothing to catch it, and a reader told the wrong floor
-   * stops paging early. Seconds rather than days, because a client that
-   * re-derives the unit is a second place it can be wrong; the sentence is
-   * `eventHistoryLabel` in `lib/format.ts`.
-   */
-  event_history_seconds?: number;
-  in_flight?: number;
-  shutting_down?: boolean;
-  posture?: string;
-  applied_epoch?: number;
-  /** The handles THIS node currently holds. */
-  seats?: string[];
-}
 
 export interface FleetNode {
   id: string;
@@ -1266,36 +1533,15 @@ export interface RetentionDomain {
   evictions_unreadable?: boolean;
 }
 
-/**
- * What a domain's floor is — `statelog.TrimFloorStates`, held to the engine's
- * by a gate in `internal/statelog`.
- */
-export type RetentionTrimFloorState = "published" | "none_at_generation" | "unreadable";
-
-/**
- * Which finding is behind a `wrong_stream` — `statelog.IdentityCauses`. One
- * word refuses for four facts, each with its own remedy.
- */
-export type RetentionIdentityCause =
-  "recreated" | "ahead_of_log" | "log_diverged" | "generation_passed";
-
 /** Why the answering node refuses a domain. */
 export interface RetentionRefusal {
   /** A read refusal (`wrong_stream`, `stalled`, …) or a write refusal (`log_truncated`). */
   code: string;
-  /** Kept as strings, so a cause a newer node names is shown rather than dropped. */
-  causes?: string[];
+  /** Kept open, so a cause a newer node names is shown rather than dropped. */
+  causes?: (RetentionIdentityCause | (string & {}))[];
   /** The sentence the refusal carries everywhere else it is met. */
   detail: string;
 }
-
-/**
- * A node's position generation against its domain's —
- * `statelog.GenerationStates`. Only `current` compares with the log's
- * sequences: a position from a generation the log has left is a number in a
- * space that no longer exists.
- */
-export type RetentionGenerationState = "current" | "left" | "ahead" | "unknown";
 
 /**
  * A term's value made explicit: read, unreadable, not applicable, or read and
@@ -1454,6 +1700,13 @@ export interface FleetSeatLease {
   owner?: string;
   epoch?: number;
   expires_in?: number;
+  /**
+   * Since when `node` has held it: the tenure's start (RFC 3339, UTC, the
+   * coordination store's clock), which a renewal does not move. Absent for a
+   * lease written by a build older than the stamp — its start was never
+   * recorded, and absent is not "now".
+   */
+  acquired_at?: string;
 }
 
 export interface FleetDutyLease {
@@ -1473,224 +1726,9 @@ export interface FleetAnswer {
   target_epoch: number;
 }
 
-/** One observation a reconcile pass made that is not "fine". */
-export interface ReconcileFinding {
-  kind: string;
-  subject?: string;
-  /**
-   * What is wrong, in one sentence — and only that.
-   *
-   * What to do about it is `remedy` and which things it is about is
-   * `subjects`. Three fields because a reader wants them in three different
-   * moments and one string cannot be laid out: glued, they arrived as one
-   * unbroken paragraph carrying a problem, a name and an instruction, with
-   * the disclosure summary running straight into its last word.
-   */
-  detail?: string;
-  /** What to do about it, rendered as its own line at a quieter weight. */
-  remedy?: string;
-  action_url?: string;
-  /**
-   * What this finding MEANS, from the engine's own per-kind verdict table
-   * (integration.FindingKind.Verdict) rather than from a second copy of the
-   * closed set kept here.
-   *
-   * Two kinds are advisory — their phase is `ready`: something the engine did
-   * not do and cannot undo, on an integration that is working. A reader that
-   * treats every finding as a fault reports those as broken; one that keeps
-   * its own list of which kinds are advisory reports a kind it has not heard
-   * of as fine, which is worse. Optional because a node older than the field
-   * sends neither — treat an absent phase as "cannot say", never as ready.
-   */
-  phase?: string;
-  actor?: string;
-  /**
-   * Everything this finding is about, when there are many and `subject`
-   * cannot name them all.
-   *
-   * `detail` is the card's status line and the engine caps it, so a finding
-   * that listed its subjects inline arrived as a wall cut off mid-item —
-   * thirty-six Datadog service accounts ending `…@agents.cr…`. The engine
-   * now puts the COUNT in `detail` and the whole list here, so a reader with
-   * room lays them out and one without is still correct.
-   *
-   * It named three of them in the sentence too, which put every short list
-   * on screen twice: once as prose and once as the list, a centimetre apart.
-   *
-   * Absent on the ordinary finding about one thing.
-   */
-  subjects?: string[];
-}
-
-/**
- * What the reconcile loop last found for one surface.
- *
- * The row's `reconcile` is THREE-VALUED like every count beside it: an object
- * is a real finding, and `null` is either a node that could not read the
- * fleet's rows or a surface the loop has not reached yet. Neither is a claim
- * that the surface is healthy.
- */
-export interface ReconcileStatus {
-  /** unconfigured | awaiting_admin | provisioning | activating | degraded | ready */
-  phase: string;
-  /**
-   * The phase in a reader's words, from [integration.Phase.Label] in Go.
-   *
-   * Optional because a node older than the field sends none, not because a
-   * screen may skip it: derive nothing from `phase` that this can answer.
-   */
-  phase_label?: string;
-  /**
-   * Whether a disconnect has been ASKED FOR, which is a fact the phase
-   * cannot carry on its own: between the request and the first teardown pass
-   * the stored phase is still whatever the last reconcile concluded.
-   */
-  disconnecting?: boolean;
-  /** "" | engine | provider | admin | operator — who has to act. */
-  actor?: string;
-  detail?: string;
-  action_url?: string;
-  /** settled | waiting | blocked */
-  outcome?: string;
-  attempts?: number;
-  last_error?: string;
-  last_attempt_at?: string | null;
-  settled_at?: string | null;
-  next_attempt_at?: string | null;
-  /** Everything the pass saw, not only what the phase was derived from. */
-  findings?: ReconcileFinding[];
-}
-
-export interface IntegrationRow {
-  key: string;
-  label?: string;
-  configured: boolean;
-  detail?: string;
-  /** Deliveries the edge accepted. */
-  inbound?: number | null;
-  /**
-   * The two OUTCOME counts, three-valued: a number, or null when this process
-   * could not read its event log. Reporting that as 0 would claim every
-   * delivery woke a seat on a node that cannot tell.
-   *
-   * They are read together with `inbound` and are misleading apart: "128
-   * arrived" alone cannot tell a working integration from one whose every
-   * delivery reaches nobody, and a seat draining a thread's backlog as one
-   * turn looks like a seat that ignored twelve messages.
-   */
-  skipped?: number | null;
-  coalesced?: number | null;
-  /** Null means "nothing here can say", never "this surface is fine". */
-  reconcile?: ReconcileStatus | null;
-  /**
-   * The public base URL this surface's registration at the third-party app
-   * points at, and whether it is still the one in force.
-   *
-   * `endpoint_current` is three-valued: null is "nothing has recorded an
-   * address for this surface", which is not the same claim as "the address
-   * moved". False is a delivery route pointing somewhere that no longer
-   * answers, which for a surface no pass converges only a person can fix.
-   */
-  endpoint?: string | null;
-  endpoint_current?: boolean | null;
-  [key: string]: unknown;
-}
-
-export interface IntegrationsAnswer {
-  integrations: IntegrationRow[];
-  traffic_known: boolean;
-  traffic_since: string;
-}
-
 // ---------------------------------------------------------------------------
 // Learning, conversations, knowledge
 // ---------------------------------------------------------------------------
-
-export interface DiaryEntry {
-  id?: string;
-  scope?: string;
-  retention?: string;
-  content: string;
-  created_at: string;
-  ttl_until?: string;
-  tags?: string[];
-}
-
-export interface Episode {
-  id?: string;
-  turn_id?: string;
-  agent_handle?: string;
-  conversation_key?: string;
-  task_summary?: string;
-  outcome?: string;
-  review_outcome?: string;
-  duration_ms?: number;
-  created_at: string;
-  content?: string;
-  compacted?: boolean;
-}
-
-export interface SynthesizedSkill {
-  id?: string;
-  key?: string;
-  title: string;
-  summary?: string;
-  body?: string;
-  version?: number;
-  updated_at?: string;
-  uses?: number;
-}
-
-/** Who a counterparty IS, which is two identities and not one string.
- *
- *  A profile's subject is either a seat in this company or an unmapped person
- *  on some surface — a chat account, an issue reporter — and the name is
- *  DISPLAY ONLY: somebody renaming themselves on Slack must not orphan what
- *  this seat learned about them. */
-export interface CounterpartySubject {
-  handle?: string;
-  external_id?: string;
-  platform?: string;
-  name: string;
-}
-
-/** What one seat has learned about one colleague.
- *
- *  THE TWO INSTANTS MEASURE DIFFERENT CADENCES and both are carried, because
- *  the difference is the interesting one: `last_updated_at` moves on every
- *  interaction and `last_corroborated_at` only when the traits actually
- *  changed. A colleague seen daily whose profile has not moved in months is
- *  one this seat has stopped learning about — which is the state the Plan
- *  phase's own prefetch demotes on, so a screen showing one number would
- *  disagree with the prompt. */
-export interface CounterpartyProfile {
-  subject: CounterpartySubject;
-  /** Whether the subject resolved to a seat in this company. */
-  resolved: boolean;
-  /** A bag whose keys the model invents — never a fixed schema. */
-  traits: Record<string, unknown>;
-  interactions: number;
-  first_seen_at: string;
-  last_updated_at: string;
-  last_corroborated_at: string;
-}
-
-export interface AgentMemoryAnswer {
-  id: string;
-  diary: DiaryEntry[];
-  episodes: Episode[];
-  skills: SynthesizedSkill[];
-  /** How many the seat HAS, which is not how many `skills` carries: the
-   *  listing is cut at the page limit, and this is what says so. ALWAYS
-   *  PRESENT — `queries.Sources.agentMemory` seeds it in the answer's
-   *  default map, so it is `0` for a seat that has learned nothing rather
-   *  than absent. Optional here, a reader had to fall back to
-   *  `skills.length`, which is the page size and therefore silently
-   *  under-reports exactly the seat this count exists for. */
-  skills_total: number;
-  counterparties: CounterpartyProfile[];
-  onboarded_at: string;
-}
 
 /** One recorded turn in one conversation, from the conversation ledger. */
 export interface ConversationEntry {
@@ -1723,10 +1761,13 @@ export interface ConversationRow {
 
 export interface ConversationsAnswer {
   handle: string;
+  /** A page of the threads the seat holds entries in, newest activity
+   *  first — of `conversations_total`. */
   conversations: ConversationRow[];
+  conversations_total: number;
   entries: ConversationEntry[];
-  /** False when this node holds no conversation ledger at all. */
-  available: boolean;
+  /** The node holding the seat, which answered, or `none`. */
+  held_by: string;
 }
 
 /** One open or closed agent-to-agent channel. */
@@ -1742,7 +1783,18 @@ export interface A2AChannel {
 
 export interface A2AAnswer {
   channels: A2AChannel[];
+  /** False when this node could not read the channel record at all — which
+   *  is not the same fact as a record with no channels in it. */
   available: boolean;
+  /** Which channels were asked for (`open`, `closed` or `all`). Absent on an
+   *  answer that is not available. */
+  state?: string;
+  /** True when the record held more channels than one answer carries, so
+   *  `channels` is the most recently active of them rather than all of them.
+   *  Absent on an answer that is not available. */
+  truncated?: boolean;
+  /** Why the record could not be read, on an answer that is not available. */
+  note?: string;
 }
 
 export interface KnowledgeHit {
@@ -1773,7 +1825,45 @@ export type KnowledgeReason =
   | "building"
   | (string & {});
 
-export interface KnowledgeAnswer {
+/**
+ * How a search ranks — ONE vocabulary for `knowledge` and `work_search`
+ * (`knowledge.Mode` in the engine). The label for `semantic` is "Meaning"; the
+ * wire value is never that word, and the engine refuses it.
+ */
+export type SearchMode = "hybrid" | "keyword" | "semantic";
+
+/**
+ * Why a ranked search served less than it was asked for; `""` when it served
+ * what was asked. `no_embeddings` is configuration (no provider, or
+ * `knowledge.vectors` off); `embedding_failed` is transient (the query's own
+ * vector could not be computed this time); `semantic_partial` is part of the
+ * fleet losing its meaning half; `unsupported` is a backend with no such
+ * ranker (Confluence). Widened for a reason a newer engine adds.
+ */
+export type SearchDegradation =
+  "" | "no_embeddings" | "embedding_failed" | "semantic_partial" | "unsupported" | (string & {});
+
+/**
+ * What a ranked search actually did, carried whole on both `knowledge` and
+ * `work_search` so one mode control reads either answer.
+ */
+export interface SearchOutcome {
+  /** The mode asked for, resolved (an absent one is `hybrid`). */
+  mode: SearchMode;
+  /** The ranking the hits came from; `""` when nothing ran — a semantic
+   *  search with nothing to rank by meaning answers no hits rather than a
+   *  keyword ranking passed off as one. */
+  served_mode: SearchMode | "";
+  /** The modes this backend can serve AS ASKED right now. A mode missing
+   *  from it would be answered degraded. */
+  modes: SearchMode[];
+  degraded: SearchDegradation;
+  /** The fleet the search was divided across, plus how many of the corpus's
+   *  buckets no answer covered. Not complete before a search has run. */
+  coverage: Coverage & { buckets_missing: number };
+}
+
+export interface KnowledgeAnswer extends SearchOutcome {
   backend: string;
   query: string;
   hits: KnowledgeHit[];
@@ -1877,6 +1967,40 @@ export interface WorkSummary {
   updated: string;
   /** The composed log position this row was last written at. */
   version: number;
+  /** THE OPT-IN CARD FACTS, present only on an answer that named them in
+   *  `fields=` — and then present at zero too (`[]`, `0`), so "asked, and
+   *  none" is never an absent key. The same row is what an agent reads
+   *  through `list_work_items`, which never asks. */
+  tags?: string[];
+  /** Live tasks waiting on this one, through the authored `waiting_on`
+   *  edges `blocking=` reads — the card's "blocks N". */
+  dependents_count?: number;
+  /** Questions on the task still waiting for their answer. */
+  open_asks?: number;
+  spend?: WorkRowSpend;
+}
+
+/** What one task has cost, as a card and the most expensive tasks draw it:
+ *  tokens only, never a price. */
+export interface WorkRowSpend {
+  tokens: number;
+  turns: number;
+  workers: number;
+  sent_back: number;
+  reopens: number;
+}
+
+/** Where `around=` placed one task in an answer's DRAWING order — the list's
+ *  own sort, or a board read column by column and lane by lane — over the
+ *  whole answer rather than the page. `prev`/`next` are keys, null at the
+ *  ends; `position` is null past the count's ceiling. On a label board the
+ *  order counts cards, so `total_hint` here is the number drawn. */
+export interface WorkAround {
+  position: number | null;
+  prev: string | null;
+  next: string | null;
+  total_hint: number;
+  total_capped?: boolean;
 }
 
 /** One person's load, as `work_workload` answers it.
@@ -2017,6 +2141,9 @@ export interface WorkItemsAnswer {
    *  are different facts, and `read_level` speaks only to the first. */
   complete: boolean;
   incomplete?: WorkIncomplete;
+  /** Present only when the request named `around=`, and NULL when that task
+   *  is not in this answer — it moved off the board — rather than absent. */
+  around?: WorkAround | null;
 }
 
 /** One entry in a container's view strip.
@@ -2025,29 +2152,6 @@ export interface WorkItemsAnswer {
  *  a timeline without anybody saving one — they are not objects, so there is
  *  nothing to rename, protect, rank or pin — and a screen renders them from
  *  `key`. */
-/**
- * The renderings a view may be drawn in, and there are no others.
- *
- * HELD AGAINST THE ENGINE'S OWN CLOSED SET by a Go gate —
- * `internal/tracker/viewshape_client_test.go` — because this is a copy the
- * dashboard has to keep: it is a separate build in a separate language and
- * cannot import `tracker.ViewTypes`. A shape the engine mints that this union
- * does not name is a tab that renders a blank body, and one named here the
- * engine refuses is a branch nothing can reach. Both are silent.
- *
- * `timeline` draws the rows against a DATE AXIS, which is the one arrangement
- * the others cannot express: a list orders by a column, a board groups by one,
- * and a calendar puts a task on the day it is due — none of them can show that
- * a task spans three weeks, or that it cannot start until another finishes.
- * `table` puts one field per column, which is what a question about a FIELD
- * rather than about a task needs.
- *
- * THE TRASH IS NOT ONE OF THESE. It is a table carrying `removed=true`,
- * because what makes a listing the trash is the query rather than the drawing
- * — so every view saved with that parameter is one.
- */
-export type WorkViewShape = "list" | "board" | "calendar" | "timeline" | "table";
-
 export interface WorkView {
   id?: string;
   key: string;
@@ -2067,6 +2171,15 @@ export interface WorkView {
   icon?: string;
   /** The saved query, in `work_items`' own parameter names. */
   params?: Record<string, string>;
+  /** How many tasks the view selects when RUN — the board's own `total_hint`
+   *  for it — carried only on a row pinned for the viewer, and only when the
+   *  strip was asked with `counts=true`. Absent is "not counted", never zero. */
+  count?: number;
+  /** The count stopped at the engine's ceiling, so it is a floor. */
+  count_capped?: boolean;
+  /** Why a pinned row asked for a count carries none: the view no longer
+   *  compiles against this company (a filtered field was archived, say). */
+  count_refused?: string;
 }
 
 export interface WorkViewsAnswer {
@@ -2106,14 +2219,22 @@ export interface WorkLeadRef {
   kind?: "agent" | "human" | "operator" | "system";
 }
 
-/** A project's task census.
+/** A project's task census, one number per status group.
  *
  *  MAINTAINED by the applier on every status-group change and every arrival or
  *  departure, never aggregated per poll — which is what makes a sixty-second
- *  refresh three column reads rather than a scan of every task in the
- *  company. */
+ *  refresh four column reads rather than a scan of every task in the
+ *  company.
+ *
+ *  There is no `open`: it folded the work nobody has started into the work
+ *  somebody is doing, which are the two states a reader acts on oppositely.
+ *  Every unfinished item is `todo + active` — see `unfinished` in
+ *  `lib/work.ts`. */
 export interface WorkTaskCounts {
-  open: number;
+  /** Not started. */
+  todo: number;
+  /** Started — the `active` status group. */
+  active: number;
   done: number;
   closed: number;
 }
@@ -2143,6 +2264,10 @@ export interface WorkProjectRow {
   unit: WorkUnitRef;
   lead: WorkLeadRef;
   default_assignee?: string;
+  /** The day (`YYYY-MM-DD`, on the company's clock) the lead means the
+   *  project to be finished. ABSENT when none is set — not the earliest
+   *  date, so `sort=target` puts those rows last in both directions. */
+  target_date?: string;
   task_counts: WorkTaskCounts;
   /** ABSENT for a project no work has ever been filed into, which is a
    *  different fact from a project whose work is old — see
@@ -2298,6 +2423,8 @@ export interface WorkCatalogueAnswer {
 /** One entry in a person's inbox, with the log position it was at. */
 export interface WorkInboxEntry {
   record_id: string;
+  /** The notice's PACKED log position, `(generation << 40) | seq`, read by the
+   *  engine from the notice's own history row. */
   position: number;
   /** On a snooze, when it comes back. */
   until?: string;
@@ -2310,6 +2437,8 @@ export interface WorkInboxEntry {
  *  and no priorities, and the first write is what creates the record. */
 export interface WorkPersonState {
   handle: string;
+  /** EXCEPTIONS to `seen_through`: `unread` holds notices at or below it
+   *  marked unread again, `read` notices above it marked read out of order. */
   unread?: WorkInboxEntry[];
   read?: WorkInboxEntry[];
   snoozed?: WorkInboxEntry[];
@@ -2324,8 +2453,14 @@ export interface WorkPersonState {
    *  was theirs. Their own next change clears it. */
   priorities_set_by?: string;
   priorities_set_at?: string;
-  seen_through?: { stream: string; generation: number; seq: number };
+  /** How far this person has read. The generation is OMITTED when it is
+   *  zero — a record carrying one is stamped for the build that stores it. */
+  seen_through?: { stream: string; generation?: number; seq: number };
+  /** The record's version: what `set_priorities`' `if_match` states. */
   version: number;
+  /** How far ahead a snooze may be set, in SECONDS — the engine's bound, so a
+   *  screen offers only the presets the write accepts. */
+  max_snooze_ahead?: number;
   held: boolean;
   read_level?: ReadLevel;
   log_seq?: number;
@@ -2348,6 +2483,11 @@ export interface WorkComment {
   ask?: string;
   /** The comment id this one answers, which is what closes that question. */
   answers?: string;
+  /** The structure an ask carries when it asks somebody to choose. Set only
+   *  on the comment that asks, and never changed after. */
+  decision?: WorkDecision;
+  /** The option an answer chose, by id — one of the answered ask's own. */
+  choice?: string;
   mentions?: string[];
   resolved?: boolean;
   resolved_by?: string;
@@ -2357,12 +2497,100 @@ export interface WorkComment {
   updated_at?: string;
 }
 
+/** One page of a task's thread, walking back from the newest (`work_comments`).
+ *  The page is in the order it was written; `next_cursor` reads the page
+ *  before it and is absent when this reaches the first comment. */
+export interface WorkCommentsAnswer {
+  item: string;
+  key: string;
+  title: string;
+  comments: WorkComment[];
+  next_cursor?: string;
+  /** The PERSON behind each comment an operator token wrote, by comment id:
+   *  `author` is the credential, which is the audit trail and not a name. */
+  comment_seats?: Record<string, string>;
+  read_level?: ReadLevel;
+  log_seq?: number;
+  applied_through?: number;
+  complete?: boolean;
+  incomplete?: WorkIncomplete;
+}
+
+/** Another task as a reader names it (`tracker.TaskRef`). */
+export interface WorkTaskRef {
+  id: string;
+  key: string;
+  title: string;
+  status: WorkStatus;
+}
+
+/** One tool a turn called, and how many times (`tracker.TurnTool`). */
+export interface WorkTurnTool {
+  name: string;
+  calls: number;
+}
+
+/** One turn charged to a task, its segments folded (`tracker.TaskTurn`). */
+export interface WorkItemTurn {
+  /** The run the segments share — what the trace link carries. */
+  turn_id: string;
+  /** "Turn n": the task's own count of turns. Zero for a turn with no counted
+   *  segment on this task (more of a turn charged elsewhere). */
+  ordinal: number;
+  seat: string;
+  trigger?: string;
+  /** How many completions were charged here; more than one for a turn that
+   *  parked on a coding run. */
+  segments: number;
+  /** Input plus output, over every segment — what the task's spend sums. */
+  tokens: number;
+  cache_read: number;
+  rounds: number;
+  wall_ms: number;
+  workers?: number;
+  sent_back?: number;
+  /** How the turn ended, off its newest segment: its decision, `failed`, or
+   *  `suspended` while a coding run is still out. */
+  outcome: string;
+  phases: string[];
+  /** The phase that failed, when `outcome` is `failed` because one did.
+   *  `phases` lists it too — it ran — so a card marks that chip rather than
+   *  ticking every phase beside a pill that names none. */
+  failed_in?: string;
+  /** What it did, in the agent's own words. Absent on a turn an older build
+   *  recorded. */
+  summary?: string;
+  /** What the newest review that sent the work back asked for. */
+  review?: string;
+  tools?: WorkTurnTool[];
+  /** When the newest segment landed. */
+  at: string;
+}
+
+/** One page of the turns charged to a task, newest first (`work_item_turns`).
+ *  From the tracker's own rows — the account the task's spend sums — so it
+ *  outlives the event history and answers on any node. */
+export interface WorkItemTurnsAnswer {
+  item: string;
+  key: string;
+  turns: WorkItemTurn[];
+  next_cursor?: string;
+  read_level?: ReadLevel;
+  log_seq?: number;
+  applied_through?: number;
+  complete: boolean;
+  incomplete?: WorkIncomplete;
+}
+
 export interface WorkChange {
   id: string;
   kind: string;
   actor?: string;
   actor_kind?: string;
   operator_id?: string;
+  /** The person an operator token was bound to when it wrote this — who a
+   *  row DRAWS; `actor` stays the token, which is the audit trail. */
+  actor_seat?: string;
   comment_id?: string;
   excerpt?: string;
   turn_id?: string;
@@ -2370,6 +2598,10 @@ export interface WorkChange {
   /** A commit that woke nobody — a fact about the change rather than about
    *  its importance, since a bulk edit is quiet by construction. */
   quiet?: boolean;
+  /** The item's hand-off counter AS THIS COMMIT LEFT IT — the "3" of "hand-off
+   *  3 of 8" on a row that moved the assignee. Absent on a row the answering
+   *  node holds no count for, never a zero it did not derive. */
+  reassignments?: number;
   /** The EFFECTIVE instant: the fleet-agreed one rather than the writer's own
    *  clock, so two nodes render one feed in one order. */
   at: string;
@@ -2520,6 +2752,10 @@ export interface WorkSpend {
   cache_write?: number;
   wall_ms?: number;
   tokens?: number;
+  /** How many delegated tasks its turns ran, and how many reviews sent the
+   *  work back — the two counts that say WHY a task was expensive. */
+  workers?: number;
+  sent_back?: number;
 }
 
 /** One custom-field value with the declaration that explains it.
@@ -2560,6 +2796,9 @@ export interface WorkItemDetail {
    *  renderer falls back to the id, which is a value somebody set. */
   keys?: Record<string, string>;
   links?: WorkLink[];
+  /** The task this one is filed under, named — absent for a top-level task
+   *  and for a parent this node holds no row for. */
+  parent?: WorkTaskRef;
   /** The task's custom-field values, ANNOTATED — see [WorkFieldValue]. The
    *  raw map stays on the task; this is the reader's view of it. */
   fields?: WorkFieldValue[];
@@ -2580,12 +2819,29 @@ export interface WorkItemDetail {
   units?: WorkItemUnits;
   /** Pages the thread backwards, and is empty when this page is all of it. */
   comments_cursor?: string;
+  /** The person behind each comment an operator token wrote, by comment id. */
+  comment_seats?: Record<string, string>;
+  /** The PERSON behind the token that filed this task, off the create's own
+   *  history row: `task.reporter` is the credential, which is the audit trail
+   *  and not a name. Absent for a task a seat filed. */
+  reporter_seat?: string;
   /** The SAME predicate WorkSummary.blocked carries — an open dependency edge
    *  — computed by the server in the same transaction as the task, so the
    *  badge here and the badge on the board row cannot disagree. It is on the
    *  ANSWER rather than on the task because it is derived rather than stored:
    *  `links` say what the relations are, not whether any blocker is open. */
   blocked?: boolean;
+  /** Where the due date stands against the COMPANY's today, computed where
+   *  a row's `overdue` is: whole calendar days to the due day (negative once
+   *  it has passed) and whether it is overdue (open work only). Absent for a
+   *  task with no due date. A renderer never re-derives it from the
+   *  browser's clock, which read "1d ago" beside a board marking the same
+   *  task two days late. */
+  due_standing?: { days: number; overdue?: boolean };
+  /** How many times agents may hand this item on before the engine refuses
+   *  the next one — the limit `task.reassignments` counts against, served by
+   *  the engine that enforces it so no screen carries a figure of its own. */
+  reassignment_budget?: number;
   read_level?: ReadLevel;
   log_seq?: number;
   applied_through?: number;
@@ -2610,12 +2866,26 @@ export interface PageSummary {
   labels?: string[];
   updated_at: string;
   revision: number;
+  /** How many pages sit directly under this one that the SAME listing would
+   *  show (its status and skill narrowing applied), so a tree draws an
+   *  expander only where one opens onto something. Absent means none. */
+  children?: number;
 }
 
 export interface PagesAnswer {
   pages: PageSummary[];
   limit: number;
-  offset: number;
+  /** How many pages the filter matches IN ALL — never the window's length,
+   *  which is what every screen drew as the size of a container before. */
+  total: number;
+  /** What to pass as `after` for the next window; absent on the last one. A
+   *  cursor rather than an offset, because a listing read while seats write
+   *  repeats and skips rows under an offset. */
+  after?: string;
+  /** Who each listed TOOL SKILL reached as a skill over thirty company days,
+   *  keyed by page id — sent only on a `skills: true` listing, for every page
+   *  in it (an unloaded skill as an empty list). */
+  skill_loaded_by?: Record<string, SkillLoad[]>;
   /** THE COVERAGE HALF, which `Sources.pageList` returns and this type dropped
    *  — so a page list served far behind the log was pixel-identical to a
    *  complete one. Same envelope as every other state-log answer. */
@@ -2631,7 +2901,7 @@ export interface PageContainer {
   purpose?: string;
   created_at?: string;
   /** How many pages this container holds, TRASHED ONES EXCLUDED — so the
-   *  number on the rail and the list behind it agree. DERIVED beside the
+   *  number in the tree and the list behind it agree. DERIVED beside the
    *  container rather than stored on it: the document is what a writer wrote,
    *  and a count on it would have every page create rewrite its container. */
   pages: number;
@@ -2644,8 +2914,11 @@ export interface PageComment {
   author_kind?: string;
   body: string;
   mentions?: string[];
+  /** The comment this one answers. */
+  reply_to?: string;
   created_at: string;
-  edited_at?: string;
+  /** Moved by an edit, and equal to `created_at` on a comment never edited. */
+  updated_at: string;
 }
 
 /** One past version, METADATA ONLY: the projection keeps no bodies, and
@@ -2710,9 +2983,24 @@ export interface PageRevisionBody {
 export interface PageDetail {
   page: Page;
   revision: number;
+  /** What the applier DERIVED the page as — a tool skill, the onboarding
+   *  page. Beside `page` rather than on it: neither is anything a writer
+   *  wrote. */
+  skill: boolean;
+  onboarding: boolean;
+  /** For a tool-skill page: the seats it reached as a skill over thirty
+   *  company days, most recent first. Absent on any other page. */
+  skill_loaded_by?: SkillLoad[];
+  /** The pages and tasks linking here, from the answering node's index;
+   *  absent where the node has no index to ask, and where
+   *  `linked_from_status` says why the node that has one could not answer. */
+  linked_from?: PageBacklinks;
+  linked_from_status?: LinkedFromStatus;
   comments?: PageComment[];
   history?: PageRevision[];
+  /** The first page of children by title; `children_total` is all of them. */
   children?: PageSummary[];
+  children_total?: number;
   /** The parent chain, outermost first — the breadcrumb. */
   ancestors?: PageSummary[];
 }
@@ -2727,6 +3015,8 @@ export interface PhasesPage {
   /** Pass back verbatim to page further. Empty at the end of the record. */
   next: { before_time?: string; before_id?: string };
   exhausted: boolean;
+  /** Which nodes the page was merged from. */
+  coverage?: Coverage;
 }
 
 /** Every stored event of one RUN of a turn, ordered oldest first. */
@@ -2770,6 +3060,47 @@ export interface TurnAnswer {
    * answer", never "this turn touched no trace".
    */
   trace_ids?: string[];
+  /** Which nodes the turn was assembled from — a turn resumed on another node
+   *  has rows on both, and a node that did not answer may hold the missing
+   *  part. */
+  coverage?: Coverage;
+  /** Which of them RAN it: the nodes whose own store held any of its events,
+   *  sorted. Absent from an older node's answer. */
+  nodes?: string[];
+}
+
+/**
+ * What a running coding run has said so far, read from its box by the node
+ * that owns it (`sandbox.Output`). Redacted by the engine; the LAST 8 KiB.
+ */
+export interface SandboxOutput {
+  text: string;
+  /** Which of the job's two accounts of itself this is. */
+  source: "transcript" | "stderr" | "none";
+  /** The text lost its front to the bound. */
+  cut: boolean;
+  /** When the box was read, on the owning node's clock. */
+  as_of: string;
+  /** The job is over and waiting to be collected; it will not grow again. */
+  finished: boolean;
+}
+
+/**
+ * One `sandbox_tail{turn_id, launch_id}` answer (`sandbox.TailAnswer`): the
+ * tail of that job while it runs, `not_running` with the record's own status
+ * once it is not, or the owning node NAMED where it did not answer
+ * (`owner_silent`) or runs a build that cannot (`owner_upgrading`).
+ */
+export interface SandboxTailAnswer {
+  outcome: "tail" | "not_running" | "owner_silent" | "owner_upgrading";
+  turn_id: string;
+  launch_id: string;
+  /** The node that owns the run — the one that answered, or did not. */
+  node?: string;
+  /** Why the job is not running: the record's status, `replaced`, or absent
+   *  where no record is left. */
+  status?: string;
+  output?: SandboxOutput;
 }
 
 /** A seat's phase history, newest first, with a cursor. */
@@ -2779,6 +3110,9 @@ export interface AgentAnswer {
   llm_history: EventRecord[];
   /** Pass back as `before` to page further into the record. */
   next: string;
+  /** Which nodes the history came from — a seat's history is on every node
+   *  that ever held it — or null when it could not be read at all. */
+  coverage?: Coverage | null;
 }
 
 // ---------------------------------------------------------------------------
@@ -2800,6 +3134,16 @@ export interface RevisionMeta {
   summary: string;
   source: string;
   created_by: string;
+  /**
+   * WHAT `created_by` names: `operator` for a person's credential (an API
+   * token, or the login running the CLI), `node` for the engine's own write
+   * (a boot seed, the reconcile loop). EMPTY when nobody recorded it — a
+   * revision a node adopted from a pointer an older build published — and a
+   * screen shows that as "not recorded" rather than picking a kind. A kind a
+   * newer engine adds arrives as itself, so this is a string rather than a
+   * closed union a newer value would silently fall outside of.
+   */
+  created_by_kind: string;
   created_at: string;
   activated_at?: string;
   is_active?: boolean;
@@ -2936,9 +3280,10 @@ export interface SetupRequirement {
    * join — setupapi's own suite checks that every vendor has a credential
    * field claiming `credential_missing`, so a row asking for a credential
    * cannot offer every field except the credential — and the dialog used to
-   * narrow to it when a Fix control existed. It does not any more: a card that
-   * needs attention says so in its tag, and the gear opens the same settings
-   * rather than a narrowed copy (see `actionFor` in Integrations.tsx).
+   * narrow to it when a Fix control existed. It does not any more: a tile's
+   * one action (Continue, Rotate token) opens the same settings rather than a
+   * narrowed copy (see `actionFor` in Integrations.tsx and `rotate` on the
+   * setup dialog).
    *
    * Declared because it is part of the shape the API sends, not because
    * anything here consumes it.
@@ -3177,27 +3522,12 @@ export interface Snapshot {
   sandboxes?: SandboxEntry[];
   org?: OrgProjection;
   tools?: ToolRow[];
-  health?: HealthPush;
+  health?: EngineHealth;
   tokens?: Rollup;
-  budget?: OrgBudget;
+  /** `null` until a node has reported the counters — see {@link OrgBudget}. */
+  budget?: OrgBudget | null;
   schedules?: ScheduleRow[];
 }
-
-export type PushKind =
-  | "snapshot"
-  | "event"
-  | "agents"
-  | "seats"
-  | "sandboxes"
-  | "tokens"
-  | "budget"
-  | "schedules"
-  | "org"
-  | "tools"
-  | "health"
-  | "result"
-  | "error"
-  | "pong";
 
 export interface Frame {
   kind: PushKind;
@@ -3205,6 +3535,18 @@ export interface Frame {
   id?: number;
   what?: string;
   error?: string;
+  /**
+   * How long to wait before asking again, on an `unavailable` error frame and
+   * nowhere else — the socket's `Retry-After`, computed by the same engine
+   * helper as the REST 503's header.
+   */
+  retry_after_seconds?: number;
+  /**
+   * The refusal's own sentence, on a `bad_params` error frame and nowhere
+   * else: that refusal is written for the caller — it names the parameter to
+   * change — and every other failure's text stays in the node's log.
+   */
+  detail?: string;
   ts?: string;
 }
 
@@ -3234,6 +3576,9 @@ export interface WorkActivityRecord {
   actor?: string;
   actor_kind?: string;
   operator_id?: string;
+  /** The person an operator token was bound to when it made this change —
+   *  who a row DRAWS; `actor` stays the token, which is the audit trail. */
+  actor_seat?: string;
   subject_kind: string;
   subject_id: string;
   subject_key?: string;
@@ -3243,6 +3588,8 @@ export interface WorkActivityRecord {
   comment_id?: string;
   batch_id?: string;
   turn_id?: string;
+  /** The question this commit asked or answered, as it stands NOW. */
+  ask?: WorkAskView;
   /** How a reader tells "nothing was announced" from "nothing happened" —
    *  which is the whole reason a quiet commit still writes a row. */
   notified: boolean;
@@ -3276,12 +3623,52 @@ export interface WorkActivityAnswer {
   incomplete?: WorkIncomplete;
 }
 
+/** A structured ask: the question, two to six options, what the asker
+ *  recommends and why, what it looked at, and the role the person is asked
+ *  in. The engine enforces only its shape and that an answer's `choice`
+ *  names one of its options. */
+export interface WorkDecision {
+  question: string;
+  options: WorkDecisionOption[];
+  /** An option id, or absent when the asker has no view. */
+  recommended?: string;
+  rationale?: string;
+  evidence?: WorkDecisionEvidence[];
+  /** `approver`: the answer IS the decision. `contributor`: it is an input
+   *  to a decision somebody else makes. */
+  role: "approver" | "contributor";
+  /** Where the asker will report what was decided. */
+  inform?: { surface: "mattermost" | "slack"; channel: string };
+}
+
+export interface WorkDecisionOption {
+  id: string;
+  label: string;
+  detail?: string;
+}
+
+/** One thing a decision cites. A task's `ref` is its id — resolved at write,
+ *  because a key moves with the task — and a url's is https. */
+export interface WorkDecisionEvidence {
+  kind: "task" | "page" | "turn" | "run" | "url";
+  ref: string;
+  label?: string;
+}
+
 /** One question waiting on somebody, with what to do about it. */
 export interface WorkAskRow extends WorkSummary {
   comment: string;
   asked_by: string;
+  /** The person behind an operator token that asked — the seat it was bound
+   *  to — and absent where the asker already is a seat. Who a row draws;
+   *  `asked_by` stays the author. */
+  asked_by_seat?: string;
   asked_at: string;
   body: string;
+  /** Present when the ask asks somebody to choose. */
+  decision?: WorkDecision;
+  /** Whether the ask is still waiting on an answer. */
+  open?: boolean;
   /** The literal call that answers it. A model handed a comment id still has
    *  to compose the call, and every one it composes differently is a round
    *  spent being refused. */
@@ -3300,6 +3687,24 @@ export interface WorkChecklistRow {
   done: boolean;
 }
 
+/** How many rows one `work_my_work` block holds in full. `capped` says the
+ *  count stopped at the engine's ceiling, so `total` is a floor, not a fact. */
+export interface WorkClaimTotal {
+  total: number;
+  capped?: boolean;
+}
+
+/** One [WorkClaimTotal] per block, keyed by the block's own name. */
+export interface WorkMyWorkTotals {
+  priorities: WorkClaimTotal;
+  assigned: WorkClaimTotal;
+  asked_of_me: WorkClaimTotal;
+  checklist_items: WorkClaimTotal;
+  collaborating: WorkClaimTotal;
+  watching_recent: WorkClaimTotal;
+  unblocked_recent: WorkClaimTotal;
+}
+
 /** Everything one person is expected to look at — seven different CLAIMS on
  *  their attention, each bounded the same so no block crowds out another. */
 export interface WorkMyWork {
@@ -3313,6 +3718,10 @@ export interface WorkMyWork {
   collaborating: WorkSummary[];
   watching_recent: WorkSummary[];
   unblocked_recent: WorkSummary[];
+  /** Every block counted in FULL, by the predicate that drew its page and in
+   *  the same transaction. A block is a page of at most twenty rows; its total
+   *  is the claim — so a count is drawn from here, never from a length. */
+  totals?: WorkMyWorkTotals;
   read_level?: ReadLevel;
   log_seq?: number;
   applied_through?: number;
@@ -3353,9 +3762,34 @@ export interface WorkInboxNotice {
   excerpt?: string;
   actor?: string;
   actor_kind?: string;
+  /** The person an operator token was bound to when it made this change —
+   *  what a row draws in place of the token's id. */
+  actor_seat?: string;
+  /** The comment this change wrote and the agent turn that made it. */
+  comment_id?: string;
+  turn_id?: string;
+  /** The question this notice is about — the ask itself for `asked`, the ask
+   *  it answered for `answered` — read NOW, so an answered one reads closed. */
+  ask?: WorkAskView;
   read: boolean;
   snoozed?: boolean;
   snoozed_until?: string;
+}
+
+/** The ask a notice or a feed row is about, as it stands at the read. */
+export interface WorkAskView {
+  /** The ask's own comment id — what an answer names in `answers`. */
+  comment: string;
+  asked_of: string;
+  open: boolean;
+  /** Who closed it and when: the answer's author, or with `resolved` whoever
+   *  resolved it without an answer. Absent while open. */
+  answered_by?: string;
+  answered_at?: string;
+  resolved?: boolean;
+  /** The option the answer chose, by id. */
+  choice?: string;
+  decision?: WorkDecision;
 }
 
 /** A page of one person's inbox. */
@@ -3391,6 +3825,9 @@ export interface WorkRanked {
   type: string;
   status: string;
   assignee?: string;
+  /** The item's own priority, drawn as the Board draws it. Optional: an
+   *  older node's hit does not carry it. */
+  priority?: string;
   /** A PLACE, 1-based, and deliberately NOT a score. The arithmetic that
    *  ordered these — score within a method, reciprocal rank fusion across
    *  methods, per slice of the corpus — is finished before a coordinator sees
@@ -3408,7 +3845,7 @@ export interface WorkRanked {
  *  from here yet. It is reported rather than returned as an error because
  *  nothing is wrong, and a screen that drew "nothing matches" would have a
  *  reader file the duplicate. */
-export interface WorkSearchAnswer {
+export interface WorkSearchAnswer extends SearchOutcome {
   hits: WorkRanked[];
   available: boolean;
   reason?: string;
@@ -3493,12 +3930,19 @@ export interface TurnRow {
    *  covers the reflection pass that publishes after the turn ends. */
   started_at: string;
   ended_at: string;
-  /** The turn's OWN measurement, and zero for one that has not finished —
-   *  which `complete` is what tells apart. */
+  /** The turn's OWN measurement: the sum of every completed segment's, so a
+   *  turn that parked and resumed counts both and not the wait between them.
+   *  Zero for one that has completed no segment — `complete` and `parked` say
+   *  which. */
   duration_ms: number;
-  /** Whether a completion record exists. A turn with none is either running
-   *  or died mid-flight, and those look identical from a list. */
+  /** Whether the turn ENDED: its newest completion record is not a
+   *  suspension. A turn with no completion is either running or died
+   *  mid-flight, and those look identical from a list. */
   complete: boolean;
+  /** Whether the turn is waiting on a detached coding run: its newest
+   *  completion is a suspension, and it completes again when the run is
+   *  collected. Never true beside `complete`. */
+  parked?: boolean;
   phases: number;
   /** SELF-ITERATE rounds — the highest iteration any phase reached. A phase's
    *  TOOL rounds are `rounds_used` on its own record; the two are different
@@ -3512,18 +3956,40 @@ export interface TurnRow {
   input_tokens: number;
   output_tokens: number;
   total_tokens: number;
+  /** The share of `input_tokens` the provider's prompt cache served and
+   *  stored — a BREAKDOWN of the input, never an addition to it. */
+  cache_read_tokens?: number;
+  cache_write_tokens?: number;
   /** Every distinct model the turn used, comma-joined — a turn routinely uses
    *  two, a cheap one for the extension judge and the seat's own. */
   models?: string;
   summary?: string;
   trigger?: string;
-  task_id?: string;
+  /** The one work item the turn is charged to, off its completion record.
+   *  Absent for a turn on nothing — which includes one still running, since a
+   *  sole write names its item only at the end. */
+  work_item?: TurnWorkItem;
+}
+
+/** The work item a turn is charged to — `work_item` on the turn events. The
+ *  `id` is the identity and `key` the label a person reads; `<backend>:<id>`
+ *  is unique across trackers, the bare id is not. */
+export interface TurnWorkItem {
+  backend: "native" | "jira" | "github" | "gitlab" | (string & {});
+  id: string;
+  key: string;
+  project: string;
 }
 
 export interface TurnsAnswer {
   turns: TurnRow[];
-  /** The cursor to resume from, on the turn's START. */
+  /** The cursor to resume from, on the turn's START, and `null` on the last
+   *  page — present only while more turns lie past this one. The fleet's, so
+   *  it can be present on an empty page: where a node's page stopped, with
+   *  nothing above it left to show. */
   next: string | null;
+  /** Which nodes the page was merged from. */
+  coverage?: Coverage;
 }
 
 /** Who the presented credential belongs to — see `lib/viewer.ts`. */
@@ -3537,33 +4003,265 @@ export interface Viewer {
   handle: string;
   name: string;
   kind: string;
+  /** The tools `POST /operator/act/{tool}` serves this caller: every write
+   *  the operator catalogue holds for a token bound to a seat, and EMPTY for
+   *  an anonymous or unbound caller, who may not act (ADR-0024). */
+  acts?: string[];
+  /** The project this person's create lands in when it names none — the
+   *  engine's own default for their seat, which `create_work_item` applies.
+   *  "" when their team and every team above it owns none. Optional: an
+   *  older node does not send it. */
+  project?: string;
+}
+
+/** One seat a name could mean, and why. */
+export interface ColleagueCandidate {
+  handle: string;
+  /** The tier that found it, as a person reads it ("handle matches exactly"). */
+  why: string;
+}
+
+/**
+ * A name resolved through the engine's own four tiers — the ones an agent's
+ * `lookup_colleague` uses. `match` is set only when EXACTLY ONE seat is meant;
+ * several is a list for the person to choose from, never a pick.
+ */
+export interface ColleagueAnswer {
+  match: ColleagueCandidate | null;
+  /** Every seat the name could mean, best tier first (the match included). */
+  candidates: ColleagueCandidate[];
+}
+
+/** One window of the `work_flow` series: the census at its end (at now for
+ *  the window now falls in) and how many tasks were delivered in it. */
+export interface WorkFlowPoint {
+  /** The window's label on the company calendar: `2026-09-23`, `2026-W39`. */
+  window: string;
+  start: string;
+  end: string;
+  not_started: number;
+  active: number;
+  done: number;
+  closed: number;
+  /** Changes in the window that took a task from not delivered to
+   *  delivered: a cancellation is not one, and done → closed is not a
+   *  second. */
+  completed: number;
+}
+
+/** The company's work as a series — `work_flow`, the tracker's history
+ *  replayed backward from today's census on the company clock. */
+export interface WorkFlowAnswer {
+  bucket: "day" | "week";
+  project?: string;
+  /** Oldest first; the last is the window now falls in. */
+  points: WorkFlowPoint[];
+  /** Today's open census, with the two shapes of trouble only the present
+   *  can answer. */
+  now: { not_started: number; active: number; blocked: number; overdue: number };
+  /** Always false: nothing records when a task became blocked, so the past
+   *  has no blocked count and a chart must not draw one. */
+  blocked_history: boolean;
+  read_level?: ReadLevel;
+  complete: boolean;
+}
+
+/** One tracker row of the company feed. */
+export interface FeedWorkRow {
+  id: string;
+  kind: "created" | "completed" | "handoff";
+  at: string;
+  cursor: string;
+  actor?: string;
+  actor_kind?: string;
+  /** The person a bound token's commit was made for. */
+  actor_seat?: string;
+  task: string;
+  key?: string;
+  title?: string;
+  project?: string;
+  /** On a completion: the task's running totals, tokens only. */
+  spend?: { tokens: number; turns: number };
+  /** On a completion with a charged turn: no reviewer ever sent it back. */
+  first_pass?: boolean;
+  /** On a create: the chat surface and conversation it was filed from. */
+  origin?: { surface: string; conversation?: string };
+  /** On a hand-off. */
+  from?: string;
+  to?: string;
+  reassignments?: number;
+  reassignment_budget?: number;
+}
+
+/** One merged row of `company_feed`: exactly one body, the kind's. */
+export interface FeedEntry {
+  kind: "completed" | "created" | "handoff" | "schedule" | "page";
+  at: string;
+  work?: FeedWorkRow;
+  page?: {
+    id: string;
+    page_id: string;
+    title?: string;
+    container?: string;
+    change: string;
+    actor?: string;
+    actor_kind?: string;
+    turn_id?: string;
+  };
+  schedule?: FeedScheduleRun;
+}
+
+/**
+ * A schedule's RUN in the company feed — a fire the scheduler dispatched,
+ * never a tick it skipped — or several in a row: the engine folds consecutive
+ * runs of one schedule for one runner that nothing else falls between into the
+ * newest of them.
+ */
+export interface FeedScheduleRun {
+  scope_type: string;
+  scope_id: string;
+  name: string;
+  target?: string;
+  outcome?: string;
+  trace_id?: string;
+  turn_id?: string;
+  /** How many consecutive runs this row stands for, at least 1. */
+  runs: number;
+  /** The oldest of them, when `runs` is above 1. */
+  since?: string;
+}
+
+/** `company_feed`: what the company did, newest first, merged across the
+ *  tracker, the pages and the schedules' runs. */
+export interface CompanyFeedAnswer {
+  rows: FeedEntry[];
+  /** Resumes every source where this page stopped; absent at the end. */
+  next_cursor?: string;
+  read_level?: ReadLevel;
+  complete: boolean;
+}
+
+/** One thing waiting on a person's decision. */
+export interface DecisionItem {
+  kind: "ask" | "run";
+  at: string;
+  ask?: WorkAskRow;
+  run?: SandboxRun;
+}
+
+/** `decisions`: the open asks put to a person and the coding runs parked on
+ *  a question to them, newest first. */
+export interface DecisionsAnswer {
+  handle: string;
+  items: DecisionItem[];
+  /** Every such item, not the page. */
+  total: number;
+  /** The ask count reached the engine's ceiling, so `total` is a floor. */
+  capped: boolean;
+  /** When the longest-waiting one began waiting. */
+  oldest_at?: string;
+  read_level?: ReadLevel;
+  complete?: boolean;
+}
+
+/** One company day of one seat's turns, summed across every node. */
+export interface SeatActivityDay {
+  /** A company date label, `2026-09-23`. */
+  day: string;
+  turns: number;
+  failed: number;
+  tokens: number;
+}
+
+/** One seat's totals over the window before, with `previous=true`. */
+export interface SeatActivityTotals {
+  turns: number;
+  failed: number;
+  reviewed: number;
+  first_pass: number;
+  sent_back: number;
+  tokens: number;
+  /** Every day of the previous window, oldest first — so the fortnight a
+   *  week-on-week figure is made over comes from the same answer. */
+  per_day: SeatActivityDay[];
+}
+
+/**
+ * One seat's turns over a window of company days, from the replicated usage
+ * domain — every node's days summed (`seat_activity`).
+ */
+export interface SeatActivityRow {
+  handle: string;
+  role?: string;
+  agent_id?: string;
+  /** False for a seat whose days are in the window and that has left the chart. */
+  in_chart: boolean;
+  turns: number;
+  failed: number;
+  reviewed: number;
+  first_pass: number;
+  /** `first_pass` over REVIEWED turns, 0–100 — ABSENT when none was reviewed,
+   *  which is no rate at all rather than 0%. */
+  first_pass_pct?: number;
+  /** Reviews that sent work back, not turns. */
+  sent_back: number;
+  /** Duration quantiles within `quantile_resolution`; absent with no turn. */
+  p50_ms?: number;
+  p90_ms?: number;
+  tokens: number;
+  /** Every day of the window, oldest first, a quiet day as zeros. */
+  per_day: SeatActivityDay[];
+  last_turn_at?: string;
+  previous?: SeatActivityTotals;
+}
+
+/** `seat_activity`: every agent seat's turns over `days` company days. */
+export interface SeatActivityAnswer {
+  since: string;
+  until: string;
+  days: number;
+  previous_since?: string;
+  previous_until?: string;
+  seats: SeatActivityRow[];
+  /** The worst relative error of a quantile (0.06). */
+  quantile_resolution: number;
 }
 
 export interface QueryMap {
   viewer: Viewer;
   work_inbox: WorkInboxAnswer;
   agent: AgentAnswer;
-  agent_memory: AgentMemoryAnswer;
+  agent_memory: AgentMemory;
+  memory_overview: MemoryOverview;
   events: EventsPage;
   event_series: EventSeries;
-  event: EventRecord;
+  event: EventRecord & { coverage: Coverage };
   trace: TraceAnswer;
   turn: TurnAnswer;
   turns: TurnsAnswer;
   phases: PhasesPage;
   tokens: Rollup;
   token_series: TokenSeries;
-  stream: EngineHealth;
+  seat_activity: SeatActivityAnswer;
   fleet: FleetAnswer;
+  access: AccessAnswer;
+  mcp_servers_status: McpServersStatusAnswer;
+  credential_pool: CredentialPoolAnswer;
+  backups: BackupsAnswer;
   budgets: BudgetsAnswer;
   schedules: SchedulesAnswer;
   schedule_runs: ScheduleRunsAnswer;
   integrations: IntegrationsAnswer;
   sandbox_runs: { runs: SandboxRun[] };
+  sandbox_tail: SandboxTailAnswer;
   retention: RetentionReport;
   work_items: WorkItemsAnswer;
   work_item: WorkItemDetail;
+  work_comments: WorkCommentsAnswer;
+  work_item_turns: WorkItemTurnsAnswer;
   work_views: WorkViewsAnswer;
+  /** Every saved view a viewer can see, across every container. */
+  work_saved_views: WorkViewsAnswer;
   work_projects: WorkProjectsAnswer;
   work_project: WorkProjectDetail;
   work_workload: WorkloadAnswer;
@@ -3573,14 +4271,19 @@ export interface QueryMap {
   work_person: WorkPersonState;
   work_search: WorkSearchAnswer;
   work_routing: WorkRoutingAnswer;
+  work_flow: WorkFlowAnswer;
+  company_feed: CompanyFeedAnswer;
+  decisions: DecisionsAnswer;
   pages: PagesAnswer;
   page: PageDetail;
   containers: { containers: PageContainer[] };
   page_activity: PageActivityAnswer;
+  page_reads: PageReadsAnswer;
   page_revision: PageRevisionBody;
   conversations: ConversationsAnswer;
   a2a_channels: A2AAnswer;
   knowledge: KnowledgeAnswer;
+  colleague: ColleagueAnswer;
   config: CompanyDocument | null;
   config_audit: RevisionMeta[];
   config_diff: ConfigDiff;
@@ -3588,23 +4291,3 @@ export interface QueryMap {
 }
 
 export type QueryName = keyof QueryMap;
-
-/** The machine-readable codes a rejected query carries. */
-export type QueryErrorCode =
-  | "unknown_query"
-  | "unauthorized"
-  | "query_failed"
-  /** This node understood the question and REFUSED it: a parameter missing,
-   *  malformed, or outside the set the field accepts. The caller's fault, not
-   *  the engine's — retrying sends the same bad request again. */
-  | "bad_params"
-  | "not_found"
-  /** This node understood the question and cannot answer it YET: a
-   *  projection still catching up after a restart or a fresh join, or a
-   *  coordination store it could not reach. A screen asks again in a moment
-   *  (`useQuery` does so itself), and never says "there is nothing": the
-   *  second is an answer a person acts on. A source this node does not have
-   *  at all is `unknown_query`, which waiting never changes. */
-  | "unavailable"
-  | "timeout"
-  | "closed";

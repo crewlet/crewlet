@@ -53,7 +53,7 @@ import { handlesOf, recordIntent, type BuilderState } from "./model/reducer.ts";
 import { datadogFallback } from "./chartModel.ts";
 import { isWorking, referenceNames, vendorIdentities } from "./nodeFacts.ts";
 import { massRemoval, newlyStranded, removedSeats, removedUnits, simulate } from "./preflight.ts";
-import { DeleteGlyph } from "@crewlethq/icons/glyphs";
+import { TrashGlyph } from "@crewlethq/icons/glyphs";
 import { Button, Callout, Checkbox, Modal, SegmentedControl } from "@crewlethq/ui";
 
 type PlacedChoice = "keep" | "remove";
@@ -153,7 +153,7 @@ export function DeleteDialog({ nodeKey, onClose }: { nodeKey: NodeKey; onClose: 
       open
       stackBody
       title={`Delete ${name}`}
-      icon={<DeleteGlyph />}
+      icon={<TrashGlyph />}
       size="md"
       /*
        * AN ALERT, NOT A DIALOG. This interrupts to ask something consequential
@@ -175,7 +175,7 @@ export function DeleteDialog({ nodeKey, onClose }: { nodeKey: NodeKey; onClose: 
       onSubmit={remove}
       footer={
         <>
-          <Button variant="tertiary" onClick={onClose}>
+          <Button variant="ghost" onClick={onClose}>
             Cancel
           </Button>
           <Button variant="danger" type="submit" disabled={blocked}>

@@ -126,6 +126,19 @@ updates:
   # `vitest`-only bump now arrives titled for the group rather than for
   # `vitest`, and the packages it moved are in the body instead of the subject.
   #
+  # THE DESIGN SYSTEM IS GROUPED, for a reason that is not a peer at all.
+  # `@crewlethq/ui` pins `@crewlethq/tokens` and `@crewlethq/icons` as
+  # DEPENDENCIES at an EXACT version (0.5.0 depends on both at `0.5.0`), and
+  # the three are released together from one repository. So a lone bump of
+  # any one of them installs cleanly and wrongly: `ui` 0.5.1 beside a direct
+  # `tokens` 0.5.0 nests a second copy of the tokens under `ui`, and the
+  # components paint from one palette while the dashboard's own stylesheets
+  # read the other — a split no install error reports and no test that reads
+  # the INSTALLED package (palette.test.ts, tokens.test.ts) can see, because
+  # each reads the top-level copy. `@crewlethq/*` is a pattern rather than
+  # three names because the pinning is the whole scope's convention, and a
+  # fourth package from it would be pinned the same way.
+  #
   # NOTHING ELSE IS GROUPED, and the peer graph is why rather than taste. The
   # only other REQUIRED edges a bump here could split are
   # @testing-library/react's: on react and react-dom at `^18.0.0 || ^19.0.0`,
@@ -139,9 +152,9 @@ updates:
   # `applies-to` is left at its default of version-updates on both: a security
   # advisory must not wait for the rest of a family to have a release.
   #
-  # Of twelve direct dependencies, seven are grouped; the remaining five —
-  # @testing-library/react, @types/node, jsdom, prettier, typescript — still
-  # arrive one pull request each.
+  # Of fifteen direct dependencies, ten are grouped (react 4, vite 3,
+  # crewlethq 3); the remaining five — @testing-library/react, @types/node,
+  # jsdom, prettier, typescript — arrive one pull request each.
   - package-ecosystem: npm
     directory: "/dashboard"
     schedule:
@@ -163,6 +176,9 @@ updates:
           - "vite"
           - "vitest"
           - "@vitejs/plugin-react"
+      crewlethq:
+        patterns:
+          - "@crewlethq/*"
 
   # The base image a release ships. Distinct from docker-compose below: that
   # entry reads compose files and this one reads Dockerfiles, and neither

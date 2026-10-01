@@ -144,6 +144,7 @@ type recorder struct {
 	panicWith any
 	parked    [][]*events.Event
 	paused    []string
+	holds     []inbox.Hold
 	deferred  []string
 }
 
@@ -165,8 +166,9 @@ func dispatcher(t *testing.T, r *recorder) *engine.Dispatcher {
 			r.parked = append(r.parked, evs)
 			return nil
 		},
-		Pause: func(_ context.Context, handle, _ string) error {
+		Pause: func(_ context.Context, handle string, hold inbox.Hold, _ string) error {
 			r.paused = append(r.paused, handle)
+			r.holds = append(r.holds, hold)
 			return nil
 		},
 		NoteDeferred: func(handle string) { r.deferred = append(r.deferred, handle) },
@@ -274,7 +276,7 @@ func TestAFailedPauseDoesNotPark(t *testing.T) {
 	r := &recorder{}
 	d := dispatcher(t, r)
 	d.Conditions = func(string) inbox.Conditions { return inbox.Conditions{Owned: true} }
-	d.Pause = func(context.Context, string, string) error { return errors.New("no") }
+	d.Pause = func(context.Context, string, inbox.Hold, string) error { return errors.New("no") }
 	got := d.Dispatch(context.Background(), "ceo", []*events.Event{ev("notification")})
 	if got.Outcome != queue.OutcomeNak {
 		t.Errorf("outcome = %v, want a NAK", got.Outcome)
@@ -620,16 +622,35 @@ func TestAPanickedTurnIsRecordedRatherThanRedelivered(t *testing.T) {
 // The loop recovers a panicking phase; everything between the broker and the
 // loop is this frame's: the screening stages, and the turn's own set-up and
 // tear-down around the loop. Each case panics somewhere different, and each
-// must settle the delivery, record the trigger and put the seat AFK, because
+// must settle the delivery, record the trigger and put the failure on the seat,
+// because
 // no turn telemetry ran to do it.
+//
+// AND THE BREACH NAMES THE RUN THE PANIC ENDED, when there was one. A turn
+// announces itself under its run id before its prefetch, so a panic in its own
+// frames is a panic in a turn already on the record — and the breach is the one
+// row that says why it stopped. It used to carry the WORK KEY in `turn_id`, a
+// value no turn event is filed under since ADR-0017, so the start and the
+// breach of one dead turn were joined by nothing. A panic in a screening stage
+// happens before any run is minted, and names none.
 func TestAPanicOutsideTheLoopIsRecoveredAtTheDispatcher(t *testing.T) {
 	t.Parallel()
-	for name, arrange := range map[string]func(d *engine.Dispatcher, r *recorder){
-		"in the turn's own frames": func(_ *engine.Dispatcher, r *recorder) {
-			r.panicWith = "runner could not be built: nil registry"
+	for name, tc := range map[string]struct {
+		arrange func(d *engine.Dispatcher, r *recorder)
+		// ran reports whether the panic came from inside the turn, where
+		// a run had been minted for it to name.
+		ran bool
+	}{
+		"in the turn's own frames": {
+			arrange: func(_ *engine.Dispatcher, r *recorder) {
+				r.panicWith = "runner could not be built: nil registry"
+			},
+			ran: true,
 		},
-		"in a screening stage": func(d *engine.Dispatcher, _ *recorder) {
-			d.Conditions = func(string) inbox.Conditions { panic("lease table returned nil") }
+		"in a screening stage": {
+			arrange: func(d *engine.Dispatcher, _ *recorder) {
+				d.Conditions = func(string) inbox.Conditions { panic("lease table returned nil") }
+			},
 		},
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -647,7 +668,7 @@ func TestAPanicOutsideTheLoopIsRecoveredAtTheDispatcher(t *testing.T) {
 				}
 				return "CEO", "a-1"
 			}
-			arrange(d, r)
+			tc.arrange(d, r)
 			ctx := context.Background()
 
 			got := d.Dispatch(ctx, "ceo", []*events.Event{a})
@@ -671,14 +692,25 @@ func TestAPanicOutsideTheLoopIsRecoveredAtTheDispatcher(t *testing.T) {
 			}
 			if breach == nil {
 				t.Fatalf("observed %v, want a guard breach: without it the seat never "+
-					"goes AFK and shows whatever it was last doing", typesSeen(seen))
+					"records the failure and shows whatever it was last doing", typesSeen(seen))
 			}
 			if breach.Kind != types.GuardUnhandledException || breach.RoleName != "CEO" ||
 				breach.Agent != "a-1" {
 				t.Errorf("breach = %+v, want unhandled_exception addressed to CEO/a-1", breach)
 			}
-			if breach.TurnID != key {
-				t.Errorf("breach turn id = %q, want the partition's work key %q", breach.TurnID, key)
+			wantRun := ""
+			if tc.ran {
+				if len(r.reqs) != 1 || r.reqs[0].RunID == "" {
+					t.Fatalf("the turn ran %d times, want once under a minted run", len(r.reqs))
+				}
+				wantRun = r.reqs[0].RunID
+			}
+			if breach.TurnID != wantRun {
+				t.Errorf("breach turn id = %q, want %q: the run the panic ended, "+
+					"which every other record of that turn is filed under", breach.TurnID, wantRun)
+			}
+			if breach.WorkKey != key {
+				t.Errorf("breach work key = %q, want the partition's %q", breach.WorkKey, key)
 			}
 			if skipped == nil || !strings.Contains(skipped.Reason, "panicked") {
 				t.Errorf("skipped = %+v, want the trigger on the record as panicked", skipped)
@@ -844,8 +876,15 @@ func TestAPanicInADegradedHeadLeavesTheRequeuedTailToRun(t *testing.T) {
 					"to the queue", data.TriggerID)
 			}
 		case *types.TurnGuardBreach:
-			if data.TurnID != headKey {
-				t.Errorf("breach turn id = %q, want the head's own key %q", data.TurnID, headKey)
+			// THE HEAD'S OWN KEY beside the run it was running under —
+			// the tail was never this delivery's to answer for, so a key
+			// derived over both would name a unit nobody worked.
+			if data.WorkKey != headKey {
+				t.Errorf("breach work key = %q, want the head's own key %q", data.WorkKey, headKey)
+			}
+			if len(r.reqs) != 1 || data.TurnID != r.reqs[0].RunID {
+				t.Errorf("breach turn id = %q, want the run the head's turn was "+
+					"dispatched under", data.TurnID)
 			}
 		}
 	}
@@ -1230,6 +1269,10 @@ func (failingConversations) Threads(context.Context, string, int) ([]ledgerstore
 	return nil, errors.New("store down")
 }
 
+func (failingConversations) ThreadCount(context.Context, string) (int, error) {
+	return 0, errors.New("store down")
+}
+
 func (failingConversations) Purge(context.Context, time.Time) (int64, error) {
 	return 0, errors.New("store down")
 }
@@ -1245,7 +1288,7 @@ func eventIDs(evs []*events.Event) []string {
 // A MERGE HAS TO BE RECORDED HERE, because here is where the constituent
 // list exists: a coalesced digest is minted fresh and carries no memory of
 // what it absorbed, so by the time a turn is running there is nothing left
-// to count. Nothing else emits it, which is why the Integrations room could
+// to count. Nothing else emits it, which is why Settings › Integrations could
 // report how many deliveries ARRIVED and not how many turns they became.
 func TestAMergedPartitionIsRecordedWithItsConstituents(t *testing.T) {
 	t.Parallel()
@@ -1283,7 +1326,7 @@ func TestAMergedPartitionIsRecordedWithItsConstituents(t *testing.T) {
 	// THE VENDOR, not the producer of the wake. internal/notify stamps the
 	// envelope "notify.slack"; every other notification event carries the
 	// bare third-party app name, and a record that disagrees is filed under a source
-	// no dashboard filter matches — so the Integrations room reported zero
+	// no dashboard filter matches — so Settings › Integrations reported zero
 	// coalesced merges for every integration.
 	if rec.NotificationSource != "slack" {
 		t.Errorf("source = %q, want the bare third-party app name", rec.NotificationSource)
@@ -2692,7 +2735,8 @@ func unreadableAnswerLookup(t *testing.T, awaiting bool) *sandbox.Coordinator {
 		t.Fatalf("NewManager: %v", err)
 	}
 	coordinator, err := sandbox.NewCoordinator(sandbox.CoordinatorOptions{
-		Queue: discardPublisher{}, Pending: blindLookupStore{PendingStore: store}, Manager: manager,
+		Audience: noAudience{},
+		Queue:    discardPublisher{}, Pending: blindLookupStore{PendingStore: store}, Manager: manager,
 		// A RESUMER THAT PANICS, because these cases never reach one:
 		// the lookup is what fails, and a resume from here would be the
 		// answer being run after the store said it could not say which
@@ -2757,4 +2801,116 @@ func (r unreachedResumer) Resume(context.Context, sandbox.ResumeRequest) error {
 	r.t.Fatal("the answer was resumed although the lookup that matches it to a " +
 		"run could not be made")
 	return nil
+}
+
+// noAudience resolves every question to nobody: these coordinators are about
+// the answer route, not whom a question is put to (audience_internal_test.go).
+type noAudience struct{}
+
+func (noAudience) ResolveAudience(sandbox.PendingRun, string) sandbox.Audience {
+	return sandbox.Audience{}
+}
+
+// answerGiven is an operator's answer by turn, as it arrives on a seat's inbox.
+func answerGiven(turnID string) *events.Event {
+	return events.New(types.SandboxAnswerGiven{
+		TurnID: turnID, AgentHandle: "ceo", Answer: "use main",
+		AnsweredBy: "founder-token", AnsweredBySeat: "founder",
+	}, events.TraceContext{})
+}
+
+// AN ANSWER BY TURN IS NEVER RUN AS A TURN, whatever it became. It is
+// addressed to a parked run and not to the seat: resumed, found not waiting or
+// found gone, it is spent where it was routed, and only an answer the run is
+// still owed comes back — as a NAK, the spaced return. A seat HELD by another
+// coding job does not park it either, because the run it answers holds
+// nothing; a node that does not hold the seat routes nothing at all.
+func TestAnAnswerEventIsNeverRunAsATurn(t *testing.T) {
+	t.Parallel()
+	free := inbox.Conditions{Owned: true, TurnEngineReady: true, AdmitsTriggers: true}
+	held := free
+	held.SeatHeldBySandbox = true
+	for name, tc := range map[string]struct {
+		conds       inbox.Conditions
+		disposition sandbox.AnswerDisposition
+		unwired     bool
+		outcome     queue.Outcome
+		routed      bool
+	}{
+		"resumed":                          {free, sandbox.AnswerConsumed, false, queue.OutcomeAck, true},
+		"not waiting or gone":              {free, sandbox.AnswerNotMine, false, queue.OutcomeAck, true},
+		"an answer this build cannot read": {free, sandbox.AnswerDisposition(""), false, queue.OutcomeAck, true},
+		"still owed":                       {free, sandbox.AnswerDeferred, false, queue.OutcomeNak, true},
+		"a seat another job holds":         {held, sandbox.AnswerConsumed, false, queue.OutcomeAck, true},
+		"a node with no coordinator":       {free, "", true, queue.OutcomeNak, false},
+		"a node that does not hold the seat": {
+			inbox.Conditions{}, sandbox.AnswerConsumed, false, queue.OutcomeDefer, false},
+		// AN ANSWER WAITS BEHIND A PAUSE, like the seat's other mail:
+		// resuming a run is work, and a paused seat does none. The park
+		// the screening makes holds it for the resume.
+		"a seat a person paused": {
+			inbox.Conditions{Owned: true, TurnEngineReady: true, AdmitsTriggers: true, Paused: true},
+			sandbox.AnswerConsumed, false, queue.OutcomeAck, false},
+		"a node that has not read the pauses": {
+			inbox.Conditions{Owned: true, TurnEngineReady: true, AdmitsTriggers: true, PauseUnknown: true},
+			sandbox.AnswerConsumed, false, queue.OutcomeDefer, false},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			r := &recorder{}
+			d := dispatcher(t, r)
+			d.Conditions = func(string) inbox.Conditions { return tc.conds }
+			var routed []string
+			if !tc.unwired {
+				d.AnswerByTurn = func(_ context.Context, given types.SandboxAnswerGiven,
+					_ *events.Event) (sandbox.AnswerDisposition, error) {
+					routed = append(routed, given.TurnID)
+					return tc.disposition, nil
+				}
+			}
+			got := d.Dispatch(context.Background(), "ceo", []*events.Event{answerGiven("t1")})
+			if got.Outcome != tc.outcome {
+				t.Errorf("outcome = %v, want %v", got.Outcome, tc.outcome)
+			}
+			if len(r.reqs) != 0 {
+				t.Errorf("an answer by turn was run as a turn: %+v", r.reqs)
+			}
+			if (len(routed) == 1) != tc.routed {
+				t.Errorf("routed to the run %v, want routed=%v", routed, tc.routed)
+			}
+			if tc.routed && len(r.parked) != 0 {
+				t.Errorf("an answer routed to its run was also parked: %v", r.parked)
+			}
+			if tc.conds.Paused && (len(r.parked) != 1 ||
+				!slices.Equal(r.holds, []inbox.Hold{inbox.HoldSeatPaused})) {
+				t.Errorf("a paused seat's answer parked %v under holds %v, want one park "+
+					"under the pause's own hold", r.parked, r.holds)
+			}
+		})
+	}
+}
+
+// AN ANSWER IS TAKEN OUT OF WHATEVER IT ARRIVED WITH, and the rest of the
+// delivery is the ordinary delivery it is: the other event runs as a turn, and
+// the answer is not in it.
+func TestAnAnswerIsTakenOutOfTheDeliveryBeforeTheTurn(t *testing.T) {
+	t.Parallel()
+	r := &recorder{result: turn.Result{Decision: phase.Done, Artifact: "posted"}}
+	d := dispatcher(t, r)
+	d.AnswerByTurn = func(context.Context, types.SandboxAnswerGiven, *events.Event) (sandbox.AnswerDisposition, error) {
+		return sandbox.AnswerConsumed, nil
+	}
+	answer, other := answerGiven("t1"), ev("notification")
+	got := d.Dispatch(context.Background(), "ceo", []*events.Event{answer, other})
+	if got.Outcome != queue.OutcomeAck {
+		t.Fatalf("outcome = %v, want an ack", got.Outcome)
+	}
+	if len(r.reqs) != 1 {
+		t.Fatalf("the turn ran %d times, want once for the ordinary event", len(r.reqs))
+	}
+	for _, e := range r.reqs[0].Events {
+		if e.ID == answer.ID {
+			t.Fatal("the answer by turn reached the turn as part of its trigger")
+		}
+	}
 }

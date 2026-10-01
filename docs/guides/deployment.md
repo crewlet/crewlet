@@ -53,28 +53,31 @@ with — but the operator then has to finish it to see what it did.
 
 ### The room the stream's volume needs
 
-The engine's own tracker, knowledge base and vector index each keep an ordered
-log on the stream, and each log's byte ceiling is **reserved** on the volume
+The engine's own tracker, knowledge base, vector index and usage history each
+keep a log on the stream, and each log's byte ceiling is **reserved** on the volume
 holding `stream.store_dir` when its stream is created: the embedded broker
 grants a ceiling in full, up front, or refuses to create the stream at all.
 Its limit is three quarters of that volume's free space.
 
-The node sizes the three ceilings together to fit half of that limit, and
+The node sizes the four ceilings together to fit half of that limit, and
 never below 1 GiB each, so:
 
-- **A first boot needs at least 4 GiB free on that volume.** Three quarters of
-  4 GiB is the three 1 GiB floors. Below it the node refuses to boot with an
+- **A first boot needs at least 5⅓ GiB free on that volume.** Three quarters
+  of 5⅓ GiB is the four 1 GiB floors. Below it the node refuses to boot with an
   error naming the log it could not reserve, the bytes it needed, the bytes
   the broker had left, and the Tier A field that sets the ceiling.
 - **More room buys longer logs, up to a point.** Unset, the mutation log asks
   for a quarter of the free space (4..64 GiB), the knowledge base's log for a
-  quarter of that, and the vector changelog for 16 GiB capped by the same
-  quarter. They are scaled down together whenever they ask for more than that
-  half, which on a first boot is every volume with less than 256 GiB free;
-  from there up each log gets what it asked for.
+  quarter of that, the vector changelog for 16 GiB capped by the same
+  quarter, and the usage log for a fixed 1 GiB — its size is a count of
+  node-days rather than a rate, so more disk buys it nothing. They are scaled
+  down together whenever they ask for more than that half, which on a first
+  boot is every volume with less than 256 GiB free; from there up each log gets
+  what it asked for.
 - **The ceilings are fixed when the streams are created.** Moving the node to
   a bigger volume, or setting `stream.tracker_log_max_bytes`,
-  `stream.tracker_vectors_max_bytes` or `stream.pages_log_max_bytes` later,
+  `stream.tracker_vectors_max_bytes`, `stream.pages_log_max_bytes` or
+  `stream.usage_log_max_bytes` later,
   changes nothing about streams that already exist; `crewlet retention
   set-capacity` is what changes a running log's ceiling. A log created later —
   one a new version adds — is sized from what the existing logs' ceilings leave
@@ -238,8 +241,9 @@ reasons:
 Then placement retries for as long as the cluster answers "no suitable
 peers", inside the per-create provisioning budget — **30 seconds** on a solo
 node and **2 minutes** on a member with peers, because the two creates are not
-the same call underneath. See *A clustered node is given longer to create
-them* below.
+the same call underneath. See
+[A clustered node is given longer to create them](#a-clustered-node-is-given-longer-to-create-them)
+below.
 
 The clustered accept budget is four times the solo one because a member
 starting alongside its peers is competing with them for the same disk and the
@@ -394,9 +398,9 @@ than something a reconnect policy should paper over.
 **The account needs more than publish and subscribe.** A node creates what it
 uses, on every start and idempotently: the six engine streams
 (`CREWLET_AGENT`, `CREWLET_EVENTS`, `CREWLET_NOTIFICATIONS`,
-`CREWLET_CONFIG`, `CREWLET_MEMORY`, `CREWLET_DLQ`), the three state-log
+`CREWLET_CONFIG`, `CREWLET_MEMORY`, `CREWLET_DLQ`), the four state-log
 domain streams (`CREWLET_TRACKER_LOG`, `CREWLET_TRACKER_VECTORS`,
-`CREWLET_PAGES_LOG`), a stream per extra subject namespace a company
+`CREWLET_PAGES_LOG`, `CREWLET_USAGE_LOG`), a stream per extra subject namespace a company
 publishes under, one durable consumer per seat mailbox (an ordinary API
 call, measured at 1.7 ms), and the eighteen `crewlet_*` KV buckets:
 three in the lease store, holding the seat and presence leases, the duty
@@ -420,7 +424,9 @@ consumer churn is what produces a steady stream of `JetStream connection
 closed: Client Closed` lines — see `stream.debug`, which is off by default for
 exactly this reason.
 
-**A clustered node is given longer to create them than a solo one.** Every
+#### A clustered node is given longer to create them
+
+A clustered node is given longer than a solo one. Every
 one of those creates is a local file-store setup on a solo node and a raft
 round trip on a member of a cluster, against a metadata group whose peers are
 themselves still booting — so the budget branches: **30 seconds** per create
@@ -740,7 +746,7 @@ What a fleet gets right, each of which was a real defect before:
 - *Duplicate Slack posts, duplicate Jira comments, two contradictory plans for one webhook.* A seat's inbox is attached only by the node holding its lease, admission is gated on a renew fresh enough to prove exclusivity, and the turn loop re-checks the seat fence at the top of every round and again before each of that round's tool calls — so a node that loses the seat mid-turn stops before its next call rather than running out the turn beside the seat's new owner. A turn that finished but whose delivery was never acked is not re-run, because the [completion ledger](../concepts/seat-ownership.md#the-completion-ledger) records what shipped.
 - *Live coding sandboxes torn down mid-run.* Recovery is a per-seat step inside the acquire hook, fenced on the claiming node's epoch, instead of a fleet-wide scan that treated every in-flight run as abandoned.
 - *Config activation.* Delivered by the [control plane](../concepts/control-plane.md) — a shared activation pointer whose own revision is the epoch, polled by every node — rather than the competing-consumer subscription that used to let exactly one replica apply a revision while the rest ran the previous company.
-- *Token budgets.* A shared counter in the coordination slot, so an org cap of 500 k is 500 k across the fleet — and it covers **every** completion the engine makes on a seat's behalf, the turn loop, the coding sandbox and the auxiliary learning passes alike.
+- *Token budgets.* Shared counters in the coordination slot, one slot per calendar window, so an org cap of 500 k a day is 500 k a day across the fleet — and they cover **every** completion the engine makes on a seat's behalf, the turn loop (the round-cap extension judge included), the coding sandbox, the turn-start context assembly and the auxiliary learning passes alike.
 - *Duplicate auto-drafted skill pages and N× LLM spend on synthesis.* Skill clustering, skill curation and episode compaction are [singleton duties](../concepts/seat-ownership.md#singleton-duties) (they share one `worker:` lease, so a fleet runs each of them on exactly one node), along with the scheduler tick, the sandbox waiter, the seat-subscription walk and the retention sweeps. Each lease is claimed per tick: a node that stops gracefully gives its duties back as it exits, and one that dies mid-duty hands them back by lapsing, which for the longer duties takes up to their TTL (45 minutes for the retention sweep, three hours for the curator).
 - *Unbounded table growth.* `scheduled_runs` and `conversation_sessions` both answer a short-horizon question and are written on every event that asks it. The migrations always said they were swept on a TTL; the sweep exists, behind the `maintenance` duty. Most fleet-shared records — the delivery dedupe, the rate valve, the completion ledger, the credential cooldowns and each node's apply status — are not swept here at all: each lives in a [coordination](../concepts/coordination.md) bucket whose own age is its retention, so the broker expires them. Agent-to-agent channels are the exception and *are* swept by the duty, because a bucket age cannot tell an open ask from an answered one. The apply status is the one that hides: it is keyed by *node* rather than by event, so it does not look short-horizon — but a node that is scaled in, redeployed or crashed would leave its last report behind, which under generated pod names is one per pod that ever ran, and the bucket's one-minute age is what makes that node *vanish* instead.
 
@@ -842,10 +848,17 @@ dimensions (`event_type`, `source`, `category`, `agent_id`, `agent_role`,
 everything else.
 
 That inline write is also why a fleet's event store is *per node*: each holds
-what it published. The dashboard reads the node it is served by. A deployment
-that wants one queryable history across a fleet exports to an external sink
-over OTLP rather than pointing the nodes at one database, which the exclusive
-file ownership rules out by construction.
+what it published. A history read is therefore asked of **every live node**
+at query time — the node serving the dashboard reads its own store and
+scatters the same question to its peers, merges what comes back, and names
+any node that did not answer in the answer's `coverage` (see
+[Reading the fleet's history](../concepts/event-system.md#reading-the-fleets-history)).
+A node that has LEFT the fleet takes its turn-level detail with it; the
+aggregates — spend, turn counts, page reads — survive it in the replicated
+`usage` domain. A deployment that wants to keep every node's detail past its
+departure exports to an external sink over OTLP rather than pointing the
+nodes at one database, which the exclusive file ownership rules out by
+construction.
 
 #### What gets stored, and under which category
 
@@ -858,11 +871,11 @@ from that map — a guard test fails if the two drift.
 |---|---|
 | `a2a` | `a2a_channel_closed`, `a2a_channel_opened`, `a2a_message_sent` |
 | `decision` | `contribution_received`, `contribution_requested`, `decision_requested`, `decision_resolved` |
-| `learning` | `compaction_completed`, `compaction_requested`, `counterparty_profile_updated`, `episode_written`, `persist_decider_completed`, `prefetch_summary`, `reflection_completed`, `skill_archived`, `skill_promoted`, `skill_refined`, `skill_revived`, `skill_staled`, `skill_synthesized`, `skill_used`, `turn_completed` |
-| `lifecycle` | `config_revision_activated`, `config_revision_applied`, `org_started`, `org_stopped` |
+| `learning` | `compaction_completed`, `compaction_requested`, `counterparty_profile_updated`, `episode_written`, `knowledge_read`, `persist_decider_completed`, `prefetch_summary`, `reflection_completed`, `skill_archived`, `skill_promoted`, `skill_refined`, `skill_revived`, `skill_staled`, `skill_synthesized`, `skill_used`, `turn_completed` |
+| `lifecycle` | `backup_requested`, `config_revision_activated`, `config_revision_applied`, `operator_acted`, `org_started`, `org_stopped`, `seat_paused`, `seat_resumed` |
 | `notification` | `external_notification`, `notification_skipped`, `notifications_coalesced`, `turn_trigger_skipped` |
-| `system` | `agent_phase_completed`, `agent_phase_started`, `agent_turn_completed`, `budget_exhausted`, `llm_unavailable`, `phase.tool_skill_blocked`, `prompt.size`, `provider_fallback`, `skill_telemetry_write_failed`, `subagent_batched`, `turn.guard_breach` |
-| `task` | `sandbox_clarification_requested`, `sandbox_run_completed`, `sandbox_run_failed`, `sandbox_run_started`, `scheduled_task_fired`, `task_assigned` |
+| `system` | `agent_phase_completed`, `agent_phase_started`, `agent_turn_completed`, `agent_turn_started`, `agent_turn_steered`, `agent_turn_stopped`, `budget_exhausted`, `llm_unavailable`, `phase.tool_skill_blocked`, `prompt.size`, `provider_fallback`, `skill_telemetry_write_failed`, `subagent_batched`, `turn.guard_breach` |
+| `task` | `sandbox_clarification_requested`, `sandbox_run_answered`, `sandbox_run_completed`, `sandbox_run_failed`, `sandbox_run_started`, `scheduled_task_fired`, `task_assigned` |
 | `webhook` | *No event type.* The [webhook receiver](../reference/api-endpoints.md) writes the delivery's row itself, under its own id with the provider's exact bytes as the payload |
 
 **The map is also the admission list.** A type that is not in it is not written
@@ -872,14 +885,15 @@ test rather than vanishing quietly.
 
 | Excluded type | Why |
 |---|---|
-| `agent_turn_progress` | Fires once per LLM round as a live-only signal; the matching `agent_phase_completed` is its durable record, so persisting this would fill the log with intermediate states of rows it also holds finished. It still drives the live projection. |
+| `agent_turn_progress` | Fires as each LLM round opens, answers and runs its tools, as a live-only signal; the matching `agent_phase_completed` is its durable record, so persisting this would fill the log with intermediate states of rows it also holds finished. It still drives the live projection. |
 | `agent_spawned` | Placement moves a seat between nodes on every rebalance, so a durable row per claim would fill the log with a fact about **scheduling** rather than about the company. It still drives the live projection, which is what asks "is this seat running, and where". |
-| `agent_terminated` | The counterpart, excluded for the same reason. It is what returns a released seat to `terminated` on a live screen rather than leaving it showing whatever it last did. |
+| `agent_terminated` | The counterpart, excluded for the same reason. It is what takes a released instance's call off a live screen rather than leaving it showing whatever it last did; whether the seat still runs anywhere is the seat leases' to say. |
 | `raw_webhook` | The delivery is **already** a row (the `webhook` category above). This event is the wake the receiver publishes onto a seat's inbox, so categorising it too would store every delivery twice — once as what arrived and once as what was forwarded. |
 | `a2a_request` | The ask is **already** a row: `a2a_channel_opened` and `a2a_message_sent` record the same exchange under the ids the audit trail is keyed on. This event is the wake it puts on the target seat's inbox — same reason as `raw_webhook`. |
 | `a2a_message` | The answer is **already** a row (`a2a_message_sent`). This event is the wake it puts on the requester's inbox. |
+| `sandbox_answer_given` | The wake an [answer by turn](../concepts/code-sandbox.md#answering-a-parked-run) puts on the seat's inbox, and never a turn. What the answer became is **already** a row (`sandbox_run_answered`), and that a person gave it is their `operator_acted` row — same reason as `a2a_request`. |
 | `tool_skill_page_changed` | A **nudge** between nodes that one tool-skill page moved, so every node's registry re-reads it rather than only the node that won the webhook. The delivery that caused it is **already** a row (the `webhook` category above), and what the change did is a log line on each node, so a durable row would record one wiki edit once more per member of the fleet. |
-| `budget_reported` | A **snapshot** of the shared token counter, published by every node on a 15-second tick, so a durable row per report is about two million a year per node to answer a question the live projection and `GET /budgets` answer for free. What the audit log holds instead is the spend the counter is charged with, recorded per phase in the `agent_phase_completed` rows every spend query folds, so "what did we spend last month" is answerable and "what was the counter reading at 14:03:15" is not a question anybody asks. It still drives the live projection. |
+| `budget_meters` | A **snapshot** of the shared token counters, published by every node on a 15-second tick, so a durable row per report is about two million a year per node to answer a question the live projection and `GET /budgets` answer for free. What the audit log holds instead is the spend the counter is charged with, recorded per phase in the `agent_phase_completed` rows every spend query folds, so "what did we spend last month" is answerable and "what was the counter reading at 14:03:15" is not a question anybody asks. It still drives the live projection. |
 
 #### Querying events
 
@@ -1319,43 +1333,104 @@ functions the REST routes call, so the two surfaces cannot disagree.
 
 ```bash
 crewlet budgets show      # the durable counters, read from a running node
-crewlet budgets reset     # -scope org, or -scope agent:<id>
 ```
 
-Both talk to a node rather than to a file: the counter is the fleet's, and on
-the default topology it lives inside the running engine. `-url` and `-token`
+It talks to a node rather than to a file: the counters are the fleet's, and on
+the default topology they live inside the running engine. `-url` and `-token`
 name another node; without them they are taken from the `api` block of the
 config on the command line.
 
 ### Token Budgets
 
-Set budgets at two levels:
+Set budgets at two levels, each a mapping of ceilings per calendar window —
+`day`, `week` and `month`, each optional — cut on the company's
+[clock](../getting-started/configuration.md#the-companys-clock):
 
 - **Org-wide** — `token_budget` in the top-level YAML config
 - **Per-agent** — `token_budget` on each Role definition
 
-Every model round is charged against both before it runs. A charge that does
-not fit is refused: the turn stops and the engine publishes a
-`budget_exhausted` event naming the scope that refused and its figures,
-beside the turn's own `agent_turn_completed`. The
+```yaml
+token_budget: {day: 3000000, month: 40000000}
+```
+
+An absent window is uncapped, and a ceiling of `0` is refused rather than read
+as unlimited. See [Configuration § Token budgets](../getting-started/configuration.md#token-budgets)
+for the rules and for the ceilings `crewlet validate` warns can never bind.
+
+Every model round is charged against both before it runs, in every window at
+once — the day, the week and the month it falls in on the company's clock —
+and it is admitted only while every capped window of both has room. A charge
+that does not fit is refused: the turn stops and the engine publishes a
+`budget_exhausted` event naming the scope that refused, the window
+(`period`, `window`, `resets_at`) and its figures, beside the turn's own
+`agent_turn_completed`. The
 check is atomic: if the agent's budget refuses, the org-level consumption it
 had already charged is rolled back. In a fleet the counters live in the
 coordination slot, so an org cap of 500 k is 500 k across every node rather
 than per process.
 
-A refusal is also recorded beside the counter, as when that scope last refused
-a charge (`refused_at` on [`GET /budgets`](../reference/api-endpoints.md#get-budgets)
+A window's allowance comes back when the window turns over — at local
+midnight, on Monday, on the 1st — rolled inside the first charge after the
+boundary, so nothing has to run for it and no node has to be up at midnight.
+There is no reset: room before a window turns over is made by raising its
+ceiling, which takes effect on the next turn. See
+[Coordination § Token budgets are windows](../concepts/coordination.md#token-budgets-are-windows).
+
+**A seat out of room waits; its mail is not lost.** Before a delivery is
+handed to a seat, the node asks whether one of that seat's capped windows —
+its own or the company's — is refusing. If one is, the seat is **parked**:
+its inbox is held, the delivery goes back to the broker for one of its
+deliveries, and it is delivered again when the window turns over (the one
+that ends last, where several refuse) or at once when an applied revision
+changes the ceilings. The node logs `seat_budget_parked` with the window and
+when it resets, and `seat_budget_park_released` when the mail flows again. A
+turn refused part-way through is parked the same way, unless it had already
+written outside the engine, in which case it is recorded and not run again.
+See [Agent Runtime § The budget park](../concepts/agent-runtime.md#the-budget-park).
+
+**Every seat is counted, capped or not.** A company that sets no ceiling
+still has its spend on the counters, in every window, so a ceiling added
+part-way through a day judges what the day has already spent rather than
+starting from zero, and `GET /budgets` shows an uncapped company's spend
+rather than nothing.
+
+A refusal is also recorded beside the counter, as when that window last
+refused a charge (`refused_at` on [`GET /budgets`](../reference/api-endpoints.md#get-budgets)
 and on the [live token meter](../reference/api-endpoints.md#the-live-token-meter)),
-and the next charge the scope admits clears it. That, not a counter at its cap,
+and the next charge the scope admits clears it, as does the window turning
+over. That, not a counter at its cap,
 is what exhausted means: a refused charge increments nothing, so the counter
 stops short of the cap by the size of the round that did not fit.
 
-A coding run is the one spend that cannot be checked first. Its box spends
-while the turn is suspended, so its tokens are known only when the run is
-collected, and they are **post-charged**: added to both counters without a
-check, because no answer can un-spend them. A run that takes a counter past its
-cap is logged as `sandbox_spend_over_budget`, and the next round the seat or
-the company attempts is refused against the recorded figure.
+Three spends cannot be checked by their own size first, because their size is
+known only once they have happened, and each is **post-charged** — added to the
+counters in the windows it is recorded in, without a check, because no answer
+can un-spend it — behind a gate that reads the room left *before* it starts:
+
+- **A coding run.** Its box spends while the turn is suspended, so its tokens
+  are known only when the run is collected, and they reach both the seat's
+  counter and the company's in the windows the run is collected in. A run that
+  takes a counter past its cap is logged as `sandbox_spend_over_budget`.
+- **An auxiliary pass** — the reflection, profiling, compaction and summary
+  calls the [learning subsystem](../concepts/agent-learning.md) makes on a
+  seat's behalf. A pass does not start for a seat or company with no room
+  left, and each completion it makes is recorded in full on the seat's counter
+  and the company's, past the ceiling included.
+- **A turn's context assembly** — the memory filter, the knowledge query and
+  the episode summary the [turn-start prefetch](../concepts/agent-learning.md)
+  asks the seat's auxiliary model for before the first phase opens. Its gate is
+  the turn's own: a delivery to a seat whose window has no room left is
+  [parked](../concepts/agent-runtime.md#the-budget-park) before it runs, so no
+  prefetch starts for it, and each completion it does make is recorded on the
+  seat's counter and the company's like an auxiliary pass.
+- **A person's knowledge answer** — the dashboard's ⌘K answer
+  ([`answer_knowledge`](../reference/api-endpoints.md#answering-a-question-from-the-companys-knowledge)).
+  A person has no seat budget, so it is gated on the **company's** windows
+  alone — refused `budget_exhausted` before any model call when one of them
+  has no room — and recorded on the company's counter alone.
+
+In each case the next round the seat or the company attempts is refused
+against the recorded figure.
 
 ### Structured Logging
 
@@ -1400,5 +1475,5 @@ inside the process to hook them, because the engine loads no plugins.
 - **Scope isolation** — agents can only access knowledge within their permitted scopes
 - **Tool availability** — all registered tools available; per-role MCP tools carry role-specific credentials
 - **Communication permissions** — agents can only post to channels they're members of
-- **Manager handoffs** — agents identify their manager from their identity prompt and reach them through the colleague-surface tools (Slack/Jira/Confluence/A2A); engine-detected failures surface to the operator dashboard as `afk` state
+- **Manager handoffs** — agents identify their manager from their identity prompt and reach them through the colleague-surface tools (Slack/Jira/Confluence/A2A); engine-detected failures surface to the operator dashboard as the seat's `last_error`, and an unreachable provider as the seat state `stopped`/`provider`
 - **LLM sandboxing** — tool execution results are validated before returning to the agent

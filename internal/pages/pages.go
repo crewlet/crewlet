@@ -74,6 +74,7 @@
 package pages
 
 import (
+	"errors"
 	"fmt"
 	"slices"
 	"strings"
@@ -235,7 +236,31 @@ func nowUTC() time.Time { return time.Now().UTC() }
 // ErrInvalid reports a value this knowledge base refuses.
 var ErrInvalid = fmt.Errorf("pages: invalid")
 
+// invalidError is a refusal naming the field and what to do, marked
+// [ErrInvalid]. The field and the sentence are held apart so [Sentence] can
+// say them to a PERSON — a write surface prints this class as it stands — while
+// the Go error keeps the form every log and model has read.
+type invalidError struct{ field, why string }
+
+func (e *invalidError) Error() string {
+	return fmt.Sprintf("%v: %s: %s", ErrInvalid, e.field, e.why)
+}
+func (e *invalidError) Unwrap() error { return ErrInvalid }
+
 // invalid builds a refusal naming the field and what to do.
 func invalid(field, why string, args ...any) error {
-	return fmt.Errorf("%w: %s: %s", ErrInvalid, field, fmt.Sprintf(why, args...))
+	return &invalidError{field: field, why: fmt.Sprintf(why, args...)}
+}
+
+// Sentence is a refusal this package wrote, as a person reads it: the
+// argument it names, as a value, and what to do — without the "pages:
+// invalid:" a Go error opens with, which says where the error came from and
+// nothing about what to change. Any other error, or a refusal a caller
+// wrapped in context of its own, is its whole message.
+func Sentence(err error) string {
+	var r *invalidError
+	if errors.As(err, &r) && r.Error() == err.Error() {
+		return "`" + r.field + "`: " + r.why
+	}
+	return err.Error()
 }

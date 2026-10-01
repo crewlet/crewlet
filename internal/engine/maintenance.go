@@ -83,6 +83,12 @@ func (e *Engine) startMaintenance(ctx context.Context) {
 				jobs = append(jobs, maintenance.ChannelJobs(svc)...)
 			}
 		}
+		// AND THE LIFETIME TOKEN COUNTERS an earlier build kept, which
+		// nothing here reads any more. Deleted once, under the duty, and
+		// only when no node of that build is live to charge them — see
+		// [maintenance.RetiredBudgetJobs] for why the protocol floor is
+		// the gate and a boot step is not.
+		jobs = append(jobs, maintenance.RetiredBudgetJobs(fleet, e.backends.Coord)...)
 		// The NATIVE backends' own records, on the same edge and for a
 		// related reason: their family holds several classes under one
 		// grammar, and only some of them age out — so no bucket age can

@@ -2,9 +2,11 @@ package sandbox
 
 import (
 	"context"
+	"encoding/json"
 	"slices"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/workkey"
 )
 
@@ -136,6 +138,10 @@ type Release struct {
 	// Charged is whether the run's spend is on the token counter, recorded
 	// on the row by the release itself. See [PendingRun.Charged].
 	Charged bool
+
+	// Published is whether the run's own phase record went out, recorded
+	// the same way and for the same reason. See [LaunchRecord.Published].
+	Published bool
 
 	// Fence is the lease the claim was taken under.
 	Fence Fence
@@ -332,6 +338,11 @@ type PendingRun struct {
 	// else.
 	LaunchID string `json:"launch_id,omitempty"`
 
+	// Launch is what the run's own phase record needs about the job named
+	// by LaunchID — see [LaunchRecord]. Read only through
+	// [PendingRun.LaunchFacts], which refuses a record kept for another job.
+	Launch LaunchRecord `json:"launch_record,omitzero"`
+
 	// Owner is the process INCARNATION that owns this run's seat, and
 	// OwnerEpoch the seat lease's epoch at the moment of the claim.
 	//
@@ -429,6 +440,71 @@ type PendingRun struct {
 	Question string `json:"question"`
 	Audience string `json:"audience"`
 
+	// ParkedInputTokens and ParkedOutputTokens are what the job that
+	// asked the question cost, recorded with the question.
+	//
+	// ON THE ROW because the segment that pays for them is not the one
+	// that collected them: a job that parks on a question is collected,
+	// charged to the counters and parked, and the turn resumes only when a
+	// person answers — possibly days later, on another node, with nothing
+	// collected at all. That resumed segment is the job's segment (it
+	// resumes under the same launch), and its charge to the turn's work
+	// item includes the job's tokens exactly as a completion's resume does
+	// (ADR-0022). Without these the answer's resume charged the task for
+	// the collection and never for the coding run that asked.
+	//
+	// ADDITIVE, for the reason every field here is: a row parked by a
+	// build without them decodes to zero, and its resume charges what that
+	// build would have — nothing for the job.
+	ParkedInputTokens  int `json:"parked_input_tokens,omitempty"`
+	ParkedOutputTokens int `json:"parked_output_tokens,omitempty"`
+
+	// WorkItem is the one work item the launching turn was charged to, nil
+	// when it was on nothing.
+	//
+	// ON THE ROW because the resumed turn has no trigger to resolve it from:
+	// the dispatch that named the item is gone, and a person's answer that
+	// resumes a parked run is an ordinary chat message naming nothing. The
+	// resume reads it back as its own item, under
+	// [types.BasisResume] — the same turn, still on the same work.
+	WorkItem *types.WorkItem `json:"work_item,omitempty"`
+
+	// AudienceHandles are the seats a parked question may be answered by,
+	// and AudienceFallback whether that set fell back to a default rather
+	// than being what the run named.
+	//
+	// RESOLVED ONCE, AT THE PARK, by [CoordinatorOptions.Audience] against
+	// the chart the parking node holds, and written in the same write as the
+	// question. [PendingRun.Audience] is a free label the coding agent chose
+	// — "requester", "team", "manager", or a name it typed — and it was
+	// never resolved at all, so "what is waiting on me" had no answer: a
+	// person could see every parked question in the company and none of
+	// them said it was theirs. Resolved at the park rather than at every
+	// read because the label is about the moment it was asked: who the
+	// requester's manager WAS then is who was asked.
+	//
+	// DECLARED WITH THE ITEM AND WITH [PendingRun.Extra], in one change,
+	// because all three answer the same hazard: a key an older build does
+	// not know is a key its compare-and-swap drops. Empty on a row parked by
+	// a build that did not resolve them, which every reader takes as "the
+	// audience string is all there is". Cleared with the question when a
+	// new job opens on the row ([PendingStore.BeginLaunch]).
+	AudienceHandles  []string `json:"audience_handles,omitempty"`
+	AudienceFallback bool     `json:"audience_fallback,omitempty"`
+
+	// Requester is the seat whose message, notice or ask woke the turn
+	// that launched this run — the person a question addressed to
+	// "requester" means — and empty when nothing a seat said woke it (a
+	// schedule, a sender this company's chart does not know).
+	//
+	// ON THE ROW because the park that resolves the audience is not the
+	// frame that saw the trigger: it runs when the job finishes, possibly
+	// days later and on another node, with nothing of the dispatch left.
+	// ADDITIVE, and carried through an older build's write by
+	// [PendingRun.Extra]; a row without it resolves "requester" to the
+	// fallback, which is what a run whose requester nobody recorded is.
+	Requester string `json:"requester,omitempty"`
+
 	// TraceID and SpanID are the trace the run started under, so the
 	// follow-up turn nests beneath it rather than appearing as unrelated
 	// work minutes later.
@@ -519,6 +595,23 @@ type PendingRun struct {
 
 	CreatedAt time.Time `json:"created_at"`
 	UpdatedAt time.Time `json:"updated_at"`
+
+	// Extra is every key on the stored record THIS BUILD DOES NOT KNOW,
+	// kept verbatim and written back on every re-encode.
+	//
+	// THE ROW IS READ, MODIFIED AND WRITTEN WHOLE by every node that touches
+	// it — every status flip, claim and release is a compare-and-swap of the
+	// entire value — and a fleet mid-upgrade has two builds doing that to
+	// one row. Decoded into this struct alone, an older build's flip wrote
+	// back only the fields IT knew, so the first claim or release it made
+	// silently deleted whatever a newer build had added: the item the run
+	// is charged to, the audience its question is waiting on. Nothing
+	// failed; the newer node simply read the row back without them.
+	//
+	// Filled by the decode in [CoordStore] and re-emitted by its encode,
+	// never set by a caller: a known field always wins over a key of the
+	// same name here, so this can only ever carry what the struct cannot.
+	Extra map[string]json.RawMessage `json:"-"`
 }
 
 // Paused reports whether a pause was RECORDED for this run's box.
@@ -709,7 +802,7 @@ type PendingStore interface {
 	// resume of a turn that is over. The caller has a suspended
 	// conversation with nowhere to put it, so the run cannot be resumed and
 	// must be failed rather than left holding a box.
-	MarkSuspended(ctx context.Context, turnID string, state map[string]any) (bool, error)
+	MarkSuspended(ctx context.Context, turnID string, s Suspension) (bool, error)
 
 	// AppendBridgeCall records one tool call a bridged run made through the
 	// MCP bridge, so the reviewer of a run that outlived its process still
@@ -946,6 +1039,29 @@ type Clarification struct {
 	// while the question waits.
 	Branch    string
 	SessionID string
+
+	// InputTokens and OutputTokens are what the job that asked cost,
+	// carried to the resume its answer drives — see
+	// [PendingRun.ParkedInputTokens].
+	InputTokens  int
+	OutputTokens int
+
+	// Answerers is who the question may be answered by, resolved from
+	// Audience against the chart — see [PendingRun.AudienceHandles].
+	Answerers Audience
+}
+
+// Audience is who a parked question may be answered by: the seats, and
+// whether they are a fallback rather than what the run asked for.
+//
+// FALLBACK IS A FACT A READER NEEDS, not an apology. A question addressed to
+// "manager" on a seat with no manager, or to a name nobody in the chart has,
+// still waits on somebody — the seat's lead chain — and a person reading "what
+// is waiting on me" has to be able to tell a question put to them from one
+// that reached them because nobody else could be named.
+type Audience struct {
+	Handles  []string
+	Fallback bool
 }
 
 // BoxRef is the box and command a run is attached to.
@@ -970,3 +1086,75 @@ type Fence struct {
 
 // Fenced reports whether this token constrains anything.
 func (f Fence) Fenced() bool { return f.Epoch > 0 }
+
+// Suspension is what [PendingStore.MarkSuspended] writes: the suspended
+// Execute loop and the turn iteration it suspended in.
+//
+// The iteration travels BESIDE the conversation rather than being read back
+// out of it, because the conversation is opaque here by design — the
+// coordinator carries it back to the engine without ever decoding it, and a
+// field reached into it would be a second reader of a format this package
+// does not own. The run's phase record is keyed on it (see [LaunchRecord]).
+type Suspension struct {
+	// State is the serialized loop, [PendingRun.ExecuteState].
+	State map[string]any
+
+	// Iteration is the turn iteration the executor suspended in, which is
+	// the iteration the run's own phase record is filed under.
+	Iteration int
+}
+
+// LaunchRecord is what one job's own phase record needs that nothing else on
+// the row says: when it started, which executor iteration launched it, the
+// model it ran on, and whether that record has already been published.
+//
+// KEYED ON THE JOB, by [LaunchRecord.ID], and every reader goes through
+// [PendingRun.LaunchFacts], which answers the zero record for any other job.
+// The row is the TURN's and outlives each job on it, and it is shared by every
+// build in a rolling upgrade: a build that predates this field carries it
+// through its own read-modify-write untouched ([PendingRun.Extra]) — including
+// across the relaunch it performs itself, which it cannot know to clear. A
+// record that named no job would then tell the NEXT job it had been launched
+// at the previous one's instant and already published. Keyed, a stale record
+// is simply not this job's.
+//
+// ONE FIELD RATHER THAN FOUR for the same reason: there is one key to check,
+// and a fact added here later is scoped to its job by construction.
+type LaunchRecord struct {
+	// ID is the [PendingRun.LaunchID] this record belongs to.
+	ID string `json:"launch_id"`
+
+	// StartedAt is when the job was launched, on the store's clock —
+	// written by [PendingStore.BeginLaunch], the moment the launch exists.
+	StartedAt time.Time `json:"started_at,omitzero"`
+
+	// Model is the model the coding agent was pointed at, empty when the
+	// launch named none and the CLI chose its own.
+	Model string `json:"model,omitempty"`
+
+	// Iteration is the turn iteration the launching executor suspended in,
+	// written by [PendingStore.MarkSuspended].
+	Iteration int `json:"iteration,omitempty"`
+
+	// Published is whether the job's `agent_phase_completed{phase: sandbox}`
+	// record went out.
+	//
+	// ONCE PER JOB, and on the row, for exactly the reason
+	// [PendingRun.Charged] is: the publish sits inside the part of the
+	// completion tail that is retried, the retry may run on another node or
+	// after a restart, and every reader of that record — the spend rollup,
+	// each node's daily usage — counts it as spend. A second copy is a
+	// second charge on every surface that shows one. WRITTEN BY THE
+	// RELEASE ([Release.Published]), the one write through which a retry
+	// reaches the publish again.
+	Published bool `json:"published,omitempty"`
+}
+
+// LaunchFacts is the [LaunchRecord] of the job this row holds now, and the
+// zero record when what the row carries belongs to another job or to none.
+func (r PendingRun) LaunchFacts() LaunchRecord {
+	if r.Launch.ID == "" || r.Launch.ID != r.LaunchID {
+		return LaunchRecord{}
+	}
+	return r.Launch
+}

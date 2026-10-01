@@ -1,8 +1,7 @@
 // @vitest-environment node
-import { readdirSync, readFileSync } from "node:fs";
-import { join } from "node:path";
-import { fileURLToPath } from "node:url";
 import { describe, expect, test } from "vitest";
+
+import { modules } from "../test/source.ts";
 
 /**
  * WHERE THE ACCENT IS SPENT, which is a rule this product states four times and
@@ -28,16 +27,16 @@ import { describe, expect, test } from "vitest";
  * the site should be re-justified. Two-sided, so an entry that stopped firing
  * fails as loudly as a site that is not excused.
  *
- * SCOPE, stated rather than assumed: this reads the literal `"brand"` only.
- * `Tag` is the one uilet component taking `variant: TagVariant`, and
- * `StatusDot`'s `tone` would be caught by the same literal. Out of scope on
- * purpose: `Meter`'s and `MeterCell`'s `tone="accent"`, which is a BAR'S FILL
+ * SCOPE, stated rather than assumed: this reads the literal `"brand"` only,
+ * and the two places the kit still spends it are the ones excused here — a
+ * `Tag` of `variant="brand"`, and `Avatar`'s `ring="brand"`, the accent drawn
+ * round a badge to say "this one is you". `StatusDot`'s `tone` would be
+ * caught by the same literal. Out of scope on
+ * purpose: `Meter`'s `tone="accent"`, which is a BAR'S FILL
  * rather than a pill's ground and a different family — the accent list includes
  * the primary button for the same reason — and `uiletTone(toneOf(...))`, which
  * is dynamic and unreadable statically. A floor, not a proof.
  */
-
-const SRC = fileURLToPath(new URL("..", import.meta.url));
 
 interface Site {
   file: string;
@@ -52,29 +51,29 @@ const ACCENT: Site[] = [
     why: "THE TRANSLATION, not a call site: our `accent` said in uilet's spelling. The one place the two vocabularies meet.",
   },
   {
-    file: "routes/admin/Fleet.tsx",
+    file: "routes/settings/Fleet.tsx",
     line: `{data?.this_node && <Tag variant="brand">you are on {data.this_node}</Tag>}`,
     why: "Which node is answering this reader. Literally where the reader is.",
   },
   {
-    file: "routes/admin/Fleet.tsx",
+    file: "routes/settings/Fleet.tsx",
     line: `{n.id === data?.this_node && <Tag variant="brand">this one</Tag>}`,
     why: "The same fact, as a row of the fleet table.",
   },
   {
-    file: "routes/admin/Fleet.tsx",
+    file: "routes/settings/Fleet.tsx",
     line: `{here && <Tag variant="brand">this one</Tag>}`,
     why: "The same fact again, in the node's own rail.",
   },
   {
-    file: "routes/admin/Retention.tsx",
+    file: "routes/settings/Retention.tsx",
     line: `{n.node_id === thisNode && <Tag variant="brand">this one</Tag>}`,
     why: "The same fact, in the retention table's node column.",
   },
   {
-    file: "app/Shell.tsx",
-    line: `tone="brand"`,
-    why: 'THE badge that IS the reader — the rail\'s own account row. `AvatarTone` in @crewlethq/ui reserves `brand` for exactly this: "the one badge that is the reader themselves". It is the strongest reading of the rule this file enforces, not an exception to it.',
+    file: "routes/settings/Access.tsx",
+    line: `{t.yours && <Tag variant="brand">yours</Tag>}`,
+    why: 'The token THIS BROWSER presents, among every token the guard accepts: the same fact as Nodes\' "you are on", in the tokens table.',
   },
   {
     file: "routes/work/SavedViews.tsx",
@@ -85,21 +84,13 @@ const ACCENT: Site[] = [
 
 /** Every source file under `src/`, comments blanked, as trimmed lines. */
 function lines(): { file: string; at: number; line: string }[] {
-  const walk = (dir: string): string[] =>
-    readdirSync(dir, { withFileTypes: true }).flatMap((e) =>
-      e.isDirectory()
-        ? walk(join(dir, e.name))
-        : /\.tsx?$/.test(e.name) && !e.name.includes(".test.")
-          ? [join(dir, e.name)]
-          : [],
-    );
-  return walk(SRC).flatMap((path) =>
-    readFileSync(path, "utf8")
+  return modules().flatMap(({ path, text }) =>
+    text
       // Blanked rather than removed, so a line number still points at the line.
       .replace(/\/\*[\s\S]*?\*\//g, (m) => m.replace(/[^\n]/g, " "))
       .replace(/\/\/[^\n]*/g, "")
       .split("\n")
-      .map((line, i) => ({ file: path.slice(SRC.length), at: i + 1, line: line.trim() })),
+      .map((line, i) => ({ file: path, at: i + 1, line: line.trim() })),
   );
 }
 

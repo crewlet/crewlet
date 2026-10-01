@@ -137,15 +137,33 @@ type HumanContact struct {
 	// credentials, and the org chart says which of them is a person.
 	//
 	// Unbound is an ORDINARY state, not a misconfiguration. An operator
-	// who is not in the org chart, a pipeline, an automation: each acts as
-	// `operator:<id>` under the label its token carries, and is never
-	// refused for it.
+	// who is not in the org chart, a pipeline, an automation: each writes
+	// under its token's own id as the author, with author kind `operator`,
+	// and is never refused for it.
 	//
 	// Lower-cased like the code-host logins, because the guard compares
 	// what an operator typed here against what they typed in Tier A and
-	// two files are two chances to disagree about case.
+	// two files are two chances to disagree about case. Tier A's token ids
+	// are lowercase by validation, so the lowercased value names exactly
+	// one credential.
 	CrewletOperatorID string `yaml:"crewlet_operator_id,omitempty" json:"crewlet_operator_id,omitempty"`
 }
+
+// ReservedOperatorID is the attribution stamped on every request a DISABLED
+// auth guard serves: nobody presented a credential, so nobody is named.
+//
+// # Why it lives in org
+//
+// Three rules read it and must never disagree about which id it is. Tier A
+// refuses it as an `api.auth.tokens[].id`, so no real credential's writes are
+// confused in an audit row with the ones made while the guard was off; the API
+// stamps it on a disabled-mode request; and the chart refuses it as a
+// `contact.crewlet_operator_id`, so a disabled guard's caller is never a
+// PERSON. The last rule is the one that forces the home: config imports org,
+// so org is the lowest package all three can reach, and a second copy of the
+// string is how the reservation would stop covering what is actually stamped —
+// silently, because each side would stay self-consistent.
+const ReservedOperatorID = "anonymous"
 
 // contactField describes one identity field: what an operator writes, how
 // its literal values are normalised, and where the value lives.
@@ -214,6 +232,22 @@ type Identity struct {
 	ExternalID string
 }
 
+// Clone returns a copy the caller may normalise without touching the original,
+// or nil for nil.
+//
+// A seat is BUILT from the authored config on every read of the org — each
+// apply, and each placement read the dashboard makes on its five-second tick —
+// and [Organization.Normalize] then rewrites the contact in place. Shared, that
+// rewrote the stored revision's own contact, from several goroutines at once:
+// a data race, and a stored document silently changed by being read.
+func (c *HumanContact) Clone() *HumanContact {
+	if c == nil {
+		return nil
+	}
+	dup := *c
+	return &dup
+}
+
 // Normalize strips whitespace and lowercases the literal values of the
 // case-normalised fields. It is idempotent.
 //
@@ -261,6 +295,23 @@ func (c *HumanContact) faults() []fieldError {
 		return nil
 	}
 	var out []fieldError
+	// A LITERAL binding of the reserved id. Folded because the lookup folds:
+	// Normalize has usually lowercased it already, but Validate is exported
+	// and a caller need not have normalised first, and "Anonymous" binds
+	// exactly what "anonymous" does. A ${VAR} is not caught here — its value
+	// lives in an environment validation may not be able to see — and is
+	// dropped where it is resolved instead (see [HumanContact.ResolvedIdentities]).
+	if v := strings.TrimSpace(c.CrewletOperatorID); strings.EqualFold(v, ReservedOperatorID) {
+		out = append(out, fieldError{
+			field: []any{"contact", "crewlet_operator_id"},
+			err: fmt.Errorf("contact.crewlet_operator_id: %w: %q is the attribution "+
+				"a disabled api.auth guard stamps on every caller, so binding it "+
+				"makes everybody who reaches the engine with the guard off this "+
+				"person, and files every disabled-mode write under their name. "+
+				"Bind one of api.auth.tokens[].id instead",
+				ErrReservedOperatorID, v),
+		})
+	}
 	for _, f := range contactFields {
 		v := strings.TrimSpace(*f.value(c))
 		if !strings.Contains(v, "${") {
@@ -333,26 +384,99 @@ func (c *HumanContact) ResolvedIdentities(lookup EnvLookup) []Identity {
 	}
 	var out []Identity
 	for _, t := range contactTransports {
-		f := contactFields[t.field]
+		resolved, ok := resolveContactField(t.field, c, lookup)
+		if !ok {
+			continue
+		}
+		out = append(out, Identity{Transport: t.transport, ExternalID: resolved})
+	}
+	return out
+}
+
+// resolveContactField is one field's consumable value — every rule
+// [HumanContact.ResolvedIdentities] states, for one field — or false when it
+// has none: unset, an unset or empty variable, or the reserved operator id.
+//
+// ONE COPY, because two readers need it: the identities the engine consumes and
+// the per-field account [HumanContact.Fields] gives a screen. Two copies of the
+// `${VAR}` handling are two chances for a person's contact to read as
+// resolving on the screen that shows it and as absent to the engine that uses
+// it.
+func resolveContactField(field int, c *HumanContact, lookup EnvLookup) (string, bool) {
+	f := contactFields[field]
+	raw := strings.TrimSpace(*f.value(c))
+	if raw == "" {
+		return "", false
+	}
+	resolved := raw
+	if name, isRef := envref.Whole(raw); isRef {
+		v, ok := lookup(name)
+		if !ok {
+			return "", false
+		}
+		resolved = strings.TrimSpace(v)
+		if resolved == "" {
+			return "", false
+		}
+	}
+	if f.lowercase {
+		resolved = strings.ToLower(resolved)
+	}
+	// A REFERENCE THAT RESOLVES TO THE RESERVED ID BINDS NOBODY. Validation
+	// refuses the literal, but a ${VAR}'s value lives in an environment it
+	// cannot always see, so the refusal has to be repeated where the value
+	// is known. Omitted, like an unset variable, rather than returned:
+	// every consumer of this identity — the seat a credential resolves to,
+	// the alias a personal read matches, the registry — would otherwise
+	// make a disabled guard's caller this person.
+	if field == fieldCrewletOperatorID && resolved == ReservedOperatorID {
+		return "", false
+	}
+	return resolved, true
+}
+
+// ContactField is one identity field of a contact AS CONFIGURED, beside
+// whether it resolves — what a screen shows an operator about a person.
+//
+// PER FIELD, not per transport: [HumanContact.Identities] lists Jira and
+// Confluence as two identities over one Atlassian field, which is right for
+// routing and reads as a duplicate to a person checking what they wrote.
+type ContactField struct {
+	// Key is the config key the value is written under: `slack_user_id`.
+	Key string
+	// Value is the field VERBATIM — a literal id or a `${VAR}` reference,
+	// never the variable's value. An account id is not a secret, but a
+	// reference's value lives in a process environment, and a screen that
+	// printed environment values would be one somebody extends to a
+	// variable that is.
+	Value string
+	// Reference reports that Value is a whole `${VAR}`.
+	Reference bool
+	// Resolves reports that the engine can use the field: a literal
+	// always, a reference whose variable is set here and non-empty — and
+	// never a binding that resolves to the reserved operator id.
+	Resolves bool
+}
+
+// Fields returns every declared field in config order, through the same
+// resolution the engine consumes identities by. A nil lookup reads the process
+// environment.
+func (c *HumanContact) Fields(lookup EnvLookup) []ContactField {
+	if c == nil {
+		return nil
+	}
+	if lookup == nil {
+		lookup = os.LookupEnv
+	}
+	var out []ContactField
+	for i, f := range contactFields {
 		raw := strings.TrimSpace(*f.value(c))
 		if raw == "" {
 			continue
 		}
-		resolved := raw
-		if name, isRef := envref.Whole(raw); isRef {
-			v, ok := lookup(name)
-			if !ok {
-				continue
-			}
-			resolved = strings.TrimSpace(v)
-			if resolved == "" {
-				continue
-			}
-		}
-		if f.lowercase {
-			resolved = strings.ToLower(resolved)
-		}
-		out = append(out, Identity{Transport: t.transport, ExternalID: resolved})
+		_, isRef := envref.Whole(raw)
+		_, resolves := resolveContactField(i, c, lookup)
+		out = append(out, ContactField{Key: f.key, Value: raw, Reference: isRef, Resolves: resolves})
 	}
 	return out
 }
@@ -542,8 +666,10 @@ type Role struct {
 
 	BehavioralGuidelines []string `yaml:"behavioral_guidelines,omitempty" json:"behavioral_guidelines,omitempty"`
 
-	// TokenBudget caps this seat's spend; 0 is unlimited.
-	TokenBudget int `yaml:"token_budget,omitempty" json:"token_budget,omitempty"`
+	// TokenBudget caps this seat's spend per calendar window; a window it
+	// does not name is uncapped, and the company's own ceilings apply on
+	// top of it.
+	TokenBudget TokenCeilings `yaml:"token_budget,omitempty" json:"token_budget,omitempty"`
 
 	// LLM is the provider chain used when a phase does not name its own.
 	LLM ProviderKeys `yaml:"llm,omitempty" json:"llm,omitzero"`
@@ -655,7 +781,7 @@ func (r *Role) humanForbidden() []string {
 		{"llm_judge", len(r.LLMJudge) > 0},
 		{"llm_sandbox", len(r.LLMSandbox) > 0},
 		{"sandbox", r.Sandbox != nil},
-		{"token_budget", r.TokenBudget != 0},
+		{"token_budget", len(r.TokenBudget) > 0},
 		{"workers", len(r.Workers) > 0},
 		{"learning_enabled", r.LearningEnabled.IsSet()},
 		{"schedules", len(r.Schedules) > 0},

@@ -48,8 +48,8 @@ import { insidePart, orgTableParts } from "~/testing.tsx";
 const read = (path: string) => readFileSync(join(process.cwd(), path), "utf8");
 
 /**
- * This screen's stylesheet. `screens.css` in this tree: the builder is a lens
- * of the company screen, and every screen's recipes live in one sheet here —
+ * This screen's stylesheet. `screens.css` in this tree: the builder is a
+ * section of Agents, and every screen's recipes live in one sheet here —
  * see the note in `builderStyles.test.ts`. The cascade below is read over the
  * whole sheet, which is what the browser does anyway.
  */

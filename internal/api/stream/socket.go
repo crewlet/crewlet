@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"sync"
 	"time"
@@ -17,10 +18,26 @@ import (
 // MaxInFlightQueries bounds how many queries one socket may have running.
 //
 // Queries run CONCURRENTLY so a store scan cannot stall the live feed, but each
-// can take a connection from a pool the engine shares — so an unbounded fan-out
-// from one tab would starve the engine's own writes. Four covers the most one
-// screen issues at once (the agent page opens with three) and makes a burst
-// queue rather than pile up.
+// takes a connection from the node's READER POOL, which the engine's own reads
+// share (a seat's tool reads, the coverage probes) — so an unbounded fan-out
+// from one tab would starve them.
+//
+// FOUR IS THAT POOL'S SIZE (`store.defaultReaderConns`), and that is the whole
+// of the reasoning: one tab may use every reader connection and no more. A
+// larger cap would not run a fifth query any sooner — it would park it in
+// `database/sql`'s wait for a connection rather than here, holding a goroutine
+// and a connection's worth of queue against the engine's own reads instead of
+// against this socket's.
+//
+// It is NOT sized to a screen's burst, which it used to claim ("the agent page
+// opens with three") and which stopped being true when the one sidebar landed:
+// the shell keeps five reads standing on every page — the viewer, the Inbox
+// count, My work's count, the projects and the pinned views — two asked the
+// moment a tab opens and three the moment the viewer answers. A screen's first
+// reads therefore queue behind them for the length of a tracker read, and
+// after the first paint the five poll on independent 60 s to 5 min timers and
+// rarely coincide. That queue is the design working: a burst waits HERE, per
+// socket, rather than in the pool every reader on the node shares.
 const MaxInFlightQueries = 4
 
 // The error codes a query answer can carry. CODES, not prose: the client
@@ -76,6 +93,74 @@ var (
 	ErrBadParams    = errors.New("stream: query refused")
 	ErrUnavailable  = errors.New("stream: not available on this node yet")
 )
+
+// UnavailableError is [ErrUnavailable] carrying the wait its refusal derived.
+//
+// A TYPE RATHER THAN A WRAPPED SENTINEL ALONE, because the socket's error frame
+// has to say how long to wait and the text of an error is no place to carry a
+// number. Hint is the refusal's own — how far behind this node is over how fast
+// it is actually draining — and zero where the refusal derived none; the
+// seconds on the wire are [RetryAfterSeconds] of it, never the hint itself.
+type UnavailableError struct {
+	What string
+	Hint time.Duration
+}
+
+func (e *UnavailableError) Error() string {
+	return fmt.Sprintf("%v: %s", ErrUnavailable, e.What)
+}
+
+// Unwrap makes an UnavailableError an [ErrUnavailable] to errors.Is.
+func (e *UnavailableError) Unwrap() error { return ErrUnavailable }
+
+// RefusedError is [ErrBadParams] carrying the refusal's own sentence.
+//
+// A TYPE FOR THE SAME REASON [UnavailableError] is one: the frame has to carry
+// something the code alone cannot, and here it is the sentence. A `bad_params`
+// refusal is the one failure whose text is written FOR the caller — it names
+// the parameter to change and the values it accepts ("days=91, and a spend
+// window is 1 to 90 company days — ask for at most 90") — and it used to reach
+// the debug log and nothing else, so a person who picked a window past the
+// spend history was told only that "something it needs was missing". Every
+// other failure keeps its text off the wire: a query failure can carry a
+// database path, and none of the rest has a reader.
+type RefusedError struct {
+	What string
+	// Detail is the refusal's sentence with no sentinel prefix in front of
+	// it — what a screen shows beside the code.
+	Detail string
+}
+
+func (e *RefusedError) Error() string {
+	return fmt.Sprintf("%v: %s: %s", ErrBadParams, e.What, e.Detail)
+}
+
+// Unwrap makes a RefusedError an [ErrBadParams] to errors.Is.
+func (e *RefusedError) Unwrap() error { return ErrBadParams }
+
+// RetryAfterSeconds is how long a caller told `unavailable` should wait, in
+// the whole seconds both transports carry it in.
+//
+// ONE HELPER FOR BOTH — the REST 503's `Retry-After` header and the socket
+// error frame's `retry_after_seconds` — because a hint computed twice is two
+// hints: the socket used to send the bare code, so a screen that fell back to
+// REST waited what the node asked and one on the socket waited whatever it had
+// hard-coded.
+//
+// THE REFUSAL'S OWN HINT where it has one, rounded and never below a second,
+// and [HealthInterval] otherwise. The fallback is what an unreachable
+// coordination store gets, since there is no drain to derive from, and it is
+// the shared health tick's cadence: a client that waits it out asks again
+// having seen at most one newer health frame, which is the soonest it could
+// learn the store is back. A flat hint is wrong in both directions on one
+// fleet — too early for a node grinding through a bulk apply, too late for one
+// that caught up in milliseconds.
+func RetryAfterSeconds(hint time.Duration) int {
+	if hint > 0 {
+		return max(1, int(hint.Round(time.Second)/time.Second))
+	}
+	return int(HealthInterval / time.Second)
+}
 
 // Query answers one client question.
 //
@@ -319,13 +404,25 @@ func runQuery(ctx context.Context, guard *auth.Guard, client *Client, query Quer
 	case errors.Is(err, ErrBadParams):
 		// DEBUG, NOT WARN: it is not this node's failure, and a poll
 		// behind a bad request writes a line per tick for as long as the
-		// screen is open. The message is worth keeping — it names the
-		// field the caller got wrong, which is the whole of the fix —
-		// but only to somebody who turned debug on to look for it.
+		// screen is open. The sentence travels on the frame's `detail`
+		// (see [RefusedError]), so the caller reads the fix without
+		// anybody turning debug on.
 		log.DebugContext(ctx, "stream_query_refused", "what", req.What, "error", err)
-		client.send(queryError(req, CodeBadParams))
+		refusal := queryError(req, CodeBadParams)
+		var refused *RefusedError
+		if errors.As(err, &refused) {
+			refusal.Detail = refused.Detail
+		}
+		client.send(refusal)
 	case errors.Is(err, ErrUnavailable):
-		client.send(queryError(req, CodeUnavailable))
+		refusal := queryError(req, CodeUnavailable)
+		var hint time.Duration
+		var unavailable *UnavailableError
+		if errors.As(err, &unavailable) {
+			hint = unavailable.Hint
+		}
+		refusal.RetryAfterSeconds = RetryAfterSeconds(hint)
+		client.send(refusal)
 	default:
 		// The reason reaches the LOG, not the client. A query failure can
 		// carry a database path or a driver's own message, and the socket

@@ -402,6 +402,15 @@ func (e *Engine) Apply(ctx context.Context, cfg *config.Company,
 		if next.Models != nil {
 			e.releaseModelHolds(ctx)
 		}
+		// AND A SEAT PARKED ON ITS BUDGET whose ceilings this revision
+		// changed, for the same reason and in the same place: the first
+		// thing a released inbox does is judge a delivery against the
+		// counters, and it must do so under the ceilings now current.
+		e.reconcileBudgetParks(ctx, next)
+		// AND A PAUSE WHOSE SEAT THIS REVISION REMOVED goes with the seat,
+		// or a seat later added under the same handle would arrive paused
+		// by somebody who paused a different role. See seatpause.go.
+		e.clearRemovedSeatPauses(ctx, next)
 		applied = append(applied, "mailboxes")
 	}
 	// THE BACKGROUND PASSES follow the revision too, and after the swap:

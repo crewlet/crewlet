@@ -1,332 +1,354 @@
 /**
- * Knowledge — what the company knows, and what each seat has learned.
+ * Knowledge — the company's own pages, searched and browsed.
  *
- * Two halves, and the split is the architecture rather than a layout choice:
+ * # What this screen is
  *
- *  - **The knowledge base** is searched LIVE, at query time, through the
- *    engine's own `knowledge.Searcher` seam. There is no local copy, no sync
- *    worker and no index to keep fresh — which is exactly why this screen has
- *    a search box and not a browsable tree. Search is BEST EFFORT by contract:
- *    every failure path is an empty result, so this screen has to say when it
- *    got one rather than drawing silence as "nothing found".
- *  - **What a seat learned** is per-agent and private: its diary, its
- *    episodes, the skills it drafted for itself. That lives on the seat.
+ * The pane beside the Knowledge tree (`KnowledgeTree.tsx`, which holds the
+ * search box and its mode): with a phrase in the address it is the RANKED
+ * ANSWER, and with none it is the spaces at a glance.
+ *
+ * # What a search here reads — the native truth
+ *
+ * On the engine's own knowledge base a search reads THIS NODE'S OWN COPY of
+ * the pages: the replicated rows every node applies from the pages log, the
+ * lexical index this node keeps over them, and the replicated vectors — the
+ * same fan-out a seat's `search_knowledge` runs, divided across the live
+ * nodes by bucket. It is as current as this node's place on that log, not a
+ * live read of somewhere else. (It said "no local copy … no staleness window"
+ * here, which was true of the Confluence backend it was written for and false
+ * of the one most companies run.) On Confluence the search IS live, at query
+ * time, against the site.
+ *
+ * # Three modes, and what was served
+ *
+ * `mode=hybrid|keyword|semantic` — Hybrid, Keyword and Meaning to a reader.
+ * The answer says what it actually ranked by (`served_mode`) and why that
+ * differs from what was asked (`degraded`), and a partial fan-out names the
+ * part it did not cover (`coverage`). Each is a sentence above the hits,
+ * because each is a fact about every one of them.
  */
 
-import { useState } from "react";
+import { useMemo } from "react";
 import { href, useParam } from "~/app/router.tsx";
 import { QueryState, Section, SeatChip } from "~/components/common.tsx";
-import { Button, Callout, Card, EmptyState, EmptyValue, Input, Skeleton, Tag } from "@crewlethq/ui";
+import { Callout, Card, EmptyState, EmptyValue, Skeleton, Tag } from "@crewlethq/ui";
 import {
-  ArrowForwardGlyph,
-  Book2Glyph,
-  CloseGlyph,
-  DatabaseGlyph,
-  DescriptionGlyph,
+  BookOpenGlyph,
+  ClockGlyph,
+  ExternalLinkGlyph,
+  FileTextGlyph,
   FolderGlyph,
-  GroupGlyph,
-  NeurologyGlyph,
-  OpenInNewGlyph,
-  ScheduleGlyph,
   SearchGlyph,
   TargetGlyph,
+  UsersGlyph,
 } from "@crewlethq/icons/glyphs";
 import { useOrg } from "~/lib/store-hooks.ts";
 import { useQuery } from "~/lib/useQuery.ts";
-import { documentUnits, indexOrg, seatLookup, type OrgIndex } from "~/lib/seats.ts";
-import { fmtDateTime, plural, tsKey } from "~/lib/format.ts";
+import { indexOrg, seatLookup, type OrgIndex } from "~/lib/seats.ts";
+import { plural, tsKey } from "~/lib/format.ts";
 import { useNow } from "~/lib/clock.ts";
-import { useMemo } from "react";
+import { modeLabel, resolveSearchMode, searchCoverageNote, servedNote } from "~/lib/search.ts";
 import { PageActions } from "~/app/frame/PageActions.tsx";
 import { PageNote } from "~/app/frame/PageNote.tsx";
 import { peekHref, rowPeekHandler, usePeekControls } from "~/app/frame/DetailRail.tsx";
 import { usePeekNeighbours } from "~/app/frame/PeekHost.tsx";
 import { DateCell, NumberCell } from "~/app/frame/cells.tsx";
 import { ObjectHeader, type Fact } from "~/app/frame/ObjectHeader.tsx";
-import type { PageContainer, PageSummary } from "~/protocol/index.ts";
+import type { KnowledgeAnswer, PageContainer, PageSummary } from "~/protocol/index.ts";
 // THE BROWSE'S OWN SPELLING of a page's address and of a link that peeks,
 // rather than a second one here: a hit, a grid row and a container's page list
 // must resolve to the same `peek=` token, or the stepper walks past the page
 // the reader just opened and one of the three forgets the middle button.
-import { pageAddress, PageLink } from "./Pages.tsx";
+import { PageLink } from "./Pages.tsx";
+import { PAGES_WINDOW } from "./usePagedPages.ts";
+import { ownerSentence, useSpaceOwners, type SpaceOwners } from "./spaceOwners.ts";
+import { plainText } from "~/lib/markdown.ts";
 
 export function Knowledge() {
-  const org = useOrg();
-  const [q, setQ] = useParam("q", "");
-  const [draft, setDraft] = useState(q);
-  const index = useMemo(() => indexOrg(org), [org]);
-
-  // Searching is a real request against a real wiki, so it runs on submit
-  // rather than on every keystroke: a per-character search would put one
-  // request per letter through the company's own credentials.
-  const { data, loading, error } = useQuery("knowledge", { q }, { enabled: q.trim().length > 0 });
-
-  const { open: openPeek } = usePeekControls();
-  // WHAT `[` AND `]` WALK: the hits this search returned, in the engine's own
-  // ranked order — which is the order they are drawn in and the only order a
-  // reader of a ranked list is looking at.
-  //
-  // THE NATIVE HITS ONLY, and that leaves no gap in the middle: there is
-  // exactly ONE knowledge backend per company, so a result set is either all
-  // native (every hit a page this engine holds) or all vendor (every hit a URL
-  // in somebody else's wiki, which has no page here to peek at). On a vendor
-  // backend this publishes nothing and the rail gets no stepper, which is the
-  // honest answer rather than one that steps through something else.
-  usePeekNeighbours(
-    useMemo(
-      () =>
-        (data?.hits ?? [])
-          .filter((hit) => !hit.url && hit.container)
-          .map((hit) => ({ kind: "page" as const, id: pageAddress(hit) })),
-      [data],
-    ),
-  );
+  const [q] = useParam("q", "");
+  const [modeRaw] = useParam("mode", "");
+  const phrase = q.trim();
+  // THE PROBE: which backend, whether it can search at all — the home's one
+  // question about the search — and which modes it serves, which is what an
+  // address naming no mode runs in (`defaultSearchMode`, the same rule the
+  // tree's control draws). It runs nothing, so asking it beside a search
+  // costs a round trip and no ranking. See `KnowledgeTree`.
+  const probe = useQuery("knowledge", { q: "", mode: "semantic" });
+  const mode = resolveSearchMode(modeRaw || null, probe.data);
+  // AN ADDRESS WITH NO MODE WAITS FOR THE PROBE rather than running hybrid
+  // first: on a company with no embeddings provider that first answer is
+  // "asked for Hybrid, served Keyword" — a degradation of a choice nobody
+  // made, drawn and then replaced. A probe that failed settles it too, at the
+  // engine's default.
+  const settled = modeRaw !== "" || probe.data !== null || probe.error !== null;
+  // Searching is a real request, so it runs on submit — the phrase is in the
+  // address — rather than on every keystroke.
+  const asked = useQuery("knowledge", { q: phrase, mode }, { enabled: phrase !== "" && settled });
+  const search = { ...asked, loading: asked.loading || (phrase !== "" && !settled) };
+  const answer = phrase ? search.data : probe.data;
 
   return (
     <>
       <PageActions>
-        {data?.backend ? <Tag appearance="outline">{data.backend}</Tag> : undefined}
+        {answer?.backend ? (
+          <Tag appearance="outline" title="The knowledge backend this company runs">
+            {answer.backend}
+          </Tag>
+        ) : undefined}
       </PageActions>
-      <PageNote>
-        The company knowledge base, searched live the way an agent searches it — there is no local
-        copy, so what you see here is what the backend holds right now.
-      </PageNote>
+      {answer?.available === false && <Unavailable answer={answer} />}
+      {phrase ? (
+        <Results phrase={phrase} search={search} />
+      ) : (
+        <KnowledgeHome backend={probe.data?.backend ?? ""} />
+      )}
+    </>
+  );
+}
 
-      <form
-        className="toolbar"
-        onSubmit={(e) => {
-          e.preventDefault();
-          setQ(draft.trim());
-        }}
-      >
-        <div style={{ flex: 1, maxWidth: 520 }}>
-          {/* THEIR FIELD, WITH THE GLYPH IN ITS LEADING SLOT — which is what
-              our own `SearchInput` was, plus the name carried as an
-              `aria-label` rather than a prop of its own. */}
-          <Input
-            type="search"
-            width="full"
-            value={draft}
-            onChange={(e) => setDraft(e.target.value)}
-            aria-label="Search the knowledge base"
-            leading={<SearchGlyph size="sm" />}
-            placeholder="Search the knowledge base — plain text, not a query language"
-          />
-        </div>
-        <Button variant="primary" type="submit" leadingIcon={<SearchGlyph size="sm" />}>
-          Search
-        </Button>
-        {q && (
-          <Button
-            variant="secondary"
-            leadingIcon={<CloseGlyph size="sm" />}
-            onClick={() => {
-              setDraft("");
-              setQ("");
-            }}
-          >
-            Clear
-          </Button>
+/**
+ * The search DID NOT RUN, and why — chosen off `reason`, never off the prose
+ * `note` or an empty `backend` (which means "no backend" and "no company"
+ * alike, and the remedies differ).
+ */
+function Unavailable({ answer }: { answer: KnowledgeAnswer }) {
+  const building = answer.reason === "building";
+  return (
+    <Callout
+      variant={building ? "warning" : "neutral"}
+      icon={building ? <ClockGlyph size="md" /> : <BookOpenGlyph size="md" />}
+    >
+      <span>
+        Search cannot run here: {answer.note || "the engine gave no reason"}.
+        {answer.reason === "no_backend" && (
+          <>
+            {" "}
+            Set <code className="inline">knowledge.backend</code> to{" "}
+            <code className="inline">native</code> to use the engine&rsquo;s own knowledge base, or
+            to <code className="inline">confluence</code> alongside an{" "}
+            <code className="inline">integrations.confluence</code> block.
+          </>
         )}
-      </form>
+        {answer.reason === "no_scope" && (
+          <>
+            {" "}
+            The backend itself is fine — add the spaces to search to{" "}
+            <code className="inline">knowledge.scope</code>.
+          </>
+        )}
+        {/* NOT A MISCONFIGURATION: this node joined recently and is still
+            indexing what it holds. Nothing is lost and nothing needs fixing. */}
+        {building && (
+          <>
+            {" "}
+            Nothing is wrong — this node joined recently and is still indexing. Pages that exist are
+            not findable from here yet; try again in a moment.
+          </>
+        )}
+      </span>
+    </Callout>
+  );
+}
 
-      {!q && (
-        <EmptyState
-          icon={<Book2Glyph size="xl" />}
-          title="Search the company's shared knowledge"
-          description="The engine runs this against the configured knowledge backend at query time — the same live search an agent gets at turn start and can re-run itself with search_knowledge. Nothing is cached here, so there is no staleness window."
-        />
-      )}
+function Results({
+  phrase,
+  search,
+}: {
+  phrase: string;
+  search: { data: KnowledgeAnswer | null; loading: boolean; error: string | null };
+}) {
+  const { open: openPeek } = usePeekControls();
+  const data = search.data;
+  const hits = useMemo(() => data?.hits ?? [], [data]);
+  // WHAT `[` AND `]` WALK: the hits in the engine's ranked order — the order
+  // they are drawn in. NATIVE HITS ONLY, with no gap in the middle: one
+  // backend serves a company, so a result set is all native (pages this
+  // engine holds) or all vendor (URLs in somebody else's wiki, with nothing
+  // here to peek at).
+  usePeekNeighbours(
+    useMemo(
+      () =>
+        hits
+          .filter((hit) => !hit.url && hit.container)
+          .map((hit) => ({ kind: "page" as const, id: hit.id })),
+      [hits],
+    ),
+  );
+  if (search.loading && !data) return <Skeleton variant="text" rows={5} label="Searching" />;
+  if (data?.available === false) return null;
 
-      {loading && <Skeleton variant="text" rows={4} label="Searching" />}
+  const served = servedNote(data);
+  const partial = searchCoverageNote(data);
+  const ran = Boolean(data?.served_mode);
+  const native = data?.backend === "native";
 
-      {/* The search DID NOT RUN. `available: false` covers four states — no
-          company, no backend, a backend with no org-wide read scope, and an
-          index still building — so the engine's `note` is rendered rather
-          than restated, and the REMEDY is chosen off `reason`. Neither is
-          guessed from `backend`: it is empty for "no backend" and "no
-          company" alike, and telling somebody with no company configured to
-          go and wire a wiki is the wrong fix. */}
-      {q && data?.available === false && (
-        <Callout
-          variant={data.reason === "building" ? "warning" : "neutral"}
-          icon={data.reason === "building" ? <ScheduleGlyph size="md" /> : <Book2Glyph size="md" />}
-        >
-          <span>
-            This search could not run: {data.note || "the engine gave no reason"}.
-            {data.reason === "no_backend" && (
-              <>
-                {" "}
-                Set <code className="inline">knowledge.backend</code> to{" "}
-                <code className="inline">native</code> to use the engine's own knowledge base, or to{" "}
-                <code className="inline">confluence</code> alongside an{" "}
-                <code className="inline">integrations.confluence</code> block.
-              </>
-            )}
-            {data.reason === "no_scope" && (
-              <>
-                {" "}
-                The backend itself is fine — add the containers to search to{" "}
-                <code className="inline">knowledge.scope</code>.
-              </>
-            )}
-            {/* NOT A MISCONFIGURATION, and the banner must not read as one:
-                this node is still indexing what it has projected, which is
-                where a freshly joined node spends its first minutes. There is
-                nothing to fix and nothing is lost. */}
-            {data.reason === "building" && (
-              <>
-                {" "}
-                Nothing is wrong — this node joined recently and is still indexing. Pages that exist
-                are simply not findable from here yet. Try again in a moment.
-              </>
-            )}
-          </span>
+  return (
+    <>
+      {/* WHAT WAS SERVED, when it is not what was asked; and WHAT WAS NOT
+          COVERED, when the search is partial. Above the hits, because each is
+          a fact about every one of them. */}
+      {served && <Callout variant="info">{served}</Callout>}
+      {partial && (
+        <Callout variant="warning" className="coverage-note">
+          {partial.sentence}
+          {partial.nodes.length > 0 && (
+            <ul className="coverage-nodes">
+              {partial.nodes.map((n) => (
+                <li key={n.id}>
+                  <code className="inline">{n.id}</code>
+                  {n.error ? ` — ${n.error}` : ""}
+                </li>
+              ))}
+            </ul>
+          )}
         </Callout>
       )}
-
-      {/* The search DID run and came back degraded — a different banner,
-          because an empty result that ran is not the same fact as one that
-          never started. */}
-      {q && data?.available !== false && data?.note && (
-        // NO EXPLICIT ICON: `Callout` draws the variant's own mark, and for
-        // `warning` that is the same glyph our banner reached for by name.
-        <Callout variant="warning">
-          The search did not complete: {data.note}. Knowledge search is best effort by design — a
-          turn never dies because a wiki was slow — so an empty result here is not proof that
-          nothing matches.
-        </Callout>
-      )}
-
-      {q && (
-        <QueryState
-          error={error}
-          loading={loading}
-          empty={
-            data?.hits?.length
-              ? undefined
-              : data?.available === false || data?.note
-                ? undefined
-                : {
-                    title: `Nothing matched “${q}”`,
-                    hint: "This is the backend's own answer, taken just now.",
-                  }
-          }
-        >
+      <QueryState
+        error={search.error}
+        loading={search.loading}
+        empty={
+          hits.length || !ran
+            ? undefined
+            : {
+                title: `Nothing matched “${phrase}”`,
+                hint: native
+                  ? `Ranked by ${modeLabel(data?.served_mode ?? "")} over this node’s copy of the pages. Another mode may find what these words did not.`
+                  : "This is the wiki’s own answer, taken just now.",
+              }
+        }
+      >
+        {hits.length > 0 && (
           <Card padding="none">
-            <Card.Header icon={<SearchGlyph size="sm" />} count={data?.hits?.length ?? 0}>
+            <Card.Header
+              icon={<SearchGlyph size="sm" />}
+              count={hits.length}
+              // WHAT RANKED THEM, always — not only when it differs from what
+              // was asked: a reader comparing two searches has to know each
+              // one's ranking without remembering the segment's state.
+              subtitle={ran ? `ranked by ${modeLabel(data?.served_mode ?? "")}` : undefined}
+            >
               <Card.Title>Results</Card.Title>
             </Card.Header>
-            <div className="list">
-              {(data?.hits ?? []).map((hit) => (
-                <div key={hit.id} className="hit">
-                  {/* A HIT THAT LINKS SOMEWHERE.
-                      `internal/pages/search.go` builds a native hit with an
-                      empty `URL` — deliberately, because the seam must not
-                      know this dashboard's routes — and this rendered it
-                      anyway, so every result on the engine's own backend was
-                      an `href=""` that resolves to the dashboard root. A
-                      vendor backend (Confluence) does send one, and that one
-                      is external.
-
-                      So the destination is chosen HERE, where the routes are
-                      known: the page's own route for a native hit, the
-                      vendor's link for a vendor one. */}
+            <ol className="list k-list">
+              {hits.map((hit) => (
+                <li key={hit.id} className="hit">
+                  {/* THE DESTINATION IS CHOSEN HERE, where the routes are
+                      known: a native hit has no URL (the seam must not know
+                      this dashboard's routes) and opens the page, a vendor
+                      hit carries the wiki's own link. A native hit with no
+                      container has no page to open and is text. */}
                   {hit.url ? (
                     <a className="hit-title" href={hit.url} target="_blank" rel="noreferrer">
-                      {hit.title} <OpenInNewGlyph size="xs" style={{ display: "inline" }} />
+                      {hit.title}{" "}
+                      <ExternalLinkGlyph
+                        size="xs"
+                        style={{ display: "inline" }}
+                        aria-hidden="true"
+                      />
+                      <span className="sr-only"> (opens the wiki in a new tab)</span>
                     </a>
                   ) : hit.container ? (
-                    // THE CONTAINER AND THE TITLE, which is how a page is
-                    // addressed now: the engine's own Get takes
-                    // `CONTAINER/Title` and matches the title the way the
-                    // fleet claimed it. A hit with no container has no page
-                    // route, so it renders as text rather than as a link to
-                    // nowhere.
-                    //
-                    // A PLAIN CLICK PEEKS. A ranked list is read by comparing
-                    // the top few against each other, and the answer to "which
-                    // of these did I mean" is the first paragraph of each —
-                    // which is the one thing the snippet is capped too short to
-                    // be. The `href` is still the page's own route, built from
-                    // the frame's reference rather than a second copy of it, so
-                    // ⌘-click and the middle button open the page as before.
+                    // A PLAIN CLICK PEEKS: a ranked list is read by comparing
+                    // the top few, and the first paragraph of each is what the
+                    // snippet is too short to be. The href is the page's own
+                    // route, so ⌘-click and the middle button open it.
                     <a
                       className="hit-title"
-                      href={peekHref({ kind: "page", id: pageAddress(hit) })}
-                      onClick={rowPeekHandler(() =>
-                        openPeek({ kind: "page", id: pageAddress(hit) }),
-                      )}
+                      href={peekHref({ kind: "page", id: hit.id })}
+                      onClick={rowPeekHandler(() => openPeek({ kind: "page", id: hit.id }))}
                     >
                       {hit.title}
                     </a>
                   ) : (
                     <span className="hit-title">{hit.title}</span>
                   )}
-                  <div className="row gap-1">
-                    {hit.container && <Tag appearance="outline">{hit.container}</Tag>}
-                    {hit.updated_at && (
-                      <span className="t-caption">updated {fmtDateTime(hit.updated_at)}</span>
-                    )}
-                  </div>
-                  {hit.snippet && <p className="hit-snippet">{hit.snippet}</p>}
-                </div>
+                  {hit.container && (
+                    <div className="row gap-1">
+                      <Tag appearance="outline" monospace>
+                        {hit.container}
+                      </Tag>
+                    </div>
+                  )}
+                  {/* A CUT OF A MARKDOWN PAGE, drawn as the prose it renders
+                      to rather than with its marks in it. */}
+                  {hit.snippet && <p className="hit-snippet">{plainText(hit.snippet)}</p>}
+                </li>
               ))}
-            </div>
-            {/* THEIR FOOTER SLOT, `meta` rather than `actions`: this is a
-                sentence about the list above it, not a row of buttons. */}
+            </ol>
             <Card.Footer variant="meta">
-              A snippet is capped by contract — it exists to say WHICH page to read, not to be the
-              page.
+              {native
+                ? "Searched on this node’s own copy of the pages — the same search an agent’s search_knowledge runs — and as current as this node’s place on the pages log."
+                : "Searched live on the wiki at query time, as the engine’s own account."}
             </Card.Footer>
           </Card>
-        </QueryState>
-      )}
-
-      <Section
-        title="What each seat has learned for itself"
-        hint="private to the seat: its diary, its past turns, the skills it drafted"
-      >
-        {/* A HEADING OVER NOTHING. A company with no agent seats — which the
-            quickstart's own example is — rendered this section's title and
-            hint above an empty grid, so the screen appeared to be broken
-            rather than to be describing a company that has none. */}
-        {index.seats.filter((s) => s.kind === "agent").length === 0 ? (
-          <EmptyState
-            size="compact"
-            icon={<NeurologyGlyph size="xl" />}
-            title="No agent seats to have learned anything"
-            description="Memory is per agent seat: a diary, past episodes, and the skills it drafted for itself. This company's seats are all human, so there is nothing private to show."
-          />
-        ) : (
-          <div className="grid grid-auto">
-            {index.seats
-              .filter((s) => s.kind === "agent")
-              .slice(0, 12)
-              .map((seat) => (
-                <a
-                  key={seat.handle}
-                  className="seat-card"
-                  href={href(["company", "people", seat.handle], { tab: "memory" })}
-                >
-                  <div className="row">
-                    <span className="attention-icon" data-severity="info">
-                      <DatabaseGlyph size="sm" />
-                    </span>
-                    <span className="col" style={{ gap: 0, flex: 1, minWidth: 0 }}>
-                      <strong className="truncate t-cell">{seat.name}</strong>
-                      <span className="truncate t-caption mono">@{seat.handle}</span>
-                    </span>
-                    <ArrowForwardGlyph size="sm" />
-                  </div>
-                  <span className="t-caption truncate">
-                    {seat.goal || "memory, episodes and skills"}
-                  </span>
-                </a>
-              ))}
-          </div>
         )}
-      </Section>
+      </QueryState>
+    </>
+  );
+}
+
+/**
+ * The spaces at a glance, before anybody searches: what each is for and how
+ * much is in it, one card per space.
+ */
+function KnowledgeHome({ backend }: { backend: string }) {
+  const containers = useQuery("containers", undefined, { pollMs: 60_000 });
+  const spaces = useMemo(
+    () =>
+      [...(containers.data?.containers ?? [])].sort((a, b) =>
+        (a.name || a.key).localeCompare(b.name || b.key),
+      ),
+    [containers.data],
+  );
+  if (containers.error === "unknown_query") {
+    // A VENDOR WIKI: nothing on this node to browse, by design.
+    return (
+      <EmptyState
+        icon={<SearchGlyph size="xl" />}
+        title="Search your wiki from the search box"
+        description={`This company’s pages live in ${backend || "its wiki"}, so there is nothing on this engine to browse — the search reaches the wiki live, as the engine’s own account.`}
+      />
+    );
+  }
+  return (
+    <>
+      <PageNote>
+        The company&rsquo;s own pages. Search ranks them by their words, their meaning or both — the
+        same search an agent runs — and the tree browses them by space.
+      </PageNote>
+      <QueryState
+        error={containers.error}
+        loading={containers.loading}
+        empty={
+          spaces.length
+            ? undefined
+            : {
+                title: "Nothing has been written down yet",
+                hint: "A space is created the first time somebody writes into it. Give a unit a `space` and its agents will have somewhere to file what they learn.",
+              }
+        }
+      >
+        <Section title="Spaces" hint="where each team files what it writes down">
+          <ul className="grid grid-auto k-list" role="list">
+            {spaces.map((space) => (
+              <li key={space.key}>
+                <a className="k-space" href={href(["knowledge", space.key])}>
+                  <span className="row gap-2">
+                    <FolderGlyph size="sm" aria-hidden="true" />
+                    <strong className="truncate">{space.name || space.key}</strong>
+                    <span className="spacer" />
+                    <span className="ktree-key mono">{space.key}</span>
+                  </span>
+                  <span className="t-caption clamp">
+                    {space.purpose || "No purpose is written for this space."}
+                  </span>
+                  <span className="t-caption">{plural(space.pages, "page")}</span>
+                </a>
+              </li>
+            ))}
+          </ul>
+        </Section>
+      </QueryState>
     </>
   );
 }
@@ -370,7 +392,7 @@ function containerFacts({
   newest,
   capped,
   unread,
-  units,
+  owners,
   now,
 }: {
   container: PageContainer;
@@ -381,13 +403,14 @@ function containerFacts({
   /** The page list has not answered — it is still in flight, or it failed. */
   unread: boolean;
   /**
-   * The units whose `space:` names this container, or NULL when the company
-   * document could not be read: `space` is guarded, so an anonymous reader
-   * does not know who files here, and an empty list would say nobody does.
+   * Who files into this container, in the four states `spaceOwners.ts` names:
+   * `space` is guarded, so a reader without the company document does not know
+   * who files here, and an empty list would say nobody does.
    */
-  units: { name: string }[] | null;
+  owners: SpaceOwners;
   now: number;
 }): Fact[] {
+  const units = owners.state === "read" ? owners.units : null;
   const lead = units?.[0];
   return [
     // A COUNT, and ZERO IS A REAL ONE: a container exists from the first write
@@ -422,8 +445,10 @@ function containerFacts({
       // answers the question even for a container nobody has written in yet.
       // The panel below answers the other half — who actually has.
       label: "Filed by",
+      // THE STATE'S OWN SENTENCE while there is no list: "needs a token" said
+      // to an operator whose read is merely in flight is false.
       value: !units ? (
-        <EmptyValue label="Needs an operator token to read" />
+        <EmptyValue label={ownerSentence(owners)} />
       ) : units.length > 0 ? (
         units.map((u) => u.name).join(", ")
       ) : (
@@ -432,7 +457,7 @@ function containerFacts({
       // A LINK ONLY WHERE THERE IS ONE PLACE TO GO. Two units filing into one
       // container is legal and happens — a shared space — and a fact line that
       // linked the first of them would be a link that is right half the time.
-      path: units?.length === 1 && lead ? ["company", "units", lead.name] : undefined,
+      path: units?.length === 1 && lead ? ["agents", "teams", lead.name] : undefined,
     },
     { label: "Created", value: <DateCell at={container.created_at} now={now} /> },
   ];
@@ -471,9 +496,15 @@ export function ContainerPeek({ id }: { id: string }) {
   // `pages` deliberately — "a reader clicks 12 and finds nine" is the reason
   // in its own source — and an unfiltered list here would put the trashed ones
   // back under a number that does not include them.
+  //
+  // ONE WINDOW OF `PAGES_WINDOW`, not the engine's default fifty: every
+  // statement below — what moved last, who writes here — is derived from the
+  // rows this read returned, and a default window made them statements about
+  // the first fifty pages BY TITLE of a container of four hundred. What the
+  // rail COUNTS comes from the answer's `total`, never from the rows.
   const list = useQuery(
     "pages",
-    { container: id, status: "published,draft" },
+    { container: id, status: "published,draft", limit: PAGES_WINDOW },
     { enabled: id !== "", pollMs: 20_000 },
   );
   const found = containers.data?.containers.find((c) => c.key === id);
@@ -484,28 +515,22 @@ export function ContainerPeek({ id }: { id: string }) {
     () => [...(list.data?.pages ?? [])].sort((a, b) => tsKey(b.updated_at) - tsKey(a.updated_at)),
     [list.data],
   );
-  // WHETHER THAT READ SAW THE WHOLE CONTAINER, off the answer's OWN limit
-  // rather than a number written here — and false until there IS an answer,
-  // since with no data `0 >= 0` would qualify a fact nothing has read yet.
-  const capped = Boolean(list.data && recent.length >= list.data.limit);
+  // HOW MANY PAGES THE LISTING MATCHES IN ALL — the answer's own `total`,
+  // which is the same set (trashed excluded) as the container's count — or
+  // null before there is an answer.
+  const total = list.data ? (list.data.total ?? recent.length) : null;
+  // WHETHER THAT READ SAW THE WHOLE CONTAINER: the engine says so by counting
+  // more than it returned, or by handing back a cursor to the next window.
+  // False until there IS an answer, since nothing has been read to qualify.
+  const capped = Boolean(list.data && (list.data.after || (total ?? 0) > recent.length));
   // WHO FILES HERE IS GUARDED. A unit's `space:` is the knowledge container
   // it owns, and `internal/api/orgprojection_test.go` classifies it as guarded
   // ("a knowledge container key: where this unit's pages are written"), so the
   // anonymous org projection carries none of it and this is read from the
-  // company document. NULL rather than an empty list when it could not be:
-  // "no unit files here" is a fact about the company and an unread document is
-  // not evidence for it.
-  //
-  // A UNIT'S `space:` IS CASE-INSENSITIVE against the key, because the engine
-  // upper-cases a container key on the way in and a config file says whatever
-  // its author typed.
-  const doc = useQuery("config", undefined, { enabled: id !== "" });
-  const units = useMemo(() => {
-    if (doc.error || !doc.data) return null;
-    return documentUnits(doc.data)
-      .filter((u) => (u.space ?? "").toUpperCase() === id.toUpperCase())
-      .map((u) => ({ name: u.name }));
-  }, [doc.data, doc.error, id]);
+  // company document — in the four states `spaceOwners.ts` names, the tree's
+  // own, because "no unit files here" is a fact about the company and an
+  // unread document is not evidence for it.
+  const owners = useSpaceOwners({ enabled: id !== "" })(id);
 
   return (
     <>
@@ -532,7 +557,7 @@ export function ContainerPeek({ id }: { id: string }) {
                   newest: recent[0]?.updated_at,
                   capped,
                   unread: !list.data,
-                  units,
+                  owners,
                   now,
                 })}
               />
@@ -552,8 +577,15 @@ export function ContainerPeek({ id }: { id: string }) {
                   )}
                 </Card>
 
-                <ContainerPages container={found} recent={recent} list={list} now={now} />
-                <ContainerWriters recent={recent} index={index} />
+                <ContainerPages
+                  container={found}
+                  recent={recent}
+                  total={total}
+                  capped={capped}
+                  list={list}
+                  now={now}
+                />
+                <ContainerWriters recent={recent} total={total} capped={capped} index={index} />
               </div>
             </>
           ) : (
@@ -585,17 +617,37 @@ export function ContainerPeek({ id }: { id: string }) {
 function ContainerPages({
   container,
   recent,
+  total,
+  capped,
   list,
   now,
 }: {
   container: PageContainer;
   recent: PageSummary[];
+  /** The listing's own total, or null before it answered. */
+  total: number | null;
+  /** The read returned fewer pages than the container holds. */
+  capped: boolean;
   list: { error: string | null; loading: boolean };
   now: number;
 }) {
+  const shown = Math.min(recent.length, PEEK_PAGES);
+  // THE REST OF THE CONTAINER, counted off the TOTAL: the rows are one window,
+  // and "42 more pages" under a container of four hundred was the window
+  // subtracted from itself.
+  const rest = (total ?? recent.length) - shown;
   return (
     <Card>
-      <Card.Header icon={<DescriptionGlyph size="sm" />} count={recent.length}>
+      <Card.Header
+        icon={<FileTextGlyph size="sm" />}
+        count={total ?? undefined}
+        // WHAT "RECENT" COVERS when the read is a window: the engine orders a
+        // listing by title, so the newest of a capped read is the newest of
+        // the pages it returned rather than of the container.
+        subtitle={
+          capped ? `newest of the first ${plural(recent.length, "page")} by title` : undefined
+        }
+      >
         <Card.Title>Recent pages</Card.Title>
       </Card.Header>
       <QueryState
@@ -618,9 +670,9 @@ function ContainerPages({
               <DateCell at={page.updated_at} now={now} />
             </span>
           ))}
-          {recent.length > PEEK_PAGES && (
+          {rest > 0 && (
             <a className="t-link t-caption" href={href(["knowledge", container.key])}>
-              {plural(recent.length - PEEK_PAGES, "more page")} in this container →
+              {plural(rest, "more page")} in this container →
             </a>
           )}
         </div>
@@ -638,7 +690,17 @@ function ContainerPages({
  * without that qualification would make a container whose pages one seat
  * started and another has rewritten look like the first seat's tree.
  */
-function ContainerWriters({ recent, index }: { recent: PageSummary[]; index: OrgIndex }) {
+function ContainerWriters({
+  recent,
+  total,
+  capped,
+  index,
+}: {
+  recent: PageSummary[];
+  total: number | null;
+  capped: boolean;
+  index: OrgIndex;
+}) {
   // THE NAME AND THE KIND, from one lookup: a writer's chip draws the dashed
   // ring off the kind, so resolving only the name makes every human writer
   // look like an agent.
@@ -654,9 +716,16 @@ function ContainerWriters({ recent, index }: { recent: PageSummary[]; index: Org
   return (
     <Card>
       <Card.Header
-        icon={<GroupGlyph size="sm" />}
+        icon={<UsersGlyph size="sm" />}
         count={writers.length}
-        subtitle="the seats that started these pages"
+        // WHAT THE LIST COVERS, when it is not the whole container: the
+        // creators of the pages this read returned, which past one window is
+        // a slice by title rather than every writer here.
+        subtitle={
+          capped && total !== null
+            ? `creators of the first ${recent.length} by title`
+            : "creators, not editors"
+        }
       >
         <Card.Title>Who writes here</Card.Title>
       </Card.Header>

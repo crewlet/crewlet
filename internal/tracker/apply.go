@@ -71,7 +71,8 @@ func (a *Applier) Committed(context.Context) {}
 //     when coordination cannot be reached at all.
 //  3. THE DELETION GATE. A record about a task a purge destroyed applies
 //     nowhere, for ever — otherwise a redelivery months later would resurrect
-//     rows an operator deliberately removed.
+//     rows an operator deliberately removed. A TURN charged to that task is
+//     about it too, and is read past on the same marker.
 func (a *Applier) Gated(ctx context.Context, tx *sql.Tx, rec statelog.Record) (statelog.Reason, bool, error) {
 	// THE ENVELOPE'S OWN KIND, not the payload's: a retired record is one
 	// this build may no longer be able to decode the body of, and the
@@ -109,7 +110,16 @@ func (a *Applier) Gated(ctx context.Context, tx *sql.Tx, rec statelog.Record) (s
 	// The deletion gate reads the subject's own marker. A purge is the one
 	// operation that removes rows, and its marker is what makes the
 	// removal permanent rather than a race a redelivery can undo.
-	if ObjectKind(rec.Subject.Kind) == KindTask {
+	//
+	// A TURN IS GATED TOO, on its task's marker — a turn's subject id IS its
+	// task's id. A turn is additive and carries no expectation, so nothing
+	// at the broker orders it against a purge of the same task: a turn
+	// decided while the task existed can land after the purge that removed
+	// it. Ungated, its spend update found no row and stopped the applier on
+	// EVERY node, since every node applies the same log in the same order —
+	// a fleet-wide wedge from one ordinary race. Gated, it is read past and
+	// counted as a hit on the marker like any other late write.
+	if ObjectKind(rec.Subject.Kind).GatedByPurge() {
 		var author sql.NullString
 		err := tx.QueryRowContext(ctx,
 			`SELECT purge_record_id FROM tracker_deletions WHERE task_id = ?`,
@@ -252,18 +262,13 @@ func (c applyContext) skewMs() int64 {
 //
 // A SPEND UPDATE AFFECTING ZERO ROWS IS A MALFORMED RECORD AND STOPS THE LOOP:
 // it names a task this node does not have, which under a strict replay cannot
-// happen — the create is below this position — so it is a writer's bug rather
-// than a race, and continuing would leave a total nobody can reconcile.
+// happen — the writer's decide read the task, so its create is below this
+// position — and it is a writer's bug rather than a race, and continuing would
+// leave a total nobody can reconcile. The ONE race there is, a purge landing
+// between the decide and this record, never reaches here: the deletion gate
+// reads a turn on a purged task past before Apply runs (see [Applier.Gated]).
 func (a *Applier) applyTurn(ctx context.Context, tx *sql.Tx, c applyContext) (int, error) {
-	var turn struct {
-		Task    string    `json:"task"`
-		Seat    string    `json:"seat"`
-		TurnID  string    `json:"turn_id"`
-		Trigger string    `json:"trigger"`
-		Outcome string    `json:"outcome"`
-		Phases  []string  `json:"phases"`
-		Spend   TurnSpend `json:"spend"`
-	}
+	var turn TurnRecord
 	if err := decodePayload(c.record.Mutation, &turn); err != nil {
 		return 0, fmt.Errorf("tracker: decode the turn at %s: %w", c.position, err)
 	}
@@ -303,11 +308,13 @@ func (a *Applier) applyTurn(ctx context.Context, tx *sql.Tx, c applyContext) (in
 			spend_input = spend_input + ?, spend_output = spend_output + ?,
 			spend_cache_read = spend_cache_read + ?,
 			spend_cache_write = spend_cache_write + ?,
-			spend_wall_ms = spend_wall_ms + ?, spend_tokens = spend_tokens + ?
+			spend_wall_ms = spend_wall_ms + ?, spend_tokens = spend_tokens + ?,
+			spend_workers = spend_workers + ?,
+			spend_sent_back = spend_sent_back + ?
 		WHERE id = ?`,
 		turn.Spend.Turns, turn.Spend.Rounds, turn.Spend.Input, turn.Spend.Output,
 		turn.Spend.CacheRead, turn.Spend.CacheWrite, turn.Spend.WallMs,
-		turn.Spend.Tokens(), turn.Task)
+		turn.Spend.Tokens(), turn.Spend.Workers, turn.Spend.SentBack, turn.Task)
 	if err != nil {
 		return 0, fmt.Errorf("tracker: add the turn's spend at %s: %w", c.position, err)
 	}

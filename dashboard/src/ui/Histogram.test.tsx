@@ -57,10 +57,23 @@ test("the axis names its first and its last bucket", () => {
 // a histogram's columns are whatever bucket the window chose, so a rule on
 // weeks would put one tick on an axis of sixty minutes.
 test("the ticks between the ends are an even spread over the buckets", () => {
-  expect(ticksFor(14)).toEqual([0, 3, 7, 10, 13]);
+  // A WEEK LABELS EVERY OTHER DAY — never 22, 24, 25, 27, 28, whose uneven
+  // gaps read as days missing from the data.
+  expect(ticksFor(7)).toEqual([0, 2, 4, 6]);
+  expect(ticksFor(14)).toEqual([0, 4, 8, 13]);
+  expect(ticksFor(31)).toEqual([0, 10, 20, 30]);
   // THE WIDEST AXIS THIS PRODUCT DRAWS — `lib/range.ts`'s own `MAX_BARS` — still
   // carries five labels and no more.
-  expect(ticksFor(90)).toEqual([0, 22, 45, 67, 89]);
+  expect(ticksFor(90)).toEqual([0, 23, 46, 69, 89]);
+  // AND EVERY INTERIOR GAP IS ONE STRIDE, at every window length.
+  for (let n = 1; n <= 90; n++) {
+    const at = ticksFor(n);
+    expect(at.length, `${n} bars`).toBeLessThanOrEqual(5);
+    expect(at[0]).toBe(0);
+    expect(at[at.length - 1]).toBe(n - 1);
+    const gaps = at.slice(1, -1).map((v, i) => v - at[i]!);
+    expect(new Set(gaps).size, `${n} bars: ${at}`).toBeLessThanOrEqual(1);
+  }
   // FEWER BARS THAN LABELS IS NOT FEWER LABELS THAN BARS: every bucket gets its
   // own, and a single bucket gets exactly one rather than two of itself.
   expect(ticksFor(3)).toEqual([0, 1, 2]);
@@ -134,4 +147,43 @@ test("a bar names its own bucket in the caller's noun", () => {
   const bars = [...container.querySelectorAll(".histogram-bar")] as HTMLElement[];
   expect(bars[0]!.title).toContain("0 changes");
   expect(bars[1]!.title).toContain("1 change");
+});
+
+// THE HEIGHT IS THE FILL'S, NOT THE SLOT'S. The slot is the control and spans
+// its whole column; were the height on it, the stylesheet's 63% cap would have
+// nothing to narrow and a lone busy day would be a card-wide block again.
+test("a bar's height is carried by a fill inside its slot", () => {
+  const { container } = render(
+    <Histogram
+      bars={days(2, [0, 4])}
+      bucket="day"
+      total={4}
+      noun="change"
+      over="loaded"
+      onPick={() => {}}
+    />,
+  );
+  const slots = [...container.querySelectorAll<HTMLElement>(".histogram-bar")];
+  expect(slots).toHaveLength(2);
+  for (const slot of slots) expect(slot.style.height).toBe("");
+  const fills = slots.map((s) => s.querySelector<HTMLElement>(":scope > .histogram-fill")!);
+  expect(fills.map((f) => f.style.height)).toEqual(["0%", "100%"]);
+  expect(slots[0]!.hasAttribute("data-empty")).toBe(true);
+});
+
+// THE FAILED SHARE IS THE FOOT OF ITS OWN BAR, and said in the bar's title.
+// The column's height stays the bucket's whole count, so totals compare as
+// before; a bar the engine sent no split for draws the plain fill, since a
+// split the answer did not carry is not a split of zero.
+test("a bar's failed share is drawn at its foot and named in its title", () => {
+  const bars = [{ ...days(2, [8])[0]!, failed: 2 }, { ...days(2, [0, 5])[1]! }];
+  const { container } = render(
+    <Histogram bars={bars} bucket="day" total={13} noun="turn" over="window" now={NOW} />,
+  );
+  const [split, plain] = [...container.querySelectorAll(".histogram-bar")];
+  const foot = split!.querySelector<HTMLElement>(".histogram-failed");
+  expect(foot?.style.height).toBe("25%");
+  expect(split!.getAttribute("title")).toMatch(/8 turns, 2 failed$/);
+  expect(plain!.querySelector(".histogram-failed")).toBeNull();
+  expect(plain!.getAttribute("title")).not.toMatch(/failed/);
 });

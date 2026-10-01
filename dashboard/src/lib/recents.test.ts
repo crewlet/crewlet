@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { MaxRecents, forgetAll, remember, resetForTest } from "./recents.ts";
 
 /** Read the list the way the hook's snapshot does, without rendering. */
-type Row = { path: string[]; label: string; workspace: string; at: number };
+type Row = { path: string[]; label: string; workspace: string };
 
 function stored(): Row[] {
   const raw = localStorage.getItem("crewlet_recents");
@@ -24,39 +24,15 @@ describe("what the reader opened", () => {
     expect(stored().map((r) => r.label)).toEqual(["Runbook", "ENG-1"]);
   });
 
-  it("stores a revisit once, and leaves it exactly where it was", () => {
+  it("stores a revisit once, and moves it to the top", () => {
     // Keyed on the PATH: without that, a reader who keeps returning to one
-    // item fills the whole list with it.
-    //
-    // AND THE SLOT DOES NOT MOVE, which is the half this list got wrong.
-    // Re-inserting at the top is fine for a ranking and wrong for a DRAWN
-    // list: the workspace sidebar's Recent section sent the row the reader
-    // had just pressed to the first position and slid the rows above it down,
-    // under the pointer, at the instant it was hit.
+    // item fills the whole list with it. And the palette's first row is where
+    // the reader just was, so a revisit is newest.
     remember({ path: ["work", "ENG-1"], label: "ENG-1", workspace: "work" }, true);
     remember({ path: ["work", "ENG-2"], label: "ENG-2", workspace: "work" }, true);
     remember({ path: ["work", "ENG-3"], label: "ENG-3", workspace: "work" }, true);
     remember({ path: ["work", "ENG-2"], label: "ENG-2", workspace: "work" }, true);
-    expect(stored().map((r) => r.label)).toEqual(["ENG-3", "ENG-2", "ENG-1"]);
-  });
-
-  it("records when each place was last opened, for the readers that rank", () => {
-    // `at` had no reader at all while the order was the ranking. It is the
-    // palette's order and the cap's eviction rule now, so a revisit has to
-    // move it even though it moves nothing else.
-    vi.useFakeTimers();
-    try {
-      vi.setSystemTime(new Date("2026-09-20T10:00:00Z"));
-      remember({ path: ["work", "ENG-1"], label: "ENG-1", workspace: "work" }, true);
-      vi.setSystemTime(new Date("2026-09-20T10:05:00Z"));
-      remember({ path: ["work", "ENG-2"], label: "ENG-2", workspace: "work" }, true);
-      vi.setSystemTime(new Date("2026-09-20T10:09:00Z"));
-      remember({ path: ["work", "ENG-1"], label: "ENG-1", workspace: "work" }, true);
-    } finally {
-      vi.useRealTimers();
-    }
-    const at = Object.fromEntries(stored().map((r) => [r.label, r.at]));
-    expect(at["ENG-1"]).toBeGreaterThan(at["ENG-2"]!);
+    expect(stored().map((r) => r.label)).toEqual(["ENG-2", "ENG-3", "ENG-1"]);
   });
 
   it("takes the latest label a screen resolved for a path", () => {
@@ -77,44 +53,30 @@ describe("what the reader opened", () => {
     // because the screen publishes its name a render later. Overwriting on
     // that write turned the row's title into a hex string at the instant it
     // was clicked, until the query came back.
-    remember({ path: ["activity", "turns", "abc"], label: "abc", workspace: "activity" }, false);
-    remember(
-      { path: ["activity", "turns", "abc"], label: "Cut the release", workspace: "activity" },
-      true,
-    );
-    remember({ path: ["activity", "turns", "abc"], label: "abc", workspace: "activity" }, false);
+    remember({ path: ["live", "turns", "abc"], label: "abc", workspace: "live" }, false);
+    remember({ path: ["live", "turns", "abc"], label: "Cut the release", workspace: "live" }, true);
+    remember({ path: ["live", "turns", "abc"], label: "abc", workspace: "live" }, false);
     expect(stored().map((r) => r.label)).toEqual(["Cut the release"]);
   });
 
   it("stores an identifier for a place nothing has ever named", () => {
     // An object NOTHING names — a turn with no plan summary — has its id and
     // nothing else, and a rail that dropped it would lose a place the reader
-    // was. `routes/activity/crumbs.test.tsx` pins the same rule from the
+    // was. `routes/live/crumbs.test.tsx` pins the same rule from the
     // screen's end.
-    remember({ path: ["activity", "turns", "abc"], label: "abc", workspace: "activity" }, false);
+    remember({ path: ["live", "turns", "abc"], label: "abc", workspace: "live" }, false);
     expect(stored().map((r) => r.label)).toEqual(["abc"]);
   });
 
   it("keeps only a few, and drops the one nobody has opened in longest", () => {
-    // NOT THE LAST IN THE LIST, which under arrival order is merely the one
-    // that has been here longest — the board somebody opens every morning.
-    // The entry to lose is the one with the oldest VISIT.
-    vi.useFakeTimers();
-    try {
-      vi.setSystemTime(new Date("2026-09-20T09:00:00Z"));
-      for (let i = 0; i < MaxRecents; i++) {
-        vi.advanceTimersByTime(60_000);
-        remember({ path: ["work", `ENG-${i}`], label: `ENG-${i}`, workspace: "work" }, true);
-      }
-      // The oldest ARRIVAL is opened again, so the oldest VISIT is now the
-      // second one in — and that is what the next arrival has to evict.
-      vi.advanceTimersByTime(60_000);
-      remember({ path: ["work", "ENG-0"], label: "ENG-0", workspace: "work" }, true);
-      vi.advanceTimersByTime(60_000);
-      remember({ path: ["work", "NEW"], label: "NEW", workspace: "work" }, true);
-    } finally {
-      vi.useRealTimers();
+    // NOT THE FIRST ONE IN: the board somebody opens every morning arrived
+    // first and is still wanted. A revisit moves it up, so the bottom row is
+    // always the oldest VISIT.
+    for (let i = 0; i < MaxRecents; i++) {
+      remember({ path: ["work", `ENG-${i}`], label: `ENG-${i}`, workspace: "work" }, true);
     }
+    remember({ path: ["work", "ENG-0"], label: "ENG-0", workspace: "work" }, true);
+    remember({ path: ["work", "NEW"], label: "NEW", workspace: "work" }, true);
     const labels = stored().map((r) => r.label);
     expect(labels).toHaveLength(MaxRecents);
     expect(labels[0]).toBe("NEW");
@@ -122,15 +84,6 @@ describe("what the reader opened", () => {
       "ENG-0",
     );
     expect(labels, "the least recently opened entry survived the cap").not.toContain("ENG-1");
-  });
-
-  it("keeps a revisited entry in its own slot when the list is full", () => {
-    for (let i = 0; i < MaxRecents; i++) {
-      remember({ path: ["work", `ENG-${i}`], label: `ENG-${i}`, workspace: "work" }, true);
-    }
-    const before = stored().map((r) => r.label);
-    remember({ path: ["work", "ENG-3"], label: "ENG-3", workspace: "work" }, true);
-    expect(stored().map((r) => r.label)).toEqual(before);
   });
 
   it("stores nothing for a path with no segments", () => {
@@ -153,10 +106,13 @@ describe("a store that will not cooperate", () => {
       "crewlet_recents",
       JSON.stringify([
         { label: "no path" },
-        // A ROW WITH NO WORKSPACE is the shape every build before the cap
-        // became per-workspace could write, and it is one no rail can draw.
-        { path: ["work", "ENG-0"], label: "ENG-0", at: 0 },
-        { path: ["work", "ENG-1"], label: "ENG-1", workspace: "work", at: 1 },
+        // A ROW WITH NO WORKSPACE is a shape an older build wrote, and one
+        // the palette has no hint for.
+        { path: ["work", "ENG-0"], label: "ENG-0" },
+        // A ROUTE THIS BUILD DOES NOT HAVE, which a row outlives: drawn, it
+        // would lead to Not Found for ever.
+        { path: ["activity", "turns"], label: "Turns", workspace: "activity" },
+        { path: ["work", "ENG-1"], label: "ENG-1", workspace: "work" },
       ]),
     );
     resetForTest();
@@ -208,8 +164,8 @@ describe("two tabs on one origin", () => {
     localStorage.setItem(
       "crewlet_recents",
       JSON.stringify([
-        { path: ["work", "ENG-2"], label: "ENG-2", workspace: "work", at: 2 },
-        { path: ["work", "ENG-1"], label: "ENG-1", workspace: "work", at: 1 },
+        { path: ["work", "ENG-2"], label: "ENG-2", workspace: "work" },
+        { path: ["work", "ENG-1"], label: "ENG-1", workspace: "work" },
       ]),
     );
     remember({ path: ["work", "ENG-3"], label: "ENG-3", workspace: "work" }, true);
@@ -218,28 +174,21 @@ describe("two tabs on one origin", () => {
 });
 
 /**
- * The cap counts what a rail DRAWS, which is one workspace's rows.
+ * The cap counts what the palette DRAWS, which is the whole list.
  *
- * It was a single global bound, written when the command palette was the only
- * reader and offered the whole list. The sidebar's Recent section came later
- * and filters to the workspace it is drawn in, so across a rail of eight
- * workspaces the reader saw one or two rows where the number says eight.
+ * It was per workspace while a sidebar drew one workspace's share; with the
+ * palette the only reader, that let an empty palette open on up to eight rows
+ * for each of nine workspaces.
  */
 describe("the cap", () => {
-  it("is per workspace, so one workspace cannot empty another", () => {
+  it("is one bound over every workspace", () => {
+    remember({ path: ["live", "turns", "t1"], label: "A turn", workspace: "live" }, true);
     for (let i = 0; i < MaxRecents + 3; i++) {
       remember({ path: ["work", `ENG-${i}`], label: `ENG-${i}`, workspace: "work" }, true);
     }
-    remember({ path: ["activity", "turns", "t1"], label: "A turn", workspace: "activity" }, true);
-    for (let i = MaxRecents + 3; i < MaxRecents + 8; i++) {
-      remember({ path: ["work", `ENG-${i}`], label: `ENG-${i}`, workspace: "work" }, true);
-    }
     const kept = stored();
-    expect(kept.filter((r) => r.workspace === "work")).toHaveLength(MaxRecents);
-    expect(
-      kept.filter((r) => r.workspace === "activity").map((r) => r.label),
-      "a morning in Work emptied the Activity rail",
-    ).toEqual(["A turn"]);
+    expect(kept).toHaveLength(MaxRecents);
+    expect(kept.some((r) => r.workspace === "live")).toBe(false);
   });
 
   it("refuses a place no workspace owns rather than storing one nothing draws", () => {

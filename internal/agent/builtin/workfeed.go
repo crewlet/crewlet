@@ -31,8 +31,8 @@ import (
 type FeedReader interface {
 	Activity(ctx context.Context, q tracker.ActivityQuery, now time.Time) (
 		tracker.ActivityAnswer, error)
-	MyWork(ctx context.Context, q tracker.MyWorkQuery, now time.Time) (
-		tracker.MyWork, error)
+	MyWork(ctx context.Context, q tracker.MyWorkQuery, now time.Time,
+		loc *time.Location) (tracker.MyWork, error)
 }
 
 type taskActivity struct{ deps WorkDeps }
@@ -151,7 +151,7 @@ func (t *taskActivity) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	}
 	answer, err := reader.Activity(ctx, q, t.deps.now())
 	if err != nil {
-		return failed(readFailure(tracker.TaskActivityTool, err)), nil
+		return readFailure(tracker.TaskActivityTool, err), nil
 	}
 	return jsonResult(answer)
 }
@@ -206,9 +206,9 @@ func (t *myWork) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	// matched. The chart lookup is the surface's — see [Actor.Seat].
 	out, err := reader.MyWork(ctx, tracker.MyWorkQuery{
 		Who: actor.Party(), Level: seatReadLevel,
-	}, t.deps.now())
+	}, t.deps.now(), t.deps.zone())
 	if err != nil {
-		return failed(readFailure(tracker.MyWorkTool, err)), nil
+		return readFailure(tracker.MyWorkTool, err), nil
 	}
 	return jsonResult(out)
 }

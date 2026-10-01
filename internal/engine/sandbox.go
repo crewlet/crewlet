@@ -234,7 +234,7 @@ func secondsPtr(v *float64) *time.Duration {
 }
 
 // sandboxAccountant post-charges a collected coding run against the shared
-// counter.
+// counters.
 //
 // The charge happens AFTER the spend, which is why it cannot refuse: a refusal
 // cannot un-spend a run that already ran, and recording it anyway is the only
@@ -245,27 +245,53 @@ func secondsPtr(v *float64) *time.Duration {
 // moment the cap bound, and stamped a refusal on a seat that would still
 // admit its next round.
 //
-// The caps only decide whether to SAY the run went over. They are read live,
-// and a limit of 0 is unlimited, matching the config.
+// The run is counted in the windows of COLLECTION — the day, week and month
+// it was collected in, on the company's clock — because that is the only
+// instant the counter is told about: a run that started yesterday and ended
+// today is today's spend as far as any cap can know. The caps only decide
+// whether to SAY the run went over.
 //
 // Charging it once per launch, however often its completion is retried, is the
 // coordinator's side: see [sandbox.PendingRun.Charged].
 type sandboxAccountant struct {
-	budgets coord.Budgets
-	caps    func(agentID string) (org, seat int)
+	budgets postCharger
+
+	// basis reads, off the epoch LIVE at charge time rather than the one
+	// the turn was pinned to, the ceilings the run is measured against and
+	// the clock its windows are cut on: this charge lands after a run that
+	// may have taken hours, and the caps the company is running under now
+	// are the ones it should be measured against.
+	basis func(agentID string) budgetBasis
+
+	now func() time.Time
+}
+
+// postCharger is the slice of the fleet's counters the accountant calls.
+type postCharger interface {
+	PostCharge(ctx context.Context, seat string, tokens int, windows coord.Windows) (coord.Spend, error)
 }
 
 func (a sandboxAccountant) Charge(ctx context.Context, agentID, _ string, tokens int) (bool, error) {
 	if a.budgets == nil || tokens <= 0 {
 		return false, nil
 	}
-	spend, err := a.budgets.PostCharge(ctx, coord.AgentScope(agentID), tokens)
+	basis := a.basis(agentID)
+	spend, err := a.budgets.PostCharge(ctx, coord.AgentScope(agentID), tokens,
+		coord.WindowsAt(a.now(), basis.zone))
 	if err != nil {
 		return false, err
 	}
-	orgLimit, seatLimit := a.caps(agentID)
-	over := (orgLimit > 0 && spend.OrgUsed > orgLimit) || (seatLimit > 0 && spend.AgentUsed > seatLimit)
-	return over, nil
+	return overAnyCap(spend.Org, basis.org) || overAnyCap(spend.Agent, basis.seat), nil
+}
+
+// overAnyCap reports whether a counter has spent past any window's ceiling.
+func overAnyCap(u coord.Usage, caps coord.Caps) bool {
+	for p, ceiling := range caps {
+		if u.In(p).Used > ceiling {
+			return true
+		}
+	}
+	return false
 }
 
 // resumer re-enters a suspended turn on this node.
@@ -334,8 +360,9 @@ func (r *resumer) resume(ctx context.Context, req sandbox.ResumeRequest) error {
 		Answer:        req.Answer,
 		Success:       req.Success,
 		Trigger:       req.Trigger,
-		CostUSD:       req.CostUSD,
 		DeliveredRefs: req.DeliveredRefs,
+		InputTokens:   req.InputTokens,
+		OutputTokens:  req.OutputTokens,
 	})
 }
 
@@ -358,7 +385,7 @@ func resumedTurn(run sandbox.PendingRun, seat *org.Role, organization *org.Organ
 //
 // It publishes the unhandled-exception guard itself because the frame that
 // would have, the resumed turn's own telemetry, is what did not run: without
-// it the seat renders as whatever it was last doing rather than AFK. The run's
+// it the seat renders as whatever it was last doing rather than its failure. The run's
 // own row names the seat, and the live epoch is preferred where it still does,
 // so a seat renamed since the run detached is addressed as it is now.
 func (e *Engine) guardResume(ctx context.Context, run sandbox.PendingRun, resume func() error) (err error) {
@@ -382,7 +409,7 @@ func (e *Engine) resumePanicked(ctx context.Context, run sandbox.PendingRun, pan
 		}
 	}
 	trace := events.TraceContext{TraceID: run.TraceID, SpanID: run.SpanID}
-	if breach := panicBreach(role, agentID, run.TurnID, trace, panicked); breach != nil {
+	if breach := panicBreach(role, agentID, run.TurnID, run.UnitOfWork(), trace, panicked); breach != nil {
 		e.observe(ctx, breach)
 	}
 	return fmt.Errorf("%w (%s): %w", sandbox.ErrResumeAbandoned, turn.AbandonedPanicked, panicked)
@@ -403,11 +430,17 @@ type resumeInput struct {
 	Success bool
 	Trigger *events.Event
 
-	// CostUSD and DeliveredRefs are what the collected run reported, for the
-	// resumed phase's own event. Zero when a person's answer resumed a
-	// parked clarification: nothing was collected.
-	CostUSD       float64
+	// DeliveredRefs are what the collected run reported, for the resumed
+	// phase's own event. Empty when a person's answer resumed a parked
+	// clarification: nothing was collected. The run's cost is on its own
+	// `sandbox` phase record — see [sandbox.ResumeRequest.DeliveredRefs].
 	DeliveredRefs []string
+
+	// InputTokens and OutputTokens are the resumed job's tokens, which this
+	// segment's charge to the turn's work item includes — see
+	// [sandbox.ResumeRequest.InputTokens].
+	InputTokens  int
+	OutputTokens int
 }
 
 // resumeTurn re-enters a suspended turn.
@@ -521,6 +554,9 @@ func (e *Engine) resumeTurn(ctx context.Context, in resumeInput) error {
 	tel := e.describeResume(ctx, company, in)
 	turnIdentity := tel.runnerTurn(company, in.Run.DelegationDepth,
 		in.Run.DelegationChain, resumeTask(in), resumedReply)
+	// The runtime, and the note box it decides — see [steerBox].
+	agentRun := e.agentRunFor(company, in.Turn.Handle(), turnIdentity.Context)
+	box := steerBox(agentRun)
 	r, err := company.RunnerFor(in.Turn.Handle(),
 		e.seatRegistry(company, in.Turn.Handle()), RunnerInput{
 			Task: resumeTask(in),
@@ -538,8 +574,12 @@ func (e *Engine) resumeTurn(ctx context.Context, in resumeInput) error {
 			// being re-entered was agentic is the state's own answer (see
 			// [execstate.State.AgentRun]), but a turn that loops to another
 			// iteration must run that one the same way it ran the first.
-			AgentRun: e.agentRunFor(company, in.Turn.Handle(), turnIdentity.Context),
-			Budget:   e.meterFor(company, in.Turn.Handle()),
+			AgentRun: agentRun,
+			// A RESUMED SEGMENT IS STEERABLE LIKE ANY OTHER: it is the
+			// same turn running again, and a note sent while it parked
+			// was answered `closed` — the box that segment had is gone.
+			Steer:  box,
+			Budget: e.meterFor(company, in.Turn.Handle()),
 			// A resumed Execute loop can exhaust its rounds like any other,
 			// and it is the phase most likely to: it comes back mid-task with
 			// its budget already partly spent.
@@ -578,7 +618,7 @@ func (e *Engine) resumeTurn(ctx context.Context, in resumeInput) error {
 				Run: runner.RunRecord{
 					CodingAgent:   in.Run.CodingAgent,
 					SandboxID:     in.Run.SandboxID,
-					CostUSD:       in.CostUSD,
+					LaunchID:      in.Run.LaunchID,
 					DeliveredRefs: in.DeliveredRefs,
 				},
 				// THE RUN'S OWN TOOL CALLS, off its durable row. An
@@ -591,17 +631,54 @@ func (e *Engine) resumeTurn(ctx context.Context, in resumeInput) error {
 	if err != nil {
 		return err
 	}
+	// THE SEGMENT IS ON THE RECORD ONCE IT IS CERTAIN TO RUN, and not a
+	// line earlier — which is where the dispatch path's start differs, and
+	// has to. Every return above is a RETRY OF THIS SAME RUN: the
+	// coordinator reverts its claim and the resume comes round again under
+	// the same turn id. Announced before them, a runner that could not be
+	// built would leave a start nothing closes, and closing it with a
+	// completion would record as ended a run that is still parked. From
+	// here every path publishes the completion below, so each start this
+	// frame makes is paired. A resume gathers no context of its own, so
+	// nothing slow is being skipped by waiting.
+	e.publishTurnStarted(ctx, tel, in.Run.DelegationDepth, in.Run.DelegationChain, true)
+	// Open once the segment is certain to run, for the reason its start is
+	// announced only now; closed the moment it returns, as on the dispatch
+	// path, with the defer as the backstop.
+	closeSteer := e.openSteer(in.Run.TurnID, in.Turn.Handle(), box, r)
+	defer closeSteer(ctx)
 	// NO WALL-CLOCK CAP ON A RESUME. The cap bounds the turn a fire started;
 	// a detached sandbox run can legitimately outlive it, and the resumed
 	// half is finishing work the box already did rather than starting more.
 	res, err := turn.Run(ctx, r, company.TurnSettings(0),
 		resumeInputFor(in, resumedReply))
+	closeSteer(ctx)
 	// THE TURN RAN, so from here the indicator follows what it concluded
 	// rather than the retry rule above: a resumed turn that suspended AGAIN
 	// keeps it, because the same box is still working.
 	working = res.Suspended
-	e.publishTurnCompleted(ctx, tel, r.Spend(), res, err)
+	// THE SEGMENT'S CHARGE, decided once for the suspension below and the
+	// charge after the completion — see turnspend.go.
+	spend := r.Spend()
+	charge := tel.chargeFor(spend, res, err, time.Now().UTC())
+	e.publishTurnCompleted(ctx, tel, spend, res, err)
+	e.recordTurnSpend(ctx, charge)
 	if err != nil {
+		// A PERSON STOPPED THE RESUMED TURN — its seat was paused with a
+		// stop while the run was out, and the turn ended at its first
+		// round back. It is settled rather than reverted, for the reason
+		// the dispatcher spends a stopped trigger: a revert brings the
+		// completion straight back, and the resume would be stopped again
+		// on every delivery until the broker dead-lettered it. The run's
+		// box is reclaimed with it; stopping the turn is what was asked.
+		if turn.Stopped(err) {
+			pause, _ := stopOf(err)
+			role, agentID := seatIdentity(company, in.Turn.Handle())
+			e.observe(ctx, turnStoppedEvent(in.Turn.Handle(), role, agentID,
+				in.Run.TurnID, in.Run.UnitOfWork(), pause, tracing.TraceOf(ctx)))
+			return fmt.Errorf("%w (a person stopped the resumed turn): %w",
+				sandbox.ErrResumeAbandoned, err)
+		}
 		if reason, abandon := turn.Abandon(res, err); abandon {
 			// The same decision the dispatcher makes on the other path
 			// (see (*Dispatcher).abandon), from the same rule, taken here
@@ -654,7 +731,7 @@ func (e *Engine) resumeTurn(ctx context.Context, in resumeInput) error {
 	// running and leaves the box for the next completion — and keeps its
 	// indicator on the same terms, off the ROW rather than off the intent.
 	if res.Suspended {
-		working = stillWorking(e.persistSuspension(ctx, r, in.Run.TurnID))
+		working = stillWorking(e.persistSuspension(ctx, r, in.Run.TurnID, tel.written, charge.carry))
 	}
 	e.recordResume(ctx, in, res)
 	return nil
@@ -791,7 +868,16 @@ func resumeReply(run sandbox.PendingRun) (turn.Reply, error) {
 // resumes. The error is for deciding, not for logging: every failure path here
 // has already said what it did and why (see [Engine.failSuspension]), and no
 // caller fails a turn over it — the run is settled either way.
-func (e *Engine) persistSuspension(ctx context.Context, r *runner.Runner, turnID string) (bool, error) {
+//
+// WHAT THE TURN HAS WRITTEN SO FAR rides the suspension too (see
+// execstate.State.Written): the segment that finishes the turn may be charged
+// by a sole write, and it can only judge "exactly one" over the whole turn if
+// the half before the park travels with the conversation. So does what the
+// segments so far spent and charged to nothing (execstate.State.Uncharged),
+// for that same finishing segment to pay — see turnspend.go.
+func (e *Engine) persistSuspension(ctx context.Context, r *runner.Runner, turnID string,
+	written *turnctx.Written, uncharged *execstate.Uncharged,
+) (bool, error) {
 	rt := e.sandbox.Load()
 	if rt == nil {
 		// No store and no coordinator: nothing recorded the run, nothing
@@ -804,13 +890,19 @@ func (e *Engine) persistSuspension(ctx context.Context, r *runner.Runner, turnID
 			"the turn suspended but recorded no conversation", nil)
 		return false, nil
 	}
+	suspension.State.Written, suspension.State.WrittenMany = written.Items()
+	suspension.State.Uncharged = uncharged
 	blob, err := execstate.Encode(suspension.State)
 	if err != nil {
 		e.failSuspension(ctx, rt, turnID, "sandbox_suspension_unserializable",
 			"the suspended conversation could not be serialized", err)
 		return false, nil
 	}
-	suspended, err := rt.pending.MarkSuspended(ctx, turnID, blob)
+	// The iteration rides BESIDE the blob: the coordinator files the run's
+	// own phase record under it and never decodes the conversation.
+	suspended, err := rt.pending.MarkSuspended(ctx, turnID, sandbox.Suspension{
+		State: blob, Iteration: suspension.State.Round,
+	})
 	if err != nil {
 		e.failSuspension(ctx, rt, turnID, "sandbox_suspension_unwritable",
 			"the suspended conversation could not be written", err)
@@ -948,9 +1040,13 @@ func (l *launcher) Launch(ctx context.Context, t *turnctx.Turn, brief string) (s
 	}
 
 	return sandbox.Launch(ctx, manager, pending, e.backends.Queue, sandbox.LaunchRequest{
-		Turn:       sandboxTurnRef(ctx, t, seat.Name),
-		Brief:      brief,
-		Task:       t.Task,
+		Turn:  sandboxTurnRef(ctx, t, seat.Name),
+		Brief: brief,
+		Task:  t.Task,
+		// HOW TO ASK A PERSON, with the names the chart gives this seat —
+		// without it the coding agent was never told the ask shim its box
+		// carries exists, so no run could park on a question at all.
+		Ask:        askBrief(company.Org, seat),
 		Setup:      setup,
 		Spec:       spec,
 		LLM:        agentLLM,
@@ -1016,6 +1112,12 @@ func sandboxTurnRef(ctx context.Context, t *turnctx.Turn, role string) sandbox.T
 		// anybody is waiting: it sees neither its trigger nor this frame,
 		// and the row is the only place this can reach it from.
 		Reply: t.Reply,
+		// AND THE ITEM, for the same reason: the resumed turn is charged
+		// to what this one was on, and has no trigger to resolve it from.
+		WorkItem: t.WorkItem,
+		// AND WHO ASKED, which the park resolves a question addressed to
+		// "the requester" against — see [sandbox.PendingRun.Requester].
+		Requester: t.Requester,
 	}
 }
 
@@ -1198,6 +1300,19 @@ type sandboxRuntime struct {
 	coordinator *sandbox.Coordinator
 }
 
+// sandboxManager is this node's current sandbox manager, or nil where no
+// runtime has come up — read LIVE through the runtime, because the runtime
+// may arrive by apply and every apply swaps the manager under its coordinator
+// ([sandbox.Coordinator.SetManager]). The live-output reader and server take
+// it as a function for that reason.
+func (e *Engine) sandboxManager() *sandbox.Manager {
+	rt := e.sandbox.Load()
+	if rt == nil {
+		return nil
+	}
+	return rt.coordinator.Manager()
+}
+
 // startSandboxFor is [Engine.startSandbox] for the company a node boots on:
 // its catalogue built, and the runtime brought up where it reaches a cell.
 // An apply builds the catalogue itself, earlier, so that a revision whose
@@ -1286,6 +1401,9 @@ func (e *Engine) buildSandboxRuntime(manager *sandbox.Manager) (*sandboxRuntime,
 		Queue: e.backends.Queue, Pending: pending, Manager: manager,
 		Resume:  &resumer{engine: e},
 		Account: e.sandboxAccountant(),
+		// Who a parked question is put to, resolved against the live
+		// chart at the park — see audience.go.
+		Audience: audienceResolver{engine: e},
 		// The per-run tool bridge dies with the run — see
 		// [sandbox.CoordinatorOptions.Ended]. Idempotent, and reached
 		// from every settle path, so a run that failed before it ever
@@ -1372,6 +1490,25 @@ func (e *Engine) answerParkedRun(ctx context.Context, handle string,
 	return rt.coordinator.TryResumeFromAnswer(ctx, handle, conv, answer, trigger)
 }
 
+// answerRunByTurn hands a person's answer BY TURN to the parked coding run it
+// names, through the runtime current when it arrives.
+//
+// LIVE, for the reason [Engine.answerParkedRun] is: bound to the coordinator
+// when the dispatcher was built, a node whose sandbox arrived by apply had no
+// route for an answer by turn for the life of the process. With no runtime the
+// answer is DEFERRED rather than not-mine — this node cannot resume a run, and
+// the delivery is the seat's next holder's to spend, never this node's to drop.
+func (e *Engine) answerRunByTurn(ctx context.Context, given types.SandboxAnswerGiven,
+	trigger *events.Event) (sandbox.AnswerDisposition, error) {
+
+	rt := e.sandbox.Load()
+	if rt == nil {
+		return sandbox.AnswerDeferred, fmt.Errorf("engine: this node runs no sandbox "+
+			"coordinator to resume run %s with the answer it was given", given.TurnID)
+	}
+	return rt.coordinator.AnswerByTurn(ctx, given, trigger)
+}
+
 // sandboxAccountant charges collected runs, or nil where nothing counts them.
 func (e *Engine) sandboxAccountant() sandbox.Accountant {
 	if e.backends == nil || e.backends.Fleet == nil {
@@ -1379,18 +1516,21 @@ func (e *Engine) sandboxAccountant() sandbox.Accountant {
 	}
 	return sandboxAccountant{
 		budgets: e.backends.Fleet,
-		// The ORG cap and the seat's own, read off the epoch LIVE at charge
-		// time rather than pinned to the turn: this charge lands after a run
-		// that may have taken hours, and the cap the company is running
-		// under now is the one it should be measured against.
-		caps: func(agentID string) (int, int) {
+		basis: func(agentID string) budgetBasis {
 			c := e.Company()
+			if c == nil || c.Org == nil {
+				// No epoch yet: nothing is capped, and the run is still
+				// counted, on UTC — the clock a company that names none
+				// has.
+				return basisOf(c, nil)
+			}
 			id, err := uuid.Parse(agentID)
 			if err != nil {
-				return c.Config.TokenBudget, 0
+				return basisOf(c, nil)
 			}
-			return c.Config.TokenBudget, seatBudget(c.Org, c.Org.AgentSeatByID(id))
+			return basisOf(c, c.Org.AgentSeatByID(id))
 		},
+		now: time.Now,
 	}
 }
 
@@ -1672,6 +1812,10 @@ func (e *Engine) releaseSeat(ctx context.Context, handle string) {
 	// with them, so nothing here can serve a turn through a dead client.
 	// stopSeatServers drops the registry with the bridge, in one step.
 	e.stopSeatServers(ctx, handle)
+	// A budget park's alarm dies with the seat too. The detach that
+	// released the inbox already dropped the hold; the alarm would only
+	// fire into a seat a peer now serves.
+	e.forgetBudgetPark(handle)
 
 	// AND THE SEAT'S WORKING INDICATORS, for the reason the event above
 	// exists: a seat that went away with no signal leaves its last state

@@ -64,6 +64,9 @@ var namedRoutes = []struct {
 	// parameter of it: the two answers have different shapes, and one route
 	// returning either would make every caller branch on what came back.
 	{method: "GET", pattern: "/tokens/series", what: "token_series"},
+	// EVERY SEAT'S TURNS over company days. A literal segment under
+	// /agents, which the stream service serves exactly and nothing deeper.
+	{method: "GET", pattern: "/agents/activity", what: "seat_activity"},
 	{method: "GET", pattern: "/schedules", what: "schedules"},
 	// ONE SCHEDULE'S OWN HISTORY. Three path segments because a schedule's
 	// identity is all three — two units may each declare a "standup", and a
@@ -72,8 +75,25 @@ var namedRoutes = []struct {
 	{method: "GET", pattern: "/schedules/{scope_type}/{scope_id}/{name}/runs", what: "schedule_runs", path: map[string]string{"scope_type": "scope_type", "scope_id": "scope_id", "name": "name"}},
 	{method: "GET", pattern: "/fleet", what: "fleet"},
 	{method: "GET", pattern: "/sandbox-runs", what: "sandbox_runs"},
+	// ONE RUNNING RUN'S LIVE OUTPUT, with the job as `launch_id=`: a run is
+	// one execution of a turn and may launch more than one job.
+	{method: "GET", pattern: "/sandbox-runs/{turn_id}/tail", what: "sandbox_tail", path: map[string]string{"turn_id": "turn_id"}},
 	{method: "GET", pattern: "/budgets", what: "budgets"},
 	{method: "GET", pattern: "/integrations", what: "integrations"},
+	{method: "GET", pattern: "/access", what: "access"},
+	// WHAT EACH MCP SERVER DID ON EACH NODE. Not under /config/mcp-servers,
+	// which is the configuration's own collection — this is what the fleet
+	// did with it, from the heartbeats.
+	{method: "GET", pattern: "/mcp-servers", what: "mcp_servers_status"},
+	// EVERY MODEL'S KEY BAG AND WHICH KEYS ARE COOLING. Not under
+	// /config/llm-providers either — the configuration names the keys, and
+	// this is what the pools and the fleet's ledger did with them.
+	{method: "GET", pattern: "/credential-pool", what: "credential_pool"},
+	// WHAT THE FLEET HAS BACKED UP, and every backup a person asked for.
+	// Plural beside `POST /backup`, which TAKES one: the read is a
+	// collection and the write is one act, and neither is the other's
+	// method on one path.
+	{method: "GET", pattern: "/backups", what: "backups"},
 	// The NATIVE backends. The literal segments beat the wildcards, as
 	// above, so /work/counters is not read as an item whose key is
 	// "counters" — net/http resolves the more specific pattern rather
@@ -82,15 +102,28 @@ var namedRoutes = []struct {
 	{method: "GET", pattern: "/work/projects/{key}", what: "work_project", path: map[string]string{"key": "key"}},
 	{method: "GET", pattern: "/work/projects", what: "work_projects"},
 	{method: "GET", pattern: "/work/workload", what: "work_workload"},
+	// THE LANDING SCREEN'S SERIES AND WHAT WAITS ON THE CALLER, both
+	// literal segments above /work/{id} for the reason given there.
+	{method: "GET", pattern: "/work/flow", what: "work_flow"},
+	{method: "GET", pattern: "/work/decisions", what: "decisions"},
 	{method: "GET", pattern: "/work/activity", what: "work_activity"},
 	{method: "GET", pattern: "/work/my-work", what: "work_my_work"},
 	{method: "GET", pattern: "/work/inbox", what: "work_inbox"},
+	// A TASK'S THREAD, deeper than the detail's own page, with the task as
+	// `item=`. A literal segment rather than /work/{id}/comments, which
+	// net/http refuses beside /work/projects/{key}: neither is more specific
+	// for "/work/projects/comments", so the mux would not start.
+	{method: "GET", pattern: "/work/comments", what: "work_comments"},
+	// A TASK'S TURNS, beside its thread and for the same reason: a literal
+	// segment with `id=` rather than /work/{id}/turns.
+	{method: "GET", pattern: "/work/turns", what: "work_item_turns"},
 	// SEARCH AND ROUTING, both above /work/{id} for the reason the comment
 	// there gives: a literal segment beats the wildcard, so neither is read
 	// as a task whose key is "search" or "routing".
 	{method: "GET", pattern: "/work/search", what: "work_search"},
 	{method: "GET", pattern: "/work/routing/{record_id}", what: "work_routing", path: map[string]string{"record_id": "record_id"}},
 	{method: "GET", pattern: "/work/views", what: "work_views"},
+	{method: "GET", pattern: "/work/views/saved", what: "work_saved_views"},
 	{method: "GET", pattern: "/work/catalogue", what: "work_catalogue"},
 	{method: "GET", pattern: "/work/people/{handle}", what: "work_person", path: map[string]string{"handle": "handle"}},
 	{method: "GET", pattern: "/work/{id}", what: "work_item", path: map[string]string{"id": "id"}},
@@ -103,6 +136,10 @@ var namedRoutes = []struct {
 	{method: "GET", pattern: "/pages/{id}", what: "page", path: map[string]string{"id": "id"}},
 	{method: "GET", pattern: "/pages", what: "pages"},
 	{method: "GET", pattern: "/containers", what: "containers"},
+	// WHAT THE COMPANY DID, merged across the tracker, the pages and the
+	// schedules — not under /work/, since two of its three sources are
+	// not the tracker's.
+	{method: "GET", pattern: "/feed", what: "company_feed"},
 	// WHO IS ASKING. Not under /work/: the answer is the caller's own
 	// identity rather than anything the tracker holds, and a node with no
 	// native tracker still has a viewer.

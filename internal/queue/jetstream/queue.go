@@ -262,6 +262,11 @@ type Queue struct {
 	log *slog.Logger
 	cfg Config
 
+	// contract is the contract-level settings this client was built with —
+	// the node it publishes for among them. Fixed at construction, so it is
+	// read without the lock.
+	contract queue.Options
+
 	// embedded is the in-process broker, when there is one. A client may
 	// reference a server it does NOT own — see ownsServer.
 	embedded *embeddedServer
@@ -298,15 +303,18 @@ type attachKey struct{ topic, group string }
 // owns one broker: stopping the queue stops the broker with it. A deployment
 // that needs several clients of one embedded broker — a fleet test, a peer —
 // uses StartServer and Server.Client instead.
-func Open(ctx context.Context, cfg Config) (*Queue, error) {
+//
+// opts are the contract-level settings; see [Server.Client].
+func Open(ctx context.Context, cfg Config, opts ...queue.Option) (*Queue, error) {
+	contract := queue.Resolve(opts...)
 	if cfg.URL != "" {
-		return newQueueOn(ctx, cfg, nil, false)
+		return newQueueOn(ctx, cfg, nil, false, contract)
 	}
 	e, err := startEmbedded(ctx, cfg)
 	if err != nil {
 		return nil, fmt.Errorf("start embedded nats: %w", err)
 	}
-	q, err := newQueueOn(ctx, cfg, e, true)
+	q, err := newQueueOn(ctx, cfg, e, true, contract)
 	if err != nil {
 		e.shutdown()
 		return nil, err
@@ -316,10 +324,13 @@ func Open(ctx context.Context, cfg Config) (*Queue, error) {
 
 // newQueueOn builds a client against an already-running broker (or an
 // external URL when embedded is nil).
-func newQueueOn(ctx context.Context, cfg Config, embedded *embeddedServer, owns bool) (*Queue, error) {
+func newQueueOn(ctx context.Context, cfg Config, embedded *embeddedServer, owns bool,
+	contract queue.Options,
+) (*Queue, error) {
 	q := &Queue{
 		log:         logging.Get("queue.jetstream"),
 		cfg:         cfg,
+		contract:    contract,
 		embedded:    embedded,
 		ownsServer:  owns,
 		attachments: map[attachKey][]*attachment{},
@@ -907,6 +918,12 @@ func (q *Queue) Start(context.Context) error { return nil }
 // it — with replicas configured, that acknowledgement is a quorum commit, so
 // "published" means "survives losing this node".
 func (q *Queue) Publish(ctx context.Context, topic string, ev *events.Event) error {
+	if ev == nil {
+		// Refused rather than encoded: json.Marshal writes a nil event as
+		// `null`, which the broker stores and every consumer decodes into
+		// an event with no id and no type.
+		return errors.New("jetstream: publish a nil event")
+	}
 	if topic == "" {
 		// An empty subject is what an unroutable handle produces. It must
 		// not become a real subject nobody reads.
@@ -923,6 +940,10 @@ func (q *Queue) Publish(ctx context.Context, topic string, ev *events.Event) err
 		return ErrClosed
 	}
 
+	// THE ORIGIN BEFORE THE BYTES, so the message every consumer decodes and
+	// the event every listener is handed name the same node. See
+	// [queue.Options.Stamp].
+	ev = q.contract.Stamp(ev)
 	data, err := json.Marshal(ev)
 	if err != nil {
 		return fmt.Errorf("serialize event %s: %w", ev.Type, err)

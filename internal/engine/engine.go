@@ -12,6 +12,7 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/prompts"
 	"github.com/crewlet/crewlet/internal/agent/runner"
 	"github.com/crewlet/crewlet/internal/agent/skills"
+	"github.com/crewlet/crewlet/internal/agent/steer"
 	"github.com/crewlet/crewlet/internal/agent/subagent"
 	"github.com/crewlet/crewlet/internal/agent/toolloop"
 	"github.com/crewlet/crewlet/internal/agent/turn"
@@ -44,6 +45,15 @@ type Company struct {
 	// models ([phase.ErrNoProviders]), so a consumer that forgets to ask
 	// is refused rather than crashed.
 	Models *phase.Registry
+
+	// credentials is where each pooled provider's keys came from, as this
+	// epoch resolved them — the variable each names and a hint of what it
+	// resolved to, never a value — for [Engine.CredentialPools]. Keyed on
+	// the provider's config key. Computed HERE because the resolver the
+	// providers were built through exists only while the epoch is being
+	// built, and a key's provenance read through any other resolver would
+	// describe credentials no pool holds.
+	credentials map[string][]credentialSource
 
 	// Tools is the catalogue every seat's surface is cut from: the
 	// builtins, plus the SHARED MCP servers, which one company-wide child
@@ -117,10 +127,11 @@ func newCompany(c *config.Company, env *config.Resolver) (*Company, error) {
 		return nil, err
 	}
 	return &Company{
-		Config: c,
-		Org:    organization,
-		Models: models,
-		Tools:  tools.NewRegistry(),
+		Config:      c,
+		Org:         organization,
+		Models:      models,
+		Tools:       tools.NewRegistry(),
+		credentials: credentialSources(c, env),
 	}, nil
 }
 
@@ -267,6 +278,9 @@ func (c *Company) RunnerFor(handle string, reg *tools.Registry, in RunnerInput) 
 		// the turn — and there is one helper behind both call sites, so
 		// a turn cannot change runtime by being resumed.
 		AgentRun: in.AgentRun,
+		// The turn's note box, opened by the caller because the caller is
+		// what files it where a person's note can find it.
+		Steer: in.Steer,
 	})
 }
 
@@ -305,8 +319,9 @@ type RunnerInput struct {
 	Judge extension.Judge
 
 	// Fence stops the turn's tool loop the moment this node stops holding
-	// the seat's grant. Built by [Engine.seatFence]; nil is an open fence,
-	// which is the single-node case and every test with no seat host.
+	// the seat's grant, or a person's pause asks the running turn to stop.
+	// Built by [Engine.seatFence]; nil is an open fence, which is every
+	// test that drives a runner directly.
 	Fence func() error
 
 	// Remaining reads the seat's token headroom for a sub-agent spawn.
@@ -346,6 +361,13 @@ type RunnerInput struct {
 	// Resume makes this runner's turn a RE-ENTRY into a suspended Execute
 	// conversation rather than a fresh turn. Nil is the ordinary case.
 	Resume *runner.Resume
+
+	// Steer is the turn's box of notes from a person, opened by
+	// [steerBox] from the SAME launcher as AgentRun above — a turn whose
+	// executor is a coding CLI's own loop answers every note
+	// `unsupported`. Nil is a turn nobody can steer: every test that
+	// drives a runner directly.
+	Steer *steer.Box
 }
 
 // TurnSettings is the loop's pinned configuration for this epoch.

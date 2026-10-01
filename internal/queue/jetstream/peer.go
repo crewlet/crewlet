@@ -12,6 +12,7 @@ import (
 	"github.com/nats-io/nats.go/jetstream"
 
 	"github.com/crewlet/crewlet/internal/events"
+	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/queue/topics"
 )
 
@@ -25,11 +26,15 @@ import (
 //
 // The peer does not own the embedded server. Stopping it closes its own
 // connection and leaves the broker running for whoever else is using it.
-func (q *Queue) Peer(ctx context.Context) (*Queue, error) {
+//
+// Nor does it inherit this client's node: a peer is a different node, and one
+// that published as this one would name the wrong origin on everything it
+// sent. It names itself through its own opts.
+func (q *Queue) Peer(ctx context.Context, opts ...queue.Option) (*Queue, error) {
 	// The peer never owns the broker: stopping it must leave the server
 	// and every other client running, exactly as one node leaving a
 	// cluster does.
-	return newQueueOn(ctx, q.cfg, q.embedded, false)
+	return newQueueOn(ctx, q.cfg, q.embedded, false, queue.Resolve(opts...))
 }
 
 // Backlog reports the events a subscription retains and has not acked — the

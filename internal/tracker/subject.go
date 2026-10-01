@@ -25,6 +25,50 @@
 // possible for a record that failed to decode at all, because such a record
 // yields no id, no kind and no subject to file it under. A rolling upgrade
 // puts exactly that record on the wire.
+//
+// # Every new field is version-gated, and every new derived column re-derived
+//
+// The version a record carries is the LOWEST one that reads it — the highest
+// version among the fields in the versioned-field table it actually carries,
+// or 1 — and the encoder stamps it, so no writer states one. A field added to
+// a record, a payload or a document without a row in that table is decoded
+// AROUND by an older build: it finds the version readable, drops the field and
+// applies the rest, and its rows for that object differ from its peers' for
+// good. With the row, the older build retains the record instead, and only
+// that record and what its scope meets; everything carrying nothing new stays
+// readable by every build. [RecordVersion] moves with the table and only with
+// it (see its doc for the whole rule).
+//
+// THREE KINDS OF RECORD ARE PINNED rather than stamped, because an older node
+// defers or retains what it cannot read and none of them survives that: an
+// apply gate at [GateRecordVersion], and the read index's barrier and a
+// reanchor's generation at the base version. The encoder refuses any of them
+// carrying a versioned field at all.
+//
+// A change to how the applier treats a field it ALREADY copies is the same
+// hazard with no new field to carry it, and takes the same gate: a marker the
+// writer sets and a row that stamps it, with the new rule applied only to a
+// record at that version or above. An older build's record is then applied
+// by that build's rule on every node — [actorSeatVersion] (the history row's
+// seat) and [keepsPlaceVersion] (a task write carrying its board place
+// through rather than re-filing the rank its document holds) are the two.
+//
+// A column the applier COMPUTES from the rows it holds, rather than copies out
+// of a record, is the other half: no record version can see it, because what
+// differs between builds is the rule. Such a column is maintained under
+// [statelog.Deriver] — the rule set is versioned on the checkpoint row, and
+// the first boot of a build whose rules differ re-derives the column from the
+// rows, in the applier's own Go, inside one transaction — never backfilled a
+// second time in a migration's SQL.
+//
+// # A decision is a structured ask, and nothing more
+//
+// ADR-0023 is the record: a decision somebody needs is an ask comment carrying
+// a [Decision], answered by a comment whose [Comment.Choice] names one of its
+// options, and the engine enforces exactly its shape, that the choice names an
+// option of the ask it answers, and that a promised inform is kept — never an
+// approval chain, a quorum or a state machine. decision.go holds the type and
+// the rules; the ADR says why the engine stops there.
 package tracker
 
 import (
@@ -441,6 +485,19 @@ func (k ObjectKind) RecordsHistory() bool {
 
 // RequiresAProject reports a kind that cannot live at the top of the company.
 func (k ObjectKind) RequiresAProject() bool {
+	return k == KindTask || k == KindTurn
+}
+
+// GatedByPurge reports a kind whose subject id is a TASK id, so a purge of
+// that task's marker gates every record of it: the task's own, and the turns
+// charged to it.
+//
+// ONE PREDICATE for both statements of the deletion gate — the applier's
+// ([Applier.Gated]) and the publisher's outcome resolution
+// ([Gates.GatedAt]) — because the two answer one question and a kind added to
+// one of them would drop a record on every node while its writer was told it
+// had applied.
+func (k ObjectKind) GatedByPurge() bool {
 	return k == KindTask || k == KindTurn
 }
 

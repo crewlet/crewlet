@@ -35,7 +35,8 @@ func configSurface(t *testing.T, docs ...string) (*configapi.Service, []string) 
 			t.Fatal(err)
 		}
 		id, err := db.Configs().InsertActive(t.Context(), store.Revision{
-			Source: "test", CreatedBy: "operator", Summary: "revision",
+			CreatedByKind: store.AuthorOperator,
+			Source:        "test", CreatedBy: "operator", Summary: "revision",
 			Payload: payload, CreatedAt: pinned.Add(time.Duration(i) * time.Minute),
 		})
 		if err != nil {

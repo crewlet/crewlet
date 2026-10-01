@@ -73,6 +73,14 @@ func (d DependencyChange) Empty() bool {
 
 // DependencyResult is what the sequence did, per counterparty.
 type DependencyResult struct {
+	// WriteResult answers for EVERY commit this call made rather than for
+	// any one of them — see [DependencyResult.fold]. Its Version is the
+	// dependency's OWN task's version after this call, zero where the call
+	// landed nothing on that task's subject (a `blocking`-only change whose
+	// mirror on this task was left one-sided): never the last commit's,
+	// which is usually another task's — every blocker's mirror and every
+	// dependent's edge is a commit of this call, on the other task's
+	// subject.
 	WriteResult
 
 	// Mirrored is every task whose mirror commit landed, and OneSided
@@ -83,17 +91,6 @@ type DependencyResult struct {
 	// dependency that exists would re-issue it.
 	Mirrored []string
 	OneSided []string
-
-	// TaskVersion is the dependency's own task's version after this call:
-	// that of the last commit on ITS subject, or zero where the call landed
-	// nothing there — a `blocking`-only change whose mirror on this task
-	// was left one-sided.
-	//
-	// NOT [statelog.Result.Version], which is the LAST COMMIT's and so
-	// usually another task's: every blocker's mirror and every dependent's
-	// edge is a commit of this call, on the other task's subject. A caller
-	// that reports a version about the task it named reports this one.
-	TaskVersion int64
 }
 
 // Depend writes a dependency change end to end.
@@ -102,16 +99,16 @@ func (w *Writer) Depend(ctx context.Context, opID string, change DependencyChang
 
 	switch {
 	case change.Task == "":
-		return DependencyResult{}, fmt.Errorf("tracker: a dependency change names no task")
+		return DependencyResult{}, invalid("a dependency change names no task")
 	case change.Project == "":
-		return DependencyResult{}, fmt.Errorf("tracker: the dependency change on "+
+		return DependencyResult{}, invalid("the dependency change on "+
 			"task %s names no project — the caller resolved a key to reach "+
 			"this task and therefore holds one", change.Task)
 	case change.Empty():
-		return DependencyResult{}, fmt.Errorf("tracker: the dependency change on "+
+		return DependencyResult{}, invalid("the dependency change on "+
 			"task %s adds and removes nothing", change.Task)
 	case len(change.Note) > MaxRelationNote:
-		return DependencyResult{}, fmt.Errorf("tracker: the note on task %s's "+
+		return DependencyResult{}, invalid("the note on task %s's "+
 			"dependency change is %d bytes and the maximum is %d",
 			change.Task, len(change.Note), MaxRelationNote)
 	}
@@ -122,10 +119,10 @@ func (w *Writer) Depend(ctx context.Context, opID string, change DependencyChang
 	}
 	at := w.Now()
 	var out DependencyResult
-	// own is step 2's commit on THIS task's subject, which the one mirror
-	// landing on that same subject has to see ([Writer.After]) — kept apart
-	// from out.WriteResult, which moves to whichever commit came last.
-	var own WriteResult
+	// authored is the position of step 2's commit on this task's own
+	// subject, which the one mirror landing on that same subject has to see
+	// ([Writer.After]).
+	var authored statelog.Position
 
 	// STEP 2 — THE AUTHORED EDGES.
 	//
@@ -137,15 +134,16 @@ func (w *Writer) Depend(ctx context.Context, opID string, change DependencyChang
 		result, err := w.UpdateTask(ctx, stepID(opID, "waiting"), change.Task,
 			change.Project, NoIfMatch, TaskPatch{Relate: intent},
 			ChangeRelations, found.wakeFor(found.self, nil, leads))
+		out.fold(result, true)
 		// AN UNKNOWN AUTHORED EDGE STOPS THE CALL BEFORE ITS MIRRORS. A
 		// mirror written over an edge that may not exist is the residue
 		// the order above exists to rule out: a blocker listing a
 		// dependent whose own edge is missing, which no scan can find.
 		if err = resolved(fmt.Sprintf("task %s's own dependency edges",
 			change.Task), result, err); err != nil {
-			return DependencyResult{WriteResult: result}, err
+			return out, err
 		}
-		own, out.WriteResult, out.TaskVersion = result, result, result.Version
+		authored = result.Position
 	}
 	for i, id := range append(slices.Clone(change.BlockingAdd), change.BlockingRemove...) {
 		other, held := found.byID[id]
@@ -171,20 +169,18 @@ func (w *Writer) Depend(ctx context.Context, opID string, change DependencyChang
 		}
 		// NAMED BY THE TASK IT WRITES, never by its place in the list —
 		// see [authoredStep].
-		authored, err := w.UpdateTask(ctx, stepID(opID, authoredStep(adding, id)),
+		result, err := w.UpdateTask(ctx, stepID(opID, authoredStep(adding, id)),
 			id, other.Project, NoIfMatch, TaskPatch{Relate: intent},
 			ChangeRelations, notify)
+		// A COMMIT OF THIS CALL LIKE ANY OTHER, folded before it is judged,
+		// so a `blocking`-only change whose mirror below is left one-sided
+		// still reports the edges it authored on the other tasks — and one
+		// stopped here reports the step it stopped at.
+		out.fold(result, false)
 		if err = resolved(fmt.Sprintf("task %s's edge to %s", id,
-			change.Task), authored, err); err != nil {
+			change.Task), result, err); err != nil {
 			return out, fmt.Errorf("tracker: %d of this call's edges were "+
 				"written before task %s's own stopped the call: %w", i, id, err)
-		}
-		// A COMMIT OF THIS CALL LIKE ANY OTHER, so it can be the last one:
-		// a `blocking`-only change whose mirror below is left one-sided
-		// has nothing else to report, and answered the zero result — an
-		// outcome that is none of the three, and no position to wait for.
-		if authored.Position.Seq > out.Position.Seq {
-			out.WriteResult = authored
 		}
 	}
 
@@ -195,32 +191,49 @@ func (w *Writer) Depend(ctx context.Context, opID string, change DependencyChang
 	// for its own `waiting_on` edges, and once here for the dependents it
 	// gains. See [Writer.After] for what the second one would otherwise
 	// spend discovering that the first had moved it.
-	mirrors := w.mirror(ctx, opID, change, found, leads, own.Position)
-	out.Mirrored, out.OneSided = mirrors.mirrored, mirrors.oneSided
-	// THE POSITION IS THE LAST COMMIT THIS CALL MADE, whatever its shape.
-	// A `blocking`-only change writes nothing on its own subject, so the
-	// authored branch above never ran — and a caller that settled at the
-	// zero position would barrier at nothing and read its own write back
-	// missing.
-	if mirrors.last.Position.Seq > out.Position.Seq {
-		out.WriteResult = mirrors.last
-	}
-	// AND THIS TASK'S OWN MIRROR, where it landed, is the newest commit on
-	// its subject: it is written after step 2's and waits for it.
-	if mirrors.own != 0 {
-		out.TaskVersion = mirrors.own
-	}
+	out.Mirrored, out.OneSided = w.mirror(ctx, opID, change, found, leads,
+		authored, &out)
 	return out, nil
 }
 
-// mirrored is what step 3 did: every task whose mirror commit landed and every
-// one whose did not, the last commit among them, and the version the mirror on
-// the call's OWN task left it at (zero where there was none, or it did not
-// land).
-type mirrored struct {
-	mirrored, oneSided []string
-	last               WriteResult
-	own                int64
+// fold is how every commit this call made reaches the one answer it returns.
+//
+// THE CALL ANSWERS FOR EVERY RECORD, never for the first or the last:
+//
+//   - the POSITION is the latest of them, because a caller barriers on it
+//     before its next read. A `blocking`-only change writes nothing on its
+//     own subject before the mirror, and a waiting-on change's mirrors land
+//     after its authored commit — either earlier position is a floor below a
+//     record this call made, and a read at it comes back without the edge;
+//   - the OUTCOME is the least certain of them, so an authored commit whose
+//     outcome is `unknown` is never reported `applied` because a mirror after
+//     it was confirmed (the rule [statelog.LessCertain] states) — and an
+//     unknown the ledger could not vouch for says so ([statelog.Result.Unvouched]);
+//   - the VERSION is this task's OWN, from the latest commit on its subject,
+//     and zero where the call landed nothing there. A caller reads it as the
+//     item's version and passes it back as an If-Match, so a counterparty's
+//     version — which answering with the last commit whole handed over
+//     whenever a mirror or a dependent's edge landed last — refused that
+//     caller's very next edit.
+//
+// own says whether the commit is on the call's own task.
+func (out *DependencyResult) fold(result WriteResult, own bool) {
+	if !result.Wrote() {
+		return
+	}
+	out.Outcome = statelog.LessCertain(out.Outcome, result.Outcome)
+	out.Position = statelog.Later(out.Position, result.Position)
+	if result.Outcome == statelog.OutcomeUnknown && result.Unvouched {
+		out.Unvouched = true
+	}
+	if out.OpID == "" {
+		out.OpID = result.OpID
+	}
+	out.Rounds += result.Rounds
+	if own && result.Version > out.Version {
+		out.Version = result.Version
+	}
+	out.Warnings = append(out.Warnings, result.Warnings...)
 }
 
 // authoredStep and mirrorStep name one append of a dependency change BY THE
@@ -228,14 +241,14 @@ type mirrored struct {
 //
 // A retry answers each step from the ledger by its step's id
 // ([statelog.Snap.Held]), so the id has to name the same write on every run of
-// the gesture — and the lists do not keep their places. A caller recomputes a whole-set change
-// against what the first run already landed: the retry of `waiting_on: [X]`
-// plus `blocking: [Z]` finds X's edge written and authors none, so its mirror
-// list loses X and this task's own mirror moves from second to first. Named
-// by position, that mirror was answered with X's ledger row — refused as an
-// operation that landed on another object, or before that check existed,
-// answered as landed — and this task never learned of its new dependent.
-// [Writer.UpdateTasks] learned the same thing the same way.
+// the gesture — and the lists do not keep their places. A caller recomputes a
+// whole-set change against what the first run already landed: the retry of
+// `waiting_on: [X]` plus `blocking: [Z]` finds X's edge written and authors
+// none, so its mirror list loses X and this task's own mirror moves from
+// second to first. Named by position, that mirror was answered with X's ledger
+// row — refused as an operation that landed on another object, or before that
+// check existed, answered as landed — and this task never learned of its new
+// dependent. [Writer.UpdateTasks] learned the same thing the same way.
 //
 // THE SIGN IS PART OF AN AUTHORED STEP'S NAME, because one call may add an
 // edge on a task and remove another's, and a task listed on both sides must
@@ -284,9 +297,7 @@ func edgesOn(add, remove []string, actor, note string, at time.Time) *RelationIn
 // the session mark for the ONE mirror that lands on that same subject.
 func (w *Writer) mirror(ctx context.Context, opID string, change DependencyChange,
 	found parties, leads Leads,
-	authored statelog.Position) mirrored {
-
-	var out mirrored
+	authored statelog.Position, out *DependencyResult) (mirrored, oneSided []string) {
 
 	type edit struct {
 		add, remove []string
@@ -359,20 +370,15 @@ func (w *Writer) mirror(ctx context.Context, opID string, change DependencyChang
 		// repairs. Reported mirrored, a caller would be told a blocker
 		// knows about a dependent it may never hear of.
 		if resolved("a mirror", result, err) != nil {
-			out.oneSided = append(out.oneSided, id)
+			oneSided = append(oneSided, id)
 			continue
 		}
-		if result.Position.Seq > out.last.Position.Seq {
-			out.last = result
-		}
-		if id == change.Task {
-			out.own = result.Version
-		}
-		out.mirrored = append(out.mirrored, id)
+		out.fold(result, id == change.Task)
+		mirrored = append(mirrored, id)
 	}
-	slices.Sort(out.mirrored)
-	slices.Sort(out.oneSided)
-	return out
+	slices.Sort(mirrored)
+	slices.Sort(oneSided)
+	return mirrored, oneSided
 }
 
 // parties is the pre-flight read: every counterparty this call names, and the
@@ -420,10 +426,10 @@ func (w *Writer) readParties(ctx context.Context, change DependencyChange) (part
 		for _, id := range group {
 			switch {
 			case id == "":
-				return parties{}, fmt.Errorf("tracker: the dependency change "+
+				return parties{}, invalid("the dependency change "+
 					"on task %s names an empty counterparty", change.Task)
 			case id == change.Task:
-				return parties{}, fmt.Errorf("tracker: task %s cannot depend "+
+				return parties{}, invalid("task %s cannot depend "+
 					"on itself — a task that blocks itself is one no close "+
 					"can ever clear", change.Task)
 			}
@@ -433,7 +439,7 @@ func (w *Writer) readParties(ctx context.Context, change DependencyChange) (part
 		}
 	}
 	if len(wanted) > MaxBulkTasks {
-		return parties{}, fmt.Errorf("tracker: this dependency change names %d "+
+		return parties{}, invalid("this dependency change names %d "+
 			"counterparties and one call may name %d — each is a commit of "+
 			"its own, and a gesture larger than that is a batch",
 			len(wanted), MaxBulkTasks)
@@ -458,7 +464,7 @@ func (w *Writer) readParties(ctx context.Context, change DependencyChange) (part
 			adding := slices.Contains(required, id)
 			switch {
 			case !held && adding:
-				return fmt.Errorf("tracker: there is no task %s, so the "+
+				return invalid("there is no task %s, so the "+
 					"dependency naming it cannot be written — an edge to a "+
 					"task that does not exist resolves to nothing on every "+
 					"node, for ever", id)
@@ -468,12 +474,12 @@ func (w *Writer) readParties(ctx context.Context, change DependencyChange) (part
 				// here and still applied on this task's own side.
 				continue
 			case current.Removed != nil && adding:
-				return fmt.Errorf("tracker: task %s was removed by %s at %s, "+
+				return invalid("task %s was removed by %s at %s, "+
 					"so nothing can be made to wait on it; restore it first",
 					id, current.Removed.By,
 					current.Removed.At.Format(time.RFC3339))
 			case adding && len(current.Dependents) >= MaxDependents:
-				return fmt.Errorf("tracker: %d tasks already wait on task %s "+
+				return invalid("%d tasks already wait on task %s "+
 					"and the maximum is %d — every one of them is an object a "+
 					"close of that task has to name in its own scope",
 					len(current.Dependents), id, MaxDependents)

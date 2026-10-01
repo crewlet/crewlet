@@ -89,6 +89,16 @@ type BackupPoint struct {
 	// of a record against a backup nobody opened is the failure this whole
 	// term exists to prevent.
 	Verified bool `json:"verified"`
+
+	// Bytes is how large the artefact is — every database copy and every
+	// stream snapshot in it — as the taker measured what it wrote. Zero on
+	// an operator acknowledgement, which asserts a copy the engine never
+	// saw, and on a point an older build wrote: absent rather than empty,
+	// which a reader says rather than printing a size of nothing.
+	//
+	// ADDITIVE, on the envelope's rule for a record two builds share: an
+	// older peer re-writing its own point simply omits it.
+	Bytes int64 `json:"bytes,omitempty"`
 }
 
 // BackupRegister is the fleet's record of what has been backed up.
@@ -142,6 +152,29 @@ func (p BackupPoint) Validate() error {
 		}
 	}
 	return nil
+}
+
+// CountedBackups is the points a backup-floor policy takes the word of:
+// every owner's under `engine`, and the operator's acknowledgement alone under
+// `operator` (pass operatorOnly), which is the one fact the engine cannot see
+// for itself — that a copy has left the host.
+//
+// ONE RULE, because three readers apply it and they must agree: the trim's
+// backup term, the backup-age alarm and the `backups` answer's `counted`
+// flag. The alarm used to age the newest point of ANY owner, so under
+// `operator` a fleet whose nodes backed up nightly and whose operator never
+// acknowledged one kept a green alarm beside a trim that could not move.
+func CountedBackups(points []BackupPoint, operatorOnly bool) []BackupPoint {
+	if !operatorOnly {
+		return points
+	}
+	var out []BackupPoint
+	for _, p := range points {
+		if p.Owner == OperatorBackupOwner {
+			out = append(out, p)
+		}
+	}
+	return out
 }
 
 // NewestBackup is the freshest point in a set, and whether there is one.

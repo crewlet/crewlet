@@ -44,7 +44,7 @@ function liveCall(over: Partial<LiveCall> = {}): LiveCall {
     total_tokens: 0,
     tool_executions: null,
     round_num: 0,
-    rounds: 0,
+    rounds_used: 0,
     in_progress: true,
     updated_at: "2026-01-01T00:00:05Z",
     ...over,
@@ -74,6 +74,30 @@ function phaseEvent(over: Record<string, unknown> = {}, ts = "2026-01-01T00:00:0
     },
   };
 }
+
+// THE STAGE A CARD DRAWS STALENESS FROM IS THE TURN'S, and only this call's
+// turn: a seat that has already started another turn says nothing about the
+// call a screen still holds from the last one.
+describe("a live call carries its turn's stage", () => {
+  const turn = (turn_id: string, stage: "context" | "phase" | "parked") => ({
+    turn_id,
+    stage,
+    started_at: "2026-09-02T10:00:00Z",
+  });
+
+  test("the seat's own turn, when it is this call's", () => {
+    expect(fromLiveCall(liveCall(), "PM", turn("t1", "parked")).stage).toBe("parked");
+  });
+
+  test("nothing from a turn the seat moved on to", () => {
+    expect(fromLiveCall(liveCall(), "PM", turn("t2", "parked")).stage).toBe("");
+    expect(fromLiveCall(liveCall(), "PM").stage).toBe("");
+  });
+
+  test("and nothing on a finished record", () => {
+    expect(fromPhaseEvent(phaseEvent())?.stage).toBe("");
+  });
+});
 
 describe("identity", () => {
   test("a live phase and its finished record share ONE key", () => {
@@ -308,6 +332,27 @@ describe("the round ledger", () => {
     expect(toolCalls([{ name: "a", failed: true }])[0]?.failed).toBe(true);
     expect(toolCalls([{ name: "a", error: "boom" }])[0]?.failed).toBe(true);
     expect(toolCalls([{ name: "a", success: true }])[0]?.failed).toBe(false);
+  });
+
+  test("a call the engine timed and attributed is read as it was written", () => {
+    // The row the tool loop and the surface now write: when, how long, and
+    // who answered.
+    const [timed] = toolCalls([
+      {
+        name: "create_issue",
+        round: 2,
+        started_at: "2026-09-24T10:00:01.5Z",
+        duration_ms: 2300,
+        origin: "mcp:github",
+        server: "github",
+      },
+    ]);
+    expect(timed).toMatchObject({ durationMs: 2300, origin: "mcp:github", server: "github" });
+  });
+
+  test("a row nothing timed reads as not recorded, never as instant", () => {
+    const [untimed] = toolCalls([{ name: "run_sandbox", round: 1 }]);
+    expect(untimed).toMatchObject({ durationMs: 0, origin: "", server: "" });
   });
 });
 
@@ -584,6 +629,44 @@ describe("delegated workers", () => {
     const live = fromLiveCall(liveCall({ phase: "execute", iteration: 1 }), "PM");
     const done = fromPhaseEvent(phaseEvent({ phase: "execute", iteration: 1 }))!;
     expect(live.key).toBe(done.key);
+  });
+
+  // TWO CODING RUNS IN ONE ITERATION ARE TWO ROWS. A resumed executor that
+  // calls run_sandbox again launches a second run of the same iteration, and
+  // keyed on the three parts alone the map kept the last one to arrive — the
+  // first run, its report and its spend simply were not on the page. The
+  // executor that resumed from a run names it too, and keeps its three-part
+  // key, or it would stop matching the live call it replaces.
+  test("a coding run is keyed on its launch, and the executor that collected it is not", () => {
+    const first = fromPhaseEvent(phaseEvent({ phase: "sandbox", launch_id: "job-1" }))!;
+    const second = fromPhaseEvent(phaseEvent({ phase: "sandbox", launch_id: "job-2" }))!;
+    expect(first.key).toBe("t1|sandbox|1|job-1");
+    expect(second.key).not.toBe(first.key);
+    expect(first.launchId).toBe("job-1");
+
+    const resumed = fromPhaseEvent(phaseEvent({ phase: "execute", launch_id: "job-2" }))!;
+    const live = fromLiveCall(liveCall({ phase: "execute", iteration: 1 }), "PM");
+    expect(resumed.key).toBe(live.key);
+  });
+
+  // THE RUN'S OWN ACCOUNT reaches the record the card renders, and a turn
+  // reads the run after the executor that launched it.
+  test("a coding run carries its transcript and follows its executor", () => {
+    const run = fromPhaseEvent(
+      phaseEvent(
+        {
+          phase: "sandbox",
+          launch_id: "job-1",
+          activity_transcript: "[tool] bash: go test",
+        },
+        "2026-01-01T00:00:05Z",
+      ),
+    )!;
+    expect(run.transcript).toBe("[tool] bash: go test");
+    const executor = fromPhaseEvent(phaseEvent({ phase: "execute" }, "2026-01-01T00:00:09Z"))!;
+    const review = fromPhaseEvent(phaseEvent({ phase: "review" }, "2026-01-01T00:00:12Z"))!;
+    const [turn] = groupTurns([review, run, executor]);
+    expect(turn?.phases.map((p) => p.phase)).toEqual(["execute", "sandbox", "review"]);
   });
 });
 

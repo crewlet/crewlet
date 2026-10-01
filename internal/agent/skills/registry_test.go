@@ -379,10 +379,10 @@ func TestTheCatalogueRendersOperatorVariables(t *testing.T) {
 	if got := r.Render(offered[0].Summary); got != "post to nimbus.example.com" {
 		t.Fatalf("rendered summary = %q", got)
 	}
-	body, ok := r.Body("chat")
-	if !ok || !strings.Contains(body, "the nimbus workspace") ||
-		!strings.Contains(body, "# Chat on nimbus") {
-		t.Fatalf("body = %q", body)
+	loaded, ok := r.Load("chat")
+	if !ok || !strings.Contains(loaded.Body, "the nimbus workspace") ||
+		!strings.Contains(loaded.Body, "# Chat on nimbus") {
+		t.Fatalf("body = %q", loaded.Body)
 	}
 }
 
@@ -391,17 +391,25 @@ func TestTheCatalogueRendersOperatorVariables(t *testing.T) {
 // is a body it cannot decide to trust.
 func TestALoadedBodyNamesWhatItIs(t *testing.T) {
 	t.Parallel()
-	r := registry(t, skill("chat", skills.Trigger{Tool: "t"}, true))
-	body, ok := r.Body("chat")
+	chat := skill("chat", skills.Trigger{Tool: "t"}, true)
+	chat.SourceBackend, chat.SourceContainer, chat.SourceTitle = "native", "SKILLS", "Chat page"
+	r := registry(t, chat)
+	loaded, ok := r.Load("chat")
 	if !ok {
 		t.Fatal("the skill has no body")
 	}
 	for _, want := range []string{"# Chat", "how to use chat", "the body of chat"} {
-		if !strings.Contains(body, want) {
-			t.Fatalf("the body is missing %q:\n%s", want, body)
+		if !strings.Contains(loaded.Body, want) {
+			t.Fatalf("the body is missing %q:\n%s", want, loaded.Body)
 		}
 	}
-	if _, ok := r.Body("never-existed"); ok {
+	// AND THE PAGE IT CAME FROM, in the same answer, so a load is recorded
+	// against the page whose body was handed over.
+	if loaded.PageID != chat.SourcePageID || loaded.Backend != "native" ||
+		loaded.Container != "SKILLS" || loaded.Title != "Chat page" {
+		t.Errorf("loaded page = %+v; want the skill's own source", loaded)
+	}
+	if _, ok := r.Load("never-existed"); ok {
 		t.Fatal("an absent key produced a body")
 	}
 }
@@ -430,4 +438,48 @@ func TestANilRegistryAnswersEmpty(t *testing.T) {
 	r.Replace([]skills.Skill{skill("chat", skills.Trigger{Tool: "t"}, true)})
 	r.SetVariables(map[string]string{"a": "b"})
 	r.Audit(nil, nil)
+}
+
+// AN OFFER RECORDS WHAT EACH RENDER OFFERED, AND REPORTS IT ONCE.
+//
+// Which skills a prompt's catalogue carried is known only to the render, since
+// the registry is live and a second match could answer differently. Each render
+// is its own offering — two worker prompts offered the same skill twice, and a
+// merged set would say one prompt carried both — and a drain hands each over
+// exactly once, however many callers drain.
+func TestAnOfferRecordsEachRenderOnce(t *testing.T) {
+	t.Parallel()
+	r := registry(t,
+		skill("chat", skills.Trigger{Tool: "post"}, false),
+		skill("deploy", skills.Trigger{Tool: "ship"}, false))
+	offer := r.Offer()
+	cat := offer.Catalogue()
+	surface := prompts.Surface{Tools: []string{"post", "ship"}}
+
+	if got := cat.SkillsFor(prompts.PhaseExecute, surface); len(got) != 2 {
+		t.Fatalf("the catalogue offered %d skills, want both", len(got))
+	}
+	cat.SkillsFor(prompts.PhaseSubagent, prompts.Surface{Tools: []string{"post"}})
+	// A render that matched nothing is not an offer.
+	cat.SkillsFor(prompts.PhaseExecute, prompts.Surface{Tools: []string{"none"}})
+
+	drained := offer.Drain()
+	if len(drained) != 2 {
+		t.Fatalf("drained %d offerings, want one per render that offered something", len(drained))
+	}
+	if len(drained[0]) != 2 || drained[0][0].SourcePageID != "chat-page" ||
+		drained[0][1].SourcePageID != "deploy-page" {
+		t.Errorf("first offering = %+v; want both skills, by page", drained[0])
+	}
+	if len(drained[1]) != 1 || drained[1][0].Key != "chat" {
+		t.Errorf("second offering = %+v; want chat alone", drained[1])
+	}
+	if again := offer.Drain(); len(again) != 0 {
+		t.Errorf("a second drain reported %d offerings again", len(again))
+	}
+
+	var none *skills.Registry
+	if none.Offer().Catalogue() != nil {
+		t.Error("a nil registry's offer is a non-nil catalogue, which renders a header over nothing")
+	}
 }

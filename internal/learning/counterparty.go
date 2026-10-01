@@ -270,14 +270,23 @@ func (c *Counterparties) Get(ctx context.Context, observer string, subject Subje
 // question a reader has is "who is this seat working with", and a colleague it
 // spoke to a hundred times last quarter is not the answer.
 //
-// LIMITED, and by a constant rather than a parameter: a seat's counterparties
-// are the people it has met, which is bounded by the company and its
-// correspondents rather than by anything that grows with time. A seat with
-// more than this many is one whose profile list is a report rather than a
-// panel, and the cap is what keeps the panel from becoming one silently.
-func (c *Counterparties) List(ctx context.Context, observer string) ([]Profile, error) {
+// CEILINGED BY A CONSTANT: a seat's counterparties are the people it has met,
+// which is bounded by the company and its correspondents rather than by
+// anything that grows with time. A seat with more than [MaxProfilesListed] is
+// one whose profile list is a report rather than a panel, and the ceiling is
+// what keeps the panel from becoming one silently.
+//
+// AND PAGED BELOW IT, in the statement: limit is how many the caller will
+// draw, and an absent one (or one past the ceiling) is served the ceiling.
+// Every row carries the profile's whole trait bag, the one column here with no
+// bound, so a caller that read the ceiling and kept the first row — the seat
+// profile's memory card, on a poll — read two hundred bags to draw one name.
+func (c *Counterparties) List(ctx context.Context, observer string, limit int) ([]Profile, error) {
 	if c == nil || c.db == nil || observer == "" {
 		return nil, nil
+	}
+	if limit <= 0 || limit > MaxProfilesListed {
+		limit = MaxProfilesListed
 	}
 	rows, err := c.db.SQL().QueryContext(ctx, `
 		SELECT observer_handle, subject_handle, subject_external_id, subject_platform,
@@ -286,7 +295,7 @@ func (c *Counterparties) List(ctx context.Context, observer string) ([]Profile, 
 		FROM counterparty_profiles
 		WHERE observer_handle = ?
 		ORDER BY last_updated_at DESC
-		LIMIT ?`, observer, MaxProfilesListed)
+		LIMIT ?`, observer, limit)
 	if err != nil {
 		return nil, fmt.Errorf("learning: list profiles for %s: %w", observer, err)
 	}
@@ -322,6 +331,23 @@ func (c *Counterparties) List(ctx context.Context, observer string) ([]Profile, 
 		return nil, fmt.Errorf("learning: list profiles for %s: %w", observer, err)
 	}
 	return out, nil
+}
+
+// Count is how many people one seat holds a profile of — the set
+// [Counterparties.List] returns at most [MaxProfilesListed] of, so a listing
+// that was cut can say what it was cut from.
+func (c *Counterparties) Count(ctx context.Context, observer string) (int, error) {
+	if c == nil || c.db == nil || observer == "" {
+		return 0, nil
+	}
+	var n int
+	err := c.db.SQL().QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM counterparty_profiles WHERE observer_handle = ?`,
+		observer).Scan(&n)
+	if err != nil {
+		return 0, fmt.Errorf("learning: count profiles for %s: %w", observer, err)
+	}
+	return n, nil
 }
 
 // MaxProfilesListed bounds [Counterparties.List].

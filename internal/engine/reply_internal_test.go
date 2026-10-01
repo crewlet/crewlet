@@ -2,6 +2,7 @@ package engine
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/agent/inbox"
@@ -9,6 +10,7 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/turn"
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
+	"github.com/crewlet/crewlet/internal/tracker"
 )
 
 // wake builds one inbox trigger of the given type, THE WAY ITS PRODUCER
@@ -173,5 +175,53 @@ func TestOnlyASkippedTurnWritesAPlanDecision(t *testing.T) {
 		if got := skipDecision(string(decision)); got != "" {
 			t.Errorf("a %s turn wrote plan_decision %q, want empty", decision, got)
 		}
+	}
+}
+
+// AN INFORMED ANSWER OWES THE CHAT SURFACE, NOT THE TRACKER IT CAME FROM.
+//
+// The answer to a decision whose asker said it would report the outcome in a
+// channel wakes the asker from the TRACKER. On its source alone a comment on
+// the item would close the turn, and the person who answered — told the
+// outcome would be posted — would never see it. The notification's Owes names
+// the chat surface, and the obligation is raised there: [turn.Check] sends the
+// turn back until a tool on that surface has run. An owed wake is awaited
+// whether or not its source read it as addressed, the obligation survives the
+// wire (the dispatch runs on whichever node wins the delivery), and a wake
+// owing nothing keeps the source it arrived on.
+func TestAnInformedAnswerOwesTheChatSurface(t *testing.T) {
+	t.Parallel()
+	answered := func(addressed bool, owes string) *events.Event {
+		salient := "Chose “Hold”: the audit first"
+		return events.New(types.ExternalNotification{
+			NotificationSource: tracker.Source, SourceEventType: "comment",
+			Sender: "ana", Body: "enriched prompt", SalientBody: &salient,
+			Addressed: addressed, Owes: owes,
+		}, events.TraceContext{})
+	}
+	if got := ReplyFor([]*events.Event{answered(true, "slack")}); got != turn.ToolReply("slack") {
+		t.Errorf("an informed answer owes %+v, want a tool delivery on slack", got)
+	}
+	if got := ReplyFor([]*events.Event{answered(false, "mattermost")}); got != turn.ToolReply("mattermost") {
+		t.Errorf("an owed wake its source read as unaddressed owes %+v — the "+
+			"promise is the obligation", got)
+	}
+	if got := ReplyFor([]*events.Event{answered(true, "")}); got != turn.ToolReply(tracker.Source) {
+		t.Errorf("an answer owing no chat surface owes %+v, want the tracker", got)
+	}
+
+	raw, err := json.Marshal(answered(true, "slack"))
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	if !strings.Contains(string(raw), `"owes":"slack"`) {
+		t.Errorf("the wire form does not carry the owed surface: %s", raw)
+	}
+	var back events.Event
+	if err := json.Unmarshal(raw, &back); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if got := ReplyFor([]*events.Event{&back}); got != turn.ToolReply("slack") {
+		t.Errorf("an informed answer off the wire owes %+v, want slack", got)
 	}
 }

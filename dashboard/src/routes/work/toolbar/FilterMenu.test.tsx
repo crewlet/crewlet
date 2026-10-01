@@ -161,7 +161,7 @@ test("a filter the menu does not offer has no row here", () => {
   expect(offered()).not.toContain("shape=");
 });
 
-// NOT WHERE THE HOST HAS ALREADY ANSWERED IT. `#/me`'s Assigned tab IS one
+// NOT WHERE THE HOST HAS ALREADY ANSWERED IT. `#/me`'s Queue IS one
 // person's work, so an Assignee row there is a second answer to a question the
 // screen has answered — and choosing it writes a key the lock overwrites on
 // the way to the wire, which reads as a control that does nothing.
@@ -208,7 +208,7 @@ const PICKS: { field: string; option: string; param: string; value: string }[] =
   // opens a board to ask for.
   { field: "Assignee", option: "Unassigned", param: "assignee", value: "none" },
   { field: "Assignee", option: "Ada Okonkwo", param: "assignee", value: "ada" },
-  { field: "Tag", option: "Platform", param: "tag", value: "platform" },
+  { field: "Labels", option: "Platform", param: "tag", value: "platform" },
   // A DUE ALIAS THE ENGINE EXPANDS ITSELF, never a window this control
   // composed: `internal/tracker/dates.go` resolves the word on the chip.
   { field: "Due", option: "Overdue", param: "due", value: "overdue" },

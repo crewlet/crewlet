@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/period"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/store"
 	"github.com/crewlet/crewlet/internal/textcut"
@@ -46,6 +47,16 @@ var ErrNoTask = errors.New("tracker: no such task")
 // it typed the key wrong.
 var ErrNoProject = errors.New("tracker: no such project")
 
+// ErrNoType reports a `for_type` that names no type this company files.
+//
+// NOT [ErrNoProject], which is what it used to wrap: the project the caller
+// named exists, and it is the NARROWING argument that is wrong — so every
+// reader classifying by the sentinel answered "there is no such project" (a
+// 404 on the query surface, a dead link to a person) about a project that was
+// right there. The fix a caller needs is the argument, and the refusal lists
+// the types it may name.
+var ErrNoType = errors.New("tracker: no such type")
+
 // ErrNoComment reports a comment this node has no row for on that task.
 //
 // ITS OWN SENTINEL beside the two above, and the caller's answer differs
@@ -78,6 +89,13 @@ type DetailWants struct {
 	// CommentCursor pages the thread. Empty starts at the newest.
 	CommentCursor string
 
+	// CommentLimit is how many comments one page holds. Zero takes
+	// [DetailComments], the detail's own page; anything above
+	// [MaxCommentPage] is held to it. A caller that walks a thread
+	// rather than catching up on one — the work_comments question —
+	// asks for more per page so a long thread is fewer round trips.
+	CommentLimit int
+
 	// Units resolves the task's two unit references against the chart —
 	// see [Units] and [TaskDetail.Units]. Nil renders both raw and
 	// unresolved, which is honest for a surface holding no chart and a
@@ -90,6 +108,14 @@ type DetailWants struct {
 	// an id where a person expects their team's name.
 	Units Units
 
+	// Clock is the company's calendar the task's due date is stood
+	// against — see [TaskDetail.DueStanding]. Nil answers no standing,
+	// which is honest for a caller that draws no due date (a tool reading
+	// a task before it writes one) and never a guess on the process's own
+	// clock and zone, which would put one node's answer a day out from
+	// another's.
+	Clock *DayClock
+
 	// Comment names ONE comment to read WHOLE, and REPLACES the page.
 	//
 	// The thread page carries EXCERPTS — see [CommentBodyShown] — so this
@@ -101,6 +127,54 @@ type DetailWants struct {
 	// twenty whole bodies is ten times the ceiling on one tool answer —
 	// which is the reason the page is excerpted in the first place.
 	Comment string
+}
+
+// DayClock is an instant and the company's zone: what "today" is, on the
+// calendar every due band, overdue mark and `due=` token is cut on.
+type DayClock struct {
+	Now  time.Time
+	Zone *time.Location
+}
+
+// DueStanding is where a task's due date stands against the company's today.
+//
+// ON THE ANSWER, never re-derived by a renderer: the task page's rail read
+// "1d ago" in the reader's own clock for a task two company days late that
+// every board and the calendar drew as overdue — two screens, one task, two
+// answers about whether it was late.
+type DueStanding struct {
+	// Days is whole CALENDAR days from the company's today to the due
+	// date's day, negative when the date has passed: 0 is due today, 1
+	// tomorrow, -2 two days ago. Counted on labels rather than instants,
+	// so a day DST made 23 or 25 hours long is still one day.
+	Days int `json:"days"`
+
+	// Overdue is [TaskRow.Overdue]'s predicate exactly — open work whose
+	// due instant is before the company's midnight today — so the rail and
+	// the row it was opened from cannot disagree. A finished task two days
+	// past its date is not overdue; it is done.
+	Overdue bool `json:"overdue,omitempty"`
+}
+
+// dueStanding stands a task's due date against clock, or answers nothing
+// where there is no clock or no date.
+func dueStanding(clock *DayClock, task Task) *DueStanding {
+	if clock == nil || task.DueAt == nil {
+		return nil
+	}
+	today := period.At(period.Day, clock.Now, clock.Zone)
+	due := period.At(period.Day, *task.DueAt, clock.Zone)
+	from, errFrom := time.Parse(time.DateOnly, today.Label)
+	to, errTo := time.Parse(time.DateOnly, due.Label)
+	if errFrom != nil || errTo != nil {
+		// A DATE A LABEL CANNOT SPELL — past year 9999 in this zone —
+		// has no standing to report rather than a wrong one.
+		return nil
+	}
+	return &DueStanding{
+		Days:    int(to.Sub(from).Hours() / 24),
+		Overdue: task.StatusGroup.Open() && task.DueAt.Before(today.Start),
+	}
 }
 
 // DetailHistoryDefault is how many history rows a detail read returns when the
@@ -150,6 +224,34 @@ type TaskDetail struct {
 	// life of the task, to tell them something the cursor already says.
 	CommentsCursor string `json:"comments_cursor,omitempty"`
 
+	// CommentSeats names, per comment id, the PERSON behind a comment an
+	// operator token wrote — the seat the token was bound to, off the
+	// history row that recorded the comment. A comment's `author` is the
+	// credential that wrote it, which is the audit trail and a secret's
+	// name rather than a person's; a thread drawn from it showed "maya"
+	// where the chart says Maya Ops. Absent for a comment whose author is
+	// already a seat. Only with the comments it labels.
+	CommentSeats map[string]string `json:"comment_seats,omitempty"`
+
+	// ReporterSeat is the PERSON behind a task an operator token filed —
+	// the seat that token was bound to when it wrote the create, off the
+	// create's own history row — on exactly the terms [CommentSeats] names
+	// the person behind a comment. [Task.Reporter] is the credential, which
+	// is the audit trail and stays the record; a rail drawn from it named
+	// "founder" as the reporter while the activity beside it, which reads
+	// the history row's `actor_seat`, said Jane Founder filed it — one
+	// person with two names on one page.
+	//
+	// FROM THE CREATE ROW rather than from the history page, because the
+	// page is the newest [DetailHistoryDefault] changes and a busy task's
+	// create falls out of it, and rather than from the chart's CURRENT
+	// binding, because a token re-bound since would name somebody who
+	// filed nothing. Only when that row's author IS the reporter — the
+	// create sets the field to its author and nothing else writes it, so
+	// a mismatch is an imported task whose reporter nobody here bound.
+	// Absent for a task a seat filed, whose reporter already is a seat.
+	ReporterSeat string `json:"reporter_seat,omitempty"`
+
 	// Fields are the task's custom-field values with the declaration that
 	// explains each one, and with the values nothing explains reported as
 	// exactly that. The raw map stays on [TaskDetail.Task] — it is the
@@ -177,6 +279,17 @@ type TaskDetail struct {
 	// which.
 	Links []DetailLink `json:"links,omitempty"`
 
+	// Parent is the task this one is filed under, as a reader names it:
+	// its key, its title and where it stands. A task carries its parent's
+	// ID — the record — and a page that says "Part of LEAD-12 · 2.4
+	// release" needed a second read of the whole parent to say it.
+	//
+	// IN THE SAME TRANSACTION as the task, so the name cannot come from a
+	// later instant than the child it heads. ABSENT for a top-level task,
+	// and for a parent this node holds no row for — an id the reader falls
+	// back to rather than a blank name.
+	Parent *TaskRef `json:"parent,omitempty"`
+
 	// Blocked is the SAME predicate [TaskRow.Blocked] carries — an open
 	// dependency edge — computed here rather than derived from Links,
 	// which say what the relations ARE and not whether any blocker is
@@ -188,12 +301,48 @@ type TaskDetail struct {
 	// the browser would be a second definition of blocked.
 	Blocked bool `json:"blocked,omitempty"`
 
+	// DueStanding is where the due date stands against the company's
+	// today — see [DueStanding]. Only with [DetailWants.Clock], and absent
+	// for a task with no due date.
+	DueStanding *DueStanding `json:"due_standing,omitempty"`
+
+	// ReassignmentBudget is [ReassignmentBudget], served beside the
+	// counter it bounds ([Task.Reassignments]) so a screen saying "hand-off
+	// 7 of 8" reads the limit from the engine that enforces it. The
+	// dashboard used to hold its own figure — a warning at six against a
+	// budget of eight — and a number stated twice is two numbers the day
+	// either moves.
+	ReassignmentBudget int `json:"reassignment_budget"`
+
 	// The coverage half, identical in meaning to a board's — see [Answer].
 	Level          statelog.ReadLevel `json:"read_level"`
 	LogSeq         uint64             `json:"log_seq"`
 	AppliedThrough uint64             `json:"applied_through"`
 	Complete       bool               `json:"complete"`
 	Incomplete     *Incomplete        `json:"incomplete,omitempty"`
+}
+
+// TaskRef is another task as a reader names it.
+type TaskRef struct {
+	ID     string `json:"id"`
+	Key    string `json:"key"`
+	Title  string `json:"title"`
+	Status Status `json:"status"`
+}
+
+// readTaskRef names one task, or nil for an id this node holds no row for.
+func readTaskRef(ctx context.Context, tx *sql.Tx, id string) (*TaskRef, error) {
+	ref := TaskRef{ID: id}
+	err := tx.QueryRowContext(ctx,
+		`SELECT key, title, status FROM tracker_tasks WHERE id = ?`, id).
+		Scan(&ref.Key, &ref.Title, &ref.Status)
+	switch {
+	case errors.Is(err, sql.ErrNoRows):
+		return nil, nil
+	case err != nil:
+		return nil, fmt.Errorf("tracker: name task %s: %w", id, err)
+	}
+	return &ref, nil
 }
 
 // TaskUnits is a task's two unit references as a reader renders them.
@@ -238,12 +387,25 @@ type HistoryEntry struct {
 	Actor      string     `json:"actor,omitempty"`
 	ActorKind  AuthorKind `json:"actor_kind,omitempty"`
 	OperatorID string     `json:"operator_id,omitempty"`
-	CommentID  string     `json:"comment_id,omitempty"`
-	Excerpt    string     `json:"excerpt,omitempty"`
-	TurnID     string     `json:"turn_id,omitempty"`
+
+	// ActorSeat is the person an operator token was bound to when it
+	// wrote this — see [ActivityRecord.ActorSeat], which this is the same
+	// column of.
+	ActorSeat string `json:"actor_seat,omitempty"`
+
+	CommentID string `json:"comment_id,omitempty"`
+	Excerpt   string `json:"excerpt,omitempty"`
+	TurnID    string `json:"turn_id,omitempty"`
 
 	// Fields is what changed, as the notification snapshot recorded it.
 	Fields map[string]any `json:"fields,omitempty"`
+
+	// Reassignments is the task's hand-off counter as this commit left it
+	// — the "3" of "hand-off 3 of 8" on a row that moved the assignee, and
+	// the zero a person's touch reset it to on a row that did anything
+	// else (migration 0028). ABSENT on a row this node holds no count for,
+	// never a zero it did not derive.
+	Reassignments *int `json:"reassignments,omitempty"`
 
 	// Quiet marks a commit that ANNOUNCED NOTHING — one that carried no
 	// notification at all. It is a fact about the change rather than
@@ -306,6 +468,14 @@ func (r *Reader) Task(ctx context.Context, idOrKey string, want DetailWants,
 			return err
 		}
 		out.Task = task
+		if task.Parent != nil && *task.Parent != "" {
+			if out.Parent, err = readTaskRef(ctx, tx, *task.Parent); err != nil {
+				return err
+			}
+		}
+		if out.ReporterSeat, err = reporterSeat(ctx, tx, id, task.Reporter); err != nil {
+			return err
+		}
 		switch {
 		case want.Comment != "":
 			// READ WHETHER OR NOT `comments` WAS ASKED FOR: naming one
@@ -317,9 +487,20 @@ func (r *Reader) Task(ctx context.Context, idOrKey string, want DetailWants,
 			}
 		case want.Comments:
 			out.Comments, out.CommentsCursor, err = readComments(ctx, tx, id,
-				want.CommentCursor)
+				want.CommentCursor, commentPage(want.CommentLimit))
 			if err != nil {
 				return err
+			}
+		}
+		// IN THE SAME TRANSACTION as the comments it labels, so a name
+		// cannot come from a later instant than the thread it is on.
+		if operator := operatorComments(out.Comments); len(operator) > 0 {
+			seats, seatsErr := commentSeats(ctx, tx, operator)
+			if seatsErr != nil {
+				return seatsErr
+			}
+			if len(seats) > 0 {
+				out.CommentSeats = seats
 			}
 		}
 		if want.History {
@@ -402,6 +583,8 @@ func (r *Reader) Task(ctx context.Context, idOrKey string, want DetailWants,
 	// reads no row, so there is nothing to keep consistent with the ones
 	// above.
 	out.Units = taskUnits(want.Units, out.Task)
+	out.DueStanding = dueStanding(want.Clock, out.Task)
+	out.ReassignmentBudget = ReassignmentBudget
 	// THE LEVEL SERVED, never the level asked for. Assigning the argument
 	// here — which is the only thing this function used to do with it —
 	// is what made the level a label: a read that refused and one that
@@ -411,6 +594,29 @@ func (r *Reader) Task(ctx context.Context, idOrKey string, want DetailWants,
 		out.Complete = false
 	}
 	return out, nil
+}
+
+// reporterSeat is the seat bound to the credential that filed this task, off
+// the create's own history row — see [TaskDetail.ReporterSeat].
+//
+// ON THE SUBJECT INDEX (`tracker_history_subject_idx`), whose seek bounds the
+// scan to this task's own rows; a task has exactly one create.
+func reporterSeat(ctx context.Context, tx *sql.Tx, taskID, reporter string) (string, error) {
+	if reporter == "" {
+		return "", nil
+	}
+	var seat string
+	err := tx.QueryRowContext(ctx, `
+		SELECT actor_seat FROM tracker_history
+		WHERE subject_id = ? AND kind = ? AND actor = ? AND actor_seat <> ''
+		ORDER BY log_seq LIMIT 1`, taskID, string(ChangeCreated), reporter).Scan(&seat)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", nil
+	}
+	if err != nil {
+		return "", fmt.Errorf("tracker: read who filed %s: %w", taskID, err)
+	}
+	return seat, nil
 }
 
 // resolveTaskID turns an id or a key — current or former — into an id.
@@ -446,7 +652,12 @@ func resolveTaskID(ctx context.Context, tx *sql.Tx, idOrKey string) (string, err
 // puts a newer node's fields on the wire, and a reader that rebuilt a task
 // from its columns would hand a caller a task with the new field stripped.
 //
-// # `status_entered_at` IS THE ONE EXCEPTION, and it is joined here
+// # `status_entered_at` and `rank` ARE THE TWO EXCEPTIONS, joined here
+//
+// `rank` because a task's place after its create is written by its project's
+// ORDER, which moves the column and never the task's document (see
+// [Applier.applyRankOrder]); the document's copy is only the key it was filed
+// at. The rest of this section is about the other one.
 //
 // Every other column is extracted from what the WRITER wrote, so the document
 // is the authority and the column is the copy. This one is DERIVED by the
@@ -465,9 +676,16 @@ func resolveTaskID(ctx context.Context, tx *sql.Tx, idOrKey string) (string, err
 func readTaskDocument(ctx context.Context, tx *sql.Tx, id string) (Task, error) {
 	var body []byte
 	var entered int64
+	var rank string
+	var spend Spend
 	err := tx.QueryRowContext(ctx,
-		`SELECT document, status_entered_at FROM tracker_tasks WHERE id = ?`,
-		id).Scan(&body, &entered)
+		`SELECT document, status_entered_at, rank, spend_turns, spend_rounds,
+		        spend_input, spend_output, spend_cache_read, spend_cache_write,
+		        spend_wall_ms, spend_tokens, spend_workers, spend_sent_back
+		   FROM tracker_tasks WHERE id = ?`,
+		id).Scan(&body, &entered, &rank, &spend.Turns, &spend.Rounds, &spend.Input,
+		&spend.Output, &spend.CacheRead, &spend.CacheWrite, &spend.WallMs,
+		&spend.Tokens, &spend.Workers, &spend.SentBack)
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
 		return Task{}, fmt.Errorf("%w: %s", ErrNoTask, id)
@@ -484,6 +702,18 @@ func readTaskDocument(ctx context.Context, tx *sql.Tx, id string) (Task, error) 
 	if entered != 0 {
 		task.StatusEnteredAt = store.DecodeTime(entered)
 	}
+	// AND THE RANK, for the same reason: the order moves the column and
+	// never the document, so the document's copy is the key the task was
+	// filed or last re-homed at — which a detail read answered as the
+	// card's place long after a drag had moved it.
+	task.Rank = Rank(rank)
+	// AND THE SPEND, for the rank's reason exactly: a turn adds to the
+	// task's COLUMNS in the transaction that inserts its turn row
+	// ([Applier.applyTurn]) and never touches the document, so the
+	// document's copy is whatever the create wrote — zero. Read from the
+	// document, every task page said no agent had ever worked on it, beside
+	// a turn list and a board card counting the turns the columns hold.
+	task.Spend = spend
 	return task, nil
 }
 
@@ -496,6 +726,28 @@ func readTaskDocument(ctx context.Context, tx *sql.Tx, id string) (Task, error) 
 // a relation set is capped — so it is the shape that decides whether this
 // answer fits [ToolAnswerBytes] at all.
 const DetailComments = 20
+
+// MaxCommentPage is the most comments one page may hold.
+//
+// FIFTY, the ceiling every other paged read in this tracker holds a caller to
+// ([MaxInboxRows], [MaxFeedPage], [MaxSearchLimit]): each body on a page is
+// excerpted to [CommentBodyShown], so fifty of them stay near a hundred KiB —
+// inside what one answer carries — where a caller walking a long thread wants
+// as few round trips as that allows.
+const MaxCommentPage = 50
+
+// commentPage is the page size a detail read asked for, defaulted and held
+// to [MaxCommentPage].
+func commentPage(asked int) int {
+	switch {
+	case asked <= 0:
+		return DetailComments
+	case asked > MaxCommentPage:
+		return MaxCommentPage
+	default:
+		return asked
+	}
+}
 
 // CommentBodyShown is how much of each body a THREAD PAGE carries.
 //
@@ -524,7 +776,7 @@ const CommentBodyShown = 2 << 10
 // A REMOVED COMMENT KEEPS ITS ROW with a blank body, which is what lets a
 // reply still resolve against something — so it is returned rather than
 // filtered, and its `removed` flag is what a renderer reads.
-func readComments(ctx context.Context, tx *sql.Tx, taskID, cursor string) (
+func readComments(ctx context.Context, tx *sql.Tx, taskID, cursor string, limit int) (
 	[]Comment, string, error) {
 
 	// ONE MORE THAN THE PAGE, which is how the cursor knows whether there
@@ -535,7 +787,7 @@ func readComments(ctx context.Context, tx *sql.Tx, taskID, cursor string) (
 		WHERE task_id = ? AND (? = '' OR (created_at, id) < (?, ?))
 		ORDER BY created_at DESC, id DESC
 		LIMIT ?`, taskID, cursor, cursorAt(cursor), cursorID(cursor),
-		DetailComments+1)
+		limit+1)
 	if err != nil {
 		return nil, "", fmt.Errorf("tracker: read the thread on %s: %w", taskID, err)
 	}
@@ -543,6 +795,10 @@ func readComments(ctx context.Context, tx *sql.Tx, taskID, cursor string) (
 	var (
 		out  []Comment
 		next string
+		// The LAST ROW THIS PAGE RETURNS — the oldest on it — which is
+		// what the next page continues strictly below.
+		lastAt int64
+		lastID string
 	)
 	for rows.Next() {
 		var body []byte
@@ -551,11 +807,14 @@ func readComments(ctx context.Context, tx *sql.Tx, taskID, cursor string) (
 		if err := rows.Scan(&body, &at, &id); err != nil {
 			return nil, "", err
 		}
-		if len(out) == DetailComments {
-			// THE EXTRA ROW IS THE CURSOR, not a result: it is the
-			// first comment of the NEXT page, and naming it is
-			// cheaper than counting what is left.
-			next = formatCommentCursor(at, id)
+		if len(out) == limit {
+			// THE EXTRA ROW SAYS THERE IS A NEXT PAGE, and the cursor
+			// is the last row RETURNED, not this one. The query reads
+			// strictly below its cursor, so a cursor naming the extra
+			// row skipped it: every page boundary lost one comment —
+			// the one a reader walking back through the thread would
+			// have met next — and no read anywhere returned it.
+			next = formatCommentCursor(lastAt, lastID)
 			break
 		}
 		var comment Comment
@@ -568,12 +827,25 @@ func readComments(ctx context.Context, tx *sql.Tx, taskID, cursor string) (
 		// elision is what makes twenty of them fit an answer at all.
 		comment.Body = elideCommentBody(comment.Body)
 		out = append(out, comment)
+		lastAt, lastID = at, id
 	}
 	if err := rows.Err(); err != nil {
 		return nil, "", err
 	}
 	slices.Reverse(out)
 	return out, next, nil
+}
+
+// operatorComments is the ids of the comments an operator token wrote — the
+// only ones whose author is a credential rather than a seat.
+func operatorComments(comments []Comment) []any {
+	var out []any
+	for _, c := range comments {
+		if c.AuthorKind == AuthorOperator {
+			out = append(out, c.ID)
+		}
+	}
+	return out
 }
 
 // elideCommentBody is what a thread carries of one comment.
@@ -641,8 +913,9 @@ func cursorID(cursor string) string {
 // readHistory is the activity feed, NEWEST FIRST and capped.
 func readHistory(ctx context.Context, tx *sql.Tx, taskID string, limit int) ([]HistoryEntry, error) {
 	rows, err := tx.QueryContext(ctx, `
-		SELECT id, kind, actor, actor_kind, operator_id, comment_id, excerpt,
-		       fields_json, turn_id, notified, effective_at, log_seq
+		SELECT id, kind, actor, actor_kind, operator_id, actor_seat,
+		       comment_id, excerpt, fields_json, turn_id, notified,
+		       effective_at, log_seq, reassignments
 		FROM tracker_history
 		WHERE subject_id = ?
 		ORDER BY log_seq DESC
@@ -665,10 +938,15 @@ func readHistory(ctx context.Context, tx *sql.Tx, taskID string, limit int) ([]H
 		var actorKind, fields string
 		var notified int
 		var effective, seq int64
+		var handOffs sql.NullInt64
 		if err := rows.Scan(&e.ID, &e.Kind, &e.Actor, &actorKind, &e.OperatorID,
-			&e.CommentID, &e.Excerpt, &fields, &e.TurnID, &notified,
-			&effective, &seq); err != nil {
+			&e.ActorSeat, &e.CommentID, &e.Excerpt, &fields, &e.TurnID, &notified,
+			&effective, &seq, &handOffs); err != nil {
 			return nil, err
+		}
+		if handOffs.Valid {
+			n := int(handOffs.Int64)
+			e.Reassignments = &n
 		}
 		e.ActorKind = AuthorKind(actorKind)
 		e.Quiet = notified == 0

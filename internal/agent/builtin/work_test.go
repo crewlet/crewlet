@@ -13,6 +13,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/agent/builtin"
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
+	"github.com/crewlet/crewlet/internal/knowledge"
 	"github.com/crewlet/crewlet/internal/mcp"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/statelog"
@@ -34,7 +35,12 @@ type fakeTracker struct {
 
 	// params is what the tool handed the grammar, before it was parsed.
 	params map[string]string
-	tasks  map[string]tracker.TaskDetail
+
+	// views are the saved views [fakeTracker.ExpandedQuery] expands, by id
+	// — a view's own keys under the caller's, as the real expansion loads
+	// them.
+	views map[string]map[string]any
+	tasks map[string]tracker.TaskDetail
 
 	// reads is every freshness the point readers were handed.
 	reads []statelog.Freshness
@@ -45,6 +51,7 @@ type fakeTracker struct {
 	wants tracker.DetailWants
 
 	created []tracker.Task
+	asks    []tracker.Comment
 	merged  []mergeCall
 	moved   []moveCall
 
@@ -53,14 +60,23 @@ type fakeTracker struct {
 	// composed.
 	createAnswer *tracker.WriteResult
 
+	// defaultAssignee is who a create naming nobody is reported filed to,
+	// standing in for the project's default the real tracker settles on
+	// inside the create's own snapshot.
+	defaultAssignee string
+
 	// searched is every text the ranked search was asked for, and ranked
 	// what it answers with.
 	searched  []string
 	ranked    []tracker.Ranked
 	searchErr error
-	patched   []tracker.TaskPatch
-	ifMatch   []uint64
-	notified  []*tracker.Notify
+	// searchModes is every mode a search asked for, and partialSearch
+	// makes the fake answer over part of the corpus.
+	searchModes   []knowledge.Mode
+	partialSearch bool
+	patched       []tracker.TaskPatch
+	ifMatch       []uint64
+	notified      []*tracker.Notify
 
 	// kinds is what each write said it WAS, which is a different fact
 	// from whether it notified anybody — see [tracker.MutationRecord.Kind].
@@ -75,14 +91,18 @@ type fakeTracker struct {
 	threadQuery tracker.ThreadQuery
 	threadErr   error
 
-	// depended is every dependency change the tool composed, and
-	// dependErr what the sequence answers.
+	// depended is every dependency change the tool composed, dependErr
+	// what the sequence answers, and dependAnswer — when set — the result
+	// it answers in place of the default applied commit.
 	depended     []tracker.DependencyChange
 	dependErr    error
 	dependAnswer *tracker.DependencyResult
 
 	projectEdits     []tracker.ProjectEdit
 	projectAuthority []tracker.ProjectAuthority
+	// projectWarnings is what a policy write reports it was not refused
+	// for — a target date given as an instant, stored as its day.
+	projectWarnings []string
 
 	// declaredTypes and declaredFields are the catalogue as the WRITE
 	// tools composed it, which is the half of those verbs that lives in
@@ -111,6 +131,10 @@ type fakeTracker struct {
 	activity      tracker.ActivityAnswer
 	myWorkQuery   tracker.MyWorkQuery
 	myWork        tracker.MyWork
+
+	// myWorkZone is the clock the last day was cut on, which is the half
+	// of that read a tool decides rather than the tracker.
+	myWorkZone *time.Location
 
 	// viewer is who the last list was expanded FOR, which is the half of a
 	// personal filter — `preset=my_queue`, `assignee=me` — that decides
@@ -165,11 +189,24 @@ func (f *fakeTracker) Tasks(_ context.Context, q tracker.Query, _ time.Time) (tr
 	}
 	answer := tracker.Answer{Complete: true, Level: statelog.ReadSession}
 	for _, d := range f.tasks {
-		answer.Rows = append(answer.Rows, tracker.TaskRow{
+		row := tracker.TaskRow{
 			ID: d.Task.ID, Key: d.Task.Key, Title: d.Task.Title,
 			Status: d.Task.Status, Project: d.Task.Project,
-		})
+		}
+		// THE OPT-IN FACTS, as the real reader fills them: present when
+		// the query asked, so a surface that forwarded `fields=` shows up
+		// in what it renders rather than only in the query it built.
+		if q.Wants(tracker.RowFieldSpend) {
+			row.Spend = &tracker.RowSpend{Tokens: 1400, Turns: 2}
+		}
+		if q.Wants(tracker.RowFieldTags) {
+			row.Tags = []string{"api"}
+		}
+		answer.Rows = append(answer.Rows, row)
 	}
+	slices.SortFunc(answer.Rows, func(a, b tracker.TaskRow) int {
+		return strings.Compare(a.ID, b.ID)
+	})
 	answer.TotalHint = len(answer.Rows)
 	return answer, nil
 }
@@ -208,7 +245,16 @@ func (f *fakeTracker) ExpandedQuery(_ context.Context, params map[string]any,
 	for key, value := range params {
 		f.params[key] = fmt.Sprint(value)
 	}
-	return tracker.ParseQuery(tracker.MapParams(params), now, loc)
+	merged := tracker.MapParams{}
+	if view, held := f.views[fmt.Sprint(params["view"])]; held {
+		for key, value := range view {
+			merged[key] = value
+		}
+	}
+	for key, value := range params {
+		merged[key] = value
+	}
+	return tracker.ParseQuery(merged, now, loc)
 }
 
 func (f *fakeTracker) Catalogue(context.Context, tracker.CatalogueQuery) (tracker.CatalogueAnswer, error) {
@@ -277,9 +323,10 @@ func (f *fakeTracker) Activity(_ context.Context, q tracker.ActivityQuery,
 }
 
 func (f *fakeTracker) MyWork(_ context.Context, q tracker.MyWorkQuery,
-	_ time.Time) (tracker.MyWork, error) {
+	_ time.Time, loc *time.Location) (tracker.MyWork, error) {
 
 	f.myWorkQuery = q
+	f.myWorkZone = loc
 	return f.myWork, f.readErr
 }
 
@@ -297,17 +344,25 @@ func (f *fakeTracker) depends(actor builtin.Actor) builtin.WorkDepender {
 
 // Search implements [builtin.WorkSearcher]: the fake in its fifth shape, for
 // the one read here that is a RANKING rather than a filter.
-func (f *fakeTracker) Search(_ context.Context, text string,
-	limit int) ([]tracker.Ranked, error) {
+func (f *fakeTracker) Search(_ context.Context,
+	q tracker.SearchQuery) (tracker.SearchAnswer, error) {
 
-	f.searched = append(f.searched, text)
+	f.searched = append(f.searched, q.Text)
+	f.searchModes = append(f.searchModes, q.Mode)
 	if f.searchErr != nil {
-		return nil, f.searchErr
+		return tracker.SearchAnswer{}, f.searchErr
 	}
-	if limit <= 0 || limit > len(f.ranked) {
-		return f.ranked, nil
+	answer := tracker.SearchAnswer{}
+	answer.Coverage.Complete = true
+	if f.partialSearch {
+		answer.Coverage = knowledge.Coverage{BucketsMissing: 21}
 	}
-	return f.ranked[:limit], nil
+	if q.Limit <= 0 || q.Limit > len(f.ranked) {
+		answer.Hits = f.ranked
+		return answer, nil
+	}
+	answer.Hits = f.ranked[:q.Limit]
+	return answer, nil
 }
 
 // merges is its fourth, for the second sequence.
@@ -384,11 +439,28 @@ func (f *fakeTracker) CreateTask(_ context.Context, opID string, task tracker.Ta
 	if f.createAnswer != nil {
 		return *f.createAnswer, nil
 	}
+	// THE ASSIGNEE THE TASK WAS FILED TO, as the tracker reports it: the
+	// named one, or this fake's stand-in for the project's default.
+	assignee := task.Assignee
+	if assignee == "" {
+		assignee = f.defaultAssignee
+	}
 	return tracker.WriteResult{
-		Key: "ENG-9", Outcome: statelog.OutcomeApplied,
+		Key: "ENG-9", Assignee: assignee, Outcome: statelog.OutcomeApplied,
 		Position: statelog.Position{Stream: "S", Generation: 1, Seq: 11},
 		Version:  11,
 	}, nil
+}
+
+// CreateTaskAsking records the ask beside the task, and is otherwise the
+// create.
+func (f *fakeTracker) CreateTaskAsking(ctx context.Context, opID string, task tracker.Task,
+	ask tracker.Comment, notify *tracker.Notify) (tracker.WriteResult, error) {
+
+	if f.writeErr == nil {
+		f.asks = append(f.asks, ask)
+	}
+	return f.CreateTask(ctx, opID, task, notify)
 }
 
 func (f *fakeTracker) UpdateTask(_ context.Context, opID, _, _ string, ifMatch uint64,
@@ -424,8 +496,11 @@ func (f *fakeTracker) WriteProject(_ context.Context, opID, key string,
 	f.projectAuthority = append(f.projectAuthority, authority)
 	f.opIDs = append(f.opIDs, opID)
 	return tracker.WriteResult{
-		Outcome: statelog.OutcomeApplied, Version: 3,
-		Position: statelog.Position{Stream: "S", Generation: 1, Seq: 13},
+		Result: statelog.Result{
+			Outcome: statelog.OutcomeApplied, Version: 3,
+			Position: statelog.Position{Stream: "S", Generation: 1, Seq: 13},
+		},
+		Warnings: f.projectWarnings,
 	}, nil
 }
 
@@ -603,6 +678,41 @@ func TestAWriteIsAttributedToTheTurnsSeat(t *testing.T) {
 	}
 	if actor.WorkKey != "turn-1" || actor.OperationSeed() != "turn-1" {
 		t.Errorf("provenance = %+v, want the unit of work as the id seed", actor)
+	}
+}
+
+// A TASK FILED BY A TURN A CHAT MESSAGE WOKE SAYS WHERE IT CAME FROM — the
+// surface and the conversation, off the turn and never off an argument — and
+// one filed by a turn nothing on a chat surface woke says nothing.
+func TestAWriteCarriesTheChatSurfaceTheTurnWasWokenOn(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		transport string
+		want      *tracker.Origin
+	}{
+		{"slack", &tracker.Origin{Surface: "slack", Conversation: "slack:C1:171.2"}},
+		{"", nil},
+	} {
+		trk := newFakeTracker()
+		reg := workRegistry(t, builtin.WorkDeps{Reader: trk, Writer: trk.as})
+		turn := workTurn(t)
+		turn.Transport, turn.ConversationKey = tc.transport, "slack:C1:171.2"
+		entry, _ := reg.Lookup(builtin.CreateWorkItemTool)
+		got, err := entry.Tool.(tools.SeatCallable).CallForTurn(t.Context(), turn,
+			map[string]any{"title": "from the thread", "project": "ENG",
+				"origin": map[string]any{"surface": "forged"}})
+		if err != nil || got.Failed {
+			t.Fatalf("create: %v %s", err, got.Output)
+		}
+		origin := trk.actors[0].Origin
+		if (origin == nil) != (tc.want == nil) ||
+			(origin != nil && *origin != *tc.want) {
+			t.Errorf("a turn woken on %q filed with origin %+v, want %+v",
+				tc.transport, origin, tc.want)
+		}
+		if provenance := trk.actors[0].Provenance(); provenance.Origin != origin {
+			t.Error("the writer's provenance does not carry the actor's origin")
+		}
 	}
 }
 
@@ -1040,6 +1150,13 @@ func TestAStaleVersionSaysToReadItAgain(t *testing.T) {
 	if !strings.Contains(got.Output, "get_work_item") {
 		t.Errorf("the refusal does not say to re-read: %q", got.Output)
 	}
+	// AND IT SAYS SO TO A READER THAT IS NOT A MODEL: the class is what a
+	// person's surface re-reads and re-offers on, where a lost race is
+	// retried as it stands.
+	if got.Refusal != tools.RefusalStaleVersion {
+		t.Errorf("a stale edit is classed %q, want %q", got.Refusal,
+			tools.RefusalStaleVersion)
+	}
 }
 
 // THE ANNOTATIONS ARE WHAT THE WORKER GUARD READS. A write to a surface the
@@ -1160,6 +1277,7 @@ func TestNoSeatHoldsAnOperatorOnlyTool(t *testing.T) {
 		CatalogueWriter: func(builtin.Actor) builtin.CatalogueWriter { return nil },
 		PersonWriter:    func(builtin.Actor) builtin.PersonWriter { return nil },
 		TrashWriter:     func(builtin.Actor) builtin.TrashWriter { return nil },
+		Placer:          func(builtin.Actor) builtin.WorkPlacer { return nil },
 		ProjectWriter:   func(builtin.Actor) builtin.ProjectWriter { return trk },
 	})
 	for _, name := range tracker.OperatorOnlyTools() {
@@ -1179,6 +1297,7 @@ func TestNoSeatHoldsAnOperatorOnlyTool(t *testing.T) {
 			CatalogueWriter: func(builtin.Actor) builtin.CatalogueWriter { return nil },
 			PersonWriter:    func(builtin.Actor) builtin.PersonWriter { return nil },
 			TrashWriter:     func(builtin.Actor) builtin.TrashWriter { return nil },
+			Placer:          func(builtin.Actor) builtin.WorkPlacer { return nil },
 			ProjectWriter:   func(builtin.Actor) builtin.ProjectWriter { return trk },
 			Inbox:           trk,
 			Actor: func(context.Context, *turnctx.Turn) (builtin.Actor, error) {
@@ -1643,6 +1762,79 @@ func TestACreateSetsWhenAndHowBig(t *testing.T) {
 	if task.EstimateMinutes != 240 || task.Points != 8 {
 		t.Errorf("sizing is %d minutes / %v points, want 240 and 8",
 			task.EstimateMinutes, task.Points)
+	}
+}
+
+// A TASK IS FILED INTO THE LANE IT WAS FILED FROM. A board lane's "+" names
+// the lane's status, and a create that could only land in `todo` made that two
+// writes, the second free to fail after the first had filed the task in the
+// wrong column. The group travels with the status, and an unknown status is
+// refused by name rather than filed as `todo`.
+func TestACreateStartsInTheStatusItNames(t *testing.T) {
+	t.Parallel()
+	trk := newFakeTracker()
+	reg := workRegistry(t, builtin.WorkDeps{Reader: trk, Writer: trk.as})
+
+	got := callWork(t, reg, builtin.CreateWorkItemTool, map[string]any{
+		"title": "already under way", "project": "ENG", "status": "in_progress",
+	})
+	if got.Failed {
+		t.Fatalf("create failed: %s", got.Output)
+	}
+	task := trk.created[0]
+	if task.Status != tracker.StatusInProgress || task.StatusGroup != tracker.GroupActive {
+		t.Errorf("filed as %s/%s, want in_progress/active", task.Status, task.StatusGroup)
+	}
+
+	plain := callWork(t, reg, builtin.CreateWorkItemTool, map[string]any{
+		"title": "not started", "project": "ENG",
+	})
+	if plain.Failed || trk.created[1].Status != tracker.StatusTodo {
+		t.Errorf("a create naming no status filed %q (%s), want todo",
+			trk.created[1].Status, plain.Output)
+	}
+
+	bad := callWork(t, reg, builtin.CreateWorkItemTool, map[string]any{
+		"title": "somewhere", "project": "ENG", "status": "shipping",
+	})
+	if !bad.Failed || !strings.Contains(bad.Output, "shipping") {
+		t.Errorf("an unknown status was not refused by name: %s", bad.Output)
+	}
+	if len(trk.created) != 2 {
+		t.Errorf("the refused create filed a task anyway (%d filed)", len(trk.created))
+	}
+}
+
+// WHO A CREATE WAS FILED TO IS THE TRACKER'S ANSWER, never the argument. A
+// create naming nobody goes to the project's default assignee, which only the
+// create's own snapshot decides — so an answer echoing the empty argument
+// told a model, and a person's surface, that the work went to triage while it
+// sat on a colleague's queue.
+func TestACreatesAnswerNamesWhoTheTrackerFiledItTo(t *testing.T) {
+	t.Parallel()
+	trk := newFakeTracker()
+	trk.defaultAssignee = "bo"
+	reg := workRegistry(t, builtin.WorkDeps{Reader: trk, Writer: trk.as})
+
+	got := callWork(t, reg, builtin.CreateWorkItemTool, map[string]any{
+		"title": "nobody named", "project": "ENG",
+	})
+	if got.Failed {
+		t.Fatalf("create failed: %s", got.Output)
+	}
+	var answer struct {
+		Assignee string `json:"assignee"`
+	}
+	if err := json.Unmarshal([]byte(got.Output), &answer); err != nil {
+		t.Fatalf("decode the answer: %v (%s)", err, got.Output)
+	}
+	if trk.created[0].Assignee != "" {
+		t.Fatalf("the tool named %q itself; the default is the tracker's to settle",
+			trk.created[0].Assignee)
+	}
+	if answer.Assignee != "bo" {
+		t.Errorf("the answer names %q as the assignee, want the tracker's %q",
+			answer.Assignee, "bo")
 	}
 }
 

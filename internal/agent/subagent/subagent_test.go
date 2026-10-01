@@ -774,8 +774,9 @@ func TestATimedOutChildReportsWhatItAlreadyDid(t *testing.T) {
 	}
 	// The partial work is the point: a child that spent a round did work the
 	// parent paid for, and reporting zeros throws away both the transcript
-	// and the only evidence of the cost.
-	if res.Rounds != 1 || res.Tokens() != 100 {
+	// and the only evidence of the cost. TWO rounds: the second's provider
+	// call was made — the round it was cut off in — and billed nothing yet.
+	if res.Rounds != 2 || res.Tokens() != 100 {
 		t.Errorf("partial work lost: rounds=%d tokens=%d", res.Rounds, res.Tokens())
 	}
 	if len(res.Executions) != 1 {
@@ -2568,8 +2569,15 @@ func TestAWorkersProviderHandOffIsPublishedAgainstTheParentTurn(t *testing.T) {
 	pub := &publisher{}
 	cfg.Publisher = pub
 
-	if res := one(t, cfg, request("read_file")); res.Status != subagent.StatusOK {
+	res := one(t, cfg, request("read_file"))
+	if res.Status != subagent.StatusOK {
 		t.Fatalf("worker did not finish on the second member: %+v", res)
+	}
+	// THE ENTRY THAT ANSWERED, not the head it was resolved under — which
+	// is what the worker's record named before the chain reported it, so
+	// every worker behind a benched head was charged to the benched key.
+	if res.ProviderKey != "default" {
+		t.Errorf("ProviderKey = %q, want %q — the member that served", res.ProviderKey, "default")
 	}
 
 	var got []*types.ProviderFallback

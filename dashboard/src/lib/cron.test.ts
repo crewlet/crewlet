@@ -9,11 +9,22 @@ group("reading an expression as a sentence", () => {
   it("says the shapes a company's schedules are actually written in", () => {
     expect(describe("0 9 * * 1-5")).toBe("at 09:00 on weekdays");
     expect(describe("30 8 * * *")).toBe("at 08:30 every day");
-    expect(describe("*/15 * * * *")).toBe("every 15 minutes every day");
-    expect(describe("0 */4 * * *")).toBe("every 4 hours at :00 past every day");
+    expect(describe("*/15 * * * *")).toBe("every 15 minutes");
+    expect(describe("0 */4 * * *")).toBe("every 4 hours at :00 past");
     expect(describe("0 0 1 * *")).toBe("at 00:00 on the 1st");
     expect(describe("0 0 * * 0,6")).toBe("at 00:00 on weekends");
     expect(describe("0 12 * 1 *")).toBe("at 12:00 every day in January");
+  });
+
+  // A TIME THAT RECURS THROUGH THE DAY SAYS "EVERY DAY" ALREADY. Appended, it
+  // read "every 4 hours at :00 past every day"; a day it does skip is still
+  // said, and so is a time that is not a recurrence.
+  it("says a day only where the time does not already cover every one", () => {
+    expect(describe("* * * * *")).toBe("every minute");
+    expect(describe("5 * * * *")).toBe(":05 past every hour");
+    expect(describe("*/20 * * * 1-5")).toBe("every 20 minutes on weekdays");
+    expect(describe("0 */6 * 1 *")).toBe("every 6 hours at :00 past in January");
+    expect(describe("* 9 * * *")).toBe("every minute of 09:00 every day");
   });
 
   it("names both restrictions when both are set, because cron ORs them", () => {

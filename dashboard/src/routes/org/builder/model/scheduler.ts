@@ -41,6 +41,7 @@
  */
 
 import type { ConfigProblem, ConfigWarning, Derived, DryRunResult } from "~/protocol/index.ts";
+import { classifyConfigRefusal, type ConfigConflictReason } from "~/protocol/configAnswer.ts";
 import type { IndexedDocument } from "./document.ts";
 import { isRecord } from "./json.ts";
 import type {
@@ -90,14 +91,13 @@ export function backoffDelay(failures: number): number {
 export type CheckStatus =
   "checking" | "clean" | "problems" | "conflict" | "guarded" | "unreachable";
 
-/** Why the engine holds a revision the draft was not built on. */
+/**
+ * Why the engine holds a revision the draft was not built on: every reason
+ * a `/config` refusal names (`protocol/configAnswer.ts`), and one only a
+ * check can see.
+ */
 export type ConflictReason =
-  /** `409 revision_advanced`: another write activated after the draft's base. */
-  | "revision_advanced"
-  /** `412 already_configured`: a company exists, and the draft was creating one. */
-  | "already_configured"
-  /** `409` or `412 no_active_revision`: the draft edits a company the engine no longer holds. */
-  | "no_active_revision"
+  | ConfigConflictReason
   /** A dry run validated against a base other than the draft's. */
   | "base_moved";
 
@@ -140,11 +140,8 @@ export function classifyCheck(
   mode: BuilderMode,
   baseRevision: string | null,
 ): CheckOutcome {
-  const body = isRecord(answer.body) ? answer.body : {};
-  const code = text(body.error);
-  const current = text(body.current_revision_id) || null;
-
   if (answer.status >= 200 && answer.status < 300) {
+    const body = isRecord(answer.body) ? answer.body : {};
     const result = body as Partial<DryRunResult>;
     const answeredBase = text(result.base_revision_id);
     if (
@@ -162,34 +159,32 @@ export function classifyCheck(
       derived: derivedOf(result.derived),
     };
   }
-  if (answer.status === 401 || answer.status === 403) return { status: "guarded" };
-  if (answer.status === 409 || answer.status === 412) {
-    const reason: ConflictReason =
-      code === "no_active_revision"
-        ? "no_active_revision"
-        : code === "already_configured"
-          ? "already_configured"
-          : "revision_advanced";
-    return { status: "conflict", reason, currentRevisionId: current };
+  // EVERY REFUSAL IS READ THE WAY EVERY OTHER /config WRITER READS IT
+  // (`protocol/configAnswer.ts`). A check has no stored revision to settle,
+  // so a drain and an unanswered request are the same thing to it: the
+  // engine could not be asked, and the scheduler asks again.
+  const refusal = classifyConfigRefusal(answer);
+  switch (refusal.kind) {
+    case "guarded":
+      return { status: "guarded" };
+    case "conflict":
+      return {
+        status: "conflict",
+        reason: refusal.reason,
+        currentRevisionId: refusal.currentRevisionId,
+      };
+    case "draining":
+    case "unreachable":
+      return { status: "unreachable", detail: refusal.detail };
+    case "problems":
+      return {
+        status: "problems",
+        problems: refusal.problems,
+        derived: refusal.derived,
+        code: refusal.code,
+        hint: refusal.hint,
+      };
   }
-  if (answer.status === 0 || answer.status >= 500) {
-    return { status: "unreachable", detail: text(body.detail) || code };
-  }
-  // Every other refusal is about the document or the request that carried it:
-  // a validation error, a patch the engine could not apply, a body too large.
-  const problems = list<ConfigProblem>(body.problems);
-  const detail =
-    text(body.detail) || code || `The engine refused the check with status ${answer.status}.`;
-  return {
-    status: "problems",
-    problems:
-      problems.length > 0
-        ? problems
-        : [{ path: "", segments: null, kind: "invalid", message: detail }],
-    derived: derivedOf(body.derived),
-    code,
-    hint: text(body.hint),
-  };
 }
 
 // ---------------------------------------------------------------------------

@@ -1,47 +1,82 @@
 /**
- * What an item's properties and links CLAIM.
+ * One task, whole: what its page and its peek CLAIM, and the changes a person
+ * makes on it as themselves.
  *
- * The two panels here are where a task's stored values meet the words a person
- * uses for them, and every one of these cases is a value whose raw form is
- * meaningless on screen: an option's uuid under a field heading, a dependency
- * labelled from the wrong end, a zero where nobody has written anything.
+ * The rail is where a task's stored values meet the words a person uses for
+ * them, and every case there is a value whose raw form is meaningless on
+ * screen: an option's uuid under a field heading, a dependency labelled from
+ * the wrong end, a zero where nobody wrote anything, a team's key where its
+ * name belongs. The page is where the task's three histories meet: a turn card
+ * that must say what the turn did and what the reviewer asked for, a thread
+ * past its first page, and the one turn running on THIS task now.
  */
 
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { afterEach, expect, test, vi } from "vitest";
-import { EMPTY_VALUE } from "@crewlethq/ui";
-import {
-  RemovedNote,
-  itemFlags,
-  ItemBody,
-  ItemLinks,
-  ItemPeek,
-  ItemProps,
-  Routing,
-  Subtasks,
-  WorkItem as WorkItemPage,
-  linkHeading,
-} from "./WorkItem.tsx";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { afterEach, beforeEach, expect, test, vi } from "vitest";
+import type { ReactNode } from "react";
+import { EMPTY_VALUE, LayerHost, ToastProvider } from "@crewlethq/ui";
+
+import { ItemPeek, RemovedNote, WorkItem as WorkItemPage, itemFlags, liveOn } from "./WorkItem.tsx";
+import { Subtasks } from "./item/Body.tsx";
+import { ItemRail, Relations, linkHeading, standingWords } from "./item/Rail.tsx";
+import { Routing, TurnCard, changeSentence, turnPills } from "./item/Activity.tsx";
 import { Router, href } from "~/app/router.tsx";
 import { pathOf, refToken } from "~/app/frame/objects.ts";
 import { PeekHost, PeekNeighbours } from "~/app/frame/PeekHost.tsx";
-import { useClient, useConnection, useOrg } from "~/lib/store-hooks.ts";
-import type { QueryName, WorkItem, WorkItemDetail, WorkProjectDetail } from "~/protocol/index.ts";
+import { FrameReadings } from "~/app/Shell.tsx";
+import { ClientContext } from "~/lib/store-hooks.ts";
+import { WRITE_REASONS } from "~/lib/useWriteAccess.ts";
+import { reloadForTest } from "~/lib/prefs.ts";
+import { LiveSocket, Store } from "~/protocol/index.ts";
+import type {
+  WorkActivityRecord,
+  WorkItem,
+  WorkItemDetail,
+  WorkItemTurn,
+  WorkProjectDetail,
+  WorkRoutingAnswer,
+} from "~/protocol/index.ts";
 
-vi.mock("~/lib/store-hooks.ts", async () => {
-  const actual =
-    await vi.importActual<typeof import("~/lib/store-hooks.ts")>("~/lib/store-hooks.ts");
-  return { ...actual, useClient: vi.fn(), useConnection: vi.fn(), useOrg: vi.fn() };
-});
-
-afterEach(() => {
-  cleanup();
-  vi.restoreAllMocks();
-  location.hash = "#/";
-});
+class InertWebSocket {
+  static CONNECTING = 0;
+  static OPEN = 1;
+  static CLOSED = 3;
+  readyState = InertWebSocket.CONNECTING;
+  send(): void {}
+  close(): void {}
+}
 
 const NOW = Date.parse("2031-04-16T12:00:00Z");
-const NOW_ISO = "2031-04-16T12:00:00Z";
+
+const EVERY_TOOL = [
+  "update_work_item",
+  "comment_on_work_item",
+  "create_work_item",
+  "restore_work_item",
+  "write_page",
+];
+
+const JANE = {
+  operator_id: "U0FOUNDER",
+  operator: true,
+  handle: "jane",
+  name: "Jane Founder",
+  kind: "human",
+  acts: EVERY_TOOL,
+};
+/** A token no seat is bound to: it may read, and every write says why not. */
+const UNBOUND = { operator_id: "U0OPS", operator: true, handle: "", name: "", acts: [] };
+
+const ORG = {
+  name: "Acme",
+  timezone: "UTC",
+  roles: [
+    { name: "Jane Founder", handle: "jane", kind: "human" },
+    { name: "Ada Okonkwo", handle: "ada", kind: "agent" },
+    { name: "SWE", handle: "swe", kind: "agent" },
+  ],
+  units: [],
+};
 
 const task = (over: Partial<WorkItem> = {}): WorkItem => ({
   id: "t-1",
@@ -49,12 +84,13 @@ const task = (over: Partial<WorkItem> = {}): WorkItem => ({
   project: "ENG",
   title: "Fix the login race",
   status: "in_progress",
-  version: 1,
+  version: 7,
   ...over,
 });
 
 const detail = (over: Partial<WorkItemDetail> = {}): WorkItemDetail => ({
   task: task(),
+  reassignment_budget: 8,
   complete: true,
   ...over,
 });
@@ -64,10 +100,14 @@ const project = (over: Partial<WorkProjectDetail> = {}): WorkProjectDetail => ({
   name: "Engineering",
   unit: { resolved: true },
   lead: {},
-  task_counts: { open: 1, done: 0, closed: 0 },
+  task_counts: { todo: 1, active: 0, done: 0, closed: 0 },
   version: 1,
   statuses: [],
   types: [],
+  tags: [
+    { slug: "bug", label: "bug" },
+    { slug: "provisioner", label: "provisioner" },
+  ],
   fields: [
     {
       fields: [
@@ -86,289 +126,443 @@ const project = (over: Partial<WorkProjectDetail> = {}): WorkProjectDetail => ({
   ...over,
 });
 
-// A CHOICE STORES THE OPTION'S ID — which is what lets a company rename an
-// option without orphaning every task that chose it — so a panel that showed
-// the stored value would print a uuid under a field heading.
-test("a custom field renders by its name, with its option's own word", () => {
-  render(
-    <ItemProps
-      detail={detail({
-        fields: [
-          { id: "f-sev", slug: "severity", name: "Severity", type: "dropdown", value: "o-1" },
-        ],
-      })}
-      chrome={{}}
-      project={project()}
-    />,
+const turn = (over: Partial<WorkItemTurn> = {}): WorkItemTurn => ({
+  turn_id: "run-1",
+  ordinal: 1,
+  seat: "swe",
+  segments: 1,
+  tokens: 38_400,
+  cache_read: 0,
+  rounds: 7,
+  wall_ms: 842_000,
+  outcome: "done",
+  phases: ["execute", "review"],
+  at: "2031-04-15T16:40:00Z",
+  ...over,
+});
+
+type Answer = unknown | ((params: Record<string, unknown>) => Promise<unknown>);
+
+const QUIET: Record<string, Answer> = {
+  // THE SHELL'S OWN READS — the inbox count the frame keeps.
+  work_inbox: { handle: "jane", notices: [], primary_reasons: [], unread: 0, primary: 0 },
+  decisions: { handle: "jane", items: [], total: 0, capped: false },
+  work_item: detail(),
+  work_project: project(),
+  work_items: { items: [], complete: true },
+  work_activity: { records: [], complete: true },
+  work_comments: { item: "t-1", key: "ENG-42", title: "Fix the login race", comments: [] },
+  work_item_turns: { item: "t-1", key: "ENG-42", turns: [], complete: true },
+};
+
+let asked: { kind: string; params: Record<string, unknown> }[];
+let posted: { tool: string; args: Record<string, unknown> }[];
+
+beforeEach(() => {
+  Object.defineProperty(globalThis, "WebSocket", { writable: true, value: InertWebSocket });
+  vi.spyOn(Date, "now").mockReturnValue(NOW);
+  asked = [];
+  posted = [];
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (url: string, init: RequestInit) => {
+      const tool = decodeURIComponent(String(url).split("/operator/act/")[1] ?? "");
+      const body = JSON.parse(init.body as string) as { args: Record<string, unknown> };
+      posted.push({ tool, args: body.args });
+      return new Response(
+        JSON.stringify({
+          tool,
+          outcome: "applied",
+          position: "CREWLET_TRACKER_LOG@1:99",
+          receipt: {},
+        }),
+        { status: 200, headers: { "Content-Type": "application/json" } },
+      );
+    }),
   );
+});
+
+afterEach(() => {
+  cleanup();
+  vi.restoreAllMocks();
+  vi.unstubAllGlobals();
+  localStorage.clear();
+  reloadForTest();
+  location.hash = "#/";
+});
+
+/** Everything a task's frames read, answered from fixtures, around `children`. */
+function mount(
+  children: ReactNode,
+  {
+    answers = {},
+    viewer = JANE,
+    agents = [],
+  }: {
+    answers?: Record<string, Answer>;
+    viewer?: Record<string, unknown>;
+    agents?: Record<string, unknown>[];
+  } = {},
+) {
+  const store = new Store();
+  store.applyHealth({ status: "healthy", nodes: 1 } as never);
+  store.applyOrg(ORG as never);
+  store.applyAgents(agents as never);
+  const socket = new LiveSocket(store);
+  socket.query = ((what: string, params?: Record<string, unknown>) => {
+    asked.push({ kind: what, params: params ?? {} });
+    const all: Record<string, Answer> = { ...QUIET, viewer, ...answers };
+    if (what in all) {
+      const answer = all[what];
+      return typeof answer === "function"
+        ? (answer as (p: Record<string, unknown>) => Promise<unknown>)(params ?? {})
+        : Promise.resolve(answer);
+    }
+    return Promise.resolve({});
+  }) as typeof socket.query;
+  const view = render(
+    <ToastProvider>
+      <LayerHost>
+        <ClientContext.Provider value={{ store, socket }}>
+          <FrameReadings>
+            <Router>{children}</Router>
+          </FrameReadings>
+        </ClientContext.Provider>
+      </LayerHost>
+    </ToastProvider>,
+  );
+  return { ...view, store };
+}
+
+async function settle() {
+  await act(async () => {
+    for (let i = 0; i < 10; i++) await Promise.resolve();
+  });
+}
+
+/** The reason a write control is disabled with, off the kit's described-by. */
+function reasonOf(button: HTMLElement): string {
+  return (button.getAttribute("aria-describedby") ?? "")
+    .split(/\s+/)
+    .map((id) => document.getElementById(id)?.textContent ?? "")
+    .join(" ");
+}
+
+/** The rail alone, read-only (no page write around it). */
+function rail(d: WorkItemDetail, p: WorkProjectDetail | null = project(), chrome = {}) {
+  return mount(<ItemRail detail={d} chrome={chrome} project={p} now={NOW} />);
+}
+
+/** The value cell of a rail row, found by its label. */
+const rowValue = (label: string) => screen.getByText(label).nextElementSibling as HTMLElement;
+
+// ---------------------------------------------------------------------------
+// The rail: what a value CLAIMS
+// ---------------------------------------------------------------------------
+
+// A DUE DATE STANDS ON THE COMPANY'S CALENDAR, AS THE BOARD'S DOES. The rail
+// read "1d ago" in grey for a task two company days late that every row and
+// calendar day drew red, and printed a far date twice ("Nov 09, 2026 /
+// Nov 09, 2026"). It now prints the engine's standing — whole days, overdue
+// only for open work — in the danger tone when it is late.
+test("the due date reads the engine's standing, in the danger tone when late", async () => {
+  rail(
+    detail({
+      task: task({ due_at: "2031-04-14T12:00:00Z" }),
+      due_standing: { days: -2, overdue: true },
+    }),
+  );
+  await settle();
+  const due = rowValue("Due");
+  expect(due.textContent).toContain("2 days overdue");
+  expect(due.querySelector(".task-date.overdue")).toBeTruthy();
+  cleanup();
+  rail(detail({ task: task({ due_at: "2031-11-09T12:00:00Z" }), due_standing: { days: 207 } }));
+  await settle();
+  const far = rowValue("Due");
+  expect(far.textContent).toContain("in 207 days");
+  expect(far.querySelector(".task-date.overdue")).toBeNull();
+  // THE DATE ONCE: the absolute form is drawn a single time.
+  const date = far.querySelector(".task-date [title]")?.textContent ?? "";
+  expect(far.textContent!.split(date).length - 1).toBe(1);
+});
+
+test("a standing reads in whole calendar days, and late only where the engine says so", () => {
+  expect(standingWords({ days: 0 })).toBe("today");
+  expect(standingWords({ days: 1 })).toBe("tomorrow");
+  expect(standingWords({ days: 42 })).toBe("in 42 days");
+  expect(standingWords({ days: -1, overdue: true })).toBe("1 day overdue");
+  expect(standingWords({ days: -2, overdue: true })).toBe("2 days overdue");
+  // FINISHED WORK PAST ITS DATE IS DONE, NOT LATE.
+  expect(standingWords({ days: -2 })).toBe("2 days ago");
+  expect(standingWords({ days: -1 })).toBe("yesterday");
+});
+
+// A CHOICE STORES THE OPTION'S ID — which is what lets a company rename an
+// option without orphaning every task that chose it — so a rail that showed
+// the stored value would print a uuid under a field heading.
+test("a custom field renders by its name, with its option's own word", async () => {
+  rail(
+    detail({
+      fields: [{ id: "f-sev", slug: "severity", name: "Severity", type: "dropdown", value: "o-1" }],
+    }),
+  );
+  await settle();
   expect(screen.getByText("Severity")).toBeTruthy();
   expect(screen.getByText("High")).toBeTruthy();
   expect(screen.queryByText("o-1")).toBeNull();
 });
 
 // A VALUE A FILTER CANNOT REACH SAYS SO IN A WORD. "Archived", "from another
-// tracker" and "undeclared" are three different facts, and dimming all three
-// the same would invite somebody to filter on a field that cannot be filtered.
-test("a value whose declaration was archived is marked as such", () => {
-  render(
-    <ItemProps
-      detail={detail({
-        fields: [
-          {
-            id: "f-sev",
-            slug: "severity",
-            name: "Severity",
-            type: "dropdown",
-            value: "o-1",
-            hidden: true,
-          },
-        ],
-      })}
-      chrome={{}}
-      project={project()}
-    />,
+// tracker" and "undeclared" are three different facts.
+test("a value whose declaration was archived is marked as such", async () => {
+  rail(
+    detail({
+      fields: [
+        {
+          id: "f-sev",
+          slug: "severity",
+          name: "Severity",
+          type: "dropdown",
+          value: "o-1",
+          hidden: true,
+        },
+      ],
+    }),
   );
+  await settle();
   expect(screen.getByText("archived")).toBeTruthy();
 });
 
 // AN ABSENT VALUE IS A MARKED ABSENCE, never a zero: zero is a measurement,
-// and an unestimated task is one nobody has sized. The task carries a due date
-// so the Plan group draws its rows at all — with nothing scheduled the group
-// says so in one line instead, which is the case below.
-test("an unestimated task shows a marked absence rather than a zero", () => {
-  render(
-    <ItemProps
-      detail={detail({ task: task({ due_at: "2031-04-20T00:00:00Z" }) })}
-      chrome={{}}
-      project={project()}
-    />,
-  );
-  const estimate = screen.getByText("Estimate").nextElementSibling!;
-  expect(estimate.textContent).toBe(`${EMPTY_VALUE}Not set`);
+// and an unestimated task is one nobody has sized.
+test("an unestimated task shows a marked absence rather than a zero", async () => {
+  rail(detail());
+  await settle();
+  const estimate = rowValue("Estimate");
+  expect(estimate.textContent).toContain("Not estimated");
   expect(estimate.textContent).not.toContain("0m");
+  expect(estimate.textContent).not.toMatch(/\b0 points\b/);
 });
 
-// NOTHING SCHEDULED IS ONE FACT, NOT FOUR. Every Plan row dashes when unset —
-// a task HAS a due date, unset — so a fresh task spent a heading, a hairline
-// and four lines saying one thing four times, which in a 420px peek is most
-// of the space between the header and the description. The heading stays: the
-// group exists and is empty, which is not the same claim as a task that has no
-// plan at all.
-test("a task with no dates, estimate or size says so in one line", () => {
-  const { container } = render(<ItemProps detail={detail()} chrome={{}} project={project()} />);
-  expect(screen.getByText("Plan")).toBeTruthy();
-  expect(screen.getByText("Nothing scheduled: no dates, no estimate, no size.")).toBeTruthy();
-  for (const row of ["Start", "Due", "Estimate", "Points"]) {
-    expect(screen.queryByText(row)).toBeNull();
-  }
-  expect(container.querySelectorAll(".props-empty")).toHaveLength(1);
-});
-
-// `none` IS A VALUE THE ENGINE MINTS. A create defaults the field to it
-// (`internal/tracker/policy.go`: "a real value rather than an absent one") and
-// the applier records the delta, so the change log names somebody as having
-// set it — and the rail rendered a dash with that attribution underneath, the
-// dashboard contradicting the engine about one row on one screen. A rail
-// answers what the field is SET TO, which is the same reasoning it already
-// applied to `normal`.
-test("a priority of none is the word, with the change that set it", () => {
-  render(
-    <ItemProps
-      detail={detail({
-        task: task({ priority: "none" }),
-        history: [
-          {
-            id: "h-1",
-            kind: "created",
-            actor: "agent-ceo",
-            at: "2031-04-16T09:00:00Z",
-            log_seq: 1,
-            fields: { priority: { from: "", to: "none" } },
-          },
-        ],
-      })}
-      chrome={{}}
-      project={project()}
-    />,
+// `none` IS A VALUE THE ENGINE MINTS — a create defaults the field to it and
+// a change can set it back — so the rail answers what the field is SET TO, in
+// the word, with the change that set it.
+test("a priority of none is the word, with the change that set it", async () => {
+  rail(
+    detail({
+      task: task({ priority: "none" }),
+      history: [
+        {
+          id: "h-1",
+          kind: "fields",
+          actor: "agent-ceo",
+          at: "2031-04-16T09:00:00Z",
+          log_seq: 1,
+          fields: { priority: { from: "high", to: "none" } },
+        },
+      ],
+    }),
   );
-  const value = screen.getByText("Priority").nextElementSibling!;
-  expect(value.textContent).toContain("none");
+  await settle();
+  const value = rowValue("Priority");
+  expect(value.textContent).toContain("No priority");
   expect(value.textContent).not.toContain(EMPTY_VALUE);
   expect(value.querySelector(".props-setby")!.textContent).toContain("set by agent-ceo");
 });
 
-// AN ABSENT PRIORITY IS STILL A DASH. No value reached this build at all,
-// which is a different fact from one the engine minted, and the row carries no
-// attribution because there is nothing for it to be about.
-test("a task carrying no priority at all still dashes", () => {
-  const { container } = render(<ItemProps detail={detail()} chrome={{}} project={project()} />);
-  expect(screen.getByText("Priority").nextElementSibling!.textContent).toBe(
-    `${EMPTY_VALUE}Not set`,
-  );
+// AN ABSENT PRIORITY IS STILL A DASH, with no attribution: no value reached
+// this build at all.
+test("a task carrying no priority at all still dashes", async () => {
+  const { container } = rail(detail());
+  await settle();
+  expect(rowValue("Priority").textContent).toBe(`${EMPTY_VALUE}Not set`);
   expect(container.querySelectorAll(".props-setby")).toHaveLength(0);
 });
 
-// THE PROJECT IS THE TASK'S ADDRESS, and the peek had no trace of it but the
-// prefix inside the key — a reader who does not know the key grammar could
-// neither tell which project LEAD-1 is in nor reach it, because the page's own
-// way there is in the page bar and the peek renders none. The name is what a
-// person calls it and the key is what everything is addressed by, so the row
-// carries both.
-test("the rail names the project and its key, and links to its board", () => {
-  const { container } = render(
-    <ItemProps detail={detail()} chrome={{}} project={project({ name: "Engineering" })} />,
-  );
-  const value = screen.getByText("Project").nextElementSibling!;
+// THE PROJECT IS THE TASK'S ADDRESS: the name is what a person calls it and
+// the key is what everything is addressed by, so the row carries both — and
+// the key alone while the project read has not answered.
+test("the rail names the project and its key, and links to its board", async () => {
+  rail(detail());
+  await settle();
+  const value = rowValue("Project");
   expect(value.textContent).toContain("Engineering");
   expect(value.textContent).toContain("ENG");
   expect(value.querySelector("a")!.getAttribute("href")).toBe(href(["work", "ENG"]));
 });
 
-// A PANEL STILL LOADING ITS PROJECT SHOWS THE KEY rather than waiting: the
-// `work_project` read is what supplies this rail's vocabulary and it answers
-// after the item does, so the row would otherwise be blank on every open.
-test("the project row falls back to the key alone", () => {
-  render(<ItemProps detail={detail()} chrome={{}} project={null} />);
-  expect(screen.getByText("Project").nextElementSibling!.textContent).toBe("ENG");
+test("the project row falls back to the key alone", async () => {
+  rail(detail(), null);
+  await settle();
+  expect(rowValue("Project").textContent).toBe("ENG");
 });
 
-// A HAND-OFF COUNT IS A BUDGET, not trivia: an item handed on too many times
-// has stopped being work and started being a hot potato, and the engine
-// refuses the next hand-off rather than letting it circle.
-test("a task near its hand-off cap is flagged", () => {
-  const { container } = render(
-    <ItemProps
-      detail={detail({ task: task({ reassignments: 7 }) })}
-      chrome={{}}
-      project={project()}
-    />,
-  );
-  expect(screen.getByText("Hand-offs")).toBeTruthy();
-  expect(container.querySelector("dd svg")).toBeTruthy();
+// A HAND-OFF COUNT IS A BUDGET: the engine refuses the next hand-off at its
+// own limit, served beside the count, so the warning is exactly where the
+// refusals start — and moves with the budget, which is read, never held.
+test("the hand-off warning is at the engine's budget", async () => {
+  const at = (reassignments: number, budget: number) => {
+    cleanup();
+    rail(detail({ task: task({ reassignments }), reassignment_budget: budget }));
+  };
+  at(7, 8);
+  await settle();
+  expect(screen.getByText(/Hand-offs 7 of 8/)).toBeTruthy();
+  expect(screen.queryByText(/the next hand-off will be refused/)).toBeNull();
+
+  at(8, 8);
+  await settle();
+  expect(screen.getByText(/Hand-offs 8 of 8/)).toBeTruthy();
+  expect(screen.getByText(/the next hand-off will be refused/)).toBeTruthy();
+
+  at(3, 3);
+  await settle();
+  expect(screen.getByText(/the next hand-off will be refused/)).toBeTruthy();
 });
 
-// WATCHING AND MUTED ARE DIFFERENT FACTS AND BOTH TRAVEL: a set carrying only
-// the difference would silently re-add everybody on the next mention.
-test("a muted watcher is listed and said to be muted", () => {
-  render(
-    <ItemProps
-      detail={detail({ task: task({ watchers: ["ada", "bo"], muted: ["bo"] }) })}
-      chrome={{ seatName: (h) => h }}
-      project={project()}
-    />,
+// WHAT A TASK HAS COST IS ITS OWN COUNTERS, in tokens — the task's `spend`,
+// the same count its turn cards and its board card read — and never money.
+test("the cost is the task's own turns, tokens and agent time, and no price", async () => {
+  const { container } = rail(
+    detail({ task: task({ spend: { turns: 2, tokens: 79_600, wall_ms: 1_200_000 } }) }),
   );
+  await settle();
+  const cost = container.querySelector(".task-cost")!;
+  // TERM THEN FIGURE in each group, as a definition list requires; the
+  // stylesheet draws the figure above.
+  const pairs = [...cost.children].map((group) =>
+    [...group.children].map((el) => `${el.tagName}:${el.textContent}`),
+  );
+  expect(pairs).toEqual([
+    ["DT:turns", "DD:2"],
+    ["DT:tokens", "DD:79.6k"],
+    ["DT:agent time", "DD:20m"],
+  ]);
+  expect(container.textContent).not.toMatch(/[$€£]|USD|cost_usd/);
+
+  cleanup();
+  rail(detail());
+  await settle();
+  expect(screen.getByText("No agent turn has been charged to it yet.")).toBeTruthy();
+
+  // A CHARGE WITH NO TURN IS STILL A CHARGE: a segment continuing a turn
+  // counted elsewhere adds tokens and time and no turn, and the panel shows it.
+  cleanup();
+  const charged = rail(
+    detail({ task: task({ spend: { turns: 0, tokens: 5_000, wall_ms: 60_000 } }) }),
+  );
+  await settle();
+  expect(charged.container.querySelector(".task-cost")?.textContent).toContain("5,000");
+  expect(screen.queryByText("No agent turn has been charged to it yet.")).toBeNull();
+});
+
+// WATCHING AND MUTED ARE DIFFERENT FACTS AND BOTH TRAVEL.
+test("a muted watcher is listed and said to be muted", async () => {
+  rail(detail({ task: task({ watchers: ["ada", "swe"], muted: ["swe"] }) }), project(), {
+    seatName: (h: string) => (h === "swe" ? "SWE" : h),
+  });
+  await settle();
   expect(screen.getByText("Watching")).toBeTruthy();
-  expect(screen.getByText("(muted)")).toBeTruthy();
+  expect(screen.getByText("Muted: SWE")).toBeTruthy();
 });
 
-// ROUTING IS SHOWN ONLY WHERE IT HAS MOVED. The pair being equal is the
-// ordinary case, and repeating it in two rows is noise that buries the one
-// task whose routing actually changed.
-test("a task routed where it was filed says so once", () => {
-  const { rerender } = render(
-    <ItemProps
-      detail={detail({ task: task({ filed_unit: "platform", routing_unit: "platform" }) })}
-      chrome={{}}
-      project={project()}
-    />,
-  );
+// ROUTING IS SHOWN ONLY WHERE IT HAS MOVED.
+test("a task routed where it was filed says so once", async () => {
+  rail(detail({ task: task({ filed_unit: "platform", routing_unit: "platform" }) }));
+  await settle();
   expect(screen.queryByText("Routes to")).toBeNull();
-  rerender(
-    <ItemProps
-      detail={detail({ task: task({ filed_unit: "platform", routing_unit: "payments" }) })}
-      chrome={{}}
-      project={project()}
-    />,
-  );
+  cleanup();
+  rail(detail({ task: task({ filed_unit: "platform", routing_unit: "payments" }) }));
+  await settle();
   expect(screen.getByText("Routes to")).toBeTruthy();
 });
 
-// A TEAM IS DRAWN BY ITS NAME AND FOLLOWED BY ITS KEY.
-//
-// What the row holds is the unit's KEY — its `id` on a company that gave its
-// units one, a word chosen so that a rename moves nothing and therefore a word
-// nobody reads. The panel rendered that raw and said `eng` while the same
-// company's board column said Engineering. The address keeps the key, which
-// the engine matches against the whole set of that team's spellings.
-test("a unit reads as the team's name and links by the stored key", () => {
-  render(
-    <ItemProps
-      detail={detail({
-        task: task({ filed_unit: "eng", routing_unit: "plat" }),
-        units: {
-          filed: { key: "eng", name: "Core Engineering", resolved: true },
-          routing: { key: "plat", name: "Platform", resolved: true },
-        },
-      })}
-      chrome={{}}
-      project={project()}
-    />,
+// A TEAM IS DRAWN BY ITS NAME AND FOLLOWED BY ITS KEY; one the chart has lost
+// is a finding, unlinked; and a row with no resolution still reads and links.
+test("a unit reads as the team's name and links by the stored key", async () => {
+  rail(
+    detail({
+      task: task({ filed_unit: "eng", routing_unit: "plat" }),
+      units: {
+        filed: { key: "eng", name: "Core Engineering", resolved: true },
+        routing: { key: "plat", name: "Platform", resolved: true },
+      },
+    }),
   );
-  const filed = screen.getByText("Core Engineering").closest("a");
-  expect(filed?.getAttribute("href")).toContain("unit=eng");
-  const routed = screen.getByText("Platform").closest("a");
-  expect(routed?.getAttribute("href")).toContain("unit=plat");
-  // AND THE KEY IS NOT WHAT IS READ, on either row.
+  await settle();
+  expect(screen.getByText("Core Engineering").closest("a")?.getAttribute("href")).toContain(
+    "unit=eng",
+  );
+  expect(screen.getByText("Platform").closest("a")?.getAttribute("href")).toContain("unit=plat");
   expect(screen.queryByText("eng")).toBeNull();
-  expect(screen.queryByText("plat")).toBeNull();
 });
 
-// A TEAM THE CHART NO LONGER HAS IS A FINDING, marked the way the project
-// directory marks the same one: the stored key in a warning tag, unlinked,
-// because a team that has left the chart is something to correct rather than
-// somewhere to go.
-test("a unit the chart has lost is marked rather than linked", () => {
-  render(
-    <ItemProps
-      detail={detail({
-        task: task({ filed_unit: "dissolved", routing_unit: "dissolved" }),
-        units: {
-          filed: { key: "dissolved", resolved: false },
-          routing: { key: "dissolved", resolved: false },
-        },
-      })}
-      chrome={{}}
-      project={project()}
-    />,
+test("a unit the chart has lost is marked rather than linked", async () => {
+  rail(
+    detail({
+      task: task({ filed_unit: "dissolved", routing_unit: "dissolved" }),
+      units: {
+        filed: { key: "dissolved", resolved: false },
+        routing: { key: "dissolved", resolved: false },
+      },
+    }),
   );
+  await settle();
   const pill = screen.getByTitle("The current org chart has no such unit");
   expect(pill.textContent).toBe("dissolved");
   expect(pill.closest("a")).toBeNull();
 });
 
-// AND AN ANSWER WITH NO RESOLUTION BESIDE IT STILL DRAWS THE ROW, because the
-// record is on the task either way: a node holding no chart answers the raw
-// key, and a row that vanished would be a task filed into nothing.
-test("a unit with no resolution beside it still reads and links", () => {
-  render(
-    <ItemProps
-      detail={detail({ task: task({ filed_unit: "eng", routing_unit: "eng" }) })}
-      chrome={{}}
-      project={project()}
-    />,
+// WHO SET IT: a property names the change that put the value there, and one
+// the visible history does not name carries nothing rather than borrowing the
+// oldest line still visible.
+test("a property names the change that set it, and only that change", async () => {
+  const { container } = rail(
+    detail({
+      task: task({ assignee: "ada", points: 3 }),
+      history: [
+        {
+          id: "h-2",
+          kind: "assignee",
+          actor: "bo",
+          actor_kind: "human",
+          at: "2031-04-16T09:00:00Z",
+          log_seq: 2,
+          fields: { assignee: { from: "", to: "ada" } },
+        },
+      ],
+    }),
   );
-  const raw = screen.getByText("eng").closest("a");
-  expect(raw?.getAttribute("href")).toContain("unit=eng");
+  await settle();
+  const lines = [...container.querySelectorAll(".props-setby")].map((el) => el.textContent);
+  expect(lines).toHaveLength(1);
+  expect(lines[0]).toContain("bo");
 });
 
 // ---------------------------------------------------------------------------
-// Links
+// Relations and pages
 // ---------------------------------------------------------------------------
 
 // THE DERIVED HALF OF A DEPENDENCY IS THE ONE NOBODY AUTHORED, so calling both
-// ends "waiting on" would tell a reader their task is blocked by the very task
-// it is blocking.
+// ends "waiting on" would tell a reader their task is blocked by the task it
+// is blocking.
 test("a dependency is named from the end it is read at", () => {
   expect(linkHeading({ kind: "waiting_on", other: "x" })).toBe("Waiting on");
   expect(linkHeading({ kind: "waiting_on", other: "x", derived: true })).toBe("Blocks");
   expect(linkHeading({ kind: "duplicates", other: "x" })).toBe("Duplicates");
   expect(linkHeading({ kind: "duplicates", other: "x", derived: true })).toBe("Duplicated by");
+  expect(linkHeading({ kind: "linked", other: "x" })).toBe("Related");
 });
 
-test("links are grouped under the word each end earns", () => {
-  render(
-    <ItemLinks
+// THE TASK IT IS FILED UNDER, BY NAME — "Part of LEAD-12 · 2.4 release" — off
+// the detail's own `parent`, and each relation under the word its end earns.
+test("relations name the parent and each link from this end", async () => {
+  mount(
+    <Relations
       detail={detail({
+        task: task({ parent: "t-12" }),
+        parent: { id: "t-12", key: "LEAD-12", title: "2.4 release", status: "in_progress" },
         links: [
           { kind: "waiting_on", other: "t-2", key: "ENG-2", title: "the blocker" },
           { kind: "waiting_on", other: "t-3", key: "ENG-3", title: "the dependent", derived: true },
@@ -377,16 +571,19 @@ test("links are grouped under the word each end earns", () => {
       chrome={{}}
     />,
   );
+  await settle();
+  const part = screen.getByText("Part of").closest("a")!;
+  expect(part.textContent).toContain("LEAD-12");
+  expect(part.textContent).toContain("2.4 release");
+  expect(part.getAttribute("href")).toBe(href(["work", "LEAD-12"]));
   expect(screen.getByText("Waiting on")).toBeTruthy();
   expect(screen.getByText("Blocks")).toBeTruthy();
 });
 
-// THE REPAIR AND THE FINDING ARE DIFFERENT STATES: the first is a commit the
-// tracker duty writes 30 seconds later, the second is an edge whose mirror was
-// refused for good and which a person has to resolve.
-test("a pending mirror and a permanent one-sided edge read differently", () => {
-  render(
-    <ItemLinks
+// THE REPAIR AND THE FINDING ARE DIFFERENT STATES.
+test("a pending mirror and a permanent one-sided edge read differently", async () => {
+  mount(
+    <Relations
       detail={detail({
         links: [
           { kind: "waiting_on", other: "t-2", key: "ENG-2", one_sided: true },
@@ -402,80 +599,49 @@ test("a pending mirror and a permanent one-sided edge read differently", () => {
       chrome={{}}
     />,
   );
+  await settle();
   expect(screen.getByText("mirror pending")).toBeTruthy();
   expect(screen.getByText("one-sided")).toBeTruthy();
 });
 
-// A PAGE LINK LEAVES THE TRACKER, and it has to go to the knowledge base
-// rather than to a task key that does not exist.
-//
-// ASSERTED THROUGH `pathOf`, never against a hand-typed literal. This case
-// used to re-compute the component's own string — `#/pages/p-1` — and so
-// pinned a head the application has no route for: every task→page link landed
-// on NotFound while the suite reported a pass. The frame's map is the one
-// definition of where a page lives, and a link that does not agree with it is
-// a link to nothing.
-test("a linked page points at the page rather than at a task", () => {
-  const { container } = render(
-    <ItemLinks
-      detail={detail({
-        links: [{ kind: "page", other: "p-1", key: "ENG/The runbook", title: "The runbook" }],
-      })}
-      chrome={{}}
-    />,
-  );
-  expect(screen.getByText("Pages")).toBeTruthy();
-  expect(container.querySelector("a.mono")?.getAttribute("href")).toBe(
-    href(pathOf({ kind: "page", id: "ENG/The runbook" })),
-  );
-});
-
-// AND AN EDGE THAT CARRIES ONLY AN ID STILL LANDS IN THE KNOWLEDGE BASE. The
-// tracker's `readLinks` resolves the other end against the TASK rows, so a
-// page edge comes back with no `key` and no `title` and the row is a bare
-// uuid — a screen that answers that address honestly is the knowledge base
-// saying it holds no such container, never a screen that does not exist.
-test("a page edge with no address resolved still leaves the tracker", () => {
-  const { container } = render(
-    <ItemLinks detail={detail({ links: [{ kind: "page", other: "p-1" }] })} chrome={{}} />,
-  );
-  expect(container.querySelector("a.mono")?.getAttribute("href")).toBe(
-    href(pathOf({ kind: "page", id: "p-1" })),
-  );
-  expect(container.querySelector("a.mono")?.getAttribute("href")).toContain("#/knowledge/");
-});
-
-// NO LINKS IS NO PANEL. A panel headed "Links" over nothing reads as a task
-// whose links failed to load.
-test("a task with no links draws no panel at all", () => {
-  const { container } = render(<ItemLinks detail={detail()} chrome={{}} />);
+// NO RELATIONS IS NO SECTION: a heading over nothing reads as a task whose
+// relations failed to load.
+test("a task with no relations draws no section", async () => {
+  const { container } = mount(<Relations detail={detail()} chrome={{}} />);
+  await settle();
   expect(container.textContent).toBe("");
 });
 
-// A FAILED SUBTREE READ IS NOT AN EMPTY ONE.
-//
-// The subtasks read is the only thing on this screen that can see a task's
-// children, so nothing contradicts it: a refusal that draws no panel states
-// that the task is a leaf. The panel took the rows and never the error, so
-// every failure rendered as the fact that a task has no subtasks.
-test("a refused subtree read says so rather than looking like a leaf", () => {
-  render(<Subtasks rows={[]} error="bad_params" now={NOW} chrome={{}} />);
-  expect(screen.getByText("Subtasks")).toBeTruthy();
+// A PAGE LINK GOES TO THE PAGE'S ONE ADDRESS, BY ITS ID (`other`) — asserted
+// through `pathOf`, the frame's one definition of where a page lives — and is
+// named by the page's own title.
+test("a linked page points at the page by its id and reads its title", async () => {
+  mount(
+    <ItemRail detail={detail({ links: [{ kind: "page", other: "p-1" }] })} chrome={{}} now={NOW} />,
+    { answers: { page: { page: { id: "p-1", title: "Provisioner runbook" } } } },
+  );
+  await settle();
+  const link = screen.getByText("Provisioner runbook").closest("a")!;
+  expect(link.getAttribute("href")).toBe(href(pathOf({ kind: "page", id: "p-1" })));
+  expect(link.getAttribute("href")).toBe("#/knowledge/pages/p-1");
+  expect(asked.find((a) => a.kind === "page")?.params).toEqual({ id: "p-1" });
+});
+
+// ---------------------------------------------------------------------------
+// Sub-tasks
+// ---------------------------------------------------------------------------
+
+// A FAILED SUBTREE READ IS NOT AN EMPTY ONE: the error is drawn where the rows
+// would have been, and outranks rows a previous poll listed.
+test("a refused subtree read says so rather than looking like a leaf", async () => {
+  mount(<Subtasks rows={[]} error="bad_params" chrome={{}} />);
+  await settle();
+  expect(screen.getByText("Sub-tasks")).toBeTruthy();
   expect(screen.getByText(/The engine refused this request/)).toBeTruthy();
 });
 
-// AND A READ THAT ANSWERED IS ALLOWED TO CONCLUDE IT. An empty answer is a
-// fact about the task, so the panel stays away and the screen does not carry
-// a heading over nothing.
-test("a task that answered with no children draws no panel", () => {
-  const { container } = render(<Subtasks rows={[]} error={null} now={NOW} chrome={{}} />);
-  expect(container.textContent).toBe("");
-});
-
-// AND AN ERROR OUTRANKS ROWS ALREADY ON SCREEN, so a failing poll is never
-// presented as the current shape of the tree.
-test("a refused poll says so even when children were listed before", () => {
-  render(
+test("a refused poll says so even when children were listed before", async () => {
+  mount(
     <Subtasks
       rows={[
         {
@@ -490,313 +656,460 @@ test("a refused poll says so even when children were listed before", () => {
         },
       ]}
       error="query_failed"
-      now={NOW}
       chrome={{}}
     />,
   );
+  await settle();
   expect(screen.getByText(/The engine tried to answer and failed/)).toBeTruthy();
   expect(screen.queryByText("A child")).toBeNull();
 });
 
-// WHO SET IT, WHICH IS THE THING THIS PRODUCT CAN SAY AND A TRACKER CANNOT.
-// Every write here is attributed and carries its turn, so a property row can
-// name the change that put the value there. The field was declared on
-// `Property`, the markup was written, the class was in the stylesheet — and
-// nothing ever passed one, so the line rendered on zero rows.
-test("a property names the change that set it", () => {
-  render(
-    <ItemProps
-      detail={detail({
-        task: task({ assignee: "ada" }),
-        history: [
-          {
-            id: "h-2",
-            kind: "assignee",
-            actor: "bo",
-            actor_kind: "human",
-            turn_id: "turn-7",
-            at: "2031-04-16T09:00:00Z",
-            log_seq: 2,
-            fields: { assignee: { from: "", to: "ada" } },
-          },
-        ],
-      })}
-      chrome={{}}
-      project={project()}
-    />,
-  );
-  expect(screen.getByText(/bo/)).toBeTruthy();
+// AND A READ THAT ANSWERED MAY CONCLUDE THE TASK IS A LEAF: no card, and — for
+// a task nobody may add to — nothing at all.
+test("a task that answered with no children draws no card", async () => {
+  const { container } = mount(<Subtasks rows={[]} error={null} chrome={{}} />);
+  await settle();
+  expect(container.textContent).toBe("");
 });
 
-// A PROPERTY THE VISIBLE HISTORY DOES NOT NAME CARRIES NOTHING. `history` is
-// the newest fifty changes, so a value last moved before that window is a fact
-// about the page size — and borrowing the oldest entry still visible would
-// read as a confident sentence about something nobody can see.
-test("a property no visible change names carries no attribution", () => {
-  const { container } = render(
-    <ItemProps
-      detail={detail({
-        task: task({ points: 3 }),
-        history: [
-          {
-            id: "h-1",
-            kind: "status",
-            actor: "ada",
-            at: "2031-04-16T09:00:00Z",
-            log_seq: 1,
-            fields: { status: { to: "in_progress" } },
-          },
-        ],
-      })}
+test("the sub-task card counts what is done", async () => {
+  mount(
+    <Subtasks
+      rows={[
+        {
+          id: "a",
+          key: "ENG-413",
+          project: "ENG",
+          title: "Backoff helper",
+          type: "task",
+          status: "done",
+          status_group: "done",
+          updated: "",
+          version: 1,
+        },
+        {
+          id: "b",
+          key: "ENG-414",
+          project: "ENG",
+          title: "Emit the count",
+          type: "task",
+          status: "in_progress",
+          updated: "",
+          version: 1,
+        },
+        {
+          id: "c",
+          key: "ENG-416",
+          project: "ENG",
+          title: "e2e",
+          type: "task",
+          status: "todo",
+          updated: "",
+          version: 1,
+        },
+      ]}
       chrome={{}}
-      project={project()}
     />,
   );
-  // One line, for the one property a change names — never a dash-shaped one
-  // under every other row.
-  expect(container.querySelectorAll(".props-setby").length).toBe(1);
+  await settle();
+  expect(screen.getByText("1 / 3")).toBeTruthy();
+  expect(screen.getByRole("img", { name: "1 of 3 sub-tasks done" })).toBeTruthy();
 });
 
 // ---------------------------------------------------------------------------
-// The two frames of one task
+// Activity
 // ---------------------------------------------------------------------------
 
-/** One socket answering each question with a fixture. */
-function serving(answers: Partial<Record<QueryName, unknown>>) {
-  const query = vi.fn(async (what: string) => answers[what as QueryName] ?? {});
-  vi.mocked(useClient).mockReturnValue({ socket: { query } } as never);
-  vi.mocked(useConnection).mockReturnValue({ connected: true } as never);
-  vi.mocked(useOrg).mockReturnValue({
-    name: "Acme",
-    roles: [{ name: "Ada Okonkwo", handle: "ada", kind: "agent" }],
-  } as never);
-  return query;
+/** A change record of the task's own feed. */
+function record(over: Partial<WorkActivityRecord>): WorkActivityRecord {
+  return {
+    id: "r-1",
+    log_seq: 1,
+    log_stream: "CREWLET_TRACKER_LOG",
+    log_generation: 1,
+    at: "2031-04-10T09:00:00Z",
+    effective_at: "2031-04-10T09:00:00Z",
+    kind: "created",
+    actor: "jane",
+    subject_kind: "task",
+    subject_id: "t-1",
+    project: "ENG",
+    notified: false,
+    ...over,
+  };
 }
 
-// THE WAY OUT HAS TO LAND WHERE IT SAYS. "Open on the board" carried
-// `?project=&item=`, the two keys this screen retired when a project became a
-// path and the rail moved into the frame — so the one control promising "this
-// task, on its own board" dropped the reader on the company-wide board with
-// the rail shut. The project is a PATH SEGMENT and the task is the frame's
-// own `peek=` token; asserted through `refToken` so the spelling has one
-// definition.
-test("the way out to the board names the project and opens the task", async () => {
-  serving({
-    work_item: { task: task({ assignee: "ada" }), complete: true },
-    work_project: { key: "ENG", name: "Engineering", complete: true },
+// A HAND-OFF SAYS WHY. The reason a person gave is the change's excerpt — the
+// one line the new holder is woken with — and it is quoted beside the change.
+test("a hand-off is a sentence with its reason", () => {
+  const chrome = { seatName: (h: string) => ({ swe: "SWE" })[h] ?? h };
+  expect(changeSentence(record({ kind: "created" }), task(), chrome)).toEqual({
+    what: "filed this in ENG",
+    why: "",
   });
-  const { container } = render(
-    <Router>
-      <WorkItemPage id="ENG-42" />
-    </Router>,
-  );
-  await waitFor(() => expect(screen.getByText("Open on the board →")).toBeTruthy());
-  const out = [...container.querySelectorAll("a")].find(
-    (a) => a.textContent === "Open on the board →",
-  );
-  expect(out?.getAttribute("href")).toBe(
-    href(["work", "ENG"], { peek: refToken({ kind: "item", id: "ENG-42" }) }),
-  );
+  expect(
+    changeSentence(
+      record({
+        kind: "assignee",
+        excerpt: "owns the provisioner",
+        fields: { assignee: { from: "", to: "swe" } },
+      }),
+      task(),
+      chrome,
+    ),
+  ).toEqual({ what: "assigned it to SWE", why: "owns the provisioner" });
 });
 
-// A PEEK RESOLVES ITS OWN PEOPLE. The frame mounts it from a `peek=` token and
-// knows nothing about an org chart, so a peek that waited to be handed a
-// resolver rendered every handle raw — assignee, reporter, watchers, comment
-// authors and history actors — while the page for the same task named them.
-// One person under two names, depending on which frame you opened.
-test("the rail names a person, exactly as the page does", async () => {
-  serving({
-    work_item: {
-      task: task({ assignee: "ada" }),
-      // A CHANGE TOO, because the set-by line under a property is the one
-      // place the rail used to print the raw handle — and without a history
-      // entry the line is never drawn, so this case passed with the bug in.
-      history: [
-        {
-          id: "h-1",
-          kind: "status",
-          actor: "ada",
-          actor_kind: "agent",
-          at: "2031-04-16T09:00:00Z",
-          log_seq: 1,
-          fields: { status: { from: "todo", to: "in_progress" } },
-        },
-      ],
-      complete: true,
+// A CHANGE ROW IS A SENTENCE, with the actor in front of it: a checklist move
+// says what happened to which list rather than printing the stored counts on
+// both sides of an arrow, and a field sits mid-sentence in lower case.
+test("a change reads as a sentence, a checklist move included", () => {
+  const chrome = {};
+  const said = (fields: WorkActivityRecord["fields"]) =>
+    changeSentence(record({ kind: "checklist", fields }), task(), chrome).what;
+  expect(said({ checklists: { from: "", to: "Acceptance: 0 of 4 done" } })).toBe(
+    "added the Acceptance checklist (4 items)",
+  );
+  expect(
+    said({ checklists: { from: "Acceptance: 0 of 4 done", to: "Acceptance: 1 of 4 done" } }),
+  ).toBe("ticked 1 on Acceptance — 1 of 4 done");
+  expect(
+    said({
+      checklists: {
+        from: "Acceptance: 1 of 4 done, Rollout: 0 of 2 done",
+        to: "Acceptance: 1 of 5 done",
+      },
+    }),
+  ).toBe("added 1 item to Acceptance and removed the Rollout checklist");
+  expect(
+    changeSentence(
+      record({ kind: "fields", fields: { priority: { from: "normal", to: "high" } } }),
+      task(),
+      chrome,
+    ).what,
+  ).toBe("changed the priority from normal to high");
+  expect(
+    changeSentence(
+      record({ kind: "fields", fields: { due: { from: "2031-04-20T00:00:00Z", to: "" } } }),
+      task(),
+      chrome,
+    ).what,
+  ).toBe("cleared the due date");
+  // A relation says which task joined it, by its key.
+  expect(
+    changeSentence(
+      record({ kind: "relations", fields: { blocking: { from: "", to: "t-4" } } }),
+      task(),
+      { taskKey: (id: string) => (id === "t-4" ? "ENG-4" : "") },
+    ).what,
+  ).toBe("made it block ENG-4");
+});
+
+// WHO A CHANGE REACHED IS A QUIET DISCLOSURE AT THE END OF ITS LINE: a button
+// that says it expands, inside the sentence, rather than a bold row of its own
+// under every change.
+test("who a change reached opens from the end of its line", async () => {
+  mount(<WorkItemPage id="ENG-42" />, {
+    answers: {
+      work_item: detail(),
+      work_activity: {
+        records: [
+          record({
+            id: "r-9",
+            kind: "status",
+            notified: true,
+            fields: { status: { from: "todo", to: "in_progress" } },
+          }),
+        ],
+        complete: true,
+      },
     },
-    work_project: { key: "ENG", name: "Engineering", complete: true },
   });
-  const { container } = render(
-    <Router>
-      <ItemPeek itemKey="ENG-42" />
-    </Router>,
-  );
-  await waitFor(() => expect(screen.getAllByText("Ada Okonkwo").length).toBeGreaterThan(0));
-  expect(screen.queryByText("ada")).toBeNull();
-  // AND ON THE SET-BY LINE, read off its own element: the line is one span
-  // holding the actor, the age and the turn link, so an exact-text query
-  // for the bare handle matched nothing whether or not the handle was there.
-  const setBy = [...container.querySelectorAll(".props-setby")].map((el) => el.textContent ?? "");
-  expect(setBy.length).toBeGreaterThan(0);
-  expect(setBy.every((line) => line.includes("Ada Okonkwo"))).toBe(true);
-  expect(setBy.some((line) => /\bada\b/.test(line))).toBe(false);
+  await settle();
+  const reached = screen.getByRole("button", { name: /Who this reached/ });
+  expect(reached.getAttribute("aria-expanded")).toBe("false");
+  expect(reached.closest("p")?.textContent).toContain("moved it to In progress");
+  act(() => reached.click());
+  expect(reached.getAttribute("aria-expanded")).toBe("true");
 });
 
-// THE RAIL'S BODY IS KEYED ON ITS SUBJECT. `[` and `]` move the peek from
-// task A to task B by changing one query key, so React reconciles one body
-// rather than mounting another — and everything that body remembers, an open
-// disclosure or a chosen tab, described A until something cleared it. Rule 14
-// for a route, kept for the rail: a different object is a different mount,
-// asserted on DOM identity because that is the only thing that tells a
-// remount from a re-render.
-test("moving the rail to another task mounts a new body", async () => {
-  serving({
-    work_item: { task: task({ assignee: "ada" }), complete: true },
-    work_project: { key: "ENG", name: "Engineering", complete: true },
-  });
-  location.hash = `#/work?peek=${refToken({ kind: "item", id: "ENG-42" })}`;
-  const { container } = render(
-    <Router>
-      <PeekNeighbours>
-        <PeekHost />
-      </PeekNeighbours>
-    </Router>,
-  );
-  await waitFor(() => expect(container.querySelector(".object-head")).toBeTruthy());
-  const before = container.querySelector(".object-head");
-  location.hash = `#/work?peek=${refToken({ kind: "item", id: "ENG-43" })}`;
-  await waitFor(() => expect(container.querySelector(".object-head")).not.toBe(before));
-});
-
-// A HEADER AND A RAIL STACKED IN ONE COLUMN ARE ONE READING. The peek's header
-// carried the same five facts the rail states below it, so Status, Type and
-// Assignee were each on screen twice within about a hundred pixels — a third
-// of the panel above the fold spent saying the same thing again, with the
-// description under it. The header keeps the identity and the state marks;
-// every property is the rail's, once.
-test("the peek states each property once", async () => {
-  serving({
-    work_item: { task: task({ type: "task" }), complete: true },
-    work_project: { key: "ENG", name: "Engineering", complete: true },
-  });
-  const { container } = render(
-    <Router>
-      <ItemPeek itemKey="ENG-42" />
-    </Router>,
-  );
-  await waitFor(() => expect(screen.getByText("Fix the login race")).toBeTruthy());
-  expect(container.querySelector(".fact-line")).toBeNull();
-  // The rail's row, and no second copy of it above.
-  expect(screen.getAllByText("Unassigned")).toHaveLength(1);
-  expect(screen.getAllByText("Status")).toHaveLength(1);
-  // The identity and the state marks stay: they are what a reader lands on.
-  expect(screen.getByText("ENG-42")).toBeTruthy();
-});
-
-// THE PAGE KEEPS ITS FACT LINE, which is the whole of the difference between
-// the two frames. There the rail is a sticky side COLUMN beside the body
-// rather than a block under the header, so the line and the rows are read
-// across a gap — two readings of one object, the line to scan and the rows to
-// study.
-test("the page heads itself with the facts the peek leaves to the rail", async () => {
-  serving({
-    work_item: { task: task({ assignee: "ada" }), complete: true },
-    work_project: { key: "ENG", name: "Engineering", complete: true },
-  });
-  const { container } = render(
-    <Router>
-      <WorkItemPage id="ENG-42" />
-    </Router>,
-  );
-  await waitFor(() => expect(container.querySelector(".fact-line")).not.toBeNull());
-  const line = container.querySelector(".fact-line")!;
-  expect(line.textContent).toContain("Status");
-  expect(line.textContent).toContain("Assignee");
-});
-
-// THE BODY IS NOT REBUILT ON EVERY TICK OF THE SCREEN'S CLOCK. Both frames of
-// a task hold a live `now` for their relative times, so this component
-// re-renders once a second — and the wrapper around the description used to be
-// a component DEFINED INSIDE the render, so its type identity was new each
-// time and React tore the subtree down and built it again. A reader selecting
-// a sentence to copy lost the selection within a second. Asserted on DOM node
-// identity, which is the only thing that distinguishes a re-render from a
-// remount.
-test("the description keeps its own DOM across a clock tick", async () => {
-  serving({ work_items: { items: [], complete: true } });
-  const body = (now: number) => (
-    <Router>
-      <ItemBody
-        detail={detail({ task: task({ body: "the runbook is **here**" }) })}
-        chrome={{}}
-        now={now}
+// A TURN CARD SAYS WHAT THE TURN DID AND WHAT THE REVIEWER ASKED FOR: "SWE ran
+// turn 1", its phases, "sent back for another pass" with the reviewer's
+// request quoted, the tools it called, wall time and tokens, and its trace.
+test("a turn card shows the send-back notes", async () => {
+  mount(
+    <ol>
+      <TurnCard
+        turn={turn({
+          sent_back: 1,
+          summary: "Added a backoff helper to provisioner/dhcp.",
+          review: "the timeout path has no test.",
+          tools: [
+            { name: "create_branch", calls: 1 },
+            { name: "run_sandbox", calls: 4 },
+          ],
+        })}
+        chrome={{ seatName: (h: string) => (h === "swe" ? "SWE" : h) }}
+        now={NOW}
       />
-    </Router>
+    </ol>,
   );
-  const { container, rerender } = render(body(NOW));
-  await waitFor(() => expect(container.querySelector(".prose")).toBeTruthy());
-  const before = container.querySelector(".prose");
-  rerender(body(NOW + 1000));
-  expect(container.querySelector(".prose")).toBe(before);
+  await settle();
+  const card = screen.getByRole("article", { name: "Turn 1" });
+  expect(within(card).getByText("ran turn 1")).toBeTruthy();
+  expect(within(card).getByText("sent back for another pass")).toBeTruthy();
+  expect(within(card).getByText("the timeout path has no test.")).toBeTruthy();
+  expect(within(card).getByText("Reviewer:")).toBeTruthy();
+  expect(within(card).getByText("run_sandbox ×4")).toBeTruthy();
+  expect(within(card).getByText("14m 2s · 38.4k tokens")).toBeTruthy();
+  expect(within(card).getByText("Trace").getAttribute("href")).toBe(
+    href(["live", "turns", "run-1"]),
+  );
+  // Tokens only, never money.
+  expect(card.textContent).not.toMatch(/[$€£]/);
 });
 
-// A TASK IN THE TRASH IS SAID TO BE IN THE TRASH.
-//
-// The detail read does not filter removed tasks, so a removed task's page
-// resolves and answers exactly like a live one's — and the wire has always
-// carried the tombstone while the client type had no field for it. A task
-// somebody deleted rendered as an ordinary open task: a reader could comment
-// on it, wonder why it was on no board, and never be told.
-test("a removed task is marked, and a live one carries no such mark", () => {
-  const { container } = render(
-    <>
-      {itemFlags(
-        detail({
-          task: task({ removed: { by: "ada", kind: "human", at: "2031-04-15T09:00:00Z" } }),
-        }),
-      )}
-    </>,
+// A TURN WITH NO COUNT HERE IS NOT NUMBERED, and a turn still out on a coding
+// run says it is parked rather than done.
+test("a turn's pills say how it went, and only what is worth a pill", () => {
+  expect(turnPills(turn())).toEqual([]);
+  expect(turnPills(turn({ sent_back: 2 })).map((p) => p.label)).toEqual([
+    "sent back 2 times for another pass",
+  ]);
+  expect(turnPills(turn({ outcome: "suspended" })).map((p) => p.label)).toEqual([
+    "parked on a coding run",
+  ]);
+  expect(turnPills(turn({ outcome: "failed" }))[0]?.variant).toBe("danger");
+  expect(turnPills(turn({ outcome: "failed" }))[0]?.label).toBe("failed");
+  expect(turnPills(turn({ outcome: "failed", failed_in: "review" }))[0]?.label).toBe(
+    "failed in review",
   );
-  expect(container.textContent).toContain("In the trash");
+});
+
+// A FAILED TURN SAYS WHICH STEP BROKE: the phase it failed in wears the cross
+// and says "failed" to a screen reader, the phases that held keep their tick,
+// and the wall time and tokens sit on their own line under the chips.
+test("a failed turn marks the phase it broke in", async () => {
+  mount(
+    <ol>
+      <TurnCard
+        turn={turn({
+          outcome: "failed",
+          failed_in: "review",
+          summary: "",
+          tools: [{ name: "run_sandbox", calls: 1 }],
+        })}
+        chrome={{}}
+        now={NOW}
+      />
+    </ol>,
+  );
+  await settle();
+  const card = screen.getByRole("article", { name: "Turn 1" });
+  const phases = [...card.querySelectorAll(".task-phase")];
+  expect(phases.map((p) => p.hasAttribute("data-failed"))).toEqual([false, true]);
+  expect(phases[1]!.textContent).toContain("(failed)");
+  expect(within(card).getByText("failed in review")).toBeTruthy();
+  // No account recorded: one quiet line, the reason on hover.
+  expect(within(card).getByText("No summary recorded — see the trace")).toBeTruthy();
+  // The meta line is its own row, after the tool chips.
+  const meta = card.querySelector(".task-turn-meta")!;
+  expect(meta.previousElementSibling?.classList.contains("task-turn-tools")).toBe(true);
+  expect(within(meta as HTMLElement).getByText("Trace")).toBeTruthy();
+});
+
+// THE LIVE ROW IS THE TURN RUNNING ON *THIS* TASK: joined on the item the
+// engine charges the turn to, and only while the seat is working. A seat
+// working on another task, or one stopped mid-turn on this one, draws nothing.
+test("the live row appears only for a turn on this item", async () => {
+  const on = (key: string, activity = "working") => ({
+    handle: "swe",
+    activity,
+    turn: {
+      turn_id: "run-9",
+      started_at: "2031-04-16T11:57:00Z",
+      stage: "phases",
+      work_item: { backend: "native", id: key === "ENG-42" ? "t-1" : "t-9", key, project: "ENG" },
+    },
+    // THE SEVENTH ROUND IN FLIGHT: `round_num` is zero-based.
+    live_call: { turn_id: "run-9", phase: "execute", round_num: 6, rounds_used: 6, max_rounds: 25 },
+  });
+  expect(liveOn([on("ENG-9")] as never, { id: "t-1", key: "ENG-42" })).toBeNull();
+  expect(liveOn([on("ENG-42", "stopped")] as never, { id: "t-1", key: "ENG-42" })).toBeNull();
+  expect(liveOn([on("ENG-42")] as never, { id: "t-1", key: "ENG-42" })?.handle).toBe("swe");
+
+  mount(<WorkItemPage id="ENG-42" />, {
+    agents: [on("ENG-42")],
+    answers: {
+      work_item: detail({ task: task({ spend: { turns: 2 } }) }),
+      work_item_turns: {
+        item: "t-1",
+        key: "ENG-42",
+        turns: [turn({ ordinal: 2, turn_id: "run-2" })],
+        complete: true,
+      },
+    },
+  });
+  await settle();
+  const live = screen.getByRole("link", { name: /is on turn 3 of ENG-42/ });
+  expect(live.textContent).toContain("SWE is on turn 3");
+  expect(live.textContent).toContain("executing · round 7 of 25");
+  expect(live.getAttribute("href")).toBe(href(["live", "turns", "run-9"]));
+  // AND THE PAGE BAR'S WAY TO WATCH IT.
+  expect(screen.getByRole("link", { name: "Watch live" }).getAttribute("href")).toBe(
+    href(["live", "turns", "run-9"]),
+  );
 
   cleanup();
-  const live = render(<>{itemFlags(detail())}</>);
-  expect(live.container.textContent ?? "").not.toContain("In the trash");
+  mount(<WorkItemPage id="ENG-42" />, { agents: [on("ENG-9")] });
+  await settle();
+  expect(screen.queryByRole("link", { name: /is on turn/ })).toBeNull();
+  expect(screen.queryByRole("link", { name: "Watch live" })).toBeNull();
 });
 
-// AND THE NOTE SAYS WHO, WHEN, AND THAT IT CAN BE UNDONE — the last being the
-// fact that decides what a reader does next. A removal is reversible at any
-// age and nothing is destroyed, so this is a state rather than the end of the
-// record.
-test("the removal note names its author and says it is reversible", () => {
-  render(<RemovedNote tomb={{ by: "ada", kind: "human", at: "2031-04-15T09:00:00Z" }} now={NOW} />);
-  expect(screen.getByText(/ada/)).toBeTruthy();
-  expect(screen.getByText(/reversible at any age/)).toBeTruthy();
-});
-
-// A TASK THAT WENT WITH ITS CONTAINER SAYS SO. `removed_with` names the parent
-// whose removal took this one along, which is the difference between somebody
-// deleting this task and somebody deleting the epic above it — and it decides
-// whether restoring this one alone is even the right move.
-test("a task removed alongside its parent names the parent", () => {
-  render(
-    <RemovedNote
-      tomb={{ by: "ada", kind: "human", at: "2031-04-15T09:00:00Z", removed_with: "ENG-1" }}
-      now={NOW}
-    />,
+// THE LIVE ROW NAMES THE ROUND AND THE PHASE THE SEAT'S PROFILE NAMES. It kept
+// a private reading of the live call that took the zero-based `round_num` raw
+// — no round at all during the first, one lower than the stepper and the peek
+// after it — and called every phase but review "executing". It reads the task
+// card's strip's words (`doingWords`), so a turn is described once.
+test("the live row counts rounds from one and names the phase running", async () => {
+  const working = (live_call: Record<string, unknown>) => ({
+    handle: "swe",
+    activity: "working",
+    turn: {
+      turn_id: "run-9",
+      started_at: "2031-04-16T11:57:00Z",
+      stage: "phases",
+      work_item: { backend: "native", id: "t-1", key: "ENG-42", project: "ENG" },
+    },
+    live_call: { turn_id: "run-9", max_rounds: 25, ...live_call },
+  });
+  const liveText = async (live_call: Record<string, unknown>) => {
+    cleanup();
+    mount(<WorkItemPage id="ENG-42" />, { agents: [working(live_call)] });
+    await settle();
+    return screen.getByRole("link", { name: /is on turn \d+ of ENG-42/ }).textContent ?? "";
+  };
+  // The first round, in flight before any has come back.
+  expect(await liveText({ phase: "execute", round_num: 0, rounds_used: 0 })).toContain(
+    "executing · round 1 of 25",
   );
-  expect(screen.getByText("ENG-1")).toBeTruthy();
+  expect(await liveText({ phase: "execute", round_num: 6, rounds_used: 6 })).toContain(
+    "executing · round 7 of 25",
+  );
+  // Reading context is not executing.
+  const reading = await liveText({ phase: "context", round_num: -1 });
+  expect(reading).toContain("reading context");
+  expect(reading).not.toContain("executing");
 });
 
-// THE ACCENT SAYS WHERE THE READER IS, and this panel is about other people.
-//
-// `variant="brand"` resolves to `--color-brand-accent-soft` under
-// `--color-brand-accent-ink`, which is the pair a pressed FilterChip takes — so
-// a brand pill here drew the ground of a switched-on filter, beside a list that
-// really is a selection. Whether a notice ASKED is a fact about the notice: it
-// gets the caution tone and a word of its own.
-test("the Woke panel spends no accent, and 'asks' is its own mark", () => {
-  const { container } = render(
+// HOW LONG IT HAS RUN IS THE PROFILE CARD'S CLOCK: seconds under a minute.
+// The list's short age read a sub-minute turn as "for 0m" while the seat's own
+// card said "0s" of the same turn.
+test("the live row says a sub-minute turn's seconds, as the profile does", async () => {
+  mount(<WorkItemPage id="ENG-42" />, {
+    agents: [
+      {
+        handle: "swe",
+        activity: "working",
+        turn: {
+          turn_id: "run-9",
+          started_at: new Date(NOW - 30_000).toISOString(),
+          stage: "phases",
+          work_item: { backend: "native", id: "t-1", key: "ENG-42", project: "ENG" },
+        },
+        live_call: { turn_id: "run-9", phase: "execute", round_num: 1, max_rounds: 24 },
+      },
+    ] as never,
+  });
+  await settle();
+  // THE PAGE'S CLOCK re-reads (the mocked) `Date.now` when the tab is shown.
+  act(() => {
+    document.dispatchEvent(new Event("visibilitychange"));
+  });
+  const live = screen.getByRole("link", { name: /is on turn \d+ of ENG-42/ }).textContent ?? "";
+  expect(live).toContain("for 30s");
+  expect(live).not.toContain("0m");
+});
+
+// OLDER COMMENTS ARE REACHABLE. The detail returns the newest page of a thread
+// and a cursor nothing followed, so a conversation past fifty was invisible;
+// "Earlier activity" asks for the page before the oldest one shown.
+test("older comments are reachable", async () => {
+  const comment = (id: string, at: string, body: string) => ({
+    id,
+    task: "t-1",
+    author: "ada",
+    author_kind: "agent",
+    body,
+    created_at: at,
+  });
+  mount(<WorkItemPage id="ENG-42" />, {
+    answers: {
+      work_comments: (params: Record<string, unknown>) =>
+        Promise.resolve(
+          params.cursor === "c-50"
+            ? {
+                item: "t-1",
+                key: "ENG-42",
+                title: "x",
+                comments: [comment("c-1", "2031-04-01T09:00:00Z", "the very first word")],
+              }
+            : {
+                item: "t-1",
+                key: "ENG-42",
+                title: "x",
+                comments: [comment("c-51", "2031-04-12T09:00:00Z", "the newest word")],
+                next_cursor: "c-50",
+              },
+        ),
+    },
+  });
+  await settle();
+  expect(screen.getByText("the newest word")).toBeTruthy();
+  expect(screen.queryByText("the very first word")).toBeNull();
+  const earlier = screen.getByRole("button", { name: "Earlier activity" });
+  // A CONTROL THAT LOOKS LIKE ONE: its chevron, without which the label read
+  // as a heading over the feed.
+  expect(earlier.querySelector("svg")).toBeTruthy();
+  fireEvent.click(earlier);
+  await settle();
+  expect(asked.some((a) => a.kind === "work_comments" && a.params.cursor === "c-50")).toBe(true);
+  expect(screen.getByText("the very first word")).toBeTruthy();
+});
+
+// THE FOUR ANSWERS OF "WHO THIS REACHED" KEEP THEIR SENTENCES: reached nobody,
+// no such change here, beyond the retention window, and cannot say — four
+// different facts, which a tracker that listed recipients would draw as one
+// empty list.
+test("the Woke answers keep their four empty sentences", async () => {
+  const empty = (over: Partial<WorkRoutingAnswer>): WorkRoutingAnswer => ({
+    record_id: "r-1",
+    held: true,
+    notified: true,
+    delivery: "reached",
+    addressed: 0,
+    fallback: 0,
+    recipients: [],
+    ...over,
+  });
+  for (const [answer, title] of [
+    [empty({}), "It announced, and reached nobody"],
+    [empty({ held: false }), "No such change here"],
+    [empty({ delivery: "swept" }), "Beyond the retention window"],
+    [empty({ delivery: "unknown" }), "Cannot say"],
+  ] as const) {
+    cleanup();
+    mount(<Routing answer={answer} chrome={{}} />);
+    await settle();
+    expect(screen.getByText(title)).toBeTruthy();
+  }
+});
+
+// THE ACCENT SAYS WHERE THE READER IS, and this panel is about other people:
+// whether a notice ASKED is its own mark, never a brand tint on the reason.
+test("the Woke panel spends no accent, and 'asks' is its own mark", async () => {
+  const { container } = mount(
     <Routing
       answer={{
         record_id: "r-1",
@@ -813,128 +1126,412 @@ test("the Woke panel spends no accent, and 'asks' is its own mark", () => {
       chrome={{}}
     />,
   );
+  await settle();
   expect(container.querySelectorAll(".crewlet-tag--brand")).toHaveLength(0);
-  // The fact the tint carried is still on the screen, in a word.
   expect(screen.getAllByText("asks")).toHaveLength(1);
   expect(screen.getByText("1 asked")).toBeTruthy();
-  // Both reasons read the same: the word is the reason, the obligation is the
-  // mark beside it.
-  for (const reason of ["assignee", "reporter"]) {
-    const pill = screen.getByText(reason).closest(".crewlet-tag");
-    expect(pill?.className, reason).toContain("crewlet-tag--outline");
-    expect(pill?.className, reason).not.toContain("crewlet-tag--brand");
-  }
 });
 
-// THE HISTORY DRAWS A MARK PER KIND AND NEVER REPRINTS THE THREAD.
-//
-// All eight rows drew the same timeline glyph — pixel-identical across every one
-// — so a comment and a field change were visually the same event. And only the
-// twelve task fields `TaskDeltas` compares produce deltas, so every other kind
-// fell through to the change's EXCERPT, which for the whole comment family is
-// the comment body: the History tab printed the Thread tab back, one clipped
-// line per comment, and the row never said what the change WAS.
-test("the history draws a mark per kind and never reprints the thread", async () => {
-  serving({ work_items: { items: [], complete: true } });
+// ---------------------------------------------------------------------------
+// Changes, as the signed-in person
+// ---------------------------------------------------------------------------
+
+// A READER WHO CANNOT CHANGE THE TASK SEES THE SAME PAGE, every control drawn
+// and disabled with the sentence that says what would change that — never a
+// hidden button, never a picker that silently does nothing — for each of the
+// three readers who cannot act.
+test.each([
+  [
+    "an anonymous reader",
+    { operator_id: "", operator: false, handle: "", name: "", acts: [], anonymous: true },
+    WRITE_REASONS.anonymous,
+  ],
+  ["an unbound token", UNBOUND, WRITE_REASONS.unbound],
+  ["a person the engine does not serve", { ...JANE, acts: [] }, WRITE_REASONS.not_served],
+])("%s sees disabled controls with the reason", async (_who, viewer, reason) => {
+  mount(<WorkItemPage id="ENG-42" />, { viewer });
+  await settle();
+  expect(document.querySelector(".task-readonly")?.textContent).toContain(reason);
+  expect(document.querySelector(".task-readonly")?.textContent).toContain(
+    "The fields, checklists and description are read-only here.",
+  );
+  const comment = screen.getByRole("button", { name: /^Comment$/ });
+  expect(comment.getAttribute("aria-disabled")).toBe("true");
+  expect(reasonOf(comment)).toContain(reason);
+  const assign = screen.getByRole("button", { name: /^Assign$/ });
+  expect(reasonOf(assign)).toContain(reason);
+  // No pencil offers an edit the engine would refuse, and no pick is sent.
+  expect(screen.queryByRole("button", { name: "Edit the title" })).toBeNull();
+  expect(screen.queryByRole("button", { name: /Status of ENG-42/ })).toBeNull();
+  expect(posted).toEqual([]);
+});
+
+// A WRITER'S FIELD IS CHANGED WHERE IT IS READ, conditional on the version the
+// page was drawn from — so a race lost to somebody else is refused, not
+// overwritten.
+test("a status picked in the rail is sent as the person, at the page's version", async () => {
+  mount(<WorkItemPage id="ENG-42" />);
+  await settle();
+  fireEvent.click(screen.getByRole("button", { name: /Status of ENG-42/ }));
+  fireEvent.click(
+    await screen
+      .findByRole("menuitemradio", { name: "In review" })
+      .catch(() => screen.findByRole("menuitem", { name: "In review" })),
+  );
+  await settle();
+  expect(posted).toEqual([
+    { tool: "update_work_item", args: { item: "ENG-42", if_match: 7, status: "in_review" } },
+  ]);
+});
+
+// A TICK IS A GESTURE, applied to the checklists as they are when it lands —
+// so it carries no version, and never loses to an agent that moved the status.
+test("a checklist tick is sent without a version", async () => {
+  mount(<WorkItemPage id="ENG-42" />, {
+    answers: {
+      work_item: detail({
+        task: task({
+          checklists: [
+            {
+              id: "l-1",
+              name: "Done when",
+              items: [
+                { id: "i-1", name: "Retries with backoff", done: true },
+                { id: "i-2", name: "An integration test covers it" },
+              ],
+            },
+          ],
+        }),
+      }),
+    },
+  });
+  await settle();
+  expect(screen.getByText("1 / 2")).toBeTruthy();
+  fireEvent.click(screen.getByRole("checkbox", { name: "An integration test covers it" }));
+  await settle();
+  expect(posted).toEqual([
+    {
+      tool: "update_work_item",
+      args: { item: "ENG-42", checklist: { op: "set_done", item: "i-2", done: true } },
+    },
+  ]);
+});
+
+// "+" FILES A SUB-TASK UNDER THIS TASK, in its project.
+test("a sub-task is filed under the task it was added from", async () => {
+  mount(<WorkItemPage id="ENG-42" />);
+  await settle();
+  fireEvent.click(screen.getByRole("button", { name: "Add a sub-task" }));
+  fireEvent.change(screen.getByRole("textbox", { name: "New sub-task of ENG-42" }), {
+    target: { value: "e2e: a slow switch port" },
+  });
+  fireEvent.click(screen.getByRole("button", { name: "Add" }));
+  await settle();
+  expect(posted).toEqual([
+    {
+      tool: "create_work_item",
+      args: { title: "e2e: a slow switch port", project: "ENG", parent: "t-1" },
+    },
+  ]);
+});
+
+// FOLLOWING A TASK IS THE PERSON'S OWN, and carries no version either.
+test("watch follows the task as the person", async () => {
+  mount(<WorkItemPage id="ENG-42" />);
+  await settle();
+  fireEvent.click(screen.getByRole("button", { name: "Watch" }));
+  await settle();
+  expect(posted).toEqual([{ tool: "update_work_item", args: { item: "ENG-42", watch: true } }]);
+});
+
+// A COMMENT IS POSTED ON THE TASK — and a question put to one seat is an ask.
+test("a comment is posted on the task", async () => {
+  mount(<WorkItemPage id="ENG-42" />);
+  await settle();
+  fireEvent.change(screen.getByRole("combobox", { name: "Comment on ENG-42" }), {
+    target: { value: "Holding the port for 20s reproduces it." },
+  });
+  fireEvent.click(screen.getByRole("button", { name: /^Comment$/ }));
+  await settle();
+  expect(posted).toEqual([
+    {
+      tool: "comment_on_work_item",
+      args: { item: "ENG-42", body: "Holding the port for 20s reproduces it." },
+    },
+  ]);
+});
+
+/**
+ * Holds every write until `release` answers them all `applied` — the window a
+ * second Enter lands in.
+ */
+function holdWrites(): { release: () => void } {
+  const waiting: ((r: Response) => void)[] = [];
+  vi.mocked(fetch).mockImplementation(async (url, init) => {
+    const tool = decodeURIComponent(String(url).split("/operator/act/")[1] ?? "");
+    const body = JSON.parse((init as RequestInit).body as string) as {
+      args: Record<string, unknown>;
+    };
+    posted.push({ tool, args: body.args });
+    return new Promise<Response>((resolve) => waiting.push(resolve));
+  });
+  return {
+    release: () => {
+      for (const answer of waiting.splice(0)) {
+        answer(
+          new Response(
+            JSON.stringify({
+              outcome: "applied",
+              position: "CREWLET_TRACKER_LOG@1:99",
+              receipt: {},
+            }),
+            { status: 200, headers: { "Content-Type": "application/json" } },
+          ),
+        );
+      }
+    },
+  };
+}
+
+// EVERY WAY INTO A PRESS TAKES THE BUTTON'S OWN GATE. A one-line form files on
+// Enter and a comment sends on ⌘Enter, neither touching the button that
+// refuses a press while one is out — so a second key before the first answer
+// filed the sub-task twice and posted the comment twice, each under a new
+// request id the engine rightly took for a second change.
+test("a second Enter while the first is out files one sub-task and one comment", async () => {
+  mount(<WorkItemPage id="ENG-42" />);
+  await settle();
+  const writes = holdWrites();
+  fireEvent.click(screen.getByRole("button", { name: "Add a sub-task" }));
+  const line = screen.getByRole("textbox", { name: "New sub-task of ENG-42" });
+  fireEvent.change(line, { target: { value: "e2e: a slow switch port" } });
+  fireEvent.submit(line.closest("form")!);
+  await settle();
+  fireEvent.submit(line.closest("form")!);
+  await settle();
+  const comment = screen.getByRole("combobox", { name: "Comment on ENG-42" });
+  fireEvent.change(comment, { target: { value: "Holding the port reproduces it." } });
+  fireEvent.keyDown(comment, { key: "Enter", ctrlKey: true });
+  await settle();
+  fireEvent.keyDown(comment, { key: "Enter", ctrlKey: true });
+  await settle();
+  expect(posted.map((p) => p.tool)).toEqual(["create_work_item", "comment_on_work_item"]);
+  await act(async () => writes.release());
+  await settle();
+});
+
+// A CONDITIONAL EDIT WHILE A PRESS IS OUT IS NOT SENT: it carries the version
+// the first press is about to move, so the engine could only refuse it — and
+// the page then drew the person's own first press as somebody else's change.
+test("a second Enter on the title sends one rename and reports no conflict", async () => {
+  mount(<WorkItemPage id="ENG-42" />);
+  await settle();
+  const writes = holdWrites();
+  fireEvent.click(screen.getByRole("button", { name: "Edit the title" }));
+  const title = screen.getByRole("textbox", { name: "Title of ENG-42" });
+  fireEvent.change(title, { target: { value: "Switch ports flap under load" } });
+  fireEvent.submit(title.closest("form")!);
+  await settle();
+  fireEvent.submit(title.closest("form")!);
+  await settle();
+  expect(posted).toEqual([
+    {
+      tool: "update_work_item",
+      args: { item: "ENG-42", if_match: 7, title: "Switch ports flap under load" },
+    },
+  ]);
+  await act(async () => writes.release());
+  await settle();
+});
+
+// ---------------------------------------------------------------------------
+// The two frames of one task
+// ---------------------------------------------------------------------------
+
+// A PEEK RESOLVES ITS OWN PEOPLE: the frame mounts it knowing nothing about an
+// org chart, and a peek that waited to be handed a resolver drew every handle
+// raw — the set-by lines included.
+test("the peek names a person, exactly as the page does", async () => {
+  const { container } = mount(<ItemPeek itemKey="ENG-42" />, {
+    answers: {
+      work_item: detail({
+        task: task({ assignee: "ada" }),
+        history: [
+          {
+            id: "h-1",
+            kind: "status",
+            actor: "ada",
+            actor_kind: "agent",
+            at: "2031-04-16T09:00:00Z",
+            log_seq: 1,
+            fields: { status: { from: "todo", to: "in_progress" } },
+          },
+        ],
+      }),
+    },
+  });
+  await settle();
+  expect(screen.getAllByText("Ada Okonkwo").length).toBeGreaterThan(0);
+  const setBy = [...container.querySelectorAll(".props-setby")].map((el) => el.textContent ?? "");
+  expect(setBy.length).toBeGreaterThan(0);
+  expect(setBy.every((line) => line.includes("Ada Okonkwo"))).toBe(true);
+});
+
+// AN OPERATOR IS A PERSON, AND IS DRAWN AS ONE: the reporter a token filed as
+// is in no chart, and takes the kind its writes carry.
+test("an operator reporter is drawn with a person's circle", async () => {
+  const { container } = mount(<ItemPeek itemKey="ENG-42" />, {
+    answers: {
+      work_item: detail({
+        task: task({ assignee: "ada", reporter: "founder" }),
+        history: [
+          {
+            id: "h-1",
+            kind: "created",
+            actor: "founder",
+            actor_kind: "operator",
+            at: "2031-04-16T09:00:00Z",
+            log_seq: 1,
+          },
+        ],
+      }),
+    },
+  });
+  await settle();
+  const chip = [...container.querySelectorAll("a.seat-chip")].find(
+    (a) => a.querySelector(".truncate")?.textContent === "founder",
+  );
+  expect(chip, "the reporter is drawn as a seat chip").toBeTruthy();
+  expect(chip!.querySelector(".crewlet-avatar--human")).not.toBeNull();
+});
+
+// ONE PERSON, ONE NAME ON ONE PAGE. A task a bound token filed names the
+// credential as its reporter; the rail draws the seat the engine names beside
+// it (`reporter_seat`) and every set-by line the seat the history row names
+// (`actor_seat`) — the same resolution the activity column makes, so the rail
+// can no longer say "founder" where the feed says Jane Founder. And the create
+// itself draws no set-by line: the Reporter row already says who filed it.
+test("an operator-authored task names the person in the reporter and set-by lines", async () => {
+  const { container } = mount(<ItemPeek itemKey="ENG-42" />, {
+    answers: {
+      work_item: detail({
+        task: task({ reporter: "founder", priority: "high", assignee: "ada" }),
+        reporter_seat: "jane",
+        history: [
+          {
+            id: "h-2",
+            kind: "fields",
+            actor: "founder",
+            actor_kind: "operator",
+            actor_seat: "jane",
+            at: "2031-04-16T10:00:00Z",
+            log_seq: 2,
+            fields: { priority: { from: "normal", to: "high" } },
+          },
+          {
+            id: "h-1",
+            kind: "created",
+            actor: "founder",
+            actor_kind: "operator",
+            actor_seat: "jane",
+            at: "2031-04-16T09:00:00Z",
+            log_seq: 1,
+            fields: { assignee: { from: "", to: "ada" }, reporter: { from: "", to: "founder" } },
+          },
+        ],
+      }),
+    },
+  });
+  await settle();
+  const reporter = rowValue("Reporter");
+  expect(reporter.textContent).toContain("Jane Founder");
+  expect(reporter.textContent).not.toContain("founder");
+  const lines = [...container.querySelectorAll(".props-setby")].map((el) => el.textContent ?? "");
+  expect(lines).toHaveLength(1);
+  expect(lines[0]).toContain("set by Jane Founder");
+  expect(rowValue("Priority").querySelector(".props-setby")).not.toBeNull();
+});
+
+// THE PEEK STATES EACH PROPERTY ONCE: its header is the identity and the state
+// marks, and every field is the rail's, in the same column.
+test("the peek states each property once", async () => {
+  const { container } = mount(<ItemPeek itemKey="ENG-42" />);
+  await settle();
+  expect(container.querySelector(".fact-line")).toBeNull();
+  expect(screen.getAllByText("Status")).toHaveLength(1);
+  expect(screen.getByText("ENG-42")).toBeTruthy();
+});
+
+// THE RAIL'S BODY IS KEYED ON ITS SUBJECT: `[` and `]` move the peek from task
+// A to task B, and a different object is a different mount.
+test("moving the rail to another task mounts a new body", async () => {
+  location.hash = `#/work?peek=${refToken({ kind: "item", id: "ENG-42" })}`;
+  const { container } = mount(
+    <PeekNeighbours>
+      <PeekHost />
+    </PeekNeighbours>,
+  );
+  // THE PEEK'S BODY IS A LAZY CHUNK, so it is waited for rather than settled.
+  await waitFor(() => expect(container.querySelector(".object-head")).toBeTruthy(), {
+    timeout: 5000,
+  });
+  const before = container.querySelector(".object-head");
+  location.hash = `#/work?peek=${refToken({ kind: "item", id: "ENG-43" })}`;
+  await waitFor(() => expect(container.querySelector(".object-head")).not.toBe(before), {
+    timeout: 5000,
+  });
+});
+
+// THE DESCRIPTION IS NOT REBUILT ON EVERY TICK OF THE PAGE'S CLOCK: a reader
+// selecting a sentence to copy would lose it within a second.
+test("the description keeps its own DOM across a clock tick", async () => {
+  const { container } = mount(<WorkItemPage id="ENG-42" />, {
+    answers: { work_item: detail({ task: task({ body: "the runbook is **here**" }) }) },
+  });
+  await settle();
+  const before = container.querySelector(".task-prose");
+  expect(before).toBeTruthy();
+  await act(async () => {
+    vi.mocked(Date.now).mockReturnValue(NOW + 1000);
+    await new Promise((r) => setTimeout(r, 1100));
+  });
+  expect(container.querySelector(".task-prose")).toBe(before);
+});
+
+// ---------------------------------------------------------------------------
+// A removed task
+// ---------------------------------------------------------------------------
+
+// A TASK IN THE TRASH IS SAID TO BE IN THE TRASH — the detail read does not
+// filter removed tasks, so without the flag it rendered as an ordinary one.
+test("a removed task is marked, and a live one carries no such mark", () => {
   const { container } = render(
-    <Router>
-      <ItemBody
-        detail={detail({
-          history: [
-            {
-              id: "h1",
-              kind: "comment",
-              at: NOW_ISO,
-              log_seq: 1,
-              excerpt: "the login race is a double-submit",
-            },
-            {
-              id: "h2",
-              kind: "status",
-              at: NOW_ISO,
-              log_seq: 2,
-              fields: { status: { from: "todo", to: "done" } },
-            },
-            { id: "h3", kind: "watchers", at: NOW_ISO, log_seq: 3 },
-            {
-              id: "h4",
-              kind: "assignee",
-              at: NOW_ISO,
-              log_seq: 4,
-              turn_id: "turn-7",
-              fields: { assignee: { from: "", to: "ada" } },
-            },
-          ],
-        })}
-        chrome={{}}
-        now={NOW}
-      />
-    </Router>,
+    <>
+      {itemFlags(
+        detail({
+          task: task({ removed: { by: "ada", kind: "human", at: "2031-04-15T09:00:00Z" } }),
+        }),
+      )}
+    </>,
   );
-  fireEvent.click(await screen.findByRole("tab", { name: /History/ }));
-
-  // FOUR KINDS, FOUR DRAWINGS. Today every row renders the same `timeline`
-  // path, so this set has one member.
-  const drawings = new Set(
-    [...container.querySelectorAll(".work-hist-row > svg path")].map((p) => p.getAttribute("d")),
-  );
-  expect(drawings.size).toBe(4);
-
-  // THE COMMENT ROW SAYS WHAT THE CHANGE WAS, not what was said.
-  expect(screen.queryByText(/double-submit/)).toBeNull();
-  expect(screen.getByText(/commented/)).toBeTruthy();
-  // AND A KIND WITH NO DELTAS IS A SENTENCE, not a bare noun after a name.
-  expect(screen.getByText(/changed the watchers/)).toBeTruthy();
-
-  // THE CONTROL IS OUT OF THE TRUNCATING CELL, so an entry long enough to fill
-  // the track cannot eat it.
-  expect(container.querySelector(".work-hist-what a")).toBeNull();
-  expect(container.querySelector(".work-hist-tail a")).toBeTruthy();
+  expect(container.textContent).toContain("In the trash");
+  cleanup();
+  const live = render(<>{itemFlags(detail())}</>);
+  expect(live.container.textContent ?? "").not.toContain("In the trash");
 });
 
-// AND IT NAMES THE OTHER TASK, rather than printing the uuid the delta holds.
-//
-// A re-parent, a cascade removal and every relation delta carry the other end
-// by its ID — a key belongs to that task's own row, and a history row is
-// written once by every node and repaired by nothing — so the ANSWER resolves
-// what this node holds and the sentence reads it from `detail.keys`. Handed no
-// resolver, these two tabs drew `Parent: — → 1d573f85-…` while `#/work/history`
-// drew `Parent: — → ENG-1` for the same commit, one click away.
-test("a re-parent names the parent, and an unresolved id stays an id", async () => {
-  serving({ work_items: { items: [], complete: true } });
-  render(
-    <Router>
-      <ItemBody
-        detail={detail({
-          keys: { "t-parent": "ENG-1" },
-          history: [
-            {
-              id: "h1",
-              kind: "reparented",
-              at: NOW_ISO,
-              log_seq: 1,
-              fields: { parent: { from: "", to: "t-parent" } },
-            },
-            // AN ID THE ANSWER DID NOT RESOLVE RENDERS AS THE ID — past the
-            // map's cap, or a counterparty this node has not applied. A blank
-            // there would read as a task with no name.
-            {
-              id: "h2",
-              kind: "relations",
-              at: NOW_ISO,
-              log_seq: 2,
-              fields: { waiting_on: { from: "", to: "t-unapplied" } },
-            },
-          ],
-        })}
-        chrome={{}}
-        now={NOW}
-      />
-    </Router>,
-  );
-  fireEvent.click(await screen.findByRole("tab", { name: /History/ }));
+test("the removal note names its author and says it is reversible", () => {
+  render(<RemovedNote tomb={{ by: "ada", kind: "human", at: "2031-04-15T09:00:00Z" }} now={NOW} />);
+  expect(screen.getByText(/ada/)).toBeTruthy();
+  expect(screen.getByText(/reversible at any age/)).toBeTruthy();
+});
 
-  expect(screen.getByText(new RegExp(`Parent: ${EMPTY_VALUE} → ENG-1`))).toBeTruthy();
-  expect(screen.queryByText(/t-parent/)).toBeNull();
-  expect(screen.getByText(new RegExp(`Waiting on: ${EMPTY_VALUE} → t-unapplied`))).toBeTruthy();
+test("a task removed alongside its parent names the parent", () => {
+  render(
+    <RemovedNote
+      tomb={{ by: "ada", kind: "human", at: "2031-04-15T09:00:00Z", removed_with: "ENG-1" }}
+      now={NOW}
+    />,
+  );
+  expect(screen.getByText("ENG-1")).toBeTruthy();
 });

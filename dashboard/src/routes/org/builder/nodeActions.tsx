@@ -27,15 +27,15 @@ import { COMPANY_KEY, type NodeKey } from "./model/keys.ts";
 import type { Reorder } from "./reorder.ts";
 import { CrewletIcon } from "@crewlethq/icons";
 import {
-  AccountTreeGlyph,
-  ArrowDownwardGlyph,
-  ArrowOutwardGlyph,
-  ArrowUpwardGlyph,
-  DeleteGlyph,
-  EditGlyph,
-  MoveItemGlyph,
-  PersonGlyph,
-  SmartToyGlyph,
+  NetworkGlyph,
+  ArrowDownGlyph,
+  ArrowUpRightGlyph,
+  ArrowUpGlyph,
+  TrashGlyph,
+  PencilGlyph,
+  FolderInputGlyph,
+  UserGlyph,
+  BotGlyph,
 } from "@crewlethq/icons/glyphs";
 import { Kbd, isApplePlatform, type AddPillSection, type MenuEntry } from "@crewlethq/ui";
 
@@ -67,9 +67,9 @@ const deleteKey = () => (isApplePlatform() ? "Backspace" : "Delete");
  * agent seat carries the mark every agent seat in the chart wears.
  */
 const ADD_CHOICES: readonly { kind: AddKind; label: string; icon: ReactNode }[] = [
-  { kind: "unit", label: "Add unit", icon: <AccountTreeGlyph /> },
+  { kind: "unit", label: "Add unit", icon: <NetworkGlyph /> },
   { kind: "agent", label: "Add agent seat", icon: <CrewletIcon /> },
-  { kind: "human", label: "Add human seat", icon: <PersonGlyph /> },
+  { kind: "human", label: "Add human seat", icon: <UserGlyph /> },
 ];
 
 /** Where an add under `parent` lands: the company root is `null`. */
@@ -121,14 +121,14 @@ export function nodeMenu(api: BuilderApi, view: NodeView, open: OpenScreen): Men
   const edit: MenuEntry = {
     key: "edit",
     label: "Edit",
-    icon: <EditGlyph />,
+    icon: <PencilGlyph />,
     hint: <Kbd keys={["Enter"]} />,
     onSelect: () => api.openEditor(view.key),
   };
   const remove: MenuEntry = {
     key: "delete",
     label: "Delete",
-    icon: <DeleteGlyph />,
+    icon: <TrashGlyph />,
     danger: true,
     disabled: api.readOnly,
     hint: <Kbd keys={[deleteKey()]} />,
@@ -137,7 +137,7 @@ export function nodeMenu(api: BuilderApi, view: NodeView, open: OpenScreen): Men
   const move: MenuEntry = {
     key: "move",
     label: "Move to",
-    icon: <MoveItemGlyph />,
+    icon: <FolderInputGlyph />,
     disabled: api.readOnly,
     onSelect: () => api.openMove(view.key),
   };
@@ -160,7 +160,7 @@ export function nodeMenu(api: BuilderApi, view: NodeView, open: OpenScreen): Men
     entries.push({
       key: "open",
       label: "Open seat",
-      icon: <ArrowOutwardGlyph />,
+      icon: <ArrowUpRightGlyph />,
       onSelect: () => open(screen),
     });
   }
@@ -169,13 +169,13 @@ export function nodeMenu(api: BuilderApi, view: NodeView, open: OpenScreen): Men
     {
       key: "reports",
       label: "Edit reports",
-      icon: <AccountTreeGlyph />,
+      icon: <NetworkGlyph />,
       onSelect: () => api.openEditor(view.key, "reports"),
     },
     {
       key: "kind",
       label: view.kind === "human" ? "Change to agent seat" : "Change to human seat",
-      icon: view.kind === "human" ? <SmartToyGlyph /> : <PersonGlyph />,
+      icon: view.kind === "human" ? <BotGlyph /> : <UserGlyph />,
       disabled: api.readOnly,
       onSelect: () => api.openChangeKind(view.key),
     },
@@ -203,14 +203,14 @@ export function moveEntries(api: BuilderApi, reorder: Reorder, key: NodeKey): Me
     {
       key: "move-up",
       label: "Move up",
-      icon: <ArrowUpwardGlyph />,
+      icon: <ArrowUpGlyph />,
       disabled: api.readOnly,
       onSelect: () => reorder.move(key, -1),
     },
     {
       key: "move-down",
       label: "Move down",
-      icon: <ArrowDownwardGlyph />,
+      icon: <ArrowDownGlyph />,
       disabled: api.readOnly,
       onSelect: () => reorder.move(key, 1),
     },
@@ -334,7 +334,7 @@ export function reportingMenu(api: BuilderApi, view: SeatView, open: OpenScreen)
     {
       key: "reports",
       label: "Edit reports",
-      icon: <AccountTreeGlyph />,
+      icon: <NetworkGlyph />,
       hint: <Kbd keys={["Enter"]} />,
       onSelect: () => api.openEditor(view.key, "reports"),
     },
@@ -343,7 +343,7 @@ export function reportingMenu(api: BuilderApi, view: SeatView, open: OpenScreen)
     entries.push({
       key: "open",
       label: "Open seat",
-      icon: <ArrowOutwardGlyph />,
+      icon: <ArrowUpRightGlyph />,
       onSelect: () => open(screen),
     });
   }
@@ -443,7 +443,7 @@ export function leadMenu(api: BuilderApi, structure: Structure, unit: UnitView):
     {
       key: "other",
       label: "Choose another seat",
-      icon: <EditGlyph />,
+      icon: <PencilGlyph />,
       disabled: api.readOnly,
       onSelect: () => api.openEditor(unit.key, "leadership"),
     },

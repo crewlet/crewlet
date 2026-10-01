@@ -19,6 +19,63 @@ const DefaultRevisionPage = 50
 // ErrNoRevision reports a revision id that does not exist.
 var ErrNoRevision = errors.New("store: no such config revision")
 
+// AuthorKind is WHAT wrote a revision: a person through a credential, or the
+// engine itself.
+//
+// # Why a kind and not just a name
+//
+// `created_by` is a LABEL — a token's name, a login, a node id, "reconcile
+// loop" — and the two name spaces overlap: nothing stops an operator token
+// being called `node`. A reader that inferred the writer from the label was
+// guessing, and the audit screen stopped guessing by assuming instead: it drew
+// every revision as an operator's, including the ones a node seeded from its
+// file and the reloads the reconcile loop makes after sealing a credential.
+// So the writer states its kind at the write, where it is a fact, beside the
+// label it chose.
+//
+// There is no `seat` kind. No seat writes configuration in this build — the
+// agent tools reach the tracker and the knowledge base, never /config — and a
+// constant with no producer would be a value every reader had to handle and no
+// test could reach. A newer build that adds one needs no change here to be
+// READ: [Configs.Adopt] keeps whatever kind the fleet's pointer carries.
+type AuthorKind string
+
+// The two writers of a revision in this build.
+const (
+	// AuthorOperator is a person, through the credential that
+	// authenticated them: an API token on /config or /setup, or the login
+	// running `crewlet config import` and `crewlet config rekey`.
+	AuthorOperator AuthorKind = "operator"
+	// AuthorNode is the engine acting on its own: a node seeding the store
+	// from its -company file at boot, and the reconcile loop's own writes
+	// (removing a disconnected integration's block, recording a site it
+	// discovered, reloading after it sealed a credential).
+	AuthorNode AuthorKind = "node"
+)
+
+// Valid reports a kind this build writes.
+//
+// Only a WRITE is held to it. A revision adopted from the fleet carries the
+// kind its origin recorded, which may be one a newer build added, or none at
+// all from a pointer an older build published — an unknown kind off the wire
+// is a value, and refusing it would stop this node recording a revision it is
+// running.
+func (k AuthorKind) Valid() bool {
+	switch k {
+	case AuthorOperator, AuthorNode:
+		return true
+	}
+	return false
+}
+
+// Author is who wrote a revision: the label they are recorded under and
+// their [AuthorKind]. One value, so a writer cannot pass a name and forget
+// what it names.
+type Author struct {
+	Name string
+	Kind AuthorKind
+}
+
 // Revision is one immutable snapshot of the whole Tier B document.
 type Revision struct {
 	ID       string
@@ -26,8 +83,14 @@ type Revision struct {
 
 	CreatedAt time.Time
 	CreatedBy string
-	Source    string
-	Summary   string
+	// CreatedByKind is what CreatedBy names. EMPTY only on a revision this
+	// node adopted from a pointer that did not say — published by a build
+	// older than the one that records it, or stored before migration
+	// 0035 could classify it — and a reader shows that as "not recorded"
+	// rather than picking a kind.
+	CreatedByKind AuthorKind
+	Source        string
+	Summary       string
 
 	// Payload is the document as stored. When a keyring is configured this
 	// is the sealed envelope rather than the plaintext structure — opaque
@@ -49,7 +112,7 @@ type Configs struct{ db *DB }
 func (d *DB) Configs() *Configs { return &Configs{db: d} }
 
 const revisionColumns = `revision_id, parent_revision_id, created_at, created_by,
-	source, summary, payload, is_active, activated_at`
+	created_by_kind, source, summary, payload, is_active, activated_at`
 
 // InsertActive writes a new revision and makes it the active one, returning
 // its id.
@@ -100,7 +163,15 @@ func (c *Configs) Insert(ctx context.Context, r Revision) (string, error) {
 
 // insert is the one INSERT both writes share, so a revision stored active and
 // one stored inactive cannot differ in anything but the flag.
+//
+// THE KIND IS REQUIRED. Every writer on this node knows whether it is a person
+// or the engine, and a revision stored without saying is exactly the row the
+// audit screen used to fill in with a guess.
 func (c *Configs) insert(ctx context.Context, r Revision, active bool) (string, error) {
+	if !r.CreatedByKind.Valid() {
+		return "", fmt.Errorf("store: a config revision needs its author's kind "+
+			"(%q or %q), got %q", AuthorOperator, AuthorNode, r.CreatedByKind)
+	}
 	id := r.ID
 	if id == "" {
 		id = uuid.NewString()
@@ -129,17 +200,19 @@ func (c *Configs) insert(ctx context.Context, r Revision, active bool) (string, 
 		_, err := tx.ExecContext(ctx,
 			`INSERT INTO company_config
 			     (revision_id, parent_revision_id, created_at, created_by,
-			      source, summary, payload, is_active, activated_at)
-			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			      created_by_kind, source, summary, payload, is_active, activated_at)
+			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 			id, NullText(r.ParentID), EncodeTime(at), r.CreatedBy,
-			r.Source, r.Summary, string(payload), isActive, activatedAt)
+			string(r.CreatedByKind), r.Source, r.Summary, string(payload),
+			isActive, activatedAt)
 		return err
 	})
 	if err != nil {
 		return "", fmt.Errorf("store: insert config revision: %w", err)
 	}
 	log.InfoContext(ctx, "config_revision_stored",
-		"revision", id, "source", r.Source, "by", r.CreatedBy, "active", active)
+		"revision", id, "source", r.Source, "by", r.CreatedBy,
+		"by_kind", string(r.CreatedByKind), "active", active)
 	return id, nil
 }
 
@@ -214,6 +287,20 @@ func (c *Configs) Activate(ctx context.Context, revisionID string, at time.Time)
 // The id is REQUIRED, and that is the difference from InsertActive minting
 // one: this row's identity belongs to the fleet, and a generated id would
 // make the node's own history disagree with the pointer it converged on.
+//
+// # The author is the ORIGIN's, never this node's
+//
+// The caller passes the author, kind, source and creation instant the fleet's
+// pointer carries, so a revision reads the same on every node rather than
+// "peer" everywhere but the one it was written on. The kind is NOT held to
+// [AuthorKind.Valid] here, for the reason that method gives.
+//
+// A row that is already here keeps its body, but an author it did not know
+// is FILLED IN when the fleet now says: a node that adopted a revision from
+// an older build's pointer, or before this was recorded at all, learns who
+// wrote it the next time the fleet points at it. A known author is never
+// overwritten — the row this node wrote itself is the authority on its own
+// write.
 func (c *Configs) Adopt(ctx context.Context, r Revision) error {
 	if r.ID == "" {
 		return fmt.Errorf("store: adopting a revision needs its fleet id")
@@ -234,11 +321,16 @@ func (c *Configs) Adopt(ctx context.Context, r Revision) error {
 		if _, err := tx.ExecContext(ctx,
 			`INSERT INTO company_config
 			     (revision_id, parent_revision_id, created_at, created_by,
-			      source, summary, payload, is_active, activated_at)
-			 VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?)
-			 ON CONFLICT (revision_id) DO NOTHING`,
+			      created_by_kind, source, summary, payload, is_active, activated_at)
+			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, ?)
+			 ON CONFLICT (revision_id) DO UPDATE
+			    SET created_by = excluded.created_by,
+			        created_by_kind = excluded.created_by_kind
+			  WHERE company_config.created_by_kind = ''
+			    AND excluded.created_by_kind <> ''`,
 			r.ID, NullText(r.ParentID), EncodeTime(at), r.CreatedBy,
-			r.Source, r.Summary, string(payload), EncodeTime(at)); err != nil {
+			string(r.CreatedByKind), r.Source, r.Summary, string(payload),
+			EncodeTime(at)); err != nil {
 			return err
 		}
 		// The row may already have been here — the conflict above did
@@ -252,7 +344,8 @@ func (c *Configs) Adopt(ctx context.Context, r Revision) error {
 	if err != nil {
 		return fmt.Errorf("store: adopt config revision %s: %w", r.ID, err)
 	}
-	log.InfoContext(ctx, "config_revision_adopted", "revision", r.ID, "source", r.Source)
+	log.InfoContext(ctx, "config_revision_adopted", "revision", r.ID, "source", r.Source,
+		"by", r.CreatedBy, "by_kind", string(r.CreatedByKind))
 	return nil
 }
 
@@ -331,11 +424,13 @@ func scanRevision(rows *sql.Rows) (Revision, error) {
 	var createdAt int64
 	var activatedAt sql.NullInt64
 	var active int64
-	if err := rows.Scan(&r.ID, &parent, &createdAt, &r.CreatedBy, &r.Source,
+	var kind string
+	if err := rows.Scan(&r.ID, &parent, &createdAt, &r.CreatedBy, &kind, &r.Source,
 		&r.Summary, &payload, &active, &activatedAt); err != nil {
 		return Revision{}, fmt.Errorf("store: read config revision: %w", err)
 	}
 	r.ParentID = Text(parent)
+	r.CreatedByKind = AuthorKind(kind)
 	r.CreatedAt = DecodeTime(createdAt)
 	r.Payload = json.RawMessage(payload)
 	r.Active = active != 0

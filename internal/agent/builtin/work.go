@@ -77,6 +77,11 @@ type WorkReader interface {
 type WorkWriter interface {
 	CreateTask(ctx context.Context, opID string, task tracker.Task,
 		notify *tracker.Notify) (tracker.WriteResult, error)
+	// CreateTaskAsking files a task AS a question — the task and the ask
+	// on it in one record, so the question can never land without the
+	// item or the item without the question.
+	CreateTaskAsking(ctx context.Context, opID string, task tracker.Task,
+		ask tracker.Comment, notify *tracker.Notify) (tracker.WriteResult, error)
 	// UpdateTask takes the change KIND beside the notification because
 	// they are two facts: what happened, and who is told about it. A tool
 	// that stated only the second left the record's kind to be guessed
@@ -204,6 +209,13 @@ type WorkDeps struct {
 	// no trace — the board simply has one fewer item on it.
 	TrashWriter func(actor Actor) TrashWriter
 
+	// Placer resolves the board-drag side for one actor, and is the
+	// operator surface's alone for the reason [WorkDeps.ViewWriter] is: a
+	// board's manual order is furniture a person arranges. Its lane half is
+	// a status change, which every surface already makes through
+	// [WorkDeps.Writer]. See workplace.go.
+	Placer func(actor Actor) WorkPlacer
+
 	// Seats is the company's roster, for validating a handle a caller
 	// typed. Nil admits every handle, which is the honest state for a
 	// surface with no chart loaded.
@@ -271,17 +283,30 @@ type WorkDeps struct {
 	// every concurrent request.
 	Actor func(ctx context.Context, turn *turnctx.Turn) (Actor, error)
 
+	// Channels is where an asker may promise to report a decision — the
+	// chat surfaces a seat posts on and the channels the chart declares.
+	// Read per call, for the reason [WorkDeps.Seats] is. Nil refuses
+	// `decision.inform`, which is the honest answer for a surface with no
+	// chart to check it against.
+	Channels ChannelDirectory
+
 	// Leads resolves the two fallbacks a wake may need — a project's lead
 	// and a unit's. Nil carries neither, which degrades to a change that
 	// reaches the people already on the task and nobody else.
 	Leads tracker.Leads
 
-	// Now is the clock a query's relative dates resolve against, and the
-	// zone they resolve in. Injected because "due this week" is a calendar
-	// boundary, and a boundary read from a wall clock in the wrong zone
-	// names a different week.
+	// Now is the clock a query's relative dates resolve against, and Zone
+	// the company's clock they resolve in (ADR-0018). Injected because
+	// "due this week" is a calendar boundary, and a boundary read from a
+	// wall clock in the wrong zone names a different week.
+	//
+	// Zone is READ PER CALL, for the reason the chart seams are: the
+	// operator surface is built once at startup and never rebuilt, so a
+	// zone captured there answered every assistant's "due friday" on the
+	// clock the company booted with — and before that, on UTC, since that
+	// surface was given none at all. Nil is UTC.
 	Now  func() time.Time
-	Zone *time.Location
+	Zone func() *time.Location
 
 	// Await blocks until this node's applier has consumed a write.
 	//
@@ -377,17 +402,45 @@ type Actor struct {
 	Calls *turnctx.CallLog
 
 	// Operation is the id of the operation this CALL is, on a surface
-	// whose callers have no turn to derive one from — the operator's
-	// ([WorkDeps.bindOperation]): the `op_id` the caller brought back, or
-	// one minted for this call and answered so it can be. Every write the
-	// call makes derives its own id from it ([opIDFor], [commentID]), so
-	// the call brought back is the same writes — the same task, the same
-	// comment, the same steps — answered from the ledger where they
-	// landed and finished where they did not. Empty in a turn, where the
-	// turn is the identity.
+	// whose callers have no turn to derive one from — the operator's —
+	// and the ONE key every write such a call makes is derived from (see
+	// the package doc, "How a write is made once"). The caller names it:
+	// an operator's assistant brings back the `op_id` its call was
+	// answered with, or is minted one for a new call
+	// ([WorkDeps.bindOperation]); a transport that names its requests —
+	// the dashboard's, whose retry repeats its `request_id` — names it
+	// from the request ([RequestOperation]), and the actor resolver sets
+	// it here. Every write the call makes derives its own id from it
+	// ([opIDFor], [commentID]), so the call made again is the same writes
+	// — the same task, the same comment, the same steps — answered from the
+	// ledger where they landed and finished where they did not. Empty in a
+	// turn, where the turn is the identity.
 	Operation string
 
+	// requested is whether [Actor.Operation] is the one a transport named
+	// from its request rather than one the caller brought back or was
+	// minted — decided by [WorkDeps.bindOperation], which is the only frame
+	// that sees the call arrive with it, and never by the transport. It
+	// changes WHAT A CALLER IS TOLD, not what is written: such a caller
+	// repeats its request and has no `op_id` to bring back (one beside the
+	// request is refused), so its answer carries none ([withOperation]) and
+	// "make the same call again" names the request ([sameCall]).
+	requested bool
+
 	Chain []string
+
+	// Origin is the chat surface and conversation the turn was woken on,
+	// which every task it files states — see [tracker.Origin]. Nil outside
+	// a turn and for a turn no chat message woke: a person at the
+	// dashboard files from no thread.
+	Origin *tracker.Origin
+
+	// Written is the turn's own record of the work items its writes
+	// committed to — see [turnctx.Written]. The writer reports each
+	// committed task into it, which is what lets the engine charge a turn
+	// nothing at dispatch named an item for to the one it wrote. Nil
+	// outside a turn: an operator's write is charged to no turn at all.
+	Written *turnctx.Written
 }
 
 // OperationSeed is what a derived, idempotent id is built from.
@@ -403,9 +456,10 @@ type Actor struct {
 // mint a fresh id and write again. Falling back to the run keeps the
 // within-run guarantee without inventing a cross-run one.
 //
-// EMPTY OUTSIDE A TURN, which is the operator surface: their MCP client made
-// one call, nothing will redeliver it, and an invented key would be a lie
-// about what produced the write.
+// EMPTY OUTSIDE A TURN, which is the operator surface: a call there names
+// its own operation instead ([Actor.Operation]), and an invented seed would be
+// a lie about what produced the write — and a STABLE one would collapse every
+// later write as a redelivery of the first.
 func (a Actor) OperationSeed() string {
 	if a.WorkKey != "" {
 		return a.WorkKey
@@ -511,7 +565,39 @@ func actorFor(turn *turnctx.Turn) (Actor, error) {
 		WorkKey:   turn.WorkKey,
 		WorkSince: turn.WorkSince,
 		Chain:     turn.Chain,
+		Origin:    originOf(turn),
+		Written:   turn.Written,
 	}, nil
+}
+
+// originOf is where a turn was woken, as a create states it: the chat surface
+// and the conversation on it, or nil for a turn no chat message woke.
+func originOf(turn *turnctx.Turn) *tracker.Origin {
+	if turn == nil || strings.TrimSpace(turn.Transport) == "" {
+		return nil
+	}
+	return &tracker.Origin{Surface: turn.Transport, Conversation: turn.ConversationKey}
+}
+
+// Provenance is the trail this actor's writes carry, and where they report
+// the items they commit to.
+//
+// ONE CONSTRUCTION for every writer a surface derives — the task writer, the
+// project settings, the dependency sequence, the merge — because each is the
+// same writer in another shape, and a shape that dropped the turn's write log
+// would be a tool whose writes a turn could never be charged by.
+func (a Actor) Provenance() tracker.Provenance {
+	provenance := tracker.Provenance{
+		OperatorID: a.OperatorID, Seat: a.Seat, TurnID: a.TurnID, Chain: a.Chain,
+		Origin: a.Origin,
+	}
+	// NIL STAYS NIL. A nil *Written in the interface is a non-nil log that
+	// reports into nothing, and the writer would do the work of naming an
+	// item for every write only to discard it.
+	if a.Written != nil {
+		provenance.Written = a.Written
+	}
+	return provenance
 }
 
 // actor resolves who this call writes as — see [WorkDeps.Actor].
@@ -544,14 +630,16 @@ func (d WorkDeps) partyOf(handle string) tracker.Party {
 	return d.Party(handle)
 }
 
-// turnKey is the idempotency key a comment carries, or "" outside a turn.
+// turnKey is the idempotency key a turn's derived ids are seeded from, or ""
+// outside a turn.
 //
-// NIL-SAFE, because these tools serve two callers now. A TURN's key makes a
-// comment idempotent: the engine's redelivery guarantees make a re-run turn
-// ordinary, and without it a seat says the same thing twice. An OPERATOR has
-// no turn and no redelivery — their MCP client made one call — so there is
-// nothing to deduplicate against and an invented key would be a lie about
-// what produced the comment.
+// NIL-SAFE, because these tools serve two callers. A TURN's key makes a write
+// idempotent: the engine's redelivery guarantees make a re-run turn ordinary,
+// and without it a seat says the same thing twice. A caller with NO TURN names
+// its operation instead ([Actor.Operation]) — the operator's assistant with an
+// `op_id`, a person at the dashboard with the request id a retry repeats — and
+// where it names none there is nothing to deduplicate against, and an invented
+// key would be a lie about what produced the write.
 //
 // THROUGH [Actor.OperationSeed] rather than reading a field, because which of
 // a turn's two identities an idempotent id is built from is one rule and this
@@ -583,16 +671,23 @@ func turnIdentity(turn *turnctx.Turn) Actor {
 }
 
 // notInATurn is the refusal every one of these tools gives outside a turn.
+//
+// [tools.RefusalForbidden]: nothing about the arguments is wrong — this caller,
+// with no seat and no bound person behind it, may not write as anybody.
 func notInATurn(name string) tools.Result {
-	return failed(name + " can only be called during a turn, on behalf of a seat.")
+	return refused(tools.RefusalForbidden,
+		name+" can only be called during a turn, on behalf of a seat.")
 }
 
 // unconfigured is the refusal when the company runs no native tracker.
-func unconfigured(name string) tools.Result { return failed(unconfiguredText(name)) }
-
-func unconfiguredText(name string) string {
-	return name + " is unavailable: this company does not run the native " +
-		"work tracker. Use the tracker tools your company has configured."
+//
+// [tools.RefusalUnavailable]: the call is well-formed and the object may well
+// exist in the tracker the company DOES run, so neither "invalid" nor "not
+// found" is true of it.
+func unconfigured(name string) tools.Result {
+	return refused(tools.RefusalUnavailable, name+" is unavailable: this "+
+		"company does not run the native work tracker. Use the tracker tools "+
+		"your company has configured.")
 }
 
 // queryAlias is one argument this surface spells differently from the query
@@ -851,8 +946,8 @@ func (t *listWorkItems) CallForTurn(ctx context.Context, turn *turnctx.Turn, arg
 	// comment about two lines from where this one is parsed.
 	if ref := strings.TrimSpace(argString(args, "parent")); ref != "" {
 		id, refusal := t.deps.resolveRef(ctx, ListWorkItemsTool, "`parent`", ref)
-		if refusal != "" {
-			return failed(refusal), nil
+		if refusal != nil {
+			return *refusal, nil
 		}
 		params["parent"] = id
 	}
@@ -949,6 +1044,15 @@ func (t *listWorkItems) CallForTurn(ctx context.Context, turn *turnctx.Turn, arg
 	// and `totals` — see the passthrough list above. A model that wants a
 	// subtree asks with `parent`, which the mode does not apply to at all.
 	q.Subtasks = tracker.SubtasksSeparate
+	// AND THE ROW IS THE ROW A MODEL HAS ALWAYS READ. `fields=` is a board
+	// card's opt-in — labels, "blocks 3", an open question, what the task
+	// cost — and a saved `view` built on a board carries it; forwarded here,
+	// every listing through that view would grow every row in a model's
+	// context by facts it never asked for. Overruled for the reason the
+	// subtask mode above is, and `around` with it: where one task sits in a
+	// board's drawing order is a task page's question, and a view refuses
+	// to carry it anyway.
+	q.RowFields, q.Around = nil, ""
 	answer, err := t.deps.Reader.Tasks(ctx, q, t.deps.now())
 	switch {
 	case errors.Is(err, tracker.ErrTooBroad):
@@ -958,7 +1062,7 @@ func (t *listWorkItems) CallForTurn(ctx context.Context, turn *turnctx.Turn, arg
 		// refusal's own sentence, which names what would narrow it.
 		return failed(fmt.Sprintf("%s: %v", ListWorkItemsTool, err)), nil
 	case err != nil:
-		return failed(readFailure(ListWorkItemsTool, err)), nil
+		return readFailure(ListWorkItemsTool, err), nil
 	}
 	// A GROUPED ANSWER HAS NO FLAT ROWS BY CONSTRUCTION, so the empty
 	// message has to ask about the groups too — a board with five columns
@@ -1187,14 +1291,14 @@ func (t *getWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn, args 
 	detail, err := t.deps.Reader.Task(ctx, id, want, seatRead)
 	switch {
 	case errors.Is(err, tracker.ErrNoTask):
-		return failed(fmt.Sprintf("There is no work item %q. Check the key, or "+
+		return refused(tools.RefusalNotFound, fmt.Sprintf("There is no work item %q. Check the key, or "+
 			"use list_work_items to find it.", clip(id))), nil
 	case errors.Is(err, tracker.ErrNoComment):
-		return failed(fmt.Sprintf("Work item %q has no comment %q. Comment ids "+
+		return refused(tools.RefusalNotFound, fmt.Sprintf("Work item %q has no comment %q. Comment ids "+
 			"come from the `comments` in a read of the item itself — drop "+
 			"`comment` to see the thread.", clip(id), clip(want.Comment))), nil
 	case err != nil:
-		return failed(readFailure(GetWorkItemTool, err)), nil
+		return readFailure(GetWorkItemTool, err), nil
 	}
 	// THE CUT IS TAKEN HERE, where the budget is. The tracker answers the
 	// body whole because its other reader — the dashboard — renders a task
@@ -1250,7 +1354,13 @@ func shownBody(body string, whole bool) string {
 
 // ---- create_work_item -------------------------------------------------- //
 
-type createWorkItem struct{ deps WorkDeps }
+type createWorkItem struct {
+	deps WorkDeps
+
+	// pages checks a decision's page evidence — see [evidenceLookup]. Nil
+	// on a company with no native knowledge base.
+	pages PageReader
+}
 
 var _ tools.SeatCallable = (*createWorkItem)(nil)
 
@@ -1258,9 +1368,13 @@ func (t *createWorkItem) Name() string { return CreateWorkItemTool }
 
 func (t *createWorkItem) Description() string {
 	return "File a new work item. Search with list_work_items first — a " +
-		"duplicate costs somebody a triage turn. Leave the assignee empty " +
-		"and the item lands in triage, where the team's lead is told about " +
-		"it; name an assignee and it goes straight to their queue."
+		"duplicate costs somebody a triage turn. Name an assignee and it " +
+		"goes straight to their queue; leave it empty and it goes to the " +
+		"project's default assignee, or lands in triage — where the " +
+		"team's lead is told about it — when the project names none. The " +
+		"answer's `assignee` says which. Name " +
+		"`ask` to file the item AS a question to that person — the title " +
+		"is the question — with `decision` when they have to choose."
 }
 
 func (t *createWorkItem) Parameters() map[string]any {
@@ -1288,11 +1402,18 @@ func (t *createWorkItem) Parameters() map[string]any {
 			"assignee": map[string]any{
 				"type": "string",
 				"description": "A seat's handle, from lookup_colleague. Omit " +
-					"to leave it in triage for the lead to route.",
+					"and the project's default assignee takes it (describe_project " +
+					"names them), else it waits in triage for the lead to route.",
 			},
 			"priority": map[string]any{
 				"type":        "string",
 				"description": "One of: " + priorityList() + ". Default none.",
+			},
+			"status": map[string]any{
+				"type": "string",
+				"description": "Where it starts: one of " + statusList() +
+					". Default todo — name another only when the work is " +
+					"already under way or already done as it is filed.",
 			},
 			"parent": map[string]any{
 				"type":        "string",
@@ -1334,9 +1455,65 @@ func (t *createWorkItem) Parameters() map[string]any {
 					"does not have, then file. Say true only when you MEANT " +
 					"to add a grouping — the answer lists what it created.",
 			},
+			"ask": map[string]any{
+				"type": "string",
+				"description": "A colleague's handle: the item IS a question " +
+					"they owe an answer to, and its title is the question. " +
+					"They are woken asking for one and follow the item, and " +
+					"their answer wakes you. Filed in one record with the " +
+					"item, so the question cannot be lost between two writes.",
+			},
+			"decision": decisionSchema(),
 		},
 		"required": []any{"title"},
 	}, false))
+}
+
+// askFor is the question a create is filed as, or nil when it asks nobody.
+//
+// THE TITLE IS THE QUESTION, and it is the ask's body: an item filed to ask
+// somebody something is phrased as that question — "Ask" and "Message" on a
+// person's screen write it there — and the body beside it is the context,
+// which the item already carries. An ask row with no text would render as
+// nothing in the thread and in the asked person's `asked_of_me`.
+func (t *createWorkItem) askFor(ctx context.Context, actor Actor, task tracker.Task,
+	args map[string]any) (*tracker.Comment, *tools.Result) {
+
+	asked := strings.TrimSpace(argString(args, "ask"))
+	rawDecision, decided := args["decision"]
+	switch {
+	case asked == "" && decided:
+		return nil, refusalOf(failed("create_work_item: `decision` needs `ask` " +
+			"— the handle of the person who has to choose. A decision asked " +
+			"of nobody wakes nobody."))
+	case asked == "":
+		return nil, nil
+	}
+	resolved, refusal := t.deps.resolveHandle(CreateWorkItemTool, "`ask`", asked)
+	if refusal != "" {
+		return nil, refusalOf(failed(refusal))
+	}
+	ask := &tracker.Comment{
+		// DERIVED LIKE EVERY COMMENT'S, so a re-run turn — or the same
+		// call brought back under its operation — files one question
+		// rather than two.
+		ID:         commentID(actor, CreateWorkItemTool, task.ID, args),
+		Task:       task.ID,
+		Author:     actor.Handle,
+		AuthorKind: actor.Kind,
+		Body:       task.Title,
+		Ask:        resolved,
+		CreatedAt:  task.CreatedAt,
+	}
+	if decided {
+		decision, refusal := t.deps.readDecision(ctx, CreateWorkItemTool,
+			actor, rawDecision, t.pages)
+		if refusal != nil {
+			return nil, refusal
+		}
+		ask.Decision = decision
+	}
+	return ask, nil
 }
 
 // scheduleInto merges the scheduling parameters into a tool's own schema.
@@ -1418,11 +1595,27 @@ func (t *createWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn, ar
 		return failed(fmt.Sprintf("%q is not a priority. The priorities are: %s.",
 			clip(string(task.Priority)), priorityList())), nil
 	}
+	// WHERE IT STARTS, when the caller says. A person filing work from a
+	// board lane files it INTO that lane, and a create that could only land
+	// in `todo` made that two writes — a create and a status move — where
+	// the second could fail after the first had filed the task in the
+	// wrong column. The group is the status's own (the tracker copies it
+	// onto every record), and the applier stamps the finish instants from
+	// it exactly as it does for a move, so a task filed `done` is done from
+	// its first row.
+	if raw := strings.TrimSpace(argString(args, "status")); raw != "" {
+		status := tracker.Status(raw)
+		if !status.Valid() {
+			return failed(fmt.Sprintf("%q is not a status. The statuses are: %s.",
+				clip(raw), statusList())), nil
+		}
+		task.Status, task.StatusGroup = status, status.Group()
+	}
 	if ref := strings.TrimSpace(argString(args, "parent")); ref != "" {
 		//nolint:govet // shadow: `x, refusal := f()` declares x too; see .golangci.yml
 		parent, refusal := t.deps.resolveRef(ctx, CreateWorkItemTool, "`parent`", ref)
-		if refusal != "" {
-			return failed(refusal), nil
+		if refusal != nil {
+			return *refusal, nil
 		}
 		task.Parent = &parent
 	}
@@ -1492,10 +1685,38 @@ func (t *createWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn, ar
 	// heard nothing about it again.
 	task.Watchers = handles(actor.Record(), task.Assignee)
 
+	// THE QUESTION, when the item is filed as one. Resolved and checked
+	// before anything is published, like every other argument here — and
+	// AFTER the task's id is derived, because the ask's own id is derived
+	// from it.
+	ask, askRefusal := t.askFor(ctx, actor, task, args)
+	if askRefusal != nil {
+		return *askRefusal, nil
+	}
+	notify := tracker.Wake{
+		Kind: tracker.ChangeCreated, After: task, Comment: ask,
+	}.Notify(t.deps.Leads)
+	// THE BLOCKERS ARE RESOLVED BEFORE THE CREATE, so a dependency on a
+	// task that does not exist refuses the whole call rather than leaving
+	// a new item filed with an edge nobody asked to drop.
+	var blockers []string
+	for _, ref := range argStrings(args, "waiting_on") {
+		id, refusal := t.deps.resolveRef(ctx, CreateWorkItemTool, "`waiting_on`", ref)
+		if refusal != nil {
+			return *refusal, nil
+		}
+		blockers = append(blockers, id)
+	}
+	if len(blockers) > 0 && t.deps.Dependencies == nil {
+		return unconfigured(CreateWorkItemTool), nil
+	}
 	// THE LABELS BEFORE THE TASK, because the create refuses one the
 	// project has not declared and the declare is a separate record on a
 	// separate subject: doing it after would file the task that already
-	// failed.
+	// failed. And AFTER EVERY REFUSAL ABOVE, because the declare is the
+	// call's first PUBLISH — a call refused over its ask, its decision or
+	// a blocker after it would have filed nothing and still left the
+	// project with labels nobody went on to use.
 	declared, labelRefusal := t.deps.declareLabels(ctx, actor, labelWrite{
 		tool:    t.Name(),
 		before:  "filing the work item",
@@ -1508,43 +1729,42 @@ func (t *createWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn, ar
 			"with: look for it with list_work_items rather than filing it " +
 			"any other way",
 	}, args, task.Project, task.Tags)
-	if refusal := labelRefusal; refusal != "" {
-		return failed(refusal), nil
+	if labelRefusal != nil {
+		return *labelRefusal, nil
 	}
-	notify := tracker.Wake{
-		Kind: tracker.ChangeCreated, After: task,
-	}.Notify(t.deps.Leads)
-	// THE BLOCKERS ARE RESOLVED BEFORE THE CREATE, so a dependency on a
-	// task that does not exist refuses the whole call rather than leaving
-	// a new item filed with an edge nobody asked to drop.
-	var blockers []string
-	for _, ref := range argStrings(args, "waiting_on") {
-		id, refusal := t.deps.resolveRef(ctx, CreateWorkItemTool, "`waiting_on`", ref)
-		if refusal != "" {
-			return failed(refusal), nil
-		}
-		blockers = append(blockers, id)
+	var got tracker.WriteResult
+	if ask != nil {
+		got, err = writer.CreateTaskAsking(ctx, opID, task, *ask, notify)
+	} else {
+		got, err = writer.CreateTask(ctx, opID, task, notify)
 	}
-	if len(blockers) > 0 && t.deps.Dependencies == nil {
-		return failed(unconfiguredText(CreateWorkItemTool)), nil
-	}
-	got, err := writer.CreateTask(ctx, opID, task, notify)
 	if err != nil {
-		return failed(writeFailure(actor, CreateWorkItemTool, err)), nil
+		return writeFailure(actor, CreateWorkItemTool, err), nil
 	}
 	if got.Outcome == statelog.OutcomeUnknown {
 		// AN ITEM NOBODY CAN SAY WAS FILED IS NOT ONE TO REPORT. The key
 		// below would be one this attempt minted for a task that may never
 		// have landed — or, where this node's ledger cannot vouch for the
 		// operation, no key at all beside an "outcome" a model reads past.
-		return failed(createUnknown(actor, opID, got)), nil
+		return unknownOutcome(createUnknown(actor, opID, got)), nil
 	}
 	t.deps.settle(ctx, got.Position)
 	answer := withOperation(map[string]any{
 		"key": got.Key, "id": task.ID, "status": task.Status,
-		"assignee": task.Assignee, "outcome": string(got.Outcome), "position": positionOf(got.Position),
+		// WHO THE CREATE FILED IT TO, which is the tracker's answer rather
+		// than the argument: a create naming nobody goes to the project's
+		// default assignee, which only the create's own snapshot decides.
+		"assignee": got.Assignee, "outcome": string(got.Outcome), "position": positionOf(got.Position),
 		"labels_created": declared, "version": got.Version,
 	}, actor)
+	if ask != nil {
+		// THE ASK'S OWN ID, which is what the answer will name in
+		// `answers` and what my_work lists it under.
+		answer["asked"], answer["comment_id"] = ask.Ask, ask.ID
+		if ask.Decision != nil {
+			answer["decision"] = ask.Decision
+		}
+	}
 	if len(got.Warnings) > 0 {
 		answer["warnings"] = got.Warnings
 	}
@@ -1565,11 +1785,51 @@ func (t *createWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn, ar
 			return jsonResult(answer)
 		}
 		t.deps.settle(ctx, result.Position)
+		// THE CALL ANSWERS FOR BOTH RECORDS, never for the create alone:
+		// the dependency lands after it, so the create's position is a
+		// floor below the edge and a read at it shows the item without
+		// its blocker, and an `unknown` dependency beside an applied
+		// create is not a call anybody may treat as landed. The version
+		// moves too, since the authored edge is a commit on this item.
+		outcome, at, version := joinDepend(got.Outcome, got.Position,
+			got.Version, result)
+		answer["outcome"], answer["position"] = string(outcome), positionOf(at)
+		answer["version"] = version
 		if len(result.OneSided) > 0 {
 			answer["dependencies_pending_mirror"] = len(result.OneSided)
 		}
 	}
 	return jsonResult(answer)
+}
+
+// joinDepend folds a dependency sequence that ran AFTER a call's first record
+// into that call's one answer: the less certain outcome, the later position,
+// and the item's later version.
+//
+// ONE RULE FOR EVERY TOOL THAT APPENDS MORE THAN ONE RECORD, which is the rule
+// save_page follows for a save and its rename ([statelog.LessCertain],
+// [statelog.Later]). A caller barriers on the position before its next read
+// and treats the outcome as "may I stop looking": answering the first
+// record's hands it a floor below the edge it just wrote and reports an
+// unknown dependency as applied. A sequence that appended nothing leaves the
+// answer as it was.
+//
+// THE VERSION IS THIS ITEM'S OWN, never the sequence's last commit's: a
+// dependency change writes other items too — each blocker's mirror, each
+// dependent's edge — and [tracker.DependencyResult]'s version is the one its
+// commits on THIS item's subject reached, zero where it landed none there.
+// Where both wrote this item the dependency's is the newer, since its
+// `waiting_on` commit lands on the same subject after the patch; answering the
+// patch's handed the caller an `if_match` its own call's second write had
+// already moved past.
+func joinDepend(outcome statelog.Outcome, at statelog.Position, version int64,
+	result tracker.DependencyResult) (statelog.Outcome, statelog.Position, int64) {
+
+	if !result.Wrote() {
+		return outcome, at, version
+	}
+	return statelog.LessCertain(outcome, result.Outcome),
+		statelog.Later(at, result.Position), max(version, result.Version)
 }
 
 // createUnknown explains a create whose outcome is unknown: the item may have
@@ -1685,15 +1945,17 @@ func unknownNext(unvouched bool, again, look, twice string) string {
 }
 
 // restateNext is [unknownNext] for a write that STATES a value rather than
-// changing one — a catalogue list, a project's tags and policy — and mints a
-// fresh operation on every call: a repeat is a new operation, and harmless,
-// because it states the same thing again and changes nothing if the first one
-// landed. So it is offered rather than warned against, and never offered as
-// "the same operation", which it is not.
+// changing one — a catalogue list, a project's tags and policy. Its repeat is
+// harmless whichever operation it is: a seat's same call, or a person's retry
+// under one request, is the same operation and is answered with what landed;
+// an operator's assistant names no operation for these tools, so its repeat is
+// a new one — which states the same thing again and changes nothing where the
+// first one landed. So it is offered rather than warned against, and never
+// promised as "the same operation", which for one caller it is not.
 func restateNext(look string) string {
 	return look + " to see whether it did. Making the same call again is " +
-		"harmless: it is a new operation stating the same thing, so it changes " +
-		"nothing if the first one landed."
+		"harmless: it states the same thing again, so it changes nothing if " +
+		"the first one landed."
 }
 
 // dependencyFailure explains a create whose ITEM was filed and whose
@@ -1717,6 +1979,24 @@ func dependencyFailure(key, id string, err error) string {
 		"missing, and says so if one cannot be.", key, id, err, key)
 }
 
+// unknownOutcome is the answer to a write whose outcome is unknown — see
+// [unknownWrite] for the sentence and why it is a failed result rather than a
+// receipt.
+//
+// [tools.RefusalUnavailable], the class the operator's act transport already
+// answers an interrupted call under: nothing about the request was wrong, and
+// this node cannot say what became of it. ONE CONSTRUCTOR, so every write
+// tool's unknown carries one class and a reader that is not a model can never
+// be handed an unknown under the argument class `failed` gives — and it sets
+// [mcp.Result.Unknown], because that class alone is also what a tool answers
+// when it refused BEFORE writing anything, and a person's surface that read the
+// two alike would say "nothing happened" about a write that may have landed.
+func unknownOutcome(sentence string) tools.Result {
+	result := refused(tools.RefusalUnavailable, sentence)
+	result.Unknown = true
+	return result
+}
+
 // resolveRef turns what a model typed — a key like ENG-7, or an id — into the
 // task ID every relation and every parent pointer is written with.
 //
@@ -1731,23 +2011,31 @@ func dependencyFailure(key, id string, err error) string {
 // key is what it read; the resolution is therefore the tool's job.
 //
 // It returns the model-facing refusal rather than an error, because every
-// caller here answers a model rather than a process.
-func (d WorkDeps) resolveRef(ctx context.Context, tool, field, ref string) (string, string) {
+// caller here answers a model rather than a process — and a RESULT rather
+// than a sentence, because its refusals are of two classes: an argument that
+// names no item is [tools.RefusalInvalid] (the ARGUMENT is what to change —
+// the call is not about that item), and a read this node could not serve is
+// [tools.RefusalUnavailable]. A sentence would leave the caller to pick one.
+func (d WorkDeps) resolveRef(ctx context.Context, tool, field, ref string) (string, *tools.Result) {
 	if d.Reader == nil {
-		return "", unconfiguredText(tool)
+		return "", refusalOf(unconfigured(tool))
 	}
 	got, err := d.Reader.Task(ctx, ref, tracker.DetailWants{}, seatRead)
 	switch {
 	case errors.Is(err, tracker.ErrNoTask):
-		return "", fmt.Sprintf("%s names %s %q and there is no such work item. "+
-			"Check the key with list_work_items rather than guessing — a link "+
-			"to an item that does not exist renders as a dead reference on "+
-			"everybody's board.", tool, field, clip(ref))
+		return "", refusalOf(failed(fmt.Sprintf("%s names %s %q and there is "+
+			"no such work item. Check the key with list_work_items rather than "+
+			"guessing — a link to an item that does not exist renders as a "+
+			"dead reference on everybody's board.", tool, field, clip(ref))))
 	case err != nil:
-		return "", readFailure(tool, err)
+		return "", refusalOf(readFailure(tool, err))
 	}
-	return got.Task.ID, ""
+	return got.Task.ID, nil
 }
+
+// refusalOf is a refusal as the optional second answer of a helper that
+// resolves something for a tool: nil when there is nothing to refuse.
+func refusalOf(r tools.Result) *tools.Result { return &r }
 
 // resolveHandle turns a handle a caller typed into one the company has.
 //
@@ -1821,39 +2109,44 @@ func handles(all ...string) []string {
 
 // opIDFor is the operation id one tool call writes under.
 //
-// DERIVED FROM THE TURN AND THE OBJECT rather than minted fresh, so a re-run
-// turn — which the engine's redelivery guarantees make ordinary — writes ONCE.
+// DERIVED rather than minted fresh wherever the caller has an identity a
+// repetition reproduces, so a re-run turn — which the engine's redelivery
+// guarantees make ordinary — writes ONCE, and so does an operator's call made
+// again under its operation. See the package doc, "How a write is made once",
+// for the one rule this is the heart of.
 //
-// OUTSIDE A TURN IT IS FRESH PER CALL, and that is the whole of the second
-// branch: there is nothing to be idempotent against, because nothing is going
-// to redeliver an operator's tool call. It used to return `verb + "-" + object`
-// here on the reasoning that "the object's own id is enough to make it unique"
-// — which is true of two DIFFERENT objects and false of the same one twice, so
-// the id was stable for the life of the deployment and the operation ledger
-// collapsed every write after the first as a redelivery.
+// WITH NEITHER IT IS FRESH PER CALL, and that is the whole of the third
+// branch: a call that names no operation — an operator's assistant calling a
+// tool that offers no `op_id` — has nothing to be idempotent against. It used
+// to return `verb + "-" + object` here on the reasoning that "the object's own
+// id is enough to make it unique" — which is true of two DIFFERENT objects and
+// false of the same one twice, so the id was stable for the life of the
+// deployment and the operation ledger collapsed every write after the first
+// as a redelivery.
 //
-// Measured through `/operator/mcp`, which is the ONLY write path the dashboard
-// offers and what an operator's own assistant connects to: a work item could
-// be updated exactly once. The second update, and every one after it, wrote
-// nothing and answered `outcome: "applied"` with the FIRST write's position —
-// the worst shape a write surface has, because the caller is told it worked.
-// The same held for a dependency change, a re-removal after a restore, a
-// merge, a priority list, a pin set and an inbox mark.
+// Measured through `/operator/mcp`, which is what an operator's own assistant
+// connects to: a work item could be updated exactly once. The second update,
+// and every one after it, wrote nothing and answered `outcome: "applied"` with
+// the FIRST write's position — the worst shape a write surface has, because
+// the caller is told it worked. The same held for a dependency change, a
+// re-removal after a restore, a merge, a priority list, a pin set and an inbox
+// mark — the last three through a helper of their own that spelled this rule
+// a second time, until they were brought here.
 //
-// [commentID] three hundred lines below has always had this right, and is
-// where the shape comes from: the turn's key where there is one, a fresh id
-// where there is not.
+// [commentID] has always had this right, and is where the shape comes from:
+// the caller's identity where there is one, a fresh id where there is not.
 //
 // # And it carries the instant the unit of work began
 //
-// Both branches mint through [statelog], whose ids carry their own mint
+// Every branch mints through [statelog], whose ids carry their own mint
 // instant: a fresh id the instant of this call, which is the instant it was
-// minted, and a derived one [Actor.OperationSince] — the start of the work it
-// is derived from, which is what a re-run reproduces. The state log refuses to
-// decide a second time an operation its ledger cannot vouch for, and "cannot
-// vouch" is "minted before this node adopted a donated snapshot"; an id that
-// carried this CALL's instant instead read every re-run after an adoption as
-// minted after it, and published the operation again.
+// minted; a derived one [Actor.OperationSince] — the start of the work it is
+// derived from, which is what a re-run reproduces; and a step of a caller's
+// operation that operation's own. The state log refuses to decide a second
+// time an operation its ledger cannot vouch for, and "cannot vouch" is
+// "minted before this node's ledger may have lost rows"; an id that carried
+// this CALL's instant instead read every re-run after a loss as minted after
+// it, and published the operation again.
 //
 // # And what the call ASKS FOR is part of it
 //
@@ -1867,7 +2160,11 @@ func handles(all ...string) []string {
 // for was dropped with a success. So the id also covers a digest of the
 // call's own arguments ([turnctx.ArgsDigest]): the same call repeated — a
 // re-run, or an executor that asks twice — is still one operation, and two
-// different calls are two.
+// different calls are two. That is as true of a verb that writes one SHARED
+// object — a project's tags or policy, the workspace catalogue, a label
+// declaration — as of a task: keyed on the object alone, a turn that declared
+// a tag and then archived another was answered `applied` for the second
+// without it landing.
 //
 // # And how many different calls to the tool came before it
 //
@@ -1889,12 +2186,11 @@ func handles(all ...string) []string {
 //
 // A call on the operator's surface is its own identity ([Actor.Operation]):
 // each write it makes is a STEP of that operation, named by what it writes, so
-// the same call brought back with its `op_id` derives every id it derived the
-// first time — and a create derives the same task. Its arguments are not
-// part of the step, because the operation is already bound to them: an
-// `op_id` names the one call it was answered for, and brought back with any
-// other arguments it is refused before anything here runs
-// ([WorkDeps.bindOperation]).
+// the same call made again under it derives every id it derived the first
+// time — and a create derives the same task. Its arguments are not part of
+// the step, because the operation is already bound to them: an operation
+// names the one call it was answered for, and brought back with any other
+// arguments it is refused before anything here runs ([WorkDeps.bindOperation]).
 func opIDFor(actor Actor, tool, verb, object string, args map[string]any) string {
 	if actor.Operation != "" {
 		return statelog.StepOpID(actor.Operation, verb+"-"+object)
@@ -1938,6 +2234,63 @@ func createdTaskID(opID string) string {
 // under. Fixed for the life of the format: it is durable in every task row.
 var createdTaskNamespace = uuid.MustParse("8677bb1c-20e0-4fbe-ab44-846868b79b37")
 
+// callOutcome is one tool call's answer over EVERY record it appended: the
+// less certain outcome and the later position, which is the rule [joinDepend]
+// and save_page follow ([statelog.LessCertain], [statelog.Later]).
+//
+// FOR A TOOL WHOSE RECORDS ARE REPORTED FACET BY FACET — a project's tags and
+// its policy, the catalogue's types and its fields — and which therefore had
+// no top-level answer at all. Every transport reads the call's outcome and
+// position from the top of the answer (a caller barriers on the position
+// before its next read), so a tool that stated them only per facet handed the
+// act transport nothing, and it reported `applied` at no position over records
+// whose outcome may have been `unknown`.
+type callOutcome struct {
+	outcome statelog.Outcome
+	at      statelog.Position
+}
+
+// add folds one record's result in. A result that appended nothing is left
+// out ([statelog.Result.Wrote]): it claims no record a caller must wait for.
+func (c *callOutcome) add(r statelog.Result) {
+	if !r.Wrote() {
+		return
+	}
+	c.outcome = statelog.LessCertain(c.outcome, r.Outcome)
+	c.at = statelog.Later(c.at, r.Position)
+}
+
+// stamp writes the call's answer onto the top of a tool's result. A call that
+// appended nothing is `applied` at no position — nothing is outstanding.
+func (c callOutcome) stamp(answer map[string]any) {
+	outcome := c.outcome
+	if outcome == "" {
+		outcome = statelog.OutcomeApplied
+	}
+	answer["outcome"], answer["position"] = string(outcome), positionOf(c.at)
+}
+
+// partlyWritten is the refusal of a call whose LATER record was refused after
+// an earlier one landed: the later write's class, and a sentence that says
+// what did land and where.
+//
+// THE SAME SHAPE save_page gives a refused rename after a landed save, and for
+// the same reason. The unmarked refusal says "the change was NOT made", which
+// over a call that already replaced a tag set or a type list tells a caller to
+// redo — or to report as undone — a change that is on every node.
+func partlyWritten(failure tools.Result, landed, refusedPart string, call callOutcome) tools.Result {
+	outcome := call.outcome
+	if outcome == "" {
+		outcome = statelog.OutcomeApplied
+	}
+	where := "and appended nothing"
+	if !call.at.IsZero() {
+		where = "at " + call.at.String()
+	}
+	return refused(failure.Refusal, fmt.Sprintf("%s (%s, %s) and %s were not: %s",
+		landed, outcome, where, refusedPart, failure.Output))
+}
+
 // ---- update_work_item -------------------------------------------------- //
 
 type updateWorkItem struct {
@@ -1965,8 +2318,9 @@ func (t *updateWorkItem) Name() string { return UpdateWorkItemTool }
 
 func (t *updateWorkItem) Description() string {
 	return "Change a work item: its status, assignee, priority, title, " +
-		"description, labels, or whether you watch it. Only the fields you " +
-		"pass are changed. Say WHY you closed something with " +
+		"description, labels, checklists, or whether you watch it. Only the " +
+		"fields you pass are changed. An assignment can carry a `reason` the " +
+		"new assignee reads. Say WHY you closed something with " +
 		"comment_on_work_item — an item that went to `cancelled` with no " +
 		"word is one somebody has to reconstruct. Closing as a duplicate " +
 		"also names the item that survives, in `duplicate_of`."
@@ -1982,9 +2336,18 @@ func (t *updateWorkItem) Parameters() map[string]any {
 			},
 			"status":   map[string]any{"type": "string", "description": "One of: " + statusList() + "."},
 			"assignee": map[string]any{"type": "string", "description": "A seat's handle, or \"\" to unassign."},
-			"priority": map[string]any{"type": "string", "description": "One of: " + priorityList() + "."},
-			"title":    map[string]any{"type": "string"},
-			"body":     map[string]any{"type": "string", "description": "Replaces the description."},
+			"reason": map[string]any{
+				"type": "string",
+				"description": fmt.Sprintf("Only with `assignee`: one line "+
+					"saying why the work is theirs now, at most %d "+
+					"characters. It is what the new assignee is woken with "+
+					"and what the item's history shows beside the hand-off.",
+					MaxAssignmentReason),
+			},
+			"checklist": checklistSchema(),
+			"priority":  map[string]any{"type": "string", "description": "One of: " + priorityList() + "."},
+			"title":     map[string]any{"type": "string"},
+			"body":      map[string]any{"type": "string", "description": "Replaces the description."},
 			"labels": map[string]any{
 				"type": "array",
 				"description": "REPLACES the item's labels. Each must be a " +
@@ -2094,14 +2457,35 @@ func (t *updateWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn, ar
 	before, err := t.deps.Reader.Task(ctx, ref, tracker.DetailWants{}, seatRead)
 	switch {
 	case errors.Is(err, tracker.ErrNoTask):
-		return failed(fmt.Sprintf("There is no work item %q.", clip(ref))), nil
+		return refused(tools.RefusalNotFound, fmt.Sprintf("There is no work item %q.", clip(ref))), nil
 	case err != nil:
-		return failed(readFailure(UpdateWorkItemTool, err)), nil
+		return readFailure(UpdateWorkItemTool, err), nil
 	}
 
 	patch, kind, refusal := patchFromArgs(args, actor, t.deps.now(), t.deps.zone())
 	if refusal != "" {
 		return failed(refusal), nil
+	}
+	// ONE OPERATION PER DISTINCT CALL, keyed on what was sent — see
+	// [opIDFor]: a turn that set the status and then assigned the item, or
+	// ticked two checklist items, is two operations, and a retry sends the
+	// same arguments and is still the same one. Derived HERE, before the
+	// patch is built, because a checklist gesture mints the ids of the lists
+	// and items it adds from it.
+	opID := opIDFor(actor, t.Name(), "update", before.Task.ID, args)
+	reason, refusal := assignmentReason(args)
+	if refusal != "" {
+		return failed(refusal), nil
+	}
+	checklist, refusal := t.deps.checklistIntent(args, opID)
+	if refusal != "" {
+		return failed(refusal), nil
+	}
+	if checklist != nil {
+		patch.Checklist = checklist
+		if kind == tracker.ChangeFields {
+			kind = tracker.ChangeChecklist
+		}
 	}
 	// IF-MATCH IS THE MODEL'S OWN PRECONDITION, passed through rather than
 	// derived: omitted it merges, which is what a model naming two fields
@@ -2114,9 +2498,6 @@ func (t *updateWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn, ar
 		// one: the roster is on the deps, and a patch builder that
 		// reached for it would need the whole surface threaded through
 		// it to validate one field.
-		//
-		// The outer refusal was checked empty above and is next WRITTEN
-		// by declareLabels, so nothing reads a stale one.
 		//nolint:govet // shadow: `x, refusal := f()` declares x too; see .golangci.yml
 		assignee, refusal := t.deps.resolveHandle(UpdateWorkItemTool,
 			"`assignee`", *patch.Assignee)
@@ -2124,27 +2505,6 @@ func (t *updateWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn, ar
 			return failed(refusal), nil
 		}
 		patch.Assignee = &assignee
-	}
-	var declared []string
-	if patch.Tags != nil {
-		// AGAINST THE TASK'S HOME PROJECT, which is the one whose set
-		// the write is checked against — never the caller's default.
-		if declared, refusal = t.deps.declareLabels(ctx, actor, labelWrite{
-			tool:   t.Name(),
-			before: "changing " + before.Task.Key,
-			notMade: fmt.Sprintf("Nothing it asked of %s was written by this "+
-				"call.", before.Task.Key),
-			then: "makes the change",
-			twice: "applies the change a second time, and is refused as " +
-				"stale if it names `if_match`",
-			unvouched: "it answers with the change where this node still " +
-				"holds its record",
-			look: fmt.Sprintf("the change may have landed where this node "+
-				"cannot see it: read %s with get_work_item to see whether it "+
-				"is there rather than making it any other way", before.Task.Key),
-		}, args, before.Task.Project, *patch.Tags); refusal != "" {
-			return failed(refusal), nil
-		}
 	}
 	// THE RE-ROUTE IS ITS OWN KIND AND ITS OWN GATE. `routed` carries
 	// exactly one delta, and the new unit's lead hears it as an ORDINARY
@@ -2165,7 +2525,7 @@ func (t *updateWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn, ar
 		// `write_project` resolves, for the same reason.
 		lead := t.leads != nil && t.leads(ctx, actor.Record(), before.Task.Project)
 		if !lead && !actor.Kind.Person() {
-			return failed(fmt.Sprintf("Pointing %s at a different team is the "+
+			return refused(tools.RefusalForbidden, fmt.Sprintf("Pointing %s at a different team is the "+
 				"lead of %s's decision, not yours. Ask them, or say in a "+
 				"comment why it belongs elsewhere.",
 				before.Task.Key, before.Task.Project)), nil
@@ -2192,10 +2552,10 @@ func (t *updateWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn, ar
 	// a dependency has two ends: a `linked` edge is one collection on one
 	// item, while `waiting_on` is an authored edge on one item and a
 	// mirrored entry on another, which is a sequence rather than a field.
-	inert, refusal := t.deps.inertRelations(ctx, UpdateWorkItemTool, args,
+	inert, relationRefusal := t.deps.inertRelations(ctx, UpdateWorkItemTool, args,
 		before.Task)
-	if refusal != "" {
-		return failed(refusal), nil
+	if relationRefusal != nil {
+		return *relationRefusal, nil
 	}
 	if inert != nil {
 		patch.Relate = inert
@@ -2203,24 +2563,57 @@ func (t *updateWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn, ar
 			kind = tracker.ChangeRelations
 		}
 	}
-	change, refusal := t.deps.dependencyChange(ctx, UpdateWorkItemTool, args, before.Task)
-	if refusal != "" {
-		return failed(refusal), nil
+	change, dependencyRefusal := t.deps.dependencyChange(ctx, UpdateWorkItemTool, args, before.Task)
+	if dependencyRefusal != nil {
+		return *dependencyRefusal, nil
+	}
+	// BEFORE THE PATCH, because a call that cannot write its dependency
+	// change must write nothing: refused after the patch landed, the
+	// caller is told the call failed about an item whose fields it did
+	// in fact change.
+	if !change.Empty() && t.deps.Dependencies == nil {
+		return unconfigured(UpdateWorkItemTool), nil
+	}
+	// THE LABELS LAST AMONG THE CHECKS, because declaring them is this
+	// call's first PUBLISH: every refusal above has to have had its chance
+	// first, or a refused update leaves its project with labels nobody
+	// went on to use. Against the task's HOME project, which is the one
+	// whose set the write is checked against — never the caller's default.
+	var declared []string
+	if patch.Tags != nil {
+		var labelRefusal *tools.Result
+		if declared, labelRefusal = t.deps.declareLabels(ctx, actor, labelWrite{
+			tool:   t.Name(),
+			before: "changing " + before.Task.Key,
+			notMade: fmt.Sprintf("Nothing it asked of %s was written by this "+
+				"call.", before.Task.Key),
+			then: "makes the change",
+			twice: "applies the change a second time, and is refused as " +
+				"stale if it names `if_match`",
+			unvouched: "it answers with the change where this node still " +
+				"holds its record",
+			look: fmt.Sprintf("the change may have landed where this node "+
+				"cannot see it: read %s with get_work_item to see whether it "+
+				"is there rather than making it any other way", before.Task.Key),
+		}, args, before.Task.Project, *patch.Tags); labelRefusal != nil {
+			return *labelRefusal, nil
+		}
 	}
 
 	answer := withOperation(map[string]any{
 		"key": before.Task.Key, "labels_created": declared,
 	}, actor)
-	// patchedAt is where the patch landed, when it ran: the dependency step
-	// below replaces the answer's position only with a LATER one.
-	var patchedAt statelog.Position
+	var (
+		patchOutcome statelog.Outcome
+		patchAt      statelog.Position
+		patchVersion int64
+	)
 	// THE PATCH IS SKIPPED WHEN THIS CALL IS ONLY A DEPENDENCY CHANGE.
 	// An empty patch is a real write — it stamps a version and writes a
 	// history row — and spending one on a call that changed no field of
 	// this item would put a `fields` commit in the feed that changed no
 	// fields.
 	if !patch.Empty() {
-		opID := opIDFor(actor, t.Name(), "update", before.Task.ID, args)
 		got, err := writer.UpdateTask(ctx, opID, before.Task.ID,
 			before.Task.Project, ifMatch, patch, kind,
 			tracker.Wake{
@@ -2228,9 +2621,14 @@ func (t *updateWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn, ar
 				Before: before.Task,
 				After:  patched(before.Task, patch),
 				Parent: t.deps.parentParty(ctx, before.Task, patch),
+				// THE REASON IS THE CHANGE'S EXCERPT, which is the one line
+				// both the history row and the wake already carry — so the
+				// new assignee is woken with it and the item's history
+				// shows it beside the hand-off, with no field of its own.
+				Excerpt: reason,
 			}.Notify(t.deps.Leads))
 		if err != nil {
-			return failed(writeFailure(actor, UpdateWorkItemTool, err)), nil
+			return writeFailure(actor, UpdateWorkItemTool, err), nil
 		}
 		if got.Outcome == statelog.OutcomeUnknown {
 			// A CHANGE NOBODY CAN SAY LANDED IS NOT ONE TO REPORT, and
@@ -2238,13 +2636,13 @@ func (t *updateWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn, ar
 			// names a version the item may never have had. And the
 			// dependencies wait for it — the same call made again answers
 			// this write first and writes them after, once.
-			return failed(updateUnknown(actor, opID, got, before.Task,
+			return unknownOutcome(updateUnknown(actor, opID, got, before.Task,
 				!change.Empty())), nil
 		}
 		t.deps.settle(ctx, got.Position)
-		patchedAt = got.Position
 		answer["outcome"], answer["version"] = string(got.Outcome), got.Version
 		answer["position"] = positionOf(got.Position)
+		patchOutcome, patchAt, patchVersion = got.Outcome, got.Position, got.Version
 		// THE WARNINGS THE WRITE PRODUCED, which today is the one the
 		// coercion table can raise: a timestamp truncated to its date on
 		// a field that holds no time. A change the engine made to a
@@ -2256,42 +2654,25 @@ func (t *updateWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn, ar
 		}
 	}
 	if !change.Empty() {
-		if t.deps.Dependencies == nil {
-			return failed(unconfiguredText(UpdateWorkItemTool)), nil
-		}
 		result, err := t.deps.Dependencies(actor).Depend(ctx,
 			opIDFor(actor, t.Name(), "depend", before.Task.ID, args), change, t.deps.Leads)
 		if err != nil {
-			return failed(writeFailure(actor, UpdateWorkItemTool, err)), nil
+			return writeFailure(actor, UpdateWorkItemTool, err), nil
 		}
 		t.deps.settle(ctx, result.Position)
-		_, patchRan := answer["outcome"]
-		// THE LATER OF THE TWO POSITIONS, with the outcome that goes with
-		// it. The dependency step runs after the patch and the tracker's
-		// log is strictly ordered, so where its last commit is later it is
-		// the one this call is durable — and applied here, or not — at:
-		// an answer carrying the patch's position had a caller settle
-		// short of its own call's writes.
-		if later, err := patchedAt.Before(result.Position); !patchRan ||
-			(err == nil && later) {
-			answer["outcome"] = string(result.Outcome)
+		// THE CALL ANSWERS FOR BOTH RECORDS when the patch appended one
+		// too — see [joinDepend], which also says why the version is this
+		// item's own — and for the sequence alone otherwise, where a
+		// version of zero (nothing landed on this item's own subject) is
+		// no `if_match` condition at all.
+		if _, held := answer["outcome"]; held {
+			outcome, at, version := joinDepend(patchOutcome, patchAt,
+				patchVersion, result)
+			answer["outcome"], answer["version"] = string(outcome), version
+			answer["position"] = positionOf(at)
+		} else {
+			answer["outcome"], answer["version"] = string(result.Outcome), result.Version
 			answer["position"] = positionOf(result.Position)
-		}
-		// THIS ITEM'S OWN VERSION, never the last commit's. A dependency
-		// change writes other items too — each blocker's mirror, each
-		// dependent's edge — and the last of those is somebody else's
-		// version: handed back as `if_match` on this item it was refused
-		// as stale. Zero where the call landed nothing on this item's own
-		// subject, which as `if_match` is no condition at all — and so,
-		// where the patch ran, the patch's version stands.
-		//
-		// WHERE BOTH WROTE THIS ITEM, THE DEPENDENCY'S IS THE NEWER: its
-		// `waiting_on` commit lands on the same subject after the patch.
-		// Answering the patch's version handed the caller an `if_match`
-		// its own call's second write had already moved past, and the
-		// next update was refused as stale by nobody but itself.
-		if !patchRan || result.TaskVersion != 0 {
-			answer["version"] = result.TaskVersion
 		}
 		// THE HALF-WRITTEN EDGES ARE REPORTED, never swallowed. A
 		// dependency whose mirror lost its race is durable on the
@@ -2348,31 +2729,32 @@ func updateUnknown(actor Actor, opID string, got tracker.WriteResult,
 // And so is its refusal, which [labelFailure] answers under the CALLING tool.
 func (d WorkDeps) declareLabels(ctx context.Context, actor Actor,
 	write labelWrite, args map[string]any, project string,
-	labels []string) ([]string, string) {
+	labels []string) ([]string, *tools.Result) {
 
 	if len(labels) == 0 || !argBool(args, "labels_create_missing") {
-		return nil, ""
+		return nil, nil
 	}
 	if d.ProjectWriter == nil {
 		// THE REFUSAL NAMES THE OTHER ROUTE rather than failing the
 		// write: a build with no project writer still has a lead who
 		// can declare the tag, and the create that follows will say
 		// which label is missing.
-		return nil, "This build cannot declare labels at a write. Ask the " +
-			"project lead to declare it, or file without the label."
+		return nil, refusalOf(refused(tools.RefusalUnavailable, "This build "+
+			"cannot declare labels at a write. Ask the project lead to "+
+			"declare it, or file without the label."))
 	}
 	opID := opIDFor(actor, write.tool, "tags", project, args)
 	created, warnings, err := d.ProjectWriter(actor).EnsureTags(ctx, opID,
 		project, labels)
 	if err != nil {
-		return nil, labelFailure(actor, write, opID, project, labels, err)
+		return nil, refusalOf(labelFailure(actor, write, opID, project, labels, err))
 	}
 	if len(warnings) > 0 {
 		// THE WARNINGS RIDE THE CREATED LIST, because they are about
 		// exactly these slugs and the caller has one answer to read.
 		created = append(created, warnings...)
 	}
-	return created, ""
+	return created, nil
 }
 
 // labelWrite is the write a call was about to make when it declared its labels
@@ -2445,13 +2827,13 @@ type labelWrite struct {
 // than presenting write_project as what unblocks the call: it does only where
 // the write already happened.
 func labelFailure(actor Actor, write labelWrite, opID, project string,
-	labels []string, err error) string {
+	labels []string, err error) tools.Result {
 
 	var clash *tracker.TagClash
 	var full *tracker.TagsFull
 	switch {
 	case errors.As(err, &clash):
-		return fmt.Sprintf("%s was refused, and nothing was written: to use "+
+		return failed(fmt.Sprintf("%s was refused, and nothing was written: to use "+
 			"the label %s it has to declare it in %s, where the tag %s is "+
 			"already labelled %q — two tags nobody could tell apart. If they "+
 			"mean the same thing, give `labels` %s instead of %s; if not, "+
@@ -2460,16 +2842,16 @@ func labelFailure(actor Actor, write labelWrite, opID, project string,
 			"does not use>\"}]). Then make this call again.", write.tool,
 			clash.Slug, clash.Project, clash.Other.Slug, clash.Other.Label,
 			clash.Other.Slug, clash.Slug, clash.Slug, clash.Project,
-			clash.Project, clash.Slug, clash.Project)
+			clash.Project, clash.Slug, clash.Project))
 	case errors.As(err, &full):
-		return fmt.Sprintf("%s was refused, and nothing was written: to use "+
+		return failed(fmt.Sprintf("%s was refused, and nothing was written: to use "+
 			"the label %s it has to declare it in %s, which already keeps %d "+
 			"tags, the most a project may. Use a tag %s already has "+
 			"(describe_project lists them) or leave %s out of `labels`; or have "+
 			"%s's lead archive tags it no longer files under (write_project's "+
 			"tags_archive), then make this call again.", write.tool, full.Slug,
 			full.Project, tracker.MaxTagsPerProject, full.Project, full.Slug,
-			full.Project)
+			full.Project))
 	case errors.Is(err, tracker.ErrStepUnresolved):
 		unvouched := errors.Is(err, tracker.ErrStepUnvouched)
 		why := "the write's acknowledgement was lost"
@@ -2488,21 +2870,23 @@ func labelFailure(actor Actor, write labelWrite, opID, project string,
 		again := sameCall(actor, write.tool)
 		switch {
 		case again == "":
-			return stopped + " Making the call again is a new operation: it " +
-				"declares the labels again — harmless, since that states the " +
-				"same tags — then " + write.then + "."
+			return unknownOutcome(stopped + " Making the call again is a new " +
+				"operation: it declares the labels again — harmless, since that " +
+				"states the same tags — then " + write.then + ".")
 		case unvouched:
 			adds := make([]string, len(labels))
 			for i, label := range labels {
 				adds[i] = fmt.Sprintf("{\"slug\": %q}", label)
 			}
+			// AN `op_id` TRAVELS, so another node can be asked; a request
+			// is answered by the node its transport reached.
 			elsewhere := ""
-			if actor.Operation != "" {
+			if actor.Operation != "" && !actor.requested {
 				elsewhere = ", or make the same call with that `op_id` through " +
 					"another node's operator MCP, whose ledger may reach back " +
 					"that far"
 			}
-			return fmt.Sprintf("%s The same call made here stops at this step "+
+			return unknownOutcome(fmt.Sprintf("%s The same call made here stops at this step "+
 				"until the declaration reaches this node, and never if it did "+
 				"not land. Declaring a tag again is harmless, so declare them "+
 				"first: write_project on %s with tags_add: [%s] states the same "+
@@ -2513,20 +2897,23 @@ func labelFailure(actor Actor, write labelWrite, opID, project string,
 				"again — which then means %s%s. Do not reword it: if an earlier "+
 				"attempt at this call got past this step, a different call %s.",
 				stopped, project, strings.Join(adds, ", "), again,
-				write.unvouched, write.look, elsewhere, write.twice)
+				write.unvouched, write.look, elsewhere, write.twice))
 		}
-		return fmt.Sprintf("%s %s: that is the same operation — it answers the "+
+		return unknownOutcome(fmt.Sprintf("%s %s: that is the same operation — it answers the "+
 			"declaration with what landed, then %s, once. Do not reword it: if "+
 			"an earlier attempt at this call got past this step, a different call %s. "+
 			"Do not report it as done until a call answers without this error.",
-			stopped, capitalize(again), write.then, write.twice)
+			stopped, capitalize(again), write.then, write.twice))
 	}
 	if reused := reusedOperation(actor, write.tool, err); reused != "" {
-		return reused
+		return failed(reused)
 	}
-	return fmt.Sprintf("%s was refused before %s: declaring its labels in %s "+
-		"did not land (%v). Nothing was written — do not report it as done.",
-		write.tool, write.before, project, err)
+	// THE CLASS IS THE ERROR'S OWN, read the one way every write reads it,
+	// under a sentence that names the write this call did not make.
+	return refused(writeFailure(actor, write.tool, err).Refusal, fmt.Sprintf(
+		"%s was refused before %s: declaring its labels in %s did not land "+
+			"(%v). Nothing was written — do not report it as done.",
+		write.tool, write.before, project, err))
 }
 
 // patchFromArgs builds the patch and the change kind, or the refusal to show
@@ -2641,12 +3028,6 @@ func patchFromArgs(args map[string]any, actor Actor, now time.Time,
 	return patch, kind, ""
 }
 
-// patched is the task as the write will leave it, for the wake's snapshot.
-//
-// APPLIED HERE RATHER THAN READ BACK, because the snapshot has to describe the
-// state this change produces and the change has not landed yet — a read after
-// the write would race every other writer, and on a lagging node would return
-// the state before it.
 // remove is a handle set minus one handle, order preserved.
 func remove(all []string, handle string) []string {
 	out := make([]string, 0, len(all))
@@ -2666,6 +3047,12 @@ func appendMissing(all []string, handle string, add bool) []string {
 	return append(all, handle)
 }
 
+// patched is the task as the write will leave it, for the wake's snapshot.
+//
+// APPLIED HERE RATHER THAN READ BACK, because the snapshot has to describe the
+// state this change produces and the change has not landed yet — a read after
+// the write would race every other writer, and on a lagging node would return
+// the state before it.
 func patched(task tracker.Task, patch tracker.TaskPatch) tracker.Task {
 	// THE WRITER'S OWN MERGE, not a copy of it. This was a field-by-field
 	// reimplementation, so every field added to [tracker.TaskPatch] had to
@@ -2690,12 +3077,29 @@ func patched(task tracker.Task, patch tracker.TaskPatch) tracker.Task {
 		task.Muted = appendMissing(remove(task.Muted, patch.Watch.Handle),
 			patch.Watch.Handle, !patch.Watch.Watch)
 	}
+	if patch.Checklist != nil {
+		// THE GESTURE THROUGH THE WRITER'S OWN FUNCTION, over the snapshot
+		// this tool read — so the wake's checklist delta and the people
+		// whose items it touched are computed from what the gesture does,
+		// as they are for a watch. A gesture this read cannot resolve (an
+		// item added since) leaves the snapshot as read: the decide is the
+		// authority and resolves it against the task as it lands.
+		if lists, err := tracker.ApplyChecklist(task.Checklists, *patch.Checklist); err == nil {
+			task.Checklists = lists
+		}
+	}
 	return task
 }
 
 // ---- comment_on_work_item ---------------------------------------------- //
 
-type commentOnWorkItem struct{ deps WorkDeps }
+type commentOnWorkItem struct {
+	deps WorkDeps
+
+	// pages checks a decision's page evidence — see [evidenceLookup]. Nil
+	// on a company with no native knowledge base.
+	pages PageReader
+}
 
 var _ tools.SeatCallable = (*commentOnWorkItem)(nil)
 
@@ -2705,7 +3109,9 @@ func (t *commentOnWorkItem) Description() string {
 	return "Post a comment on a work item. Everyone following the item is " +
 		"told, and anyone you @-mention by handle is woken specifically. " +
 		"Post ONE substantive comment when you have something to say — " +
-		"running commentary is noise on a surface other people read."
+		"running commentary is noise on a surface other people read. " +
+		"`ask` puts a question to somebody, and `decision` structures it " +
+		"when they have to choose; `answers` with `choice` answers one."
 }
 
 func (t *commentOnWorkItem) Parameters() map[string]any {
@@ -2728,11 +3134,19 @@ func (t *commentOnWorkItem) Parameters() map[string]any {
 					"for one and start following the item. It does not hand " +
 					"the item over, and it does not stop anybody closing it.",
 			},
+			"decision": decisionSchema(),
 			"answers": map[string]any{
 				"type": "string",
 				"description": "The comment id of the question this answers, " +
 					"which closes it. Omitted, it is inferred when exactly " +
 					"one open question on the item is addressed to you.",
+			},
+			"choice": map[string]any{
+				"type": "string",
+				"description": "When the question you answer carries a " +
+					"decision: the id of the option you choose. `body` is " +
+					"then optional — say why in it. Leave it out to answer " +
+					"in prose when none of the options is right.",
 			},
 			"reply_to": map[string]any{
 				"type": "string",
@@ -2742,7 +3156,7 @@ func (t *commentOnWorkItem) Parameters() map[string]any {
 					"`answers` is what does.",
 			},
 		},
-		"required": []any{"item", "body"},
+		"required": []any{"item"},
 	})
 }
 
@@ -2767,18 +3181,34 @@ func (t *commentOnWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 
 	ref := strings.TrimSpace(argString(args, "item"))
 	body := strings.TrimSpace(argString(args, "body"))
+	choice := strings.TrimSpace(argString(args, "choice"))
+	rawDecision, decided := args["decision"]
 	switch {
 	case ref == "":
 		return failed("comment_on_work_item needs an `item` — a key like ENG-42, or an id."), nil
-	case body == "":
-		return failed("comment_on_work_item needs a `body`. Say the substantive thing, once."), nil
+	case body == "" && choice == "":
+		// A CHOICE IS AN ANSWER ON ITS OWN: the option is what the asker
+		// was waiting for, and a reason is welcome but not owed.
+		return failed("comment_on_work_item needs a `body`. Say the substantive " +
+			"thing, once — or, answering a decision, a `choice`."), nil
+	case decided && strings.TrimSpace(argString(args, "ask")) == "":
+		// REFUSED BEFORE ANY READ, because nothing about the item can make
+		// it right: a decision is a question put to somebody, and one
+		// asked of nobody is a set of options nobody is woken to weigh.
+		return failed("comment_on_work_item: `decision` needs `ask` — the " +
+			"handle of the person who has to choose. A decision asked of " +
+			"nobody wakes nobody."), nil
+	case decided && choice != "":
+		return failed("comment_on_work_item: a comment either asks a decision " +
+			"(`decision`) or answers one (`choice`), never both — they are two " +
+			"comments, by two people."), nil
 	}
 	before, err := t.deps.Reader.Task(ctx, ref, tracker.DetailWants{}, seatRead)
 	switch {
 	case errors.Is(err, tracker.ErrNoTask):
-		return failed(fmt.Sprintf("There is no work item %q.", clip(ref))), nil
+		return refused(tools.RefusalNotFound, fmt.Sprintf("There is no work item %q.", clip(ref))), nil
 	case err != nil:
-		return failed(readFailure(CommentOnWorkTool, err)), nil
+		return readFailure(CommentOnWorkTool, err), nil
 	}
 
 	now := t.deps.now()
@@ -2792,7 +3222,16 @@ func (t *commentOnWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		Author:     actor.Handle,
 		AuthorKind: actor.Kind,
 		Body:       body,
+		Choice:     choice,
 		CreatedAt:  now,
+	}
+	if decided {
+		decision, refusal := t.deps.readDecision(ctx, CommentOnWorkTool,
+			actor, rawDecision, t.pages)
+		if refusal != nil {
+			return *refusal, nil
+		}
+		comment.Decision = decision
 	}
 	if reply := strings.TrimSpace(argString(args, "reply_to")); reply != "" {
 		comment.ReplyTo = &reply
@@ -2811,7 +3250,7 @@ func (t *commentOnWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		}
 		ask = resolved
 	}
-	thread, refusal := t.deps.resolveThread(ctx, tracker.ThreadQuery{
+	thread, threadRefusal := t.deps.resolveThread(ctx, tracker.ThreadQuery{
 		Task:    before.Task.ID,
 		ReplyTo: strings.TrimSpace(argString(args, "reply_to")),
 		Ask:     ask,
@@ -2822,13 +3261,28 @@ func (t *commentOnWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		// answering the question put to their seat stamped nothing, and
 		// the ask stayed open on the board.
 		Author: actor.Record(),
+		// THIS COMMENT'S OWN ID, so a re-run turn whose first answer
+		// landed is told nothing is wrong rather than that somebody —
+		// itself — already answered.
+		Comment: comment.ID,
+		Choice:  comment.Choice,
 	})
-	if refusal != "" {
-		return failed(refusal), nil
+	if threadRefusal != nil {
+		return *threadRefusal, nil
 	}
 	comment.Ask = thread.Asked
 	if thread.Answers != "" {
 		comment.Answers = &thread.Answers
+	}
+	if comment.Choice != "" && comment.Answers == nil {
+		// A CHOICE THAT ANSWERS NOTHING: no `answers` was named and no
+		// open question on the item is addressed to this caller, so there
+		// is no decision for the option to be one of.
+		return failed(fmt.Sprintf("comment_on_work_item: `choice` %q answers "+
+			"a decision, and no open question on %s is addressed to you. Name "+
+			"the question with `answers` (its comment id), or answer in "+
+			"`body` without a choice.", clip(comment.Choice),
+			before.Task.Key)), nil
 	}
 
 	// A COMMENT RIDES THE TASK'S OWN WRITE, because a comment is a
@@ -2872,10 +3326,11 @@ func (t *commentOnWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 			// there rather than refused.
 			After:   patched(before.Task, patch),
 			Comment: comment, Mentions: comment.Mentions,
-			Thread: thread.ThreadParties,
+			Thread:          thread.ThreadParties,
+			AnswersDecision: thread.AnswersDecision,
 		}.Notify(t.deps.Leads))
 	if err != nil {
-		return failed(writeFailure(actor, CommentOnWorkTool, err)), nil
+		return writeFailure(actor, CommentOnWorkTool, err), nil
 	}
 	if got.Outcome == statelog.OutcomeUnknown {
 		// A COMMENT NOBODY CAN SAY WAS POSTED IS NOT ONE TO REPORT. Its
@@ -2883,7 +3338,7 @@ func (t *commentOnWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		// a remark on the thread, and the seat tells whoever asked that
 		// it answered — when an operation this node's ledger cannot
 		// vouch for is answered without publishing anything at all.
-		return failed(unknownWrite(actor, CommentOnWorkTool,
+		return unknownOutcome(unknownWrite(actor, CommentOnWorkTool,
 			fmt.Sprintf("the comment on %s was posted", before.Task.Key), opID,
 			got.Unvouched, unknownNext(got.Unvouched,
 				sameCall(actor, CommentOnWorkTool),
@@ -2901,6 +3356,14 @@ func (t *commentOnWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	}
 	if comment.Answers != nil {
 		answer["answered"] = *comment.Answers
+	}
+	if comment.Choice != "" {
+		answer["choice"] = comment.Choice
+	}
+	if comment.Decision != nil {
+		// WHAT THE PERSON ASKED WILL CHOOSE BETWEEN, as it was stored — a
+		// task named by key in the evidence comes back as its id.
+		answer["decision"] = comment.Decision
 	}
 	// THE WARNING THE CALLER CANNOT SEE FOR THEMSELVES. A comment from
 	// somebody who is not the assignee, naming nobody, still WAKES the
@@ -2948,8 +3411,9 @@ func unansweredWarning(task tracker.Task, actor Actor, comment *tracker.Comment)
 //
 // A CALLER WITH NO TURN derives it from the call's operation instead
 // ([Actor.Operation]), and without the arguments — for the reason [opIDFor]
-// leaves them out there: the `op_id` the caller brought back IS the claim that
-// this is that call, so the comment it names is the one the first call posted.
+// leaves them out there: the operation the caller made the call under IS the
+// claim that this is that call, so the comment it names is the one the first
+// call posted.
 func commentID(actor Actor, tool, taskID string, args map[string]any) string {
 	if actor.Operation != "" {
 		return uuid.NewSHA1(commentNamespace, []byte(actor.Operation+"\x00"+
@@ -2993,22 +3457,50 @@ func jsonResult(v any) (tools.Result, error) {
 // IT NEVER SAYS "NOTHING FOUND". A projection that has not caught up must not
 // be able to tell a seat the company has no work — it would file a duplicate,
 // or abandon work it was told to do.
-func readFailure(name string, err error) string {
-	return fmt.Sprintf("%s could not read the tracker right now (%v). This is "+
-		"NOT an empty result — do not conclude the item or the list does not "+
-		"exist. Try again, or say you could not check.", name, err)
+//
+// [tools.RefusalUnavailable], and never not-found, for the same reason: a
+// caller that is not a model reads the class rather than the sentence, and a
+// dashboard told "not found" about a read this node could not serve would
+// render the item as gone.
+func readFailure(name string, err error) tools.Result {
+	return refused(tools.RefusalUnavailable, fmt.Sprintf("%s could not read "+
+		"the tracker right now (%v). This is NOT an empty result — do not "+
+		"conclude the item or the list does not exist. Try again, or say you "+
+		"could not check.", name, err))
 }
 
 // writeFailure explains a write that did not land, in terms the model can act
 // on: which of these it can fix by trying differently, and which it cannot.
 //
+// EACH SENTINEL HAS ITS OWN CLASS, because the classes are what a person's
+// surface acts on: a stale version is re-read and offered again, a lost race
+// is retried, a spent hand-off budget is never retried, and a log that refused
+// the append is this node's condition rather than anything about the item.
+// Folding any two of them together would make one of those surfaces do the
+// other's thing.
+//
+// A CONTENT REFUSAL IS MARKED AND EVERYTHING UNMARKED IS THE NODE'S. The
+// tracker's writer wraps [tracker.ErrInvalid] on every refusal it writes about
+// what was asked — a custom-field value it will not round, a tombstoned item
+// that must be restored first, a rank key that is not well formed — and its
+// sentence names what to change. A text past its cap is TYPED
+// ([tracker.TextCapError]) and gets a sentence composed from its fields, since
+// it is the content refusal a person filing by hand reaches most. What it does NOT write arrives unmarked from
+// places it does not own: a SQL read of the decide's snapshot, the log's last
+// message, the operation ledger, the apply gates, a re-spread window. The
+// opposite default was the one this used to take, and it told a person whose
+// write hit a disk error to fix their input; an unmarked refusal read as the
+// node's failure at worst invites a retry that fails the same way, which a
+// person can see for themselves, while a node failure read as theirs sends
+// them to edit a field that was never wrong.
+//
 // IT TAKES THE ACTOR because what "the same call again" is depends on who is
-// calling ([sameCall]): a seat repeats its arguments, an operator brings back
-// the `op_id`, and a caller holding neither has no repeat that is the same
+// calling ([sameCall]): a seat repeats its arguments, an operator repeats its
+// operation, and a caller holding neither has no repeat that is the same
 // operation — telling it to repeat one filed a second item.
-func writeFailure(actor Actor, name string, err error) string {
+func writeFailure(actor Actor, name string, err error) tools.Result {
 	if reused := reusedOperation(actor, name, err); reused != "" {
-		return reused
+		return failed(reused)
 	}
 	var clash *tracker.TagClash
 	var full *tracker.TagsFull
@@ -3016,12 +3508,12 @@ func writeFailure(actor Actor, name string, err error) string {
 	case errors.As(err, &clash) && name == tracker.WriteProjectTool:
 		// THE DECLARATION ITSELF, so the remedy is this call with another
 		// label, or the tag that already has this one.
-		return fmt.Sprintf("%s was refused, and nothing was written: %s already "+
+		return failed(fmt.Sprintf("%s was refused, and nothing was written: %s already "+
 			"has a tag %s labelled %q, and %s (%q) would be a second tag nobody "+
 			"could tell apart from it. Use %s if it means the same thing, or "+
 			"declare %s under a label of its own.", name, clash.Project,
 			clash.Other.Slug, clash.Other.Label, clash.Slug, clash.Label,
-			clash.Other.Slug, clash.Slug)
+			clash.Other.Slug, clash.Slug))
 	case errors.As(err, &clash):
 		// A LABEL TWO PROJECTS USE FOR DIFFERENT TAGS, which a move meets
 		// when it declares its subtree's tags in the target — its first
@@ -3029,7 +3521,7 @@ func writeFailure(actor Actor, name string, err error) string {
 		// labels meets in its own project. Named with the two ways past
 		// it, because the generic "NOT made" gave a seat nothing to do but
 		// give up on the move.
-		return fmt.Sprintf("%s was refused, and nothing was written: it has to "+
+		return failed(fmt.Sprintf("%s was refused, and nothing was written: it has to "+
 			"declare the tag %s (%q) in %s, where the tag %s is already labelled "+
 			"%q — two tags nobody could tell apart. If they mean the same thing, "+
 			"put the items under %s instead (update_work_item's `labels`); if "+
@@ -3038,29 +3530,49 @@ func writeFailure(actor Actor, name string, err error) string {
 			"\"<a label %s does not use>\"}]). Then make this call again.",
 			name, clash.Slug, clash.Label, clash.Project, clash.Other.Slug,
 			clash.Other.Label, clash.Other.Slug, clash.Slug, clash.Project,
-			clash.Project, clash.Slug, clash.Project)
+			clash.Project, clash.Slug, clash.Project))
 	case errors.As(err, &full):
-		return fmt.Sprintf("%s was refused, and nothing was written: %s already "+
+		return failed(fmt.Sprintf("%s was refused, and nothing was written: %s already "+
 			"keeps %d tags, the most a project may, and %s is not among them. "+
 			"Archive tags %s no longer files under (write_project's "+
 			"tags_archive — its lead's decision), or take %s off the items with "+
 			"update_work_item, then make this call again.", name, full.Project,
-			tracker.MaxTagsPerProject, full.Slug, full.Project, full.Slug)
+			tracker.MaxTagsPerProject, full.Slug, full.Project, full.Slug))
 	case errors.Is(err, tracker.ErrNoTask):
-		return fmt.Sprintf("%s: %v", name, err)
+		return refused(tools.RefusalNotFound, fmt.Sprintf("%s: %v", name, err))
+	case errors.Is(err, tracker.ErrForbidden):
+		// NOT A RACE. The sentence names who may, which is the only part
+		// of it a caller can act on; re-reading changes nothing.
+		return refused(tools.RefusalForbidden, fmt.Sprintf("%s was refused: "+
+			"%s. Re-reading will not change this — ask whoever the refusal "+
+			"names.", name, tracker.Sentence(err)))
 	case errors.Is(err, statelog.ErrConflict):
-		return fmt.Sprintf("%s could not land: %v. Somebody else is editing "+
-			"this item. Read it again with get_work_item and decide from what "+
-			"it says now.", name, err)
+		return refused(tools.RefusalConflict, fmt.Sprintf("%s could not land: "+
+			"%v. Somebody else is editing this item. Read it again with "+
+			"get_work_item and decide from what it says now.", name, err))
 	case errors.Is(err, statelog.ErrExists):
-		return fmt.Sprintf("%s: %v", name, err)
+		return refused(tools.RefusalExists, fmt.Sprintf("%s: %v", name, err))
 	case errors.Is(err, tracker.ErrStaleVersion):
 		// THE ONE REFUSAL WHOSE ANSWER IS "READ IT AGAIN". Nothing is
 		// wrong with the patch, so a model told only "it failed" would
 		// re-send the same one against the same moved item forever.
-		return fmt.Sprintf("%s was refused: %v. Nothing is wrong with your "+
-			"edit — somebody changed the item after you read it. Call "+
-			"get_work_item again and decide from what it says now.", name, err)
+		return refused(tools.RefusalStaleVersion, fmt.Sprintf("%s was "+
+			"refused: %v. Nothing is wrong with your edit — somebody "+
+			"changed the item after you read it. Call get_work_item again "+
+			"and decide from what it says now.", name, err))
+	case errors.Is(err, tracker.ErrAlreadyAnswered):
+		// THE ANSWER THAT LOST A RACE. The thread read passed it and the
+		// write's own snapshot found the question answered in between,
+		// so the sentence names who answered and when — the move is to
+		// read that answer, never to send this one again.
+		return refused(tools.RefusalAlreadyAnswered, fmt.Sprintf("%s was "+
+			"refused: %v. Nothing was posted.", name, err))
+	case errors.Is(err, tracker.ErrInboxFull):
+		// NOT A SMALLER GESTURE BUT A DIFFERENT ONE: the sentence names
+		// `read_through`, which marks everything up to a notice in one move
+		// and is what empties the lists this refusal is about.
+		return refused(tools.RefusalInboxFull, fmt.Sprintf("%s was refused: "+
+			"%v.", name, err))
 	case errors.Is(err, tracker.ErrStepUnvouched):
 		// NEITHER DONE NOR NOT MADE, AND NOT FINISHED BY ASKING AGAIN
 		// HERE. It is an ErrStepUnresolved, so this arm goes first: the
@@ -3068,12 +3580,12 @@ func writeFailure(actor Actor, name string, err error) string {
 		// every time, because the ledger row that step needs is the one
 		// the loss took — and a model told "call again" goes round that
 		// loop until its rounds run out.
-		return fmt.Sprintf("%s stopped part of the way through: %v. Some of "+
+		return unknownOutcome(fmt.Sprintf("%s stopped part of the way through: %v. Some of "+
 			"it may already have landed, and this node cannot tell which — "+
 			"calling %s again here stops at the same step. Do not report it as "+
 			"done or as failed, and do not redo it by other means: read the "+
 			"items it touches with get_work_item, and say which part is "+
-			"unconfirmed.", name, err, name)
+			"unconfirmed.", name, err, name))
 	case errors.Is(err, tracker.ErrStepUnresolved):
 		// NEITHER DONE NOR NOT MADE. A gesture that walks — a move, a
 		// merge, a promotion, a dependency — stopped at a step whose
@@ -3083,26 +3595,63 @@ func writeFailure(actor Actor, name string, err error) string {
 		// it — and what that is depends on the caller ([sameCall]).
 		again := sameCall(actor, name)
 		if again == "" {
-			return fmt.Sprintf("%s stopped part of the way through: %v. Some "+
+			return unknownOutcome(fmt.Sprintf("%s stopped part of the way through: %v. Some "+
 				"of it may already have landed. Calling %s again is a new "+
 				"operation here and does not finish this one: read the items "+
 				"it touches with get_work_item and finish what is missing with "+
-				"the tool for each. Do not report it as done.", name, err, name)
+				"the tool for each. Do not report it as done.", name, err, name))
 		}
-		return fmt.Sprintf("%s stopped part of the way through: %v. Some of "+
+		return unknownOutcome(fmt.Sprintf("%s stopped part of the way through: %v. Some of "+
 			"it may already have landed. %s — the retry answers what landed "+
 			"and finishes the rest. Do not report it as done until a call "+
-			"answers without this error.", name, err, capitalize(again))
+			"answers without this error.", name, err, capitalize(again)))
 	case errors.Is(err, tracker.ErrReassignmentBudget):
 		// THE REFUSAL THAT MUST NOT INVITE ANOTHER ATTEMPT: this item is
 		// circulating between agents, and a message that reads like a
 		// transient failure is exactly what keeps it circulating.
-		return fmt.Sprintf("%s was refused: %v. Do not reassign it again. "+
-			"Comment on the item saying what is blocking it and who you "+
-			"think should own it, and leave it where it is.", name, err)
+		return refused(tools.RefusalReassignmentBudget, fmt.Sprintf("%s was "+
+			"refused: %v. Do not reassign it again. Comment on the item "+
+			"saying what is blocking it and who you think should own it, "+
+			"and leave it where it is.", name, err))
 	}
-	return fmt.Sprintf("%s did not land (%v). The change was NOT made — do not "+
-		"report it as done.", name, err)
+	var capped *tracker.TextCapError
+	if errors.As(err, &capped) {
+		return refused(tools.RefusalInvalid, textCapRefusal(capped))
+	}
+	if errors.Is(err, tracker.ErrInvalid) {
+		// WHAT WAS ASKED, and the sentence is the writer's, which names
+		// what to change. NOT the node-failure wording below: "did not
+		// land … do not report it as done" is an instruction to a model
+		// about a failure it could not see, and this class — with the
+		// forbidden one above — is what a person's surface prints as it
+		// stands (`contract/errors.ts`), so it carries the writer's
+		// sentence alone rather than the Go error's "tracker:" in front.
+		return refused(tools.RefusalInvalid, fmt.Sprintf("%s refused that: %s",
+			name, tracker.Sentence(err)))
+	}
+	return refused(tools.RefusalUnavailable, fmt.Sprintf("%s did not land (%v). "+
+		"The change was NOT made — do not report it as done.", name, err))
+}
+
+// textCapRefusal says which of a task's texts is too long, by how much, and
+// what to do with the rest — for a model and for a person alike, since the
+// invalid class is shown to a person verbatim.
+//
+// COMPOSED FROM THE TYPED FIELDS rather than from the writer's sentence,
+// which is a Go error: it starts "tracker:", and it used to quote the id of
+// the task being created — a uuid minted for a task the refusal meant would
+// never exist.
+func textCapRefusal(e *tracker.TextCapError) string {
+	argument, holds := "`title`", "a task's title"
+	switch e.Field {
+	case tracker.TextBody:
+		argument, holds = "`body`", "a task's description"
+	case tracker.TextComment:
+		argument, holds = "`body`", "a comment"
+	}
+	return fmt.Sprintf("%s is %d bytes and %s holds at most %d, so nothing was "+
+		"changed. Shorten it, or put the long form on a page and link it here "+
+		"— a value is refused rather than cut.", argument, e.Size, holds, e.Limit)
 }
 
 // reusedOperation explains a write refused because the caller's operation
@@ -3117,12 +3666,25 @@ func writeFailure(actor Actor, name string, err error) string {
 // ([statelog.ReasonOpReused]) rather than answering a write that is not this
 // one. The remedy is the one thing a generic "NOT made" leaves out: this write
 // needs an operation of its own. ONLY where the caller named the operation — a
-// seat's ids are derived and it has no `op_id` to leave out.
+// seat's ids are derived and it has no operation to leave out.
+//
+// A REQUEST'S OPERATION MEETS IT THE SAME WAY — a retried request whose item
+// somebody moved in between — and its remedy is the same move in that
+// caller's own terms: a new request, since its operation IS the request and
+// it has no `op_id` to leave out ([sameCall] makes the same split).
 func reusedOperation(actor Actor, tool string, err error) string {
 	var refusal *statelog.Unavailable
 	if actor.Operation == "" || !errors.As(err, &refusal) ||
 		refusal.Reason != statelog.ReasonOpReused {
 		return ""
+	}
+	if actor.requested {
+		return fmt.Sprintf("%s was refused, and this request's change was NOT "+
+			"made: the operation this request names (%s) already wrote to "+
+			"something else (%v) — what it names has changed since the request "+
+			"was first sent — so it cannot finish that request here. Read the "+
+			"item again, and send this as a new request, under a new request id.",
+			tool, actor.Operation, err)
 	}
 	return fmt.Sprintf("%s was refused, and this call's change was NOT made: "+
 		"the operation `op_id` %q names already wrote to something else (%v) — "+
@@ -3135,15 +3697,20 @@ func reusedOperation(actor Actor, tool string, err error) string {
 // sameCall says how this caller makes THIS call again as the same operation,
 // as a clause to be told — or "" where no repeat is the same operation.
 //
-// ONE PLACE, because it is three different answers and every failure that
+// ONE PLACE, because it is four different answers and every failure that
 // says "call again" has to give the right one. A SEAT's ids are derived from
 // its turn, the call's own arguments and how many different calls to the tool
 // came first ([opIDFor]), so the same arguments before any different call to
-// it are the same operation, and reworded they are a new one. An OPERATOR's
-// call is the operation it brings back as `op_id`. A caller with neither mints
-// afresh on every call, and a repeat it is told to make is a second write.
+// it are the same operation, and reworded they are a new one. A call whose
+// transport named its operation from the REQUEST is that request sent again
+// ([RequestOperation]). Any other OPERATOR's call is the operation it brings
+// back as `op_id`. A caller with none of these mints afresh on every call,
+// and a repeat it is told to make is a second write.
 func sameCall(actor Actor, tool string) string {
 	switch {
+	case actor.requested:
+		return fmt.Sprintf("send the same %s request again — the same request "+
+			"id, with exactly the same arguments", tool)
 	case actor.Operation != "":
 		return fmt.Sprintf("call %s again with exactly the same arguments and "+
 			"`op_id` %q", tool, actor.Operation)
@@ -3179,17 +3746,26 @@ const opIDArg = "op_id"
 // unreachable. A create repeated filed a second item, and an update
 // conditioned on a version was refused as stale by its own first copy.
 //
-// So each call there IS an operation: one minted for it and answered as
-// `op_id` ([withOperation]), or the one the caller brought back,
-// held to the same rule every surface that takes one holds it to
-// ([statelog.CheckCallerOpID]). Every write the call makes derives from it.
+// So each call there IS an operation ([Actor.Operation]), named in one of
+// three ways, and every write the call makes derives from it:
 //
-// # Why a brought-back id must come with its own call
+//   - a TRANSPORT THAT NAMES ITS REQUESTS already set it — the dashboard's,
+//     whose retry repeats its request id ([RequestOperation]). The request is
+//     the identity, so an `op_id` beside it is refused, as a turn's is;
+//   - the caller BROUGHT ONE BACK as `op_id`, held to the same rule every
+//     surface that takes one holds it to ([statelog.CheckCallerOpID]);
+//   - or it is minted for this call and answered as `op_id`
+//     ([withOperation]), so the call can be brought back.
 //
-// The id is minted NAMING the call — the tool and a digest of its arguments
-// ([callName]) — and brought back it is accepted only with that call. With any
-// other it is refused before a single write: see [callName] for the second
-// items and the half-applied gestures a looser rule let through.
+// # Why an operation must come with its own call
+//
+// Every one of them NAMES the call — the tool and a digest of its arguments
+// ([callName]) — and is accepted only with that call. With any other it is
+// refused before a single write: see [callName] for the second items and the
+// half-applied gestures a looser rule let through. A transport's operation is
+// held to it too, although the transport derived it for this very call: the
+// rule is about what an operation IS, and a check that exempted one source of
+// them would be the place a transport that derived it wrong wrote anyway.
 //
 // # Why a turn's call is refused one
 //
@@ -3214,6 +3790,15 @@ func (d WorkDeps) bindOperation(actor Actor, tool string,
 		}
 		return actor, ""
 	}
+	if actor.Operation != "" {
+		if brought {
+			return actor, fmt.Sprintf("%s takes no `op_id` here: this request "+
+				"already names its operation — the request id a retry of it "+
+				"repeats — so the same request sent again is already the same "+
+				"operation. Leave it out.", tool)
+		}
+		return bindRequest(actor, tool, args)
+	}
 	call := callName(tool, args)
 	if !brought {
 		actor.Operation = statelog.NewOpID(time.Now(), call)
@@ -3235,8 +3820,88 @@ func (d WorkDeps) bindOperation(actor Actor, tool string,
 	return actor, ""
 }
 
-// callName is the name an operator's operation id carries: the tool, and a
-// digest of the arguments of the call it is minted for.
+// bindRequest holds an operation a TRANSPORT named to the call it was derived
+// for ([RequestOperation]) and marks the actor as the request's — see
+// [Actor.requested]. It is [WorkDeps.bindOperation]'s transport half, and on
+// its own it is what the writes that take no `op_id` call: write_project and
+// write_work_catalogue restate what they declare, so a repeat under a NEW
+// operation already changes nothing a first attempt landed and there is no
+// operation for a caller to bring back — but a request's operation reaches
+// them all the same, their records are its steps, and a check that exempted
+// them would be where one derived for another call answered this one from
+// that call's ledger rows. No operation — a turn's call, or a call no
+// transport named — passes untouched.
+func bindRequest(actor Actor, tool string, args map[string]any) (Actor, string) {
+	if actor.Operation == "" {
+		return actor, ""
+	}
+	if !answeredFor(actor.Operation, callName(tool, args)) {
+		return actor, foreignRequest(tool)
+	}
+	actor.requested = true
+	return actor, ""
+}
+
+// foreignRequest refuses a call whose transport named an operation derived
+// for another call. One sentence for the work tools and the page tools alike
+// ([WorkDeps.bindOperation], [PageDeps.foreignOperation]): it is one rule.
+func foreignRequest(tool string) string {
+	return fmt.Sprintf("%s refused this request, and nothing was written: the "+
+		"operation it was sent under was derived for another call — another "+
+		"tool, or this one with other arguments — and an operation finishes "+
+		"only the call it names.", tool)
+}
+
+// RequestOperation is the operation one call through a transport that names
+// its requests is: the operator's act transport, whose client — the
+// dashboard — mints a request id once per gesture and sends it again,
+// unchanged, on a retry. The transport sets it on the call's actor
+// ([Actor.Operation]); nothing else may.
+//
+// DERIVED from the request id and the credential that sent it, so a retry of
+// the request is the operation its first attempt was, and the ledger answers
+// what landed. And NAMING THE CALL ([callName]) exactly as a minted `op_id`
+// does, so a tool accepts it only with the call it was derived for
+// ([WorkDeps.bindOperation]) — and a second, different call sent under one
+// request id is a second operation rather than the first one's retry.
+//
+// THE CREDENTIAL IS PART OF IT, so a request id names only its own sender's
+// writes: nobody can make their write the first attempt of somebody else's by
+// sending that request id first.
+//
+// THE INSTANT IS THE REQUEST ID'S OWN, which is why the id must be a UUIDv7:
+// it is when the gesture began, every retry reproduces it, and it is what the
+// state log reads to decide whether this node's operation ledger can vouch for
+// the operation ([statelog.OpMintedAt]). An id carrying none would be read as
+// minted before every loss the ledger has had, and on a node whose ledger ever
+// lost a row — every deployment older than the ledger's retention — every
+// write under it would answer `unknown` without publishing, first attempt
+// included. So it is refused, naming what to send, rather than accepted into a
+// write that could never run. The id is canonicalised first, so one id spelled
+// two ways — upper case, braces, a `urn:uuid:` prefix — is one request.
+func RequestOperation(sender, requestID, tool string, args map[string]any) (string, error) {
+	id, err := uuid.Parse(strings.TrimSpace(requestID))
+	if err != nil {
+		return "", fmt.Errorf("the request id is not a UUID: %w", err)
+	}
+	at, minted := statelog.OpMintedAt(id.String())
+	if !minted {
+		return "", fmt.Errorf("the request id %s carries no instant: it must be a "+
+			"UUIDv7 minted when the gesture began (its first 48 bits the Unix "+
+			"millisecond), sent again unchanged on every retry", id)
+	}
+	return statelog.DeriveOpID(at, callName(tool, args), requestOperationNamespace,
+		sender, id.String()), nil
+}
+
+// requestOperationNamespace keeps an operation derived from a request apart
+// from every other derivation of the same parts. FIXED for the life of the
+// format: changing it makes every retry straddling the change a second write.
+const requestOperationNamespace = "crewlet.builtin.request"
+
+// callName is the name an operator's operation id carries — minted, brought
+// back or derived from a request: the tool, and a digest of the arguments of
+// the call it is for.
 //
 // # Why the arguments are in the operation
 //
@@ -3269,9 +3934,9 @@ func callName(tool string, args map[string]any) string {
 
 // callDigestLen is how many hex digits of the arguments' digest an operator's
 // operation id carries: 64 bits, far past any accidental collision, in an id
-// of at most 74 bytes with the longest tool that offers one
-// (comment_on_work_item: 36 + 1 + 20 + 1 + 16) — well inside
-// [statelog.MaxCallerOpIDBytes].
+// of at most 74 bytes with the longest operator write's name
+// (comment_on_work_item, write_work_catalogue: 36 + 1 + 20 + 1 + 16) — well
+// inside [statelog.MaxCallerOpIDBytes].
 const callDigestLen = 16
 
 // answeredFor reports whether op was minted for call: a uuid and exactly that
@@ -3286,8 +3951,13 @@ func answeredFor(op, call string) bool {
 // withOperation puts the call's operation on its answer, where it has one:
 // the `op_id` a caller brings back to make this call again as the same
 // operation. See [WorkDeps.bindOperation].
+//
+// NOT WHERE A TRANSPORT NAMED IT FROM ITS REQUEST: that caller makes the call
+// again by repeating its request, and an `op_id` beside the request is
+// refused — so one on its answer would be an instruction it cannot follow,
+// and a second retry identity for a surface that has exactly one.
 func withOperation(answer map[string]any, actor Actor) map[string]any {
-	if actor.Operation != "" {
+	if actor.Operation != "" && !actor.requested {
 		answer[opIDArg] = actor.Operation
 	}
 	return answer
@@ -3346,7 +4016,10 @@ func (d WorkDeps) zone() *time.Location {
 	if d.Zone == nil {
 		return time.UTC
 	}
-	return d.Zone
+	if loc := d.Zone(); loc != nil {
+		return loc
+	}
+	return time.UTC
 }
 
 func statusList() string   { return joinValues(tracker.Statuses) }

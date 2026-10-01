@@ -1,7 +1,7 @@
 package queries_test
 
 import (
-	"context"
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -16,6 +16,9 @@ import (
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
 	coordmemory "github.com/crewlet/crewlet/internal/coord/memory"
+	"github.com/crewlet/crewlet/internal/eventfan"
+	"github.com/crewlet/crewlet/internal/events/types"
+	"github.com/crewlet/crewlet/internal/period"
 	"github.com/crewlet/crewlet/internal/store"
 	"github.com/crewlet/crewlet/internal/tokens"
 )
@@ -60,6 +63,10 @@ func seedEvents(t *testing.T, log *store.EventLog, n int, mutate func(int, *stor
 		}
 	}
 }
+
+// fleetOf is one store read as the fleet it is: a node alone, with nobody
+// else to ask, so every answer is the store's with a complete coverage.
+func fleetOf(log *store.EventLog) *eventfan.Fleet { return eventfan.Solo("node-a", log) }
 
 func registryOver(t *testing.T, s queries.Sources) *queries.Registry {
 	t.Helper()
@@ -148,17 +155,22 @@ func TestEachSourceRegistersItsOwnQuestions(t *testing.T) {
 		// of them, which the dashboard used to fake by paging the raw
 		// feed; `phases` is the company-wide phase record WITH its
 		// payloads, which the event listing deliberately cannot serve;
-		// `token_series` is the spend with a time axis, which the
-		// breakdown has no dimension for; and `event_series` is the log's
-		// own, which a page of rows has no dimension for either.
-		{"the event log alone", queries.Sources{Events: db.Events()},
-			[]string{"event", "event_series", "events", "phases", "token_series",
+		// and `event_series` is the log's own time axis, which a page of
+		// rows has no dimension for.
+		{"the fleet's history alone", queries.Sources{Events: fleetOf(db.Events())},
+			[]string{"event", "event_series", "events", "phases",
 				"trace", "turn", "turns", "viewer"}},
-		{"both, plus health", queries.Sources{
-			State: state, Events: db.Events(),
-			Health: func(context.Context) any { return map[string]any{"status": "ok"} },
-		}, []string{"agent", "event", "event_series", "events", "phases", "stream",
-			"token_series", "tokens", "trace", "turn", "turns", "viewer"}},
+		// `token_series` is the spend with a time axis, which the
+		// breakdown has no dimension for — folded from the usage domain's
+		// company days, a source of its own rather than the fleet's turn
+		// detail; `seat_activity` is every seat's turns over those same
+		// days, summed across nodes.
+		{"the usage domain alone", queries.Sources{Usage: db.Replicated()},
+			[]string{"page_reads", "seat_activity", "token_series", "viewer"}},
+		{"all of them", queries.Sources{
+			State: state, Events: fleetOf(db.Events()), Usage: db.Replicated(),
+		}, []string{"agent", "event", "event_series", "events", "page_reads",
+			"phases", "seat_activity", "token_series", "tokens", "trace", "turn", "turns", "viewer"}},
 	} {
 		if got := registryOver(t, c.sources).Names(); !slices.Equal(got, c.names) {
 			t.Errorf("%s answers\n  %v\nwant\n  %v", c.what, got, c.names)
@@ -173,13 +185,13 @@ func TestAgentAnswersOneSeatsLiveState(t *testing.T) {
 	state := livestate.New()
 	state.Apply(&livestate.Envelope{
 		ID: "e1", Type: "agent_phase_started", Timestamp: "2026-06-14T12:00:00Z",
-		Category: "task", Payload: map[string]any{"role": "Lead", "task_id": "t-1"},
+		Category: "task", Payload: map[string]any{"role": "Lead", "turn_id": "tn-1"},
 	})
 	r := registryOver(t, queries.Sources{State: state})
 
 	got := ask(t, r, "agent", map[string]any{"role": "Lead"})
 	live, _ := got["live"].(*livestate.Overlay)
-	if live == nil || live.State != "working" {
+	if live == nil || live.Activity != livestate.ActivityWorking {
 		t.Fatalf("answer = %+v", got)
 	}
 }
@@ -240,113 +252,24 @@ func TestTokensAnswersTheLiveWindow(t *testing.T) {
 	}
 }
 
-func TestTokensOverAnotherWindowReadsTheStore(t *testing.T) {
+// THE ENGINE'S HEALTH IS A PUSH AND NEVER A QUERY.
+//
+// It was both: the `health` push carried three fields and a `stream` query
+// answered the rest, polled by five screens at two cadences of their own, so
+// the rail and the panel in front of it could disagree about whether a
+// revision had applied for as long as fifteen seconds. The push carries the
+// whole body now (`api.Health`), and a question that answered a second copy of
+// it would be the second cadence coming back.
+//
+// Mutation: register `stream` again, gated on any seam, and this fails.
+func TestTheEnginesHealthIsAPushAndNeverAQuery(t *testing.T) {
 	t.Parallel()
-	// The live projection can only answer for its own window. Any other one
-	// is a scan — folded by the SAME aggregator, so the number a reader
-	// sees when they change the window is comparable with the one they
-	// were looking at.
-	db := openStore(t)
-	log := db.Events()
-	write := func(id, role, phase string, total int) {
-		t.Helper()
-		payload, _ := json.Marshal(map[string]any{
-			"role": role, "phase": phase, "model": "m-1", "turn_id": "tn-1",
-			"input_tokens": total / 2, "output_tokens": total / 2,
-			"total_tokens": total,
-		})
-		if err := log.Append(t.Context(), store.EventRecord{
-			ID: id, Type: "agent_phase_completed", Time: time.Now().UTC().Add(-time.Hour),
-			Category: "system", Actor: role, Summary: "phase",
-			Tags: map[string]string{"agent_role": role}, Payload: payload,
-		}); err != nil {
-			t.Fatalf("append: %v", err)
+	// EVERY SEAM, so the sweep covers every registration this build has.
+	r := registryOver(t, everySeam(t))
+	for _, name := range []string{"stream", "health"} {
+		if _, err := r.Answer(t.Context(), name, nil, ""); !errors.Is(err, queries.ErrUnknown) {
+			t.Errorf("%q is answerable as a query (%v): read the health push", name, err)
 		}
-	}
-	write("s1", "Lead", "plan", 10)
-	write("s2", "Lead", "execute", 20)
-	write("s3", "Coder", "plan", 6)
-
-	r := registryOver(t, queries.Sources{State: livestate.New(), Events: log})
-	got := askRaw(t, r, "tokens", map[string]any{"since_days": 3}).(tokens.Rollup)
-
-	if got.Totals.TotalTokens != 36 || got.Totals.Calls != 3 {
-		t.Errorf("totals = %+v", got.Totals)
-	}
-	if width := windowWidth(t, got); width != 3*24*time.Hour {
-		t.Errorf("window = %s .. %s (%s), want the three days asked for",
-			got.Since, got.Until, width)
-	}
-	// Biggest first, and every dimension present.
-	if len(got.ByPhase) != 2 || got.ByPhase[0].Phase != "execute" {
-		t.Errorf("by_phase = %+v, want execute first", got.ByPhase)
-	}
-	if len(got.ByAgent) != 2 || got.ByAgent[0].Role != "Lead" {
-		t.Errorf("by_agent = %+v", got.ByAgent)
-	}
-	if len(got.ByTurn) != 1 || got.ByTurn[0].TurnID != "tn-1" {
-		t.Errorf("by_turn = %+v", got.ByTurn)
-	}
-}
-
-func TestOneRoleCanBeAskedForAlone(t *testing.T) {
-	t.Parallel()
-	// A per-seat window is a store read even when it IS the live window:
-	// the projection holds the whole org, and filtering it here would be a
-	// second implementation of the store's own filter.
-	db := openStore(t)
-	log := db.Events()
-	for _, seat := range []struct{ id, role string }{{"a", "Lead"}, {"b", "Coder"}} {
-		payload, _ := json.Marshal(map[string]any{
-			"role": seat.role, "phase": "plan", "total_tokens": 5,
-		})
-		if err := log.Append(t.Context(), store.EventRecord{
-			ID: seat.id, Type: "agent_phase_completed", Time: time.Now().UTC(),
-			Category: "system", Tags: map[string]string{"agent_role": seat.role},
-			Payload: payload,
-		}); err != nil {
-			t.Fatalf("append: %v", err)
-		}
-	}
-	r := registryOver(t, queries.Sources{State: livestate.New(), Events: log})
-	got := askRaw(t, r, "tokens", map[string]any{"agent_role": "Lead"}).(tokens.Rollup)
-
-	if got.Totals.Calls != 1 || got.AgentRole != "Lead" {
-		t.Errorf("rollup = %+v", got)
-	}
-}
-
-func TestAWindowNobodyCanSeeIsLabelledAsAsked(t *testing.T) {
-	t.Parallel()
-	// A registry holding the projection and no event log cannot see a
-	// fourteen-day window. It answers an empty rollup labelled with the
-	// window ASKED for, not the live one relabelled: a week's heading over an
-	// hour's numbers is a lie about what a reader is looking at.
-	r := registryOver(t, queries.Sources{State: livestate.New()})
-	got := askRaw(t, r, "tokens", map[string]any{"since_days": 14}).(tokens.Rollup)
-	if width := windowWidth(t, got); width != 14*24*time.Hour || got.Totals.Calls != 0 {
-		t.Errorf("rollup = %+v (window %s)", got, width)
-	}
-	// Never nil: the client does `d.by_phase.length`, so a null throws in
-	// the browser rather than rendering an empty table.
-	if got.ByPhase == nil || got.ByAgent == nil || got.ByTurn == nil {
-		t.Error("an empty rollup carries nil slices, which marshal to null")
-	}
-}
-
-func TestStreamAnswersHealthUnderItsOwnName(t *testing.T) {
-	t.Parallel()
-	// Deliberately not called health: a query must never share a name with
-	// a push kind, or a reader of the protocol has to know which direction
-	// a frame was travelling to know what it means.
-	r := registryOver(t, queries.Sources{
-		Health: func(context.Context) any { return map[string]any{"status": "ok"} },
-	})
-	if got := ask(t, r, "stream", nil); got["status"] != "ok" {
-		t.Errorf("answer = %+v", got)
-	}
-	if _, err := r.Answer(t.Context(), "health", nil, ""); !errors.Is(err, queries.ErrUnknown) {
-		t.Errorf("a push kind is answerable as a query: %v", err)
 	}
 }
 
@@ -356,7 +279,7 @@ func TestEventsAnswersAPageNewestFirst(t *testing.T) {
 	t.Parallel()
 	db := openStore(t)
 	seedEvents(t, db.Events(), 5, nil)
-	r := registryOver(t, queries.Sources{Events: db.Events()})
+	r := registryOver(t, queries.Sources{Events: fleetOf(db.Events())})
 
 	got := ask(t, r, "events", map[string]any{"limit": float64(3)})
 	rows, _ := got["events"].([]store.EventRecord)
@@ -375,7 +298,7 @@ func TestAPageEchoesTheCursorToResumeFrom(t *testing.T) {
 	// not drift.
 	db := openStore(t)
 	seedEvents(t, db.Events(), 5, nil)
-	r := registryOver(t, queries.Sources{Events: db.Events()})
+	r := registryOver(t, queries.Sources{Events: fleetOf(db.Events())})
 
 	first := ask(t, r, "events", map[string]any{"limit": float64(2)})
 	next, _ := first["next"].(map[string]any)
@@ -406,7 +329,7 @@ func TestACursorWithoutItsTimestampIsRefused(t *testing.T) {
 	// microsecond resolution — so a cursor missing half its key would skip
 	// or repeat whatever collided with it, silently.
 	db := openStore(t)
-	r := registryOver(t, queries.Sources{Events: db.Events()})
+	r := registryOver(t, queries.Sources{Events: fleetOf(db.Events())})
 	_, err := r.Answer(t.Context(), "events", map[string]any{"before_id": "e1"}, "")
 	if !errors.Is(err, queries.ErrBadParams) {
 		t.Errorf("err = %v, want ErrBadParams", err)
@@ -419,7 +342,7 @@ func TestTheLimitIsClampedNotObeyed(t *testing.T) {
 	// every other tab shares.
 	db := openStore(t)
 	seedEvents(t, db.Events(), 20, nil)
-	r := registryOver(t, queries.Sources{Events: db.Events()})
+	r := registryOver(t, queries.Sources{Events: fleetOf(db.Events())})
 
 	got := ask(t, r, "events", map[string]any{"limit": float64(1 << 20)})
 	rows, _ := got["events"].([]store.EventRecord)
@@ -444,7 +367,7 @@ func TestTheStoresOwnFiltersArePassedThrough(t *testing.T) {
 			rec.Actor = "CTO"
 		}
 	})
-	r := registryOver(t, queries.Sources{Events: db.Events()})
+	r := registryOver(t, queries.Sources{Events: fleetOf(db.Events())})
 
 	got := ask(t, r, "events", map[string]any{"type": "agent_turn_completed"})
 	rows, _ := got["events"].([]store.EventRecord)
@@ -471,7 +394,7 @@ func TestAnEmptyPageSaysHistoryIsExhausted(t *testing.T) {
 	// post-filters — so only a zero-row page ends it. Saying so beats a
 	// client inferring it wrongly.
 	db := openStore(t)
-	r := registryOver(t, queries.Sources{Events: db.Events()})
+	r := registryOver(t, queries.Sources{Events: fleetOf(db.Events())})
 
 	got := ask(t, r, "events", nil)
 	if got["exhausted"] != true {
@@ -493,14 +416,15 @@ func TestEventAnswersOneRowWithItsPayload(t *testing.T) {
 	// one.
 	db := openStore(t)
 	seedEvents(t, db.Events(), 1, nil)
-	r := registryOver(t, queries.Sources{Events: db.Events()})
+	r := registryOver(t, queries.Sources{Events: fleetOf(db.Events())})
 
 	rows := ask(t, r, "events", nil)["events"].([]store.EventRecord)
 	got, err := r.Answer(t.Context(), "event", map[string]any{"id": rows[0].ID}, "")
 	if err != nil {
 		t.Fatalf("event: %v", err)
 	}
-	rec, _ := got.(store.EventRecord)
+	answer, _ := got.(queries.EventAnswer)
+	rec := answer.EventRecord
 	if len(rec.Payload) == 0 {
 		t.Error("the single-row read carried no payload")
 	}
@@ -509,7 +433,7 @@ func TestEventAnswersOneRowWithItsPayload(t *testing.T) {
 func TestEventAndTraceNeedTheirIdentifiers(t *testing.T) {
 	t.Parallel()
 	db := openStore(t)
-	r := registryOver(t, queries.Sources{Events: db.Events()})
+	r := registryOver(t, queries.Sources{Events: fleetOf(db.Events())})
 	for _, what := range []string{"event", "trace"} {
 		if _, err := r.Answer(t.Context(), what, nil, ""); !errors.Is(err, queries.ErrBadParams) {
 			t.Errorf("%s: err = %v, want ErrBadParams", what, err)
@@ -519,28 +443,40 @@ func TestEventAndTraceNeedTheirIdentifiers(t *testing.T) {
 
 func TestTraceAnswersEverythingSharingOne(t *testing.T) {
 	t.Parallel()
-	db := openStore(t)
-	seedEvents(t, db.Events(), 4, func(i int, rec *store.EventRecord) {
+	// OVER TWO STORES, because a trace routinely is: the inbound delivery
+	// that started it is written by the node that received it, and the
+	// agent work it caused by the node holding the seat.
+	fleet, a, b := twoNodes(t)
+	seedEvents(t, a, 4, func(i int, rec *store.EventRecord) {
 		if i >= 2 {
 			rec.TraceID = "tr-2"
 		}
 	})
-	r := registryOver(t, queries.Sources{Events: db.Events()})
+	seedEvents(t, b, 1, func(_ int, rec *store.EventRecord) {
+		rec.ID = "on-b"
+		rec.Time = rec.Time.Add(time.Minute)
+	})
+	r := registryOver(t, queries.Sources{Events: fleet})
 
 	got := ask(t, r, "trace", map[string]any{"trace_id": "tr-1"})
 	rows, _ := got["events"].([]store.EventRecord)
-	if len(rows) != 2 {
-		t.Fatalf("rows = %d, want the two sharing tr-1", len(rows))
+	if len(rows) != 3 {
+		t.Fatalf("rows = %d, want the three sharing tr-1 — two on one node, one on "+
+			"the other", len(rows))
 	}
 	for _, row := range rows {
 		if row.TraceID != "tr-1" {
 			t.Errorf("a row from %q came back", row.TraceID)
 		}
 	}
+	if rows[len(rows)-1].ID != "on-b" {
+		t.Errorf("the trace ends at %s, want the other node's later row last — a "+
+			"trace is read oldest first across every node", rows[len(rows)-1].ID)
+	}
 	// A SHORT TRACE IS NOT A CUT ONE, and the flag has to say so explicitly:
 	// a client cannot tell an absent field from a false one.
 	if got["truncated"] != false {
-		t.Errorf("truncated = %#v on a two-event trace", got["truncated"])
+		t.Errorf("truncated = %#v on a three-event trace", got["truncated"])
 	}
 }
 
@@ -563,7 +499,7 @@ func TestATraceOfExactlyTheCapIsNotReportedCut(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	r := registryOver(t, queries.Sources{Events: log})
+	r := registryOver(t, queries.Sources{Events: fleetOf(log)})
 
 	got := ask(t, r, "trace", map[string]any{"trace_id": "tr-exact"})
 	if rows, _ := got["events"].([]store.EventRecord); len(rows) != store.MaxTraceEvents {
@@ -587,13 +523,77 @@ func TestATraceOfExactlyTheCapIsNotReportedCut(t *testing.T) {
 	}
 }
 
-func TestBudgetsPairTheCapWithTheDurableCounter(t *testing.T) {
+// budgetsAt is the instant the budgets cases read and charge at.
+var budgetsAt = time.Date(2026, time.March, 14, 15, 0, 0, 0, time.UTC)
+
+// chargeAt charges a seat in the windows of budgetsAt, on UTC.
+func chargeAt(t *testing.T, f *coordmemory.Fleet, seat string, tokens int, org, seatCaps coord.Caps) coord.Spend {
+	t.Helper()
+	got, err := f.Charge(t.Context(), coord.ChargeRequest{
+		Seat: seat, Tokens: tokens, Windows: coord.WindowsAt(budgetsAt, time.UTC),
+		OrgCaps: org, SeatCaps: seatCaps,
+	})
+	if err != nil {
+		t.Fatalf("charge: %v", err)
+	}
+	return got
+}
+
+// budgetsWire is the budgets answer as a client decodes it.
+type budgetsWire struct {
+	Timezone     string  `json:"timezone"`
+	Durable      bool    `json:"durable"`
+	NearFraction float64 `json:"near_fraction"`
+	Org          struct {
+		Windows []types.BudgetWindow `json:"windows"`
+	} `json:"org"`
+	Seats []struct {
+		AgentID string               `json:"agent_id"`
+		Role    string               `json:"role"`
+		Handle  string               `json:"handle"`
+		Windows []types.BudgetWindow `json:"windows"`
+	} `json:"seats"`
+}
+
+// askBudgets asks the budgets question and decodes it the way the wire does,
+// returning the raw bytes beside it for assertions on what is absent.
+func askBudgets(t *testing.T, r *queries.Registry) (budgetsWire, []byte) {
+	t.Helper()
+	raw, err := json.Marshal(ask(t, r, "budgets", nil))
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	var out budgetsWire
+	if err := json.Unmarshal(raw, &out); err != nil {
+		t.Fatalf("decode %s: %v", raw, err)
+	}
+	return out, raw
+}
+
+// window is one period of a scope's answer, failing the test when it is
+// missing.
+func window(t *testing.T, ws []types.BudgetWindow, p period.Period) types.BudgetWindow {
+	t.Helper()
+	for _, w := range ws {
+		if w.Period == string(p) {
+			return w
+		}
+	}
+	t.Fatalf("no %s window in %+v", p, ws)
+	return types.BudgetWindow{}
+}
+
+func TestBudgetsStateEveryWindowWithItsCeiling(t *testing.T) {
 	t.Parallel()
-	// THE CAP AND THE COUNTER GO TOGETHER, and neither is useful alone: a
-	// ceiling with no usage says nothing about how close a company is, and
+	// THE CEILING AND THE COUNTER GO TOGETHER, and neither is useful alone:
+	// a ceiling with no usage says nothing about how close a company is, and
 	// usage with no ceiling says nothing about whether it will be refused.
+	// EVERY WINDOW is stated, capped or not, so what a seat spent this week
+	// is on the answer even where nothing caps the week — and an uncapped
+	// window carries no `limit` at all, never a 0 that reads as full.
 	cfg := parsed(t, `
 name: Acme
+timezone: Europe/Berlin
 providers:
   llm:
     p: {type: anthropic, model: m, api_keys: ["${K}"]}
@@ -601,20 +601,27 @@ roles:
   - name: CEO
     handle: ceo
     llm: p
-    token_budget: 500
+    token_budget: {day: 500, month: 12000}
   - name: Founder
     kind: human
     contact: {slack_user_id: U0F}
-token_budget: 10000
+token_budget: {week: 10000, month: 40000}
 `)
 	organization, err := cfg.Organization()
 	if err != nil {
 		t.Fatalf("organization: %v", err)
 	}
+	berlin, err := time.LoadLocation("Europe/Berlin")
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
 	ceo := organization.AgentSeatByHandle("ceo")
 	id, _ := organization.AgentIDFor(ceo)
 	budgets := coordmemory.NewFleet()
-	if _, err := budgets.Charge(t.Context(), coord.AgentScope(id.String()), 120, 10000, 500); err != nil {
+	if _, err := budgets.Charge(t.Context(), coord.ChargeRequest{
+		Seat: coord.AgentScope(id.String()), Tokens: 120, Windows: coord.WindowsAt(budgetsAt, berlin),
+		OrgCaps: coord.Caps(organization.TokenBudget), SeatCaps: coord.Caps(ceo.TokenBudget),
+	}); err != nil {
 		t.Fatalf("charge: %v", err)
 	}
 
@@ -622,30 +629,145 @@ token_budget: 10000
 		State:   livestate.New(),
 		Company: func() *config.Company { return cfg },
 		Budget:  budgets,
+		Now:     func() time.Time { return budgetsAt },
 	})
-	got := ask(t, r, "budgets", nil)
+	got, raw := askBudgets(t, r)
 
-	if got["durable"] != true {
+	if !got.Durable {
 		t.Error("durable = false with a readable counter, so every figure " +
 			"below it reads as unmeasured")
 	}
-	orgRow, _ := got["org"].(map[string]any)
-	if orgRow["max_tokens"] != 10000 || orgRow["durable_used"] != 120 {
-		t.Errorf("org = %+v", orgRow)
+	if got.Timezone != "Europe/Berlin" || got.NearFraction != 0.9 {
+		t.Errorf("timezone = %q, near_fraction = %v; want Europe/Berlin and 0.9", got.Timezone, got.NearFraction)
 	}
-	if orgRow["durable_updated_at"] == "" {
-		t.Error("no charge timestamp, so an operator cannot tell a live " +
-			"counter from a stale one")
+	if len(got.Org.Windows) != 3 {
+		t.Fatalf("org windows = %+v, want the day, the week and the month", got.Org.Windows)
+	}
+	for i, p := range period.Periods {
+		if got.Org.Windows[i].Period != string(p) {
+			t.Errorf("org window %d = %q, want %q: the answer is in day, week, month order", i, got.Org.Windows[i].Period, p)
+		}
+	}
+	if w := window(t, got.Org.Windows, period.Day); w.Used != 120 || w.Limit != nil || w.State != types.BudgetOK ||
+		w.Window != "2026-03-14" || w.StartsAt != "2026-03-13T23:00:00Z" || w.ResetsAt != "2026-03-14T23:00:00Z" {
+		t.Errorf("org day = %+v, want Berlin's 14 March at 120 under no ceiling", w)
+	}
+	if w := window(t, got.Org.Windows, period.Week); w.Used != 120 || w.Limit == nil || *w.Limit != 10000 {
+		t.Errorf("org week = %+v, want 120 of 10000", w)
 	}
 
-	seats, _ := got["seats"].([]any)
-	if len(seats) != 1 {
+	if len(got.Seats) != 1 {
 		t.Fatalf("seats = %d, want the one AGENT seat — a human spends "+
-			"nothing and a permanent zero row is noise", len(seats))
+			"nothing and a permanent zero row is noise", len(got.Seats))
 	}
-	seat, _ := seats[0].(map[string]any)
-	if seat["role"] != "CEO" || seat["max_tokens"] != 500 || seat["durable_used"] != 120 {
+	seat := got.Seats[0]
+	if seat.Role != "CEO" || seat.Handle != "ceo" || seat.AgentID != id.String() {
 		t.Errorf("seat = %+v", seat)
+	}
+	if w := window(t, seat.Windows, period.Day); w.Used != 120 || w.Limit == nil || *w.Limit != 500 {
+		t.Errorf("CEO's day = %+v, want 120 of 500", w)
+	}
+	if w := window(t, seat.Windows, period.Week); w.Used != 120 || w.Limit != nil {
+		t.Errorf("CEO's week = %+v, want 120 spent under no ceiling", w)
+	}
+	// The retired figures are gone rather than null.
+	for _, retired := range []string{"max_tokens", "durable_used", "durable_updated_at", "live_used"} {
+		if bytes.Contains(raw, []byte(`"`+retired+`"`)) {
+			t.Errorf("the answer still carries %q: %s", retired, raw)
+		}
+	}
+}
+
+func TestBudgetsAreNearAtNineTenthsAndNotATokenBefore(t *testing.T) {
+	t.Parallel()
+	// ONE THRESHOLD, THE ENGINE'S: the answer's `state` is the engine's own,
+	// so a screen has no number of its own to disagree with.
+	cfg := parsed(t, `
+name: Acme
+providers:
+  llm:
+    p: {type: anthropic, model: m, api_keys: ["${K}"]}
+roles:
+  - name: CEO
+    handle: ceo
+    llm: p
+token_budget: {day: 1000}
+`)
+	organization, err := cfg.Organization()
+	if err != nil {
+		t.Fatalf("organization: %v", err)
+	}
+	id, _ := organization.AgentIDFor(organization.AgentSeatByHandle("ceo"))
+	for _, tc := range []struct {
+		spent int
+		want  types.BudgetState
+	}{
+		{899, types.BudgetOK},
+		{900, types.BudgetNear},
+	} {
+		budgets := coordmemory.NewFleet()
+		chargeAt(t, budgets, coord.AgentScope(id.String()), tc.spent, coord.Caps{period.Day: 1000}, nil)
+		r := registryOver(t, queries.Sources{
+			State: livestate.New(), Company: func() *config.Company { return cfg },
+			Budget: budgets, Now: func() time.Time { return budgetsAt },
+		})
+		got, _ := askBudgets(t, r)
+		if w := window(t, got.Org.Windows, period.Day); w.State != tc.want {
+			t.Errorf("%d of 1000: state = %q, want %q", tc.spent, w.State, tc.want)
+		}
+	}
+}
+
+func TestBudgetsReadTheWindowTheCompanysClockIsIn(t *testing.T) {
+	t.Parallel()
+	// The answer cuts its day where the gate does: on the company's clock.
+	// Charged at 23:30 in Los Angeles — 06:30 the next day in UTC — the
+	// spend is the Los Angeles day's until LOS ANGELES midnight, and gone
+	// the moment after it. An answer cut on UTC would show it as the next
+	// day's spend all evening and roll it seven hours early.
+	cfg := parsed(t, `
+name: Acme
+timezone: America/Los_Angeles
+providers:
+  llm:
+    p: {type: anthropic, model: m, api_keys: ["${K}"]}
+roles:
+  - name: CEO
+    handle: ceo
+    llm: p
+token_budget: {day: 1000}
+`)
+	la, err := time.LoadLocation("America/Los_Angeles")
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	organization, err := cfg.Organization()
+	if err != nil {
+		t.Fatalf("organization: %v", err)
+	}
+	id, _ := organization.AgentIDFor(organization.AgentSeatByHandle("ceo"))
+	evening := time.Date(2026, time.September, 22, 23, 30, 0, 0, la)
+	budgets := coordmemory.NewFleet()
+	if _, err := budgets.Charge(t.Context(), coord.ChargeRequest{
+		Seat: coord.AgentScope(id.String()), Tokens: 300,
+		Windows: coord.WindowsAt(evening, la), OrgCaps: coord.Caps{period.Day: 1000},
+	}); err != nil {
+		t.Fatalf("charge: %v", err)
+	}
+	orgDay := func(at time.Time) types.BudgetWindow {
+		t.Helper()
+		r := registryOver(t, queries.Sources{
+			State: livestate.New(), Company: func() *config.Company { return cfg },
+			Budget: budgets, Now: func() time.Time { return at },
+		})
+		got, _ := askBudgets(t, r)
+		return window(t, got.Org.Windows, period.Day)
+	}
+	if got := orgDay(evening.Add(15 * time.Minute)); got.Used != 300 || got.Window != "2026-09-22" {
+		t.Errorf("at 23:45 in Los Angeles the day is %+v, want 22 September holding the 300 charged at 23:30", got)
+	}
+	if got := orgDay(evening.Add(45 * time.Minute)); got.Used != 0 || got.Window != "2026-09-23" {
+		t.Errorf("at 00:15 in Los Angeles the day is %+v, want a fresh 23 September", got)
 	}
 }
 
@@ -653,7 +775,8 @@ func TestBudgetsWithNoCounterSayNobodyLooked(t *testing.T) {
 	t.Parallel()
 	// `durable: false` means UNREADABLE, never zero. A company drawn at 0%
 	// of its budget when the truth is that nobody looked is the lie this
-	// field exists to prevent.
+	// field exists to prevent — so no window is stated at all, rather than
+	// three windows of zeroes.
 	cfg := parsed(t, `
 name: Acme
 providers:
@@ -663,30 +786,33 @@ roles:
   - name: CEO
     handle: ceo
     llm: p
-token_budget: 10000
+token_budget: {month: 10000}
 `)
 	r := registryOver(t, queries.Sources{
 		State: livestate.New(), Company: func() *config.Company { return cfg },
 	})
-	got := ask(t, r, "budgets", nil)
-	if got["durable"] != false {
+	got, raw := askBudgets(t, r)
+	if got.Durable {
 		t.Error("a registry with no counter claimed a durable reading")
 	}
-	// The CAPS are still stated: they are config, and they do not wait on
-	// the counter.
-	orgRow, _ := got["org"].(map[string]any)
-	if orgRow["max_tokens"] != 10000 {
-		t.Errorf("the cap was dropped with the counter: %+v", orgRow)
+	if len(got.Org.Windows) != 0 || len(got.Seats) != 0 {
+		t.Errorf("an unreadable counter stated figures: %s", raw)
+	}
+	if !bytes.Contains(raw, []byte(`"windows":[]`)) {
+		t.Errorf("the org's windows are not an empty list: %s", raw)
+	}
+	if got.Timezone != "UTC" {
+		t.Errorf("timezone = %q, want UTC: the clock is config and does not wait on the counter", got.Timezone)
 	}
 }
 
 func TestBudgetsCarryTheRefusalTheCounterRecorded(t *testing.T) {
 	t.Parallel()
-	// "Exhausted" is a refusal, never durable_used >= max_tokens: a refused
-	// charge increments nothing, so a seat charged in rounds stalls short
-	// of its cap and never reads as full. The stamp is what says the gate
-	// is turning turns away, so the answer carries it for the scope that
-	// refused and leaves it empty for the one that did not.
+	// "Exhausted" is a refusal, never used >= limit alone: a refused charge
+	// increments nothing, so a seat charged in rounds stalls short of its
+	// cap and never reads as full. The stamp is what says the gate is
+	// turning turns away, so the answer carries it on the window that
+	// refused and on no other, and the window's state says `refusing`.
 	cfg := parsed(t, `
 name: Acme
 providers:
@@ -696,8 +822,8 @@ roles:
   - name: CEO
     handle: ceo
     llm: p
-    token_budget: 100
-token_budget: 10000
+    token_budget: {day: 100}
+token_budget: {day: 10000}
 `)
 	organization, err := cfg.Organization()
 	if err != nil {
@@ -706,42 +832,37 @@ token_budget: 10000
 	id, _ := organization.AgentIDFor(organization.AgentSeatByHandle("ceo"))
 	scope := coord.AgentScope(id.String())
 	budgets := coordmemory.NewFleet()
-	if _, err := budgets.Charge(t.Context(), scope, 90, 10000, 100); err != nil {
-		t.Fatalf("charge: %v", err)
-	}
-	refusal, err := budgets.Charge(t.Context(), scope, 20, 10000, 100)
-	if err != nil || refusal.RefusedScope != "agent" {
-		t.Fatalf("setup: refusal = (%+v, %v), want the seat to refuse", refusal, err)
+	orgCaps, seatCaps := coord.Caps{period.Day: 10000}, coord.Caps{period.Day: 100}
+	chargeAt(t, budgets, scope, 70, orgCaps, seatCaps)
+	if refusal := chargeAt(t, budgets, scope, 40, orgCaps, seatCaps); refusal.RefusedScope != "agent" {
+		t.Fatalf("setup: refusal = %+v, want the seat to refuse", refusal)
 	}
 
 	r := registryOver(t, queries.Sources{
 		State:   livestate.New(),
 		Company: func() *config.Company { return cfg },
 		Budget:  budgets,
+		Now:     func() time.Time { return budgetsAt },
 	})
-	got := ask(t, r, "budgets", nil)
+	got, _ := askBudgets(t, r)
 
-	seats, _ := got["seats"].([]any)
-	if len(seats) != 1 {
-		t.Fatalf("seats = %d", len(seats))
+	if len(got.Seats) != 1 {
+		t.Fatalf("seats = %d", len(got.Seats))
 	}
-	seat, _ := seats[0].(map[string]any)
-	stamp, _ := seat["refused_at"].(string)
-	if _, err := time.Parse(time.RFC3339Nano, stamp); err != nil {
-		t.Errorf("seat refused_at = %q, want the refusal's instant: %v", stamp, err)
+	day := window(t, got.Seats[0].Windows, period.Day)
+	if _, err := time.Parse(time.RFC3339Nano, day.RefusedAt); err != nil {
+		t.Errorf("seat's day refused_at = %q, want the refusal's instant: %v", day.RefusedAt, err)
 	}
-	if seat["durable_used"] != 90 {
-		t.Errorf("seat durable_used = %v, want the 90 that fit", seat["durable_used"])
+	// 70 of 100 is below the near mark, and still refusing: the stamp, not
+	// the arithmetic, is the gate's word.
+	if day.Used != 70 || day.State != types.BudgetRefusing {
+		t.Errorf("seat's day = %+v, want the 70 that fit and refusing", day)
 	}
-	orgRow, _ := got["org"].(map[string]any)
-	if orgRow["refused_at"] != "" {
-		t.Errorf("org refused_at = %v, want empty: the company refused nothing", orgRow["refused_at"])
+	if w := window(t, got.Seats[0].Windows, period.Week); w.RefusedAt != "" || w.State != types.BudgetOK {
+		t.Errorf("seat's week = %+v, want no refusal: nothing caps it", w)
 	}
-	// The retired per-process figure is gone rather than null.
-	for _, row := range []map[string]any{seat, orgRow} {
-		if _, present := row["live_used"]; present {
-			t.Errorf("row still carries live_used: %+v", row)
-		}
+	if w := window(t, got.Org.Windows, period.Day); w.RefusedAt != "" || w.State != types.BudgetOK {
+		t.Errorf("org's day = %+v, want no refusal: the company refused nothing", w)
 	}
 }
 
@@ -770,7 +891,7 @@ func TestAnAgentAnswerCarriesItsFinishedCalls(t *testing.T) {
 	log := db.Events()
 	seedPhases(t, log, "Lead", "agent-lead")
 
-	r := registryOver(t, queries.Sources{State: livestate.New(), Events: log})
+	r := registryOver(t, queries.Sources{State: livestate.New(), Events: fleetOf(log)})
 	got := ask(t, r, "agent", map[string]any{"role": "Lead"})
 
 	history, _ := got["llm_history"].([]store.EventRecord)
@@ -816,7 +937,7 @@ func TestAgentHistoryResolvesFromTheHandle(t *testing.T) {
 	log := db.Events()
 	seedPhases(t, log, "Lead", "agent-lead")
 
-	r := registryOver(t, queries.Sources{State: livestate.New(), Events: log})
+	r := registryOver(t, queries.Sources{State: livestate.New(), Events: fleetOf(log)})
 	got := ask(t, r, "agent", map[string]any{"role": "Lead"})
 	if history, _ := got["llm_history"].([]store.EventRecord); len(history) != 2 {
 		t.Fatalf("asking by role found %v", got["llm_history"])
@@ -883,7 +1004,7 @@ func TestAMissingEventIsNotFoundRatherThanAFailure(t *testing.T) {
 	t.Parallel()
 	db := openStore(t)
 	seedEvents(t, db.Events(), 1, nil)
-	r := registryOver(t, queries.Sources{Events: db.Events()})
+	r := registryOver(t, queries.Sources{Events: fleetOf(db.Events())})
 
 	_, err := r.Answer(t.Context(), "event", map[string]any{"id": "ev-nobody-published"}, "")
 	if !errors.Is(err, queries.ErrNotFound) {
@@ -909,7 +1030,7 @@ func TestAnEmptyTraceAnswersAnArrayNotNull(t *testing.T) {
 	t.Parallel()
 	db := openStore(t)
 	seedEvents(t, db.Events(), 1, nil)
-	r := registryOver(t, queries.Sources{Events: db.Events()})
+	r := registryOver(t, queries.Sources{Events: fleetOf(db.Events())})
 
 	for _, tc := range []struct {
 		what  string
@@ -944,7 +1065,7 @@ func TestASeatWithNoFinishedPhasesAnswersRatherThanPanics(t *testing.T) {
 	// Seeded, so the log is readable and non-empty — the empty result has to
 	// come from this seat having no phases, not from an empty table.
 	seedEvents(t, db.Events(), 3, nil)
-	r := registryOver(t, queries.Sources{State: livestate.New(), Events: db.Events()})
+	r := registryOver(t, queries.Sources{State: livestate.New(), Events: fleetOf(db.Events())})
 
 	got := ask(t, r, "agent", map[string]any{"role": "NobodyHasThisRole"})
 	rows, ok := got["llm_history"].([]store.EventRecord)
@@ -973,57 +1094,4 @@ func windowWidth(t *testing.T, got tokens.Rollup) time.Duration {
 		t.Fatalf("until = %q: %v", got.Until, err)
 	}
 	return until.Sub(since)
-}
-
-func TestTokensTakeTheSameTwoInstantsTheSeriesDoes(t *testing.T) {
-	t.Parallel()
-	// THE WHOLE POINT OF THE WINDOW BEING INSTANTS. A time-range control
-	// produces two edges, and a reader who names one that ended yesterday
-	// gets a chart over it and figures above the chart over this afternoon
-	// — two facts on one screen that cannot be compared — unless the
-	// breakdown takes the same pair.
-	db := openStore(t)
-	log := db.Events()
-	at := time.Now().UTC().Add(-5 * 24 * time.Hour)
-	write := func(id string, when time.Time, total int) {
-		payload, _ := json.Marshal(map[string]any{
-			"role": "Lead", "phase": "plan", "total_tokens": total, "turn_id": "tn-1",
-		})
-		if err := log.Append(t.Context(), store.EventRecord{
-			ID: id, Type: "agent_phase_completed", Time: when,
-			Category: "system", Payload: payload,
-		}); err != nil {
-			t.Fatalf("append: %v", err)
-		}
-	}
-	write("old", at.Add(-48*time.Hour), 100)
-	write("in", at.Add(time.Hour), 7)
-	write("new", time.Now().UTC(), 500)
-
-	r := registryOver(t, queries.Sources{State: livestate.New(), Events: log})
-	got := askRaw(t, r, "tokens", map[string]any{
-		"since": at.Format(time.RFC3339),
-		"until": at.Add(24 * time.Hour).Format(time.RFC3339),
-	}).(tokens.Rollup)
-
-	if got.Totals.TotalTokens != 7 {
-		t.Errorf("totals = %+v, want only the record inside the named window", got.Totals)
-	}
-	if width := windowWidth(t, got); width != 24*time.Hour {
-		t.Errorf("window = %s .. %s (%s), want the day that was named",
-			got.Since, got.Until, width)
-	}
-}
-
-func TestATokensWindowThatEndsWhereItBeginsIsRefused(t *testing.T) {
-	t.Parallel()
-	// Half-open, so an empty window names no rows at all. The same refusal
-	// the events and series questions give, in the same words, because a
-	// reader scrubbing a range hits all three.
-	r := registryOver(t, queries.Sources{State: livestate.New()})
-	at := time.Now().UTC().Format(time.RFC3339)
-	_, err := r.Answer(t.Context(), "tokens", map[string]any{"since": at, "until": at}, "")
-	if !errors.Is(err, queries.ErrBadParams) {
-		t.Fatalf("err = %v, want ErrBadParams", err)
-	}
 }

@@ -27,15 +27,19 @@ import (
 //
 // A size is a LEVEL: four `os.Stat` calls and one `statfs`, microseconds
 // apiece, and correct whenever they are taken. So the reading measures them
-// directly and the tick publishes the same numbers as gauges.
+// directly and the trim tick publishes the same numbers as gauges.
 //
 // A wait is a DELTA: `sql.DBStats` counts since the process started, and the
 // interesting quantity is how long a caller queued RECENTLY. Consuming a delta
 // is destructive — whoever reads it clears it for everyone after — so it is
-// taken on the tick alone, at a cadence that is regular by construction, and
-// never on a request whose frequency an operator's dashboard decides.
+// taken on the trim's tick alone ([RetentionInterval]), at a cadence that is
+// regular by construction — never on the faster alarm evaluation
+// ([AlarmInterval]), which would change what the `pool_wait` alarm's p95 is a
+// percentile OF, and never on a request whose frequency an operator's
+// dashboard decides.
 
-// capacity records what one tick can measure about this node's own storage.
+// capacity records what one trim tick can measure about this node's own
+// storage.
 func (r *retention) capacity(ctx context.Context) {
 	if r.metrics == nil || r.db == nil {
 		return
@@ -174,10 +178,10 @@ func fileBytes(path string) (int64, error) {
 // space fills the three storage fields of a reading.
 //
 // MEASURED RATHER THAN READ BACK OFF THE GAUGES. The gauges are published on
-// the trim's own tick, which is a quarter of an hour; a volume fills in less
-// time than that, and an alarm evaluated against a fifteen-minute-old free
-// count is one that reports the space that was there before the thing that
-// used it.
+// the trim's own tick, which is a quarter of an hour, while the alarms are
+// evaluated every [AlarmInterval]; a volume fills in less time than a quarter
+// hour, and an alarm evaluated against a fifteen-minute-old free count is one
+// that reports the space that was there before the thing that used it.
 func (r *retention) space(out *statelog.Reading) {
 	if r.db == nil {
 		return
@@ -204,12 +208,18 @@ func (r *retention) space(out *statelog.Reading) {
 }
 
 // semanticCoverage is the fraction of this node's sources carrying a current
-// vector, cached for one tick.
+// vector, cached for one trim tick.
 //
 // A POINTER, because zero coverage is the alarm and "no embeddings configured"
 // is a company that asked for none — see [statelog.Reading.SemanticCoverage].
 // A measurement that fails answers nil for the same reason: an unreadable
 // corpus is not an uncovered one.
+//
+// A FAILED MEASUREMENT IS CACHED TOO, as unknown, for the same trim tick. The
+// reading is assembled every [AlarmInterval] as well as on every operator
+// request, and a failure that was not remembered would re-run the whole-corpus
+// scan and repeat its WARN line on each of them for as long as the fault
+// lasted.
 func (r *retention) semanticCoverage(ctx context.Context, now time.Time) *float64 {
 	if r.coverage == nil {
 		return nil
@@ -222,7 +232,7 @@ func (r *retention) semanticCoverage(ctx context.Context, now time.Time) *float6
 		measured, ok, err := r.coverage(ctx)
 		if err != nil {
 			log.WarnContext(ctx, "vector_coverage_unreadable", "err", err)
-			return nil
+			measured, ok = 0, false
 		}
 		fraction, known = measured, ok
 		r.mu.Lock()

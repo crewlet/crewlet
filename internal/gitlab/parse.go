@@ -376,6 +376,9 @@ func inbound(h hook, reason string) notify.Inbound {
 		"event_type":      reason,
 		"project":         h.Project.Path,
 	}
+	if id := h.projectID(); id != 0 {
+		meta[ProjectIDField] = strconv.Itoa(id)
+	}
 	subject, body := subjectAndBody(h)
 	if key, value := itemRef(h); key != "" {
 		meta[key] = value

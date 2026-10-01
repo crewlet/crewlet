@@ -6,7 +6,7 @@
  */
 
 import { describe, expect, test } from "vitest";
-import { lead, withoutActor } from "~/routes/activity/Turn.tsx";
+import { lead, withoutActor } from "~/routes/live/Turn.tsx";
 
 describe("a row on a page about one seat", () => {
   test("drops the seat's own name from the front of its own line", () => {

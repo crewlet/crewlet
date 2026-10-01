@@ -53,7 +53,7 @@ const (
 	SurfaceDashboard Surface = "dashboard"
 
 	// SurfaceReplication is any answer ABOUT replication: the retention
-	// report, the Fleet screen's lag column, whether a purge has landed
+	// report, Settings › Nodes' lag column, whether a purge has landed
 	// everywhere.
 	//
 	// A SURFACE OF ITS OWN although it is really a SUBJECT, because it is

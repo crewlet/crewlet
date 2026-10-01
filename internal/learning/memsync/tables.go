@@ -96,7 +96,7 @@ var tables = []table{
 		seatCol: "agent_handle",
 		key:     []string{"id"},
 		columns: []string{
-			"id", "agent_handle", "agent_role", "task_id", "turn_id",
+			"id", "agent_handle", "agent_role", "work_item", "turn_id",
 			"started_at", "ended_at", "plan_summary", "task_summary",
 			"tool_sequence", "skills_used", "review_outcome", "duration_ms",
 			"embedding", "kind", "count", "exemplar_turn_ids",

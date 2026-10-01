@@ -36,7 +36,7 @@ Crewlet treats the organizational hierarchy as its primary orchestration structu
 | **Config style** | A YAML org chart, versioned in the store and edited live |
 | **Extensibility** | Out of process: MCP servers for anything an agent calls, and the REST API, the `/ws/stream` socket and OTLP for anything built around the engine. The binary loads no plugins |
 
-The hierarchy is informational + delegation-routing, not a special upward escalation mechanism. When an agent is stuck, it hands off to its manager using the same colleague-surface tools (a chat mention, a work-item comment, A2A) that a human teammate would use; the manager's handle comes from the agent's identity prompt. Engine-detected failures (stall, max-iter, unhandled exception, LLM unavailable) surface to the operator via structured logs and a dashboard `afk` state — see [Turn Engine](turn-engine.md) and [The Tracker](task-engine.md).
+The hierarchy is informational + delegation-routing, not a special upward escalation mechanism. When an agent is stuck, it hands off to its manager using the same colleague-surface tools (a chat mention, a work-item comment, A2A) that a human teammate would use; the manager's handle comes from the agent's identity prompt. Engine-detected failures (stall, max-iter, unhandled exception, LLM unavailable) surface to the operator via structured logs and the seat's `last_error` on the dashboard — an unreachable provider as the seat state `stopped`/`provider` — see [Turn Engine](turn-engine.md) and [The Tracker](task-engine.md).
 
 ---
 
@@ -125,7 +125,7 @@ External dependencies sit behind small Go interfaces, each declared by the packa
 
 ### LLM Provider
 
-`llm.Provider` (`internal/providers/llm`) has two methods: `Complete(ctx, Request)`, one model call with the messages, optional tool definitions and a tool choice, and `Model()`, the entry's configured model id for log lines and config display. There is no separate streaming method: a caller that sets `Request.OnDelta` asks the backend to stream, and the backend calls it as text arrives while still returning the whole `Completion`. The model that actually served a call is `Completion.Model`, and the per-model token breakdown is built from that field rather than from `Model()`, because a fallback chain shared by concurrent callers has no single answer a method with no arguments could return.
+`llm.Provider` (`internal/providers/llm`) has two methods: `Complete(ctx, Request)`, one model call with the messages, optional tool definitions and a tool choice, and `Model()`, the entry's configured model id for log lines and config display. There is no separate streaming method: a caller that sets `Request.OnDelta` asks the backend to stream, and the backend calls it as text arrives while still returning the whole `Completion`. The model that actually served a call is `Completion.Model`, and the per-model token breakdown is built from that field rather than from `Model()`, because a fallback chain shared by concurrent callers has no single answer a method with no arguments could return. `Completion.ProviderKey` is the same fact in the operator's vocabulary — which `providers.llm` entry answered — and a chain fills it in from the member that served, since a backend is never told the key it was configured under.
 
 A provider does not retry and does not decide what a failure means beyond a coarse `llm.ErrorKind` (`rate_limit`, `auth`, `timeout`, `server`, or fatal). Rotation across keys belongs to the credential pool (`internal/providers/credential`), and falling back to the next model belongs to the seat's chain (`internal/providers/llm/chain`), which tries its members in order and stops at a fatal error.
 
@@ -185,7 +185,8 @@ internal/
 │                         #   gives a typed answer), prefetch/, prompts/,
 │                         #   skills/, skillsync/ (keeps every node's
 │                         #   skill registry current), builtin/,
-│                         #   subagent/ (workers)
+│                         #   subagent/ (workers), steer/ (a person's note
+│                         #   to a running turn)
 ├── queue/                # The EventQueue contract + the jetstream backend
 │                         #   and the in-memory twin, both certified by one
 │                         #   suite
@@ -198,6 +199,11 @@ internal/
 │                         #   domain: records, subjects, ranks, custom fields
 ├── pages/                # The engine's own knowledge base — statelog's third
 │                         #   domain: containers, pages, revisions, comments
+├── usage/                # Each node's day, replicated — statelog's fourth
+│                         #   domain: spend, turns and reads that outlive the
+│                         #   node that recorded them
+├── eventfan/             # The fleet's turn-level history, read from every
+│                         #   node at query time, with coverage on every answer
 ├── search/               # Both halves of knowledge search — the BM25 index
 │                         #   and the two-stage semantic retrieval — plus the
 │                         #   embedding domain and the fleet's bucket fan-out
@@ -253,7 +259,9 @@ internal/
 ├── httpx/ textcut/      # The shared HTTP transport; rune-safe shortening
 ├── api/                  # REST + dashboard: webhooks/, stream/, queries/,
 │                         #   livestate/, configapi/, setupapi/, secretsapi/,
-│                         #   auth/, httpjson/, mcpbridge/, and pagepolicy/:
+│                         #   auth/, httpjson/, mcpbridge/, operator/ (the
+│                         #   operator catalogue over /operator/mcp and the
+│                         #   dashboard's /operator/act), and pagepolicy/:
 │                         #   the security headers every response carries
 ├── observe/              # The observability edge (store row + live push)
 ├── tracing/              # OpenTelemetry: one provider, W3C propagation, and
@@ -267,11 +275,17 @@ internal/
 │                         #   resolver is config.Resolver)
 ├── skipgate/ solo/       # The suite's own gates: a skip is not a pass, and
 │                         #   which packages need the runner to themselves
-├── clientsource/         # Holds a constant the dashboard declares against the
-│                         #   engine's own
+├── docsgate/             # Every markdown link, anchor and docs index entry
+│                         #   resolves (test-only)
+├── clientsource/         # Holds a declaration the dashboard makes against the
+│                         #   engine's own, found by name and read by syntax;
+│                         #   every one lives in dashboard/src/contract/
 ├── sourcetree/           # What is this repository's tree: the module root,
 │                         #   and a walk that never reads a nested checkout
 ├── e2e/                  # The end-to-end company, and the dashboard replay
+├── period/               # The company calendar: the day, ISO week and month a
+│                         #   moment falls in, named by a label every node
+│                         #   computes alike
 └── version/ logging/ redact/ envref/ envfile/ workkey/ backoff/  # small shared
                           #   grammars
 
@@ -281,7 +295,8 @@ dashboard/                # The dashboard's SOURCE — React + TypeScript, built
                           #   Node. See reference/dashboard-design.md
 static/dashboard/         # That build output, embedded in the binary — a
                           #   store mirroring the server projection, one
-                          #   websocket as the only data channel, a hash
+                          #   websocket as the only read channel (writes
+                          #   are REST, as the signed-in person), a hash
                           #   router, one file per screen
 ```
 

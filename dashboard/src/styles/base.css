@@ -6,38 +6,45 @@
   box-sizing: border-box;
 }
 
+/* THE HIDDEN ATTRIBUTE HIDES, whatever display a class sets. The browser's own
+   `[hidden] { display: none }` is a user-agent rule, so ANY author `display`
+   outranks it — and the kit's disclosure panel sets `display: flex` on the
+   element it closes with `hidden`, so every closed Disclosure in the product
+   drew its panel anyway (a tool's 366px schema under "The schema as JSON",
+   the add-server form's "More options"). `!important` because the rule has to
+   beat a component's own class, which is the entire failure. `until-found`
+   is exempt: it is a hidden state the browser reveals on find-in-page, and
+   forcing `none` would remove it from the search. */
+[hidden]:not([hidden="until-found"]) {
+  display: none !important;
+}
+
 html {
   -webkit-text-size-adjust: 100%;
   text-size-adjust: 100%;
 }
 
-/* THE DOCUMENT DOES NOT SCROLL. `.screen` does, and it is the only thing that
-   may: the sidebar is a fixed rail beside a scrolling pane, and a page that
-   can also scroll as a whole moves that rail off the top of the window and
+/* THE DOCUMENT DOES NOT SCROLL. The shell's `main` does, and it is the only
+   thing that may: the sidebar is a fixed column beside a scrolling sheet, and a page that
+   can also scroll as a whole moves that sidebar off the top of the window and
    leaves the reader looking at background below the app.
    `min-height` only asked the body to be at least a viewport tall — it still
    PERMITTED it to grow, so the shell's invariant held by nobody ever
    exceeding it rather than by anything enforcing it. A fixed height plus
    hidden overflow makes it unreachable instead of merely unused, and costs
-   nothing: `.app` is already exactly 100dvh. */
+   nothing: the kit's `AppShell` is already exactly 100dvh. */
 body {
   margin: 0;
   height: 100dvh;
   overflow: hidden;
-  background: var(--bg);
-  color: var(--text);
-  font-family: var(--font-sans);
-  font-size: var(--fs-sm);
-  line-height: var(--lh-normal);
-  font-weight: var(--fw-normal);
+  background: var(--color-surface-background);
+  color: var(--color-text-primary);
+  font-family: var(--font-family-sans);
+  font-size: var(--font-size-sm);
+  line-height: var(--font-line-height-normal);
+  font-weight: var(--font-weight-regular);
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
-  /* Inter's own tabular figures and contextual alternates. `tnum` is the one
-     that matters on this product: a token count that changes width as it
-     counts up makes a whole column jitter. */
-  font-feature-settings:
-    "cv05" 1,
-    "ss03" 1;
 }
 
 h1,
@@ -47,10 +54,10 @@ h4,
 h5,
 h6 {
   margin: 0;
-  color: var(--heading);
-  font-weight: var(--fw-semibold);
-  line-height: var(--lh-tight);
-  letter-spacing: var(--track-tight);
+  color: var(--color-text-primary);
+  font-weight: var(--font-weight-semibold);
+  line-height: var(--font-line-height-tight);
+  letter-spacing: var(--font-letter-spacing-tight);
 }
 
 p {
@@ -70,14 +77,14 @@ p {
    rules across four sheets, each undoing the same inherited declaration, which
    is the shape a default takes when it is wrong: the exceptions outnumber it.
 
-   So the frame's own hover vocabulary carries it instead. `.rail-row`,
-   `.side-link`, `.rail-engine` and `.crumb-link` already answer a pointer by
-   moving to `--text`, and a link does the same: in dark the accent ink
-   (#8b9ff5) brightens toward near-white, in light the indigo (#3e50b8) darkens
+   So the frame's own hover vocabulary carries it instead. The sidebar's rows,
+   `.section-tab` and `.crumb-link` already answer a pointer by moving to
+   `--color-text-primary`, and a link does the same: in dark the accent ink
+   (#b3a1ff) brightens toward near-white, in light the violet (#5a33de) darkens
    toward near-black, so in BOTH themes hovering makes a link MORE prominent
    rather than merely different. Both ends are measured text rungs, which is
    what rules this out: the accent family publishes exactly one text step, and
-   `--accent`, `--accent-hover` and `--accent-active` are fills that
+   `--color-brand-accent`, `--color-brand-accent-hover` and `--color-brand-accent-active` are fills that
    `styles/rungs.test.ts` refuses as a colour.
 
    WHERE AN UNDERLINE IS THE ONLY HONEST MARK IT IS PERMANENT, not a hover: a
@@ -98,11 +105,11 @@ p {
    against the installed package, so a bump that decorates `a:focus-visible`
    fails there rather than in somebody's browser. */
 a {
-  color: var(--accent-ink);
+  color: var(--color-brand-accent-ink);
   text-decoration: none;
 }
 a:hover {
-  color: var(--text);
+  color: var(--color-text-primary);
   text-decoration: none;
 }
 
@@ -114,8 +121,8 @@ a:hover {
    it composites the 4–5% row wash onto its own Canvas as nothing. Measured in
    Chromium with `forced-colors: active`: after the reset, `.crumb-link`,
    `.t-link`, `.cell-seat`, `.work-col-foot a` and every prose register render
-   pixel-identical hovered and unhovered. Only `.rail-row` and `.side-link`
-   still answer, and only because their wash happens to survive.
+   pixel-identical hovered and unhovered. Only a row that paints a wash on
+   hover still answers, and only because its wash happens to survive.
 
    `text-decoration` is the one property the mode leaves to the author, which
    is exactly why the baseline's default is right THERE and wrong everywhere
@@ -134,8 +141,8 @@ a:hover {
    The reset is right for chrome — a breadcrumb, a row that happens to be an
    anchor, a caption-sized navigation — because every one of those is a THING
    on the page rather than a word in a line. It is wrong the moment an anchor
-   is a word in a line: the text around it is `--text` and the link is
-   `--accent-ink`, and colour alone is exactly what WCAG 1.4.1 refuses.
+   is a word in a line: the text around it is `--color-text-primary` and the link is
+   `--color-brand-accent-ink`, and colour alone is exactly what WCAG 1.4.1 refuses.
 
    This was first written as "the two containers below are the only registers
    in this tree that are genuinely a phrase", which was not true and was not
@@ -182,11 +189,63 @@ kbd,
 pre,
 samp,
 .mono {
-  font-family: var(--font-mono);
+  font-family: var(--font-family-mono);
   font-variant-ligatures: none;
   /* Every number in this product is a number that changes. Tabular figures
      are what stop a live token counter shifting the column beside it. */
   font-variant-numeric: tabular-nums;
+}
+
+/* A WORK ITEM'S KEY IS ONE TOKEN. Beside a summary in a cell or a notice
+   row it is the part that must never wrap or shrink: `ENG-22` broken into
+   `ENG-` over `22` made that row taller than its neighbours and printed a key
+   nobody can search for. The prose beside it truncates instead (its
+   `.truncate` has `min-width: 0`); the key keeps its width. */
+.item-key {
+  flex: none;
+  white-space: nowrap;
+}
+
+/* AN IDENTIFIER IN A CELL IS ONE LINE (`KeyCell`), cut with its value on the
+   title rather than broken at whichever character the column ran out on. */
+.key-cell {
+  display: block;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* WHERE A LEASE IS, beside what it is for (`HeldBy`): the body's weight, so it
+   never outweighs the seat or the duty the row is about. Two classes, because
+   `.t-link` below sets the medium weight every other card link carries. */
+.t-link.held-by {
+  font-weight: var(--font-weight-regular);
+}
+
+/* A TURN'S "WHAT IT DID" (`TurnWhatCell`): the summary keeps the width and the
+   key beside it keeps at most a bit under half of it. The key's `flex: none`
+   above is right beside a notice's prose, where a key is `ENG-22`; in a turn
+   list it can be a whole external identity, and uncapped it took the cell and
+   laid the summary out a letter per line on a phone's stacked row. */
+.turn-what {
+  display: flex;
+  align-items: baseline;
+  gap: var(--spacing-2);
+  min-width: 0;
+}
+.turn-what-summary {
+  --clamp-lines: 1;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+/* ITS OWN WIDTH, UP TO THE CAP, and never less: a key shrinking in proportion
+   to its neighbour gave up all but its first letter ("E…") beside a long
+   summary, which is the one part of the row a reader searches by. */
+.turn-what-key {
+  flex: none;
+  max-width: 45%;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 pre {
@@ -195,7 +254,7 @@ pre {
 
 hr {
   border: none;
-  border-top: 1px solid var(--border-subtle);
+  border-top: 1px solid var(--color-border-default);
   margin: 0;
 }
 
@@ -213,46 +272,37 @@ img {
   max-width: 100%;
 }
 
-/* One focus treatment for the whole product, and it is only ever the keyboard
-   ring — a mouse click that painted a ring around a row made every list look
-   permanently selected. */
-:focus {
-  outline: none;
-}
-/* THE RING ONLY. The radius belongs to `@crewlethq/tokens/css/base`, which
-   declares this exact rule — same outline, same offset, same radius — and
-   `styles/uilet.css` aliases our names onto the tokens it reads, so the copy
-   that used to live here was the same declaration twice.
+/* NO FOCUS RULE OF OUR OWN — neither a ring nor a reset. The kit's baseline
+   (`@crewlethq/tokens/css/base`) draws the document's `:focus-visible` ring,
+   and main.tsx imports it ABOVE every component so that a component's own
+   focus treatment wins the tie: the kit's Input draws ONE ring on its box and
+   sets `outline: none` on the field inside it, and its `command` appearance
+   draws none at all. A pointer click paints no ring without any help, since a
+   browser's own ring is `:focus-visible` too.
 
-   AND THE DUPLICATE WAS NOT FREE, which is the part worth writing down. Two
-   identical rules for one selector are redundant, so the minifier kept ONE —
-   the later one, which is this sheet's, emitted after all 139 KB of the
-   design system's component CSS. The baseline that was meant to be overridden
-   by a component thereby became the rule that overrode it: `:focus-visible`
-   and `.crewlet-avatar--circle` are each a single class, so the later won
-   every tie, and 119 components that shape themselves from one class changed
-   shape the instant a reader tabbed in — a circle became a rounded rectangle,
-   a pill went near-square, every `.crewlet-btn` dropped to `--radius-xs`.
-   Visible to somebody using the keyboard and to nobody else, which is how it
-   survived the port. `internal/api`'s TestTheDesignSystemCascadesInOrder is
-   the gate, and it reads the built artifact because only the bundle knows
-   which import the bundler evaluated first.
-
-   So this rule keeps the parts the baseline does not state and states nothing
-   the baseline already does. */
-:focus-visible {
-  outline: 2px solid var(--focus);
-  outline-offset: 2px;
-}
+   Any bare `:focus` or `:focus-visible` written HERE is a one-class selector
+   emitted after all of the kit's component CSS, so it wins every one of those
+   ties — which is what both rules this file used to carry did. `:focus {
+   outline: none }` erased the baseline's ring from every control that relies
+   on it, and the `:focus-visible` copy that was restored to answer that then
+   drew a second ring on the bare field inside every kit Input, and a violet
+   ring on the command palette's field that the dialog's `overflow: hidden`
+   clipped against its top edge. Before that, a copy that also carried the
+   radius squared off every button and avatar the instant a reader tabbed in.
+   Each was visible to somebody using the keyboard and to nobody else.
+   `internal/api`'s TestTheDesignSystemCascadesInOrder refuses a bare focus
+   rule anywhere after the first component rule of the built stylesheet. A
+   control that resets its own outline away (`all: unset`) takes the ring back
+   by name, in `frame.css`. */
 
 ::selection {
-  background: var(--accent-soft);
+  background: var(--color-brand-accent-soft);
 }
 
 /* Scrollbars belong to the theme. A bright system gutter down the side of a
    dark page is the single most visible way a web app admits it is a web app. */
 * {
-  scrollbar-color: var(--scrollbar) transparent;
+  scrollbar-color: var(--color-scrollbar) transparent;
   scrollbar-width: thin;
 }
 ::-webkit-scrollbar {
@@ -263,13 +313,13 @@ img {
   background: transparent;
 }
 ::-webkit-scrollbar-thumb {
-  background: var(--scrollbar);
+  background: var(--color-scrollbar);
   border: 3px solid transparent;
   background-clip: content-box;
-  border-radius: var(--r-full);
+  border-radius: var(--radius-pill);
 }
 ::-webkit-scrollbar-thumb:hover {
-  background: var(--scrollbar-hover);
+  background: var(--color-scrollbar-hover);
   background-clip: content-box;
 }
 ::-webkit-scrollbar-corner {
@@ -311,46 +361,43 @@ img {
 
    `font-weight` IS ONE OF THEM, and it is the property that gave this rule
    away. The current sidebar row and the current rail row both take
-   `--fw-medium`, so a selection that moved eased its background and its ink
-   over `--dur-fast` while the label's stroke changed on the first frame — the
+   `--font-weight-medium`, so a selection that moved eased its background and its ink
+   over `--motion-duration-fast` while the label's stroke changed on the first frame — the
    text thickened, its advance widths grew, the row's count shifted and
    `.truncate` re-clipped, all at once, under a fill that was still fading. It
    is interpolable because the faces are variable (`@crewlethq/tokens` ships
-   Inter and JetBrains Mono as variable `woff2`); on a build where they are
+   Geist and Geist Mono as variable `woff2`); on a build where they are
    not, the declaration is ignored and the weight snaps exactly as it does
    today.
 
    `prefers-reduced-motion` above zeroes every duration in the document, this
    one included, so there is nothing to opt out of here. */
-.rail-row,
-.rail-engine,
-.rail-collapse,
-.side-link,
-.side-twist,
 .crumb-link,
-.viewer-chip,
+.section-tab,
+.health-card,
+.user-block-who,
+.working-now,
 .peek-grip,
 .grid-row,
 .grid-th:not(.plain),
 .list-row.clickable,
-.attention-row.clickable,
 .work-row,
 .turn-row,
 .wl-row,
 .feed-row,
+.trace-row,
 .thread-entry.as-row,
 .phase-head,
-.toolcall-toggle,
 .org-node,
 .tl-chip,
 .tl-name,
 a.seat-chip,
-button.histogram-bar {
+.histogram-fill {
   transition:
-    background var(--dur-fast) var(--ease),
-    border-color var(--dur-fast) var(--ease),
-    color var(--dur-fast) var(--ease),
-    font-weight var(--dur-fast) var(--ease);
+    background var(--motion-duration-fast) var(--motion-easing-default),
+    border-color var(--motion-duration-fast) var(--motion-easing-default),
+    color var(--motion-duration-fast) var(--motion-easing-default),
+    font-weight var(--motion-duration-fast) var(--motion-easing-default);
 }
 
 /* ---- Type utilities -----------------------------------------------------
@@ -358,14 +405,14 @@ button.histogram-bar {
    edit here rather than a search for `font-size: 11px`. */
 
 .t-body {
-  font-size: var(--fs-sm);
+  font-size: var(--font-size-sm);
 }
 .t-cell {
-  font-size: var(--fs-xs);
+  font-size: var(--font-size-compact);
 }
 .t-caption {
-  font-size: var(--fs-2xs);
-  color: var(--text-muted);
+  font-size: var(--font-size-xs);
+  color: var(--color-text-tertiary);
 }
 /* A caption-sized thing that is a LINK, and reads as one.
    `.t-caption` on an <a> is not: it sets the muted colour, which wins over
@@ -375,23 +422,34 @@ button.histogram-bar {
    One class rather than four local overrides: the failure was the same
    collision every time, and a fifth caption-link would have repeated it. */
 .t-link {
-  font-size: var(--fs-2xs);
-  color: var(--accent-ink);
-  font-weight: var(--fw-medium);
+  font-size: var(--font-size-xs);
+  color: var(--color-brand-accent-ink);
+  font-weight: var(--font-weight-medium);
   white-space: nowrap;
 }
 .t-link:hover {
-  color: var(--text);
+  color: var(--color-text-primary);
+}
+/* A BUTTON IN THE LINK REGISTER — an action that changes this page (a
+   disclosure, a jump to another section) drawn as the card links beside it
+   are. The browser's button chrome is what goes, never the element: a
+   `button` is what a keyboard and a screen reader know to press. */
+button.t-link {
+  padding: 0;
+  border: 0;
+  background: none;
+  cursor: pointer;
+  text-align: start;
 }
 /* THE one micro-label register. It is declared once and never overridden;
    the system this replaces declared it once and then overrode it in six
    selectors with six different tracking values. */
 .t-label {
-  font-size: var(--fs-3xs);
-  font-weight: var(--fw-medium);
-  letter-spacing: var(--track-wide);
+  font-size: var(--font-size-2xs);
+  font-weight: var(--font-weight-medium);
+  letter-spacing: var(--font-letter-spacing-wide);
   text-transform: uppercase;
-  color: var(--text-muted);
+  color: var(--color-text-tertiary);
 }
 .t-num {
   font-variant-numeric: tabular-nums;
@@ -399,13 +457,13 @@ button.histogram-bar {
 }
 
 .muted {
-  color: var(--text-muted);
+  color: var(--color-text-tertiary);
 }
 .secondary {
-  color: var(--text-secondary);
+  color: var(--color-text-secondary);
 }
 .faint {
-  color: var(--text-faint);
+  color: var(--color-text-muted);
 }
 .truncate {
   overflow: hidden;
@@ -472,7 +530,7 @@ button.histogram-bar {
 }
 
 .measure {
-  max-width: var(--measure);
+  max-width: var(--size-measure);
 }
 .nowrap {
   white-space: nowrap;
@@ -518,13 +576,13 @@ button.histogram-bar {
 .row {
   display: flex;
   align-items: center;
-  gap: var(--space-2);
+  gap: var(--spacing-2);
   min-width: 0;
 }
 .col {
   display: flex;
   flex-direction: column;
-  gap: var(--space-2);
+  gap: var(--spacing-2);
   min-width: 0;
 }
 .spacer {
@@ -543,7 +601,7 @@ button.histogram-bar {
   align-items: baseline;
 }
 .gap-1 {
-  gap: var(--space-1);
+  gap: var(--spacing-1);
 }
 /* THE RUNG .row AND .col ALREADY DEFAULT TO, declared anyway. It is the gap
    most rows want, so twenty-one sites wrote `gap-2` against a scale that
@@ -551,24 +609,38 @@ button.histogram-bar {
    it silently left the browser's zero. A scale with a hole in it is read as a
    scale, not as a hole. */
 .gap-2 {
-  gap: var(--space-2);
+  gap: var(--spacing-2);
 }
 .gap-3 {
-  gap: var(--space-3);
+  gap: var(--spacing-3);
 }
 .gap-4 {
-  gap: var(--space-4);
+  gap: var(--spacing-4);
 }
 /* A grid that lays cards out at a minimum readable width and stops. `auto-fit`
    with `minmax` is what makes every screen in the product respond without a
-   single breakpoint of its own. */
+   single breakpoint of its own — and the floor is `min(<floor>, 100%)`
+   because a single track wider than its container is not scrolled here: the
+   shell's main is `overflow-x: hidden`, so the right side of every card is
+   CLIPPED, a table's last columns with it. The clamp is what lets a floor be
+   chosen for a desktop frame without breaking a phone (frame.test.ts holds
+   every repeating track in these sheets to it). */
 .grid {
   display: grid;
-  gap: var(--space-4);
+  gap: var(--spacing-4);
 }
 .grid-auto {
-  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(min(260px, 100%), 1fr));
 }
+/* THE FLOOR IS A FOUR-COLUMN LEASE TABLE'S (Settings › Nodes: seat, held by,
+   since, lease), and it is set so the panels STACK rather than cut the seat.
+   The seat is the table's one flexible track; the other three size to their
+   content (a node id of about 95px, a relative time of about 70, a duration
+   of about 60), so a panel needs roughly 225px + 225px of seat name before a
+   name like "Agent AI Systems Engineer" is drawn whole. At 420 the two panels
+   still sat side by side at a 1440 frame, 442px each, and the node id or the
+   seat had to give way; at 480 they stack below about 1520 and sit side by
+   side above it. On a phone the clamp gives the one track the container. */
 .grid-auto-lg {
-  grid-template-columns: repeat(auto-fit, minmax(360px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(min(480px, 100%), 1fr));
 }

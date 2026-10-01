@@ -22,6 +22,8 @@
  */
 
 import { useCallback, useSyncExternalStore } from "react";
+import { STORAGE_KEYS } from "~/lib/storage.ts";
+import { resolves } from "~/app/routes.ts";
 
 /** One thing the reader kept. */
 export interface Star {
@@ -35,7 +37,7 @@ export interface Star {
   at: number;
 }
 
-const KEY = "crewlet_starred";
+const KEY = STORAGE_KEYS.starred;
 
 /**
  * How many are kept.
@@ -81,7 +83,11 @@ function valid(row: unknown): row is Star {
     r.path.length > 0 &&
     r.path.every((p) => typeof p === "string") &&
     typeof r.label === "string" &&
-    typeof r.at === "number"
+    typeof r.at === "number" &&
+    // A PATH THE ROUTE TABLE NO LONGER HAS IS DROPPED ON READ. Storage
+    // outlives every build: a row kept before a route moved would be drawn
+    // as a row that leads to Not Found, forever, with nothing to say why.
+    resolves(r.path)
   );
 }
 

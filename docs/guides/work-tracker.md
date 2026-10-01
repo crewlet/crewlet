@@ -26,16 +26,22 @@ earlier never overwrites one activated later — so a node restarting on a
 revision the fleet has since replaced, or applying an older one late during a
 rollout, leaves the newer names alone. Re-applying an activation that has
 already landed writes nothing, which is every restart of every node on a
-company nobody has edited; re-activating an unchanged revision (the
-credential-rotation gesture) is a new activation, and writes one record per
-project to say so. The instant is the activating node's clock, except that an
+company nobody has edited; when several nodes apply one activation at once,
+they contend per project and exactly one of them writes it. Re-activating an
+unchanged revision (the
+[credential-rotation gesture](../concepts/secret-store.md)) is a new
+activation, and records one quiet "org chart re-applied" change per project to
+say so. The instant is the activating node's clock, except that an
 activation is never published at an instant no later (to the millisecond)
 than the one it replaces: the activation pointer moves it to a millisecond
 after, so an activation made on a node whose clock runs behind the last
 activator's — or a node republishing an older `activated_at` at boot — is
 still applied to every project, where it used to be applied to none. Keep the
 fleet's clocks synchronised anyway: the rule orders activations against each
-other, and the stamps a chart carries are still read off real clocks.
+other, and the stamps a chart carries are still read off real clocks. A node
+that boots on a company file it has not imported yet applies no chart until
+the control plane activates that file, which happens before the node claims
+any seat.
 
 A numbering **gap** is normal and permanent. `ENG-7` exists, `ENG-8` never did,
 `ENG-9` is next: the counter moves before the task lands, so a crash between
@@ -50,7 +56,7 @@ from the work filed into it — so a directory of projects answers "how much" an
 
 | | What it is |
 |---|---|
-| **task counts** | `open`, `done` and `closed`: how many of the project's tasks are in each status **group**. Moved by the commit that moves a task between groups, that files one, that moves one to another project, or that removes or purges one. |
+| **task counts** | `todo`, `active`, `done` and `closed`: how many of the project's tasks are in each of the four status **groups** — `todo` is work nobody has started, `active` work somebody has. They are two numbers because they are two situations: forty items waiting is a queue to triage, forty in progress is a team at full stretch. Moved by the commit that moves a task between groups, that files one, that moves one to another project, or that removes or purges one. A surface wanting every unfinished item adds the first two. |
 | **last change** | when the project's work last changed and **who** changed it — a handle and which of the four author kinds it is (`agent`, `human`, `operator`, `system`), so a seat's write and a person's read differently. |
 
 Both are **maintained, never counted on the fly**: they are written by the same
@@ -117,6 +123,25 @@ here" is the answer, and a made-up date would make an untouched project look
 freshly active. A company upgrading to this gets both columns filled from the
 change history it already holds, so no project reads as untouched because of
 when the engine was updated.
+
+### A project's target date
+
+A project may carry a **target date**: the day its lead means it to be
+finished. It is a **date, not an instant** — `2026-12-18`, a day on the
+company's own clock (`timezone`) — because a target is a day somebody named in
+a planning meeting, and an instant would have to invent the hour and the zone
+that day ends in.
+
+- It is the **lead's**, set with `write_project(target_date: "2026-12-18")` by
+  the project's lead or a person acting through their own credential, and
+  refused for any other seat. It is not chart-owned: a config apply that
+  renames the project carries the target through untouched.
+- Given an **instant** instead, the write stores the day that instant falls on
+  on the company's clock and says so in the answer's `warnings`. Anything that
+  is neither is refused, naming both spellings.
+- `null` or `""` clears it; a project with none reports no `target_date`, and
+  `sort=target` puts it last in both directions — "no target" is not the
+  earliest one.
 
 ### Which team an item belongs to
 
@@ -216,10 +241,12 @@ answer is that there is no such work.
 | **start / due**, **estimate**, **points** | scheduling and sizing. |
 | **tags** | from a per-project tag set — see [Tags](#tags). A tag the project has not declared is REFUSED at the write. |
 | **custom fields** | declared per project and at the workspace, typed, with option lists — see [the catalogue](#the-catalogue). Filter on one with `f.<slug>`, and see [the operators](#filtering-a-custom-field). |
-| **checklist** | items with their own assignees. No tool, route or command writes a checklist in this build, so a task's checklists are empty and nothing promotes an item to a subtask. |
+| **checklists** | up to 16 named lists holding up to 64 items each and 256 between them, each item with its own assignee — see [Checklists](#checklists). |
 | **relations**, **dependencies** | links between tasks, and blocking edges. |
 | **linked pages**, **references** | into the knowledge base and out to third-party systems. |
-| **spend** | turns, rounds, tokens and wall-clock this task has cost. |
+| **spend** | turns, rounds, tokens, cache, wall-clock, delegated workers and review send-backs this task has cost — see [Spend is on the task](#spend-is-on-the-task). |
+| **reopens** | how many times the task left a finished status for an unfinished one. |
+| **updated** | when the task last changed: the fleet-agreed instant of the newest record that changed it — the same instant its newest history entry carries — never a writer's clock. It is what `sort=-updated`, `updated=` and every list's Updated column read. |
 
 ### Status groups
 
@@ -231,12 +258,87 @@ re-teach every query what "finished" means.
 the slug. A cancelled task is finished work that produced nothing, which is a
 different fact from an open one and the same fact for anything counting.
 
+A task that leaves `done` or `closed` for an unfinished status is **reopened**,
+and the task counts it (`reopens`). Done → closed is not a reopen — the work
+stayed finished — and neither is `todo` → `in_progress`. It is counted by
+group, so a status a company adds or renames does not change what a reopen is.
+Sort by it with `sort=reopens`, and total it with `totals=reopens:sum`.
+
 ### Spend is on the task
 
 Every turn an agent spends on a task adds to that task's own counters. That is
 what makes "what did this cost" a question about a piece of work rather than
 about a seat's month, and it is the number a founder actually wants when a
 task has been reopened four times.
+
+**One turn, one task.** A turn is charged to the one work item it is on, or to
+nothing — never split. The item is the one its wake was about (a task
+notification, or a Jira, GitHub or GitLab event about one issue), the one the
+colleague who asked for help was on, or the one a coding run it resumes was
+launched on; failing all three, the one task its own writes touched, if they
+touched exactly one. A chat message that leads to no task write is charged to
+nothing. Only the engine's own tasks carry counters: a turn on a Jira issue is
+attributed on its events and adds to no row here.
+
+**What a turn's tokens include.** Its own phases, the workers it delegated to,
+the round-cap judge, and the coding runs it detached — in input and output,
+with the prompt cache's share of the input beside them. Learning afterwards
+(reflection, diary, skills) is the seat's own and is not charged to the task.
+Beside the tokens, two counts say *why* a task was expensive: `spend_workers`,
+how many delegated tasks its turns ran, and `spend_sent_back`, how many reviews
+returned the work for another pass.
+
+**A turn that parks is charged per segment.** A turn that launches a coding run
+completes once when it parks and again each time a run it launched is
+collected — often minutes later, on another node. Each segment adds what it
+spent, and only the first counts as a turn, so a turn that parked twice is
+still one turn on the task. The segment that collects a run pays for that run.
+A turn charged only because of what it wrote is charged when it ends, for
+every segment before it too.
+
+**Counted once.** Each segment is recorded under an id of its own, and the
+counters move only when that record's row is new — so a segment retried after
+a failed resume, or a record delivered twice, adds nothing.
+
+**Removed versus purged.** A task in the trash is still charged: removing a
+task hides it and destroys nothing, and the work was done on it. A **purged**
+task is not — the charge is refused, and a charge that was already on its way
+when the purge landed is dropped on every node rather than stopping them. The
+tokens are still on the seat's own counters and in the spend history; only the
+task's share is gone, with the task.
+
+**A task lists its own turns.** Every charged segment is a row the task keeps
+for good — in the replicated estate, beside the counters it added to — so the
+task's page lists its turns long after the thirty days a node keeps its own
+event history, on any node, including turns that ran on a node that has since
+left. The list is `work_item_turns`: one entry per TURN, its segments folded
+(tokens, rounds and wall time summed; the phases in the order each first ran;
+the outcome, summary and review of its newest segment), newest first, paged by
+the position of each turn's first segment so a turn that gains a segment while
+you read never moves between pages. Each entry is numbered **"Turn n"** by the
+task: the position of its counted segment among every counted segment on the
+task, so the newest turn's number IS `spend_turns` and a card reading "Turn 3"
+sits beside a cost reading "3 turns". A turn whose segments on this task
+counted none — more of a turn charged elsewhere — carries no number.
+
+**What a turn did rides on its record.** Beside its spend, a segment's record
+carries the turn's own account of what it did (the reviewer's summary of what
+landed, or the executor's artifact), the notes of the newest review that sent
+the work back for another pass, and each tool its executor called with how
+many times — each account cut to 600 bytes and at most sixteen tools, bounds
+the writer refuses to exceed rather than cutting for you — and, for a segment
+that failed because one of its phases did, which phase that was. They are record
+version 10: a node on an older build holds such a record back until it is
+upgraded rather than applying it without them. The arguments and results of
+every call stay on the turn's trace, which a task's turn card links to.
+
+The counters are `spend_turns`, `spend_rounds`, `spend_input`, `spend_output`,
+`spend_cache_read`, `spend_cache_write`, `spend_wall_ms`, `spend_tokens`
+(input plus output — the `sort=spend_tokens` key, named after the column
+like every total), `spend_workers` and
+`spend_sent_back`. Every one can be totalled over a board — including as a
+`median` or `p90`, which answer the value a task actually holds rather than an
+average of two.
 
 ## The catalogue
 
@@ -274,7 +376,7 @@ cannot be missing from it — its value would be hidden the moment it was set. A
 field required at the **workspace** is required in every project, and one
 required on a project only there; a subtask is judged by the second toggle
 (`required_in_subtasks`, off by default) so one required field does not block
-every checklist item anybody promotes.
+every small piece of work somebody splits off a task.
 
 **A name is a resolution key, not a label.** A type, a field and an option are
 each resolvable three ways — by id, by slug, and by **name** — which is what
@@ -350,7 +452,7 @@ task's every later edit on every node.
 |---|---|---|
 | `number`, `progress`, `rollup` | a number, or a string that is one | text that is not a number, and anything outside `min`/`max` or carrying more decimals than `precision` |
 | `checkbox` | `true` or `false` | a string — every rule for reading one disagrees about `"false"` |
-| `date` | a date; a timestamp when the field holds no time, **truncated with a warning** | a value that is not a date, and a bare date on a field that holds a time |
+| `date` | a date; a timestamp when the field holds no time, **truncated with a warning** to the day it falls on **on the company's clock** (`timezone`) — the evening of the 4th in Los Angeles is the 4th, not the UTC 5th | a value that is not a date, and a bare date on a field that holds a time |
 | `dropdown`, `labels` | the option's slug, name or id — stored as the **id** | an option the field does not declare |
 | `relationship` | a key, a former key or an id — stored as the **id** | an item that does not exist |
 | `people` | anything that resolves to exactly **one** colleague | a spelling that names nobody, or more than one |
@@ -422,7 +524,8 @@ refusal, and both are deliberate rather than automatic:
 - `write_project(tags_add: [...])` declares one, which **any seat** may do.
 - `labels_create_missing: true` on `create_work_item` or `update_work_item`
   declares what that write is about to use, in one append before the task's
-  own. The answer lists what it created under `labels_created`, so a caller
+  own — and only once every other argument has been checked, so a write
+  refused over its ask, a blocker or a re-route declares nothing. The answer lists what it created under `labels_created`, so a caller
   that set the flag out of habit still sees a typo now rather than on a board
   three weeks later. A declaration refused, or one whose outcome is unknown,
   stops the write before the task's own append, and the answer says so under
@@ -515,6 +618,52 @@ without. The builtins carry no id, so they are defaults rather than
 destinations — a client that offers the shapes as an arrangement (the
 dashboard does) shows only what somebody actually saved in its view strip.
 
+### Recent work, a task's place, and a card's facts
+
+Three keys exist for the screens that draw a board rather than for the
+question it asks:
+
+- **`closed_since=<date>`** is the open work **plus** whatever finished — done
+  or cancelled — at or after a date. It takes every date token the `due=`
+  filters take (`sow`, `som`, `-7d`, `2031-04-14`, a timestamp) and resolves
+  it on the **company's clock**, so `closed_since=sow` begins at Monday
+  midnight in the company's zone — the same week `due=range:sow..eow` and the
+  `due:bucket` bands mean — and a Done lane built on it empties itself when
+  that week ends rather than dropping one task an hour. It is the dashboard's
+  **Recent** scope. It is the third way to say which finished work is in an
+  answer, beside `show_closed=true` and `show_closed=recent:<duration>`, so
+  naming it beside `show_closed` is refused, and an `any=` branch may not
+  carry it.
+- **`around=<task>`** asks where one task — its key, a former key or its id —
+  sits in this answer, and the answer carries `around: {position, prev, next,
+  total_hint}`: its 1-based place, the keys of the tasks drawn before and after
+  it, and how long the order is. The order is the **drawing** order, over the
+  whole answer rather than the page: a list's own sort, or a board read column
+  by column — and lane by lane inside a column — in the order the board draws
+  them, with each column's rows in the row order. So the task after the last
+  card in To do is the first card in In progress, even when each column only
+  carried twenty rows. On a label board, where one task is on several columns,
+  the order counts **cards** and a task is placed at the first column it is
+  on. A task the answer does not hold — filtered out, finished, or in a column
+  the board did not draw — is `around: null`, never a refusal, and `position`
+  is null past the 10 000 the total stops counting at. A saved view cannot
+  carry `around`: which task somebody is standing on is theirs.
+- **`fields=tags,dependents_count,open_asks,spend`** puts facts a board CARD
+  draws on each row, and only on an answer that asked: its labels; how many
+  live tasks wait on it (the authored `waiting_on` edges `blocking=` reads);
+  how many of its questions are still unanswered (the same test
+  `has_open_asks=` makes); and `spend: {tokens, turns, workers, sent_back,
+  reopens}`. A fact that was asked for is always present, `0` and `[]`
+  included. They are opt-in because the same row is what an agent reads
+  through `list_work_items`, where every byte is context on every listing —
+  and `list_work_items` never asks for them, even through a saved view that
+  does. `sort=-spend_tokens` with `fields=spend` is the most expensive work.
+
+**A priority list is paged in its own order.** `priorities=<person>` answers
+the tasks on somebody's list in the order they arranged, and a page smaller
+than the list now carries on in that order: the whole list (at most 32 tasks)
+is read on every page and the cursor is a place in it.
+
 ### What a board groups on
 
 Any of these, as `group_by=` — and a second one as `group_by2=`, which splits
@@ -561,20 +710,31 @@ And **This week** ends where the week does, Monday-anchored, which is the same
 week `due=range:sow..eow` means: on a Sunday it holds nothing, rather than
 rolling seven days forward into next week.
 
-The day these are cut on is **the company's own midnight, in the company's own
-timezone** — the same instant a row's overdue mark is derived from and the same
-one every `due=` filter is resolved against. That is the whole reason the bands
-are the engine's rather than each screen's: cut in a browser they were cut on
-*that reader's* midnight and *that reader's* week, so for anybody whose local
-day differs from the company's, a task sat under Earlier on a row the same
+The day these are cut on is **the company's own midnight, on the company's
+[clock](../getting-started/configuration.md#the-companys-clock)** — the
+top-level `timezone`, UTC when absent — the same instant a row's overdue mark is
+derived from, the same one every `due=` filter is resolved against, and the same
+one a person's own day and the workload's overdue counts are cut on, whether a
+seat, an operator's assistant or the dashboard asked. That is the whole reason
+the bands are the engine's rather than each screen's: cut in a browser they were
+cut on *that reader's* midnight and *that reader's* week, so for anybody whose
+local day differs from the company's, a task sat under Earlier on a row the same
 answer marked as due today and not overdue.
+
+"Midnight" means the first moment of the company's date, and in a few zones
+that is not 00:00. Chile, Cuba, Lebanon and Egypt start summer time by moving
+the clock from 00:00 straight to 01:00, so on that day the day — and "today",
+and a task's all-day due date — begins at 01:00; where a zone sets its clock
+back from 01:00 to 00:00, as Cuba does, midnight happens twice and the day
+begins at the first. The week is the ISO week, Monday to Monday.
 
 ### The timeline
 
-A task's `start` and `due` are its bar. A task carrying only one of them gets
-a one-day marker with a dashed edge, because "due on the 20th" and "a day's
-work on the 20th" are different facts and drawing them the same way would
-claim knowledge nobody entered. A task carrying neither sits in an
+A task's `start` and `due` are its bar. A task carrying only a `due` is a
+**milestone** — a filled diamond on its day, in its status's tone — and one
+carrying only a `start` is a one-day marker with a dashed edge, because "due
+on the 20th", "began on the 20th" and "a day's work on the 20th" are different
+facts and drawing them the same way would claim knowledge nobody entered. A task carrying neither sits in an
 **Unscheduled** band under the axis with a count — never placed on today,
 which would invent a deadline nobody set.
 
@@ -652,7 +812,9 @@ the view. There are five:
 
 `my_queue` and `priorities` both need to know who is asking, and the surface
 supplies that from its own credential — never the query. That is also what
-makes `f.<slug>=me` mean the reader rather than whoever saved the view.
+makes `f.<slug>=me` mean the reader rather than whoever saved the view: `me`
+is resolved after the view's saved parameters and yours are merged, so a view
+saved with `f.reviewers=me` shows each person who opens it their own reviews.
 
 ### Filtering a custom field
 
@@ -715,14 +877,57 @@ furniture, and a seat's job is the work rather than the furniture around it.
 ### Manual order
 
 A board is drag-ordered, and the order is a real value on the task rather than
-a position in a list. Dragging one task writes one record; the key it mints
-sits between its new neighbours.
+a position in a list. A person drags a card with `place_work_item` — through the
+dashboard or their own assistant; no seat holds it, because where a card sits
+is a person's arrangement and a seat moves work between lanes with
+`update_work_item`. The call names the card it was dropped **beside**
+(`before` or `after`), never a position: the engine mints the new key inside
+its own write, between that card and the one next to it as the board stands
+when the move lands. So two people dragging in one project at once both land
+where they dropped, rather than between two keys that no longer bound anything.
 
-Repeated insertion at the same point makes keys grow — about one character per
-sixty-two placements — and past a threshold the engine **re-spreads** the
-affected range in the background, in batches, order-preserving. Every
-intermediate state is the original order, so an interrupted re-spread leaves a
-correct board.
+A drag within a lane writes one record, on the project's order, and wakes
+nobody — where a card sits says nothing about what the work is. It never
+changes the card's `version`, so the board's next `if_match` on it still holds.
+A drag **across** lanes also changes the card's status, and that half is an
+ordinary status change: history, and a wake for the people on the card — and
+it is written first, as its own record, before the place. It is refused
+`stale_version` before anything lands if the card changed since the board was
+drawn. If somebody changes the card between the two halves, the new lane stands
+and the answer says `placed: false`, naming why in `unplaced`: the card is in
+the lane it was dropped into, at the place it already held there, and can be
+dragged again.
+
+A drag is retried as the same call. Each half is a step of the call's one
+operation, so a retry is answered from the ledger step by step, the lane change
+the first attempt already made included. That is why a drag always sends the
+lane it was **dropped into**, whatever the card reads now: a drop into the lane
+the card is already in, on a card nobody changed since, writes nothing on the
+task, so sending it is always safe. A drag is never a move to another project —
+that re-keys what it carries, and is `move_work_item`.
+
+**On the dashboard** a drag is made as the person your token is bound to, and
+only in the manual order — a project's default, or **Sort → Manual order** —
+because in any other a dropped card would jump straight back to where its date
+or priority puts it; a drag tried in another order says so. The card is drawn where you dropped it until the engine
+answers: a refusal puts it back and says why, and a `placed: false` answer
+leaves it in the lane it went to and says the place was not taken. `Alt` with
+an arrow key moves a focused card the same way — up and down past its
+neighbours of the same project, left and right to the top of the next lane.
+
+During a rolling upgrade a card keeps its dragged place only through edits
+written by an upgraded node; an edit an older node writes puts it back where it
+was filed, on every node alike — see
+[Which records an upgrade holds back](replication.md#which-records-an-upgrade-holds-back).
+
+Repeated insertion at the same point makes keys grow, and a drop that would
+mint a key past 64 characters re-spreads the cards around it in the same
+record instead — widening the window until the keys are short again, up to 256
+cards. Past that the drag still lands and the engine **re-spreads** the
+project in the background, in batches, order-preserving. Every intermediate
+state is the original order, so an interrupted re-spread leaves a correct
+board. A card dragged to the very bottom never takes the key the project's next
+new task will be filed at, so the two can never share a place.
 
 ## What a seat can do
 
@@ -734,17 +939,17 @@ that container a seat owns, and one about CHANGE rather than about state:
 |---|---|
 | `list_work_items` | the query surface above, filtered any way a view can be — and every row filtered **on its own**, whatever a named view's own shape says: the grammar's `collapsed` default makes the filter a predicate on the ROOT and lets its whole subtree ride along unfiltered, which draws a board and misreports a list. An item's subtasks are asked for with `parent`, which that mode never applied to — including `preset=my_queue`, which is the seat's own open work. Beside the obvious filters it takes `type`, `priority`, `parent` (an item's subtasks), `reporter`, `watcher`, `unit`, the three date keys (`due`, `updated`, `created`), `sort`, `cursor` for the next page, and **`field_filters`** keyed by field slug — which is how a seat reaches the custom fields its company declares |
 | `get_work_item` | one task with its recent comments, history, links and **custom fields**. `include` narrows to the parts you need; `comments_cursor` pages back through a long thread; **`comment`** opens one comment by id with its body exactly as it was written; **`body: true`** returns the task's own description in full. Comment bodies in the thread are excerpts ending in `…`, because twenty at their full length is ten times what one tool answer may weigh — `comment` is how the rest is read, and on its own it answers the item and that comment and nothing else. The description is excerpted the same way and for the same reason, and `body` is its counterpart — each answers on its own, and naming both gets the comment, because it is the narrower ask. Each field value comes back with the slug, name and type that explain it, and says when it is **hidden** (its declaration was archived), **foreign** (mirrored in from another tracker) or **undeclared** (a value this company explains nowhere) |
-| `create_work_item` | file a task or a subtask. `fields` sets custom fields by **slug**, and the create is refused naming any the project requires and this call leaves out. It also takes the four **scheduling** arguments below |
-| `update_work_item` | change any field, with an optional `if_match`. `routing_unit` points the item at another team and is the project **lead's or a person's own** — see [Which team an item belongs to](#which-team-an-item-belongs-to). `watch: true`/`false` is a gesture about the CALLER and nobody else — the engine resolves it against the item's current watchers inside its own transaction, so following a task never removes whoever was already following it. Its `waiting_on`, `blocking`, `linked` and `linked_pages` arguments are **set-valued** — see below — and `fields` sets custom fields by slug, checked against each field's own declaration. It takes the four **scheduling** arguments too, where `null` on any of them CLEARS it |
+| `create_work_item` | file a task or a subtask. It lands in `todo` unless `status` names another — a board lane's **+** files into that lane in the one record, and an unknown status is refused by name. Left without an `assignee` it goes to the project's **default assignee** (the lead's `write_project` setting, read inside the create itself), and lands in triage — where the project's lead is told — only when the project names none, or names a seat that has since left the chart, which the answer's `warnings` say; the answer's `assignee` is who it was filed to. `fields` sets custom fields by **slug**, and the create is refused naming any the project requires and this call leaves out. It also takes the four **scheduling** arguments below, and `ask` (with an optional `decision`) to file the item **as a question** — see [Asking for a decision](#asking-for-a-decision) |
+| `update_work_item` | change any field, with an optional `if_match`. `routing_unit` points the item at another team and is the project **lead's or a person's own** — see [Which team an item belongs to](#which-team-an-item-belongs-to). `watch: true`/`false` is a gesture about the CALLER and nobody else — the engine resolves it against the item's current watchers inside its own transaction, so following a task never removes whoever was already following it. Its `waiting_on`, `blocking`, `linked` and `linked_pages` arguments are **set-valued** — see below — and `fields` sets custom fields by slug, checked against each field's own declaration. It takes the four **scheduling** arguments too, where `null` on any of them CLEARS it. An `assignee` may carry a **`reason`** — one line, at most 500 characters, that the new assignee is woken with and the item's history shows beside the hand-off; a `reason` without an `assignee` is refused, because the explanation of any other change is a comment. **`checklist`** makes one change to the item's checklists — see [Checklists](#checklists) |
 | `create_work_item` and `update_work_item` | both take `fields`, keyed by field **slug** — see "What a field value may be" above |
-| `comment_on_work_item` | add to the thread, optionally as a **question** somebody owes an answer to (`ask`) or as the **answer** that closes one (`answers`) |
-| `search_work_items` | find an item by what it **says** — ranked over every item's title *and description*, which no filter reaches. `list_work_items`' own `text` is a substring of the key or title and cannot see a description at all, so the two are different questions: one narrows a board, the other ranks a corpus. A node still building its index says so rather than answering empty, because "there is nothing" is what gets a duplicate filed |
+| `comment_on_work_item` | add to the thread, optionally as a **question** somebody owes an answer to (`ask`, with a `decision` when they have to choose) or as the **answer** that closes one (`answers`, with a `choice` naming an option — `body` is then optional) |
+| `search_work_items` | find an item by what it **says** — ranked over every item's title *and description*, which no filter reaches. `list_work_items`' own `text` is a substring of the key or title and cannot see a description at all, so the two are different questions: one narrows a board, the other ranks a corpus. It ranks `hybrid` — the words and, where the company has an embeddings provider, the meaning, fused (see [Search](search.md#three-modes-and-what-an-answer-says-it-served)). A node still building its index says so rather than answering empty, because "there is nothing" is what gets a duplicate filed, and an answer over part of the fleet carries a `partial` sentence for the same reason |
 | `merge_work_item` | fold a duplicate into the item that survives: the duplicate is linked to it, its **subtasks are re-parented onto it** (`move_subtasks`, true unless you say otherwise), and the duplicate is closed as `cancelled`. Nothing is destroyed and both histories stay readable. Closing a duplicate by hand instead leaves its subtasks under a closed parent, where nobody finds them. A subtask in the trash stays under the duplicate, where a restore finds it — a removed item is frozen. A merge that stops part-way (its node died, or the stream refused an append) is finished by the `tracker` duty on its first pass (every 15 minutes) after the merge's claim has lapsed — a minute after its holder's last heartbeat — so never beside a merge that is still running; a duplicate that is itself in the trash waits for its restore. A merge that would re-parent subtasks onto an item in **another project** is refused before it starts — a subtask under an item in another project is drawn under it on neither board — so move the duplicate first with `move_work_item` (its subtasks go with it), or merge with `move_subtasks: false` |
 | `move_work_item` | move a top-level item, with everything under it, to another project: each task in the subtree is re-keyed there (ENG-7 becomes OPS-3) with its old key still resolving, the tags the subtree carries are declared in the new project (a label the new project already gives a different tag refuses the move, naming both, before anything is written), and the people on the item are told. The item's project **lead's or a person's own**, as `routing_unit` is. A subtask does not move on its own — move its root. A move that stops part-way is finished by the same call, or by the `tracker` duty (see [how a move is carried out](#what-a-project-row-carries-about-its-work)) |
 | `get_work_catalogue` | the types a task may be and the fields it may carry |
-| `list_projects` | every project work is filed into, with how much open work each holds, when its work last changed and who changed it, and who leads it. `archived` picks the set — `false` (the default) for the live ones, `only` for the retired ones alone, `true` for both — and `sort` orders the whole company before the page is taken (`key`, `name`, `unit`, `open`, `done`, `closed`, `last_change`, each with an optional leading `-`), so `-open` is where the pile actually is rather than the biggest of the fifty keys that sort first. A seat's answer carries **50** and says `total` beside `truncated` — narrow with `q` or `unit` — because a tool answer is read out of the turn's own context window |
+| `list_projects` | every project work is filed into, with how much work each holds — `task_counts` is `{todo, active, done, closed}`, so waiting work and started work are two numbers — when its work last changed and who changed it, its `target_date`, and who leads it. `archived` picks the set — `false` (the default) for the live ones, `only` for the retired ones alone, `true` for both — and `sort` orders the whole company before the page is taken (`key`, `name`, `unit`, `todo`, `active`, `done`, `closed`, `last_change`, `target`, each with an optional leading `-`), so `-todo` is where the pile actually is rather than the biggest of the fifty keys that sort first. A seat's answer carries **50** and says `total` beside `truncated` — narrow with `q` or `unit` — because a tool answer is read out of the turn's own context window |
 | `describe_project` | one project in full: the six statuses with what each means, the types it files, the fields grouped by which type they apply to (required first, with their options), its tags and its lead. Omitting the project means the seat's own |
-| `write_project` | a project's own settings. Declaring a **tag** is open to every seat; renaming or archiving one, declaring project fields and setting the default assignee are the project **lead's or a person's own**; archiving the project takes a person specifically |
+| `write_project` | a project's own settings. Declaring a **tag** is open to every seat; renaming or archiving one, declaring project fields, setting the default assignee and setting the **target date** are the project **lead's or a person's own**; archiving the project takes a person specifically |
 | `task_activity` | what HAPPENED, in the order the log made it happen: every change to one task or one project, with who made it and exactly which fields moved |
 | `my_work` | everything this seat is expected to look at, in one call — see below |
 
@@ -755,7 +960,7 @@ input to something the tracker already reports:
 
 | Argument | What it sets |
 |---|---|
-| `due` | when the task is due. A date (`2031-04-16`), an instant, or one of the relative words the `due=` FILTER reads — `today`, `tomorrow`, `eow` (the week's end — midnight ending Sunday, since a week starts on Monday), `eom` (midnight ending the month), or an offset like `+7d`. One grammar for both, because a seat that can ask for "everything due this week" must be able to say "due this week" about one task. A token that named a DAY sets the all-day flag, so a renderer shows "16 April" rather than "16 April, 00:00" for a date nobody gave a time to. |
+| `due` | when the task is due. A date (`2031-04-16`), an instant, or one of the relative words the `due=` FILTER reads — `today`, `tomorrow`, `eow` (the week's end — midnight ending Sunday, since a week starts on Monday), `eom` (midnight ending the month), or an offset like `+7d` (refused if it lands outside the years 0000–9999, which is all a date can be written in). One grammar for both, because a seat that can ask for "everything due this week" must be able to say "due this week" about one task. A token that named a DAY sets the all-day flag, so a renderer shows "16 April" rather than "16 April, 00:00" for a date nobody gave a time to. |
 | `start` | when work on it should start, in the same spellings. |
 | `estimate_minutes` | how long it is expected to take. |
 | `points` | how big it is on the team's own scale. |
@@ -787,6 +992,14 @@ task in `assigned` that had already moved out of it by the time `priorities`
 was read — and spend its turn on work somebody else had taken. It takes **no
 handle**: the seat is the turn's own, because a tool that named whose day to
 read could read a colleague's queue.
+
+Each list is a **page of at most 20**, and beside the seven lists the answer
+carries `totals` — one `{total, capped}` per list, counted by the same
+predicate in the same read. The page is twenty; the claim is not, and a count
+taken from a list's length says 20 for the seat holding two hundred. `capped`
+means the count stopped at 10,000, so the number is a floor. `priorities` is
+cut **after** finished and removed entries are dropped, so a list whose head is
+done work still shows its first twenty open entries in the order they were put.
 
 `task_activity` is the only way to ask what CHANGED. A board is about what is
 there now, and a task that was reassigned twice and back looks exactly like
@@ -872,10 +1085,19 @@ answer if there was no way to look them up first.
 `write_project` is the one project **write** a seat holds, and it holds it for
 one facet: declaring a tag. A project's name, purpose and owning unit are
 **chart-owned** — written by the epoch apply from the org chart and by nothing
-else — so nothing writes them here at all; its field declarations and its
-default assignee are the **lead's**, and archiving the project
+else — so nothing writes them here at all; its field declarations, its
+default assignee and its target date are the **lead's**, and archiving the project
 itself takes a person's own credential. Every one of those is gated inside the
 verb, and each refusal names who can.
+
+The **default assignee** is who a task filed into the project with nobody named
+goes to — every create reads it inside its own snapshot, beside the archived
+flag and the required fields, so a person's sheet, a seat's tool and an
+operator's assistant all land the same task in the same place. Empty is the
+project's own setting for **triage**, where the lead is told. A default naming
+a seat the chart no longer holds is not applied: the task goes to triage and
+the create's answer warns that the setting wants changing, since a task filed
+to a seat nobody runs would wake nobody.
 
 **An archived project stays reachable, and it is SELECTED rather than let
 through.** Archiving stops a project taking new items and keeps every one it
@@ -902,8 +1124,8 @@ can say a company has filed nothing while sitting on its Active segment, and
 can tell a reader whose company wound a programme down exactly how many
 projects are waiting under Archived.
 
-An operator holds the same fourteen and more that no seat does, including the
-two below. `remove_work_item` puts an item
+An operator holds the same fourteen and more that no seat does, including
+`place_work_item` — see [Manual order](#manual-order) — and the two below. `remove_work_item` puts an item
 in the **trash** and `restore_work_item` takes it out again, at any age. A
 removal hides an item from every list and board and destroys nothing — its
 history is untouched and `list_work_items` with `removed: true` is the only
@@ -1003,41 +1225,166 @@ busy, and a total alone cannot tell them apart.
 `GET /work/workload`, optionally narrowed to one `unit` — the people whose open
 work sits in projects that unit owns.
 
+## How the work has moved
+
+**The flow** (`GET /work/flow`, `work_flow`) is the company's work as a series:
+for each of the last N days or weeks on the company's clock, how many tasks sat
+in each status group at the window's end, and how many were **completed** in it
+— a change that took a task from not delivered to delivered, so a cancellation
+is not a completion and moving done work to closed is not a second one. It is
+computed by walking the task history BACKWARD from today's census, undoing each
+status change, create, removal, restore, purge and project move, so what it
+costs is the window's changes rather than the company's whole history. Home's
+"Tasks in progress", "Completed" and "Tasks completed per day" all read it.
+
+**Blocked has no history.** Whether a task is blocked depends on its blockers'
+rows, and nothing records the moment it became so; the answer says
+`blocked_history: false` and carries today's blocked and overdue counts only.
+
+## What the company did
+
+**The company feed** (`GET /feed`, `company_feed`) is one feed of what the
+company did, newest first: work **completed** (with the task's tokens and
+turns, and whether a reviewer ever sent it back), work **filed**, work **handed
+on** (the task's hand-off count against its budget), pages published and
+schedules run. A create says where it was filed from — its **origin**, the chat
+surface and conversation the filing turn was woken on ("from Slack") — which
+the create record states for itself (record version 9), so an older build
+holds such a create back rather than applying it without the field. One
+cursor resumes every source exactly where the last page stopped.
+
+A schedule's entries are its **runs** — the ticks the scheduler dispatched. A
+tick it deliberately skipped (a missed run outside the catch-up window, or one
+that came due while its seat was paused) is not something the company did, so
+the feed leaves it out; it stays in the schedule's own ledger
+(`GET /schedules/{scope_type}/{scope_id}/{name}/runs`, Agents › Schedules),
+which is where "why did the standup not run" is answered. And runs of one schedule for one runner that nothing else
+falls between are **one row** ("ran 12 times since 02:40"), so a sweep every
+ten minutes is a line rather than every line of the page.
+
 ## What a person can do
 
 **The dashboard** renders the same queries a seat's tools use, against this
 node's own copy, and every answer says how far behind that copy is. It is four
 screens rather than one:
 
-- **All work** (`#/work`) is the list, and it opens as one: a container nobody
+- **Tasks** (`#/work`) is the list, and it opens as one: a container nobody
   has saved a default view for lands on the list shape, because a board's
   information is the comparison across its lanes — the best shape once work is
   moving and the worst on a company with three items in one status. The board
-  is one press away. Two menus decide what is on the list and how it is drawn —
-  **Filter** adds a narrowing, and each one is a removable chip under the bar;
-  **Display** holds the shape (list, board, table, calendar, timeline), the
-  grouping, the order and — on the list and the table, which are one grid with
-  a column set each — the columns. Grouped on a status, a
-  status group or a priority, the board and the list draw every value the
-  company declares and say which of them are empty, because those three are
-  closed sets whose order means something; grouped on an assignee, a tag or a
-  label they draw only the values work is actually in. The trash is a filter
-  here rather than a tab, which is what the engine says it is: a listing
-  carrying `removed=true`. The strip above the bar holds the views somebody
-  SAVED, never the five shapes, and it ends in a link to the whole inventory.
-  A list with nothing on it says which of three things emptied it — a narrowing
+  is one press away. The first row is **what is drawn**: the five shapes (List,
+  Board, Timeline, Calendar, Table), then the views you pinned — the strip
+  holds what somebody SAVED, never the shapes — **+ View**, which saves the
+  query on screen under a name (shared, or kept to you), and a link to the
+  whole inventory; then the search box (`/` focuses it) and **Display**, which
+  holds what you set once: a list's second grouping, the columns of the list
+  and the table (one grid with a column set each), and the board lanes you put
+  away. The second row is **how the answer is cut**, and the work starts right
+  under it: a removable chip per narrowing, ending in **+ Filter** — priority
+  by *is*, *is not* or *≥* a step, labels by *any of*, *all of* or *not* — and
+  at the far end **Show** — **Open**, **Recent** (open work and what finished
+  this week, the board's own default, so its Done lane holds the week's
+  deliveries), **Closed** and **All** — **Group by** and **Sort**, each
+  showing what it is set to, and on a board the lanes past its edge. Grouped on a status, a status group or a
+  priority, the board and the list draw every value the company declares and
+  say which of them are empty, because those three are closed sets whose order
+  means something; grouped on an assignee, a tag or a label they draw only the
+  values work is actually in. The trash is a filter here rather than a tab,
+  which is what the engine says it is: a listing carrying `removed=true`. A
+  list with nothing on it says which of three things emptied it — a narrowing
   that matched nothing, a scope with nothing in it, or a tracker nothing has
-  been filed into — and a complete one closes by saying so.
+  been filed into — and a complete one closes by saying so; one with more
+  ends in **Load more** and how many of how many are loaded, so no task is
+  past the end of a page. A card says what it has cost in **tokens**, what it
+  blocks, its labels and — while a seat's turn is on it — who is doing what
+  ("SWE · executing · round 7 of 20"), matched on the task the engine charges
+  that turn to. A card's labels give way to a "+N" before its mark row
+  wraps, so the token count keeps its place.
+
+  **What you change here is made as you.** Drag a card — in the manual order,
+  which is a project's default — to reorder it or move it to another lane
+  (`Alt` with an arrow does the same from the keyboard); set a row's status,
+  priority or holder from the value itself on the list and the table. Each is
+  a tool call under your name, conditional on the version you were looking at,
+  so a change somebody made a moment ago is refused and the sentence names
+  them. A task opened from a list carries that list with it, and its page says
+  where it sits — "3 of 18", with the tasks above and below it a press (or
+  `k` and `j`) away — in the whole list rather than in the page that was
+  loaded, whether you opened it from its row or through the peek's **Open**.
+- **A task** (`#/work/{KEY}`) is one page: the task in the order a person
+  reads one — its title and description, its checklists, its sub-tasks — then
+  its **activity**, and a rail of its fields beside it. The activity is **All**,
+  **Comments**, **Agent turns** or **Changes**: who filed it and who handed it
+  to whom (with the reason they gave), what was said, and a card for every
+  agent turn charged to it — "SWE ran turn 2", the phases it ran (and, for a
+  turn that failed, which phase it failed in), whether a reviewer sent it back
+  and what the reviewer asked for, the tools it called,
+  how long it took and how many tokens, and a link to its trace. While a seat's
+  turn is running on the task, the foot of the activity says so ("SWE is on
+  turn 3 · executing · round 7 of 25") with a way to watch it live. Each
+  announced change has **Who this reached**: the people it woke and why. The
+  three histories are read a page at a time, and **Earlier activity** reads
+  further back — the merged list only ever shows a stretch of time that is
+  complete in all three. The rail ends with **what this task has cost** —
+  turns, tokens and agent time, from the task's own counters — and its
+  hand-offs against the engine's budget.
+
+  **Everything on it is changed as you**: a field from its value in the rail
+  (status, priority, labels, dates, the estimate, a custom field), the title
+  and description in place, a checklist item by its box, a sub-task from the
+  sub-tasks' **+**, a hand-off with its reason, following it with **Watch**,
+  and a comment — or, with **Ask…**, a question put to one seat, with the
+  options to choose between where they are to choose. A field edit is
+  conditional on the version you were looking at, and a race you lost names
+  who won it; a checklist tick and following are gestures applied to the task
+  as it is when they land, so they never lose a race that was not one. A reader
+  who cannot act sees every control, disabled with the sentence that says why.
+- **New task** — on the sidebar's head, beside the Projects heading, at the
+  end of every work screen's bar and on a board lane — opens one sheet that
+  files a whole task in one `create_work_item`: its project, title and
+  description, type, the status it starts in, who holds it, its priority, due
+  date and labels. A lane's **+** files into that lane: it presets the lane's
+  status, type, priority, project, holder or label (a status-group lane, the
+  group's first status), and a lane no one value files into — a due band other
+  than *No due date*, a unit, and the Cancelled and Closed lanes nobody files
+  new work into — has no **+**. Only what you set is sent, so a
+  field you leave alone is the engine's default rather than the sheet's guess
+  of it; left without an assignee, the sheet says where the task lands (the
+  project's default assignee, else triage for its lead). The Assignee field
+  completes against the org chart, and when the engine's own colleague match
+  names exactly one seat that seat leads the list as the **best match** — why
+  it matched ("part of the name matches") is said under the field once you take
+  it. A name typed there and not chosen from the list holds **Create task**
+  until you choose the seat or clear it, so it is never dropped from the task.
+  Every write form sends one press at a time: Enter or ⌘Enter while the first
+  answer is still out sends nothing more, so a task, a comment or a sub-task is
+  never filed twice by a second key. The sheet opens
+  the new task once the engine has applied it, and a refusal — a label the
+  project does not declare, a field it requires — is said in the sheet, naming
+  the argument. A title past 256 bytes or a description past 32 KiB is refused
+  rather than cut, so the sheet counts both in bytes as the engine does, marks
+  the field that is over and holds **Create task** with the reason written
+  beside it. The engine's own refusal of a text past its cap names the argument
+  and the sizes (`` `title` is 600 bytes and a task's title holds at most 256
+  ``) — for a model and for a person alike, and without quoting the id minted
+  for a task that was never filed.
 - **Projects** (`#/work/projects`) is the directory: every project with its
-  lead, the unit that owns it, its three maintained counts, how far along its
-  filed work is and when that work last changed. A row opens the project
+  lead, the unit that owns it, its maintained counts, how far along its work is
+  — one bar split into done, active and still to do, over exactly those counts
+  — its lead's **target date**, and when that work last changed. A row opens the project
   **beside** the list rather than leaving it, and that panel's `Open ↗` is the
   way to the project's own page (⌘-click or middle-click goes straight there).
   The sentence over the grid is the company's own total, and when the engine
   answered fewer projects than the company has it says so rather than quoting
   the page as the company.
 - **History** (`#/work/history`) is the change log over a window you choose,
-  with the kinds, the authors and the projects on the pages loaded as facets.
+  narrowed from one bar — the window, then **Kind**, **By** and **Project**
+  pickers whose options are what the pages loaded hold, with how many of each
+  (said once: the counts are over the changes loaded) — and it says "Showing
+  the latest N" beside **Load older**. A config activation re-declaring the
+  org chart's projects is engine bookkeeping, not somebody's change: a run of them
+  is one quiet line ("Org chart re-applied to 3 projects", by the engine), and
+  the chart epoch they move is never printed.
   The window bounds what the engine is asked for and a page bounds what one ask
   answers, so the two are different limits: **Load older changes** fetches the
   next page back rather than asking you to move the window, and the pages you
@@ -1046,19 +1393,37 @@ screens rather than one:
   project's changes, which is the same narrowing a project's own History lens
   is.
 - **A project** (`#/work/{KEY}`) opens on its work — the **Items** lens, which
-  says how many are open — with an **Overview** lens for what the container
-  itself declares (its statuses, its types, its labels and its fields) and a
-  **History** lens narrowed to it. Under the name is the project's purpose,
-  which is the `purpose` of the unit that declared its `project` key; a project
-  declared on a seat rather than on a unit has none, so the line says which
-  unit owns it instead. A project nothing has been filed into says so and names
-  the ways work arrives, rather than showing an empty list.
+  says how many are open, is the page's first content, with the lenses on the
+  page bar beside the project's name — with an
+  **About** lens for the container itself (who leads it, the unit that owns it,
+  its target, its census and what it declares: its statuses, its types, its
+  labels and its fields) and a **History** lens narrowed to it. About's first
+  line is the project's purpose, which is the `purpose` of the unit that
+  declared its `project` key; a project declared on a seat rather than on a
+  unit has none, so the line says which unit owns it instead. A project nothing
+  has been filed into says so and offers **New task**, rather than showing an
+  empty list. **Edit project** sets or clears the target date
+  (`write_project{target_date}`) — the project's lead may, and so may a person
+  acting as themselves; a seat that does not lead the project is refused.
+- **Search** (`#/work/search`) ranks the company's work against a phrase —
+  **Hybrid** (the default: words and meaning, each ranked and then fused),
+  **Keyword** (the words, BM25) or **Meaning** (`semantic`: what the text is
+  about); each mode's tooltip says what it matches. A company with no
+  embeddings provider asking Hybrid is served Keyword, and the screen — and the
+  command palette's mode pill — says so in the same words ("Asked for Hybrid,
+  served Keyword — …").
+- **Saved views** (`#/work/views`) is the inventory of what somebody saved,
+  in every project and team as well as company-wide — each row says where the
+  view lives, and each has a **Pin**. A view you **pinned** is in your
+  sidebar, and that row **runs** it; the view running on a board can be pinned
+  or unpinned from its own strip too.
 
 **Your own AI assistant** can reach the same tracker over MCP, at
-`/operator/mcp`. It serves the same work tools above, ten more no seat is
+`/operator/mcp`. It serves the same work tools above, eleven more no seat is
 given — `list_work_views`, `save_work_view`,
 `write_work_catalogue`, `get_person`, `work_inbox`, `mark_inbox`, `set_pins`,
-`set_priorities`, `remove_work_item` and `restore_work_item`
+`set_priorities`, `remove_work_item`, `restore_work_item` and
+`place_work_item`
 — the five page tools beside them and knowledge
 search — the seat's own implementations, with one
 field different: a write carries the **token's** own name as its author and the
@@ -1072,6 +1437,14 @@ with no `project` files into, whose day `my_work` and `list_work_items`
 answer for, whose watch a `watch: true` records, and which projects it may
 re-route work out of. See
 [A person's own state](#a-persons-own-state).
+
+**The dashboard writes through the same tools**, at `/operator/act/{tool}` —
+one tool per request, as the person your token is bound to. It admits a bound
+token and nobody else: an unbound token and a disabled guard's caller are
+refused `unbound`, and keep the MCP surface. The record is the same either way,
+so a change you make on screen and one your assistant makes read alike in
+every history. See the
+[API reference](../reference/api-endpoints.md#operatoract--the-dashboards-write-surface).
 
 **The REST API** serves the read side at `/work`, `/work/{id}` and
 `/work/views`. Writes go through a seat's tools or the operator MCP, both of
@@ -1158,13 +1531,107 @@ caller; with several it is required, and the refusal lists them. Answering
 wakes the person who **asked** — not the person who just replied, which is what
 routing off the answering comment's author would have done.
 
+A question has **one** answer. An `answers` naming a question that already has
+one is refused `already_answered`, naming who answered it and when — the move
+is to read that answer. The check is made in the write's own snapshot rather
+than only in the read before it, so of two answers sent at once exactly one
+lands; the other is refused rather than posted beside it claiming to answer a
+question it did not close.
+
 `my_work` reads both sides: `asked_of_me` is the questions waiting on this
-seat, and the `has_open_asks` filter finds the items carrying any.
+seat, and the `has_open_asks` filter finds the items carrying any. The board
+asks the other two ways round: `asked_of=` is whose answer an item's open ask
+is waiting on, and `asked_by=` is whose question it is — and for your own
+handle `asked_by` also matches the token bound to you, because the asks you put
+through your own assistant are authored by the token. Each row
+carries `answer_with`, the literal call that answers it, and `open`.
+
+### Asking for a decision
+
+A question that needs somebody to **choose** carries a **decision** on the ask:
+the question in one sentence, two to six options, the option the asker
+recommends and why, the evidence it looked at, and the role the person is asked
+in. The answer names the option it chose — `choice`, by the option's id — and
+may say why in its body.
+
+| Part | Rule |
+|---|---|
+| `question` | required, at most 300 bytes — one sentence on a card; the context goes in the comment's body |
+| `options` | 2 to 6, each `{id, label, detail?}`. An `id` is 1–32 of `a-z 0-9 _ -` because it is typed back in `choice`; a `label` is at most 80 bytes and a `detail` 500. One option is an approval — ask *yes* or *no* |
+| `recommended` | optional; one of the option ids |
+| `rationale` | optional, at most 1,500 bytes |
+| `evidence` | at most 8, each `{kind, ref, label?}`: `task` (by key or id, stored as the task's id, since a key moves), `page` (by id or `CONTAINER/Title`; it must exist and not be in the trash, and is stored as its id, since a rename moves the title — a company with no native knowledge base cites a page as a `url`), `turn`, `run`, or `url` (an absolute `https://` address) |
+| `role` | `approver` — the answer **is** the decision — or `contributor` — it is an input to one somebody else makes |
+| `inform` | optional `{surface, channel}`: the chat channel the asker will report the outcome in, and a promise the engine keeps (see below). Only an **agent seat** may ask with one — a person has no turn to hold to it, so it is refused `forbidden` for an operator and `invalid` at the tracker for any author that is not an agent. `surface` is `mattermost` or `slack`, and must be one the company runs **and** the asking seat holds a bot on; `channel` must be one a unit in the org chart declares (`units[].channel`). A leading `#` is accepted and the chart's own spelling is stored |
+
+What the engine enforces is deliberately small: that a decision is well formed,
+that it rides only the comment that **asks** (a remark cannot carry one, and it
+is never changed after — an answer names an option by id, and options edited
+under it would change what that answer meant), and that a `choice` names an
+option **of the ask it answers**, checked against that ask's own row. There is
+no approval chain, quorum or state machine: a decision is still one question to
+one person, answered once, and what happens next is the asker's turn.
+
+The asker is woken with the choice **by its label** — the card reads
+`Chose “Ship Friday”: <the body>` — and the ask's row in `asked_of_me` carries
+the decision, with the recommendation already filled in as the `choice` of its
+`answer_with` call, so a reader who agrees sends it as written.
+
+**Asking.** `comment_on_work_item` takes `ask` and `decision` together — a
+`decision` without `ask` is refused, since options put to nobody wake nobody —
+and a comment either asks a decision or answers one, never both.
+`create_work_item` takes the same two to file an item **as a question**: the
+title is the question, the body its context, and the task and the ask on it
+land in **one record**, so a crash can never leave an item with nobody asked on
+it. Whoever a question asks **starts following** the item, on either tool —
+unless they muted it, which is the one gesture that says they chose not to; the
+question still reaches them under `asked`. An edit of the question does not
+re-watch anybody.
+
+**Answering.** `comment_on_work_item` with `answers` and `choice` (the option's
+id) answers it, and `body` is then optional — the choice is the answer, and
+the body its reason. Leave `choice` out to answer in prose when none of the
+options is right. A `choice` with no question to answer — nothing named, and no
+open ask on the item addressed to you — is refused.
+
+**The wakes.** The person asked is woken with the options listed by id, the
+recommendation marked, the evidence, and the answering call written out whole —
+item, the ask's comment id and a `choice` — so a seat edits one value and sends
+it rather than reading the thread to find the ids. The asker is woken with the
+question, the option chosen by its label, and — when the decision named an
+`inform` channel — where it said it would report the outcome.
+
+**An inform is enforced.** The asker's `answered` wake **owes** the chat
+surface its decision named: the notification carries `owes` (`slack` or
+`mattermost`), and the turn it wakes is held to a delivery on that surface
+rather than on the tracker the wake came from. A round that only comments on
+the item is sent back with a correction naming the surface, and the turn ends
+once a tool there has posted — because the person who answered was told the
+outcome would be posted, and a note on the item is not that. Only the asker's
+copy owes it; a watcher woken by the same answer owes nothing. An answer that
+owes a surface is its own inbox partition of the item's conversation (the
+conversation key is unchanged), so two answers promising two different
+surfaces are never merged into one turn that could keep only one of them. If
+the seat has since lost every tool on that surface, there is nothing it could
+post with and the obligation falls back to any delivery, like every other
+surface the seat cannot reach.
+
+A record carrying a decision or a choice on a comment is **record version 4**,
+and a create carrying the question it was filed as is **version 6**: a node
+still reading an older version retains it rather than applying it with the
+options — or the whole question — dropped, until it is upgraded.
 
 A comment from somebody who is not the assignee, naming nobody and asking
 nobody, still wakes the assignee — unaddressed, which a turn may absorb without
 replying. The result says so in a `warnings` line, because a commenter
 expecting an answer otherwise gets silence with nothing to explain it.
+
+**What waits on a person** is one question (`GET /work/decisions`,
+`decisions`): the open asks put to any of their identities — their seat and the
+token bound to it — beside the coding runs parked on a question to them, with
+how many there are in all and when the longest one began. The dashboard's Home
+answers them in place: each option of a structured ask is a button that sends
+the choice as the answer, and a parked run is answered by its turn.
 
 ### What an answer may weigh
 
@@ -1215,8 +1682,13 @@ person can write under, which matters for exactly one of them — a write you
 make through your own token is authored by the **token**, while the watch it
 leaves on the item is your **seat's**, so a founder filing work through their
 assistant would otherwise be woken by every item they filed and every comment
-they left. The record carries the seat beside the author for that one reader;
-nothing renders it, and the author field is untouched.
+they left. The record carries the seat beside the author for that reader, and
+the author field is untouched: an operator's change is still authored by the
+token, which is the audit trail. What a notice or a feed row *draws* is the
+seat — `actor_seat` beside `actor` — so a founder's own change reads as the
+founder rather than as a credential's id. It is stored on the history row from
+records at version 5; a change applied from an older record carries none, on
+every node alike, and a screen falls back to the author.
 
 The single exception is **`unblocked`**, and it is the exception because it is
 about a *different* task: closing a blocker is exactly the moment to be told
@@ -1285,21 +1757,100 @@ real hand-off goes through.
 Somebody else's write is **stamped** with who made it, so a person who starts
 the day on work they did not choose can see who chose it, and their own next
 change clears the stamp — taking your queue back is the gesture that says you
-have seen it. The lead relation is any ancestor in the management chain, not
-just the direct manager: a founder leads everybody.
+have seen it. The stamp names the **person**: a lead reordering a report's
+queue through their own token (from the dashboard, or their assistant) is
+stamped as their seat, never as the credential's id, which is nobody the report
+knows — the history row that write leaves still names the token, because
+attribution is the audit trail's question and "who decided this order" is the
+queue's. The lead relation is any ancestor in the management chain, not just
+the direct manager: a founder leads everybody.
 
 It also **wakes the seat**, and that is the other half of the same authority:
 a stamp is seen by somebody who opens a screen, and a seat has no screen. The
-wake names the task now at the top of the list, and it is the one notification
-in this section that **asks for an answer** — take it up, or say why you
-cannot. Going silent on it looks exactly like a message that was lost.
+wake names the task now at the top of the list and the person who put it
+there, and it is the one notification in this section that **asks for an
+answer** — take it up, or say why you cannot. Going silent on it looks exactly
+like a message that was lost.
 
-**An entry you have read past is pruned on the next write.** That is what keeps
-the record small without a cap that discards: an entry at or below your
-seen-through position is one no screen will ever render. The position is a
-*triple* — stream, generation and sequence — because a number from a recreated
-stream compares as current, and an inbox that read "nothing unread" for ever is
-not a bug anybody reports.
+**A mark is one move, and it moves nothing else.** `mark_inbox` takes what a
+person actually says about their inbox, naming each notice by the `record_id`
+`work_inbox` gave it:
+
+| Argument | What it does |
+|---|---|
+| `read` | Marks notices read — the inbox's *Done*. A snooze on one is lifted, because a notice you have dealt with is not one to bring back. |
+| `unread` | Marks notices unread again, including one you have already read past. |
+| `snooze` | `[{record_id, until}]` — puts notices off until an instant: in the future, and at most a year away, because a snooze past the horizon is a delete that does not say so. |
+| `unsnooze` | Brings snoozed notices back now. |
+| `read_through` | Reads everything up to a log position, `<stream>@<generation>:<sequence>` — the newest notice you have seen. It only ever moves **forward**: a position at or behind the one you have read to changes nothing, so "mark all read" from yesterday's tab cannot un-read what today's read. |
+| `primary_reasons` | Which wake reasons are yours to act on — see below. Omitted, your choice stands; an empty list takes the default back. |
+
+Everything you do not name stays exactly as it was — every other mark, every
+snooze, and how far you have read. The engine applies the move to your record
+as the write finds it, so two screens marking two notices at the same moment
+both land; it used to take all three lists and replace them, and one "mark this
+read" from a tab opened an hour earlier erased every mark made since. It also
+reads where each notice sits from the notice's own record rather than asking
+you, which is why a mark names nothing but the notice.
+
+**In the dashboard's Inbox these are the row's own controls.** *Done* marks
+the notices the open row stands for read — an ask's, when the row is a
+decision — and nothing else. *Snooze* offers an hour, tomorrow at 09:00 and next
+Monday at 09:00 on the company's clock, or a moment you pick, and only the ones
+inside the engine's bound: the person answer serves `max_snooze_ahead`, so a
+preset the write would refuse is never shown. *Mark all read* is `read_through`
+at the newest notice the screen LOADED, so a notice that arrived after you
+looked is still unread. A row that is not a notice — a parked coding run, a
+stopped seat, a condition — has nothing to mark; it leaves the list when it is
+answered or cleared, and its Done says so rather than disappearing.
+
+**Your read position is the rule, and the lists are the exceptions.** Everything
+at or below it reads as read and everything above it as unread, so your record
+only keeps what differs: notices *above* it you marked read out of order, and
+notices *at or below* it you marked unread again. Anything the position already
+answers is dropped on the next write, which is what keeps the record small
+without a cap that discards — and moving the position forward clears the
+unread exceptions, because "I have read everything up to here" is what that
+gesture says. A list that would pass 256 entries is refused `inbox_full`, naming
+`read_through`: the lists hold only what the position does not answer, so a
+full one is notices marked one at a time that one read-through would cover.
+
+The position is a *triple* — stream, generation and sequence — because a number
+from a recreated stream compares as current, and an inbox that read "nothing
+unread" for ever is not a bug anybody reports. The generation is kept on the
+record rather than just the sequence, so an inbox read past a reanchor stays
+read past it.
+
+**Pins are moves too.** `set_pins` takes `views` and `favorites` each as a
+change — `{add: [...]}` and `{remove: [...]}` against what is there now, or
+`{set: [...]}` for the whole list, never both — so starring a project from one
+screen never drops a view pinned from another. The caps (32 pinned views, 64
+starred things) are held against the list the move would leave.
+
+**A pin can carry its count.** Asked for a strip with a viewer and
+`counts=true`, every view pinned for that viewer carries `count` — how many
+tasks the view selects when it is run: its saved parameters, in the container
+it was saved in, with `me` as the viewer, on the company's clock. It is the
+same expansion and the same statement that answer the board's own total for
+that view, so the number beside a pin is the number on the board it opens —
+and it counts every task on its own (`subtasks=separate`), which is how every
+surface that runs a view runs it: the dashboard's shapes and `list_work_items`
+both overrule a view's subtask mode to it. Counted in the grammar's default,
+where a root's subtree rides along unfiltered, an open-work view counted the
+finished subtasks of every open epic, and the pin said 39 over a list of 36. At most 32 counts, in the
+strip's one read. A view that no longer compiles — it filters on a field that
+was since archived, say — carries `count_refused` naming why, rather than no
+count at all.
+
+**A queue is the one list written whole**, because an order is a statement
+about every entry at once. `set_priorities` takes the whole list, and
+`if_match` — the `version` `get_person` answered — makes it conditional: a
+reorder made from a screen that read an older record is refused
+`stale_version` rather than putting back an order somebody has since replaced.
+The dashboard's reorder is exactly this call: the list it sends is the
+person's **stored** one with the moved entry at its new place, so the entries
+a screen does not draw — finished ones, and open ones past the twentieth —
+keep theirs.
 
 **A due snooze is reported, never promoted.** Putting one back in the unread
 list is a write, and a read that performed one would change the fleet's state
@@ -1308,12 +1859,28 @@ which snoozes are due and your next inbox write is what moves them.
 
 **The feed and the marks are two reads.** `work_inbox` is what the company
 *asked of you*: one entry per routed change, newest first, carrying the single
-reason it reached you under, the subject, who made it, and an excerpt. It is
+reason it reached you under, the subject, who made it, and an excerpt. A
+change **you** made is never one of them — under either of your names, so the
+work your assistant files on your own seat is not waiting for you in your own
+inbox — except for the one reason that is news to its author: `unblocked`, a
+blocker of yours that you finished yourself. It is
 written by the applier when the change lands — so it is there whether or not
 anybody was online, and a person who has marked nothing still has an inbox.
 `get_person` is your own *marks over that feed*: what you have read, what you
 snoozed, how far you have got. Neither is derived from the other, which is why
 an inbox entry carries a record id and a position and no content at all.
+
+**What a page narrows, it narrows in the scan.** `work_inbox` takes `unread`,
+`primary_only`, `reasons` and `snoozed` — `exclude` by default, `include` to
+keep what you put off, `only` for just that — and every one of them is a
+predicate on the rows the engine reads, not a filter over the page it read.
+So a page holds fifty notices whenever the scope does: a person whose newest
+fifty notices are all snoozed sees the fifty after them, not an empty page with
+a cursor behind it. A snooze whose time has come counts as awake under every
+scope. Each notice also carries what it is *about*: the comment and the turn
+the change came from, and — for an `asked` or `answered` notice — the ask
+itself as it stands now, with its decision, whether it is still open, and who
+answered it with which option.
 
 **The primary half is yours to declare.** `mark_inbox` takes `primary_reasons`
 — which wake reasons are yours to act on — and `work_inbox` labels every notice
@@ -1324,25 +1891,52 @@ that changes what you should do next. An empty list means *you have not said*,
 never *nothing is primary* — the other reading gives a fresh company an inbox
 whose primary half is blank.
 
-**A person reads theirs at `#/inbox`**, which is the dashboard's landing
-screen: the notices `work_inbox` returns, each labelled with the one reason of
-twenty that routed it, beside what is waiting on a decision. Which person is
+**A person reads theirs at `#/inbox`**, one click from the landing screen:
+the notices `work_inbox` returns, each labelled with the one reason of
+eighteen that routed it, beside what is waiting on a decision. Which person is
 decided by the API token — it is matched against every seat's
 `contact.crewlet_operator_id`, so the queue is theirs rather than the
-alphabetically first seat's — and `#/me` is that same person's own work: seven
-tabs, one per claim on their attention, each carrying its count on the strip so
-an unanswered question is visible without opening it. Above the strip a band
-says whose day is on screen, links to that person's seat, and carries the one
-thing here that asks to be answered — a queue somebody *else* put in order,
-with a mark on the tab it is about. See
+alphabetically first seat's — and `#/me` is that same person's own work: one
+section per claim on their attention (the Queue, Asked of me, Asked by me,
+Unblocked, Collaborating, Watching, Checklist), each carrying the engine's own
+total on its tab so an unanswered question is visible without opening it. A
+section shows at most twenty rows of its claim, and one that holds fewer than
+its total says which twenty ("the 20 most recently changed of 130"). The
+Queue is read by due date or in the order somebody put it
+(`order=due|priorities`). Above the list a band says whose day is on screen,
+links to that person's seat, and carries the one thing here that asks to be
+answered — a queue somebody *else* put in order, named by the person who did,
+with a flag on the Priorities choice. See
 [Humans in the org](../concepts/humans-in-the-org.md) for the binding.
 
-**The Assigned tab is the work list, narrowed to one person.** It is the same
-screen `#/work` is — the Filter menu, the Display menu, the Open/Closed/All
-switch, the five shapes, the columns, the count line — with the assignee fixed
+**Asked of me is answered where it stands.** Each question put to the person
+is the same row the landing screen's "Needs your decision" draws — who asked,
+the role they are asked in, what the asker recommends — with its options as
+buttons that send the choice (`comment_on_work_item{answers, choice}`), or a
+Reply for a question with no options. **Asked by me** is the other end: the
+work this person asked a question on that is still waiting for its answer
+(`asked_by=`, every task status, since an open question on finished work is
+still one somebody is waiting on). It asks under both of the person's names —
+`viewer=` is the person themselves — so the questions they put through their
+own assistant are there beside the ones they asked from the dashboard.
+
+**Somebody else's day is read, not worked.** An operator can open anybody's
+day with the whose-day picker, and there every change on the page is held,
+disabled with a sentence saying whose day it is: the questions put to them are
+theirs to answer — the engine refuses anybody else — and their work is changed
+from the work screens. The one exception is the authority the tracker grants
+across people: somebody **above them in the chart** may reorder their queue,
+and the page says before the press that the reorder is stamped with the
+reader's name and tells them what is now first. Where the engine did not
+report its hierarchy, who leads whom is unknown and the page says that rather
+than refusing a lead.
+
+**The Queue is the work list, narrowed to one person.** It is the same
+screen `#/work` is — the five shapes, the Filter and Display menus, the
+scope switch, Group by and Sort, the columns, the count line — with the assignee fixed
 and every other choice yours and in the address. What is fixed is not a filter:
 there is no chip to take off and no `assignee=` on the URL, because that is
-what the tab *is* rather than something you narrowed it to. Whose day it is
+what the section *is* rather than something you narrowed it to. Whose day it is
 stays `handle=`.
 
 It **opens** grouped by [`due:bucket`](#what-a-board-groups-on), soonest first,
@@ -1362,11 +1956,19 @@ nobody has scheduled is the one most likely to be forgotten; and it is the one
 band no `due=` filter can reach, since every date comparison in this grammar is
 written over a date that exists.
 
-The **Priorities** tab is numbered, in the order it was stored. That order is
-the content — it is what somebody decided — so nothing re-sorts it, and the
-place is drawn rather than left for a reader to count. There is no drag: a rank
-is a value on the task, and the dashboard writes nothing, so `set_priorities`
-is the gesture and it is somebody's own.
+The **Priorities** reading is numbered, in the order it was stored. That order
+is the content — it is what somebody decided — so nothing re-sorts it, and the
+place is drawn rather than left for a reader to count. It is a list somebody
+wrote, and it can hold a task a colleague is assigned as well as your own, so
+it is not what the Queue's tab counts: its first line says how many open tasks
+it holds and how many of them are assigned to you, and the Queue's count — the
+same figure the sidebar's My work row carries — is only the work assigned to
+you. **Drag a row to a new
+place**, or press `Alt` with the up or down arrow on a focused row, and the
+dashboard sends `set_priorities` as you, conditional on the version of the
+record it drew: the row is drawn at its new place with a pending mark until the
+engine answers, and a refusal — somebody changed the list since you looked —
+puts it back and says so. Nothing moves before the engine does.
 
 **Your own writes count as yours, under either name.** A write you make
 through your token is attributed to the **token**, with author kind
@@ -1375,7 +1977,7 @@ is chosen by the writer is not an audit trail. So the item you file through
 your assistant records `founder` as its reporter, while the watch that create
 puts on it is your **seat's** — a reporter is attribution and a watcher is an
 address. Your colleagues assign work to `jane-founder`, and every personal
-question matches **both**: My work's seven tabs, the inbox, and your own
+question matches **both**: every section of My work, the inbox, and your own
 record. You are one party with two names, and the answer always comes back
 under your seat's.
 
@@ -1421,12 +2023,12 @@ when you name none is your team's. And the questions `list_work_items` asks
 about you — `preset=my_queue`, `preset=priorities` — are asked under both of
 your names, exactly as `my_work` is.
 
-The marks are the ASSISTANT'S. The dashboard is read-only, because every write
-here is attributed to somebody and a button in a browser would write as "the
-dashboard", which is nobody — so `mark_inbox` is what an assistant calls when
-you ask it to, and the screen shows what the engine recorded. Each notice
-offers the call that would mark it, pre-filled and copyable, rather than a
-control that pretends to send it.
+The marks are the PERSON'S, written as that person. Every write here is
+attributed to somebody, and a write as "the dashboard" would be attributed to
+nobody — so `mark_inbox` is called either by your assistant over
+`/operator/mcp`, or through `/operator/act`, which admits only a token bound
+to a seat and records the write exactly as your assistant's would be. The
+screen shows what the engine recorded.
 
 **And the same rows answer the other way round.** `work_inbox` reads them by
 recipient — one person, every change. `work_routing` reads them by *record* —
@@ -1476,6 +2078,59 @@ That is deliberate: an assignment is an ownership transfer down a chart of
 known height, not a nested ask, so bounding it by delegation depth would bound
 the wrong thing. What it catches is the loop where two seats hand one task back
 and forth, which is the failure mode that actually happens.
+
+The budget is **8**: an agent moving the assignee spends one, re-asserting the
+current assignee spends nothing, and a person or an operator touching the task
+at all — any field — returns the whole budget. The ninth agent hand-off is
+refused `reassignment_budget`, and the refusal says to explain on the item what
+is blocking it instead.
+
+The limit is **served**, not copied: the item answer (`GET /work/{id}`,
+`get_work_item`) carries `reassignment_budget` beside the task's own
+`reassignments`, so a screen saying "hand-off 7 of 8" reads the figure from the
+engine that enforces it. And every task history row carries **`reassignments`
+as that change left it** — the count after a hand-off, and the zero a person's
+touch reset it to — so the item's history can say which hand-off each one was.
+An assignment made with a `reason` shows it as that row's excerpt.
+
+## Checklists
+
+A task carries named checklists — up to **16** lists, **64** items in a list
+and **256** items between them, a list's name at most 128 bytes and an item's
+at most 256. Each item can be ticked or given to somebody (which puts it in their
+`my_work` answer under `checklist_items`). An item cannot be promoted into a
+subtask in this build: the tracker knows how to mark an item with the subtask
+it became, but no tool, route or command performs that promotion, so file the
+subtask with `create_work_item` and remove the line.
+
+`update_work_item` changes them with a **`checklist` gesture** — one change per
+call, stated as what somebody did rather than as the lists they want to end
+with:
+
+| `op` | Arguments | What it does |
+|---|---|---|
+| `add_list` | `name`, optional `items` (names, in order) | adds a list, with its first lines |
+| `remove_list` | `list` | removes a list and everything in it |
+| `rename_list` | `list`, `name` | renames a list |
+| `add_item` | `list`, `name`, optional `assignee` | adds a line at the end of a list |
+| `remove_item` | `item` | removes a line and the lines nested under it |
+| `rename_item` | `item`, `name` | renames a line |
+| `set_done` | `item`, `done` | ticks or unticks a line |
+| `assign_item` | `item`, `assignee` (`""` for nobody) | gives a line to somebody |
+
+Lists and items are named by the ids `get_work_item` shows; item ids are unique
+across the whole task, so an item gesture names the item alone. A gesture is a
+**gesture rather than the collection** because the collection is carried whole
+on the record: two people working one checklist is the ordinary case, and one
+ticking a line while the other adds one would otherwise have whichever landed
+second silently undo the other. The engine applies the gesture to the
+checklists as they are when it lands, so both changes survive in either order.
+The ids a gesture adds are derived from the operation, so a retried request
+names the same list rather than adding a second one.
+
+A gesture that would grow the checklists past a cap is refused naming it; one
+that removes, renames, ticks or assigns is never refused for a size the task
+already has.
 
 ## Removing, deleting and purging
 

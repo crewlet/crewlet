@@ -3,6 +3,9 @@ import { join } from "node:path";
 import { cleanup, render } from "@testing-library/react";
 import { afterEach, expect, test } from "vitest";
 import { Router } from "~/app/router.tsx";
+import { ClientContext } from "~/lib/store-hooks.ts";
+import { ViewerProvider } from "~/lib/viewer.ts";
+import { LiveSocket, Store } from "~/protocol/index.ts";
 import { WorkGrid } from "~/routes/work/shapes/Grid.tsx";
 import type { WorkGroup, WorkSummary } from "~/protocol/index.ts";
 
@@ -13,7 +16,8 @@ import type { WorkGroup, WorkSummary } from "~/protocol/index.ts";
  * `var(--sticky-top)`: the height the toolbar publishes, so a band stops under
  * it rather than beneath it. The offset is only meaningful if the toolbar's own
  * scroller is the band's scroller too. A sticky box is confined to its NEAREST
- * scroll container, so any box between the band and `.screen` that makes one
+ * scroll container, so any box between the band and the page column's one
+ * scroller (the kit's `.crewlet-app-shell__main`) that makes one
  * takes the band over — and then `top` is measured from THAT box instead.
  *
  * The failure is not a band that ignores its offset. It is a band that obeys it
@@ -22,7 +26,7 @@ import type { WorkGroup, WorkSummary } from "~/protocol/index.ts";
  * so it grows to its rows and its scroll offset is 0 for ever; and every group
  * heading was therefore held 48px DOWN from the top of the list. Each band left
  * its own slot blank and painted over the first row of its own group — a row in
- * the DOM, laid out, drawn, and covered by an opaque box at `--z-sticky`. On a
+ * the DOM, laid out, drawn, and covered by an opaque box at `--z-index-sticky`. On a
  * nine-item list that is one task per group a reader cannot see and cannot
  * click. `overflow: clip` rounds the corners exactly as `hidden` did and makes
  * no scroll container, which is the whole of the fix.
@@ -48,12 +52,11 @@ import type { WorkGroup, WorkSummary } from "~/protocol/index.ts";
  * one whose bands render from plain props. That is now a `DataGrid` — the list
  * and the table collapsed into one renderer with two column sets — so the walk
  * covers `.grid-head` and `.grid-band-head`, the two rules this file used to
- * name as uncovered. Three others take `--sticky-top` and are not walked:
- * `.work-item-side` on an item page, `.list-day` on Activity and
- * `.inbox-detail` on Inbox each draw inside a screen that needs the store, so
- * standing them up would buy less than it would cost to keep honest. The
+ * name as uncovered. One other takes `--sticky-top` and is not walked:
+ * `.list-day` on Activity draws inside a screen that needs the store, so
+ * standing it up would buy less than it would cost to keep honest. The
  * roster is derived from every sheet regardless, so a band added to THIS tree
- * is covered the moment it appears, and the day one of those is rendered here
+ * is covered the moment it appears, and the day that one is rendered here
  * by something else it is covered with no change to this file.
  *
  * (`.work-band` was a fourth, on My work's day. That day is the work grid
@@ -197,22 +200,31 @@ const group = (key: string, ids: string[]): WorkGroup => ({
  * a row.
  */
 function grouped() {
+  // AND A CLIENT AND A VIEWER, because a grid's status, priority and holder
+  // cells are writes that ask who is reading before they draw a picker.
+  const store = new Store();
+  const socket = new LiveSocket(store);
+  socket.query = (() => Promise.resolve({})) as typeof socket.query;
   return render(
-    <Router>
-      <WorkGrid
-        shape="list"
-        rows={[]}
-        groups={[group("todo", ["1", "2"]), group("in_progress", ["3"])]}
-        axis="status"
-        chrome={{}}
-        now={Date.parse("2031-04-16T00:00:00Z")}
-        workspace
-        hrefOf={(r) => `#/work/${r.key}`}
-        onOpen={() => {}}
-        onOverflow={() => {}}
-        overflowHref={() => "#/work"}
-      />
-    </Router>,
+    <ClientContext.Provider value={{ store, socket }}>
+      <ViewerProvider>
+        <Router>
+          <WorkGrid
+            shape="list"
+            rows={[]}
+            groups={[group("todo", ["1", "2"]), group("in_progress", ["3"])]}
+            axis="status"
+            chrome={{}}
+            now={Date.parse("2031-04-16T00:00:00Z")}
+            workspace
+            hrefOf={(r) => `#/work/${r.key}`}
+            onOpen={() => {}}
+            onOverflow={() => {}}
+            overflowHref={() => "#/work"}
+          />
+        </Router>
+      </ViewerProvider>
+    </ClientContext.Provider>,
   );
 }
 
@@ -221,10 +233,12 @@ afterEach(cleanup);
 test("the two rosters are read from the sheets at all", () => {
   // A GATE OVER AN EMPTY SET CERTIFIES NOTHING, and both sets come from a scan
   // that a change of idiom in the sheets could silently empty.
-  expect(stickyClasses().has("work-item-side")).toBe(true);
+  expect(stickyClasses().has("list-day")).toBe(true);
   expect(stickyClasses().has("grid-head")).toBe(true);
   expect(stickyClasses().has("grid-band-head")).toBe(true);
-  expect(scrollportClasses().has("screen")).toBe(true);
+  // The page column's own scroller is the kit's, so it is not in our sheets;
+  // two of ours stand for the scan finding one at all, on either axis.
+  expect(scrollportClasses().has("crumbs")).toBe(true);
   expect(scrollportClasses().has("work-col-body")).toBe(true);
   // And the two values that are NOT scroll containers are not counted as one,
   // or the fix below would read as the bug.

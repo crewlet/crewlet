@@ -49,8 +49,10 @@ package turnctx
 
 import (
 	"fmt"
+	"sync"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/org"
 )
 
@@ -58,8 +60,9 @@ import (
 //
 // IMMUTABLE after construction. Derive a new one rather than mutating it — a
 // tool that could rewrite the seat it runs as would make every authorization
-// decision downstream a suggestion. The one exception is [Turn.Calls], a log
-// that only grows and that nothing authorizes on.
+// decision downstream a suggestion. The two things it POINTS AT that change
+// are [Turn.Written] and [Turn.Calls], each of which only ever grows and
+// authorizes nothing.
 //
 // A goroutine that captures a Turn and outlives the turn is a bug, and the one
 // no linter can see. The rule that makes it checkable: a Turn is PASSED, never
@@ -113,11 +116,32 @@ type Turn struct {
 	Org *org.Organization
 
 	// Depth is the delegation depth this turn inherited, and Chain is who
-	// it came through. Both travel so an A2A ask can refuse past the cap
-	// rather than discovering the loop at runtime. A delegated worker needs
-	// neither: it is a leaf that contacts nobody (see agent/subagent).
+	// it came through. Both travel on the work this turn starts — an A2A
+	// ask, a detached coding run — so the turn that work wakes inherits
+	// them and is refused at the cap before it runs, rather than the loop
+	// being discovered at runtime. A delegate worker is not a turn and
+	// inherits neither: it is a leaf that contacts nobody, which is what
+	// bounds that construct (see internal/agent/subagent).
 	Depth int
 	Chain []string
+
+	// WorkItem is the one work item this turn is charged to, as the engine
+	// resolved it at dispatch — and nil for a turn nothing at dispatch
+	// named an item for, which is the ordinary case for a chat wake.
+	// WorkItemBasis is the rule that named it, empty with it.
+	//
+	// ONE ITEM, never several, and never changed by the turn. A turn that
+	// touches three tasks is charged to the one it was woken for; one woken
+	// for nothing may still be charged at completion, by what [Written]
+	// recorded, but that is a conclusion drawn after the turn and not
+	// something a tool reads mid-turn.
+	WorkItem      *types.WorkItem
+	WorkItemBasis types.WorkItemBasis
+
+	// Written records the work items this turn's own writes committed to,
+	// shared by every tool call and every delegate worker of the turn — see
+	// [Written] for why it is the one mutable thing a Turn points at.
+	Written *Written
 
 	// ConversationKey is the conversation this turn is serving — the Slack
 	// thread, the issue, the page — or empty for a trigger that has none.
@@ -147,6 +171,14 @@ type Turn struct {
 	// never read, and matched on it the person's answer reached nobody.
 	PartitionKey string
 
+	// Transport is the chat backend the trigger arrived on (`slack`,
+	// `mattermost`) — the [notify.TransportField] stamp — and empty for a
+	// turn no chat message woke. It travels beside the conversation so a
+	// task this turn files can say which surface it came from: the
+	// conversation identity names a thread, and only this names the
+	// product a person would recognise it by.
+	Transport string
+
 	// Task is the ask this turn is working on, and Reply says who is
 	// waiting for it — [turn.Reply]'s wire value, carried as a plain
 	// string so this package does not import the turn engine it is
@@ -161,14 +193,50 @@ type Turn struct {
 	Task  string
 	Reply string
 
+	// Requester is the seat whose message, notice or ask woke this turn,
+	// and empty when no seat did — a schedule, a sender the chart does not
+	// know. Carried for the reason Task and Reply are: a coding run this
+	// turn detaches can stop to ask "the requester" a question days later,
+	// on another node, and the launch is the only frame that can put who
+	// that is on the run's row.
+	Requester string
+
+	// Phase is the phase session this value was bound for, and empty on
+	// the Turn the engine built for the whole turn. Set only through
+	// [Turn.InPhase], by the frame that builds a phase's tool surface, so
+	// a tool reporting what it did can say WHICH phase did it — a read in
+	// the executor and one in a delegate worker are different acts — without
+	// the phase travelling ambiently, which is exactly what this package
+	// refuses (an ambient phase attributes a call to whichever phase last
+	// wrote the context).
+	Phase types.Phase
+
 	// Calls is what this run has called so far, which a derived operation
 	// id reads its repeat count from — see [CallLog].
 	//
-	// THE ONE PART OF A TURN THAT CHANGES, and only by growing: the tool
-	// surface appends each call it made, and nothing can rewrite or drop an
-	// entry, so no authorization decision reads it and nothing a model says
-	// reaches it but the calls it actually made.
+	// One of the two parts of a turn that change, and only by growing: the
+	// tool surface appends each call it made, and nothing can rewrite or
+	// drop an entry, so no authorization decision reads it and nothing a
+	// model says reaches it but the calls it actually made.
 	Calls *CallLog
+}
+
+// InPhase derives the Turn a phase session's tools see: this one, naming the
+// phase.
+//
+// A COPY rather than a write, because a Turn is immutable and the executor, the
+// reviewer and every delegate worker of one turn hold it at once. Everything
+// the copy points at is shared with the original — [Turn.Written] above all,
+// which is one set for the whole turn however many phases write into it, and
+// [Turn.Calls], which is one log for the run. Nil in, nil out, for a surface
+// built outside a turn.
+func (t *Turn) InPhase(phase types.Phase) *Turn {
+	if t == nil {
+		return nil
+	}
+	bound := *t
+	bound.Phase = phase
+	return &bound
 }
 
 // CallLog is this run's call log, or nil outside a turn — see [Turn.Calls].
@@ -248,4 +316,111 @@ func (t *Turn) RequireSeat() (*org.Role, error) {
 		return nil, ErrNoSeat
 	}
 	return t.Seat, nil
+}
+
+// MaxWritten is how many distinct work items [Written] lists before it stops
+// listing them and records only that there were more.
+//
+// PAST THE DEFAULT EXECUTOR CEILING (48 rounds, config.TurnEngine's
+// ExecuteMaxToolRoundsCeiling): a turn that wrote a different item on every
+// round of an executor run extended all the way to it is still listed in
+// full. A turn past 64 is a bulk operation — a relabel, a sweep — whose list
+// nobody reads item by item, and the bound is what keeps a runaway fan-out
+// from growing one turn's record without limit. The answer the set exists
+// for survives the cap untouched: "exactly one" is a question about the
+// first two.
+const MaxWritten = 64
+
+// Written is the set of work items a turn's writes committed to, in the order
+// each was first written.
+//
+// IT IS ONE OF THE TWO MUTABLE THINGS A [Turn] POINTS AT ([Turn.Calls] is the
+// other), and the exception is exactly as wide as it has to be. A Turn is
+// immutable because a tool that could rewrite what it runs as would make
+// every authorization downstream a suggestion; this set authorizes nothing
+// and is only ever added to. It has to
+// be shared rather than copied because the writes it records happen in tool
+// calls and delegate workers that run concurrently under one turn, and what it
+// answers — "did this turn write to exactly one item" — is a question about all
+// of them at once. Hence the lock.
+//
+// THE REF IS THE IDENTITY ([types.WorkItem.Ref]): the same item written twice
+// under two keys, before and after a project rename, is one item.
+//
+// The zero value is an empty set, ready to use. A NIL *Written records nothing
+// and reports nothing, which is what a surface built outside a turn — a
+// validate command, a test driving a tool directly — legitimately has.
+type Written struct {
+	mu    sync.Mutex
+	refs  map[string]struct{}
+	items []types.WorkItem
+	many  bool
+}
+
+// WrittenFrom rebuilds a set a suspended turn carried across its park: the
+// items it listed, in their order, and whether it had already written more.
+//
+// A RESUMED TURN IS THE SAME TURN, so its set continues rather than starting
+// empty — see execstate.State.Written for what an empty start cost.
+func WrittenFrom(items []types.WorkItem, many bool) *Written {
+	w := &Written{}
+	for _, item := range items {
+		w.Add(item)
+	}
+	if many {
+		w.mu.Lock()
+		w.many = true
+		w.mu.Unlock()
+	}
+	return w
+}
+
+// Add records one committed write to item. An item with no id names nothing
+// and is not recorded; one already recorded is not recorded again; one past
+// [MaxWritten] marks the set as having more than it lists.
+func (w *Written) Add(item types.WorkItem) {
+	if w == nil || item.ID == "" {
+		return
+	}
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	ref := item.Ref()
+	if _, seen := w.refs[ref]; seen {
+		return
+	}
+	if len(w.items) >= MaxWritten {
+		w.many = true
+		return
+	}
+	if w.refs == nil {
+		w.refs = map[string]struct{}{}
+	}
+	w.refs[ref] = struct{}{}
+	w.items = append(w.items, item)
+}
+
+// Items reports the items recorded, in first-write order, and whether the turn
+// wrote to more than [MaxWritten] of them — in which case the list is its first
+// MaxWritten and not the whole.
+func (w *Written) Items() (items []types.WorkItem, many bool) {
+	if w == nil {
+		return nil, false
+	}
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return append([]types.WorkItem(nil), w.items...), w.many
+}
+
+// Sole reports the one item the turn wrote to, and false when it wrote to
+// none or to more than one. A set past its cap wrote to many by definition.
+func (w *Written) Sole() (types.WorkItem, bool) {
+	if w == nil {
+		return types.WorkItem{}, false
+	}
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if w.many || len(w.items) != 1 {
+		return types.WorkItem{}, false
+	}
+	return w.items[0], true
 }

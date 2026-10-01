@@ -206,7 +206,7 @@ describe("the rail's shape", () => {
         groups={[
           {
             properties: [
-              { label: "Turn", value: "t-1", path: ["activity", "turns", "t-1"] },
+              { label: "Turn", value: "t-1", path: ["live", "turns", "t-1"] },
               { label: "Points", value: 3 },
             ],
           },
@@ -215,7 +215,7 @@ describe("the rail's shape", () => {
     );
     const links = container.querySelectorAll("dd a");
     expect(links.length).toBe(1);
-    expect(links[0]!.getAttribute("href")).toContain("/activity/turns/t-1");
+    expect(links[0]!.getAttribute("href")).toContain("/live/turns/t-1");
   });
 
   test("renders an identifier label in the mono face, and a word not", () => {
@@ -226,7 +226,7 @@ describe("the rail's shape", () => {
         groups={[
           {
             properties: [
-              { label: "GITHUB_TOKEN", value: "${GH}", code: true },
+              { label: "GITHUB_TOKEN", value: "${GH}", identifierLabel: true },
               { label: "Reports to", value: "ada" },
             ],
           },

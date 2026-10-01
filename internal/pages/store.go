@@ -186,7 +186,9 @@ func (s *Store) decide(stamp statelog.Stamp, actor Actor, subject Subject, op Op
 	}
 	record := MutationRecord{
 		RecordEnvelope: RecordEnvelope{
-			V: recordVersionOf(payload), OpID: opID, Subject: subject, Op: op,
+			// NO VERSION: the encoder stamps the lowest one that reads
+			// what this record carries — see [RecordVersion].
+			OpID: opID, Subject: subject, Op: op,
 			CreatedAt: at, Gen: stamp.Gen, Writer: stamp.Writer, Scope: scope,
 		},
 		Mutation:   body,
@@ -250,9 +252,6 @@ var (
 
 	// ErrConflict reports a write that lost its race too many times.
 	ErrConflict = errors.New("pages: the page kept changing under this write")
-
-	// ErrReserved reports a container the engine holds for itself.
-	ErrReserved = errors.New("pages: that container is reserved")
 )
 
 // Actor is who is making a write, on [tracker.Writer]'s terms — except that it

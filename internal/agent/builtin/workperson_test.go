@@ -144,8 +144,10 @@ type personSpy struct {
 	handle     string
 	opID       string
 	priorities []string
+	ifMatch    *uint64
 	authority  tracker.PersonAuthority
-	reasons    []tracker.Reason
+	inbox      tracker.InboxGesture
+	pins       tracker.PinGesture
 
 	// actor is who the surface resolved the writer FOR, which is the other
 	// half: the record's subject is the person and its author is still
@@ -155,30 +157,28 @@ type personSpy struct {
 }
 
 func (p *personSpy) WritePriorities(_ context.Context, opID, handle string,
-	priorities []string, authority tracker.PersonAuthority) (
+	priorities []string, ifMatch *uint64, authority tracker.PersonAuthority) (
 	tracker.WriteResult, error) {
 
 	p.handle, p.opID = handle, opID
-	p.priorities, p.authority = priorities, authority
+	p.priorities, p.ifMatch, p.authority = priorities, ifMatch, authority
 	return tracker.WriteResult{
 		Outcome:  statelog.OutcomeApplied,
 		Position: statelog.Position{Stream: "S", Generation: 1, Seq: 20},
 	}, nil
 }
 
-func (p *personSpy) WritePins(_ context.Context, opID, handle string, _ []string,
-	_ []tracker.Favorite) (
-	tracker.WriteResult, error) {
+func (p *personSpy) WritePins(_ context.Context, opID, handle string,
+	gesture tracker.PinGesture) (tracker.WriteResult, error) {
 
-	p.handle, p.opID = handle, opID
+	p.handle, p.opID, p.pins = handle, opID, gesture
 	return tracker.WriteResult{Outcome: statelog.OutcomeApplied}, nil
 }
 
-func (p *personSpy) WriteInbox(_ context.Context, opID, handle string,
-	_, _, _ []tracker.InboxEntry, reasons []tracker.Reason,
-	_ tracker.Position) (tracker.WriteResult, error) {
+func (p *personSpy) MarkInbox(_ context.Context, opID, handle string,
+	gesture tracker.InboxGesture) (tracker.WriteResult, error) {
 
-	p.handle, p.opID, p.reasons = handle, opID, reasons
+	p.handle, p.opID, p.inbox = handle, opID, gesture
 	return tracker.WriteResult{Outcome: statelog.OutcomeApplied}, nil
 }
 
@@ -198,11 +198,10 @@ func TestMarkInboxCarriesThePrimarySplit(t *testing.T) {
 	if got.Failed {
 		t.Fatalf("mark_inbox failed: %q", got.Output)
 	}
-	if !slices.Equal(person.reasons, []tracker.Reason{
-		tracker.ReasonMention, tracker.ReasonAsked,
-	}) {
+	if person.inbox.PrimaryReasons == nil || !slices.Equal(*person.inbox.PrimaryReasons,
+		[]tracker.Reason{tracker.ReasonMention, tracker.ReasonAsked}) {
 		t.Fatalf("the writer was given %v, want [mention asked] — the split "+
-			"has no other producer", person.reasons)
+			"has no other producer", person.inbox.PrimaryReasons)
 	}
 
 	// AND AN UNKNOWN REASON IS REFUSED NAMING THE SET, rather than
@@ -321,7 +320,7 @@ func personSurface(t *testing.T, trk *fakeTracker, person *personSpy,
 	return reg
 }
 
-// boundOperator is what `opsmcp.WorkActor` builds for a token a company bound
+// boundOperator is what `operator.WorkActor` builds for a token a company bound
 // to a human seat with `contact.crewlet_operator_id`: the credential in the
 // author field, the kind saying it is not a seat, and the PERSON it names in
 // [builtin.Actor.Seat].
@@ -373,8 +372,8 @@ func TestABoundOperatorsOwnStateIsWrittenUnderTheirSeat(t *testing.T) {
 		args map[string]any
 		want string
 	}{
-		"pins":  {tracker.SetPinsTool, map[string]any{"views": []any{"v-1"}}, "pins-jane-founder"},
-		"inbox": {tracker.MarkInboxTool, map[string]any{"seen_through": float64(4)}, "inbox-jane-founder"},
+		"pins":  {tracker.SetPinsTool, map[string]any{"views": map[string]any{"add": []any{"v-1"}}}, "pins-jane-founder"},
+		"inbox": {tracker.MarkInboxTool, map[string]any{"read": []any{"r-1"}}, "inbox-jane-founder"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
@@ -424,7 +423,7 @@ func TestAnUnboundOperatorStillWritesItsOwnRecord(t *testing.T) {
 	reg := personSurface(t, newFakeTracker(), person, unboundOperator, boundParties)
 
 	if got := callNoTurn(t, reg, tracker.SetPinsTool, map[string]any{
-		"views": []any{"v-1"},
+		"views": map[string]any{"add": []any{"v-1"}},
 	}); got.Failed {
 		t.Fatalf("set_pins failed: %q", got.Output)
 	}
@@ -592,6 +591,7 @@ func TestEveryOperatorToolIsAnnotatedDeliberately(t *testing.T) {
 		tracker.SaveWorkViewTool:       true,
 		tracker.RemoveWorkItemTool:     true,
 		tracker.RestoreWorkItemTool:    true,
+		tracker.MoveWorkItemTool:       true,
 
 		// A PERSON'S OWN STATE IS NOT A SHARED SURFACE. Each is written
 		// only on behalf of the person whose it is, so a second caller
@@ -633,29 +633,169 @@ func TestEveryOperatorToolIsAnnotatedDeliberately(t *testing.T) {
 	}
 }
 
-// projectSpy records the edit the project tool built.
-type projectSpy struct {
-	edit tracker.ProjectEdit
-	tags tracker.TagEdit
+// THE PERSON TOOLS TAKE GESTURES, and their schemas say so.
+//
+// `mark_inbox` used to take all three lists and the watermark and REPLACE each
+// — its own description told a caller to read first because an omitted list
+// was CLEARED — so one "mark this read" from a screen erased every other mark.
+// The schema is what a caller builds its call from, so it is asserted here:
+// the gesture's six names and nothing of the old shape — beside the `op_id`
+// every operator write takes to be made again as the same operation.
+func TestThePersonToolSchemasTakeGestures(t *testing.T) {
+	t.Parallel()
+	reg := personRegistry(t, &personSpy{})
+	snapshot := reg.Snapshot()
+	props := func(name string) map[string]any {
+		entry, held := snapshot.Lookup(name)
+		if !held {
+			t.Fatalf("%s is not registered", name)
+		}
+		return entry.Tool.Parameters()["properties"].(map[string]any)
+	}
+
+	inbox := props(tracker.MarkInboxTool)
+	var names []string
+	for name := range inbox {
+		names = append(names, name)
+	}
+	slices.Sort(names)
+	if want := []string{"op_id", "primary_reasons", "read", "read_through", "snooze",
+		"unread", "unsnooze"}; !slices.Equal(names, want) {
+		t.Errorf("mark_inbox takes %v, want %v", names, want)
+	}
+	entry, _ := snapshot.Lookup(tracker.MarkInboxTool)
+	if strings.Contains(entry.Tool.Description(), "REPLACES") {
+		t.Error("mark_inbox still describes itself as replacing the lists")
+	}
+	for _, key := range []string{"views", "favorites"} {
+		change, ok := props(tracker.SetPinsTool)[key].(map[string]any)
+		if !ok || change["type"] != "object" {
+			t.Errorf("set_pins' %s is %v, want a change object", key, change)
+			continue
+		}
+		for _, verb := range []string{"add", "remove", "set"} {
+			if _, held := change["properties"].(map[string]any)[verb]; !held {
+				t.Errorf("set_pins' %s takes no %q", key, verb)
+			}
+		}
+	}
+	if _, held := props(tracker.SetPrioritiesTool)["if_match"]; !held {
+		t.Error("set_priorities takes no if_match, so a reorder from a stale " +
+			"screen replaces the newer list")
+	}
 }
 
-func (p *projectSpy) WriteProject(_ context.Context, _, _ string,
-	edit tracker.ProjectEdit, _ tracker.ProjectAuthority) (
-	tracker.WriteResult, error) {
+// AND THE ARGUMENTS BECOME THE GESTURE, field for field — including the two
+// absences that mean something: no `primary_reasons` leaves the person's
+// choice alone where an empty one takes the default back, and no `if_match`
+// writes unconditionally where a zero one means "nobody has written this yet".
+func TestThePersonToolsPassTheGestureThrough(t *testing.T) {
+	t.Parallel()
+	person := &personSpy{}
+	reg := personRegistry(t, person)
 
-	p.edit = edit
-	return tracker.WriteResult{Outcome: statelog.OutcomeApplied}, nil
+	got := callWork(t, reg, tracker.MarkInboxTool, map[string]any{
+		"read":         []any{"r-1"},
+		"snooze":       []any{map[string]any{"record_id": "r-2", "until": "2031-05-01T09:00:00Z"}},
+		"read_through": "CREWLET_TRACKER_LOG@1:7",
+	})
+	if got.Failed {
+		t.Fatalf("mark_inbox failed: %q", got.Output)
+	}
+	g := person.inbox
+	switch {
+	case !slices.Equal(g.Read, []string{"r-1"}):
+		t.Errorf("read = %v", g.Read)
+	case len(g.Snooze) != 1 || g.Snooze[0].RecordID != "r-2" ||
+		g.Snooze[0].Until.Format("2006-01-02") != "2031-05-01":
+		t.Errorf("snooze = %+v", g.Snooze)
+	case g.ReadThrough == nil || g.ReadThrough.Generation != 1 || g.ReadThrough.Seq != 7:
+		t.Errorf("read_through = %+v", g.ReadThrough)
+	case g.PrimaryReasons != nil:
+		t.Errorf("an absent primary_reasons became %v, which would clear the "+
+			"person's choice", *g.PrimaryReasons)
+	}
+	if got := callWork(t, reg, tracker.MarkInboxTool, map[string]any{
+		"primary_reasons": []any{},
+	}); got.Failed || person.inbox.PrimaryReasons == nil {
+		t.Errorf("an empty primary_reasons did not reach the writer as a "+
+			"choice: %q", got.Output)
+	}
+	if got := callWork(t, reg, tracker.MarkInboxTool, map[string]any{}); !got.Failed {
+		t.Error("a mark_inbox naming nothing was accepted")
+	}
+
+	// A BARE LIST WHERE A CHANGE BELONGS is refused naming the shape,
+	// rather than read as the whole strip — which is the old replace.
+	bare := callWork(t, reg, tracker.SetPinsTool, map[string]any{"views": []any{"v-1"}})
+	if !bare.Failed || !strings.Contains(bare.Output, "add") {
+		t.Errorf("a bare list of views answered %q", bare.Output)
+	}
+	if got := callWork(t, reg, tracker.SetPinsTool, map[string]any{
+		"views":     map[string]any{"remove": []any{"v-1"}},
+		"favorites": map[string]any{"add": []any{map[string]any{"kind": "project", "id": "ENG"}}},
+	}); got.Failed {
+		t.Fatalf("set_pins failed: %q", got.Output)
+	}
+	if p := person.pins; !slices.Equal(p.Views.Remove, []string{"v-1"}) ||
+		p.Views.Set != nil || len(p.Favorites.Add) != 1 {
+		t.Errorf("the pin gesture reached the writer as %+v", p)
+	}
+
+	for _, c := range []struct {
+		args map[string]any
+		want *uint64
+	}{
+		{map[string]any{"items": []any{"ENG-1"}}, nil},
+		{map[string]any{"items": []any{"ENG-1"}, "if_match": float64(0)}, new(uint64)},
+	} {
+		person.ifMatch = nil
+		if got := callWork(t, reg, tracker.SetPrioritiesTool, c.args); got.Failed {
+			t.Fatalf("set_priorities failed: %q", got.Output)
+		}
+		if (person.ifMatch == nil) != (c.want == nil) ||
+			(c.want != nil && *person.ifMatch != *c.want) {
+			t.Errorf("if_match %v reached the writer as %v", c.args["if_match"], person.ifMatch)
+		}
+	}
+	if got := callWork(t, reg, tracker.SetPrioritiesTool, map[string]any{
+		"items": []any{"ENG-1"}, "if_match": float64(-1),
+	}); !got.Failed {
+		t.Error("a negative if_match was accepted")
+	}
 }
 
-func (p *projectSpy) WriteTags(_ context.Context, _, _ string,
-	edit tracker.TagEdit, _ tracker.TagAuthority) (tracker.WriteResult, error) {
+// THE SNOOZED SCOPE REACHES THE READER, DEFAULTS TO HIDING, AND REFUSES A
+// SCOPE IT DOES NOT KNOW. The reader refuses the zero value, so the tool is
+// what makes "my inbox" mean "not what I put off" — and a misspelt scope read
+// as the default would answer "what did I put off" with the whole inbox.
+func TestWorkInboxTakesTheSnoozedScope(t *testing.T) {
+	t.Parallel()
+	trk := newFakeTracker()
+	reg := personSurface(t, trk, &personSpy{}, unboundOperator, nil)
 
-	p.tags = edit
-	return tracker.WriteResult{Outcome: statelog.OutcomeApplied}, nil
-}
-
-func (p *projectSpy) EnsureTags(context.Context, string, string, []string) (
-	[]string, []string, error) {
-
-	return nil, nil, nil
+	if got := callPlain(t, reg, tracker.WorkInboxTool, map[string]any{
+		"handle": "alice",
+	}); got.Failed {
+		t.Fatalf("work_inbox failed: %q", got.Output)
+	}
+	if trk.inboxQuery.Snoozed != tracker.SnoozeExclude {
+		t.Errorf("no `snoozed` reached the reader as %q, want %q",
+			trk.inboxQuery.Snoozed, tracker.SnoozeExclude)
+	}
+	if got := callPlain(t, reg, tracker.WorkInboxTool, map[string]any{
+		"handle": "alice", "snoozed": "only",
+	}); got.Failed {
+		t.Fatalf("work_inbox failed: %q", got.Output)
+	}
+	if trk.inboxQuery.Snoozed != tracker.SnoozeOnly {
+		t.Errorf("snoozed=only reached the reader as %q", trk.inboxQuery.Snoozed)
+	}
+	bad := callPlain(t, reg, tracker.WorkInboxTool, map[string]any{
+		"handle": "alice", "snoozed": "bogus",
+	})
+	if !bad.Failed || !strings.Contains(bad.Output, "include") {
+		t.Fatalf("snoozed=bogus answered %q, want a refusal naming the scopes",
+			bad.Output)
+	}
 }

@@ -149,6 +149,12 @@ type Source struct {
 	Unreadable string
 }
 
+// origin is where every skill this source admits was read from, which is what
+// a record of the skill being loaded names its page by.
+func (s Source) origin() skills.Origin {
+	return skills.Origin{Backend: s.Backend, Container: s.Container}
+}
+
 // same reports whether two sources name the same skills.
 func (s Source) same(other Source) bool {
 	return strings.EqualFold(s.Backend, other.Backend) &&
@@ -680,7 +686,7 @@ func (s *Syncer) walked(ctx context.Context, generation uint64, src Source,
 		}
 		return backoff.Jitter(s.interval, jitterFraction), true
 	}
-	admitted, report := skills.Admit(pages)
+	admitted, report := skills.Admit(pages, src.origin())
 	s.registry.Replace(admitted)
 	s.seen = marks
 	s.mu.Unlock()
@@ -741,7 +747,7 @@ func (s *Syncer) applyChange(ctx context.Context, generation uint64, src Source,
 	var result skills.PageChange
 	if inContainer {
 		s.seen[change.PageID] = mark
-		if skill, verdict := skills.AdmitPage(read.Page); verdict == skills.PageAdmitted {
+		if skill, verdict := skills.AdmitPage(read.Page, src.origin()); verdict == skills.PageAdmitted {
 			var err error
 			if result, err = s.registry.PutPage(skill); err != nil {
 				// ADMISSION ACCEPTED A SKILL THE REGISTRY REFUSES, which

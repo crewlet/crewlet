@@ -297,7 +297,7 @@ func importConfig(ctx context.Context, cs *configStore, path string,
 	}
 	id, err := cs.configs.InsertActive(ctx, store.Revision{
 		ParentID: parent, Source: "file", CreatedBy: currentOperator(),
-		Summary: summary,
+		CreatedByKind: store.AuthorOperator, Summary: summary,
 		Payload: payload,
 	})
 	if err != nil {

@@ -239,6 +239,14 @@ func (t *Tool) Call(ctx context.Context, args map[string]any) (tools.Result, err
 		// names the task and says what to write instead, and the model is
 		// the one that can act on it. An engine error would end the round
 		// with the executor never seeing why.
+		//
+		// ONLY a plan error is the model's to fix, though, and only it is
+		// classed as an argument: a wiring failure reaches the model too
+		// (it is still the only reader that can route around it) but as
+		// this deployment's condition, which no rewrite of the plan clears.
+		if _, planned := AsPlanError(err); !planned {
+			return refused(tools.RefusalUnavailable, err.Error()), nil
+		}
 		return failed(err.Error()), nil
 	}
 	if cancelled(results) {
@@ -335,8 +343,15 @@ func remarshal(args map[string]any, into any) error {
 	return nil
 }
 
-// failed is a tool refusal the model reads and can act on.
-func failed(msg string) tools.Result { return tools.Result{Output: msg, Failed: true} }
+// refused is a tool refusal the model reads and can act on, with the class a
+// reader that is not a model acts on — see [tools.Refusal].
+func refused(code tools.Refusal, msg string) tools.Result {
+	return tools.Result{Output: msg, Failed: true, Refusal: code}
+}
+
+// failed is the argument refusal, [tools.RefusalInvalid]: the plan or its
+// arguments are what the model has to change.
+func failed(msg string) tools.Result { return refused(tools.RefusalInvalid, msg) }
 
 // AsPlanError reports whether an error from [Run] is a refusal the model can
 // fix, rather than a wiring failure.

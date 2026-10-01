@@ -300,14 +300,16 @@ func magnitude(v []float32) float32 {
 // canned vector, so what the provider DIALS can be asserted without a
 // network — which is the only way to see the default base URL at all.
 type dialed struct {
-	width int
-	url   string
-	auth  string
+	width  int
+	url    string
+	auth   string
+	header http.Header
 }
 
 func (d *dialed) RoundTrip(r *http.Request) (*http.Response, error) {
 	d.url = r.URL.String()
 	d.auth = r.Header.Get("Authorization")
+	d.header = r.Header.Clone()
 	return &http.Response{
 		StatusCode: http.StatusOK,
 		Header:     http.Header{"Content-Type": []string{"application/json"}},
@@ -362,21 +364,17 @@ func TestAConfiguredBaseURLIsDialledInstead(t *testing.T) {
 	}
 }
 
-// THE CONVENTIONAL KEY IS CONSULTED when the config names none — the whole
-// point of sharing OPENAI_API_KEY with the chat backend, and a fallback that
-// fails silently: with no key the provider still builds and every call comes
-// back 401, which the caller swallows as "no similarity search".
-func TestAnUnnamedKeyFallsBackToTheConventionalVariable(t *testing.T) {
-	t.Parallel()
+// AN EMPTY KEY SENDS NO AMBIENT ONE. The SDK loads OPENAI_API_KEY from the
+// process environment at construction, and this provider skipped its own key
+// option when the key was empty — so an embedder pointed at a self-hosted
+// server with no key sent the process's OpenAI credential there. Which key an
+// embedder that names none runs on is config.EmbeddingProvider.ResolvedKey's
+// rule, resolved by the engine through the secret store.
+func TestAnEmptyKeySendsNoAmbientCredential(t *testing.T) {
+	t.Setenv("OPENAI_API_KEY", "sk-ambient")
 	d := &dialed{width: 4}
 	p, err := embeddings.New(embeddings.Config{
 		Model: "m", Dimensions: 4, HTTPClient: &http.Client{Transport: d},
-		LookupEnv: func(name string) string {
-			if name == embeddings.KeyEnv {
-				return "  sk-from-the-environment  "
-			}
-			return ""
-		},
 	})
 	if err != nil {
 		t.Fatalf("New: %v", err)
@@ -384,20 +382,59 @@ func TestAnUnnamedKeyFallsBackToTheConventionalVariable(t *testing.T) {
 	if _, err := p.Embed(t.Context(), "text"); err != nil {
 		t.Fatalf("Embed: %v", err)
 	}
-	if d.auth != "Bearer sk-from-the-environment" {
-		t.Fatalf("Authorization = %q, want the trimmed conventional key", d.auth)
+	if strings.Contains(d.auth, "sk-ambient") {
+		t.Fatalf("Authorization = %q: the ambient variable reached the wire", d.auth)
+	}
+}
+
+// NOTHING ELSE FROM THE ENVIRONMENT EITHER. The SDK also reads organization
+// and project ids and arbitrary custom headers — a custom Authorization among
+// them, which replaced the configured key outright — and every one of them
+// reached whatever server this embedder points at.
+func TestNoAmbientOpenAIVariableReachesTheWire(t *testing.T) {
+	t.Setenv("OPENAI_API_KEY", "sk-ambient")
+	t.Setenv("OPENAI_ADMIN_KEY", "sk-admin-ambient")
+	t.Setenv("OPENAI_ORG_ID", "org-ambient")
+	t.Setenv("OPENAI_PROJECT_ID", "proj-ambient")
+	// WITH AND WITHOUT CUSTOM HEADERS, because deleting a custom
+	// Authorization marks the request as carrying an explicit one — which
+	// alone would hide a key the case without them shows.
+	for _, custom := range []string{"", "X-Ambient: leaked\nAuthorization: Bearer sk-custom-ambient"} {
+		t.Setenv("OPENAI_CUSTOM_HEADERS", custom)
+		for _, key := range []string{"", "sk-named"} {
+			d := &dialed{width: 4}
+			p, err := embeddings.New(embeddings.Config{
+				Model: "m", Dimensions: 4, APIKey: key,
+				BaseURL: "https://embeddings.example.com/v1", HTTPClient: &http.Client{Transport: d},
+			})
+			if err != nil {
+				t.Fatalf("New: %v", err)
+			}
+			if _, err := p.Embed(t.Context(), "text"); err != nil {
+				t.Fatalf("Embed: %v", err)
+			}
+			for name, values := range d.header {
+				for _, v := range values {
+					if strings.Contains(v, "ambient") || strings.Contains(v, "leaked") {
+						t.Errorf("key %q: header %s = %q reached the wire from the environment", key, name, v)
+					}
+				}
+			}
+			if want := map[string]string{"": "", "sk-named": "Bearer sk-named"}[key]; d.auth != want {
+				t.Errorf("key %q: Authorization = %q, want %q", key, d.auth, want)
+			}
+		}
 	}
 }
 
 // A NAMED KEY WINS over the environment, so a company running two OpenAI
 // accounts — one for chat, one for embeddings — gets the one it named.
 func TestANamedKeyBeatsTheEnvironment(t *testing.T) {
-	t.Parallel()
+	t.Setenv("OPENAI_API_KEY", "sk-environment")
 	d := &dialed{width: 4}
 	p, err := embeddings.New(embeddings.Config{
-		Model: "m", Dimensions: 4, APIKey: "sk-named",
+		Model: "m", Dimensions: 4, APIKey: "  sk-named  ",
 		HTTPClient: &http.Client{Transport: d},
-		LookupEnv:  func(string) string { return "sk-environment" },
 	})
 	if err != nil {
 		t.Fatalf("New: %v", err)
@@ -406,7 +443,7 @@ func TestANamedKeyBeatsTheEnvironment(t *testing.T) {
 		t.Fatalf("Embed: %v", err)
 	}
 	if d.auth != "Bearer sk-named" {
-		t.Fatalf("Authorization = %q, want the configured key", d.auth)
+		t.Fatalf("Authorization = %q, want the configured key, trimmed", d.auth)
 	}
 }
 

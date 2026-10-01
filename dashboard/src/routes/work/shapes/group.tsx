@@ -6,7 +6,7 @@
  * carried the word alone. Same answer, same axis, two headings — so a reader
  * who switched shape to see more rows lost the mark they had been scanning for.
  *
- * The mark is the AXIS's, never the group's: only `status` has a dot and only
+ * The mark is the AXIS's, never the group's: only `status` has a mark and only
  * `type` has an icon, because those are the two axes whose values the product
  * draws a mark for anywhere else. An axis with no mark draws none rather than
  * a placeholder — a blank slot on every row of an assignee board is a column
@@ -15,7 +15,7 @@
  */
 
 import { cx } from "@crewlethq/ui";
-import { TypeIcon, type RowChrome } from "~/components/work.tsx";
+import { StatusMark, TypeIcon, type RowChrome } from "~/components/work.tsx";
 import { groupLabel, STATUS_TONE, type Tone, type LabelContext } from "~/lib/work.ts";
 import type { WorkGroup } from "~/protocol/index.ts";
 
@@ -63,7 +63,12 @@ export function GroupMark({
   groupKey: string;
   chrome: RowChrome;
 }) {
-  if (axis === "status") return <i className={statusDot(groupKey)} aria-hidden="true" />;
+  // THE STATUS'S OWN MARK — the ring, and the check once delivered, in the
+  // status's tone — which is what the approved board heads its lanes with and
+  // what the palette and a decision's task already draw. A dot said "a
+  // status" and nothing about which; the ring says open and the check says
+  // done before the word is read.
+  if (axis === "status") return <StatusMark status={groupKey} />;
   if (axis === "type") return <TypeIcon type={groupKey} types={chrome.types} />;
   if (axis === "due:bucket") {
     const tone = DUE_BAND_TONE[groupKey];

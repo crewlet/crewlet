@@ -29,6 +29,7 @@
  * [ViewerState.loading] rather than a value. See [useViewer].
  */
 
+import { createContext, createElement, useContext, type ReactNode } from "react";
 import { useQuery } from "./useQuery.ts";
 import type { Viewer } from "~/protocol/index.ts";
 
@@ -41,13 +42,34 @@ export interface ViewerState {
   handle: string;
   /** That seat's display name, or "". */
   name: string;
+  /**
+   * The changes the engine will make as this person — every tool
+   * `POST /operator/act/{tool}` serves a token bound to a seat, and NONE for
+   * an anonymous or unbound caller, who may not act (ADR-0024). Read by
+   * `lib/useWriteAccess.ts`, and by nothing that decides for itself.
+   */
+  acts: readonly string[];
   kind: "agent" | "human" | "";
+  /**
+   * The project this person's create lands in when it names none — the
+   * engine's own default for their seat, never a guess from the chart — or
+   * "" when there is none, and a create must name one.
+   */
+  project: string;
   /** A token is presented and no seat names its id. */
   unbound: boolean;
   /** No token is presented at all. */
   anonymous: boolean;
   /** Nobody has said yet — no answer has arrived, or the last read failed. */
   loading: boolean;
+  /**
+   * The FIRST read is still out: nothing has answered and nothing has failed.
+   * The narrow half of `loading`, for a surface that would rather wait one
+   * round trip than act on no answer — a guarded section asks nothing it may
+   * be refused until this clears — and must not wait for ever on a read that
+   * failed, which `loading` alone cannot tell it apart from.
+   */
+  asking: boolean;
 }
 
 /**
@@ -57,7 +79,7 @@ export interface ViewerState {
  * token, or an epoch lands that binds a seat to their id — so this is a slow
  * poll rather than a push, and the token dialog's own reconnect re-asks it.
  */
-export function useViewer(): ViewerState {
+function useViewerRead(): ViewerState {
   const { data, loading, error } = useQuery("viewer", undefined, { pollMs: 300_000 });
   const operatorID = data?.operator_id ?? "";
   const handle = data?.handle ?? "";
@@ -78,11 +100,48 @@ export function useViewer(): ViewerState {
     operator: data?.operator ?? false,
     handle,
     name: data?.name ?? "",
+    acts: data?.acts ?? [],
+    project: data?.project ?? "",
     kind: (data?.kind as ViewerState["kind"]) ?? "",
     unbound: operatorID !== "" && handle === "",
     anonymous: !unknown && operatorID === "",
     loading: unknown,
+    asking: loading && data === null && error === null,
   };
+}
+
+const Reading = createContext<ViewerState | null>(null);
+
+/**
+ * Ask who this browser is ONCE, for everything under it.
+ *
+ * `app/Shell.tsx` mounts it around the whole frame, so the sidebar, the page
+ * header and every screen read one answer. Each of them asking for itself was
+ * a standing `viewer` query per caller — three from the frame alone, more
+ * from a screen — each holding one of the socket's four query slots while a
+ * screen's first read waited, and each polling on its own clock, so two
+ * surfaces could disagree about who the reader is for up to five minutes.
+ */
+export function ViewerProvider({ children }: { children: ReactNode }) {
+  return createElement(Reading.Provider, { value: useViewerRead() }, children);
+}
+
+/**
+ * Who the frame read this browser as.
+ *
+ * THROWS OUTSIDE A [ViewerProvider] rather than asking for itself, as the
+ * kit's `useAppShell` throws outside a shell: a fallback read here is the
+ * per-caller read this module exists to remove, back again wherever a caller
+ * is mounted outside the frame — and it would work, so nothing would say so.
+ */
+export function useViewer(): ViewerState {
+  const viewer = useContext(Reading);
+  if (viewer === null) {
+    throw new Error(
+      "useViewer() outside a ViewerProvider: the frame mounts one (FrameReadings, app/Shell.tsx), and a suite that mounts a screen without the frame mounts one around it",
+    );
+  }
+  return viewer;
 }
 
 /** The wire answer, re-exported so a screen types its own reads. */

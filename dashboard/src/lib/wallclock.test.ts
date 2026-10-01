@@ -10,7 +10,9 @@
  */
 
 import { beforeEach, describe, expect, it } from "vitest";
-import { fromWall, toWall } from "./format.ts";
+import { fromWall, readerDay, toWall } from "./format.ts";
+import { dayOf, daysBetween, shiftDay } from "./timeline.ts";
+import { calendarWeeks, dayKey, dayLabel, gridRange } from "./work.ts";
 import { reloadForTest, setZone } from "./prefs.ts";
 
 function inZone(zone: string) {
@@ -99,5 +101,44 @@ describe("a wall-clock reading and the instant it names", () => {
     const midnight = Date.parse("2026-06-14T15:00:00Z"); // 2026-06-15T00:00 in Tokyo
     expect(toWall(midnight)).toBe("2026-06-15T00:00");
     expect(fromWall("2026-06-15T00:00")).toBe(midnight);
+  });
+});
+
+/**
+ * A DAY is filed in the zone every timestamp is drawn in.
+ *
+ * The calendar's cells and the timeline's columns used to be keyed in the
+ * browser's own calendar while every spelling followed the chosen zone, which
+ * was harmless only while no control could choose one. Now one can, so a task
+ * stamped in the evening UTC is on the NEXT day for a reader who chose Tokyo —
+ * in its cell as well as in its label.
+ */
+describe("a day is the reader's day", () => {
+  it("files an instant under the chosen zone's date, not the browser's", () => {
+    const at = "2026-09-22T20:00:00Z";
+    inZone("Asia/Tokyo");
+    expect(readerDay(Date.parse(at))).toBe("2026-09-23");
+    expect(dayKey(at)).toBe("2026-09-23");
+    expect(dayOf(at)).toBe("2026-09-23");
+    // The browser is in Berlin, where it is still the 22nd.
+    inZone("");
+    expect(dayKey(at)).toBe("2026-09-22");
+    inZone("America/Los_Angeles");
+    expect(dayKey("2026-09-23T03:00:00Z")).toBe("2026-09-22");
+  });
+
+  it("lays a grid out the same in every zone, because a day key is a civil date", () => {
+    // Walked across Berlin's own DST change (25 October 2026), where a count
+    // over local midnights meets a 25-hour day.
+    for (const zone of ["", "Pacific/Kiritimati", "America/Los_Angeles", "UTC"]) {
+      inZone(zone);
+      expect(daysBetween("2026-10-24", "2026-10-26"), zone).toBe(2);
+      expect(shiftDay("2026-10-24", 2), zone).toBe("2026-10-26");
+      const weeks = calendarWeeks("2026-10", "");
+      expect(weeks[0]![0]!.key, zone).toBe("2026-09-28");
+      expect(gridRange(weeks), zone).toEqual({ from: "2026-09-28", to: "2026-11-02" });
+      expect(dayLabel("2026-10-01"), zone).toContain("1");
+      expect(dayLabel("2026-10-01"), zone).toMatch(/Thursday/);
+    }
   });
 });

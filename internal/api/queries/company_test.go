@@ -5,9 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"os"
-	"path/filepath"
-	"regexp"
+	"maps"
 	"slices"
 	"strconv"
 	"strings"
@@ -24,8 +22,13 @@ import (
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/integration"
 	"github.com/crewlet/crewlet/internal/learning"
+	"github.com/crewlet/crewlet/internal/learning/memread"
+	"github.com/crewlet/crewlet/internal/pages"
 	"github.com/crewlet/crewlet/internal/schedule"
+	"github.com/crewlet/crewlet/internal/search"
 	"github.com/crewlet/crewlet/internal/store"
+	"github.com/crewlet/crewlet/internal/tracker"
+	"github.com/crewlet/crewlet/internal/usage"
 )
 
 // pinned is the clock these answers run on. Pinned because a lease countdown
@@ -132,6 +135,35 @@ func TestSchedulesProjectsWhatIsConfigured(t *testing.T) {
 	// to tell "nothing has fired" from "this answer has no history half".
 	if _, present := body["recent_runs"]; !present {
 		t.Error("the answer carries no recent_runs key at all")
+	}
+}
+
+// A SCHEDULE THAT NAMES NO ZONE IS DESCRIBED ON THE COMPANY'S CLOCK, the one it
+// fires on (ADR-0018) — the zone beside it and the next run worked out in it
+// both. A row that said UTC while the tick fired on Tokyo would be a screen
+// promising a standup nine hours from when it arrives.
+func TestAZonelessScheduleIsDescribedOnTheCompanysClock(t *testing.T) {
+	t.Parallel()
+	cfg, err := config.ParseCompany([]byte(companyDoc + "timezone: Asia/Tokyo\n"))
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	body := asMap(t, answer(t, queries.Sources{
+		Company: func() *config.Company { return cfg },
+	}, "schedules", nil))
+	rows, _ := body["schedules"].([]any)
+	if len(rows) != 1 {
+		t.Fatalf("%d schedules, want one: %v", len(rows), body)
+	}
+	row, _ := rows[0].(map[string]any)
+	if row["timezone"] != "Asia/Tokyo" {
+		t.Errorf("the schedule is described in %v, want the company's clock Asia/Tokyo",
+			row["timezone"])
+	}
+	// Sunday 23 August 16:00 UTC; the next weekday 09:00 in Tokyo (UTC+9)
+	// is Monday the 24th at 00:00 UTC — not 09:00 UTC.
+	if want := "2026-08-24T00:00:00Z"; row["next_run"] != want {
+		t.Errorf("next run = %v, want %s — 09:00 on the company's clock", row["next_run"], want)
 	}
 }
 
@@ -365,8 +397,19 @@ func TestFleetReadsTheLeaseTable(t *testing.T) {
 	if labels, _ := node["labels"].(map[string]any); labels["zone"] != "eu" {
 		t.Errorf("labels = %v, want what the presence lease carries", node["labels"])
 	}
-	if seats, _ := body["seats"].([]any); len(seats) != 1 {
-		t.Errorf("%d seats, want 1", len(seats))
+	seats, _ := body["seats"].([]any)
+	if len(seats) != 1 {
+		t.Fatalf("%d seats, want 1", len(seats))
+	}
+	// Since when the node has held it — the lease's tenure start, which
+	// is what "node-a · since 08:02" renders from.
+	held, err := backend.Get(t.Context(), coord.SeatResource("ceo"))
+	if err != nil || held == nil {
+		t.Fatalf("Get = (%v, %v)", held, err)
+	}
+	seat, _ := seats[0].(map[string]any)
+	if want := held.AcquiredAt.Format(time.RFC3339Nano); seat["acquired_at"] != want {
+		t.Errorf("acquired_at = %v, want the lease's tenure start %s", seat["acquired_at"], want)
 	}
 	if duties, _ := body["duties"].([]any); len(duties) != 1 {
 		t.Errorf("%d duties, want 1", len(duties))
@@ -436,7 +479,7 @@ func TestFleetNamesTheRolesNobodyIsRunning(t *testing.T) {
 	}
 }
 
-// EVERY ANSWER THE ADMIN WORKSPACE DRAWS NEEDS AN OPERATOR CREDENTIAL.
+// EVERY ANSWER SETTINGS DRAWS NEEDS AN OPERATOR CREDENTIAL.
 //
 // The dashboard's rail marks all five Admin destinations `guarded: true`: it
 // draws a lock on the row and its palette says "needs a token". That flag is
@@ -546,69 +589,46 @@ func TestAQuestionWithNoSourceIsUnknownRatherThanEmpty(t *testing.T) {
 
 // --- agent memory ----------------------------------------------------------
 
-func TestAgentMemoryServesBothHalves(t *testing.T) {
-	t.Parallel()
-	// The diary is what a seat chose to remember; the episodes are what it
-	// did, summarised. A page showing one without the other reads as a
-	// seat with half a history.
-	db := openStore(t)
-	diary := learning.NewDiary(db)
-	episodes := learning.NewEpisodes(db)
-
-	if err := diary.Write(t.Context(), learning.DiaryEntry{
-		ID: "d-1", AgentID: "ceo", Kind: learning.DiaryLong,
-		Content:   "remember the release window",
-		CreatedAt: pinned,
-	}); err != nil {
-		t.Fatalf("diary: %v", err)
-	}
-	if _, err := episodes.Append(t.Context(), learning.Episode{
-		ID: "ep-1", Handle: "ceo", TaskSummary: "answered the on-call page",
-		StartedAt: pinned, EndedAt: pinned.Add(time.Minute),
-	}); err != nil {
-		t.Fatalf("episode: %v", err)
-	}
-
-	body := asMap(t, answer(t, queries.Sources{Diary: diary, Episodes: episodes},
-		"agent_memory", map[string]any{"id": "ceo"}))
-
-	if entries, _ := body["diary"].([]any); len(entries) != 1 {
-		t.Errorf("diary = %v, want the one entry", body["diary"])
-	}
-	if entries, _ := body["episodes"].([]any); len(entries) != 1 {
-		t.Errorf("episodes = %v, want the one episode", body["episodes"])
-	}
-}
-
-func TestAgentMemoryOfASeatWithNoneIsEmptyRatherThanAbsent(t *testing.T) {
-	t.Parallel()
-	// Both keys are always present. A screen that had to tell "no diary
-	// half in this answer" from "an empty diary" would be reading the
-	// shape of the response to decide what to draw.
-	db := openStore(t)
-	body := asMap(t, answer(t, queries.Sources{
-		Diary: learning.NewDiary(db), Episodes: learning.NewEpisodes(db),
-	}, "agent_memory", map[string]any{"id": "nobody"}))
-
-	for _, half := range []string{"diary", "episodes"} {
-		value, present := body[half]
-		if !present {
-			t.Errorf("the answer omits %q entirely", half)
-			continue
-		}
-		if entries, _ := value.([]any); len(entries) != 0 {
-			t.Errorf("%s = %v, want an empty list", half, value)
-		}
-	}
-}
+// The memory itself — its halves, its totals, its pages, who answers it — is
+// memread's, certified there. What this surface owns is that a question names
+// a seat and reaches the holder by the HANDLE its lease is found by.
 
 func TestAgentMemoryNeedsASeat(t *testing.T) {
 	t.Parallel()
-	db := openStore(t)
 	r := queries.NewRegistry()
-	queries.Register(r, queries.Sources{Diary: learning.NewDiary(db)})
+	queries.Register(r, queries.Sources{Memory: &stubMemory{}})
 	if _, err := r.Answer(t.Context(), "agent_memory", nil, "operator"); err == nil {
 		t.Fatal("an agent_memory query with no id was answered")
+	}
+}
+
+// THE REST ROUTE CARRIES `{id}`, which a caller may fill with the seat's
+// derived agent id rather than its handle. A seat's lease — and so its holder —
+// is found by the HANDLE, so the id is resolved through the chart before the
+// read is routed; asked by the uuid, the lease lookup would find no seat and
+// answer an empty memory for a seat that has one.
+func TestAgentMemoryIsAskedOfTheHolderByHandle(t *testing.T) {
+	t.Parallel()
+	cfg := company(t)
+	organization, err := cfg.Organization()
+	if err != nil {
+		t.Fatalf("organization: %v", err)
+	}
+	role := organization.AgentSeatByHandle("cto")
+	agentID, ok := organization.AgentIDFor(role)
+	if !ok {
+		t.Fatal("the fixture has no cto seat")
+	}
+	for _, asked := range []string{"cto", agentID.String()} {
+		memory := &stubMemory{}
+		answer(t, queries.Sources{
+			Company: func() *config.Company { return cfg },
+			Memory:  memory,
+		}, "agent_memory", map[string]any{"id": asked, "limit": 1})
+		if memory.handle != "cto" || memory.limit != 1 {
+			t.Errorf("asked by %q, the holder was asked about %q at %d, want cto at 1",
+				asked, memory.handle, memory.limit)
+		}
 	}
 }
 
@@ -683,6 +703,49 @@ func TestAnUnreadableControlPlaneDoesNotBlankTheFleet(t *testing.T) {
 	}
 	if body["target_epoch"] != float64(0) {
 		t.Errorf("target_epoch = %v, want 0 when it cannot be read", body["target_epoch"])
+	}
+}
+
+// olderBuildLeases is a lease table whose seat records came from a build that
+// predates coord.Lease.AcquiredAt: every other field is intact and the tenure
+// start is the zero time, which is exactly how such a record decodes.
+type olderBuildLeases struct{ coord.Backend }
+
+func (o olderBuildLeases) ListLive(ctx context.Context, class coord.Class) ([]coord.Lease, error) {
+	leases, err := o.Backend.ListLive(ctx, class)
+	for i := range leases {
+		leases[i].AcquiredAt = time.Time{}
+	}
+	return leases, err
+}
+
+func TestAnUnrecordedTenureStartIsAbsentNotATime(t *testing.T) {
+	t.Parallel()
+	// A seat held by a node of an older build has a tenure nobody wrote
+	// down. The field is ABSENT, which the screen renders as nothing — an
+	// empty string or the zero instant would each render as a time, and
+	// "since 0001-01-01" or "since just now" both lie about a seat that
+	// may have been held all day.
+	backend := coordmemory.New()
+	if _, err := backend.TryAcquire(t.Context(), coord.SeatResource("ceo"),
+		coord.AcquireOptions{Owner: "old:1", TTL: time.Minute}); err != nil {
+		t.Fatal(err)
+	}
+	cfg := company(t)
+	body := asMap(t, answer(t, queries.Sources{
+		Coord: olderBuildLeases{backend}, NodeID: "new",
+		Company: func() *config.Company { return cfg },
+	}, "fleet", nil))
+	seats, _ := body["seats"].([]any)
+	if len(seats) != 1 {
+		t.Fatalf("%d seats, want 1: %v", len(seats), body)
+	}
+	seat, _ := seats[0].(map[string]any)
+	if v, present := seat["acquired_at"]; present {
+		t.Fatalf("acquired_at = %q for a tenure whose start was never recorded, want absent", v)
+	}
+	if seat["handle"] != "ceo" || seat["node"] != "old" {
+		t.Fatalf("the rest of the row was lost with the stamp: %v", seat)
 	}
 }
 
@@ -1000,9 +1063,16 @@ func TestAnEngineRoutingNothingIsNotUnknown(t *testing.T) {
 // a blank inbound path, and both sides' tests passed, because each was
 // checked against its own idea of the other.
 //
-// This reads the FIELD NAMES out of the client's own declaration and asserts
-// the answer carries each. It is the cheap half of the gate `internal/e2e`
+// This reads the FIELD NAMES out of the client's own declarations — the row,
+// the answer around it, the reconcile report and its findings, all in
+// `contract/integrations.ts` — and holds the answer to each in both
+// directions ([holdShape]). It is the cheap half of the gate `internal/e2e`
 // gives the push protocol; the query channel had none at all.
+//
+// IT USED TO ONLY LOG a declared field no row carried, and two sat there for
+// as long as the room existed: `label` and `detail`, both read by the
+// dashboard — the sidebar's row name and a card's fallback summary — and
+// neither ever sent. A log line in a passing test is read by nobody.
 //
 // TWICE NOW THIS GATE HAS POINTED AT A PATH THAT DOES NOT EXIST, so it is
 // worth saying what it reads and why. It read
@@ -1012,8 +1082,10 @@ func TestAnEngineRoutingNothingIsNotUnknown(t *testing.T) {
 // rewrite while reporting a pass. [rooms_test.go] records the identical bug
 // being found and fixed in this same package; this file was missed, and
 // nothing noticed, because nothing counted skips. So: the source, never the
-// build output, and a missing file is FATAL — a broken checkout is not a
-// reason to certify nothing.
+// build output, and a missing declaration is FATAL — a broken checkout is not
+// a reason to certify nothing. And no path at all: the interfaces are found by
+// NAME through [clientsource.Interface], so a move of `protocol/types.ts` is
+// invisible here instead of a third time this gate reads a file that is gone.
 //
 // It reads the TYPE rather than the room's access sites, and that is the
 // second lesson. The old sweep matched `row.<field>` and `data.<field>`
@@ -1026,18 +1098,13 @@ func TestAnEngineRoutingNothingIsNotUnknown(t *testing.T) {
 // here.
 func TestTheIntegrationsRoomReadsWhatThisAnswerSends(t *testing.T) {
 	t.Parallel()
-	// The source tree, not the build output — see [clientsource.Tree].
-	typesPath := filepath.Join(clientsource.Tree(t), "protocol", "types.ts")
-	source, err := os.ReadFile(typesPath)
-	if err != nil {
-		t.Fatalf("read %s: %v — this gate cannot run without the client's "+
-			"declaration, and skipping would certify nothing while reporting "+
-			"a pass", typesPath, err)
-	}
 
 	// EVERY third-party app, because the per-integration detail fields (url,
 	// seats) only appear on the rows that have them: a fixture missing one
 	// reports its field as a mismatch that is really a gap in the fixture.
+	// And ONE RECONCILE REPORT whose finding carries everything a finding can
+	// — a remedy and a list of subjects are both conditional — because the
+	// report and its findings are shapes the room reads too.
 	cfg := company(t)
 	cfg.Integrations.Jira = &config.Jira{
 		URL: "https://jira.example.com", Token: "t", WebhookSecret: "jr",
@@ -1045,98 +1112,367 @@ func TestTheIntegrationsRoomReadsWhatThisAnswerSends(t *testing.T) {
 	body := asMap(t, answer(t, queries.Sources{
 		Company: func() *config.Company { return cfg },
 		Routed:  func(context.Context) []string { return []string{"gitlab"} },
+		Reconciles: func(context.Context) []integration.State {
+			return []integration.State{{
+				Kind: integration.KindGitLab,
+				Report: integration.Report{
+					Phase: integration.PhaseDegraded, Actor: integration.ActorAdmin,
+					Detail:    "2 seats need maintainer on api-gateway",
+					ActionURL: "https://gitlab.example.com/api-gateway/-/settings",
+				},
+				Findings: []integration.Finding{{
+					Kind: integration.FindingGrantShort, Subject: "ceo",
+					Detail:    "2 seats need maintainer on api-gateway",
+					Remedy:    "grant maintainer on api-gateway",
+					ActionURL: "https://gitlab.example.com/api-gateway/-/project_members",
+					Subjects:  []string{"ceo", "cto"},
+				}, {
+					// The one kind with a date, so `expires_at` is sent.
+					Kind:      integration.FindingCredentialExpiring,
+					Subject:   "integrations.gitlab.provisioning.admin_token",
+					Detail:    "the group Owner token expires on 2026-10-01",
+					ExpiresAt: pinned.Add(5 * 24 * time.Hour),
+				}},
+				Outcome:       integration.OutcomeBlocked,
+				Attempts:      2,
+				LastError:     "403 from /projects/api-gateway/members",
+				LastAttemptAt: pinned.Add(-time.Minute),
+				NextAttemptAt: pinned.Add(time.Minute),
+			}}
+		},
 	}, "integrations", nil))
 
-	rows, _ := body["integrations"].([]any)
-	if len(rows) == 0 {
-		t.Fatal("the answer carried no integrations, so this proves nothing")
-	}
-	// TWO READINGS, because the two halves of the contract are different.
-	//
-	// A REQUIRED field is required of EVERY row — the TypeScript interface
-	// describes each element, not the set — so it is checked per entry. The
-	// union was wrong for this: one integration carrying `endpoint` made the
-	// gate accept another that omitted it, which is precisely the card
-	// rendering undefined that this exists to catch.
-	//
-	// An OPTIONAL field is the other way round: `url` and `seats` are
-	// per-integration detail, so a field carried by ANY row is one the answer
-	// knows how to send, and only a field NO row carries is worth reporting.
-	sent := map[string]bool{}
-	for _, r := range rows {
-		entry, _ := r.(map[string]any)
-		for field := range entry {
-			sent[field] = true
-		}
-	}
+	rows := rowsOf(t, body["integrations"])
+	holdShape(t, "IntegrationsAnswer", []map[string]any{body}, false)
+	// OPEN, because the interface is: a row's per-surface detail (`url`,
+	// `seats`, `org_id`, …) rides its index signature, and which of them a
+	// row carries depends on the surface.
+	holdShape(t, "IntegrationRow", rows, true)
 
-	// Every field the client declares on a row, and on the answer around it.
-	for field, required := range declaredFields(t, string(source), "IntegrationRow") {
-		if required {
-			for _, r := range rows {
-				entry, _ := r.(map[string]any)
-				if _, ok := entry[field]; !ok {
-					t.Errorf("IntegrationRow declares %s as REQUIRED and the row "+
-						"for %v does not send it — that field renders as undefined "+
-						"on that card", field, entry["key"])
-				}
-			}
-			continue
-		}
-		switch {
-		case sent[field]:
-		default:
-			// An optional field no row carries is within the type's contract,
-			// so it is not a failure — but it is either dead client code or a
-			// server that stopped sending something, and both are worth
-			// seeing. The required half above is what fails.
-			t.Logf("IntegrationRow declares %s (optional) and no row carries it", field)
+	var reports, findings []map[string]any
+	for _, row := range rows {
+		if report, ok := row["reconcile"].(map[string]any); ok {
+			reports = append(reports, report)
+			findings = append(findings, rowsOf(t, report["findings"])...)
 		}
 	}
-	for field, required := range declaredFields(t, string(source), "IntegrationsAnswer") {
-		if _, ok := body[field]; !ok && required {
-			t.Errorf("IntegrationsAnswer declares %s as REQUIRED and the "+
-				"answer never sends it", field)
+	holdShape(t, "ReconcileStatus", reports, false)
+	holdShape(t, "ReconcileFinding", findings, false)
+	// AND THE ROLL-UP, one per tool, which is what a card's header draws.
+	holdShape(t, "IntegrationTool", rowsOf(t, body["tools"]), false)
+}
+
+// EVERY TOOL IS ROLLED UP BY THE ENGINE, from the rows beside it.
+//
+// The answer carries one roll-up per catalogue tool whether or not the company
+// configured it, so a screen never invents a state for a missing one; and the
+// roll-up is taken from the same values the rows carry, so the header of a card
+// cannot disagree with the row it names. Slack is the case that needs the
+// build's own answer about which surfaces a pass converges: without it an
+// unreported Slack would read "connecting" for as long as it was configured.
+func TestTheIntegrationsAnswerRollsEveryToolUp(t *testing.T) {
+	t.Parallel()
+	cfg := company(t)
+	cfg.Integrations.Slack = &config.Slack{}
+	body := asMap(t, answer(t, queries.Sources{
+		Company: func() *config.Company { return cfg },
+		Converges: func(kind integration.Kind) bool {
+			return kind != integration.KindSlack
+		},
+		Reconciles: func(context.Context) []integration.State {
+			return []integration.State{{
+				Kind:   integration.KindGitLab,
+				Report: integration.Report{Phase: integration.PhaseReady},
+				Findings: []integration.Finding{{
+					Kind:      integration.FindingCredentialExpiring,
+					Detail:    "the group Owner token expires on 2026-10-01",
+					ExpiresAt: pinned.Add(5 * 24 * time.Hour),
+				}},
+				Outcome: integration.OutcomeSettled,
+			}}
+		},
+	}, "integrations", nil))
+
+	tools := map[string]map[string]any{}
+	var order []string
+	for _, tool := range rowsOf(t, body["tools"]) {
+		key, _ := tool["key"].(string)
+		tools[key] = tool
+		order = append(order, key)
+	}
+	var want []string
+	for _, tool := range integration.Tools {
+		want = append(want, tool.Key)
+	}
+	if !slices.Equal(order, want) {
+		t.Fatalf("the answer rolls up %v, want every catalogue tool in order %v", order, want)
+	}
+	for key, state := range map[string]string{
+		// Ready, and a credential about to lapse: a person's deadline.
+		"gitlab": "attention",
+		// Configured, and no pass converges it: judged on its ingress,
+		// which nothing here says is broken.
+		"slack": "connected",
+		// Configured, a pass converges it, and it has not reported yet.
+		"mattermost": "not_connected",
+		// Nothing configured.
+		"datadog": "not_in_use",
+	} {
+		if got := tools[key]["state"]; got != state {
+			t.Errorf("%s rolled up as %v, want %s (%v)", key, got, state, tools[key])
 		}
+	}
+	if got := tools["gitlab"]["label"]; got != "Credential expiring" {
+		t.Errorf("gitlab's label = %v, want the expiry named", got)
 	}
 }
 
-// declaredFields returns the fields of one TypeScript interface, mapped to
-// whether the client declares them REQUIRED (no `?`).
-//
-// Deliberately a small parser over the declaration rather than a sweep of
-// access sites: an interface states the contract once, where a `row.x` /
-// `r.x` / destructured-`x` sweep states it as many times as the room has
-// spellings and silently covers only the spellings it guessed.
-func declaredFields(t *testing.T, source, iface string) map[string]bool {
+// rowsOf is a JSON array of objects, as a client decodes it.
+func rowsOf(t *testing.T, value any) []map[string]any {
 	t.Helper()
-
-	start := regexp.MustCompile(`(?m)^export interface ` + iface + ` \{$`).FindStringIndex(source)
-	if start == nil {
-		t.Fatalf("no `export interface %s` in the client's protocol types — "+
-			"it was renamed or removed, and this gate is asserting about nothing", iface)
+	list, ok := value.([]any)
+	if !ok {
+		t.Fatalf("%v is not a list", value)
 	}
-	end := regexp.MustCompile(`(?m)^\}$`).FindStringIndex(source[start[1]:])
-	if end == nil {
-		t.Fatalf("interface %s is not closed at column 0", iface)
-	}
-	body := source[start[1] : start[1]+end[0]]
-
-	// A field line, at one level of indentation: `name?: type;`. The leading
-	// `^  ` anchors to the interface's own fields, so a nested object literal
-	// contributes nothing; the `[a-z_]` class excludes the `[key: string]:
-	// unknown` index signature, which is not a field anybody reads by name.
-	field := regexp.MustCompile(`(?m)^  ([a-z][a-z0-9_]*)(\??):`)
-	out := map[string]bool{}
-	for _, m := range field.FindAllStringSubmatch(body, -1) {
-		out[m[1]] = m[2] == ""
-	}
-	if len(out) == 0 {
-		t.Fatalf("interface %s declared no fields this could read; the shape "+
-			"of the declaration changed and this gate stopped asserting", iface)
+	out := make([]map[string]any, 0, len(list))
+	for _, item := range list {
+		row, ok := item.(map[string]any)
+		if !ok {
+			t.Fatalf("%v is not an object", item)
+		}
+		out = append(out, row)
 	}
 	return out
 }
+
+// holdShape holds rows an answer sent against one interface the client
+// declares for them, in both directions.
+//
+// A DECLARED member is one some row carries — FAILING, not logged: a member
+// no row carries is a field every screen that trusts the type reads as
+// undefined, and a gate that only noted it left `label` and `detail` on the
+// integrations row for as long as the room existed, both read, neither ever
+// sent. A REQUIRED member is on every row, since the interface describes each
+// element rather than the set. And a key the answer sends is a declared
+// member — unless the interface is `open`, with an index signature standing
+// for the keys that vary by row — because a field no declaration names is one
+// no screen can read without first finding out it exists.
+//
+// The fixture is what makes the first half fair: it has to exercise every
+// branch that adds an optional key, or a gap in the fixture reads as a drift.
+func holdShape(t *testing.T, iface string, rows []map[string]any, open bool) {
+	t.Helper()
+	if len(rows) == 0 {
+		t.Fatalf("the answer carried no %s, so this proves nothing about it", iface)
+	}
+	declared := declaredFields(t, iface)
+	sent := map[string]bool{}
+	for _, row := range rows {
+		for field := range row {
+			sent[field] = true
+		}
+	}
+	for _, field := range slices.Sorted(maps.Keys(declared)) {
+		if !sent[field] {
+			t.Errorf("%s declares %s and no row the answer sent carries it — every "+
+				"screen that trusts the type reads it as undefined", iface, field)
+			continue
+		}
+		if !declared[field] {
+			continue
+		}
+		for _, row := range rows {
+			if _, ok := row[field]; !ok {
+				t.Errorf("%s declares %s as REQUIRED and a row does not send it: %v",
+					iface, field, row)
+			}
+		}
+	}
+	if open {
+		return
+	}
+	for _, field := range slices.Sorted(maps.Keys(sent)) {
+		if _, ok := declared[field]; !ok {
+			t.Errorf("the answer sends %s on a %s and the client does not declare it, "+
+				"so no screen can read it without first finding out it exists", field, iface)
+		}
+	}
+}
+
+// declaredFields returns the members of one TypeScript interface, mapped to
+// whether the client declares them REQUIRED (no `?`).
+//
+// The interface rather than a sweep of access sites: an interface states the
+// contract once, where a `row.x` / `r.x` / destructured-`x` sweep states it as
+// many times as the room has spellings and silently covers only the spellings
+// it guessed. READ BY ITS SYNTAX: the reader this replaced took a field to be
+// a line at exactly two spaces of indent inside a `}` at column zero, so a
+// member whose type wrapped, or an interface a formatter laid out differently,
+// read as fewer fields than it has. An index signature (`[key: string]:
+// unknown`) names no field anybody reads by name, and is not one.
+func declaredFields(t *testing.T, iface string) map[string]bool {
+	t.Helper()
+	members, err := clientsource.Interface(clientsource.Tree(t), iface)
+	if err != nil {
+		t.Fatalf("%v — this gate cannot run without the client's declaration, "+
+			"and skipping would certify nothing while reporting a pass", err)
+	}
+	out := map[string]bool{}
+	for _, m := range members {
+		out[m.Name] = !m.Optional
+	}
+	if len(out) == 0 {
+		t.Fatalf("interface %s declares no fields, so this gate asserts about nothing", iface)
+	}
+	return out
+}
+
+// THE MEMORY SCREEN READS WHAT THIS ANSWER SENDS.
+//
+// The seat page's memory tab is typed by `AgentMemory` and the row shapes
+// composed into it (`contract/memory.ts`), and nothing held them to the
+// answer. They had drifted both ways: a diary entry declared a `scope` and
+// `tags`, an episode an `outcome` and a `content`, and a skill a `body`, none
+// of which the engine has ever sent — so the tab's fallbacks read fields that
+// were always undefined — while a diary entry's `source` and `retrievals` and
+// an episode's plan, tool sequence and work key were sent to a client with no
+// name for them.
+//
+// Every row shape is held both ways over an answer whose fixture fills every
+// half — a diary entry, an episode, a skill, and two counterparties, one a
+// seat and one an unmapped person on a surface, because a subject's `handle`
+// and its `external_id` are each sent only for its own kind.
+func TestTheMemoryScreenReadsWhatThisAnswerSends(t *testing.T) {
+	t.Parallel()
+	db := openStore(t)
+	stores := &memread.Stores{
+		Diary: learning.NewDiary(db), Episodes: learning.NewEpisodes(db),
+		Skills: learning.NewSkills(db), Onboarding: learning.NewOnboarding(db),
+		AgentID: func(handle string) string { return "agent-" + handle },
+		Now:     func() time.Time { return pinned },
+	}
+	if err := stores.Diary.Write(t.Context(), learning.DiaryEntry{
+		ID: "d-1", AgentID: "agent-ceo", Kind: learning.DiaryShort,
+		Content:  "the release window moved to Thursday",
+		TTLUntil: pinned.Add(time.Hour), Source: "tool:reflect_and_persist",
+		TurnID: "turn-1", CreatedAt: pinned,
+	}); err != nil {
+		t.Fatalf("diary: %v", err)
+	}
+	if _, err := stores.Episodes.Append(t.Context(), learning.Episode{
+		ID: "ep-1", Handle: "ceo", TurnID: "turn-1",
+		TaskSummary: "answered the on-call page", PlanSummary: "read the alert, then paged",
+		ToolSequence: []string{"read_alert", "page"}, SkillsUsed: []string{"triage"},
+		ReviewOutcome: "done", WorkKey: "native:OPS-7", ConversationKey: "slack:C1",
+		StartedAt: pinned, EndedAt: pinned.Add(time.Minute), Duration: time.Minute,
+	}); err != nil {
+		t.Fatalf("episode: %v", err)
+	}
+	if err := stores.Skills.Insert(t.Context(), learning.Skill{
+		ID: "sk-1", AgentHandle: "ceo", Name: "triage",
+		Description: "read the alert before paging", CreatedAt: pinned, UpdatedAt: pinned,
+	}); err != nil {
+		t.Fatalf("skill: %v", err)
+	}
+	if err := stores.Onboarding.Mark(t.Context(), learning.Marker{
+		AgentID: "agent-ceo", ChainHash: "chain-1", Handle: "ceo",
+	}, pinned); err != nil {
+		t.Fatalf("onboarding: %v", err)
+	}
+	stores.Profiles = &stubProfiles{profiles: []learning.Profile{
+		{
+			Observer: "ceo", Subject: learning.Subject{Handle: "cto", Name: "Cy"},
+			Traits: map[string]any{"prefers": "async"}, InteractionCount: 3,
+			FirstSeenAt: pinned, LastUpdatedAt: pinned, LastCorroboratedAt: pinned,
+		},
+		{
+			Observer: "ceo",
+			Subject: learning.Subject{
+				ExternalID: "U0FOUNDER", Platform: "slack", Name: "Ada",
+			},
+			InteractionCount: 1,
+			FirstSeenAt:      pinned, LastUpdatedAt: pinned, LastCorroboratedAt: pinned,
+		},
+	}}
+
+	body := asMap(t, answer(t, queries.Sources{
+		Memory: &memread.Reader{Owner: "node-a:1", Local: stores},
+	}, "agent_memory", map[string]any{"id": "ceo"}))
+
+	holdShape(t, "AgentMemory", []map[string]any{body}, false)
+	holdShape(t, "DiaryEntry", rowsOf(t, body["diary"]), false)
+	holdShape(t, "DiaryEntry", []map[string]any{asMap(t, body["latest_reflection"])}, false)
+	holdShape(t, "Episode", rowsOf(t, body["episodes"]), false)
+	holdShape(t, "SynthesizedSkill", rowsOf(t, body["skills"]), false)
+	profiles := rowsOf(t, body["counterparties"])
+	holdShape(t, "CounterpartyProfile", profiles, false)
+	var subjects []map[string]any
+	for _, profile := range profiles {
+		subject, _ := profile["subject"].(map[string]any)
+		subjects = append(subjects, subject)
+	}
+	holdShape(t, "CounterpartySubject", subjects, false)
+
+	// THE DIARIES LIST'S ANSWER, over the same memory: one row per agent
+	// seat in the chart, each with its totals and its newest note.
+	overview := asMap(t, answer(t, queries.Sources{
+		Memory:  &memread.Reader{Owner: "node-a:1", Local: stores},
+		Company: func() *config.Company { return company(t) },
+	}, "memory_overview", nil))
+	holdShape(t, "MemoryOverview", []map[string]any{overview}, false)
+	seats := rowsOf(t, overview["seats"])
+	holdShape(t, "MemoryOverviewSeat", seats, false)
+	var reflections []map[string]any
+	for _, seat := range seats {
+		if r, ok := seat["latest_reflection"].(map[string]any); ok {
+			reflections = append(reflections, r)
+		}
+	}
+	holdShape(t, "DiaryEntry", reflections, false)
+}
+
+// THE OVERVIEW LISTS EVERY AGENT SEAT, and no person.
+//
+// The Knowledge home once drew a dozen diaries and stopped, so the thirteenth
+// agent had no diary anywhere a reader could find it. Fourteen agents and a
+// person: fourteen rows, in handle order, the person absent — a human seat
+// keeps no memory the engine writes.
+func TestTheMemoryOverviewListsEveryAgentSeat(t *testing.T) {
+	t.Parallel()
+	var doc strings.Builder
+	doc.WriteString("name: Acme\nproviders:\n  llm:\n    z: {type: anthropic, model: m, api_keys: [\"${K}\"]}\nroles:\n")
+	for i := range 14 {
+		fmt.Fprintf(&doc, "  - name: Agent %02d\n    handle: agent-%02d\n    llm: z\n", i, 13-i)
+	}
+	doc.WriteString("  - name: Founder\n    kind: human\n    contact: {slack_user_id: U0FOUNDER}\n")
+	cfg, err := config.ParseCompany([]byte(doc.String()))
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	stores := &memread.Stores{AgentID: func(h string) string { return "agent-" + h }}
+	body := asMap(t, answer(t, queries.Sources{
+		Memory:  &memread.Reader{Owner: "node-a:1", Local: stores},
+		Company: func() *config.Company { return cfg },
+	}, "memory_overview", nil))
+	seats := rowsOf(t, body["seats"])
+	if len(seats) != 14 {
+		t.Fatalf("%d rows, want all 14 agent seats", len(seats))
+	}
+	for i, seat := range seats {
+		if want := fmt.Sprintf("agent-%02d", i); seat["handle"] != want {
+			t.Errorf("row %d is %v, want %s — every agent, in handle order", i, seat["handle"], want)
+		}
+	}
+}
+
+// stubProfiles is what a seat learned about its colleagues, as fixtures.
+type stubProfiles struct{ profiles []learning.Profile }
+
+func (s *stubProfiles) List(_ context.Context, _ string, limit int) ([]learning.Profile, error) {
+	return s.profiles[:min(limit, len(s.profiles))], nil
+}
+
+func (s *stubProfiles) Count(context.Context, string) (int, error) { return len(s.profiles), nil }
 
 // brokenPlane is a config plane that answers nothing, for the case where the
 // fleet view has to survive one of its columns being unreadable.
@@ -1194,7 +1530,7 @@ func TestIntegrationsCountsWhatBecameOfTheDeliveries(t *testing.T) {
 
 	cfg := company(t)
 	body := asMap(t, answer(t, queries.Sources{
-		Company: func() *config.Company { return cfg }, Events: log,
+		Company: func() *config.Company { return cfg }, Events: fleetOf(log),
 	}, "integrations", nil))
 	rows, _ := body["integrations"].([]any)
 	byKind := map[string]map[string]any{}
@@ -1257,7 +1593,7 @@ func TestAnUnreadableEventLogReportsNullOutcomes(t *testing.T) {
 	}
 	cfg := company(t)
 	body := asMap(t, answer(t, queries.Sources{
-		Company: func() *config.Company { return cfg }, Events: log,
+		Company: func() *config.Company { return cfg }, Events: fleetOf(log),
 	}, "integrations", nil))
 	rows, _ := body["integrations"].([]any)
 	if len(rows) == 0 {
@@ -1973,142 +2309,6 @@ func TestAnEnabledFalseRowIsAlwaysADeliberatePause(t *testing.T) {
 	}
 }
 
-// A SKILL LISTING PAST THE PAGE LIMIT SAYS SO, and the count is the seat's
-// whole set rather than the page's length.
-//
-// The diary and the episodes ask their store for [queries.MemoryPageLimit] and
-// get a recency feed, where "the most recent fifty" IS the question. Skills
-// are a SET the seat loads from, so the page carries the size of the set it
-// came from — and it once carried nothing, which is the one shape this tree
-// does not allow a cut to have. The panel counts what it is given, so a seat
-// with more skills than the page holds reported exactly the page limit: a
-// number an operator has no reason to doubt and no way to check.
-func TestASkillListingPastThePageLimitReportsWhatItCut(t *testing.T) {
-	t.Parallel()
-	db := openStore(t)
-	skills := learning.NewSkills(db)
-	const held = queries.MemoryPageLimit + 7
-	for i := range held {
-		name := "skill-" + strconv.Itoa(i)
-		if err := skills.Insert(t.Context(), learning.Skill{
-			ID: name, AgentHandle: "ceo", Name: name,
-			Description: "drafted from repeated work",
-			CreatedAt:   pinned, UpdatedAt: pinned,
-		}); err != nil {
-			t.Fatalf("insert %s: %v", name, err)
-		}
-	}
-
-	body := asMap(t, answer(t, queries.Sources{Skills: skills},
-		"agent_memory", map[string]any{"id": "ceo"}))
-
-	rows, _ := body["skills"].([]any)
-	if len(rows) != queries.MemoryPageLimit {
-		t.Fatalf("the listing carries %d skill(s), want the page limit %d",
-			len(rows), queries.MemoryPageLimit)
-	}
-	total, present := body["skills_total"]
-	if !present {
-		t.Fatal("the answer omits skills_total, so a page of the set is " +
-			"indistinguishable from the whole of it")
-	}
-	if got, want := jsonInt(t, total), held; got != want {
-		t.Errorf("skills_total = %d, want %d — the count a screen renders is "+
-			"the seat's whole set, not the length of the page", got, want)
-	}
-}
-
-// AND THE PAGE IS TAKEN IN THE STORE rather than out of a fully materialized
-// library.
-//
-// The total and the page used to come from ONE unbounded listing that decoded
-// every row the seat owns — content, frontmatter and all — to show fifty of
-// them, so the answer stayed O(the whole catalogue) in I/O and allocations
-// however small the page was. The bound is [learning.ListOptions.Limit] now,
-// which the SQL honours, and the total is a COUNT beside it. Both halves are
-// asserted here because either one alone is satisfiable by the bug: a listing
-// that is bounded but counted off the page under-reports the set, and an
-// honest total over an unbounded read is exactly what this replaced.
-//
-// The zero Limit is asserted too. It is the unbounded setting every other
-// caller in the tree relies on — the prefetch's offer, the refiner's view of
-// what is live — so a bound that leaked into the default would silently
-// truncate all of them.
-func TestTheSkillPageIsBoundedInTheStore(t *testing.T) {
-	t.Parallel()
-	db := openStore(t)
-	skills := learning.NewSkills(db)
-	const held = queries.MemoryPageLimit + 7
-	for i := range held {
-		name := "skill-" + strconv.Itoa(i)
-		if err := skills.Insert(t.Context(), learning.Skill{
-			ID: name, AgentHandle: "ceo", Name: name,
-			Description: "drafted from repeated work",
-			Content:     strings.Repeat("a body a page never renders. ", 64),
-			CreatedAt:   pinned, UpdatedAt: pinned,
-		}); err != nil {
-			t.Fatalf("insert %s: %v", name, err)
-		}
-	}
-
-	page, err := skills.List(t.Context(), "ceo",
-		learning.ListOptions{Limit: queries.MemoryPageLimit})
-	if err != nil {
-		t.Fatalf("bounded listing: %v", err)
-	}
-	if len(page) != queries.MemoryPageLimit {
-		t.Errorf("a listing bounded to %d read %d row(s), so the answer pays "+
-			"for every skill the seat holds to render a page of them",
-			queries.MemoryPageLimit, len(page))
-	}
-	whole, err := skills.List(t.Context(), "ceo", learning.ListOptions{})
-	if err != nil {
-		t.Fatalf("unbounded listing: %v", err)
-	}
-	if len(whole) != held {
-		t.Errorf("the zero Limit read %d of %d skill(s): it is the unbounded "+
-			"setting every non-paging caller depends on", len(whole), held)
-	}
-
-	body := asMap(t, answer(t, queries.Sources{Skills: skills},
-		"agent_memory", map[string]any{"id": "ceo"}))
-	rows, _ := body["skills"].([]any)
-	if len(rows) != queries.MemoryPageLimit {
-		t.Errorf("the answer carries %d skill(s), want the page limit %d",
-			len(rows), queries.MemoryPageLimit)
-	}
-	if got := jsonInt(t, body["skills_total"]); got != held {
-		t.Errorf("skills_total = %d, want %d — the total is counted over the "+
-			"seat's set, never measured off the page", got, held)
-	}
-}
-
-// AND IT IS PRESENT WHEN NOTHING WAS CUT, so a client never has to tell an
-// absent key from a total of zero.
-func TestSkillsTotalIsAlwaysPresent(t *testing.T) {
-	t.Parallel()
-	db := openStore(t)
-	body := asMap(t, answer(t, queries.Sources{Skills: learning.NewSkills(db)},
-		"agent_memory", map[string]any{"id": "nobody"}))
-	if _, present := body["skills_total"]; !present {
-		t.Error("the answer omits skills_total for a seat with none")
-	}
-}
-
-// jsonInt reads a number that survived a JSON round trip as either shape.
-func jsonInt(t *testing.T, v any) int {
-	t.Helper()
-	switch n := v.(type) {
-	case float64:
-		return int(n)
-	case int:
-		return n
-	default:
-		t.Fatalf("%v is not a number (%T)", v, v)
-		return 0
-	}
-}
-
 // AN EPOCH IS A NUMBER AND NOT A REVISION, and the fleet view carried only
 // the number.
 //
@@ -2323,4 +2523,47 @@ func TestAScheduleRunsReadStatesWhatItIsMissing(t *testing.T) {
 			t.Errorf("%v answered %v, want bad params", params, err)
 		}
 	}
+}
+
+// THE PAGE SCREEN READS WHAT THESE ANSWERS SEND, in both directions — every
+// member `contract/pages.ts` declares is a key the engine sends, and every key
+// it sends is declared, down to the rows inside the lists. A field renamed
+// here without the client is a rail line that reads undefined.
+func TestThePageScreenReadsWhatTheseAnswersSend(t *testing.T) {
+	t.Parallel()
+	f := newSpendFixture(t)
+	at := time.Date(2026, 9, 24, 3, 0, 0, 0, time.UTC)
+	f.reads("node-a", "2026-09-25", "lead", 1,
+		usage.Read{PageID: readPage, Backend: "native", Via: "search", Count: 1, LastAt: at,
+			LastTurnID: "run-a", LastWorkKey: "wk-1", LastQuery: "dhcp"},
+		read("skill_loaded", 1, at, "run-a", ""))
+	sources := f.sources()
+	sources.Work = &stubWork{places: map[string]tracker.TurnPlace{
+		"run-a": {TaskID: "t-1", Key: "ENG-412", Title: "Retry PXE boot", Ordinal: 2}}}
+	sources.Pages = &stubPages{detail: pages.Detail{Page: pages.Page{ID: readPage}, Skill: true}}
+	sources.Backlinks = stubBacklinks{links: search.Backlinks{
+		Pages: []search.PageLink{{ID: "p-2", Container: "ENG", Title: "On-call"}},
+		Tasks: []search.TaskLink{{ID: "t-1", Key: "ENG-412", Title: "Retry", Status: "todo",
+			Via: []string{search.TaskLinkedPage}}},
+		PagesTotal: 1, TasksTotal: 1,
+	}}
+
+	reads := asMap(t, askRaw(t, registryOver(t, sources), "page_reads", map[string]any{"page": readPage}))
+	holdShape(t, "PageReadsAnswer", []map[string]any{reads}, false)
+	readers := rowsOf(t, reads["readers"])
+	holdShape(t, "PageReadRow", readers, false)
+	var places []map[string]any
+	for _, r := range readers {
+		if place, ok := r["last_work_item"].(map[string]any); ok {
+			places = append(places, place)
+		}
+	}
+	holdShape(t, "TurnPlace", places, false)
+
+	page := asMap(t, askRaw(t, registryOver(t, sources), "page", map[string]any{"id": readPage}))
+	holdShape(t, "SkillLoad", rowsOf(t, page["skill_loaded_by"]), false)
+	links := asMap(t, page["linked_from"])
+	holdShape(t, "PageBacklinks", []map[string]any{links}, false)
+	holdShape(t, "PageLink", rowsOf(t, links["pages"]), false)
+	holdShape(t, "TaskLink", rowsOf(t, links["tasks"]), false)
 }

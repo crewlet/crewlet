@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io/fs"
 	"net/http"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -14,7 +15,7 @@ import (
 	"github.com/crewlet/crewlet/internal/api/httpjson"
 	"github.com/crewlet/crewlet/internal/api/livestate"
 	"github.com/crewlet/crewlet/internal/api/mcpbridge"
-	"github.com/crewlet/crewlet/internal/api/opsmcp"
+	"github.com/crewlet/crewlet/internal/api/operator"
 	"github.com/crewlet/crewlet/internal/api/pagepolicy"
 	"github.com/crewlet/crewlet/internal/api/queries"
 	"github.com/crewlet/crewlet/internal/api/stream"
@@ -40,12 +41,6 @@ type App struct {
 	nodeID       string
 	queueBackend string
 
-	// events is the node's own log, for the ONE thing this package does
-	// with it outside the read registry: seeding the live spend window at
-	// boot. Required, like every other estate the engine beside this
-	// process opens.
-	events *store.EventLog
-
 	// now is the clock, shared with the stream service so a hydration
 	// window and a health tick cannot disagree about what time it is.
 	now func() time.Time
@@ -53,12 +48,12 @@ type App struct {
 	// queries is the read surface both transports answer from.
 	queries *queries.Registry
 
-	// budgets is the fleet's token counter, for the one route that WRITES
-	// to it.
-	budgets budgetResetter
-
 	// backup takes a copy of this node's durable state.
 	backup backupTaker
+
+	// audit publishes the runtime audit record every backup leaves; see
+	// [operator.Audit].
+	audit operator.AuditPublisher
 
 	// retention is the fleet's own record of what the log may delete, for
 	// the one gesture that WRITES to it: an operator's backup
@@ -104,9 +99,9 @@ type routeMounter interface {
 //
 // # What is required, and why a nil is refused rather than served around
 //
-// Runtime, Sources.Company, Sources.Events, Sources.NodeID, the Inbound edge's
+// Runtime, EventLog, Sources.Company, Sources.Events, Sources.NodeID, the Inbound edge's
 // Publisher, Claims, Secrets and AppFlow, Config, Secrets, Setup, Budgets,
-// Retention, Capacity and Backup are REQUIRED, and [New] refuses a missing one
+// Retention, Capacity, Backup and Audit are REQUIRED, and [New] refuses a missing one
 // by name.
 //
 // Every one of them is something the engine beside the API holds: `crewlet
@@ -135,6 +130,13 @@ type Options struct {
 
 	// State is the projection to serve. Nil builds an empty one.
 	State *livestate.LiveState
+
+	// EventLog is this node's OWN event store, which the webhook edge writes
+	// every delivery it accepts into. Not the read surface's history, which
+	// is the fleet's (Sources.Events): a write goes to this node and nowhere
+	// else, and a read of one node's store is a third of a three-node
+	// fleet's.
+	EventLog *store.EventLog
 
 	// Sources are what the read surface answers from. Company, Events and
 	// NodeID are required; see above. NodeID is the node's RESOLVED id, and
@@ -190,22 +192,18 @@ type Options struct {
 	// node without the ingress role serves it alone, through [BridgeOnly].
 	Bridge *mcpbridge.Bridge
 
-	// Operator is the company's own tracker and knowledge base, served to
-	// an operator's AI assistant over MCP. Nil serves none and the route
-	// is ABSENT, which is the honest shape for a company on Jira and
-	// Confluence: there is nothing here it could manage.
+	// Operator is the company's own tracker and knowledge base as ONE tool
+	// catalogue, served to the people who run it — over MCP for an
+	// operator's own AI assistant, and over the act transport for a person
+	// at the dashboard, who must hold a token bound to their seat
+	// (ADR-0024). Nil serves none and both routes are ABSENT,
+	// which is the honest shape for a company on Jira and Confluence: there
+	// is nothing here it could manage.
 	//
 	// ALWAYS GUARDED — see [auth.GuardedPrefixes]. It writes to the
 	// company, and the credential's own name is what lands on each record
 	// as the author.
-	Operator *opsmcp.Server
-
-	// Budgets is the fleet's token counter. Supplied separately from
-	// Sources.Budget, which is the READ half: a reset is an operator
-	// action against a spend ceiling, and giving the read surface a
-	// method that clears one would put it a typo away from every screen
-	// that renders spend.
-	Budgets budgetResetter
+	Operator *operator.Server
 
 	// Retention is the fleet's record of what the log may delete, for the
 	// operator's backup acknowledgement.
@@ -225,6 +223,12 @@ type Options struct {
 	// Backup copies this node's durable state to a path an operator
 	// names.
 	Backup backupTaker
+
+	// Audit is where a backup publishes its runtime audit record — this
+	// node's own queue, whose publish listener writes the event store. The
+	// operator surface is handed the same one by whoever builds it
+	// ([operator.Options.Audit]).
+	Audit operator.AuditPublisher
 
 	// Assets overrides the embedded dashboard tree. Nil serves the one
 	// compiled into the binary, which is what every deployment does; a
@@ -258,7 +262,6 @@ func New(opts Options) (*App, error) {
 		runtime:      opts.Runtime,
 		nodeID:       opts.Sources.NodeID,
 		queueBackend: opts.QueueBackend,
-		events:       opts.Sources.Events,
 		now:          now,
 		// DERIVED FROM THE SOURCE THAT ALREADY EXISTS, rather than a
 		// second field an embedder could set inconsistently with it:
@@ -276,13 +279,18 @@ func New(opts Options) (*App, error) {
 		Handles: opts.Sources.RoleHandles,
 		// The three config-derived surfaces, read live for the same
 		// reason Handles is: an apply replaces the company.
-		Roster: func() []map[string]any { return rosterTick(opts.Sources.Company, opts.Runtime) },
+		Roster: func() []map[string]any { return roster(opts.Sources.Company) },
 		Org:    func() any { return orgProjection(opts.Sources.Company) },
 		Tools:  func() []map[string]any { return toolRows(opts.Runtime) },
 		// The CONFIGURED rows only. The dispatch ledger is a store read
 		// and the snapshot makes none; the screen fetches that half
 		// itself through the `schedules` question.
 		Schedules: func() any { return opts.Sources.ConfiguredSchedules() },
+		// WHICH SEATS SOME NODE HOLDS, from the fleet's lease table, for
+		// the seat-state vocabulary's `unplaced`.
+		Placement: func() (map[string]bool, error) {
+			return placementTick(opts.Sources.Company, opts.Sources.Coord, opts.Runtime)
+		},
 
 		Now:            now,
 		HealthInterval: opts.HealthInterval,
@@ -301,11 +309,16 @@ func New(opts Options) (*App, error) {
 	// answering one question from two implementations is how they end up
 	// disagreeing with nobody noticing.
 	sources := opts.Sources
-	if sources.Health == nil {
-		sources.Health = func(ctx context.Context) any { return a.health(ctx) }
-	}
 	if sources.State == nil {
 		sources.State = state
+	}
+	// ONE CLOCK for the surface. The app's own was pinned by a test and the
+	// answers' was the wall clock, so a question stamping "now" on its answer
+	// — the live spend window's edges — answered a REST call and a socket call
+	// a second apart with two different windows, and nothing but the call's
+	// timing said which.
+	if sources.Now == nil {
+		sources.Now = now
 	}
 	// Only the engine knows which parsers registered and what its ${VAR}s
 	// resolved to, so both are read off the runtime rather than taken from
@@ -316,10 +329,20 @@ func New(opts Options) (*App, error) {
 	sources.Verifiable = func(ctx context.Context) []string {
 		return opts.Runtime.Snapshot(ctx).VerifiableSources
 	}
+	// WHO MAY REACH THE COMPANY, read off the guard just mounted rather than
+	// off Tier A: the guard is what decides, and a disabled one accepts no
+	// listed token (see [queries.AccessPosture]).
+	sources.Access = &queries.AccessPosture{
+		TokenIDs:      a.guard.TokenIDs(),
+		Disabled:      a.guard.Disabled(),
+		AnonymousRead: a.guard.AnonymousRead(),
+	}
+	if opts.Bootstrap != nil {
+		sources.Access.AllowedOrigins = slices.Clone(opts.Bootstrap.API.Auth.AllowedOrigins)
+	}
 	a.queries = queries.NewRegistry()
 	queries.Register(a.queries, sources)
-	a.budgets = opts.Budgets
-	a.backup = opts.Backup
+	a.backup, a.audit = opts.Backup, opts.Audit
 	a.retention, a.nodes, a.purger = opts.Retention, opts.Nodes, opts.Purger
 	a.capacity = opts.Capacity
 
@@ -330,13 +353,9 @@ func New(opts Options) (*App, error) {
 	// The NAMED read routes — the public REST API. Adapters over the same
 	// registry the generic form above reaches; see rest.go.
 	a.mountReads(mux)
-	// The one WRITE outside /config and the webhook edge. A POST, so the
-	// anonymous-read posture never opens it: clearing a company's spend
-	// ceiling is not a read, whatever a laptop deployment allows.
-	mux.Handle("POST /budgets/reset", http.HandlerFunc(a.serveBudgetReset))
-	// Also a POST, and for the same reason: copying every credential and
-	// every seat's memory to a path the caller names is not a read,
-	// whatever the anonymous-read posture allows.
+	// A POST, so the anonymous-read posture never opens it: copying every
+	// credential and every seat's memory to a path the caller names is not
+	// a read, whatever a laptop deployment allows.
 	mux.Handle("POST /backup", http.HandlerFunc(a.serveBackup))
 	// The three retention gestures that write. POSTs for the same reason:
 	// moving the floor the trim deletes against, stopping a machine
@@ -349,10 +368,11 @@ func New(opts Options) (*App, error) {
 	// binds no socket. See retention.go.
 	a.mountCapacity(mux)
 	mux.Handle(auth.SocketPath, stream.Handler(a.guard, a.stream, a.answer))
-	// The OPERATOR MCP surface: the same tracker and knowledge tools a
-	// seat holds, offered to a person's own assistant. Under its own
+	// The OPERATOR surface: the same tracker and knowledge tools a seat
+	// holds, offered to a person's own assistant over MCP and to the person
+	// themself over the act transport. Under its own
 	// always-guarded prefix rather than under /mcp/, which is exempt
-	// wholesale for the sandbox bridge — see opsmcp.Path.
+	// wholesale for the sandbox bridge — see operator.MCPPath.
 	a.mountOperator(mux, opts.Operator)
 	// The dashboard shell and its assets. All four paths are exempt from
 	// the guard: the page that prompts for a token cannot itself require
@@ -365,7 +385,7 @@ func New(opts Options) (*App, error) {
 	// The inbound edge. Exempt from the guard by prefix (see the auth
 	// package) because each route authenticates by provider credential,
 	// which is why every one of them verifies before it does anything.
-	if err := a.mountWebhooks(mux, opts.Inbound, sources, now); err != nil {
+	if err := a.mountWebhooks(mux, opts.Inbound, opts.EventLog, now); err != nil {
 		return nil, err
 	}
 	// The SANDBOX TELEMETRY edge, exempt by the same prefix rule and for
@@ -427,8 +447,10 @@ func (o Options) missing() error {
 	}{
 		{"Runtime", o.Runtime == nil},
 		{"Sources.Company", o.Sources.Company == nil},
+		{"EventLog", o.EventLog == nil},
 		{"Sources.Events", o.Sources.Events == nil},
 		{"Sources.NodeID", strings.TrimSpace(o.Sources.NodeID) == ""},
+		{"Sources.Coord", o.Sources.Coord == nil},
 		{"Inbound.Publisher", o.Inbound.Publisher == nil},
 		{"Inbound.Claims", o.Inbound.Claims == nil},
 		{"Inbound.Secrets", o.Inbound.Secrets == nil},
@@ -436,10 +458,10 @@ func (o Options) missing() error {
 		{"Config", o.Config == nil},
 		{"Secrets", o.Secrets == nil},
 		{"Setup", o.Setup == nil},
-		{"Budgets", o.Budgets == nil},
 		{"Retention", o.Retention == nil},
 		{"Capacity", o.Capacity == nil},
 		{"Backup", o.Backup == nil},
+		{"Audit", o.Audit == nil},
 	} {
 		if field.absent {
 			names = append(names, "Options."+field.name)
@@ -488,7 +510,7 @@ type Inbound struct {
 }
 
 // mountWebhooks registers the inbound edge.
-func (a *App) mountWebhooks(mux *http.ServeMux, in Inbound, sources queries.Sources, now func() time.Time) error {
+func (a *App) mountWebhooks(mux *http.ServeMux, in Inbound, events *store.EventLog, now func() time.Time) error {
 	receiver, err := webhooks.New(webhooks.Options{
 		Secrets:    in.Secrets,
 		Publisher:  in.Publisher,
@@ -496,7 +518,7 @@ func (a *App) mountWebhooks(mux *http.ServeMux, in Inbound, sources queries.Sour
 		Keys:       in.Keys,
 		AppFlow:    in.AppFlow,
 		Recheck:    in.Recheck,
-		Events:     sources.Events,
+		Events:     events,
 		Stream:     a.stream,
 		Configured: a.Configured,
 		Now:        now,
@@ -602,12 +624,15 @@ func (a *App) answer(ctx context.Context, what string, params map[string]any, op
 		// THE ONLY ONE HERE THAT KEEPS THE ORIGINAL ERROR, because it is
 		// the only one whose message is written FOR the caller: it names
 		// the field that was missing and the values the field accepts,
-		// and [stream] logs exactly that at debug. The others are
+		// and the frame carries it as `detail`. The others are
 		// deliberately reduced to the query name — a failure's own text
 		// can carry a database path, and none of them has a reader.
-		return nil, fmt.Errorf("%w: %s: %w", stream.ErrBadParams, what, err)
+		return nil, &stream.RefusedError{What: what, Detail: queries.RefusalDetail(err)}
 	case errors.Is(err, queries.ErrUnavailable):
-		return nil, fmt.Errorf("%w: %s", stream.ErrUnavailable, what)
+		// WITH THE REFUSAL'S OWN HINT, which the frame's
+		// `retry_after_seconds` is computed from exactly as the REST
+		// header is (see [stream.RetryAfterSeconds]).
+		return nil, &stream.UnavailableError{What: what, Hint: queries.RetryAfter(err)}
 	default:
 		return nil, err
 	}
@@ -648,8 +673,12 @@ func writeQueryError(w http.ResponseWriter, what string, err error) {
 	case errors.Is(err, queries.ErrBadParams):
 		// 400 AND ITS OWN CODE. The status was already right; the code
 		// said `query_failed`, which names a fault of this node for a
-		// request the caller has to change.
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": stream.CodeBadParams})
+		// request the caller has to change. AND ITS SENTENCE, as the
+		// socket's frame carries it: the refusal names the parameter to
+		// change, which is the whole of the fix.
+		writeJSON(w, http.StatusBadRequest, map[string]string{
+			"error": stream.CodeBadParams, "detail": queries.RefusalDetail(err),
+		})
 	case errors.Is(err, queries.ErrNotFound):
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": stream.CodeNotFound})
 	case errors.Is(err, queries.ErrUnavailable):
@@ -660,19 +689,9 @@ func writeQueryError(w http.ResponseWriter, what string, err error) {
 		// a few seconds, and an empty 200 would tell a person the company
 		// has no work.
 		//
-		// THE HINT IS THE REFUSAL'S OWN where it has one — derived from
-		// how far behind this node is over how fast it is actually
-		// draining — and five seconds otherwise. A flat hint is wrong in
-		// both directions on one fleet. The fallback is what an
-		// unreachable coordination store gets, since there is no drain to
-		// derive from, and it is the shared health tick's own cadence
-		// ([stream.HealthInterval]): a client that waits it out asks again
-		// having seen at most one newer health frame, which is the soonest
-		// it could learn the store is back.
-		after := int(stream.HealthInterval / time.Second)
-		if hint := queries.RetryAfter(err); hint > 0 {
-			after = max(1, int(hint.Round(time.Second)/time.Second))
-		}
+		// THE HINT IS THE REFUSAL'S OWN where it has one, through the one
+		// helper the socket's error frame is computed by too.
+		after := stream.RetryAfterSeconds(queries.RetryAfter(err))
 		w.Header().Set("Retry-After", strconv.Itoa(after))
 		writeJSON(w, http.StatusServiceUnavailable,
 			map[string]string{"error": stream.CodeUnavailable})

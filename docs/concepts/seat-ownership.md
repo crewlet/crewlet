@@ -21,7 +21,7 @@ So attachment has to be exclusive, and exclusivity has to be provable across pro
 Ownership is a lease in the fleet's coordination store (`internal/coord`): a record with a TTL and a monotonic `epoch`. On a fleet (`coordination.type: embedded-kv`) the record lives in the `crewlet_leases` KV bucket, whose age limit is the lease TTL, and the epoch counter in the untimed `crewlet_epochs` bucket; a single node runs the in-memory twin of the same contract.
 
 ```
-seat:{handle}   owner=node-a:9f3c1e70   epoch=7   expires_at=…   preferred=node-a
+seat:{handle}   owner=node-a:9f3c1e70   epoch=7   acquired_at=…   expires_at=…   preferred=node-a
 ```
 
 Three properties carry everything above it:
@@ -29,6 +29,8 @@ Three properties carry everything above it:
 - **The owner is a process incarnation, not a machine.** `{node_id}:{random}`, minted fresh at boot. A live lease is renewable by its own owner string, so two processes sharing an identity would both hold the seat at the same epoch — and the default node id is the shared constant `node-0`. The *stable* node id goes in `preferred`, where restart-stability is what you actually want.
 - **The epoch is a fencing token, monotonic for the resource's lifetime.** It is kept apart from the lease record, in a bucket with no age limit, because a KV deletes a key when it expires: a counter stored on the lease would restart at 1 and hand the next owner a token its predecessor is still using.
 - **A lapsed lease cannot be renewed, only re-acquired** — and re-acquiring bumps the epoch even for the same owner, because during the gap that owner's in-flight work was unprotected and must be fenced against its own past self.
+
+Beside them the record remembers **when its tenure began**. `acquired_at` is the coordination store's own timestamp on the write that won the lease, stamped when the epoch is minted and carried unchanged by every renewal — so it moves exactly when the epoch does, and "node-2 · since 08:02" in the **Since** column of Settings › Nodes means the seat has not moved since 08:02. A heartbeat restamping it would report every seat as "since a few seconds ago". It is on the store's clock for the reason `expires_at` is, and nothing decides ownership by it: it is a fact for a person, and the fence is still the epoch. A lease written by a build older than the field carries none and reads as **unknown** rather than as a time, and a renewal does not invent one — the moment it would stamp is the renewal's, not the claim's.
 
 ## Placement
 
@@ -60,6 +62,8 @@ sequenceDiagram
 ## Establishing a seat, and giving it back
 
 The acquire hook (`node.Node.OnAcquire`, preparing the seat through `Engine.prepareSeat`) establishes the seat in a known state and attaches the inbox consumer **last**: the per-role MCP children, the seat's memory hydrated from the changelog, the sandbox control subscription and the interrupted sandbox-run recovery, *then* the inbox. A seat that starts receiving work before its MCP children are up runs its first turn with an empty tool surface. The sandbox half has one more way in: on a node whose [code sandbox](code-sandbox.md) arrives with an apply, after it already holds seats, that apply gives every held seat its control subscription and run recovery then, under the same per-seat lock an acquisition and a release take, so neither is raced; a seat that cannot be prepared is handed back voluntarily (`unprepared`), and its next acquisition runs the whole hook. The release hook is the mirror: the seat's children die with its lease, because the credentials in one *are* that seat's identity and a child left running would let this node keep acting as an agent a peer now serves. See [Tools & MCP](../guides/tools-and-mcp.md#shared-vs-per-role-servers).
+
+**A seat a person paused is attached already held.** A pause holds the seat's inbox under a named hold, and a release drops every hold with the attachment — so the node that acquires a paused seat (placement moved it, or its holder restarted) takes the pause hold **before** it attaches the inbox (`node.Config.AttachHolds`). A hold taken after the attach would be taken after the first delivery can arrive, and the mail the pause was holding would be the first thing the new holder ran. See [Agent Runtime § Pausing a seat](agent-runtime.md#pausing-a-seat).
 
 Releasing has **two modes**, because losing a lease and choosing to let go are opposites:
 
@@ -163,7 +167,9 @@ It closes on the **epoch**, not on membership, because a seat can be lost and re
 | A seat whose teardown could not be proven | The lease is kept and renewed precisely so no peer can take it, so the grant has not moved and the in-flight turn is racing nobody |
 | A detached run — a coding CLI in agent mode, or a sandbox job | It outlives its turn by design; its placement is on its own row and the process that collects it is often not the one that launched it. What is fenced is the **resume**, under the grant the collecting node holds |
 
-A turn the fence stops is **deferred**, not failed: the delivery is healthy and the seat's new owner is entitled to it, so it goes back the way the three screening paths above send one — immediately, and with this attachment quiesced. That is what a deferral buys here; it is not cheaper. One handoff costs one delivery whether the turn never started or was a phase in — on every backend, the in-memory twin included — which is why the budget is sized for handoffs as well as failures (see [Event System](event-system.md#delivery-semantics)). The exceptions are a turn that panicked and a turn whose own record proves it already wrote outside the engine — each is acked and recorded instead, because a successor would reach the same defect or repeat the write.
+**The same fence carries a person's stop.** A pause that asked for the running turn to stop closes it at the same round boundary with `turn.ErrStoppedByPerson` — ownership is checked first, since a turn on a seat that moved is the successor's to stop or not. That turn is not deferred: the trigger is recorded in the completion ledger and acked, because the person stopped it so that it would not go on. See [Agent Runtime § Pausing a seat](agent-runtime.md#pausing-a-seat).
+
+A turn the fence stops because the seat moved is **deferred**, not failed: the delivery is healthy and the seat's new owner is entitled to it, so it goes back the way the three screening paths above send one — immediately, and with this attachment quiesced. That is what a deferral buys here; it is not cheaper. One handoff costs one delivery whether the turn never started or was a phase in — on every backend, the in-memory twin included — which is why the budget is sized for handoffs as well as failures (see [Event System](event-system.md#delivery-semantics)). The exceptions are a turn that panicked and a turn whose own record proves it already wrote outside the engine — each is acked and recorded instead, because a successor would reach the same defect or repeat the write.
 
 It is **not** on every seat-scoped write, and the honest inventory is narrower than "the learning tables are unfenced". What a duplicate write actually does, per table:
 
@@ -225,6 +231,29 @@ That is skipped rather than returned as an error, and the distinction matters
 more than one row: hydration runs inside seat acquisition, so an error refuses
 the seat, and a single duplicated episode would make a seat unplaceable across
 the whole fleet.
+
+**A read is answered by the holder.** Every node that ever held a seat keeps a
+copy of its memory, and only the node holding it now keeps that copy current.
+So a screen reading a seat's memory or its conversation ledger
+(`agent_memory`, `conversations`) is never answered from whichever node served
+the request: that node reads the seat's lease and answers from its own store if
+it is the holder and has the seat attached, asks the holding incarnation on an
+ephemeral scatter if a peer is, and answers empty — naming no holder — if no
+node holds the seat, because a copy of unknown age is not the seat's memory. A
+holder that is silent, or still hydrating the seat, is an `unavailable` answer
+rather than an empty one. So is a holder whose build cannot answer at all — the
+asker reads the holding incarnation's advertised
+[features](coordination.md#what-a-node-says-about-itself) first, and a node
+that does not advertise `held_read` is named as an older build at once rather
+than waited on for the whole two-second budget, on every poll, during a rolling
+upgrade. Every node answers for the seats it holds, including a node that
+serves no API. The list of every agent's memory (`memory_overview`) follows the
+same rule in one round rather than one per seat: the asker lists every seat
+lease once, reads its own seats from its store, and puts one request on the
+broker naming each holder's seats — so a fifty-agent company is one scatter,
+not fifty — and a holder that did not answer is named in the answer's coverage
+while its seats say so rather than reading as empty. See
+`internal/learning/memread`.
 
 **Deletes are deliberately not replicated.** The learning lifecycle drops rows
 constantly, and carrying a tombstone for each would double the protocol to
@@ -300,8 +329,8 @@ every turn that closed a single round.
 Giving up on a trigger is never silent. The turn has already published its own
 completion marked failed, and a `TurnTriggerSkipped` beside it says the trigger
 behind it will not come back, and why. A panic also publishes
-`turn.guard_breach(kind="unhandled_exception")`, which is what puts the seat in
-the dashboard's `afk` state, and the log line that recovered it
+`turn.guard_breach(kind="unhandled_exception")`, which is what puts the failure
+on the seat as its `last_error`, and the log line that recovered it
 (`turn_phase_panicked`, `dispatch_panicked` or `sandbox_resume_panicked`)
 carries the stack.
 
@@ -447,7 +476,7 @@ A rolling upgrade puts a vN and a vN+1 node on the same lease table and the same
 
 The rule is asymmetric: **a node refuses to claim anything while a live lease is held at a lower protocol version.** Older nodes keep working (they cannot know about a check that postdates them); newer ones wait, visibly, until the last old lease lapses. A rolling deploy converges because that is what a rolling deploy does.
 
-Two consequences worth stating plainly:
+Three consequences worth stating plainly:
 
 - **Lease schema evolution is additive-only.** A column the older build does not select is invisible to it; one it *requires* is a crash.
 - **A downgrade across a protocol bump needs a full drain.** An older build has no protocol check at all, so it will happily take over a newer node's expired leases. Stop the whole fleet before rolling back.
@@ -455,14 +484,15 @@ Two consequences worth stating plainly:
 
 **Duties have a second, narrower rule.** Fleet duties moved out of the seat lease bucket into a [bucket of their own](coordination.md#duties-have-a-bucket-of-their-own), which an older build cannot see. So while any node of a build that still keeps duties with the seat leases is live, newer nodes claim no duty at all (seats are unaffected), logging `coord_kv_duties_wait_for_older_build` once when the wait starts and `coord_kv_duties_resumed` when it ends. The older nodes run the duties they can until they stop. Rolling back across that change needs every newer node stopped first.
 
-The current protocol is **3**, and it has moved twice — each time because holding a lease came to *mean* something a previous build could not honour:
+The current protocol is **4**, and it has moved three times — each time because holding a lease came to *mean* something a previous build could not honour:
 
 - **v2 — the completion ledger.** Holding a seat lease now means consulting and settling the completion ledger. A v1 node cannot: it takes a seat over, never reads the record, and re-runs a turn whose effects already shipped.
 - **v3 — placement.** Holding a seat lease now means "and this node satisfies the seat's `role.placement`". A v2 node has no such concept, so it claims a seat pinned to a node id or a label it does not carry — and *succeeds*, because the lease is only a mutex and knows nothing about where a seat belongs. The operator's pin is silently violated: the seat runs, on the wrong node, with nothing to see.
+- **v4 — windowed token counters.** Holding a seat lease now means charging the seat's rounds to the [windowed token counters](coordination.md#token-budgets-are-windows) — a slot per day, week and month on the company's clock. A v3 node has only the lifetime counter, so beside a v4 node the two builds charge different records: each admits against a figure that is missing what the other build spent, and every cap binds late by exactly that much, with nothing refused to show it. See [the rolling upgrade across the token windows](coordination.md#the-rolling-upgrade-across-the-token-windows).
 
 ## What ownership looks like from outside
 
-`GET /health` lists the seats this node holds (`seats`). The **Fleet** screen and the `fleet` query (`GET /query/fleet`) show every live node with the seats it holds, its roles and labels, its lease protocol and when its presence expires. The log carries the rest: `seat_sweep` reports each pass's held count against the computed capacity, `seat_claimed` and `seat_attached` / `seat_detached` carry the seat and the epoch (a detach also carries its reason), `seats_unplaceable` names seats no live node can run, and `seat_claims_blocked_by_older_protocol` names the protocol floor an older peer is imposing.
+`GET /health` lists the seats this node holds (`seats`). The **Settings › Nodes** screen and the `fleet` query (`GET /query/fleet`) show every live node with the seats it holds, its roles and labels, its lease protocol and when its presence expires. The log carries the rest: `seat_sweep` reports each pass's held count against the computed capacity, `seat_claimed` and `seat_attached` / `seat_detached` carry the seat and the epoch (a detach also carries its reason), `seats_unplaceable` names seats no live node can run, and `seat_claims_blocked_by_older_protocol` names the protocol floor an older peer is imposing.
 
 `unproven_seconds` on `GET /health` is the number to alert on: a map of seat handle to how long its teardown has been failing, present only when one is stranded, and absent from `seats` for as long as it is. The `seat_still_unproven` log line carries the same alarm with the attempt count, repeating every twenty heartbeats. Alert on the **duration**, not on the field appearing or on the first `seat_release_unproven`: a teardown that fails once and succeeds on the next heartbeat retry is a working system (`seat_release_recovered`), while a seat still stranded minutes later is a seat nothing in the fleet is running.
 

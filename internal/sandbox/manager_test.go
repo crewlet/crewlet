@@ -118,7 +118,7 @@ func TestAReloadKeepsTheBoxesAlreadyOnADroppedCellReachable(t *testing.T) {
 	})
 	coordinator, err := NewCoordinator(CoordinatorOptions{
 		Queue: &recorder{}, Pending: NewCoordStore(memory.NewFleet()),
-		Manager: both, Resume: resumeNothing{},
+		Manager: both, Resume: resumeNothing{}, Audience: &audienceSpy{},
 	})
 	if err != nil {
 		t.Fatalf("NewCoordinator: %v", err)

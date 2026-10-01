@@ -178,9 +178,15 @@ export function describe(expression: string): string | null {
   if (!cron) return null;
 
   const when = timeOf(cron);
+  // A TIME THAT RECURS THROUGH THE DAY already says "every day": every hour,
+  // or every Nth, is a sentence that has no day it skips. Appended anyway it
+  // read "every 20 minutes every day" and "every 4 hours at :00 past every
+  // day" — the second one not English — on the header of the one page about
+  // the schedule, where the sentence is drawn whole.
+  const recurs = cron.hour.length === 24 || stepOf(cron.hour, 0, 23) > 0;
   const days = daysOf(cron);
   const months = monthsOf(cron);
-  return [when, days, months].filter(Boolean).join(" ");
+  return [when, recurs && days === "every day" ? "" : days, months].filter(Boolean).join(" ");
 }
 
 function timeOf(cron: Cron): string {

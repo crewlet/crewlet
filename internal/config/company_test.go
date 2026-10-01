@@ -2,6 +2,7 @@ package config
 
 import (
 	"errors"
+	"slices"
 	"strings"
 	"testing"
 
@@ -181,16 +182,26 @@ func TestCompanyValidatorRejections(t *testing.T) {
 			"learning.episode_lifecycle.exemplar_count", ErrConflict,
 		},
 
+		// the company's clock
+		{
+			"an unknown timezone",
+			"name: Acme\ntimezone: Mars/Olympus\n",
+			"timezone", ErrUnknownValue,
+		},
+		{
+			// A HOST'S OWN CLOCK: it loads, and it is whatever zone the
+			// node reading it is set to, so two nodes would cut two
+			// different days from one company.
+			"the host's own clock",
+			"name: Acme\ntimezone: Local\n",
+			"timezone", ErrUnknownValue,
+		},
+
 		// scheduling
 		{
 			"a tick that can miss a cron minute",
 			"name: Acme\nscheduling:\n  tick_seconds: 300\n",
 			"scheduling.tick_seconds", ErrOutOfRange,
-		},
-		{
-			"an unknown timezone",
-			"name: Acme\nscheduling:\n  default_timezone: Mars/Olympus\n",
-			"scheduling.default_timezone", ErrUnknownValue,
 		},
 		{
 			"catchup max below min",
@@ -509,7 +520,7 @@ roles:
   - name: Founder
     kind: human
     contact: {slack_user_id: U0FOUNDER}
-    token_budget: 100
+    token_budget: {day: 100}
 `, "Founder")
 		if !strings.Contains(err.Error(), "token_budget") {
 			t.Fatalf("the error should name the offending field; got %v", err)
@@ -846,4 +857,36 @@ func TestTheBaseURLVariableIsReserved(t *testing.T) {
 	// A DIFFERENT name is ordinary. The reservation takes one identifier,
 	// not the idea of an operator-declared URL.
 	mustCompany(t, "name: Acme\nskill_variables:\n  wiki_base_url: https://wiki.example.com\n")
+}
+
+// THE SEATS WITH TURNS ARE EVERY NON-HUMAN ROLE, AT ANY DEPTH.
+//
+// The live projection's boot seed is keyed by this list, so a seat it misses
+// starts every screen at this process's boot, and a human it includes is a
+// seat with no turn seeded as one. A unit nested two deep is the case a
+// top-level walk would silently drop.
+//
+// Mutation: walk c.Roles alone, or drop the human filter, and this fails.
+func TestAgentRolesAreEveryNonHumanSeatAtAnyDepth(t *testing.T) {
+	t.Parallel()
+	c := &Company{
+		Roles: []Role{{Name: "ceo"}, {Name: "founder", Kind: org.KindHuman}},
+		Units: []Unit{{
+			Name:  "eng",
+			Roles: []Role{{Name: "cto"}},
+			Children: []Unit{{
+				Name:  "platform",
+				Roles: []Role{{Name: "sre"}, {Name: "reviewer", Kind: org.KindHuman}},
+			}},
+		}},
+	}
+	got := c.AgentRoles()
+	slices.Sort(got)
+	if want := []string{"ceo", "cto", "sre"}; !slices.Equal(got, want) {
+		t.Errorf("AgentRoles() = %v, want %v", got, want)
+	}
+	var none *Company
+	if got := none.AgentRoles(); got != nil {
+		t.Errorf("a nil company's AgentRoles() = %v, want nil", got)
+	}
 }

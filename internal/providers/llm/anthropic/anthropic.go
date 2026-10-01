@@ -30,7 +30,6 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
-	"os"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -50,12 +49,6 @@ var log = logging.Get("llm.anthropic")
 // providerName labels errors and log lines. It is the config's type name.
 const providerName = "anthropic"
 
-// KeyEnv is the conventional variable consulted when a config names no key,
-// so a credential already exported in a shell works with no YAML change.
-// internal/config/providers.go documents the fallback; this is where it
-// happens.
-const KeyEnv = "ANTHROPIC_API_KEY"
-
 // Defaults. The timeout matches the config layer's defaultLLMTimeoutSeconds.
 const (
 	DefaultBaseURL         = "https://api.anthropic.com"
@@ -73,9 +66,12 @@ type Config struct {
 	Model string
 
 	// APIKeys are the credentials, in declaration order. Several rotate.
-	// Empty falls back to KeyEnv; failing that the provider still builds
-	// and every call comes back a clean 401, which is a far easier thing
-	// to diagnose than a constructor that refused to exist.
+	// These are THE WHOLE BAG: nothing here reads a variable. Which key an
+	// entry that names none runs on is a configuration rule
+	// (config.LLMProvider.Keys), decided where the document and the secret
+	// store are both in reach. Empty still builds, and every call comes
+	// back a clean 401, which is a far easier thing to diagnose than a
+	// constructor that refused to exist.
 	APIKeys []string
 
 	// BaseURL is the endpoint. Empty takes DefaultBaseURL. It is ALWAYS
@@ -112,10 +108,6 @@ type Config struct {
 
 	// Clock is the pool's monotonic time source. Nil takes the default.
 	Clock credential.Clock
-
-	// LookupEnv resolves KeyEnv. Nil takes os.Getenv; the engine passes a
-	// secret-store-aware resolver so a rotated secret beats a stale shell.
-	LookupEnv func(string) string
 }
 
 // Provider is an Anthropic Messages backend.
@@ -143,15 +135,6 @@ func New(cfg Config) (*Provider, error) {
 	}
 
 	keys := cfg.APIKeys
-	if len(keys) == 0 {
-		lookup := cfg.LookupEnv
-		if lookup == nil {
-			lookup = os.Getenv
-		}
-		if key := strings.TrimSpace(lookup(KeyEnv)); key != "" {
-			keys = []string{key}
-		}
-	}
 
 	baseURL := cfg.BaseURL
 	if strings.TrimSpace(baseURL) == "" {
@@ -435,8 +418,7 @@ func formatMessages(messages []llm.Message) ([]sdk.MessageParam, error) {
 				// different message entirely.
 				content = emptyToolResultContent
 			}
-			out = append(out, sdk.NewUserMessage(
-				sdk.NewToolResultBlock(m.ToolCallID, content, false)))
+			out = appendUser(out, sdk.NewToolResultBlock(m.ToolCallID, content, false))
 
 		case len(m.ToolCalls) > 0 || len(m.ThinkingBlocks) > 0:
 			blocks := make([]sdk.ContentBlockParamUnion, 0,
@@ -487,10 +469,40 @@ func formatMessages(messages []llm.Message) ([]sdk.MessageParam, error) {
 			out = append(out, sdk.NewAssistantMessage(sdk.NewTextBlock(m.Content)))
 
 		default:
-			out = append(out, sdk.NewUserMessage(sdk.NewTextBlock(m.Content)))
+			out = appendUser(out, sdk.NewTextBlock(m.Content))
 		}
 	}
 	return out, nil
+}
+
+// appendUser adds user-side blocks to the conversation, JOINING the previous
+// turn when it is also the user's.
+//
+// Anthropic's conversation alternates: every tool_use an assistant turn makes
+// is answered by a tool_result block in the ONE user turn that follows, and
+// those blocks come first in it. The engine's messages do not alternate — each
+// tool result is a message of its own, and a person's note to a running turn
+// (internal/agent/steer) is a user message sent straight after the results it
+// follows. Sent one message each, the API merges consecutive user turns
+// server-side, which is a courtesy rather than a contract — so the merge is
+// made HERE, where its order is ours: the results in call order, then the
+// note.
+//
+// NEVER A RESULT AFTER TEXT: a tool_result joins a user turn only when that turn
+// is made of results so far, because the API requires them first. A result
+// that would follow text opens a turn of its own instead, which is the shape
+// the conversation had before this merge existed.
+func appendUser(out []sdk.MessageParam, block sdk.ContentBlockParamUnion) []sdk.MessageParam {
+	n := len(out)
+	if n == 0 || out[n-1].Role != sdk.MessageParamRoleUser {
+		return append(out, sdk.NewUserMessage(block))
+	}
+	if prev := out[n-1].Content; block.OfToolResult != nil && len(prev) > 0 &&
+		prev[len(prev)-1].OfToolResult == nil {
+		return append(out, sdk.NewUserMessage(block))
+	}
+	out[n-1].Content = append(out[n-1].Content, block)
+	return out
 }
 
 // formatTools renders the tool array, with a cache breakpoint on the last

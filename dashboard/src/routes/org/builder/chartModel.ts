@@ -65,7 +65,7 @@ import {
   placeDerivation,
   type CheckedDocument,
 } from "./model/document.ts";
-import { getPath, isRecord } from "./model/json.ts";
+import { getPath } from "./model/json.ts";
 import { kindOf, type SeatKind } from "./model/operations.ts";
 import { reportingForest, type ReportingNode } from "./model/reporting.ts";
 

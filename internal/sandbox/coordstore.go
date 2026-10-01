@@ -6,7 +6,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"maps"
+	"reflect"
 	"slices"
+	"strings"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -94,6 +97,11 @@ func (s *CoordStore) BeginLaunch(ctx context.Context, run PendingRun, fence Fenc
 	// reset below included: a completion claims only the job it names.
 	run.LaunchID = uuid.NewString()
 	run.UpdatedAt = now
+	// And the job's own record starts here, keyed on that name: the
+	// instant the launch exists is the instant its phase began, and a
+	// previous job's record — its start, its iteration, whether its phase
+	// was published — is not this one's. Only the model is the caller's.
+	run.Launch = LaunchRecord{ID: run.LaunchID, StartedAt: now, Model: run.Launch.Model}
 	raw, err := encodeRun(run)
 	if err != nil {
 		return err
@@ -115,6 +123,7 @@ func (s *CoordStore) BeginLaunch(ctx context.Context, run PendingRun, fence Fenc
 		}
 		existing.Status = StatusLaunching
 		existing.LaunchID = run.LaunchID
+		existing.Launch = run.Launch
 		// The previous job's suspension is not this job's. Left in place
 		// it is worse than absent: a completion claimed before the new
 		// suspension lands would resume the conversation the LAST call
@@ -124,6 +133,12 @@ func (s *CoordStore) BeginLaunch(ctx context.Context, run PendingRun, fence Fenc
 		// And its question is answered, or was never asked — either way a
 		// reply arriving now belongs to the new job, not the old one.
 		existing.Question, existing.Audience = "", ""
+		// And whom it was put to: the audience is the question's, and a
+		// question that is gone waits on nobody.
+		existing.AudienceHandles, existing.AudienceFallback = nil, false
+		// AND ITS COST: a parked job's tokens are paid by the resume its
+		// answer drives, which has happened by the time a new job opens.
+		existing.ParkedInputTokens, existing.ParkedOutputTokens = 0, 0
 		// NOR ARE THE PREVIOUS JOB'S TOOL CALLS THIS JOB'S. The bridged
 		// log is the whole record an agent-mode resume rebuilds its phase
 		// from, and a second executor round under the same turn id — what
@@ -190,6 +205,15 @@ func (s *CoordStore) ReleaseClaim(ctx context.Context, turnID string, release Re
 		}
 		run.Status = release.To
 		run.Charged = run.Charged || release.Charged
+		if release.Published {
+			// Onto THIS job's record, starting one where the row carries
+			// none of its own: a row an older build launched has no record,
+			// and one it relaunched carries the previous job's.
+			if run.Launch.ID != run.LaunchID {
+				run.Launch = LaunchRecord{ID: run.LaunchID}
+			}
+			run.Launch.Published = true
+		}
 		return true
 	})
 	return released, err
@@ -201,8 +225,11 @@ func (s *CoordStore) MarkAwaiting(ctx context.Context, turnID string, q Clarific
 		run.Status = StatusAwaiting
 		run.Question = q.Question
 		run.Audience = q.Audience
+		run.AudienceHandles = append([]string(nil), q.Answerers.Handles...)
+		run.AudienceFallback = q.Answerers.Fallback
 		run.Branch = q.Branch
 		run.SessionID = q.SessionID
+		run.ParkedInputTokens, run.ParkedOutputTokens = q.InputTokens, q.OutputTokens
 		return true
 	})
 	return err
@@ -350,13 +377,18 @@ func appendBounded(calls []BridgeCall, elided int, next BridgeCall) ([]BridgeCal
 
 // MarkSuspended writes the suspended Execute loop and opens the run to the
 // completion poll. See the contract on [PendingStore].
-func (s *CoordStore) MarkSuspended(ctx context.Context, turnID string, state map[string]any) (bool, error) {
+func (s *CoordStore) MarkSuspended(ctx context.Context, turnID string, suspension Suspension) (bool, error) {
 	_, won, err := s.mutate(ctx, turnID, func(run *PendingRun) bool {
 		if run.Status != StatusLaunching {
 			return false
 		}
-		run.ExecuteState = maps.Clone(state)
+		run.ExecuteState = maps.Clone(suspension.State)
 		run.Status = StatusRunning
+		// Keyed on the job like the rest of its record — see ReleaseClaim.
+		if run.Launch.ID != run.LaunchID {
+			run.Launch = LaunchRecord{ID: run.LaunchID}
+		}
+		run.Launch.Iteration = suspension.Iteration
 		return true
 	})
 	return won, err
@@ -530,18 +562,60 @@ func outranked(run PendingRun, fence Fence) bool {
 	return fence.Fenced() && run.OwnerEpoch > fence.Epoch
 }
 
+// encodeRun writes a run back whole, keys this build does not know included.
+//
+// THE KNOWN FIELDS WIN. [PendingRun.Extra] holds only what the decode could
+// not place in the struct, so a key in both can only mean a caller put it
+// there by hand, and the value this build decided is the one that lands.
+// "Known" is what the struct DECLARES ([pendingRunKeys]), never what the
+// marshal happened to emit: an omitempty field left at its zero value emits
+// nothing, and testing presence would let a carried key of the same name
+// bring back the value this build just cleared.
 func encodeRun(run PendingRun) ([]byte, error) {
 	raw, err := json.Marshal(run)
+	if err != nil {
+		return nil, fmt.Errorf("sandbox: encode run %s: %w", run.TurnID, err)
+	}
+	if len(run.Extra) == 0 {
+		return raw, nil
+	}
+	fields := map[string]json.RawMessage{}
+	if err = json.Unmarshal(raw, &fields); err != nil {
+		return nil, fmt.Errorf("sandbox: encode run %s: %w", run.TurnID, err)
+	}
+	declared := pendingRunKeys()
+	for key, value := range run.Extra {
+		if !declared[key] {
+			fields[key] = value
+		}
+	}
+	raw, err = json.Marshal(fields)
 	if err != nil {
 		return nil, fmt.Errorf("sandbox: encode run %s: %w", run.TurnID, err)
 	}
 	return raw, nil
 }
 
+// decodeRun reads a run and KEEPS what it cannot read — see
+// [PendingRun.Extra] for the rolling upgrade that loses it otherwise.
 func decodeRun(record coord.Record) (PendingRun, error) {
 	var run PendingRun
 	if err := json.Unmarshal(record.Value, &run); err != nil {
 		return PendingRun{}, fmt.Errorf("sandbox: decode run %s: %w", record.Key, err)
+	}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(record.Value, &fields); err != nil {
+		return PendingRun{}, fmt.Errorf("sandbox: decode run %s: %w", record.Key, err)
+	}
+	known := pendingRunKeys()
+	for key, value := range fields {
+		if known[key] {
+			continue
+		}
+		if run.Extra == nil {
+			run.Extra = map[string]json.RawMessage{}
+		}
+		run.Extra[key] = value
 	}
 	// The KEY is the identity, not the field: a record whose body somehow
 	// disagrees with the key it is stored under would hand a caller a run
@@ -549,3 +623,23 @@ func decodeRun(record coord.Record) (PendingRun, error) {
 	run.TurnID = record.Key
 	return run, nil
 }
+
+// pendingRunKeys is every wire key [PendingRun] declares, read off its own
+// tags so a field added to the struct is known here the moment it exists — a
+// hand-kept list would be one more place a new field could be forgotten, and
+// a forgotten one would be carried in Extra AND written from the struct.
+var pendingRunKeys = sync.OnceValue(func() map[string]bool {
+	keys := map[string]bool{}
+	typ := reflect.TypeFor[PendingRun]()
+	for field := range typ.Fields() {
+		name, _, _ := strings.Cut(field.Tag.Get("json"), ",")
+		switch {
+		case name == "-" || !field.IsExported():
+			continue
+		case name == "":
+			name = field.Name
+		}
+		keys[name] = true
+	}
+	return keys
+})

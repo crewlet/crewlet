@@ -90,9 +90,11 @@ const (
 	CodeMethodNotAllowed Code = "method_not_allowed"
 
 	// CodeInvalidToken is a credential that is missing, malformed or not
-	// one this node accepts — the auth guard's refusal, and a per-run
-	// token's. ONE spelling for all of them, because telling the caller
-	// which of the three it was tells an attacker the same.
+	// one this node accepts. ONE spelling for all three, because telling
+	// the caller which it was tells an attacker the same — and one spelling
+	// for every place that refuses one: the bearer guard, the socket
+	// handshake and a per-run token's endpoint (the OTLP receiver, the MCP
+	// bridge), which each spelled it by hand until it was named here.
 	CodeInvalidToken Code = "invalid_token"
 )
 

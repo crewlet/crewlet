@@ -234,9 +234,16 @@ func TestAnEmptyRollupMarshalsToArraysNotNulls(t *testing.T) {
 	if err := json.Unmarshal(raw, &body); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
-	for _, key := range []string{"by_phase", "by_model", "by_worker", "by_agent", "by_turn"} {
+	for _, key := range []string{"by_phase", "by_model", "by_provider", "by_worker", "by_agent"} {
 		if _, ok := body[key].([]any); !ok {
 			t.Errorf("%s marshalled as %T, want an array", key, body[key])
+		}
+	}
+	// THE TURN TAIL IS ABSENT OR A LIST, never null: a named window has
+	// none to carry, and the client reads `by_turn ?? []`.
+	if v, ok := body["by_turn"]; ok {
+		if _, list := v.([]any); !list {
+			t.Errorf("by_turn marshalled as %T, want an array or nothing", v)
 		}
 	}
 	// THE WINDOW IS TWO INSTANTS, so an empty rollup still says what it is
@@ -262,7 +269,7 @@ func TestTheWireKeysAreTheOnesTheClientReads(t *testing.T) {
 		t.Fatalf("decode: %v", err)
 	}
 	for _, key := range []string{
-		"since", "until", "agent_role", "totals", "by_phase", "by_model",
+		"since", "until", "totals", "by_phase", "by_model", "by_provider",
 		"by_worker", "by_agent", "by_turn", "aggregated_through",
 	} {
 		if _, ok := body[key]; !ok {
@@ -387,5 +394,36 @@ func TestTwoRunsOfOneTriggerAreTwoLinkableRows(t *testing.T) {
 	if byID["run-1"].WorkKey != "wk-1" || byID["run-2"].WorkKey != "wk-1" {
 		t.Errorf("work keys = %q and %q, want both to name the one trigger",
 			byID["run-1"].WorkKey, byID["run-2"].WorkKey)
+	}
+}
+
+// THE CACHE'S SHARE IS SUMMED INTO EVERY BUCKET, as a breakdown of the input
+// rather than an addition to it: input_tokens already counts the cached prefix,
+// so a bucket whose total grew by its cache reads would bill that prefix twice.
+func TestTheRollupSumsCacheTokens(t *testing.T) {
+	t.Parallel()
+	first := rec("CEO", "execute", "sonnet", "t1", "2026-06-14T12:00:00Z", 1000, 40)
+	first.CacheReadTokens, first.CacheWriteTokens = 800, 150
+	second := rec("CEO", "review", "sonnet", "t1", "2026-06-14T12:00:05Z", 600, 20)
+	second.CacheReadTokens = 500
+	got := tokens.Aggregate([]tokens.Record{first, second},
+		tokens.Options{Since: since, Until: until})
+
+	for name, b := range map[string]tokens.Bucket{
+		"totals": got.Totals, "the model": got.ByModel[0].Bucket,
+		"the agent": got.ByAgent[0].Bucket, "the turn": got.ByTurn[0].Bucket,
+	} {
+		if b.CacheReadTokens != 1300 || b.CacheWriteTokens != 150 {
+			t.Errorf("%s: cache = %d read / %d write, want 1300 / 150", name, b.CacheReadTokens, b.CacheWriteTokens)
+		}
+		if b.InputTokens != 1600 || b.TotalTokens != 1660 {
+			t.Errorf("%s: input %d total %d — the cache must not be added to either", name, b.InputTokens, b.TotalTokens)
+		}
+	}
+	raw, _ := json.Marshal(got.Totals)
+	var body map[string]any
+	_ = json.Unmarshal(raw, &body)
+	if body["cache_read_tokens"] != float64(1300) || body["cache_write_tokens"] != float64(150) {
+		t.Errorf("the wire totals carry %v / %v", body["cache_read_tokens"], body["cache_write_tokens"])
 	}
 }

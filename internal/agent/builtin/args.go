@@ -185,12 +185,27 @@ func argStringMap(args map[string]any, key string) map[string]string {
 	return out
 }
 
-// failed is a tool result the model can act on.
+// refused is a tool result the model can act on, carrying the class a reader
+// that is not a model acts on instead.
 //
 // Failed rather than an error: the turn is fine, this call is not, and the
 // difference is what lets the model try again with a better argument instead
 // of the loop tearing down.
-func failed(msg string) tools.Result { return tools.Result{Output: msg, Failed: true} }
+//
+// THE CLASS IS AN ARGUMENT, never inferred from the sentence, because the
+// sentence is prompt text tuned against model behaviour and rewording it must
+// not move a person's surface to a different status. See [tools.Refusal].
+// This is the ONE place in the package a failed result is built, which is what
+// TestEveryFirstPartyRefusalIsClassified holds.
+func refused(code tools.Refusal, msg string) tools.Result {
+	return tools.Result{Output: msg, Failed: true, Refusal: code}
+}
+
+// failed is the argument refusal — [tools.RefusalInvalid] — which is what the
+// great majority of these are: a missing, malformed or unknown argument whose
+// sentence names the field to change. Anything else says its class with
+// [refused].
+func failed(msg string) tools.Result { return refused(tools.RefusalInvalid, msg) }
 
 // clip flattens a caller-supplied string echoed back into a tool result or a
 // log line.

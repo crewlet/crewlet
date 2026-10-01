@@ -71,6 +71,16 @@ type TurnRef struct {
 	// Depth and Chain are the delegation state a resumed turn inherits.
 	Depth int
 	Chain []string
+
+	// WorkItem is the item the launching turn is charged to, nil when it is
+	// on nothing. Written onto the row, because the resumed turn has no
+	// trigger to resolve it from — see [PendingRun.WorkItem].
+	WorkItem *types.WorkItem
+
+	// Requester is the seat whose wake started the turn, "" for none —
+	// what a question addressed to "requester" is put to. See
+	// [PendingRun.Requester].
+	Requester string
 }
 
 // LaunchRequest is everything one detached coding run needs.
@@ -85,6 +95,12 @@ type LaunchRequest struct {
 	// Task is the ask the suspended turn was working on, carried onto the
 	// row so a resume has the brief when the trigger is long gone.
 	Task string
+
+	// Ask is the addendum telling the coding agent how to stop and ask a
+	// person — the ask shim's usage, with the names it may address. The
+	// ENGINE composes it, because the names are the chart's and this
+	// package holds none; empty adds nothing.
+	Ask string
 
 	Spec       Spec
 	Setup      []SetupStep
@@ -159,6 +175,13 @@ func Launch(ctx context.Context, m *Manager, store PendingStore, q Publisher, re
 		Reply:           req.Turn.Reply,
 		TraceID:         req.Turn.TraceID, SpanID: req.Turn.SpanID,
 		DelegationDepth: req.Turn.Depth, DelegationChain: req.Turn.Chain,
+		WorkItem: req.Turn.WorkItem,
+		// Who asked, for the park that resolves a question's audience:
+		// that frame sees no trigger.
+		Requester: req.Turn.Requester,
+		// The model the run's phase record is filed under; the store keys
+		// the rest of that record on the launch it mints.
+		Launch:    LaunchRecord{Model: launchModel(req.LLM)},
 		CreatedAt: now(),
 	}, req.Fence); err != nil {
 		return LaunchResult{}, fmt.Errorf("sandbox: recording the run: %w", err)
@@ -212,7 +235,19 @@ func Launch(ctx context.Context, m *Manager, store PendingStore, q Publisher, re
 		return LaunchResult{}, fmt.Errorf("sandbox: recording the job: %w", err)
 	}
 
+	// WHICH JOB THIS IS, read back from the row: the store minted the
+	// launch id, and the announcement is what a watcher pairs a start with
+	// its job's record by, and what a request for its live output names.
+	// Best effort like the announcement itself — a row that cannot be read
+	// back costs the pairing, not the run.
+	var launch LaunchRecord
+	if row, ok, err := store.Get(ctx, req.Turn.TurnID); err != nil {
+		log.WarnContext(ctx, "sandbox_launch_unread", "turn_id", req.Turn.TurnID, "error", err.Error())
+	} else if ok {
+		launch = row.LaunchFacts()
+	}
 	started := types.SandboxRunStarted{
+		LaunchID: launch.ID, StartedAt: launch.StartedAt,
 		Agent: req.Turn.AgentID, AgentHandle: req.Turn.AgentHandle,
 		RoleName: req.Turn.Role, TurnID: req.Turn.TurnID, WorkKey: req.Turn.WorkKey,
 		SandboxID: box.ID(), CodingAgent: req.Spec.CodingAgent,
@@ -221,7 +256,8 @@ func Launch(ctx context.Context, m *Manager, store PendingStore, q Publisher, re
 		// this run for" is the durable thread rather than the batch the
 		// trigger arrived in.
 		ConversationKey: req.Turn.ConversationKey,
-		Task:            summarise(req.Brief),
+		WorkItem:        req.Turn.WorkItem,
+		Task:            Summarise(req.Brief),
 	}
 	ev := events.New(started, events.TraceContext{
 		TraceID: req.Turn.TraceID, ParentSpanID: req.Turn.SpanID,
@@ -322,7 +358,12 @@ func abandon(ctx context.Context, m *Manager, store PendingStore, req LaunchRequ
 // the wire. Sized to a readable row on a narrow column.
 const briefSummaryLimit = 120
 
-func summarise(brief string) string {
+// Summarise is a brief's first line, cut to [briefSummaryLimit]: the label a
+// running-runs panel draws for a run. Exported because the live projection
+// labels a run it learned of from the durable record — a process that came up
+// mid-run never saw the announcement that carried the label — with the same
+// cut, rather than a second one.
+func Summarise(brief string) string {
 	line, _, _ := strings.Cut(strings.TrimSpace(brief), "\n")
 	if len(line) <= briefSummaryLimit {
 		return line
@@ -355,6 +396,10 @@ func buildBrief(req LaunchRequest) string {
 	names := slices.Collect(maps.Keys(req.MCPServers))
 	b.WriteString("\n")
 	b.WriteString(EnvironmentBrief(req.Setup, names))
+	if req.Ask != "" {
+		b.WriteString("\n")
+		b.WriteString(req.Ask)
+	}
 	return b.String()
 }
 
@@ -417,4 +462,14 @@ func otelTokenTTL(spec Spec) time.Duration {
 // arrive somewhere.
 func RunEnvFor(m *Manager, req LaunchRequest) map[string]string {
 	return withTelemetry(m, req)
+}
+
+// launchModel is the model a launch points its coding agent at, empty when it
+// names none and the CLI chooses its own — in which case nothing here can
+// honestly say which model ran.
+func launchModel(llm *AgentLLM) string {
+	if llm == nil {
+		return ""
+	}
+	return llm.Model
 }

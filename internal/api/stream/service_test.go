@@ -2,8 +2,11 @@ package stream_test
 
 import (
 	"context"
+	"errors"
+	"maps"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -20,6 +23,15 @@ func newService(t *testing.T, opts stream.Options) (*stream.Service, *stream.Cli
 	return s, c
 }
 
+// health stands in for `api.Health`, which this package carries to the wire
+// without reading into — so any value the function returns is what reaches the
+// tab, and a case can assert it came through untouched.
+type health struct {
+	Status       string
+	InFlight     int
+	ShuttingDown bool
+}
+
 // buildService fills every required function a case leaves unset with the
 // answer a node with no company gives, so a case names only what it is about.
 func buildService(t *testing.T, opts stream.Options) *stream.Service {
@@ -28,7 +40,7 @@ func buildService(t *testing.T, opts stream.Options) *stream.Service {
 		opts.Now = func() time.Time { return clock }
 	}
 	if opts.Health == nil {
-		opts.Health = func() stream.Health { return stream.Health{Status: "ok"} }
+		opts.Health = func() any { return health{Status: "ok"} }
 	}
 	if opts.Handles == nil {
 		opts.Handles = func() map[string]string { return map[string]string{} }
@@ -44,6 +56,9 @@ func buildService(t *testing.T, opts stream.Options) *stream.Service {
 	}
 	if opts.Schedules == nil {
 		opts.Schedules = func() any { return []any{} }
+	}
+	if opts.Placement == nil {
+		opts.Placement = func() (map[string]bool, error) { return map[string]bool{}, nil }
 	}
 	s, err := stream.NewService(livestate.New(), opts)
 	if err != nil {
@@ -65,7 +80,7 @@ func TestNewServiceRefusesEveryMissingFunctionByName(t *testing.T) {
 	if err == nil {
 		t.Fatal("a service with no surface functions was built")
 	}
-	for _, field := range []string{"Health", "Handles", "Roster", "Org", "Tools", "Schedules"} {
+	for _, field := range []string{"Health", "Handles", "Roster", "Org", "Tools", "Schedules", "Placement"} {
 		if !strings.Contains(err.Error(), "Options."+field) {
 			t.Errorf("the refusal does not name Options.%s: %v", field, err)
 		}
@@ -80,8 +95,8 @@ func envelope(etype string, payload map[string]any) livestate.Envelope {
 }
 
 // kindsOf lists the push kinds a client received, in order.
-func kindsOf(c *stream.Client) []string {
-	var out []string
+func kindsOf(c *stream.Client) []stream.Kind {
+	var out []stream.Kind
 	for _, env := range drain(c) {
 		out = append(out, env.Kind)
 	}
@@ -94,7 +109,7 @@ func TestIngestPushesTheResultOfApplyingAnEvent(t *testing.T) {
 	// the raw event stream. Every tab used to keep its own copy of the
 	// projection, and each drifted its own way.
 	s, c := newService(t, stream.Options{})
-	s.Ingest(envelope("agent_phase_started", map[string]any{"role": "Lead", "task_id": "t-1"}))
+	s.Ingest(envelope("agent_phase_started", map[string]any{"role": "Lead", "turn_id": "tn-1"}))
 
 	got := drain(c)
 	var agents *stream.Envelope
@@ -125,9 +140,99 @@ func TestIngestPushesTheResultOfApplyingAnEvent(t *testing.T) {
 		t.Errorf("row role = %v; the client keys on this field and drops a "+
 			"row without it", got)
 	}
-	if got := rows[0]["state"]; got != "working" {
-		t.Errorf("row state = %v, want working", got)
+	if got := rows[0]["activity"]; got != livestate.ActivityWorking {
+		t.Errorf("row activity = %v, want working", got)
 	}
+}
+
+// A SEAT MOVES BETWEEN NODES ON A LEASE, WHICH PUBLISHES NOTHING, so the
+// placement is READ — on the shared tick and on every snapshot — and the seats
+// whose state it moved are pushed to every open tab. A read that fails moves
+// nothing: an unreachable lease table is not "no node holds anything".
+func TestPlacementIsReadAndWhatItMovedIsPushed(t *testing.T) {
+	t.Parallel()
+	var (
+		mu     sync.Mutex
+		placed = map[string]bool{"Lead": true}
+		fail   error
+	)
+	s, c := newService(t, stream.Options{
+		Placement: func() (map[string]bool, error) {
+			mu.Lock()
+			defer mu.Unlock()
+			return maps.Clone(placed), fail
+		},
+	})
+	s.RefreshPlacement()
+	drain(c)
+
+	mu.Lock()
+	placed["Lead"] = false
+	mu.Unlock()
+	s.RefreshPlacement()
+	rows := agentRows(t, drain(c))
+	if len(rows) != 1 || rows[0]["activity"] != livestate.ActivityStopped {
+		t.Fatalf("pushed = %v, want the seat no node holds, stopped", rows)
+	}
+	if reason, _ := rows[0]["stopped_reason"].(*livestate.StoppedReason); reason == nil ||
+		*reason != livestate.StoppedUnplaced {
+		t.Errorf("stopped_reason = %v, want unplaced", rows[0]["stopped_reason"])
+	}
+
+	// Nothing moved, nothing pushed.
+	s.RefreshPlacement()
+	if rows := agentRows(t, drain(c)); len(rows) != 0 {
+		t.Errorf("an unchanged placement pushed %v", rows)
+	}
+
+	// A failed read keeps what was last read.
+	mu.Lock()
+	placed, fail = map[string]bool{}, errors.New("lease table unreachable")
+	mu.Unlock()
+	s.RefreshPlacement()
+	if rows := agentRows(t, drain(c)); len(rows) != 0 {
+		t.Errorf("a failed read moved seats: %v", rows)
+	}
+	if snap := s.Snapshot()["agents"].([]map[string]any); len(snap) != 0 {
+		t.Errorf("snapshot = %v with an empty roster", snap)
+	}
+}
+
+// A RUN RECORD'S READ-BACK PUSHES THE SEATS IT MOVED, not only the panel: a
+// question found by the reconcile makes its seat need somebody on every open
+// screen at the moment the panel shows it.
+func TestAReconcilePushesTheSeatsItMoved(t *testing.T) {
+	t.Parallel()
+	s, c := newService(t, stream.Options{
+		Placement: func() (map[string]bool, error) { return map[string]bool{"Coder": true}, nil },
+	})
+	s.RefreshPlacement()
+	drain(c)
+
+	s.ReconcileSandboxes([]livestate.SandboxRecord{{Entry: livestate.SandboxEntry{
+		TurnID: "tn-1", Role: "Coder", Status: livestate.SandboxAwaiting,
+	}}}, clock)
+	rows := agentRows(t, drain(c))
+	if len(rows) != 1 || rows[0]["role"] != "Coder" || rows[0]["activity"] != livestate.ActivityNeeds {
+		t.Errorf("pushed = %v, want the seat needing somebody", rows)
+	}
+}
+
+// agentRows is every row the `agents` pushes among envelopes carried.
+func agentRows(t *testing.T, got []stream.Envelope) []map[string]any {
+	t.Helper()
+	var out []map[string]any
+	for _, env := range got {
+		if env.Kind != stream.KindAgents {
+			continue
+		}
+		rows, ok := env.Data.([]map[string]any)
+		if !ok {
+			t.Fatalf("agents data is %T", env.Data)
+		}
+		out = append(out, rows...)
+	}
+	return out
 }
 
 func TestTheEventArrivesBeforeItsConsequences(t *testing.T) {
@@ -195,13 +300,35 @@ func TestSandboxAndBudgetPushTheirOwnKinds(t *testing.T) {
 	}
 
 	s.Ingest(livestate.Envelope{
-		ID: "e2", Type: "budget_reported", Timestamp: "2026-06-14T12:00:01Z",
-		Payload: map[string]any{"meter_id": "m-1", "seq": 1, "org_used_tokens": 5},
+		ID: "e2", Type: "budget_meters", Timestamp: "2026-06-14T12:00:01Z",
+		Payload: map[string]any{"meter_id": "m-1", "seq": 1, "timezone": "UTC",
+			"org": map[string]any{"windows": []any{map[string]any{
+				"period": "day", "window": "2026-06-14", "used": 5, "limit": 10, "state": "ok",
+			}}}},
 	})
 	if kinds := kindsOf(c); !contains(kinds, stream.KindBudget) {
 		t.Errorf("kinds = %v, want a budget push", kinds)
 	}
 
+}
+
+// A RECONCILE THAT MOVED THE SET IS PUSHED, and one that did not is not: the
+// reconcile is what corrects an open panel after a lost event, and a push every
+// interval whether or not anything changed would redraw every panel for nothing.
+func TestAReconcilePushesTheSandboxSetOnlyWhenItMoved(t *testing.T) {
+	t.Parallel()
+	s, c := newService(t, stream.Options{})
+	record := livestate.SandboxRecord{Entry: livestate.SandboxEntry{
+		TurnID: "tn-1", Role: "Coder", Status: livestate.SandboxRunning,
+	}}
+	s.ReconcileSandboxes([]livestate.SandboxRecord{record}, clock)
+	if kinds := kindsOf(c); !slices.Equal(kinds, []stream.Kind{stream.KindSandboxes}) {
+		t.Fatalf("kinds = %v, want one sandboxes push", kinds)
+	}
+	s.ReconcileSandboxes([]livestate.SandboxRecord{record}, clock.Add(time.Second))
+	if kinds := kindsOf(c); len(kinds) != 0 {
+		t.Errorf("kinds = %v, want nothing pushed for a reconcile that moved nothing", kinds)
+	}
 }
 
 func TestSpendIsFoldedOnTheTickAndNotOnThePublishPath(t *testing.T) {
@@ -263,7 +390,7 @@ func TestSpendIsFoldedOnTheTickAndNotOnThePublishPath(t *testing.T) {
 	}
 }
 
-func contains(haystack []string, needle string) bool {
+func contains(haystack []stream.Kind, needle stream.Kind) bool {
 	return slices.Contains(haystack, needle)
 }
 
@@ -298,7 +425,7 @@ func TestTheHealthTickIsSharedAndKeepsTicking(t *testing.T) {
 	// answer for every tab, so a timer per client would multiply identical
 	// work by however many people happened to be watching.
 	s := buildService(t, stream.Options{
-		Health: func() stream.Health { return stream.Health{Status: "ok", InFlight: 3} },
+		Health: func() any { return health{Status: "ok", InFlight: 3} },
 	})
 
 	a, b := stream.NewClient(), stream.NewClient()
@@ -314,8 +441,8 @@ func TestTheHealthTickIsSharedAndKeepsTicking(t *testing.T) {
 			if env.Kind != stream.KindHealth {
 				t.Errorf("%s received %q, want a health tick", name, env.Kind)
 			}
-			health, ok := env.Data.(stream.Health)
-			if !ok || health.InFlight != 3 {
+			got, ok := env.Data.(health)
+			if !ok || got.InFlight != 3 {
 				t.Errorf("%s health = %#v", name, env.Data)
 			}
 		case <-time.After(3 * stream.HealthInterval):
@@ -330,13 +457,13 @@ func TestTheSnapshotCarriesTheEnginesOwnHealth(t *testing.T) {
 	// that connects mid-drain sees the drain at once rather than on the
 	// next tick.
 	s, _ := newService(t, stream.Options{
-		Health: func() stream.Health {
-			return stream.Health{Status: "shutting_down", InFlight: 2, ShuttingDown: true}
+		Health: func() any {
+			return health{Status: "shutting_down", InFlight: 2, ShuttingDown: true}
 		},
 	})
-	health, _ := s.Snapshot()["health"].(stream.Health)
-	if health.Status != "shutting_down" || health.InFlight != 2 || !health.ShuttingDown {
-		t.Errorf("health = %#v, want the engine's own answer", health)
+	got, _ := s.Snapshot()["health"].(health)
+	if got.Status != "shutting_down" || got.InFlight != 2 || !got.ShuttingDown {
+		t.Errorf("health = %#v, want the engine's own answer", got)
 	}
 }
 

@@ -5,6 +5,7 @@ import (
 	"maps"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/agent/phase"
@@ -12,6 +13,8 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/turn"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/providers/llm"
+	"github.com/crewlet/crewlet/internal/tools"
+	"github.com/crewlet/crewlet/internal/tracker"
 )
 
 // The golden-turn suite: whole turns driven through the REAL loop, the real
@@ -480,4 +483,134 @@ func TestGoldenPhaseModelsAreNotSilentlyCrossed(t *testing.T) {
 func sortedKeys(m map[string]bool) []string {
 	out := slices.Sorted(maps.Keys(m))
 	return out
+}
+
+// askingTool stands in for `comment_on_work_item`: a first-party tool that
+// DELIVERS on the tracker, recording what it was called with. The tool's own
+// write — the decision validated, the record published — is certified in
+// `builtin` and `tracker`; what this suite owns is the turn around it.
+type askingTool struct {
+	mu    sync.Mutex
+	calls []map[string]any
+}
+
+func (a *askingTool) Name() string               { return "comment_on_work_item" }
+func (a *askingTool) Description() string        { return "Comment on a work item, or ask on it." }
+func (a *askingTool) Parameters() map[string]any { return nil }
+func (a *askingTool) Call(_ context.Context, args map[string]any) (tools.Result, error) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.calls = append(a.calls, args)
+	return tools.Result{Output: "commented (id c-9)"}, nil
+}
+
+func (a *askingTool) recorded() []map[string]any {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return slices.Clone(a.calls)
+}
+
+// askingTurn runs one tracker-woken turn for a seat that holds the asking
+// tool, with the executor and reviewer scripted as given.
+func askingTurn(t *testing.T, prov *scriptedProvider) (turn.Result, *askingTool) {
+	t.Helper()
+	asker := &askingTool{}
+	r, _ := buildWith(t, []phase.Entry{{Key: "default", Provider: prov}}, buildOpts{
+		// Woken on the tracker, where the ask lands — so the gate is
+		// the NARROW one, and only a call delivering there satisfies it.
+		reply: turn.ToolReply(tracker.Source),
+		task:  "decide which region the Q4 launch ships to first",
+		register: func(t *testing.T, reg *tools.Registry) {
+			if err := reg.RegisterWith(asker, tools.OriginBuiltin, tools.Annotations{},
+				tools.DeliversTo(tracker.Source)); err != nil {
+				t.Fatalf("Register: %v", err)
+			}
+		},
+	})
+	res, err := turn.Run(context.Background(), r, settings(),
+		turn.Input{RunID: "t-golden", Reply: turn.ToolReply(tracker.Source)})
+	if err != nil {
+		t.Fatalf("turn.Run: %v", err)
+	}
+	return res, asker
+}
+
+// A DECISION ABOVE THE SEAT ENDS THE TURN BLOCKED ON THAT BRANCH, AND THAT IS
+// A FINISHED TURN. Four components have to agree for it: the prompt builder
+// tells a seat holding the asking tool to ask with options and stop, the
+// surface carries the decision to the tool unchanged, the pre-review check
+// reads a blocked round that asked as having reached somebody, and the
+// done-override accepts the ask as the delivery on the tracker. Any one of
+// them reading "blocked" as "gave up" sends the seat back round after round to
+// make the choice it was told was not its own.
+func TestGoldenAnAskWithADecisionEndsTheTurnBlockedOnThatBranch(t *testing.T) {
+	t.Parallel()
+	decision := map[string]any{
+		"question": "Which region ships first?",
+		"role":     "approver",
+		"options": []any{
+			map[string]any{"id": "eu", "label": "EU first", "detail": "GDPR review gates the date"},
+			map[string]any{"id": "us", "label": "US first", "detail": "ships two weeks sooner"},
+		},
+		"recommended": "us",
+		"rationale":   "the EU review has no date yet",
+		"evidence":    []any{map[string]any{"kind": "task", "ref": "LAUNCH-12"}},
+	}
+	askCall := llm.Completion{ToolCalls: []llm.ToolCall{{ID: "ask", Name: "comment_on_work_item",
+		Arguments: map[string]any{
+			"item": "LAUNCH-7", "body": "The region is yours to call.",
+			"ask": "founder", "decision": decision,
+		}}}}
+	blocked := submitCall(t, runner.SubmitWorkTool, `{
+		"outcome":"blocked","summary":"asked the founder which region ships first",
+		"evidence":"the region is the founder's call; the rollout plan waits on it"}`)
+	done := submitCall(t, runner.SubmitReviewTool,
+		`{"decision":"done","final_artifact":"Asked the founder to choose the launch region."}`)
+
+	prov := &scriptedProvider{execute: []llm.Completion{askCall, blocked}, review: []llm.Completion{done}}
+	res, asker := askingTurn(t, prov)
+
+	// The seat was told how to ask, because it holds the tool that asks.
+	first := prov.requestsFor("execute")[0].Messages[0].Content
+	for _, want := range []string{
+		"## When a decision is not yours to make",
+		"END THIS TURN BLOCKED ON THAT BRANCH",
+	} {
+		if !strings.Contains(first, want) {
+			t.Errorf("the executor's prompt lacks %q", want)
+		}
+	}
+
+	if res.Decision != phase.Done {
+		t.Fatalf("decision = %s (breach %+v) — a turn that asked and stopped was "+
+			"not accepted as finished", res.Decision, res.Breach)
+	}
+	if res.Rounds != 1 {
+		t.Errorf("rounds = %d — the seat was sent back to make a choice that is "+
+			"not its own", res.Rounds)
+	}
+	calls := asker.recorded()
+	if len(calls) != 1 {
+		t.Fatalf("the asking tool ran %d times, want exactly the one ask", len(calls))
+	}
+	got, _ := calls[0]["decision"].(map[string]any)
+	if got["recommended"] != "us" || len(got["options"].([]any)) != 2 || calls[0]["ask"] != "founder" {
+		t.Errorf("the decision did not reach the tool intact: %v", calls[0])
+	}
+	// The reviewer judged the round with the ask in front of it.
+	if !strings.Contains(prov.requestsFor("review")[0].Messages[0].Content, "comment_on_work_item") {
+		t.Error("the reviewer was not shown the ask")
+	}
+
+	// THE COUNTERFACTUAL: the same blocked submission and the same reviewer,
+	// with NO ask. Nobody was reached, so `blocked` is a round that gave up —
+	// and it must not close as a finished turn. Without this the assertion
+	// above also holds for a loop that accepts every `blocked` as done.
+	silent, _ := askingTurn(t, &scriptedProvider{
+		execute: []llm.Completion{blocked},
+		review:  []llm.Completion{done},
+	})
+	if silent.Decision == phase.Done && silent.Rounds == 1 {
+		t.Error("a blocked round that asked nobody closed as done in one round")
+	}
 }

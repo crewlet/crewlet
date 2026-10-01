@@ -56,16 +56,6 @@ func (s stamp) compare(o stamp) int {
 func (s stamp) before(o stamp) bool { return s.compare(o) < 0 }
 func (s stamp) after(o stamp) bool  { return s.compare(o) > 0 }
 
-// sub reports the age of s relative to now, or false when it cannot be known.
-func (s stamp) olderThan(now time.Time, d time.Duration) bool {
-	if !s.valid {
-		// An entry with no usable timestamp cannot be aged out on time,
-		// and dropping it on that basis would be arbitrary.
-		return false
-	}
-	return now.Sub(s.t) > d
-}
-
 // chronological orders two stamps for a SORT: every undateable stamp before
 // every dated one, undateable ones by their text, dated ones by instant.
 //

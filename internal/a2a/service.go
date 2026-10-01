@@ -96,6 +96,13 @@ type Ask struct {
 	// equal.
 	TurnID  string
 	WorkKey string
+
+	// WorkItem is the item the asking turn is charged to, and WorkItemBasis
+	// the rule that charged it there. Both travel on the wake, because the
+	// answering turn is charged to the same item — see
+	// [types.A2ARequest.WorkItem]. Nil when the asker is on nothing.
+	WorkItem      *types.WorkItem
+	WorkItemBasis types.WorkItemBasis
 }
 
 // Open opens a channel and wakes the target, carrying the brief.
@@ -160,10 +167,17 @@ func (s *Service) Open(ctx context.Context, ask Ask) (string, error) {
 		}
 	}
 
-	wake := events.New(types.A2ARequest{
+	request := types.A2ARequest{
 		ChannelID: id, Requester: ask.Requester,
 		SenderRole: ask.SenderRole, Content: ask.Brief,
-	}, events.TraceContext{})
+	}
+	if ask.WorkItem != nil && ask.WorkItem.ID != "" {
+		// A COPY, never the asker's pointer: the wake is published and
+		// outlives this call, and the asker's turn owns its own value.
+		named := *ask.WorkItem
+		request.WorkItem, request.WorkItemBasis = &named, ask.WorkItemBasis
+	}
+	wake := events.New(request, events.TraceContext{})
 	wake.Timestamp = now
 	wake.Source = ask.Requester
 	// The ASK is the delegation, so this is the leg that charges.

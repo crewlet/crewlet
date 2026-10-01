@@ -173,6 +173,20 @@ func (m *MemoryConversations) Threads(_ context.Context, handle string, limit in
 	return out, nil
 }
 
+// ThreadCount counts the conversations this seat holds entries in.
+func (m *MemoryConversations) ThreadCount(_ context.Context, handle string) (int, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	n := 0
+	for key, rows := range m.rows {
+		owner, _, found := strings.Cut(key, "\x00")
+		if found && owner == handle && len(rows) > 0 {
+			n++
+		}
+	}
+	return n, nil
+}
+
 // Purge deletes turns recorded before cutoff.
 func (m *MemoryConversations) Purge(_ context.Context, cutoff time.Time) (int64, error) {
 	m.mu.Lock()

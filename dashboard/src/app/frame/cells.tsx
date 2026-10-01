@@ -48,25 +48,92 @@
 
 import type { ReactNode } from "react";
 import { href } from "../router.tsx";
-import { Avatar, cx, EmptyValue, Tag } from "@crewlethq/ui";
+import { cx, EmptyValue, Tag } from "@crewlethq/ui";
+import { SeatAvatar } from "~/ui/SeatAvatar.tsx";
 // A `TextCell`'s mark is named by whichever screen draws the column, so the
 // name→drawing lookup stays in `~/ui/Icon.tsx` — one change there moves every
 // caller onto uilet's glyphs at once.
-import { Mark, type MarkName } from "~/ui/glyph.tsx";
+import type { GlyphName } from "@crewlethq/icons/glyphs";
+import { Mark } from "~/ui/glyph.tsx";
 import { type Tone } from "~/ui/primitives.tsx";
 import { fmtCount, fmtDateTime, fmtDuration, relTime } from "~/lib/format.ts";
-import type { SeatKind } from "~/lib/seats.ts";
+import { handleLabel, type SeatKind } from "~/lib/seats.ts";
+import { workItemLabel } from "~/lib/turns.ts";
+import type { WorkItemRef } from "~/protocol/index.ts";
 
-/** An identifier — a key, a handle, an id. Monospaced, and usually a link. */
-export function KeyCell({ value, path }: { value: string; path?: string[] }) {
+/**
+ * An identifier — a key, a handle, an id. Monospaced, and usually a link.
+ *
+ * ONE LINE, cut with its whole value on the title. An identifier is one token
+ * and carries no space to break at, so a long one — a conversation key is
+ * `work:task:` and a uuid — wrapped at whatever character the column ran out
+ * on, stood the row two lines tall and printed a key nobody could search for.
+ *
+ * `text` is what the row PRINTS where that is shorter than the value — a
+ * conversation key with its uuid cut to a head (`conversationLabel`) — and the
+ * value itself is still the title, so nothing is lost to the cut.
+ */
+export function KeyCell({ value, path, text }: { value: string; path?: string[]; text?: string }) {
   if (!value) return <EmptyValue label="Not set" />;
   return path ? (
-    <a className="mono t-link" href={href(path)}>
-      {value}
+    <a className="mono t-link key-cell" href={href(path)} title={value}>
+      {text ?? value}
     </a>
   ) : (
-    <span className="mono">{value}</span>
+    <span className="mono key-cell" title={value}>
+      {text ?? value}
+    </span>
   );
+}
+
+/**
+ * What a turn did, and the work item it was on: the "What it did" cell of
+ * every list of turns.
+ *
+ * THE SUMMARY IS WHAT KEEPS ITS WIDTH. The key beside it is one token and must
+ * not wrap, but it is capped (`.turn-what-key`) rather than never shrinking:
+ * an uncapped key took the whole cell whenever it was long, and on a phone's
+ * stacked row the summary beside it was laid out one letter per line — a
+ * single row 31,000px tall. Each half is cut on one line with its whole text
+ * on its title.
+ */
+export function TurnWhatCell({
+  summary,
+  item,
+  doing,
+}: {
+  summary?: string | undefined;
+  item?: WorkItemRef | null | undefined;
+  /** What the turn is doing now, for one still running (`runningNow`): said
+   *  where a settled turn's summary goes, since a running turn has none yet. */
+  doing?: string | undefined;
+}) {
+  const label = item ? workItemLabel(item) : null;
+  return (
+    <span className="turn-what">
+      {/* A CLAMP, ONE LINE WIDE, rather than a nowrap cut: it is the same
+          ellipsis on a table row, and it lets a phone's stacked card give the
+          summary a second line (`frame.css`) without a second rule. */}
+      <span className="turn-what-summary clamp" title={summary || doing || undefined}>
+        {summary || (doing ? doing : <span className="muted">no summary recorded</span>)}
+      </span>
+      {label && (
+        <span className="mono t-caption item-key turn-what-key" title={label.title}>
+          {label.text}
+        </span>
+      )}
+    </span>
+  );
+}
+
+/**
+ * A turn's figure that a turn still running does not have yet — its iteration
+ * count, its tokens, how long it took. Each is written as the turn completes,
+ * and a list that drew the row's zeros said a running turn had run no rounds
+ * and spent nothing.
+ */
+export function UnsettledCell() {
+  return <EmptyValue label="Not settled — the turn has not ended" />;
 }
 
 /**
@@ -122,8 +189,8 @@ export function DateCell({ at, now }: { at?: string | null; now: number }) {
  * the same drawing.
  *
  * The distinction the local mark carried is not lost, because the design
- * system carries it: `dashed` is documented there as "a HUMAN seat: the engine
- * does not run it", which is precisely the structural fact the dashed ring
+ * system carries it: the badge's `kind` draws a person as a circle and an
+ * agent as a squircle, which is precisely the structural fact the old mark
  * meant here. What IS lost is a picture of a robot, and that was the half
  * saying nothing — it drew the KIND, which one glance at the roster gives, in
  * the slot that should have been saying WHO.
@@ -135,31 +202,63 @@ export function SeatCell({
   handle,
   name,
   kind,
+  title,
 }: {
   handle?: string | null;
   name?: string;
+  /**
+   * What the link's tooltip says, where the handle is not the whole story —
+   * an operator's write names the person AND the token they wrote through.
+   */
+  title?: string;
   /**
    * The seat's kind, which decides the badge's one variant.
    *
    * THE NAMED TYPE, because this said `"agent" | "human" | string` — a union
    * that collapses to `string`, so it accepted any word and a caller passing
    * an author kind the chart never mints type-checked and drew a solid disc
-   * for ever. `undefined` is a handle the chart does not hold, and it draws
-   * the neutral disc rather than claiming the seat is an agent.
+   * for ever. `undefined` is a handle the chart does not hold; the kit's
+   * badge has no third outline, so it takes the kit's default. A screen that
+   * holds its writers' recorded kinds resolves them first (`kindWithAuthors`
+   * in lib/seats.ts), which is what draws an operator as the person they are.
    */
   kind?: SeatKind;
 }) {
   if (!handle) return <EmptyValue label="Nobody" />;
   return (
-    <a className="cell-seat" href={href(["company", "people", handle])} title={`@${handle}`}>
-      <Avatar
+    <a
+      className="cell-seat"
+      href={href(["agents", "seats", handle])}
+      title={title ?? handleLabel(handle)}
+    >
+      <SeatAvatar
         name={name || handle}
         size="xs"
-        variant={kind === "human" ? "dashed" : "solid"}
+        kind={kind === "human" ? "human" : "agent"}
         decorative
       />
       <span className="truncate">{name || handle}</span>
     </a>
+  );
+}
+
+/**
+ * A seat named inside a row that is ALREADY a link: its badge and its name,
+ * and no anchor of its own.
+ *
+ * [SeatCell] is a link to the seat's page, and a grid whose rows are links
+ * (the turns list, a fleet's leases, the spend tables) cannot nest one — an
+ * anchor inside an anchor is markup no browser agrees about. Those columns
+ * drew `TextCell icon="cpu"` instead: a chip glyph where every other surface
+ * identifies a seat by its badge, so the same seat was a squircle on Work and
+ * a processor on Activity. This is the badge, without the link.
+ */
+export function SeatLabel({ name, kind }: { name: string; kind?: SeatKind }) {
+  return (
+    <span className="cell-seat" title={name}>
+      <SeatAvatar name={name} size="xs" kind={kind === "human" ? "human" : "agent"} decorative />
+      <span className="truncate">{name}</span>
+    </span>
   );
 }
 
@@ -236,43 +335,6 @@ export function TagsCell({ tags, max = 3 }: { tags?: string[] | null; max?: numb
 }
 
 /**
- * A small proportion bar, for a cell that is a fraction of something.
- *
- * OURS, BECAUSE A COLUMN OF BARS HAS TO LINE UP. This is a fixed 64px bar
- * drawn inline inside a grid cell, and uilet's `Meter` is a block flex column
- * that takes the width it is given: dropped into the Budgets column it would
- * be 120px on that screen and something else on the next, so two bars at the
- * same fraction would be different lengths and the column would stop being
- * readable at a glance. `Meter` publishes no width, no intrinsic size and no
- * inline form — its `compact` size only drops the legend a type step, and the
- * legend is hidden here anyway.
- *
- * What their Meter has that ours does not is `role="meter"` with
- * `aria-valuenow`/`valuemin`/`valuemax`, where ours is a `role="img"` named by
- * its label. That is worth having and is the thing to take from it if `Meter`
- * ever grows a fixed-width form.
- */
-export function MeterCell({
-  used,
-  max,
-  label,
-  tone = "accent",
-}: {
-  used: number;
-  max: number;
-  label: string;
-  tone?: Tone;
-}) {
-  if (!(max > 0)) return <EmptyValue label="Nothing to measure against" />;
-  const pct = Math.max(0, Math.min(100, (used / max) * 100));
-  return (
-    <span className="cell-meter" title={label} role="img" aria-label={label}>
-      <span className={cx("cell-meter-fill", tone)} style={{ width: `${pct}%` }} />
-    </span>
-  );
-}
-
-/**
  * Plain text with a leading mark, truncated.
  *
  * TWO SPELLINGS OF ONE SLOT, because a COLUMN's mark and a ROW's mark are
@@ -298,7 +360,7 @@ export function TextCell({
   icon,
   mark,
 }: { children: ReactNode } & (
-  { icon?: MarkName; mark?: never } | { icon?: never; mark: ReactNode }
+  { icon?: GlyphName; mark?: never } | { icon?: never; mark: ReactNode }
 )) {
   return (
     <span className="row" style={{ gap: 6, minWidth: 0 }}>

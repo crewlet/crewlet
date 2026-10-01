@@ -18,7 +18,7 @@
  */
 
 import { Card, EmptyValue, Tag } from "@crewlethq/ui";
-import { DeleteGlyph } from "@crewlethq/icons/glyphs";
+import { TrashGlyph } from "@crewlethq/icons/glyphs";
 import { fmtDateTime, relTime } from "~/lib/format.ts";
 import { plainText } from "~/lib/markdown.ts";
 import { pageCount } from "~/lib/work.ts";
@@ -59,7 +59,7 @@ export function PurgeBand({
   return (
     <Card padding="none">
       <Card.Header
-        icon={<DeleteGlyph size="sm" />}
+        icon={<TrashGlyph size="sm" />}
         count={pageCount(records.length, more)}
         subtitle={
           "A purge destroys the rows. These cannot be restored — what survives is that it happened, to which key, by whom, and the reason the operator gave." +

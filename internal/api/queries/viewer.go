@@ -49,10 +49,28 @@ func (s Sources) viewer(ctx context.Context, _ Params) (any, error) {
 		"handle":   "",
 		"name":     "",
 		"kind":     "",
+		// WHAT THIS CALLER MAY DO on the act transport, which admits a
+		// person and nobody else (ADR-0024): empty for an anonymous
+		// reader and for a token no seat binds, so a screen disables its
+		// write controls with the reason rather than offering a press
+		// the engine refuses. ALWAYS AN ARRAY, never null, so "may do
+		// nothing" is a value a reader can test rather than an absence.
+		"acts": []string{},
+		// WHERE THIS PERSON'S CREATE LANDS when it names no project — the
+		// project `create_work_item` defaults a person's create to, from
+		// the same derivation. "" is a real answer: a seat whose team, and
+		// every team above it, owns no project, whose create is refused
+		// until one is named.
+		"project": "",
 	}
 	seat := s.seatForOperator(operatorID)
 	if seat == nil {
 		return out, nil
+	}
+	if s.OperatorActs != nil {
+		if acts := s.OperatorActs(); acts != nil {
+			out["acts"] = acts
+		}
 	}
 	out["handle"] = seat.Handle()
 	out["name"] = seat.Name
@@ -63,6 +81,10 @@ func (s Sources) viewer(ctx context.Context, _ Params) (any, error) {
 		kind = org.KindAgent
 	}
 	out["kind"] = string(kind)
+	// THE CHART THIS ANSWER WAS READ FROM, through the one derivation the
+	// operator surface's create applies (`engine.ProjectOfSeat`), so the
+	// project promised here is the project the create files into.
+	out["project"] = s.projectOf(seat.Handle())
 	return out, nil
 }
 
@@ -94,7 +116,7 @@ func (s Sources) seatForOperator(operatorID string) *org.Role {
 //
 // A write made through somebody's own credential is attributed to the TOKEN,
 // not to their seat, and deliberately so: a tracker whose author field is
-// chosen by the writer is not an audit trail (see internal/api/opsmcp). The
+// chosen by the writer is not an audit trail (see internal/api/operator). The
 // consequence is that one person's rows carry two names — `jane-founder` on
 // what a colleague assigned them, `founder` on everything their own assistant
 // filed — so a personal read asked about one of them answered nothing. A

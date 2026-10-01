@@ -41,13 +41,23 @@ func (s Sources) fleet(ctx context.Context, _ Params) (any, error) {
 	for _, lease := range seats {
 		node := nodeOf(lease.Owner)
 		held[node]++
-		seatRows = append(seatRows, map[string]any{
+		row := map[string]any{
 			"handle":     nameIn(coord.ClassSeat, lease.Resource),
 			"node":       node,
 			"owner":      lease.Owner,
 			"epoch":      lease.Epoch,
 			"expires_in": secondsLeft(lease.ExpiresAt, now),
-		})
+		}
+		// SINCE WHEN this node has held it: the tenure's start, which a
+		// renewal does not move, so "node-2 since 08:02" means the seat
+		// has not moved since 08:02. ABSENT when the lease was written by
+		// a build older than the stamp — that tenure's start was never
+		// recorded, and an empty string or the zero instant would render
+		// as a time.
+		if !lease.AcquiredAt.IsZero() {
+			row["acquired_at"] = isoOrEmpty(lease.AcquiredAt)
+		}
+		seatRows = append(seatRows, row)
 	}
 	slices.SortFunc(seatRows, func(a, b map[string]any) int {
 		return cmp.Compare(a["handle"].(string), b["handle"].(string))

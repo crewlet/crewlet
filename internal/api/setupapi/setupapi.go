@@ -50,6 +50,7 @@ import (
 	"github.com/crewlet/crewlet/internal/secrets"
 	"github.com/crewlet/crewlet/internal/setup"
 	"github.com/crewlet/crewlet/internal/slack"
+	"github.com/crewlet/crewlet/internal/store"
 )
 
 var log = logging.Get("api.setup")
@@ -263,13 +264,24 @@ func (s *Service) Routes(mux *http.ServeMux) {
 // The interface is the CONSUMER's — three strings and a patch — so the setup
 // package does not import an HTTP service to perform a write, and a test can
 // drive it with something that is not one.
+//
+// EVERY WRITE IT MAKES IS AN OPERATOR'S. This adapter is the setup screen's:
+// a submission, a disconnect and the GitHub App return are each a flow a
+// person started, so the label the setup package passes is recorded as an
+// operator. The engine's own writes never come through here — they reach the
+// config surface through the engine's writer, which states itself as the node.
 type configWriter struct{ svc *configapi.Service }
+
+// operatorAuthor is a label from this surface, as the revision's author.
+func operatorAuthor(name string) store.Author {
+	return store.Author{Name: name, Kind: store.AuthorOperator}
+}
 
 func (c configWriter) Apply(
 	ctx context.Context, patch []byte, summary, operator, expect string,
 ) (string, int64, error) {
 	applied, err := c.svc.Apply(ctx, configapi.ApplyRequest{
-		Patch: patch, Summary: summary, Operator: operator, Expect: expect,
+		Patch: patch, Summary: summary, Author: operatorAuthor(operator), Expect: expect,
 	})
 	return applied.RevisionID, applied.Epoch, err
 }
@@ -279,7 +291,7 @@ func (c configWriter) Current(ctx context.Context) (string, error) {
 }
 
 func (c configWriter) Reload(ctx context.Context, summary, operator string) (string, int64, error) {
-	applied, err := c.svc.Reload(ctx, summary, operator)
+	applied, err := c.svc.Reload(ctx, summary, operatorAuthor(operator))
 	return applied.RevisionID, applied.Epoch, err
 }
 
@@ -299,7 +311,7 @@ func (c configWriter) SetSeat(
 ) (string, int64, error) {
 	applied, err := c.svc.ApplyEntity(ctx, configapi.ApplyEntityRequest{
 		Kind: "roles", ID: handle, Body: body,
-		Summary: summary, Operator: operator, Expect: expect,
+		Summary: summary, Author: operatorAuthor(operator), Expect: expect,
 	})
 	return applied.RevisionID, applied.Epoch, err
 }
@@ -2097,10 +2109,10 @@ func (s *Service) disconnect(w http.ResponseWriter, r *http.Request) {
 
 	patch := []byte(`{"integrations":{"` + string(kind) + `":null}}`)
 	applied, err := s.config.Apply(r.Context(), configapi.ApplyRequest{
-		Patch:    patch,
-		Summary:  "disconnect " + string(kind),
-		Operator: operatorOf(r),
-		Expect:   strings.TrimSpace(r.Header.Get("If-Match")),
+		Patch:   patch,
+		Summary: "disconnect " + string(kind),
+		Author:  operatorAuthor(operatorOf(r)),
+		Expect:  strings.TrimSpace(r.Header.Get("If-Match")),
 	})
 	if err != nil {
 		s.refuse(w, r, err, setup.Result{})

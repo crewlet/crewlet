@@ -127,7 +127,7 @@ func TestABackupCapturesBothEstates(t *testing.T) {
 	t.Parallel()
 	nc := embeddedNATS(t)
 	seedStream(t, nc, "CREWLET_AGENT", "crewlet.agent.>", 5)
-	seedBucket(t, nc, "crewlet_budgets", "org", "12345")
+	seedBucket(t, nc, "crewlet_token_windows", "org", "12345")
 	db := openStore(t)
 	if err := db.Events().Append(t.Context(), store.EventRecord{
 		ID: "e1", Type: "agent_phase_started", Source: "pm", Time: clock, Category: "task",
@@ -196,7 +196,7 @@ func TestABackupCapturesBothEstates(t *testing.T) {
 	}
 	// The coordination bucket, captured without ever being named as a
 	// bucket: it is a stream, so enumerating streams gets it.
-	bucket, ok := byName["KV_crewlet_budgets"]
+	bucket, ok := byName["KV_crewlet_token_windows"]
 	if !ok {
 		t.Fatalf("the coordination bucket was not captured; got %v", names(manifest.Streams))
 	}
@@ -276,6 +276,33 @@ func TestARelativeDestinationIsRefused(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "absolute") {
 		t.Errorf("the refusal does not say what to do instead: %v", err)
+	}
+}
+
+// A DESTINATION THE HOST CANNOT PREPARE IS THE CALLER'S MISTAKE, not the
+// engine's failure. A path that runs through a regular file, or names one,
+// fails in mkdir before a byte is copied; answered as anything but
+// ErrBadDestination it reaches an operator as a 500 that sends them to the
+// engine's log for a typo in their own request.
+func TestADestinationTheHostCannotCreateIsTheCallersMistake(t *testing.T) {
+	t.Parallel()
+	svc := service(t, openStore(t), embeddedNATS(t))
+	file := filepath.Join(t.TempDir(), "a-file")
+	if err := os.WriteFile(file, []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for name, dir := range map[string]string{
+		"the destination is a file":             file,
+		"a parent of the destination is a file": filepath.Join(file, "tonight"),
+	} {
+		_, err := svc.Take(t.Context(), dir)
+		if !errors.Is(err, backup.ErrBadDestination) {
+			t.Errorf("%s: %v, want ErrBadDestination", name, err)
+			continue
+		}
+		if !strings.Contains(err.Error(), dir) {
+			t.Errorf("%s: the refusal does not name the directory: %v", name, err)
+		}
 	}
 }
 

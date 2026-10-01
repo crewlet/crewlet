@@ -20,7 +20,6 @@ import { CONTACT_IDENTITIES } from "./model/templates.ts";
 import type { PlacedProblem, ProblemLink } from "./model/problems.ts";
 import { strandedSentence, type StrandedSchedule } from "./preflight.ts";
 import { TOOL_NAMES, workingNote, type Tool } from "./nodeFacts.ts";
-import { toneOfKey } from "./nodeTone.ts";
 import { Callout, Combobox, FormField, InlineCode } from "@crewlethq/ui";
 
 /** How deep an [EditorSection] sits inside others; 0 for one directly in a drawer or dialog. */
@@ -68,7 +67,7 @@ export function EditorSection({
 /**
  * Every screen the builder links out to, and where it is.
  *
- * ONE TABLE, AND A NAME AT THE CALL SITE. Twelve links in this lens named
+ * ONE TABLE, AND A NAME AT THE CALL SITE. Twelve links in this builder named
  * their destination as a path literal — `to="integrations"` — which is
  * twelve copies of a fact that belongs to `app/nav.ts`, and the failure of a
  * wrong copy is a link that renders, clicks and lands on "there is no such
@@ -85,13 +84,13 @@ export function EditorSection({
  * points nowhere.
  */
 export const SCREENS = {
-  integrations: ["admin", "integrations"],
-  schedules: ["activity", "schedules"],
-  /** The company's credentials. The screen is "Credentials"; the engine's
-   *  word, and this lens's, is secrets — see `/secrets`. */
-  secrets: ["admin", "credentials"],
-  config: ["admin", "config"],
-  fleet: ["admin", "fleet"],
+  integrations: ["settings", "integrations"],
+  schedules: ["agents", "schedules"],
+  /** The company's credentials: Settings › Secrets, the engine's own word
+   *  (`/secrets`). */
+  secrets: ["settings", "secrets"],
+  config: ["settings", "config"],
+  nodes: ["settings", "nodes"],
 } as const satisfies Record<string, readonly [string, ...string[]]>;
 
 /** A screen the builder can send a reader to. */
@@ -179,41 +178,6 @@ export function ReadOnlyFact({
         )}
       </p>
     </div>
-  );
-}
-
-/**
- * The hue an agent seat is drawn in, stated rather than offered.
- *
- * The console's agent editor ends with a picker over six colour schemes and
- * stores the answer on the node. A Crewlet company document has no colour
- * field, so this dashboard DERIVES the hue from the seat's own key instead
- * (`nodeTone.ts`), which is right and was also silent: an operator who saw
- * the console's picker found neither the control nor a reason it was gone.
- * So the hue is a read-only fact, the same idiom every field this builder
- * shows but cannot write already uses. No new config field, no operation.
- */
-export function HueFact({ nodeKey }: { nodeKey: string }) {
-  const tone = toneOfKey(nodeKey);
-  return (
-    <ReadOnlyFact
-      label="Colour"
-      reason="The hue follows the seat's own identity, so it survives a rename and a move. A Crewlet company document holds no colour, so there is nothing to set here."
-    >
-      <span className="row">
-        <span
-          aria-hidden="true"
-          style={{
-            display: "inline-block",
-            width: "var(--spacing-3)",
-            height: "var(--spacing-3)",
-            borderRadius: "var(--radius-circle)",
-            background: `var(--color-node-${tone})`,
-          }}
-        />
-        {tone.charAt(0).toUpperCase() + tone.slice(1)}
-      </span>
-    </ReadOnlyFact>
   );
 }
 

@@ -140,7 +140,7 @@ func reseal(ctx context.Context, cs *configStore, parent store.Revision,
 	}
 	id, err := cs.configs.InsertActive(ctx, store.Revision{
 		ParentID: parent.ID, Source: "rekey", CreatedBy: currentOperator(),
-		Summary: summary, Payload: payload,
+		CreatedByKind: store.AuthorOperator, Summary: summary, Payload: payload,
 	})
 	if err != nil {
 		return "", fmt.Errorf("store the re-sealed revision: %w", err)

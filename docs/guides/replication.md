@@ -1,6 +1,8 @@
 # Replication
 
-Crewlet's own tracker and knowledge base are **replicated state machines**. One
+Crewlet's own tracker and knowledge base are **replicated state machines**
+(the embeddings and each node's usage history ride the same framework as
+[compacted domains](#two-compacted-domains-the-embeddings-and-each-nodes-day)). One
 ordered stream per domain is the write-ahead log; every node applies it into
 its own SQL database; the checkpoint commits in the same transaction as the
 rows it covers. That last clause is the whole design: a node's position and its
@@ -50,18 +52,18 @@ different with each.
   retry carries the same operation id so the ledger collapses a duplicate.
 
 A gesture made of **several** records in order — a cross-project move, a merge
-of duplicates, a checklist item's promotion, a dependency with its mirror, a
-subtree's removal or restore — treats a step answered `unknown` as the end of
-the walk, not as a step that landed. Nothing after it is written: no descendant
-follows a root whose own move or removal is unknown, a mid-move or mid-merge
-mark is not taken down, and a dependency's mirror is not written over an
-authored edge nobody can vouch for (a mirror whose own outcome is unknown is
-reported one-sided, the state the tracker duty repairs). The gesture fails
-naming the operation id, and running it again under that id answers each step
-that landed from the ledger and finishes the rest. Every step is named by the
-task it writes rather than by its place in the walk, because a re-run reads
-its list afresh — a restore's is what is still in the trash — and a step named
-by position would carry another task's operation id.
+of duplicates, a dependency with its mirror, a subtree's removal or restore —
+treats a step answered `unknown` as the end of the walk, not as a step that
+landed. Nothing after it is written: no descendant follows a root whose own
+move or removal is unknown, a mid-move or mid-merge mark is not taken down, and
+a dependency's mirror is not written over an authored edge nobody can vouch for
+(a mirror whose own outcome is unknown is reported one-sided, the state the
+tracker duty repairs). The gesture fails naming the operation id, and running
+it again under that id answers each step that landed from the ledger and
+finishes the rest. Every step is named by the task it writes rather than by its
+place in the walk, because a re-run reads its list afresh — a restore's is what
+is still in the trash — and a step named by position would carry another task's
+operation id.
 
 What "under that id" means depends on who is asking. A **seat** derives its
 ids from its turn, the call's arguments and how many different calls to the
@@ -411,7 +413,9 @@ writer on that node, never by the whole 16 seconds.
 
 A writer that does not reach the front within `store.busy_timeout_seconds`
 fails retryably and rejoins the line, logged as `store_tx_retry` naming the
-knob. With three domains applying and a bulk update in flight, the default
+knob. With three domains applying and a bulk update in flight (the usage
+domain's transactions are a node-day's handful of rows, and weigh nothing
+here outside a replay), the default
 five seconds is close to the three transactions a fourth writer can
 legitimately wait behind — so that log line on a node doing bulk work is the
 signal to raise it rather than a fault. Raise the knob before you widen
@@ -441,19 +445,14 @@ what to do, which is finish the upgrade.
 
 **A record is written at the lowest version that can apply it whole**, never at
 the newest the build knows, so what an older node holds back is exactly the
-objects whose shape changed. Two records are written above version 1 today: a
-change to a knowledge container's settings, which carries the activation that
-wrote them, and a task write carrying a cross-project move's mid-move mark (both
-at version 2). So during an upgrade from a build before them, an older node
-holds back a container a newer node renamed or re-described, with the page
-writes in it, and the root of a subtree being moved, until it is upgraded — and
-nothing else. A container record that only re-stamps unchanged settings with a
-later activation stays at version 1, because an older node applies it whole;
-written at 2, the first upgraded node's stamping of every chart-named space
-would have stalled every page write in all of them on every older node. Every barrier and
-every generation record stays at version 1 for good: an older node retaining
-those would hold a deferral for every linearizable read, or never make the
-transition a reanchor announced.
+objects whose shape changed — [the next section](#which-records-an-upgrade-holds-back)
+lists them. Every barrier and every generation record stays at version 1 for
+good: an older node retaining those would hold a deferral for every
+linearizable read, or never make the transition a reanchor announced. So does
+every record that installs a gate, and for a harder reason: a node that
+deferred an eviction would go on applying everything the evicted node appends,
+so a gate record no build can decode stops that build's applier instead, and
+its shape may only ever grow by addition.
 
 **The upgraded node applies what it retained at its next boot**, before its
 applier consumes anything new: every retained record it can now read, in log
@@ -462,6 +461,93 @@ met a retained one is applied after it, which is what makes the objects' rows
 a prefix of their history again rather than a hole. A record still above the
 new build's version stays retained, with everything it covers, until a build
 that reads it boots.
+
+### Which records an upgrade holds back
+
+Only the ones that need the newer build. A record is stamped with the
+**lowest** version that can read it: 1 when it carries nothing a later build
+added, and the version of the newest field it carries otherwise. So during a
+rolling upgrade an old node applies everything the new nodes write except the
+records that use something new, and it retains those whole rather than apply
+them with the new part dropped — which is what would leave its copy of that
+object different from its peers' for good. An upgrade that adds no record field
+holds nothing back at all.
+
+In the tracker today, ten versions past the base carry something a later build
+added. Version 2 is a
+turn's charge to its task when it counts delegated workers or reviews that sent
+the work back. Version 3 is a person's own record when their read position is
+in a generation after a reanchor — a build reading 2 stored that position as the
+bare sequence and lost the generation. Version 4 is a comment that asks for a
+decision or answers one with a choice. Version 5 is any change made through an
+operator token bound to a seat: the record has always named that seat, and a
+build reading 5 stores it on the history row as the person to draw — a build
+reading 4 would apply the change and leave that column empty on its copy. So
+the seat is stored only from records at version 5; a change an older build
+wrote names no seat on any node, whichever build applies it. Version 6 is a task
+filed as a question — the create carries the ask, which a build reading 5 would
+file as a bare task with no question on it. Version 7 is a project carrying a
+target date, which a build reading 6 has no column for. Version 8 is every
+edit, removal and restore of a task: a build reading 8 keeps a card where its
+board was last dragged to, while a build reading 7 re-files it at the place it
+was created at the next time anybody changes it. So a card keeps its dragged
+place only through a change written at version 8; a change an older build
+wrote re-files the card on every node, whichever build applies it, exactly as
+it always did. Version 9 is a task filed from a chat conversation, whose create
+says which surface and conversation it came from. Version 10 is a turn's
+account of what it did on its task — its summary, its review, the tools it
+called and the phase it failed in. Version 11 is a task change carrying a
+cross-project move's mark: only the root of the subtree being moved carries it,
+and only until the move's walk is done. An old node holds those records back,
+with the task, the person or the project they are about, and applies every
+other write as it arrives.
+
+In the knowledge base, one kind of record does: a container's settings, at
+version 2, because they carry the activation that wrote them — a later
+activation that only **re-stamps** unchanged settings included. A re-stamp is
+not exempt, because applied without its stamp it would leave that node's row
+the one unstamped copy in the fleet after its upgrade, open to the next stale
+activation it applied. So while an older node is still running, it holds back
+every container a newer node stamped — every space the org chart names, at the
+first activation a newer node applies — together with the page writes in it,
+until it is upgraded. That is one more reason to finish a rolling upgrade
+inside the deferral grace.
+
+### Values the engine computes are recomputed once
+
+Some columns are not copied out of any record but computed from the history a
+node already holds — how often a task was reopened, for example. When a build
+adds such a column or changes how one is computed, its first boot recomputes it
+from the rows it holds, in the same transaction that records which rules the
+rows now follow, before it applies anything new. It happens once per change,
+on every node, including a node that just adopted a snapshot from a peer on a
+different build; the `statelog_rederived` log line names the domain, the rule
+versions it moved between and how many rows it wrote. The tracker's first such
+column is a task's `reopens`, recomputed from its history rows the first time a
+build that counts it boots.
+
+The second is a person's inbox positions. An earlier build stored how far a
+person had read as a bare sequence number, dropping the generation, and kept
+each read, unread or snoozed mark at whatever position the caller sent. The
+first boot of a build that stores them in full rewrites every person's row
+from what the node already holds: how far they have read comes from the change
+record that last wrote the row, and each mark's position from the history row
+of the notice it names. Where that last record had itself already lost the
+generation, the node has nothing truer to recover, and the person's next
+"read through here" restores it.
+
+The third is a project's count of **started** work (`task_counts.active`),
+which splits what used to be one "open" number into work waiting and work in
+progress. The first boot of a build that keeps it counts each project's tasks
+in the `active` status group, removed ones excluded, and the task apply keeps
+the number from then on.
+
+The fourth is the **hand-off count on each history row** — how many times
+agents had handed the task on as of that change, which is what lets an item's
+history say "hand-off 3 of 8". The count is the value the change's own record
+states when it moved it, or the one the row before it holds, so the first boot
+of a build that keeps it walks every task's history in log order and fills
+every row, and the apply carries it forward from then on.
 
 ### The other direction: a kind that was removed
 
@@ -487,6 +573,37 @@ that was never published is not retired and still faults, which is what keeps
 this from hiding a writer publishing a kind it never declared. Sprints, removed
 from the work tracker, are the first retired kind.
 
+## Two compacted domains: the embeddings and each node's day
+
+Two domains do not keep a history at all. Their streams keep **one message per
+subject** — a keyed table rather than a log — so a node that joins replays the
+current value of each object and nothing before it, a gap is a coverage number
+rather than a fault, and neither gates a node's seats or claims that two nodes
+hold identical rows.
+
+| Domain | Stream | One subject per | Written by | Kept for |
+|---|---|---|---|---|
+| **vectors** | `CREWLET_TRACKER_VECTORS` | embedded source | the fleet's one embedding duty | 90 days per message; the rows until the source is forgotten |
+| **usage** | `CREWLET_USAGE_LOG` | (node, company day, seat or schedule) | **every node, for its own days only** | 181 days |
+
+**`usage` is what makes history fleet-wide.** Each node derives its own day —
+the spend by phase, worker, model and provider slot, the turns that ended and
+how (failed, reviewed, first pass, sent back, a duration histogram), the pages
+its seats read, the schedules it fired — from its own event log, every 15
+seconds while the day moves, and publishes each object's whole cumulative value.
+Every node applies every node's days, so any node answers for the fleet and a
+node that leaves takes nothing with it: its days stay in every peer's rows, and
+a node that joins later replays them from the stream. Because the node is part
+of the subject, no two nodes ever write one object and nothing is arbitrated;
+an apply replaces the object's rows.
+
+A day is cut on the company's clock (`timezone`). A node re-derives today and
+yesterday on every tick, so the turn that ended a second before midnight
+reaches the fleet, and on every start, so a day a node was down across still
+arrives. History older than 181 days leaves in the same transaction that
+applies the day that makes it old, on every node alike — there is no sweep.
+The decision is [ADR-0020](https://github.com/crewlet/crewlet/blob/main/adr/0020-a-nodes-own-day-is-a-compacted-domain.md).
+
 ## The six capacity ceilings
 
 1. **The broker's storage limit** — `stream.store_max_bytes`. Every ceiling
@@ -496,7 +613,8 @@ from the work tracker, are the first retired kind.
    measured once. **Divide it when more than one engine shares a filesystem**:
    free space bounds their sum, not each of them.
 2. **Each log's byte ceiling**: `stream.tracker_log_max_bytes`,
-   `stream.tracker_vectors_max_bytes` and `stream.pages_log_max_bytes`, sized
+   `stream.tracker_vectors_max_bytes`, `stream.pages_log_max_bytes` and
+   `stream.usage_log_max_bytes`, sized
    together as [below](#how-the-byte-ceilings-are-sized). A full log
    **refuses** appends rather than shedding old records; see
    [Retention](retention.md). On the tracker and pages logs ordinary writes
@@ -515,14 +633,14 @@ from the work tracker, are the first retired kind.
 
 A byte ceiling is a **reservation**. The broker grants it in full when it
 creates the stream, before a single record is written, and refuses to create a
-stream whose ceiling it could not honour. So the three logs compete for one
+stream whose ceiling it could not honour. So the four logs compete for one
 number, and a node sizes them together, once, when it creates their streams:
 
 | Step | What happens |
 |---|---|
 | **What the broker can grant** | Read from the broker itself. An embedded broker's limit is `stream.store_max_bytes` where you set one, and otherwise three quarters of the free space on the volume holding `stream.store_dir`, counting what its own streams already hold there; an external one's is the NATS account's JetStream limit. What counts against it is the ceilings already granted, not the bytes stored. |
 | **The logs' share** | Half of that, with the ceilings the logs' own streams already hold counted as theirs, so a restart divides the same half the first boot did. Where the broker states no limit, or it cannot be read, the share is half of the stream volume's free space instead, and nothing is added to it: a reservation never spends free space, so that figure already contains what the logs hold. The other half is for everything that reserves nothing: every mailbox, every coordination bucket and the snapshot a joining node reads. |
-| **Each log's ask** | Its Tier A field when you set one. Unset, the mutation log asks for a quarter of the stream volume's free space (4..64 GiB), the knowledge base's log for a quarter of that (1..16 GiB), and the vector changelog for 16 GiB capped by the same quarter. |
+| **Each log's ask** | Its Tier A field when you set one. Unset, the mutation log asks for a quarter of the stream volume's free space (4..64 GiB), the knowledge base's log for a quarter of that (1..16 GiB), the vector changelog for 16 GiB capped by the same quarter, and the usage log for a fixed 1 GiB — a count of node-days, which more disk does not grow. |
 | **The fit** | A log whose stream already exists takes the ceiling it **holds** off the logs' half first, whatever its field says now. A ceiling you set for a log being created comes off next, and is never scaled. The unset ones being created share what is left in proportion to what each asked for, none goes below 1 GiB, and none is created above what it would get if no log existed yet — the figure every later boot reports its stream against. |
 
 **A stream that already exists keeps its ceiling.** Sizing decides what a
@@ -575,8 +693,8 @@ and no Tier A setting changes them: …
 
 The remedies are the ones it lists. Give the broker more room: raise
 `stream.store_max_bytes` where you set one, or, where you did not, free space
-on that volume (a first boot needs at least 4 GiB free there, three quarters
-of which is the three 1 GiB floors), which the broker measures again when the
+on that volume (a first boot needs at least 5⅓ GiB free there, three quarters
+of which is the four 1 GiB floors), which the broker measures again when the
 node next starts. Or, when the refused log's ceiling is
 above the 1 GiB floor, set its field to a smaller ceiling, and the refusal says
 so when that applies.

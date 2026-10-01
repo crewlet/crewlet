@@ -233,6 +233,24 @@ func (e *Engine) startIntegrations(ctx context.Context) {
 	worker.Start(context.WithoutCancel(ctx))
 }
 
+// Converges reports whether a reconcile pass converges this surface in this
+// build.
+//
+// A PROPERTY OF THE BUILD, not of this node's wiring: it is answered from the
+// same pass list the loop registers ([Engine.setupPasses]) rather than from
+// the runner, which is nil on a node with no coordination store and would
+// then call every surface one no pass converges. What it tells a reader is
+// whether a surface with no report is waiting for one or will never get one —
+// Slack, whose apps are created by hand, is the second.
+func (e *Engine) Converges(kind integration.Kind) bool {
+	for _, pass := range e.setupPasses() {
+		if pass.Kind() == kind {
+			return true
+		}
+	}
+	return false
+}
+
 // Integrations exposes the reconcile loop.
 //
 // Exported for the same reason [Engine.Maintenance] is: "is anything checking

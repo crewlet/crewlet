@@ -243,6 +243,23 @@ type Result struct {
 	InputTokens  int
 	OutputTokens int
 
+	// CacheRead and CacheWrite are the prompt cache's share of InputTokens —
+	// see [toolloop.Result.CacheRead].
+	CacheRead  int
+	CacheWrite int
+
+	// RoundRecords is one entry per provider call the worker made, timed —
+	// see [toolloop.Round]. Rounds above is their count.
+	RoundRecords []toolloop.Round
+
+	// MaxRounds is the round cap the worker ran under (its task's
+	// `max_turns`). A worker is never extended, so it is also its ceiling.
+	MaxRounds int
+
+	// StartedAt is when the worker's clock started — the same instant
+	// Elapsed is measured from, so the two place it on a timeline exactly.
+	StartedAt time.Time
+
 	// Elapsed is this task's own wall clock, from the moment the worker
 	// started to whatever ended it — a submission, an exhausted round
 	// budget, a deadline, or a panic the runner contained.
@@ -255,8 +272,11 @@ type Result struct {
 	// answer exists.
 	Elapsed time.Duration
 
-	// Model is what actually served the calls; ProviderKey is the config
-	// key its chain was resolved under.
+	// Model is what actually served the calls, and ProviderKey the
+	// configured entry that did — the member of the worker's chain that
+	// answered, which after a fallback is not the head it was resolved
+	// under. Both follow the tool loop's one precedence, so a worker that
+	// never reached a round names neither.
 	Model       string
 	ProviderKey string
 

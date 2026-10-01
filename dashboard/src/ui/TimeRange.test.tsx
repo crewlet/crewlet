@@ -17,7 +17,7 @@
  */
 
 import { afterEach, expect, test, vi } from "vitest";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { LayerHost } from "@crewlethq/ui";
 import { TimeRangePicker } from "./TimeRange.tsx";
 import type { TimeRange, Window } from "~/lib/range.ts";
@@ -83,6 +83,41 @@ test("a window that ends where it begins is refused, and says why", () => {
   expect(set).not.toHaveBeenCalled();
 });
 
+// ENTER IN EITHER BOX APPLIES. A browser submits a form of several date
+// fields on Enter only by pressing the form's submit button (its implicit
+// submission), so Apply has to BE that button: as a plain button beside the
+// form's `onSubmit`, Enter in "From" or "To" did nothing at all.
+test("Apply is the form's submit button, so Enter in a box applies", () => {
+  open();
+  const apply = screen.getByRole("button", { name: "Apply" }) as HTMLButtonElement;
+  const from = screen.getByLabelText("From") as HTMLInputElement;
+  expect(apply.type).toBe("submit");
+  expect(apply.form).toBeTruthy();
+  expect(apply.form).toBe(from.form);
+});
+
+// DISMISSED, FOCUS COMES BACK TO A TAB STOP. The dialog returns focus to the
+// Custom option that opened it, which is not the checked one — and it has to
+// be the group's stop while the reader stands on it, or Tab and the arrows
+// resume from an option they are not on.
+test("a dismissed custom window leaves the reader on a tab stop", async () => {
+  render(
+    <LayerHost>
+      <TimeRangePicker range={picker()} />
+    </LayerHost>,
+  );
+  const custom = screen.getByRole("radio", { name: "Custom" });
+  // A PRESS FOCUSES what it presses, which `fireEvent.click` does not.
+  act(() => custom.focus());
+  fireEvent.click(custom);
+  fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+  await new Promise((r) => setTimeout(r, 0));
+  expect(document.activeElement).toBe(custom);
+  expect(custom.getAttribute("tabindex")).toBe("0");
+  const stops = screen.getAllByRole("radio").filter((r) => r.getAttribute("tabindex") === "0");
+  expect(stops).toEqual([custom]);
+});
+
 test("a window that holds something is applied", () => {
   const set = vi.fn();
   open(picker(set));
@@ -90,4 +125,61 @@ test("a window that holds something is applied", () => {
   expect(set).toHaveBeenCalledOnce();
   const picked = set.mock.calls[0]?.[0] as { from: number; to: number };
   expect(picked.to).toBeGreaterThan(picked.from);
+});
+
+// TODAY IS A WINDOW OF ITS OWN where a screen offers it, first on the strip,
+// and pressing it names the company's day rather than twenty-four hours.
+test("today leads the strip where it is offered, and sets the company's day", () => {
+  const set = vi.fn();
+  const range = picker(set);
+  range.offer = { ...range.offer, today: true, zone: "UTC" };
+  render(
+    <LayerHost>
+      <TimeRangePicker range={range} />
+    </LayerHost>,
+  );
+  const radios = screen.getAllByRole("radio");
+  expect(radios[0]!.textContent).toBe("Today");
+  fireEvent.click(radios[0]!);
+  const chosen = set.mock.calls[0]![0] as Window;
+  expect(typeof chosen === "object" && chosen.today).toBe(true);
+});
+
+test("a screen that does not offer today does not draw it", () => {
+  render(
+    <LayerHost>
+      <TimeRangePicker range={picker()} />
+    </LayerHost>,
+  );
+  expect(screen.queryByText("Today")).toBeNull();
+});
+
+// A DAY-GRAINED SCREEN TAKES TWO COMPANY DATES. Spend's question is company
+// days; a picker that took minutes would offer a precision the answer cannot
+// have. The boxes are dates on the company's clock, both counted, and what is
+// set is the interval from the first one's midnight to the one after the last.
+test("a screen of company days picks two dates on the company's clock", () => {
+  const set = vi.fn();
+  const range = picker(set);
+  range.offer = { ...range.offer, customDays: true, zone: "Asia/Tokyo" };
+  render(
+    <LayerHost>
+      <TimeRangePicker range={range} />
+    </LayerHost>,
+  );
+  fireEvent.click(screen.getByTitle("Name two company days of your own"));
+  const first = screen.getByLabelText("First day") as HTMLInputElement;
+  const last = screen.getByLabelText("Last day") as HTMLInputElement;
+  expect(first.type).toBe("date");
+  // Prefilled from the window on screen, on TOKYO's calendar: 09:00Z–17:00Z
+  // on the 16th is 18:00 on the 16th to 02:00 on the 17th there.
+  expect(first.value).toBe("2031-04-16");
+  expect(last.value).toBe("2031-04-17");
+  fireEvent.change(first, { target: { value: "2031-04-01" } });
+  fireEvent.change(last, { target: { value: "2031-04-08" } });
+  fireEvent.click(screen.getByRole("button", { name: "Apply" }));
+  expect(set).toHaveBeenCalledWith({
+    from: Date.parse("2031-03-31T15:00:00Z"),
+    to: Date.parse("2031-04-08T15:00:00Z"),
+  });
 });

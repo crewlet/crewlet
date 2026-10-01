@@ -1,10 +1,8 @@
 package coord
 
 import (
-	"cmp"
 	"context"
 	"errors"
-	"slices"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/textcut"
@@ -107,12 +105,26 @@ const (
 	// so the bucket only has to outlive the longest one.
 	CooldownMax = 24 * time.Hour
 
-	// BudgetRetention is deliberately absent, and the absence is the
-	// point: a token cap is a ceiling for the LIFE of a deployment, so
-	// the counter's bucket has no age at all. A counter that rolled itself
-	// over would silently re-arm a company somebody had stopped on
-	// purpose, on a horizon nobody chose. Clearing one is an operator
-	// action — see [Budgets.Reset].
+	// BudgetRetention is how long a token counter outlives its last
+	// write, and the bucket's age that enforces it (ADR-0019).
+	//
+	// A counter is one record per scope holding a slot per calendar
+	// window, and the longest window is a month: at most 31 days, plus the
+	// hour a clock change can add. A record nobody has charged for longer
+	// than that holds no slot for any window that is still current, so it
+	// is spend nobody can be refused against and nothing will ever read
+	// as current again — and without an age, every seat that ever ran
+	// would keep one for the life of the deployment. Thirty-two days is
+	// the first whole number of days past the longest window; the bucket
+	// reaps nothing a current window counts, because a charge rewrites
+	// the record and restarts its age.
+	//
+	// This is NOT the reset. A window's allowance comes back when the
+	// window turns over, by the roll inside the charge that crosses it —
+	// see [Tally.Roll] — and never on this clock: a counter that aged out
+	// early would re-arm a company mid-month, and one that aged out late
+	// costs a record nobody reads.
+	BudgetRetention = 32 * 24 * time.Hour
 
 	// SandboxRunRetention is absent for the same reason as the channel
 	// bucket's, one step sharper: a detached coding run can sit parked on
@@ -233,157 +245,6 @@ type Cooldowns interface {
 	Since(ctx context.Context, now time.Time) (map[string]time.Time, error)
 }
 
-// OrgScope is the company-wide token counter's key.
-const OrgScope = "org"
-
-// AgentScope is one seat's counter key.
-//
-// Keyed on the DERIVED agent id rather than the handle, matching the diary and
-// the episodes: renaming a handle then starts a fresh budget rather than
-// inheriting the spend of whoever held the name before.
-func AgentScope(agentID string) string { return "agent:" + agentID }
-
-// Spend is what one charge did.
-type Spend struct {
-	// OK is false when a scope refused. RefusedScope, RefusedUsed and
-	// RefusedLimit then say WHICH and by how much — "the company is out"
-	// and "this seat is out" send an operator to different places, and a
-	// bare refusal sends them to neither.
-	OK           bool
-	RefusedScope string
-	RefusedUsed  int
-	RefusedLimit int
-
-	// OrgUsed and AgentUsed are the counters after a successful charge.
-	OrgUsed   int
-	AgentUsed int
-}
-
-// Usage is one scope's counter, for the operator surface.
-type Usage struct {
-	Scope     string
-	Used      int
-	UpdatedAt time.Time
-
-	// RefusedAt is when this scope last turned a charge away, and zero
-	// once it has admitted one since.
-	//
-	// It is what "exhausted" means, and Used compared against the cap is
-	// not: a refused charge increments nothing, so a seat charged in
-	// 3 000-token rounds against a 100 000 cap stops near 99 000 and never
-	// reads as full. Kept HERE, in the shared counter, because the refusal
-	// is the gate's own decision and every node reports this counter: a
-	// stamp one node kept in memory would appear and vanish on a dashboard
-	// as the reports of different nodes arrived.
-	//
-	// Cleared by an ADMITTED charge and by nothing weaker, plus a
-	// [Budgets.Reset], which drops the scope's whole record and this stamp
-	// with it — an operator zeroing a counter has made room, so a scope
-	// still listed as refusing would be one nothing could clear. A charge
-	// that was refused overall leaves every other scope's stamp alone, even
-	// when that scope would have had room, so the answer does not depend
-	// on which scope a backend happens to test first. A [Budgets.PostCharge]
-	// neither stamps nor clears it: it is not a decision about room.
-	RefusedAt time.Time
-}
-
-// Budgets is the fleet's token counter.
-//
-// USAGE IS SHARED, CAPS ARE NOT. A cap belongs to a config epoch — a revision
-// that raises a ceiling takes effect on the next turn — while the counter has
-// to be one number across the fleet, because per-node counters mean N nodes
-// each spend the whole allowance and an org cap of 500 000 is silently
-// N x 500 000. So the limit travels IN on every call and the store holds only
-// what has been spent.
-type Budgets interface {
-	// Charge checks and increments the seat's counter and the org's, and
-	// a refusal by either leaves NEITHER charged.
-	//
-	// There is no transaction here — two keys, and a KV store has no way
-	// to write both at once — so the atomicity is built rather than
-	// borrowed: the ORG is charged first and compensated if the seat then
-	// refuses.
-	//
-	// Org first, and not the reverse, for two reasons that point the same
-	// way. It makes the refusal report ORG-FIRST for free when both scopes
-	// are out of room, and "the company is out" is the fact that matters —
-	// raising one seat's ceiling against an exhausted org changes nothing,
-	// and an operator sent to the seat first finds that out the slow way.
-	// And it puts the compensation on the path a seat refusal ALWAYS
-	// takes, rather than on a race between two nodes: an unwind that only
-	// a race can reach is an unwind nothing ever proves works.
-	//
-	// What the compensation cannot cover is a process that dies between
-	// the two writes. The org is then over-stated by one round, which
-	// trips the cap EARLY — the fail-closed direction, bounded by how
-	// often a node dies mid-charge, and visible in the counter rather than
-	// silently absorbed.
-	//
-	// FAILS CLOSED: an error stops the round. It is NOT a refusal, and a
-	// caller must not report it as one — "the company is out of tokens"
-	// is a budget event an operator acts on, and "the counter is
-	// unreachable" is an outage. Money leaves the building for every
-	// token, so a counter that cannot be reached must not un-cap a
-	// company.
-	//
-	// A limit of 0 is UNLIMITED, matching the config: `token_budget: 0` is
-	// how an operator says "no ceiling", and reading it as "no allowance"
-	// would stop every company that never set one.
-	//
-	// A refusal stamps the refusing scope's [Usage.RefusedAt], and an
-	// admitted charge clears the stamp on both scopes it charged. See
-	// that field for why nothing weaker clears it.
-	Charge(ctx context.Context, agentScope string, tokens, orgLimit, agentLimit int) (Spend, error)
-
-	// PostCharge adds spend that has ALREADY HAPPENED to the seat's counter
-	// and the org's, and never refuses. The answer is OK with both counters
-	// after the write, for the caller to compare with its caps — except for
-	// a charge of nothing, which writes nothing and answers OK with both
-	// figures at zero rather than reading two counters to report what it
-	// did not change.
-	//
-	// Charge is the gate: it decides whether a round may run, before the
-	// round has spent anything. Some spend is only known after it happened
-	// (a detached coding run is collected minutes or hours after it
-	// started, possibly on another node), and no answer can un-spend it.
-	// Put through the gate, it was recorded NOT AT ALL whenever it did not
-	// fit, which is exactly when a cap binds: the counter under-stated the
-	// company's spend by the whole run, and the next round was admitted
-	// against room the run had already used.
-	//
-	// It leaves both scopes' refusal stamps alone, because it is not a
-	// decision about room: it neither says the gate turned a charge away
-	// nor that it had room for one. A counter it takes past a cap is
-	// refused by the next Charge, which stamps it then.
-	//
-	// All or nothing, as Charge is: an error takes the org's half back, so
-	// a caller that retries does not count the company twice. The
-	// compensation is the same BEST-EFFORT one Charge's is — two keys and
-	// no transaction — and a backend that cannot make it says so in its log
-	// rather than in the answer, because the caller's answer is already
-	// decided. It errs in the one safe direction: the org reads HIGH, so a
-	// cap trips early rather than late.
-	PostCharge(ctx context.Context, agentScope string, tokens int) (Spend, error)
-
-	// Used reports one scope's spend. A scope never charged has spent
-	// nothing; an unreachable store is an error, never a zero.
-	Used(ctx context.Context, scope string) (int, error)
-
-	// Usage returns every counter, org first then seats by scope.
-	//
-	// Ordered so the operator surface does not have to sort, and so two
-	// reads of an unchanged counter are byte-identical — a listing that
-	// reshuffled would make a diff of two captures unreadable.
-	Usage(ctx context.Context) ([]Usage, error)
-
-	// Reset zeroes one scope, or every scope when given "", and reports
-	// how many it cleared.
-	//
-	// An operator action, never a schedule. See [BudgetRetention]'s
-	// absence above.
-	Reset(ctx context.Context, scope string) (int, error)
-}
-
 // Activation is one entry of the config pointer every node converges on.
 type Activation struct {
 	// Epoch is the monotonic version of the pointer.
@@ -396,6 +257,45 @@ type Activation struct {
 	RevisionID string
 	At         time.Time
 	Summary    string
+
+	// Origin is who wrote the revision, as the node that stored it first
+	// recorded it. See [RevisionOrigin].
+	Origin RevisionOrigin
+}
+
+// RevisionOrigin is the record a revision was WRITTEN with, travelling with
+// the pointer so a peer adopting the revision keeps it.
+//
+// A revision is stored in the database of whichever node served the write;
+// every other node meets it for the first time when the pointer names it. So
+// what the pointer does not carry, a peer cannot know — and it did not carry
+// this: every node but the origin recorded the revision as written by `peer`,
+// from source `fleet`, at the instant it was activated, so the same revision
+// had a different author on every node and the audit screen's answer depended
+// on which node served it.
+//
+// ADDITIVE ON THE WIRE, and both directions are ordinary. An older build
+// decodes a pointer carrying this and ignores it; this build reads an older
+// pointer as a zero origin, which the adopting node records as an author NOT
+// RECORDED rather than inventing one. The fields are plain strings rather than
+// the store's kind type for the reason [NodeApply.Status] gives: this package
+// is where the engine's layers meet, and a backend should not import the
+// store to carry a word.
+//
+// The PARENT is deliberately not here. It names a revision the adopting node
+// may never have held — a node that joined after it was superseded — and the
+// table's parent column is a foreign key into this node's own rows.
+type RevisionOrigin struct {
+	// Author is the label the writer was recorded under.
+	Author string
+	// AuthorKind is what Author names — `operator` or `node` in this
+	// build (store.AuthorKind).
+	AuthorKind string
+	// Source is how the revision was made: `api`, `file`, `rekey`.
+	Source string
+	// CreatedAt is when it was written, which a re-activation of an old
+	// revision makes very different from [Activation.At].
+	CreatedAt time.Time
 }
 
 // MaxApplyErrorLength bounds the failure text a node publishes.
@@ -500,6 +400,11 @@ type ActivationRequest struct {
 	// Activate returns says which, so a caller keeping a local copy of the
 	// instant keeps the pointer's.
 	At time.Time
+
+	// Origin is the revision's own record, so a peer that adopts it keeps
+	// its author. Every writer has one; a zero origin publishes a pointer
+	// every peer records as "author not recorded".
+	Origin RevisionOrigin
 
 	// Expect is the revision the caller read before building this one.
 	//
@@ -1060,14 +965,15 @@ type Mailboxes interface {
 //
 // One interface at the CONSTRUCTION seam and a narrow one at each call site:
 // the webhook edge takes a Claims and nothing else, the valve takes a Counter,
-// a turn's meter takes a Budgets. A consumer that could reach the whole store
-// would eventually use it.
+// a turn's meter takes the two verbs of [Budgets] it calls. A consumer that
+// could reach the whole store would eventually use it.
 type Fleet interface {
 	Counter
 	Claims
 	Ledger
 	Cooldowns
 	Budgets
+	LifetimeCounters
 	Plane
 	Channels
 	Follows
@@ -1076,6 +982,7 @@ type Fleet interface {
 	Secrets
 	Integrations
 	Mailboxes
+	SeatPauses
 	PositionRegister
 	HoldRegister
 	FloorRegister
@@ -1156,24 +1063,4 @@ type Follows interface {
 	// keys overlap, exactly one create wins, and the loser removes its own
 	// row having learned the fleet already has the record.
 	FollowIfAbsent(ctx context.Context, backend, handle, channel, thread, reason string, at time.Time) (bool, error)
-}
-
-// SortUsage puts the org counter first, then the seats by scope.
-//
-// Shared by the backends rather than left to each: "org" does NOT sort before
-// "agent:…" alphabetically, so a backend that just sorted would put the
-// company's own counter in the middle of its seats — and a listing whose order
-// differed between backends would make a diff of two captures unreadable.
-func SortUsage(rows []Usage) {
-	// The org counter ranks 0 and everything else 1, so cmp.Or falls
-	// through to the alphabetical compare only among the seats.
-	rank := func(u Usage) int {
-		if u.Scope == OrgScope {
-			return 0
-		}
-		return 1
-	}
-	slices.SortFunc(rows, func(a, b Usage) int {
-		return cmp.Or(cmp.Compare(rank(a), rank(b)), cmp.Compare(a.Scope, b.Scope))
-	})
 }

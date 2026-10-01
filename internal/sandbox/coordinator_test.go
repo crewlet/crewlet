@@ -107,6 +107,33 @@ func (s *resumeSpy) calls() []ResumeRequest {
 	return append([]ResumeRequest(nil), s.requests...)
 }
 
+// audienceSpy resolves every question to the seats it is told to, and records
+// what each park asked it.
+type audienceSpy struct {
+	mu     sync.Mutex
+	answer Audience
+	asked  []string
+}
+
+func (a *audienceSpy) ResolveAudience(run PendingRun, label string) Audience {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.asked = append(a.asked, run.TurnID+"/"+label)
+	return Audience{Handles: append([]string(nil), a.answer.Handles...), Fallback: a.answer.Fallback}
+}
+
+func (a *audienceSpy) resolves(to Audience) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.answer = to
+}
+
+func (a *audienceSpy) questions() []string {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return append([]string(nil), a.asked...)
+}
+
 // ledgerSpy records post-charges.
 //
 // IT RECORDS AN OVER-CAP CHARGE, which is what the engine's accountant does:
@@ -163,6 +190,7 @@ type coordRig struct {
 	coordinator *Coordinator
 	resumer     *resumeSpy
 	accountant  *ledgerSpy
+	audience    *audienceSpy
 
 	mu      sync.Mutex
 	stopped []string
@@ -183,9 +211,11 @@ func newCoordRig(t *testing.T) *coordRig {
 		waiterRig:  base,
 		resumer:    &resumeSpy{},
 		accountant: &ledgerSpy{},
+		audience:   &audienceSpy{},
 	}
 	coordinator, err := NewCoordinator(CoordinatorOptions{
-		Queue: base.queue, Pending: base.pending, Manager: base.manager,
+		Audience: rig.audience,
+		Queue:    base.queue, Pending: base.pending, Manager: base.manager,
 		Resume: rig.resumer, Account: rig.accountant,
 		Stopped: func(_ context.Context, handle, turnID string) {
 			rig.mu.Lock()
@@ -395,7 +425,55 @@ func TestACompletionResumesTheSuspendedLoop(t *testing.T) {
 	if !strings.Contains(calls[0].Answer, "do NOT redo it") {
 		t.Fatalf("the answer does not stop the executor redoing the work: %q", calls[0].Answer)
 	}
+	// THE JOB'S TOKENS REACH THE SEGMENT THAT PAYS FOR THEM: the resumed
+	// turn charges its work item for the job it collected (ADR-0022).
+	if calls[0].InputTokens != 900 || calls[0].OutputTokens != 200 {
+		t.Fatalf("the resume carries %d/%d tokens, want the job's 900/200",
+			calls[0].InputTokens, calls[0].OutputTokens)
+	}
 	rig.finished("t1")
+}
+
+// A JOB THAT PARKED ON A QUESTION IS PAID FOR BY THE ANSWER'S RESUME.
+//
+// The completion that parked resumes nothing, so the answer's resume is that
+// job's ONLY segment — days later, possibly on another node, with nothing
+// collected. The job's tokens therefore travel on the row with its question,
+// or the turn's work item is charged for the collection and never for the
+// coding run that asked.
+func TestAParkedJobsTokensReachTheAnswersResume(t *testing.T) {
+	rig := newCoordRig(t)
+	rig.launch("asks")
+	rig.coordinator.countRun("swe", StatusRunning)
+	rig.runner.Finish(Result{
+		NeedsInput: true, Question: "which branch?", AskTo: "requester",
+		InputTokens: 700, OutputTokens: 80,
+	})
+	payload, ev := rig.completion("asks")
+	if err := rig.coordinator.OnCompleted(t.Context(), payload, ev); err != nil {
+		t.Fatalf("OnCompleted: %v", err)
+	}
+	if got := len(rig.resumer.calls()); got != 0 {
+		t.Fatalf("a job that asked a question resumed %d times before any answer", got)
+	}
+	if run := rig.get("asks"); run.ParkedInputTokens != 700 || run.ParkedOutputTokens != 80 {
+		t.Fatalf("the parked row holds %d/%d tokens, want the job's 700/80",
+			run.ParkedInputTokens, run.ParkedOutputTokens)
+	}
+
+	disposition, err := rig.coordinator.TryResumeFromAnswer(
+		t.Context(), "swe", answerOnTheDM, "use main", nil)
+	if err != nil || disposition != AnswerConsumed {
+		t.Fatalf("TryResumeFromAnswer = %q, %v", disposition, err)
+	}
+	calls := rig.resumer.calls()
+	if len(calls) != 1 || calls[0].InputTokens != 700 || calls[0].OutputTokens != 80 {
+		t.Fatalf("the answer's resume carries %+v, want the parked job's 700/80 tokens", calls)
+	}
+	if len(calls[0].DeliveredRefs) != 0 {
+		t.Errorf("the answer's resume claims deliveries %v for a run that did "+
+			"not finish", calls[0].DeliveredRefs)
+	}
 }
 
 // A START EVENT REDELIVERED WHILE THE RESUME RUNS must not park the seat for
@@ -1284,7 +1362,8 @@ func TestASettleSomebodyElseEndedReportsNoStop(t *testing.T) {
 	rig.launch("t1")
 	var stopped []string
 	coordinator, err := NewCoordinator(CoordinatorOptions{
-		Queue: rig.queue, Pending: endedFirst{rig.pending},
+		Audience: &audienceSpy{},
+		Queue:    rig.queue, Pending: endedFirst{rig.pending},
 		Manager: rig.manager, Resume: rig.resumer,
 		Stopped: func(_ context.Context, handle, turnID string) {
 			stopped = append(stopped, handle+"/"+turnID)
@@ -1384,7 +1463,8 @@ func TestASettleSomebodyElseEndedIsNotAnnouncedTwice(t *testing.T) {
 	rig := newCoordRig(t)
 	rig.launch("t1")
 	coordinator, err := NewCoordinator(CoordinatorOptions{
-		Queue: rig.queue, Pending: endedFirst{rig.pending}, Manager: rig.manager, Resume: rig.resumer,
+		Audience: &audienceSpy{},
+		Queue:    rig.queue, Pending: endedFirst{rig.pending}, Manager: rig.manager, Resume: rig.resumer,
 	})
 	if err != nil {
 		t.Fatalf("NewCoordinator: %v", err)
@@ -1498,9 +1578,9 @@ func TestASettleLeavesTheNextJobItsOwnTail(t *testing.T) {
 		if _, err := Launch(ctx, rig.manager, rig.pending, rig.queue, req); err != nil {
 			t.Errorf("relaunch: %v", err)
 		}
-		if suspended, err := rig.pending.MarkSuspended(ctx, r.TurnID, map[string]any{
+		if suspended, err := rig.pending.MarkSuspended(ctx, r.TurnID, Suspension{State: map[string]any{
 			"pending_tool_name": "run_sandbox",
-		}); err != nil || !suspended {
+		}}); err != nil || !suspended {
 			t.Errorf("the relaunch's suspension: suspended=%v err=%v", suspended, err)
 		}
 		rig.runner.Finish(Result{NeedsInput: true, Question: "which file?", AskTo: "requester"})
@@ -1608,6 +1688,15 @@ func TestADuplicateCompletionDoesNotAskAParkedQuestionAgain(t *testing.T) {
 	if got := rig.get("t1"); got.Status != StatusAwaiting {
 		t.Fatalf("status = %q, want the run still waiting on its answer", got.Status)
 	}
+	// THE QUESTION NAMES THE ITEM THE RUN IS ON, off the row: it is shown
+	// against the work it is about, and the row is the only thing that
+	// still knows which work that is. And the park kept it on the row.
+	if asked := rig.questions()[0]; asked.WorkItem == nil || *asked.WorkItem != rigItem {
+		t.Errorf("the question names %+v, want the run's item", asked.WorkItem)
+	}
+	if got := rig.get("t1"); got.WorkItem == nil || *got.WorkItem != rigItem {
+		t.Errorf("the parked row holds %+v, want the run's item", got.WorkItem)
+	}
 }
 
 // staleFind answers the parked-run lookup from a snapshot taken before the
@@ -1636,7 +1725,8 @@ func TestAnAnswerDoesNotClaimTheJobThatReplacedTheAsker(t *testing.T) {
 	rig.suspend("t1")
 
 	coordinator, err := NewCoordinator(CoordinatorOptions{
-		Queue: rig.queue, Pending: staleFind{PendingStore: rig.pending, snapshot: asked},
+		Audience: &audienceSpy{},
+		Queue:    rig.queue, Pending: staleFind{PendingStore: rig.pending, snapshot: asked},
 		Manager: rig.manager, Resume: rig.resumer, Account: rig.accountant,
 	})
 	if err != nil {
@@ -1687,7 +1777,8 @@ func TestAQuestionThatCouldNotBeRecordedIsAskedAgain(t *testing.T) {
 	rig.runner.Finish(Result{NeedsInput: true, Question: "which branch?", AskTo: "requester"})
 
 	coordinator, err := NewCoordinator(CoordinatorOptions{
-		Queue: rig.queue, Pending: &parkFails{PendingStore: rig.pending, left: 1},
+		Audience: &audienceSpy{},
+		Queue:    rig.queue, Pending: &parkFails{PendingStore: rig.pending, left: 1},
 		Manager: rig.manager, Resume: rig.resumer, Account: rig.accountant,
 	})
 	if err != nil {
@@ -1756,7 +1847,8 @@ func TestAQuestionIsAskedBeforeTheRunIsParked(t *testing.T) {
 
 			spy := &statusAtAsk{recorder: rig.queue, rig: rig}
 			coordinator, err := NewCoordinator(CoordinatorOptions{
-				Queue: spy, Pending: rig.pending, Manager: rig.manager,
+				Audience: &audienceSpy{},
+				Queue:    spy, Pending: rig.pending, Manager: rig.manager,
 				Resume: rig.resumer, Account: rig.accountant,
 			})
 			if err != nil {
@@ -1828,7 +1920,8 @@ func (r relaunchThenBreak) Resume(ctx context.Context, req ResumeRequest) error 
 func (r *coordRig) withResumer(t *testing.T, resume Resumer) *Coordinator {
 	t.Helper()
 	coordinator, err := NewCoordinator(CoordinatorOptions{
-		Queue: r.queue, Pending: r.pending, Manager: r.manager,
+		Audience: &audienceSpy{},
+		Queue:    r.queue, Pending: r.pending, Manager: r.manager,
 		Resume: resume, Account: r.accountant,
 	})
 	if err != nil {
@@ -1971,7 +2064,8 @@ func TestADrainThatBreaksAResumeStillHandsTheClaimBack(t *testing.T) {
 	delivery, cancel := context.WithCancel(t.Context())
 	defer cancel()
 	coordinator, err := NewCoordinator(CoordinatorOptions{
-		Queue: rig.queue, Pending: honoursCancel{rig.pending}, Manager: rig.manager,
+		Audience: &audienceSpy{},
+		Queue:    rig.queue, Pending: honoursCancel{rig.pending}, Manager: rig.manager,
 		Resume: drained{cancel: cancel},
 	})
 	if err != nil {
@@ -2124,7 +2218,8 @@ func TestARetryOnAnotherNodeChargesTheRunOnce(t *testing.T) {
 	// charging the same fleet counter.
 	successor := &ledgerSpy{}
 	next, err := NewCoordinator(CoordinatorOptions{
-		Queue: rig.queue, Pending: rig.pending, Manager: rig.manager,
+		Audience: &audienceSpy{},
+		Queue:    rig.queue, Pending: rig.pending, Manager: rig.manager,
 		Resume: &resumeSpy{}, Account: successor,
 	})
 	if err != nil {
@@ -2162,7 +2257,8 @@ func TestAChargeIsRecordedByTheWriteThatHandsTheClaimBack(t *testing.T) {
 	rig.runner.Finish(Result{Success: true, Text: "done", InputTokens: 900, OutputTokens: 100})
 	resumer := &resumeSpy{err: fmt.Errorf("%w: the seat moved", ErrResumeUnavailable)}
 	coordinator, err := NewCoordinator(CoordinatorOptions{
-		Queue: rig.queue, Pending: onlyTheClaim{rig.pending}, Manager: rig.manager,
+		Audience: &audienceSpy{},
+		Queue:    rig.queue, Pending: onlyTheClaim{rig.pending}, Manager: rig.manager,
 		Resume: resumer, Account: rig.accountant,
 	})
 	if err != nil {
@@ -3179,7 +3275,8 @@ func TestTheResumeAnswerIsRedacted(t *testing.T) {
 func TestAnUnreadableAnswerLookupFallsThroughToNormalHandling(t *testing.T) {
 	rig := newCoordRig(t)
 	coordinator, err := NewCoordinator(CoordinatorOptions{
-		Queue: rig.queue, Pending: brokenStore{}, Manager: rig.manager, Resume: rig.resumer,
+		Audience: &audienceSpy{},
+		Queue:    rig.queue, Pending: brokenStore{}, Manager: rig.manager, Resume: rig.resumer,
 	})
 	if err != nil {
 		t.Fatalf("NewCoordinator: %v", err)
@@ -3342,7 +3439,7 @@ func TestACoordinatorNeedsItsCollaborators(t *testing.T) {
 	if err == nil {
 		t.Fatal("a coordinator with no queue, store, manager or resumer was accepted")
 	}
-	for _, field := range []string{"Queue", "Pending", "Manager", "Resume"} {
+	for _, field := range []string{"Queue", "Pending", "Manager", "Resume", "Audience"} {
 		if !strings.Contains(err.Error(), "CoordinatorOptions."+field) {
 			t.Errorf("the refusal does not name CoordinatorOptions.%s: %v", field, err)
 		}
@@ -3350,7 +3447,8 @@ func TestACoordinatorNeedsItsCollaborators(t *testing.T) {
 
 	rig := newCoordRig(t)
 	if _, err := NewCoordinator(CoordinatorOptions{
-		Queue: rig.queue, Pending: rig.pending, Manager: rig.manager,
+		Audience: &audienceSpy{},
+		Queue:    rig.queue, Pending: rig.pending, Manager: rig.manager,
 	}); err == nil || !strings.Contains(err.Error(), "CoordinatorOptions.Resume") {
 		t.Fatalf("a coordinator with no resumer = %v, want it refused naming Resume", err)
 	}
@@ -3625,7 +3723,8 @@ func TestARunsBoxIsReclaimedBeforeItsRecordIsDeleted(t *testing.T) {
 	run := rig.launch("t1")
 	witness := &finishWitness{PendingStore: rig.pending, provider: rig.provider, box: run.SandboxID}
 	coordinator, err := NewCoordinator(CoordinatorOptions{
-		Queue: rig.queue, Pending: witness, Manager: rig.manager, Resume: rig.resumer,
+		Audience: &audienceSpy{},
+		Queue:    rig.queue, Pending: witness, Manager: rig.manager, Resume: rig.resumer,
 	})
 	if err != nil {
 		t.Fatalf("NewCoordinator: %v", err)

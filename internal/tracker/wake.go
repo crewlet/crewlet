@@ -71,6 +71,14 @@ type Wake struct {
 	// comment, or from the body on a create.
 	Excerpt string
 
+	// AnswersDecision is the decision of the ask this comment answers —
+	// [ResolvedThread.AnswersDecision] — carried so the card can say which
+	// option the answer chose by its LABEL. The comment names the option
+	// by id, and an id alone tells the asker nothing it can read at a
+	// glance; the label lives on a different row, which is why the caller
+	// fills it rather than this package resolving it.
+	AnswersDecision *Decision
+
 	// Dependents, Parent and Thread are the three routing facts this
 	// package cannot derive from the two states of ONE task, and they are
 	// filled by the caller for the same reason [Wake.Mentions] is: every
@@ -151,7 +159,80 @@ func (w Wake) Notify(leads Leads) *Notify {
 	if w.Comment != nil {
 		notify.CommentID = w.Comment.ID
 	}
+	notify.Answered = w.answered()
 	return notify
+}
+
+// filedTo brings a create's wake up to the assignee its own snapshot settled
+// on — the project's default, which [Writer.landsOn] reads inside the create
+// and which the caller that built this wake could not have known.
+//
+// ONLY WHAT THAT SETTLEMENT MOVED: the routing snapshot's assignee and its
+// watchers (the default assignee follows what they hold), and each delta the
+// move touched, stated as the create's own — from nothing — by [TaskDeltas],
+// so its text is the one every other delta is written in. Nothing else is
+// re-derived, because nothing else was decided here: rebuilding the whole
+// wake would re-state the rest from a second frame, which is the
+// disagreement [TaskDeltas] was exported to end.
+//
+// Without it the record would carry an assignee its own wake did not name,
+// and the recipient rule would route the create as triage — to the lead's
+// fallback — while the task sat on the default assignee's queue with nobody
+// having woken them.
+func (n *Notify) filedTo(was, now Task) {
+	if n == nil {
+		return
+	}
+	n.Snapshot.Assignee = now.Assignee
+	n.Snapshot.Watchers = without(now.Watchers, now.Muted)
+	whole := TaskDeltas(Task{}, now, nil)
+	fields := deltaSet(n.Fields)
+	if fields == nil {
+		fields = deltaSet{}
+	}
+	for field := range TaskDeltas(was, now, nil) {
+		if delta, held := whole[field]; held {
+			fields[field] = delta
+		}
+	}
+	n.Fields = fields.done()
+}
+
+// keyed names, on a create's wake, the key the write minted.
+//
+// A CREATE'S CALLER BUILDS ITS WAKE BEFORE THE KEY EXISTS — the key is the
+// project's next counter value, taken by the write itself — so the snapshot
+// it hands in names none. [Snapshot.Key] is read as the task's addressable
+// name by everything the record wakes: the notice's `subject_key`, the woken
+// seat's `item_key` and the prompt's "Read **<key>**" line. The notice was
+// already repaired from the applier's own row, but the wake a seat is
+// delivered carried no key, so the turn it started was charged to a bare
+// uuid — a row every turn list drew as `native:<uuid>` — and its prompt had
+// no key to read the task by. Stamped here, at the one point both creates
+// (a task, a promoted sub-task) pass through with the key in hand.
+func (n *Notify) keyed(key string) {
+	if n == nil || key == "" {
+		return
+	}
+	n.Snapshot.Key = key
+}
+
+// answered is what this wake's answer tells the asker about the decision it
+// closed, or nil when it answers none.
+func (w Wake) answered() *AnsweredDecision {
+	if w.Kind != ChangeComment || w.Comment == nil || w.AnswersDecision == nil ||
+		w.Comment.Answers == nil || *w.Comment.Answers == "" {
+		return nil
+	}
+	out := &AnsweredDecision{
+		Question: w.AnswersDecision.Question,
+		Choice:   w.chosen(),
+	}
+	if inform := w.AnswersDecision.Inform; inform != nil {
+		copied := *inform
+		out.Inform = &copied
+	}
+	return out
 }
 
 // snapshot copies the routing state at the moment of the change.
@@ -228,6 +309,13 @@ func (w Wake) snapshot(leads Leads) Snapshot {
 	}
 	if lists := checklistAssignees(w.Before, after); len(lists) > 0 {
 		snapshot.ChecklistAssignees = lists
+	}
+	if w.Comment != nil && w.Kind == ChangeCreated {
+		// A TASK FILED AS A QUESTION ([Writer.CreateTaskAsking]) asks
+		// somebody in the create itself, so the person asked is woken
+		// under `asked` — which outranks `assignee`, so asking the
+		// assignee reads as a question rather than as new work.
+		snapshot.CommentAsk = w.Comment.Ask
 	}
 	if w.Comment != nil && w.Kind == ChangeComment {
 		// THE CREATION KIND ALONE. A comment becomes a question when it
@@ -626,9 +714,9 @@ func bodyText(body string) string {
 // reason.
 //
 // PROMOTIONS ARE COUNTED SEPARATELY, and that is not decoration: promoting an
-// item to a subtask is a `checklist` commit ([markPromoted]) that moves
-// neither the done count nor the total, so counts alone would have left the
-// one checklist gesture this build actually has recording nothing.
+// item to a subtask is a `checklist` commit ([PromoteIntent]) that moves
+// neither the done count nor the total, so counts alone would record nothing
+// for it.
 //
 // IN DOCUMENT ORDER, unlike the people sets above and like a person's
 // `priorities`: a checklist collection renders in the order it is stored, so
@@ -834,15 +922,46 @@ func relationText(relations []Relation, kind RelationKind) string {
 // different message. [textcut.Within] rather than Ellipsis because
 // [Notify.Validate] REFUSES an excerpt above MaxExcerpt: a marker outside the
 // budget would turn every long comment into a failed write.
+//
+// AN ANSWER THAT CHOSE LEADS WITH THE CHOICE — `Chose “Ship Friday”: <body>` —
+// because the choice is the answer and the body is its reason: cut at the cap,
+// a card that led with the body could lose the one thing the asker was waiting
+// for.
 func (w Wake) excerpt() string {
 	text := w.Excerpt
-	if text == "" && w.Comment != nil {
-		text = w.Comment.Body
-	}
 	if text == "" && w.Kind == ChangeCreated {
+		// THE BODY BEFORE THE ASK on a create: a task filed as a
+		// question carries its question as the title — which the card
+		// already shows — and its detail as the body.
 		text = w.After.Body
 	}
+	if text == "" && w.Comment != nil {
+		text = w.Comment.Body
+		if option := w.chosen(); option != nil {
+			text = choiceExcerpt(option.Label, strings.TrimSpace(text))
+		}
+	}
 	return textcut.Within(strings.TrimSpace(text), MaxExcerpt)
+}
+
+// chosen is the option this wake's comment chose, when its ask carried one.
+func (w Wake) chosen() *DecisionOption {
+	if w.Comment == nil || w.Comment.Choice == "" || w.AnswersDecision == nil {
+		return nil
+	}
+	option, ok := w.AnswersDecision.Option(w.Comment.Choice)
+	if !ok {
+		return nil
+	}
+	return &option
+}
+
+// choiceExcerpt is the card line an answer that chose is summed up as.
+func choiceExcerpt(label, body string) string {
+	if body == "" {
+		return "Chose “" + label + "”"
+	}
+	return "Chose “" + label + "”: " + body
 }
 
 // without is a minus b, order preserved.

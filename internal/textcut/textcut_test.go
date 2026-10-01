@@ -130,3 +130,39 @@ func TestWithinUnderTheMarkersOwnLength(t *testing.T) {
 		t.Errorf("Within(%q, 3) = %q", "hello", got)
 	}
 }
+
+// TAIL KEEPS THE END, CUTS ON A BOUNDARY AND SAYS SO. Every cut position
+// across a string of 1-, 2-, 3- and 4-byte runes: the kept text is valid
+// UTF-8, is a suffix of the input, is within the budget, and carries the
+// marker exactly when something was dropped.
+func TestTailKeepsTheEndOnARuneBoundary(t *testing.T) {
+	t.Parallel()
+	const mixed = "aé€𝄞bcé€𝄞"
+	for max := range len(mixed) + 4 {
+		got := textcut.Tail(mixed, max)
+		if max >= len(mixed) {
+			if got != mixed {
+				t.Errorf("Tail(%q, %d) = %q, want it untouched", mixed, max, got)
+			}
+			continue
+		}
+		kept, marked := strings.CutPrefix(got, "…")
+		if !marked {
+			t.Errorf("Tail(%q, %d) = %q, which does not say it cut", mixed, max, got)
+		}
+		if !utf8.ValidString(kept) {
+			t.Errorf("Tail(%q, %d) kept %q, which is not valid UTF-8", mixed, max, kept)
+		}
+		if !strings.HasSuffix(mixed, kept) {
+			t.Errorf("Tail(%q, %d) kept %q, which is not a suffix of the input", mixed, max, kept)
+		}
+		if len(kept) > max {
+			t.Errorf("Tail(%q, %d) kept %d bytes, over the budget", mixed, max, len(kept))
+		}
+		// Never more than one rune short of the budget: the walk moves
+		// forward only as far as the next boundary.
+		if max-len(kept) >= utf8.UTFMax {
+			t.Errorf("Tail(%q, %d) kept %d bytes, a whole rune short of the budget", mixed, max, len(kept))
+		}
+	}
+}

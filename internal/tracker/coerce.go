@@ -80,6 +80,10 @@ type FieldWorld interface {
 type fieldRefs struct {
 	world FieldWorld
 	task  func(ref string) (string, bool)
+
+	// zone is the company's clock, which a date-only value truncates an
+	// instant in — see [coerceDay]. Nil is UTC.
+	zone *time.Location
 }
 
 // coerced is one field's value after the table has had it.
@@ -109,7 +113,7 @@ func coerceFields(declared map[string]FieldDef, values map[string]json.RawMessag
 		return values, nil, nil
 	}
 	if len(values) > MaxFieldValues {
-		return nil, nil, fmt.Errorf("tracker: this write sets %d custom fields "+
+		return nil, nil, invalid("this write sets %d custom fields "+
 			"and the maximum is %d", len(values), MaxFieldValues)
 	}
 	bySlug, byName := fieldIndex(declared)
@@ -149,7 +153,7 @@ func coerceFields(declared map[string]FieldDef, values map[string]json.RawMessag
 			// TWO SPELLINGS OF ONE FIELD, disagreeing. Whichever won
 			// would silently discard the other, and a map has no
 			// order to appeal to.
-			return nil, nil, fmt.Errorf("tracker: this write sets field %q "+
+			return nil, nil, invalid("this write sets field %q "+
 				"twice, under two spellings and two different values — state "+
 				"it once", field.Slug)
 		}
@@ -238,7 +242,7 @@ func coerceMany(field FieldDef, raw json.RawMessage, refs fieldRefs) (coerced, e
 		return coerceOne(field, raw, refs)
 	}
 	if len(members) > MaxFieldValueSeq {
-		return coerced{}, fmt.Errorf("tracker: field %q takes %d values and the "+
+		return coerced{}, invalid("field %q takes %d values and the "+
 			"maximum is %d", field.Slug, len(members), MaxFieldValueSeq)
 	}
 	out := make([]json.RawMessage, 0, len(members))
@@ -266,7 +270,7 @@ func coerceOne(field FieldDef, raw json.RawMessage, refs fieldRefs) (coerced, er
 	case FieldCheckbox:
 		return coerceCheckbox(field, raw)
 	case FieldDate:
-		return coerceDate(field, raw)
+		return coerceDate(field, raw, refs.zone)
 	case FieldDropdown, FieldLabels:
 		return coerceOption(field, raw)
 	case FieldRelationship:
@@ -295,25 +299,25 @@ func coerceNumber(field FieldDef, raw json.RawMessage) (coerced, error) {
 		// stored as 7.
 		var text string
 		if err := json.Unmarshal(raw, &text); err != nil {
-			return coerced{}, fmt.Errorf("tracker: field %q is a number and "+
+			return coerced{}, invalid("field %q is a number and "+
 				"this value is %s", field.Slug, clipRaw(raw))
 		}
 		parsed, err := strconv.ParseFloat(strings.TrimSpace(text), 64)
 		if err != nil {
-			return coerced{}, fmt.Errorf("tracker: field %q is a number and "+
+			return coerced{}, invalid("field %q is a number and "+
 				"%q is not one", field.Slug, clip(text))
 		}
 		n = parsed
 	}
 	if math.IsNaN(n) || math.IsInf(n, 0) {
-		return coerced{}, fmt.Errorf("tracker: field %q cannot hold %v", field.Slug, n)
+		return coerced{}, invalid("field %q cannot hold %v", field.Slug, n)
 	}
 	if min := field.Config.Min; min != nil && n < *min {
-		return coerced{}, fmt.Errorf("tracker: field %q has a minimum of %v and "+
+		return coerced{}, invalid("field %q has a minimum of %v and "+
 			"this value is %v", field.Slug, *min, n)
 	}
 	if max := field.Config.Max; max != nil && n > *max {
-		return coerced{}, fmt.Errorf("tracker: field %q has a maximum of %v and "+
+		return coerced{}, invalid("field %q has a maximum of %v and "+
 			"this value is %v", field.Slug, *max, n)
 	}
 	if places := decimalsOf(n); places > field.Config.Precision {
@@ -321,7 +325,7 @@ func coerceNumber(field FieldDef, raw json.RawMessage) (coerced, error) {
 		// exact to two places that quietly stored 3.14 for 3.14159 is a
 		// number nobody typed, under a declaration that says it is
 		// exact.
-		return coerced{}, fmt.Errorf("tracker: field %q is exact to %d decimal "+
+		return coerced{}, invalid("field %q is exact to %d decimal "+
 			"place(s) and %v has %d — set a value at that precision, or widen "+
 			"the field's own", field.Slug, field.Config.Precision, n, places)
 	}
@@ -356,7 +360,7 @@ func decimalsOf(n float64) int {
 func coerceCheckbox(field FieldDef, raw json.RawMessage) (coerced, error) {
 	var b bool
 	if err := json.Unmarshal(raw, &b); err != nil {
-		return coerced{}, fmt.Errorf("tracker: field %q is a checkbox and takes "+
+		return coerced{}, invalid("field %q is a checkbox and takes "+
 			"true or false, not %s — a string is refused because every rule "+
 			"for reading one disagrees about \"false\"",
 			field.Slug, clipRaw(raw))
@@ -375,25 +379,33 @@ func coerceCheckbox(field FieldDef, raw json.RawMessage) (coerced, error) {
 // information lost is the part the field does not have. A `Time` field refuses
 // a bare date instead: there is nothing to truncate, and inventing midnight
 // would put a value nobody typed on the board.
-func coerceDate(field FieldDef, raw json.RawMessage) (coerced, error) {
+//
+// The date-only half is [coerceDay], shared with the one other value that
+// holds a day — a project's target date — so the two cannot drift apart.
+func coerceDate(field FieldDef, raw json.RawMessage, zone *time.Location) (coerced, error) {
 	var text string
 	if err := json.Unmarshal(raw, &text); err != nil {
-		return coerced{}, fmt.Errorf("tracker: field %q is a date and this "+
+		return coerced{}, invalid("field %q is a date and this "+
 			"value is %s — dates are strings, as 2026-03-04 or "+
 			"2026-03-04T09:00:00Z", field.Slug, clipRaw(raw))
 	}
 	text = strings.TrimSpace(text)
-	if at, err := time.Parse(time.RFC3339, text); err == nil {
-		if !field.Config.Time {
-			day := at.UTC().Format(time.DateOnly)
-			encoded, err := json.Marshal(day)
-			if err != nil {
-				return coerced{}, err
-			}
-			return coerced{Value: encoded, Warnings: []string{fmt.Sprintf(
-				"field %q holds a date and not a time, so %s was stored as %s",
-				field.Slug, text, day)}}, nil
+	if !field.Config.Time {
+		day, warning, err := coerceDay(fmt.Sprintf("field %q", field.Slug), text, zone)
+		if err != nil {
+			return coerced{}, err
 		}
+		encoded, err := json.Marshal(day)
+		if err != nil {
+			return coerced{}, err
+		}
+		out := coerced{Value: encoded}
+		if warning != "" {
+			out.Warnings = []string{warning}
+		}
+		return out, nil
+	}
+	if at, err := time.Parse(time.RFC3339, text); err == nil {
 		encoded, err := json.Marshal(at.UTC().Format(time.RFC3339))
 		if err != nil {
 			return coerced{}, err
@@ -402,20 +414,45 @@ func coerceDate(field FieldDef, raw json.RawMessage) (coerced, error) {
 	}
 	day, err := time.Parse(time.DateOnly, text)
 	if err != nil {
-		return coerced{}, fmt.Errorf("tracker: field %q is a date and %q is not "+
+		return coerced{}, invalid("field %q is a date and %q is not "+
 			"one — write 2026-03-04, or 2026-03-04T09:00:00Z", field.Slug, clip(text))
 	}
-	if field.Config.Time {
-		return coerced{}, fmt.Errorf("tracker: field %q holds a date AND a time "+
-			"and %q carries no time — give one, as %sT09:00:00Z, rather than "+
-			"letting the engine invent midnight",
-			field.Slug, clip(text), day.Format(time.DateOnly))
+	return coerced{}, invalid("field %q holds a date AND a time "+
+		"and %q carries no time — give one, as %sT09:00:00Z, rather than "+
+		"letting the engine invent midnight",
+		field.Slug, clip(text), day.Format(time.DateOnly))
+}
+
+// coerceDay is THE rule for a value that holds a DAY: a calendar date is kept,
+// an instant is truncated to the date it falls on and the writer is told, and
+// anything else is refused naming both spellings. `what` names the value in
+// the sentence — `field "launch"`, `the target date`.
+//
+// # The date an instant falls on is the COMPANY'S (ADR-0018)
+//
+// Truncated in UTC, `2026-03-04T20:00:00-08:00` — the evening of the fourth in
+// a company on Pacific time, which is what its writer meant — was stored as
+// the FIFTH, and a company east of UTC lost the morning of every day the same
+// way. The company has one calendar ([period]); a relative `due=` already
+// resolves in it, and a day read out of an instant is the same question.
+//
+// A nil zone is UTC, which is what a writer given no clock has always used.
+func coerceDay(what, text string, zone *time.Location) (day, warning string, err error) {
+	if zone == nil {
+		zone = time.UTC
 	}
-	encoded, err := json.Marshal(day.Format(time.DateOnly))
-	if err != nil {
-		return coerced{}, err
+	text = strings.TrimSpace(text)
+	if at, perr := time.Parse(time.RFC3339, text); perr == nil {
+		day = at.In(zone).Format(time.DateOnly)
+		return day, fmt.Sprintf("%s holds a date and not a time, so %s was "+
+			"stored as %s, the day it falls on in %s", what, text, day, zone), nil
 	}
-	return coerced{Value: encoded}, nil
+	parsed, perr := time.Parse(time.DateOnly, text)
+	if perr != nil {
+		return "", "", invalid("%s is a date and %q is not one — "+
+			"write 2026-03-04, or 2026-03-04T09:00:00Z", what, clip(text))
+	}
+	return parsed.Format(time.DateOnly), "", nil
 }
 
 // coerceOption resolves a slug, a name or an id to the option's ID.
@@ -427,13 +464,13 @@ func coerceDate(field FieldDef, raw json.RawMessage) (coerced, error) {
 func coerceOption(field FieldDef, raw json.RawMessage) (coerced, error) {
 	var text string
 	if err := json.Unmarshal(raw, &text); err != nil {
-		return coerced{}, fmt.Errorf("tracker: field %q takes one of its "+
+		return coerced{}, invalid("field %q takes one of its "+
 			"options and this value is %s", field.Slug, clipRaw(raw))
 	}
 	text = strings.TrimSpace(text)
 	id, held := OptionIDs(field.Config.Options)[strings.ToLower(text)]
 	if !held {
-		return coerced{}, fmt.Errorf("tracker: field %q has no option %q. Its "+
+		return coerced{}, invalid("field %q has no option %q. Its "+
 			"options are: %s", field.Slug, clip(text), optionList(field))
 	}
 	encoded, err := json.Marshal(id)
@@ -466,18 +503,18 @@ func optionList(field FieldDef) string {
 func coerceRelationship(field FieldDef, raw json.RawMessage, refs fieldRefs) (coerced, error) {
 	var text string
 	if err := json.Unmarshal(raw, &text); err != nil {
-		return coerced{}, fmt.Errorf("tracker: field %q names a work item and "+
+		return coerced{}, invalid("field %q names a work item and "+
 			"this value is %s", field.Slug, clipRaw(raw))
 	}
 	text = strings.TrimSpace(text)
 	if refs.task == nil {
-		return coerced{}, fmt.Errorf("tracker: field %q names work item %q and "+
+		return coerced{}, invalid("field %q names work item %q and "+
 			"this write cannot resolve one — a stored key resolves to nothing "+
 			"on every node", field.Slug, clip(text))
 	}
 	id, held := refs.task(text)
 	if !held {
-		return coerced{}, fmt.Errorf("tracker: field %q names work item %q and "+
+		return coerced{}, invalid("field %q names work item %q and "+
 			"there is no such item", field.Slug, clip(text))
 	}
 	encoded, err := json.Marshal(id)
@@ -493,7 +530,7 @@ func coerceRelationship(field FieldDef, raw json.RawMessage, refs fieldRefs) (co
 func coercePeople(field FieldDef, raw json.RawMessage, refs fieldRefs) (coerced, error) {
 	var text string
 	if err := json.Unmarshal(raw, &text); err != nil {
-		return coerced{}, fmt.Errorf("tracker: field %q names a colleague and "+
+		return coerced{}, invalid("field %q names a colleague and "+
 			"this value is %s", field.Slug, clipRaw(raw))
 	}
 	text = strings.TrimSpace(text)
@@ -513,7 +550,7 @@ func coercePeople(field FieldDef, raw json.RawMessage, refs fieldRefs) (coerced,
 	}
 	handle, held := refs.world.ResolveSeat(text)
 	if !held {
-		return coerced{}, fmt.Errorf("tracker: field %q names %q and that is "+
+		return coerced{}, invalid("field %q names %q and that is "+
 			"not one colleague of this company", field.Slug, clip(text))
 	}
 	encoded, err := json.Marshal(handle)
@@ -538,7 +575,7 @@ func coerceURL(field FieldDef, raw json.RawMessage) (coerced, error) {
 	parsed, err := url.Parse(text)
 	switch {
 	case err != nil:
-		return coerced{}, fmt.Errorf("tracker: field %q is a url and %q is not "+
+		return coerced{}, invalid("field %q is a url and %q is not "+
 			"one: %v", field.Slug, clip(text), err)
 	case parsed.Scheme == "":
 		// THE PRESCRIPTION IS THE WHOLE VALUE — the `text` argument
@@ -553,10 +590,10 @@ func coerceURL(field FieldDef, raw json.RawMessage) (coerced, error) {
 		// that cap rather than wider, so [textcut.Ellipsis] returns it
 		// unchanged. Equal is the whole requirement — a longer value is
 		// refused by size before it can reach this line.
-		return coerced{}, fmt.Errorf("tracker: field %q is a url and %q has no "+
+		return coerced{}, invalid("field %q is a url and %q has no "+
 			"scheme — write https://%s", field.Slug, clip(text), text)
 	case parsed.Host == "" && parsed.Opaque == "":
-		return coerced{}, fmt.Errorf("tracker: field %q is a url and %q names "+
+		return coerced{}, invalid("field %q is a url and %q names "+
 			"no host", field.Slug, clip(text))
 	}
 	return got, nil
@@ -575,7 +612,7 @@ func coerceEmail(field FieldDef, raw json.RawMessage) (coerced, error) {
 	}
 	address, err := mail.ParseAddress(text)
 	if err != nil {
-		return coerced{}, fmt.Errorf("tracker: field %q is an email address and "+
+		return coerced{}, invalid("field %q is an email address and "+
 			"%q is not one: %v", field.Slug, clip(text), err)
 	}
 	// THE ADDRESS, not the display name: `Ana <a@example.com>` parses and
@@ -592,13 +629,13 @@ func coerceEmail(field FieldDef, raw json.RawMessage) (coerced, error) {
 func coerceText(field FieldDef, raw json.RawMessage, limit int) (coerced, error) {
 	var text string
 	if err := json.Unmarshal(raw, &text); err != nil {
-		return coerced{}, fmt.Errorf("tracker: field %q holds text and this "+
+		return coerced{}, invalid("field %q holds text and this "+
 			"value is %s", field.Slug, clipRaw(raw))
 	}
 	if len(text) > limit {
 		// REFUSED NAMING THE SIZE, never cut: a value silently truncated
 		// is a value a person will look for later.
-		return coerced{}, fmt.Errorf("tracker: field %q holds %d bytes and the "+
+		return coerced{}, invalid("field %q holds %d bytes and the "+
 			"maximum is %d", field.Slug, len(text), limit)
 	}
 	encoded, err := json.Marshal(text)
@@ -682,7 +719,7 @@ const MaxRefusalQuote = MaxFieldValueBytes
 // It returns a COPY, because Decide runs again on a retry and a normalisation
 // folded into the captured patch would compound across attempts.
 func settleFields(ctx context.Context, tx *sql.Tx, project, taskType string,
-	values map[string]json.RawMessage, world FieldWorld) (
+	values map[string]json.RawMessage, world FieldWorld, zone *time.Location) (
 	map[string]json.RawMessage, []string, error) {
 
 	if len(values) == 0 {
@@ -698,6 +735,7 @@ func settleFields(ctx context.Context, tx *sql.Tx, project, taskType string,
 	// refused here rather than stored as an id that resolves to nothing.
 	return coerceFields(declared, values, taskType, fieldRefs{
 		world: world,
+		zone:  zone,
 		task: func(ref string) (string, bool) {
 			id, err := resolveTaskID(ctx, tx, ref)
 			return id, err == nil
@@ -742,7 +780,7 @@ func refuseUnsetRequired(ctx context.Context, tx *sql.Tx, current Task,
 		return nil
 	}
 	sort.Strings(cleared)
-	return fmt.Errorf("tracker: a %s in project %s requires %v, and this edit "+
+	return invalid("a %s in project %s requires %v, and this edit "+
 		"clears them — set another value rather than emptying the field",
 		current.Type, current.Project, cleared)
 }

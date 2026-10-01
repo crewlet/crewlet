@@ -39,7 +39,10 @@ func seedTurn(t *testing.T, log *store.EventLog, id string, at time.Time,
 	}
 	payload, err := json.Marshal(map[string]any{
 		"turn_id": id, "duration_ms": 4200, "plan_summary": "did the thing",
-		"task_id": "ENG-1",
+		"work_item": map[string]string{
+			"backend": "native", "id": "task-1", "key": "ENG-1", "project": "ENG",
+		},
+		"work_item_basis": "trigger",
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -94,8 +97,9 @@ func TestTurnsFoldOneRowPerTurn(t *testing.T) {
 			one.DurationMS)
 	case one.Summary != "did the thing":
 		t.Errorf("t-1's summary is %q", one.Summary)
-	case one.TaskID != "ENG-1":
-		t.Errorf("t-1's task is %q", one.TaskID)
+	case one.WorkItem == nil || *one.WorkItem != (types.WorkItem{
+		Backend: types.WorkNative, ID: "task-1", Key: "ENG-1", Project: "ENG"}):
+		t.Errorf("t-1's work item is %+v, want the completion's", one.WorkItem)
 	case one.Trigger != "chat":
 		t.Errorf("t-1's trigger is %q, want the phase records' own", one.Trigger)
 	case one.AgentRole != "PM":
@@ -325,7 +329,7 @@ func TestASeatFilterWithOneIdentifierDoesNotMatchEverything(t *testing.T) {
 	// AND THE SAME TRAP ONE FUNCTION OVER. `AgentPhases` bound both
 	// identifiers the same way, so a handle that resolved to no role was
 	// answered every seatless phase in the window.
-	phases, err := log.AgentPhases(t.Context(), "", "PM", nil)
+	phases, _, err := log.AgentPhases(t.Context(), "", "PM", nil)
 	if err != nil {
 		t.Fatalf("AgentPhases: %v", err)
 	}
@@ -528,5 +532,131 @@ func TestATurnThatDiedOnAFailureTypeReportsFailed(t *testing.T) {
 	if len(clean) != 0 {
 		t.Errorf("failed=false returned %d turns, want none — every turn here died",
 			len(clean))
+	}
+}
+
+// A TURN LISTS THE ITEM ITS COMPLETION WAS CHARGED TO, AND NO OTHER.
+//
+// A completion with no `work_item` is a turn on nothing, and a `task_id` on it
+// is never read as one: that key means a delegated worker's task or a schedule
+// fire's run, and the row that joined it to the tracker listed an item for
+// turns that were on none.
+func TestATurnWithNoItemListsNone(t *testing.T) {
+	t.Parallel()
+	log := open(t).Events()
+	at := time.Now().UTC().Add(-time.Hour)
+	payload, err := json.Marshal(map[string]any{
+		"turn_id": "t-9", "duration_ms": 10, "task_id": "run-42",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := log.Append(t.Context(), store.EventRecord{
+		ID: "t-9-done", Type: "turn_completed", Time: at,
+		Category: "lifecycle", Tags: map[string]string{"turn_id": "t-9"},
+		Payload: payload,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	got, err := log.Turns(t.Context(), store.TurnQuery{})
+	if err != nil || len(got) != 1 {
+		t.Fatalf("Turns = %+v, %v", got, err)
+	}
+	if got[0].WorkItem != nil {
+		t.Fatalf("a turn on nothing lists %+v", got[0].WorkItem)
+	}
+}
+
+// A WINDOW IS TWO INSTANTS ON THE TURN'S START, and a window in the past has an
+// upper edge. The read took whole days back from now and nothing else, so a
+// one-hour bar picked three days ago was answered with the newest turns of the
+// last day — every one of them outside the bar — and the list under the axis
+// read "no turns" while the axis counted them.
+func TestTheTurnListSelectsAWindowByItsTwoEdges(t *testing.T) {
+	t.Parallel()
+	log := open(t).Events()
+	now := time.Now().UTC()
+	bar := now.Add(-72 * time.Hour).Truncate(time.Hour)
+	seedTurn(t, log, "before", bar.Add(-10*time.Minute), "PM", nil)
+	seedTurn(t, log, "inside", bar.Add(20*time.Minute), "PM", nil)
+	seedTurn(t, log, "after", bar.Add(time.Hour), "PM", nil)
+	seedTurn(t, log, "today", now.Add(-time.Minute), "PM", nil)
+
+	for _, sort := range store.TurnSorts {
+		got, err := log.Turns(t.Context(), store.TurnQuery{
+			Since: bar, Until: bar.Add(time.Hour), Sort: sort,
+		})
+		if err != nil {
+			t.Fatalf("Turns(%s): %v", sort, err)
+		}
+		ids := []string{}
+		for _, turn := range got {
+			ids = append(ids, turn.TurnID)
+		}
+		// THE UPPER EDGE IS EXCLUSIVE, so a turn starting on the next
+		// bar's first instant is that bar's and not this one's.
+		if !slices.Equal(ids, []string{"inside"}) {
+			t.Errorf("sort=%s over the bar listed %v, want only the turn that started in it",
+				sort, ids)
+		}
+	}
+}
+
+// A TURN IS IN A WINDOW WHEN IT STARTED THERE. The window was a floor on the
+// ROWS, so a turn that began before it and ran on into it was listed as
+// starting where the window did, with only its second half's tokens — a row
+// that described neither the turn nor the window.
+func TestATurnThatBeganBeforeTheWindowIsNotInIt(t *testing.T) {
+	t.Parallel()
+	log := open(t).Events()
+	now := time.Now().UTC()
+	since := now.Add(-time.Hour)
+	// Two phases a minute before the window, the completion inside it.
+	seedTurn(t, log, "straddles", since.Add(-2*time.Second), "PM", nil)
+	seedTurn(t, log, "inside", since.Add(time.Minute), "PM", nil)
+
+	got, err := log.Turns(t.Context(), store.TurnQuery{Since: since})
+	if err != nil {
+		t.Fatalf("Turns: %v", err)
+	}
+	if len(got) != 1 || got[0].TurnID != "inside" {
+		t.Fatalf("the window listed %+v, want only the turn that started in it", got)
+	}
+	// And the wider window lists it whole, from its real start.
+	wide, err := log.Turns(t.Context(), store.TurnQuery{Since: since.Add(-time.Hour)})
+	if err != nil {
+		t.Fatalf("Turns: %v", err)
+	}
+	for _, turn := range wide {
+		if turn.TurnID == "straddles" {
+			if !turn.StartedAt.Before(since) {
+				t.Errorf("the straddling turn starts at %s, want its first phase", turn.StartedAt)
+			}
+			if turn.Phases != 2 {
+				t.Errorf("the straddling turn folded %d phases, want both", turn.Phases)
+			}
+			return
+		}
+	}
+	t.Fatalf("the wider window lost the straddling turn: %+v", wide)
+}
+
+// A SHARE IGNORES THE WINDOW: it is the rest of a turn somebody else already
+// selected, and the half a resumed turn ran before the window is the half
+// that says when it began.
+func TestATurnShareIsNotCutByTheWindow(t *testing.T) {
+	t.Parallel()
+	log := open(t).Events()
+	since := time.Now().UTC().Add(-time.Hour)
+	seedTurn(t, log, "straddles", since.Add(-2*time.Second), "PM", nil)
+
+	parts, _, err := log.TurnPartials(t.Context(), store.TurnQuery{
+		Since: since, Until: since.Add(time.Minute), IDs: []string{"straddles"},
+	})
+	if err != nil {
+		t.Fatalf("TurnPartials: %v", err)
+	}
+	if len(parts) != 1 || parts[0].Phases != 2 || !parts[0].StartedAt.Before(since) {
+		t.Fatalf("the share is %+v, want the whole turn from its first phase", parts)
 	}
 }

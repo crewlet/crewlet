@@ -2038,3 +2038,40 @@ func TestADisabledWebhookIsRewritten(t *testing.T) {
 		t.Error("a disabled hook was left disabled, so it still delivers nothing")
 	}
 }
+
+// A PULL REQUEST IS ONE WORK ITEM WHICHEVER FACE WOKE THE TURN.
+//
+// GitHub gives a pull request two global ids — its issue face, which a comment
+// carries, and its pull-request face, which a review request carries — so an
+// item keyed on either would be two items depending on the event. The
+// repository's own id and the shared number are what both faces agree on, and
+// the repository id is what a rename does not change.
+func TestAPullRequestIsOneWorkItemWhicheverFaceWokeTheTurn(t *testing.T) {
+	t.Parallel()
+	comment := route(t, "issue_comment", `{
+		"action": "created",
+		"comment": {"body": "@reviewer look", "user": {"login": "writer"}},
+		"issue": {"id": 1001, "number": 7, "title": "Add the thing", "user": {"login": "author"},
+			"pull_request": {"url": "https://api.github.com/repos/acme/api/pulls/7"}},
+		"repository": {"id": 777, "full_name": "acme/api", "name": "api", "owner": {"login": "acme"}},
+		"sender": {"login": "writer"}
+	}`)
+	review := route(t, "pull_request", `{
+		"action": "review_requested",
+		"requested_reviewer": {"login": "reviewer"},
+		"pull_request": {"id": 2002, "number": 7, "title": "Add the thing",
+			"user": {"login": "author"}},
+		"repository": {"id": 777, "full_name": "acme/api", "name": "api", "owner": {"login": "acme"}},
+		"sender": {"login": "requester"}
+	}`)
+	if len(comment) == 0 || len(review) == 0 {
+		t.Fatalf("routed %d and %d copies; this case needs both faces", len(comment), len(review))
+	}
+	want := types.WorkItem{Backend: types.WorkGitHub, ID: "777#7", Key: "acme/api#7", Project: "acme/api"}
+	for name, copies := range map[string][]notify.Routed{"comment": comment, "review": review} {
+		got, ok := github.Prompt{}.WorkItem(copies[0].Inbound.Metadata)
+		if !ok || got != want {
+			t.Errorf("the %s face names %+v (%v), want %+v", name, got, ok, want)
+		}
+	}
+}

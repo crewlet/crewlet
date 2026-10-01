@@ -90,3 +90,44 @@ func TestTheReviewFrameDoesNotMoveBetweenRounds(t *testing.T) {
 		t.Errorf("the frame moved between rounds:\nround 1: %q\nround 2: %q", first, second)
 	}
 }
+
+// A TASK'S CHARGE COUNTS THE REVIEWS THAT SENT ITS WORK BACK.
+//
+// The count is taken from the review phases' own records — the decision each
+// one published — so it is the same number the usage domain's per-seat
+// `sent_back` is. Rounds and the phases that ran ride the same tally, because
+// a task's charge reads all three from it.
+func TestTheSpendCountsTheReviewsThatSentWorkBack(t *testing.T) {
+	t.Parallel()
+	r, _, _ := fixture(t, &scriptedProvider{
+		review: []llm.Completion{
+			submitCall(t, runner.SubmitReviewTool, `{"decision":"self_iterate","notes":"try again"}`),
+			submitCall(t, runner.SubmitReviewTool, `{"decision":"self_iterate","notes":"closer"}`),
+			submitCall(t, runner.SubmitReviewTool, `{"decision":"done"}`),
+		},
+	})
+	w := turn.Work{Outcome: turn.OutcomeDelivered, Summary: "posted it", Text: "posted"}
+	for round := 1; round <= 3; round++ {
+		if _, err := r.Review(context.Background(), round, w, nil); err != nil {
+			t.Fatalf("Review round %d: %v", round, err)
+		}
+	}
+	spend := r.Spend()
+	if spend.SentBack != 2 {
+		t.Errorf("sent back = %d over a turn whose reviewer returned the work "+
+			"twice and accepted it once, want 2", spend.SentBack)
+	}
+	if spend.Rounds < 3 {
+		t.Errorf("rounds = %d over three review phases, want at least one each", spend.Rounds)
+	}
+	if len(spend.Phases) != 1 || spend.Phases[0] != "review" {
+		t.Errorf("phases = %v, want the one phase that ran, once", spend.Phases)
+	}
+	// AND WHAT THE LAST SEND-BACK ASKED FOR: the pass that followed it is
+	// the one that answered, so a task's turn card quotes that request —
+	// never the first, and never the acceptance's own empty notes.
+	if spend.Review != "closer" {
+		t.Errorf("review = %q, want the newest send-back's notes %q",
+			spend.Review, "closer")
+	}
+}

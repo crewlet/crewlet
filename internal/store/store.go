@@ -74,7 +74,7 @@
 // times beside it. Every write transaction this process begins therefore takes
 // its place in one FIFO line per file, handed from each holder to the writer
 // that asked next. A writer's wait is then bounded by the work in front of it
-// rather than by how its polls line up, which is what lets three domains'
+// rather than by how its polls line up, which is what lets four domains'
 // appliers share the replicated estate and each still drain.
 //
 // # One driver
@@ -130,11 +130,12 @@ const driverName = "turso"
 // Defaults for Options. Both are anchored to the dashboard, which is the only
 // component that reads this store concurrently with the engine writing it.
 const (
-	// The dashboard's query channel admits 4 concurrent queries, so 4
-	// connections is what keeps a read burst off
-	// the write path. More would not help: under WAL, readers never block
-	// the writer, but writers serialise on the file lock regardless, so
-	// connections past the read concurrency only deepen a queue.
+	// The dashboard's query channel admits 4 concurrent queries per socket
+	// (`stream.MaxInFlightQueries`, which is sized to THIS number), so 4
+	// connections is what keeps a read burst off the write path. More would
+	// not help: under WAL, readers never block the writer, but writers
+	// serialise on the file lock regardless, so connections past the read
+	// concurrency only deepen a queue.
 	//
 	// READERS ONLY. Every pinned writer ([DB.Writer]) holds a connection of
 	// its own for its lifetime and counts against the same bound, so the

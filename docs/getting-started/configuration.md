@@ -9,7 +9,10 @@ This page documents the **Tier B** fields below.  For Tier A see [Configuration 
 
 > **Machine-readable version.** `crewlet schema company` emits the JSON
 > Schema for everything on this page, generated from the models
-> themselves. Point your editor at it for autocomplete and typo
+> themselves — the same files the repository commits under `schema/`,
+> which `make schema` regenerates whenever a model changes, so a field
+> named here and a field the schema accepts cannot drift. Point your
+> editor at it for autocomplete and typo
 > squiggles, or hand it to an AI assistant — see
 > [Authoring with an AI assistant](ai-authoring.md). Check your file with
 > `crewlet validate <file>` (add `-json` for located, classified problems
@@ -29,7 +32,11 @@ This page documents the **Tier B** fields below.  For Tier A see [Configuration 
 name: "Acme AI Corp"                    # required — company name
 mission: "Build intelligent products"   # optional — company mission
 vision: "Lead the AI industry"          # optional — company vision
-token_budget: 1000000                   # optional — org-wide token limit (0 = unlimited)
+timezone: Europe/Berlin                 # optional — the company's ONE clock, an IANA zone
+                                        #   (default UTC). See "The company's clock" below.
+token_budget:                           # optional — org-wide token ceilings, one per calendar
+  day: 3000000                          #   window on the company clock, each optional; an
+  month: 40000000                       #   absent window is uncapped. See "Token budgets" below.
 notification_rate_limit: 10             # optional — inbound notifications one seat may be woken by
                                         #   per second. 0 (the DEFAULT) is unlimited, so the valve is
                                         #   off unless you set it. Drop-based safety valve against
@@ -197,6 +204,72 @@ section for details.
 
 See the [Turn Engine](../concepts/turn-engine.md) and [Agent Learning](../concepts/agent-learning.md) docs for what each field controls.
 
+### The company's clock
+
+```yaml
+timezone: America/Los_Angeles            # an IANA zone name; absent is UTC
+```
+
+`timezone` is the company's **one clock**, and every calendar edge the engine cuts is cut on it:
+
+- where **today**, **this week** and **this month** begin — for a `due=` filter, the due bands on a board, the overdue mark on every row, a person's own day (`my_work`) and the workload's overdue counts;
+- what a relative date (`tomorrow`, `eow`, `+7d`) or an all-day due date resolves to, whether a seat, an operator's assistant or the dashboard wrote it;
+- the wall clock a [schedule](#schedules) that names no `timezone` of its own fires on — so `cron: "0 9 * * 1-5"` is 09:00 in this zone.
+
+It is a clock for **authored instants and calendar boundaries only**. No duration — a lease, a timeout, a retention horizon — is measured against it, because a duration measured on a wall clock changes length twice a year. And there is only one: the tracker and the scheduler take no zone of their own, because a company whose board, whose people's days and whose standups each kept a clock had one "today" per subsystem. A schedule's own `timezone` is that one piece of work's wall clock — the Tokyo team's 09:30 standup — and nothing else is cut on it.
+
+The value must be a real IANA name (`Europe/Berlin`, `America/New_York`, `UTC`), and `Local` and `localtime` are refused: each is whatever zone the host reading it is set to, so two nodes would cut two different days from it. The anonymous [`org` projection](../reference/api-endpoints.md) carries the resolved clock — `UTC` where none is written — so the dashboard cuts its days where the engine does. An apply that changes it moves the next answer, the next scheduler tick and the next tool call; a turn already running keeps the clock of the epoch it started on.
+
+### Token budgets
+
+```yaml
+token_budget:                            # on the company, and on any agent seat
+  day: 3000000                           # one local day, midnight to midnight
+  week: 10000000                         # one ISO week, from Monday
+  month: 40000000                        # one calendar month
+```
+
+A token budget is a **ceiling per calendar window**, and every window is cut on the
+[company's clock](#the-companys-clock): a day runs from local midnight to the next, a week
+is the ISO week from Monday, a month is the calendar month. Each key is optional and the
+windows are independent — a model round is admitted only while **every** capped window has
+room for it, and each window opens again on its own when it turns over. There is no single
+number any more: one number was a ceiling for the life of the deployment, which nothing
+reset but an operator zeroing a counter, and `token_budget: 10000000` is refused with the
+mapping to write instead.
+
+The company's `token_budget` caps every seat's spend together. A seat's own caps that seat
+alone, **on top of** the company's: every round is charged to both, so a seat is stopped by
+whichever ceiling it reaches first. A human seat spends nothing, so a `token_budget` on one
+is refused.
+
+An **absent key is the only way to leave a window uncapped.** A ceiling of `0` or less is
+refused (`must be at least 1 token … remove token_budget.day for no daily ceiling`): `0`
+used to mean "unlimited", and it is also what a ceiling of nothing would be, so it means
+neither. Stopping a seat on purpose is not a budget's job.
+
+[`crewlet validate`](../reference/cli.md) **warns** — it never refuses — about a ceiling that
+can never refuse a turn, because another ceiling is always reached first:
+
+- a day ceiling at or above the week's or the month's (a day lies inside both);
+- a week ceiling that seven days at the daily ceiling already reach, or a month ceiling that
+  31 days at the daily one, or six weeks at the weekly one, already reach;
+- a week ceiling at or above the month's, which can then bind only in a week that straddles
+  two months;
+- a seat's ceiling at or above the company's for the same window, or for a longer window
+  that holds it (a seat's day against the company's month) — everything a seat spends is
+  the company's spend too.
+
+Spend is counted in the fleet's [coordination store](../concepts/coordination.md#token-budgets-are-windows),
+one figure per window, so it survives restarts and is one number for the whole company however
+many nodes run it — and a window nothing caps is counted too, so a ceiling added mid-window
+judges the spend already in it. A seat whose capped window is refusing is not handed work: its
+mail waits on its inbox until the window turns over or a revision raises the ceiling (see
+[the budget park](../concepts/agent-runtime.md#the-budget-park)). There is **no reset**: a
+window's allowance comes back when the window turns over, and room before then is made by
+raising its ceiling. See [Deployment § Token Budgets](../guides/deployment.md#token-budgets)
+for how a refusal is recorded and reported.
+
 ### Scheduling
 
 System-level knobs for the [Scheduler](../concepts/scheduling.md) — the
@@ -208,12 +281,13 @@ org declares at least one schedule.
 scheduling:                              # optional — role/unit scheduled work
   enabled: true                          # master switch
   tick_seconds: 10                       # scheduler poll interval
-  default_timezone: UTC                  # used by any Schedule without its own timezone
   jitter_seconds: 0                      # max per-schedule spread to smooth a shared cron minute
   catchup_min_seconds: 120               # lower clamp on the missed-tick catchup window
   catchup_max_seconds: 7200              # upper clamp on the missed-tick catchup window
 ```
 
+A schedule that names no `timezone` of its own fires on the company's
+[clock](#the-companys-clock); there is no scheduler-wide default zone.
 See the [Scheduling](../concepts/scheduling.md) concept doc for delivery
 modes (`each` / `lead`), at-most-once semantics, catchup, and the
 per-task wall-clock timeout.
@@ -241,7 +315,13 @@ providers:
                                         # store, then the environment); with neither, the
                                         # provider still builds and sends no key, and a vendor
                                         # that needs one refuses its calls as unauthorized
-                                        # (401), each failure naming the provider
+                                        # (401), each failure naming the provider.
+                                        # A NAMED key that resolves to nothing stays
+                                        # nothing: the entry never borrows the
+                                        # conventional variable in its place.
+                                        # Settings › Models & keys shows each key by
+                                        # the variable it names, whether it resolves,
+                                        # and when a benched one comes back
       cooldowns:                        # optional — TTL when a key is marked exhausted
         rate_limit_seconds: 3600        #   429 / 402 default cooldown (a Retry-After / x-ratelimit-reset
         auth_seconds: 300               #   401 / 403 default cooldown   header on the error overrides it;
@@ -378,8 +458,10 @@ turn" and carries on with recency. Nothing here retries — the caller's
 degradation costs less than a retry spent inside a turn-start prefetch
 somebody is waiting on.
 
-Tier A (`crewlet.yaml`, restart-only) says where this node's stream, store and
-API are.  Example:
+## Tier A (`crewlet.yaml`)
+
+Tier A is restart-only and says where this node's stream, store and API
+are. Example:
 
 ```yaml
 # crewlet.yaml — Tier A bootstrap
@@ -422,8 +504,11 @@ stream:
                                     #   `no suitable peers for placement,
                                     #   insufficient storage` — naming whichever
                                     #   stream was provisioned last. Bounds:
-                                    #   4 GiB..64 TiB, and it must not be smaller
-                                    #   than the ceilings declared inside it.
+                                    #   5 GiB..64 TiB — the four state logs'
+                                    #   1 GiB floors and one for every stream
+                                    #   that reserves nothing — and it must not
+                                    #   be smaller than the ceilings declared
+                                    #   inside it.
                                     #   REFUSED for `type: nats` — an external
                                     #   cluster's account limits are its own
                                     #   operator's, and this node reads them back
@@ -570,6 +655,19 @@ stream:
                                     #   and a blocked trim fills either one in
                                     #   the same time. Crossing it refuses the
                                     #   append, like the mutation log's
+  # usage_log_max_bytes: 1073741824
+                                    #   the usage log's ceiling (default 1 GiB,
+                                    #   1..64 GiB): the compacted stream every
+                                    #   node publishes its own company days to —
+                                    #   spend, turns, page reads, schedule fires
+                                    #   — so history is answered fleet-wide and
+                                    #   outlives the node that spent it. SIZED BY
+                                    #   A CENSUS, not a rate: one message per
+                                    #   (node, day, seat or schedule) for 181
+                                    #   days, about 217 MB for three nodes of
+                                    #   forty seats and twenty schedules.
+                                    #   Crossing it refuses the append and the
+                                    #   log_headroom alarm names `usage`
   # tracker_retention:              # when the log may be trimmed. Every term
                                     #   here is a statement about the OPERATOR's
                                     #   estate rather than the company's policy,
@@ -763,6 +861,11 @@ Binding a person to a credential crosses the tiers the other way: an
 `api.auth.tokens[].id` is named from the company document's
 `roles[].contact.crewlet_operator_id`, never from a `seat:` field on the token,
 because Tier A holds the keys to the secret store and may never read Tier B.
+A token id is **lowercase**, and `crewlet validate` refuses anything else: the
+binding is matched case-insensitively while every write made with the token
+records its id exactly, so `Founder` would be a person bound for their writes
+and missing from their own reads, and `Founder` beside `founder` would be two
+credentials one binding admits as the same person.
 
 The event store (LLM observability) is a table in that same file, created by
 the engine's own migrations on first start — there is nothing to configure
@@ -844,7 +947,7 @@ units:
             goal: "..."                 # optional — individual mission
             backstory: "..."            # optional — personality, background, expertise
             llm: default                # optional — named LLM provider
-            token_budget: 200000        # optional — per-agent token limit
+            token_budget: {day: 200000} # optional — this seat's own ceilings per window
             handle: tl                   # optional — custom handle (default: auto-slugified)
             email: tl@company.com       # optional — agent email
             manages: [Engineer A, Engineer B]  # optional — hierarchy links
@@ -873,7 +976,7 @@ units:
 |-------|------|----------|-------------|
 | `name` | string | yes | Unique seat identity |
 | `kind` | `agent` \| `human` | no | Who holds the seat (default `agent`). `human` marks a [human seat](../concepts/humans-in-the-org.md) — addressable, never spawned; rejects every runtime-only field below and requires at least one `contact` identity |
-| `contact` | dict | human seats | External identities: `slack_user_id`, `mattermost_user_id` (a username, not an ID), `atlassian_account_id` (Jira+Confluence), `github_login`, `gitlab_username`, `crewlet_operator_id`. Each accepts a literal ID or exactly one whole-value `${VAR}` env reference, resolved at use time; values are whitespace-stripped, and a `${VAR}` embedded inside a longer string is rejected at validation (see [Humans in the Org Chart](../concepts/humans-in-the-org.md)). **No two seats may declare the same identity** — an external account belongs to one person, and a duplicate is refused rather than silently sending one of them somebody else's mail. `crewlet_operator_id` is the odd one: it names one of Tier A's `api.auth.tokens[].id`, binding that credential to this seat so a person writing through the dashboard or the API acts as **themselves** rather than as a token. It is an attribution and never an address — the engine never sends as itself — so it is left out of rosters and colleague cards, and a seat carrying only this one is reachable through their dashboard queue rather than by an @-mention |
+| `contact` | dict | human seats | External identities: `slack_user_id`, `mattermost_user_id` (a username, not an ID), `atlassian_account_id` (Jira+Confluence), `github_login`, `gitlab_username`, `crewlet_operator_id`. Each accepts a literal ID or exactly one whole-value `${VAR}` env reference, resolved at use time; values are whitespace-stripped, and a `${VAR}` embedded inside a longer string is rejected at validation (see [Humans in the Org Chart](../concepts/humans-in-the-org.md)). **No two seats may declare the same identity** — an external account belongs to one person, and a duplicate is refused rather than silently sending one of them somebody else's mail. `crewlet_operator_id` is the odd one: it names one of Tier A's `api.auth.tokens[].id`, binding that credential to this seat so a person writing through the dashboard or the API acts as **themselves** rather than as a token. It is an attribution and never an address — the engine never sends as itself — so it is left out of rosters and colleague cards, and a seat carrying only this one is reachable through their dashboard queue rather than by an @-mention. It may not be `anonymous`, the id a disabled auth guard stamps on every caller: the literal is refused, and a `${VAR}` resolving to it binds nobody |
 | `availability` | string | no | Human seats only — free-text availability rendered into rosters and `lookup_colleague` results |
 | `goal` | string | no | Individual mission statement |
 | `backstory` | string | no | Personality, background, expertise |
@@ -881,7 +984,7 @@ units:
 | `llm_review` / `llm_subagent` / `llm_sandbox` | string | no | Per-phase overrides (alternative to the dict-shaped `llm`) |
 | `llm_auxiliary` | string | no | Cheap/fast model used by reflection workers (PersistDecider, episode summariser) |
 | `llm_judge` | string | no | Cheap/fast model used by the [round-cap extension judge](../concepts/turn-engine.md#round-cap-extension-judge); falls back to `llm` |
-| `token_budget` | int | no | Per-agent token limit (0 = unlimited) |
+| `token_budget` | dict | no | This seat's own token ceilings per calendar window — `day`, `week`, `month`, each optional — on top of the company's. See [Token budgets](#token-budgets) |
 | `handle` | string | no | Custom identity slug (default: auto-derived) |
 | `email` | string | no | Agent email address |
 | `manages` | list[string] | no | Names of roles this agent manages |
@@ -942,7 +1045,7 @@ units:
       # unit schedule, target defaults to `each` → every direct member runs it
       - name: daily-standup
         cron: "30 9 * * 1-5"            # 5-field cron, evaluated in `timezone`
-        timezone: Europe/Amsterdam      # IANA tz; defaults to scheduling.default_timezone
+        timezone: Europe/Amsterdam      # IANA tz; defaults to the company's `timezone`
         task: "Post your standup: shipped yesterday / on today / blockers."
       - name: weekly-report
         cron: "0 16 * * 5"
@@ -961,7 +1064,7 @@ units:
 | `name` | string | yes | Unique within the role/unit; part of the idempotency key |
 | `cron` | string | yes | Standard 5-field cron (`min hour dom month dow`), evaluated in `timezone` |
 | `task` | string | yes | Task prompt handed to the runner agent |
-| `timezone` | string | no | IANA timezone (default: `scheduling.default_timezone`) |
+| `timezone` | string | no | IANA timezone this one schedule fires in (default: the company's [`timezone`](#the-companys-clock)). Not `Local` or `localtime` |
 | `target` | string | no | **Unit schedules only**: `each` (default — every direct member) or `lead` (the effective unit lead). Ignored for role schedules; for a per-person task, use a role schedule |
 | `enabled` | bool | no | `false` keeps the schedule in config without firing (default `true`) |
 | `timeout_seconds` | int | no | Hard wall-clock cap on the scheduled turn (default `180`) |
@@ -1081,17 +1184,9 @@ The two axes are **separate** on purpose. A company running a native tracker aga
 ```yaml
 tracker:
   backend: native
-  native:                                # ONLY on a native company — a block of
-                                         #   working days on a company running Jira
+  native:                                # ONLY on a native company — an inbox
+                                         #   horizon on a company running Jira
                                          #   describes nothing, and is refused
-    timezone: Europe/Berlin              # the company's ONE clock, IANA name
-                                         #   (default UTC). It resolves "next
-                                         #   Friday" and places an all-day date at
-                                         #   midnight. It is a clock for AUTHORED
-                                         #   instants and calendar boundaries only —
-                                         #   no duration is measured against it,
-                                         #   because a duration measured against a
-                                         #   wall clock changes length twice a year
     inbox_retention_days: 365            # how long a person's inbox keeps a row
                                          #   (default 365, 30..3650). THE HISTORY IT
                                          #   POINTS AT IS UNTOUCHED — this is a
@@ -1100,7 +1195,7 @@ tracker:
                                          #   answered by the history either way
 ```
 
-Everything else a tracker could be told is either a fact about the **operator** — how they back up, how long their disk holds a replay window — which lives in Tier A under [`stream.tracker_retention`](#stream), or a decision the engine makes once for everybody.
+Everything else a tracker could be told is either a fact about the **operator** — how they back up, how long their disk holds a replay window — which lives in Tier A under [`stream.tracker_retention`](#tier-a-crewletyaml), a fact about the whole **company** — the clock its dates mean is the top-level [`timezone`](#the-companys-clock) — or a decision the engine makes once for everybody.
 
 **A native tracker or knowledge base needs a stream that survives a restart.** Their write-ahead logs live on the stream, and an embedded stream with no `stream.store_dir` keeps its streams in memory, so a restart recreates them empty, and a node whose durable tables are ahead of a stream that restarted from nothing refuses to serve permanently, with no snapshot that helps. `crewlet validate` refuses that pair when it is given both documents, and so does the engine at boot. Either backend starts the log: a company on Jira whose knowledge base is the engine's own, the default without Confluence, is refused the same way. Only a company whose tracker and knowledge base are both a vendor's (or `none`) starts no log at all and is unaffected, which is why the rule needs both files to see.
 

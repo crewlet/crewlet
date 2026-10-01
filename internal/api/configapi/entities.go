@@ -8,9 +8,11 @@ import (
 	"maps"
 	"net/http"
 	"slices"
+	"strings"
 
 	"github.com/crewlet/crewlet/internal/api/httpjson"
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/store"
 )
 
 // The config's addressable collections — what the dashboard's Config room
@@ -53,6 +55,24 @@ var ErrUnknownEntityKind = errors.New("configapi: unknown entity kind")
 
 // ErrNoSuchEntity reports an id nothing in the active revision carries.
 var ErrNoSuchEntity = errors.New("configapi: no such entity")
+
+// ErrEntityExists reports a create-only write (`If-None-Match: *`) naming an id
+// the active revision already carries.
+//
+// Refused rather than turned into a replacement, because the caller said it
+// was adding something: a form that adds a server called "github" to a company
+// that already has one is somebody about to overwrite a colleague's launch
+// command and credentials without ever having seen them.
+var ErrEntityExists = errors.New("configapi: entity already exists")
+
+// ErrNotCreatable reports a create-only write to a collection whose members
+// cannot be created by address alone.
+//
+// A seat and a unit have a PLACE — the unit they sit in, the position among
+// their siblings — and the path names neither, so "create the seat called X"
+// is a question this route cannot answer without inventing one. The org
+// builder adds them through the whole document, where the place is visible.
+var ErrNotCreatable = errors.New("configapi: this collection is not created by id")
 
 // ErrIdentityMismatch reports a body whose own identity disagrees with the id
 // in the path — a rename, arriving dressed as a replacement.
@@ -101,6 +121,17 @@ type entityAccess struct {
 	// a tree: the same entity find returns, found the same way, so a write
 	// replaces exactly the bytes of the entity it decoded.
 	stored func(root map[string]any, id string) (map[string]any, bool)
+
+	// create adds a decoded entity under an id the collection does not
+	// carry — the create-only write, `If-None-Match: *` — or reports why
+	// not: [ErrEntityExists] for an id already there, [ErrIdentityMismatch]
+	// for a body naming another. Nil for a collection whose members have a
+	// place the path cannot name ([ErrNotCreatable]).
+	create func(*config.Company, string, submitted) error
+	// place puts a new element into a STORED document tree where create
+	// put its entity in the struct, so the two stay in the order find and
+	// stored walk them.
+	place func(root map[string]any, id string, element map[string]any)
 }
 
 // entityKinds is the table, and the four keys are the paths the dashboard's
@@ -240,6 +271,35 @@ var entityKinds = map[string]entityAccess{
 			provider, ok := llm[id].(map[string]any)
 			return provider, ok
 		},
+		// A PROVIDER'S IDENTITY IS ITS KEY, and the body carries no name to
+		// disagree with it: the key is the address and nothing else.
+		create: func(c *config.Company, id string, raw submitted) error {
+			if _, ok := c.Providers.LLM[id]; ok {
+				return ErrEntityExists
+			}
+			incoming, err := decodeEntity[config.LLMProvider](raw, config.Path{"providers", "llm", id})
+			if err != nil {
+				return err
+			}
+			if c.Providers.LLM == nil {
+				c.Providers.LLM = map[string]config.LLMProvider{}
+			}
+			c.Providers.LLM[id] = incoming
+			return nil
+		},
+		place: func(root map[string]any, id string, element map[string]any) {
+			providers, _ := root["providers"].(map[string]any)
+			if providers == nil {
+				providers = map[string]any{}
+				root["providers"] = providers
+			}
+			llm, _ := providers["llm"].(map[string]any)
+			if llm == nil {
+				llm = map[string]any{}
+				providers["llm"] = llm
+			}
+			llm[id] = element
+		},
 	},
 	EntityMCPServers: {
 		ids: func(c *config.Company) []string {
@@ -284,6 +344,29 @@ var entityKinds = map[string]entityAccess{
 				}
 			}
 			return nil, false
+		},
+		// APPENDED, so every server already declared keeps its position:
+		// the prompt lists servers in declaration order, and an add that
+		// reordered the list would move every seat's tool block.
+		create: func(c *config.Company, id string, raw submitted) error {
+			for i := range c.MCPServers {
+				if c.MCPServers[i].Name == id {
+					return ErrEntityExists
+				}
+			}
+			incoming, err := decodeEntity[config.MCPServer](raw, config.Path{"mcp_servers", len(c.MCPServers)})
+			if err != nil {
+				return err
+			}
+			if incoming.Name != id {
+				return identityMismatch("name", id, incoming.Name)
+			}
+			c.MCPServers = append(c.MCPServers, incoming)
+			return nil
+		},
+		place: func(root map[string]any, _ string, element map[string]any) {
+			list, _ := root["mcp_servers"].([]any)
+			root["mcp_servers"] = append(list, element)
 		},
 	},
 }
@@ -386,9 +469,21 @@ func (s *Service) getEntity(kind string) http.HandlerFunc {
 // The same write [Service.ApplyEntity] performs, through the same draft, with
 // the refusals an HTTP caller needs spelled out: which entity was missing, and
 // why a rename is not an edit.
+//
+// With `dry_run=true` it is the same request, checked in the same order, that
+// stores and activates nothing — exactly as the whole-document writes are.
+// An entity write needs its check MORE than they do, not less: its caller
+// never sees the rest of the document, so the whole-company validation behind
+// the splice is the only place it can learn that a seat fine on its own leaves
+// the company invalid, or that a ceiling it raised now sits above the
+// company's own (a warning, which only a check can show before the save).
 func (s *Service) putEntity(kind string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		id := r.PathValue("id")
+		dryRun, ok := dryRunOf(w, r)
+		if !ok {
+			return
+		}
 		body, err := readBody(w, r)
 		if err != nil {
 			refuseBody(w, err)
@@ -396,8 +491,9 @@ func (s *Service) putEntity(kind string) http.HandlerFunc {
 		}
 		// The same rule the whole-document write has, and for the same
 		// reason: a list of revisions with no summaries is a list of
-		// uuids. A per-entity write can say more, so the hint does.
-		summary, sent, ok := takeSummary(w, r, body, true,
+		// uuids. A per-entity write can say more, so the hint does. A
+		// check stores nothing, so it needs none.
+		summary, sent, ok := takeSummary(w, r, body, !dryRun,
 			"this write needs an audit summary: the X-Summary header, "+
 				"or a top-level _summary key in the body. Name what changed "+
 				"about "+kind+"/"+id)
@@ -421,12 +517,15 @@ func (s *Service) putEntity(kind string) http.HandlerFunc {
 			})
 			return
 		}
-		if _, ok := s.checkPrecondition(w, r, active, found); !ok {
+		create, ok := s.entityPrecondition(w, r, active, found)
+		if !ok {
 			return
 		}
-		d, err := entityDraft(kind, id, sent, active.ID)
+		d, err := entityDraft(kind, id, sent, active.ID, create)
 		if err != nil {
-			s.fail(w, "address the entity", err)
+			// A create of a kind that has none is the caller's request to
+			// correct, answered like every other entity refusal.
+			s.refuseEntity(w, kind, id, err)
 			return
 		}
 		prepared, err := s.prepare(r.Context(), d)
@@ -434,13 +533,49 @@ func (s *Service) putEntity(kind string) http.HandlerFunc {
 			s.refuseEntity(w, kind, id, err)
 			return
 		}
-		applied, err := s.commit(r.Context(), prepared, summary, operatorOf(r))
+		if dryRun {
+			writeChecked(w, prepared)
+			return
+		}
+		applied, err := s.commit(r.Context(), prepared, summary, authorOf(r))
 		if err != nil {
 			s.refuseApply(w, err)
 			return
 		}
 		writeApplied(w, applied)
 	}
+}
+
+// entityPrecondition reads an entity write's condition, and reports whether
+// it is a create.
+//
+// `If-None-Match: *` AT AN ENTITY'S ADDRESS IS ABOUT THE ENTITY (RFC 9110
+// §13.1.2: "only if there is no current representation" of the TARGET
+// resource). Handed to the document's own precondition it was read as "only
+// if no company is configured" — a condition that can never hold on an entity
+// route, which needs a company to splice into — so the one request that says
+// "add this" was refused 412 `already_configured`, a sentence about something
+// the caller never asked. It is the create-only write here.
+//
+// NOT BESIDE `If-Match`. That tag names the DOCUMENT's revision, and at an
+// address that has no representation yet the two conditions describe two
+// different resources; the create already lands on the revision active at the
+// commit, compare-and-set, and is validated whole against it.
+func (s *Service) entityPrecondition(w http.ResponseWriter, r *http.Request, active store.Revision, found bool) (create, ok bool) {
+	if strings.TrimSpace(r.Header.Get("If-None-Match")) != "*" {
+		_, ok := s.checkPrecondition(w, r, active, found)
+		return false, ok
+	}
+	if strings.TrimSpace(r.Header.Get("If-Match")) != "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{
+			"error": "conflicting_preconditions",
+			"hint": "If-None-Match: * asks for a create and If-Match names the revision " +
+				"an edit was read from; send one. A create is checked against the " +
+				"revision active when it lands",
+		})
+		return false, false
+	}
+	return true, true
 }
 
 // refuseEntity answers an entity write's own refusals, and every other one as
@@ -458,7 +593,22 @@ func (s *Service) refuseEntity(w http.ResponseWriter, kind, id string, err error
 		writeJSON(w, http.StatusNotFound, map[string]string{
 			"error": "no_such_entity",
 			"hint": "no " + kind + " called " + id + " in the active revision; " +
-				"add one through PUT /config, which shows the whole document",
+				"to add one, send the same request with If-None-Match: *",
+		})
+	case errors.Is(err, ErrEntityExists):
+		// A CREATE THAT FOUND ONE. 412 because it is the precondition the
+		// caller sent that failed, not the document.
+		writeJSON(w, http.StatusPreconditionFailed, map[string]string{
+			"error": "entity_exists",
+			"hint": "If-None-Match: * asked for " + kind + "/" + id + " to be added, and " +
+				"the active revision already has one: pick another name, or edit " +
+				"that one under If-Match",
+		})
+	case errors.Is(err, ErrNotCreatable):
+		writeJSON(w, http.StatusBadRequest, map[string]string{
+			"error": "not_creatable",
+			"hint": "a member of " + kind + " has a place in the chart the path cannot " +
+				"name; add it through PUT /config, where the place is visible",
 		})
 	case errors.Is(err, ErrIdentityMismatch):
 		// A RENAME, REFUSED. Not coerced back to the path's id either:

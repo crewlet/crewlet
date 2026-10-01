@@ -1,10 +1,12 @@
 package statelog_test
 
 import (
+	"slices"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/eventfan"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/statelog/metrics"
 )
@@ -30,7 +32,7 @@ func TestEveryAlarmFiresOnItsConditionAndOnNothingElse(t *testing.T) {
 		"a node behind the log": {
 			statelog.KindApplyLag,
 			statelog.Reading{ApplyLag: 2 * time.Minute},
-			"2m0s behind",
+			"2m behind",
 		},
 		"reads refused for something other than lag": {
 			statelog.KindReadRefusals,
@@ -53,7 +55,7 @@ func TestEveryAlarmFiresOnItsConditionAndOnNothingElse(t *testing.T) {
 				BackupAge:    statelog.Age(30 * time.Hour),
 				BackupMaxAge: 24 * time.Hour,
 			},
-			"30h0m0s old",
+			"30h old",
 		},
 		"no backup at all": {
 			statelog.KindBackupAge,
@@ -94,6 +96,11 @@ func TestEveryAlarmFiresOnItsConditionAndOnNothingElse(t *testing.T) {
 			statelog.KindSearchScoped,
 			statelog.Reading{SearchScopedFraction: 0.1},
 			"part of the",
+		},
+		"fleet history missing a node": {
+			statelog.KindHistoryPartial,
+			statelog.Reading{HistoryPartialFraction: 0.25},
+			"25% of fleet history reads",
 		},
 		"recall below its floor": {
 			statelog.KindRecallBelowFloor,
@@ -248,7 +255,7 @@ func TestNoBackupAtAllFiresAndSaysSoRatherThanNamingAnAge(t *testing.T) {
 			"advance until one exists", kindsOf(got))
 	}
 	if want := "no verified backup has been recorded, and the policy asks for " +
-		"one every 24h0m0s"; alarm.Detail != want {
+		"one every 24h"; alarm.Detail != want {
 		t.Errorf("detail = %q, want %q", alarm.Detail, want)
 	}
 	// AND IT NAMES NO AGE. The word the fabricated sentence turned on was
@@ -264,7 +271,7 @@ func TestNoBackupAtAllFiresAndSaysSoRatherThanNamingAnAge(t *testing.T) {
 		BackupAge: statelog.Age(30 * time.Hour), BackupMaxAge: policy,
 	})
 	measured, firing := find(got, statelog.KindBackupAge)
-	if !firing || !strings.Contains(measured.Detail, "30h0m0s old") {
+	if !firing || !strings.Contains(measured.Detail, "30h old") {
 		t.Errorf("a 30h backup reported %q, want its own age", measured.Detail)
 	}
 }
@@ -294,8 +301,8 @@ func TestTheAlarmTableIsWellFormed(t *testing.T) {
 
 // AN ALARM IS LOGGED ONCE WHEN IT STARTS AND ONCE WHEN IT ENDS.
 //
-// Not on every tick: evaluated on a fifteen-second heartbeat, a level would
-// write the same line four times a minute for as long as the condition holds,
+// Not on every tick: evaluated on a ten-second heartbeat, a level would
+// write the same line six times a minute for as long as the condition holds,
 // and the one thing an operator needs from a log — when it STARTED — would be
 // buried under thousands of repetitions of the fact that it is still true.
 func TestAnAlarmIsLoggedOnItsTransitionsAndTheGaugeIsALevel(t *testing.T) {
@@ -338,6 +345,52 @@ func TestAnAlarmIsLoggedOnItsTransitionsAndTheGaugeIsALevel(t *testing.T) {
 	}
 }
 
+// THE STANDING ALARMS ARE THE LATEST EVALUATION'S, THE OLDEST FIRST — and
+// "not evaluated" is not "none firing".
+//
+// This is what every node's health envelope counts and names, so it has to
+// be exactly what the gauge and the log were just told: an alarm that cleared
+// is gone from it at once, and the name a health card shows is the condition
+// that has gone unanswered longest rather than whichever the table happens to
+// list first. Before any evaluation it says it cannot say, because an empty
+// list would render a node that has not looked as a node with nothing wrong.
+//
+// Mutation: return the table's order rather than the age order, or report
+// (nil, true) before an evaluation, and this fails.
+func TestTheStandingAlarmsAreTheLatestEvaluationsOldestFirst(t *testing.T) {
+	t.Parallel()
+	clock := time.Date(2026, 3, 1, 9, 0, 0, 0, time.UTC)
+	tracker := statelog.NewTracker(nil, func() time.Time { return clock })
+
+	if kinds, known := tracker.Standing(); known || kinds != nil {
+		t.Fatalf("before any evaluation Standing = (%v, %v), want (nil, false)", kinds, known)
+	}
+
+	// The WAL alarm is raised first; apply lag, which the table lists
+	// ahead of it, joins it five minutes later.
+	wal := statelog.Reading{WALBytes: 2 << 30}
+	tracker.Observe(t.Context(), statelog.Evaluate(wal))
+	clock = clock.Add(5 * time.Minute)
+	both := wal
+	both.ApplyLag = 2 * time.Minute
+	tracker.Observe(t.Context(), statelog.Evaluate(both))
+
+	kinds, known := tracker.Standing()
+	want := []statelog.Kind{statelog.KindWALLarge, statelog.KindApplyLag}
+	if !known || !slices.Equal(kinds, want) {
+		t.Errorf("Standing = (%v, %v), want (%v, true): the longest-standing "+
+			"alarm leads whatever the table's order is", kinds, known, want)
+	}
+
+	clock = clock.Add(time.Minute)
+	tracker.Observe(t.Context(), statelog.Evaluate(statelog.Reading{}))
+	kinds, known = tracker.Standing()
+	if !known || kinds == nil || len(kinds) != 0 {
+		t.Errorf("after an evaluation that raised nothing Standing = (%v, %v), "+
+			"want an empty list that is known", kinds, known)
+	}
+}
+
 func find(alarms []statelog.Alarm, kind statelog.Kind) (statelog.Alarm, bool) {
 	for _, a := range alarms {
 		if a.Kind == kind {
@@ -364,4 +417,31 @@ func gauge(t *testing.T, rec *metrics.Recorder, kind statelog.Kind) float64 {
 	}
 	t.Fatalf("no gauge series for %s", kind)
 	return -1
+}
+
+// THE HISTORY ALARM BORROWS THE READ BUDGET (ADR-0015).
+//
+// What makes a fleet history answer partial is a node that did not answer
+// inside [eventfan.FleetReadBudget] — so that budget IS the threshold, and the
+// alarm names it from the constant the scatter waits on. A second number here
+// would be a second opinion about one event, and the two would drift: an
+// operator told "every node had 5s" by a node that waited two would go looking
+// for a slowness that is not there.
+//
+// Mutation: spell the budget as a literal in the detail, change the constant,
+// and this fails.
+func TestHistoryPartialBorrowsTheReadBudget(t *testing.T) {
+	t.Parallel()
+	alarm, found := find(statelog.Evaluate(statelog.Reading{HistoryPartialFraction: 0.5}),
+		statelog.KindHistoryPartial)
+	if !found {
+		t.Fatal("a partial fleet read raised nothing")
+	}
+	if budget := eventfan.FleetReadBudget.String(); !strings.Contains(alarm.Detail, budget) {
+		t.Errorf("detail %q does not name the fleet read budget (%s) the scatter waits on",
+			alarm.Detail, budget)
+	}
+	if _, found := find(statelog.Evaluate(statelog.Reading{}), statelog.KindHistoryPartial); found {
+		t.Error("a node that read no fleet history alarmed about it")
+	}
 }

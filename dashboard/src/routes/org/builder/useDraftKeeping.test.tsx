@@ -95,12 +95,12 @@ test("a kept draft of the same revision waits for Keep or Discard, and Keep rest
 
 // A NEWER REVISION WHILE THE OFFER STANDS. The offer was made against the
 // base on screen, so the base is not moved under it, and keeping the draft
-// then leads into the update flow rather than a lens that is paused with no
+// then leads into the update flow rather than a builder that is paused with no
 // way forward.
 test("a kept draft offered as a colleague saves is kept, then offered as an update", async () => {
   keep({});
   const engine = new Engine(company());
-  const { store } = mountBuilder({ engine });
+  const { store } = mountBuilder({ engine, org: { name: "Acme", roles: [], units: [] } });
   await screen.findByText(/This tab kept a draft with 1 change/);
   await waitFor(() => expect(engine.checks()).toHaveLength(1));
   const next = company();
@@ -276,10 +276,10 @@ test("a draft with changes asks before the tab goes, and one without does not", 
   await waitFor(() => expect(unload()).toBe(true));
 });
 
-// WHERE NOTHING KEEPS THE DRAFT, leaving the lens loses it like a reload, so
-// that move is asked about first; a move within the lens keeps the Builder
+// WHERE NOTHING KEEPS THE DRAFT, leaving the builder loses it like a reload, so
+// that move is asked about first; a move within the builder keeps the Builder
 // and the draft, and is not.
-test("a draft this browser cannot keep asks before the lens is left, not before a view changes", async () => {
+test("a draft this browser cannot keep asks before the builder is left, not before a view changes", async () => {
   const refusing: DraftStorage = {
     getItem: () => null,
     setItem: () => {
@@ -294,32 +294,32 @@ test("a draft this browser cannot keep asks before the lens is left, not before 
   const start = location.hash;
 
   act(() => {
-    location.hash = "#/company?lens=builder&view=table";
+    location.hash = "#/agents/edit?view=table";
   });
-  await waitFor(() => expect(location.hash).toBe("#/company?lens=builder&view=table"));
+  await waitFor(() => expect(location.hash).toBe("#/agents/edit?view=table"));
   expect(screen.queryByRole("dialog", { name: "Leave the builder?" })).toBeNull();
 
   act(() => {
-    location.hash = "#/people";
+    location.hash = "#/agents/roster";
   });
   const asked = await screen.findByRole("dialog", { name: "Leave the builder?" });
-  await waitFor(() => expect(location.hash).toBe("#/company?lens=builder&view=table"));
+  await waitFor(() => expect(location.hash).toBe("#/agents/edit?view=table"));
   fireEvent.click(within(asked).getByRole("button", { name: "Stay" }));
   expect(screen.queryByRole("dialog", { name: "Leave the builder?" })).toBeNull();
 
   act(() => {
-    location.hash = "#/people";
+    location.hash = "#/agents/roster";
   });
   fireEvent.click(
     within(await screen.findByRole("dialog", { name: "Leave the builder?" })).getByRole("button", {
       name: "Leave without the draft",
     }),
   );
-  await waitFor(() => expect(location.hash).toBe("#/people"));
-  expect(start).toContain("lens=builder");
+  await waitFor(() => expect(location.hash).toBe("#/agents/roster"));
+  expect(start.startsWith("#/agents/edit")).toBe(true);
 });
 
-test("coming back to the lens restores this page's own draft without asking", async () => {
+test("coming back to the builder restores this page's own draft without asking", async () => {
   const engine = new Engine(company());
   const first = mountBuilder({ engine });
   await screen.findByText("No problems");

@@ -25,6 +25,14 @@ type Page struct {
 	Text    string
 }
 
+// Origin is where a set of pages was read from: the knowledge backend and the
+// container the sync walked. Every skill admitted from them carries it, so a
+// load can later name the page it read in terms a reader can resolve.
+type Origin struct {
+	Backend   string
+	Container string
+}
+
 // Admission is what one walk found, for the report.
 type Admission struct {
 	// Pages is how many the container held.
@@ -44,11 +52,11 @@ type Admission struct {
 // whole walk) would take a company's entire catalogue away over one operator's
 // typo, and the catalogue is what makes agents follow this company's
 // conventions rather than their model's defaults.
-func Admit(pages []Page) ([]Skill, Admission) {
+func Admit(pages []Page, from Origin) ([]Skill, Admission) {
 	out := make([]Skill, 0, len(pages))
 	report := Admission{Pages: len(pages)}
 	for _, page := range pages {
-		skill, verdict := AdmitPage(page)
+		skill, verdict := AdmitPage(page, from)
 		switch verdict {
 		case PageOrdinary:
 			report.Ordinary++
@@ -82,11 +90,14 @@ const (
 // a page the two disagreed about would be served after an edit and gone after
 // the next walk (or the reverse) and the registry would flip between the two
 // for the life of the page.
-func AdmitPage(page Page) (Skill, PageVerdict) {
+func AdmitPage(page Page, from Origin) (Skill, PageVerdict) {
 	if !IsSkill(page.Text) {
 		return Skill{}, PageOrdinary
 	}
-	skill, err := Parse(page.Text, Source{PageID: page.ID, Version: page.Version})
+	skill, err := Parse(page.Text, Source{
+		PageID: page.ID, Version: page.Version,
+		Backend: from.Backend, Container: from.Container, Title: page.Title,
+	})
 	if err != nil {
 		admitLog.Warn("skill_page_undecodable", "page", page.ID,
 			"title", page.Title, "error", err.Error())

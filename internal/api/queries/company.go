@@ -9,9 +9,9 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/eventfan"
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/integration"
-	"github.com/crewlet/crewlet/internal/learning"
 	"github.com/crewlet/crewlet/internal/schedule"
 	"github.com/crewlet/crewlet/internal/store"
 )
@@ -68,8 +68,8 @@ func (s Sources) ConfiguredSchedules() []schedule.Row {
 		return []schedule.Row{}
 	}
 	rows := schedule.Describe(organization, schedule.DescribeOptions{
-		DefaultTimezone: company.Scheduling.DefaultTimezone,
-		Now:             s.clock(),
+		Zone: company.Location(),
+		Now:  s.clock(),
 	})
 	if rows == nil {
 		return []schedule.Row{}
@@ -167,6 +167,9 @@ func (s Sources) integrations(ctx context.Context, _ Params) (any, error) {
 	}
 
 	out := []map[string]any{}
+	// WHAT THE ROLL-UP READS, one per row, built from the same values the
+	// row carries so the tool's state and the row it names cannot disagree.
+	surfaces := map[string]integration.SurfaceStatus{}
 	// CONFIGURED and ENABLED are different facts and the answer sends both.
 	// A block present with `enabled: false` is a deliberate pause an operator
 	// can see; an absent block is an integration nobody set up. Folding them
@@ -207,13 +210,13 @@ func (s Sources) integrations(ctx context.Context, _ Params) (any, error) {
 		} else {
 			row["last_at"] = nil
 		}
+		var routes, secretUsable, endpointCurrent *bool
 		if sources := deliversAs(kind); known && len(sources) > 0 {
-			row["routes"] = slices.ContainsFunc(sources, func(source string) bool {
+			routes = boolPtr(slices.ContainsFunc(sources, func(source string) bool {
 				return slices.Contains(routed, source)
-			})
-		} else {
-			row["routes"] = nil
+			}))
 		}
+		row["routes"] = routes
 		// THREE-VALUED, and the third value is the point: null means this
 		// surface uses no secret at all, false means a route is refusing
 		// every delivery, and only an operator can tell those apart.
@@ -229,12 +232,10 @@ func (s Sources) integrations(ctx context.Context, _ Params) (any, error) {
 		// every delivery is refused with nothing anywhere naming the
 		// variable. Null when this node cannot say (nothing has resolved
 		// yet) or when the surface has no secret to resolve, as above.
-		switch {
-		case secret == nil || !verifiableKnown:
-			row["secret_usable"] = nil
-		default:
-			row["secret_usable"] = boolPtr(slices.Contains(verifiable, kind))
+		if secret != nil && verifiableKnown {
+			secretUsable = boolPtr(slices.Contains(verifiable, kind))
 		}
+		row["secret_usable"] = secretUsable
 		// THREE-VALUED again, and the third value is the one that took a
 		// subsystem to be able to say at all: null means nothing is
 		// checking this surface from here, an absent entry means the loop
@@ -275,13 +276,25 @@ func (s Sources) integrations(ctx context.Context, _ Params) (any, error) {
 		// and comparing that against the reference itself would report
 		// every such company as moved for ever. A process that cannot
 		// resolve says null rather than false, for the reason above.
-		row["endpoint"], row["endpoint_current"] = nil, nil
+		row["endpoint"] = nil
 		if state, checked := reconciled[kind]; checked && state.Endpoint != "" {
 			row["endpoint"] = state.Endpoint
 			if s.PublicBase != nil {
-				row["endpoint_current"] = state.Endpoint == s.PublicBase()
+				endpointCurrent = boolPtr(state.Endpoint == s.PublicBase())
 			}
 		}
+		row["endpoint_current"] = endpointCurrent
+		status := integration.SurfaceStatus{
+			Key: kind, Enabled: enabled, Known: reconcileKnown,
+			SecretUsable: secretUsable, Routes: routes, EndpointCurrent: endpointCurrent,
+		}
+		if state, checked := reconciled[kind]; reconcileKnown && checked {
+			status.State = &state
+		}
+		if s.Converges != nil {
+			status.Converges = boolPtr(s.Converges(integration.Kind(kind)))
+		}
+		surfaces[kind] = status
 		// Every row carries seats, so the view never reads undefined.
 		// An empty list is a real answer — nobody holds credentials of
 		// their own for this surface — and it is not the same as absent.
@@ -398,8 +411,25 @@ func (s Sources) integrations(ctx context.Context, _ Params) (any, error) {
 	slices.SortFunc(out, func(a, b map[string]any) int {
 		return cmp.Compare(a["key"].(string), b["key"].(string))
 	})
+	// ONE ROLL-UP PER TOOL, decided here rather than on the client: which
+	// surface's word wins, and when a ready phase still needs a person, are
+	// rules — and a second copy of them in the dashboard is how a card came
+	// to disagree with the surface it named. Every tool is present, a tool
+	// nobody configured included, so a reader never has to invent a state
+	// for a missing one.
+	tools := make([]integration.ToolRollup, 0, len(integration.Tools))
+	for _, tool := range integration.Tools {
+		var present []integration.SurfaceStatus
+		for _, surface := range tool.Surfaces {
+			if status, ok := surfaces[surface.Key]; ok {
+				present = append(present, status)
+			}
+		}
+		tools = append(tools, integration.Rollup(tool, present))
+	}
 	body := map[string]any{
 		"integrations": out,
+		"tools":        tools,
 		// Whether the counts above are a MEASUREMENT. Without this a
 		// store that could not be read reports every integration at zero
 		// inbound, which reads as "nothing is arriving" — the alarming
@@ -409,6 +439,9 @@ func (s Sources) integrations(ctx context.Context, _ Params) (any, error) {
 		// page is capped rather than time-bounded, so there is no fixed
 		// window to name; null when nothing was counted.
 		"traffic_since": nil,
+		// WHICH NODES THE COUNTS WERE READ FROM, or null when no store
+		// could be read — the same case `traffic_known` false reports.
+		"coverage": seen.coverage,
 	}
 	if !seen.since.IsZero() {
 		body["traffic_since"] = seen.since.UTC().Format(time.RFC3339)
@@ -502,22 +535,30 @@ type traffic struct {
 	// bounded, so "42 inbound" alone could span an hour or a year; "42
 	// since Tuesday" is a measurement. Zero when nothing was counted.
 	since time.Time
+
+	// coverage is which nodes the counts were read from. A delivery is
+	// written to the store of the node the load balancer handed it to, so
+	// a count from one node is a third of a three-node fleet's traffic —
+	// and a node that did not answer is traffic the counts cannot see.
+	coverage *eventfan.Coverage
 }
 
 func (s Sources) deliveryTraffic(ctx context.Context) traffic {
 	if s.Events == nil {
 		return traffic{}
 	}
-	rows, err := s.Events.List(ctx, store.ListQuery{
+	listing, coverage, err := s.Events.List(ctx, store.ListQuery{
 		Category: events.WebhookCategory, Limit: MaxEventPage,
 	})
 	if err != nil {
 		log.WarnContext(ctx, "integration_counts_unreadable", "error", err)
 		return traffic{}
 	}
+	rows := listing.Rows
 	out := traffic{
 		known: true, count: map[string]int{}, last: map[string]time.Time{},
 		skipped: map[string]int{}, coalesced: map[string]int{},
+		coverage: &coverage,
 	}
 	for _, row := range rows {
 		out.count[row.Source]++
@@ -540,7 +581,7 @@ func (s Sources) deliveryTraffic(ctx context.Context) traffic {
 // outcome counts absent rather than zero — see [traffic] — because a zero
 // that means "unreadable" is the number an operator would act on.
 func (s Sources) countOutcomes(ctx context.Context, out *traffic) {
-	rows, err := s.Events.List(ctx, store.ListQuery{
+	listing, coverage, err := s.Events.List(ctx, store.ListQuery{
 		Category: "notification", Limit: MaxEventPage,
 	})
 	if err != nil {
@@ -548,7 +589,9 @@ func (s Sources) countOutcomes(ctx context.Context, out *traffic) {
 		out.skipped, out.coalesced = nil, nil
 		return
 	}
-	for _, row := range rows {
+	merged := out.coverage.And(coverage)
+	out.coverage = &merged
+	for _, row := range listing.Rows {
 		// THE INTEGRATION, not the event's Source: the source of an
 		// engine-published event names the engine, and what the row has
 		// to line up with is the inbound count for one third-party app.
@@ -695,14 +738,9 @@ func seatSecrets(company *config.Company, kind string) int {
 
 func boolPtr(v bool) *bool { return &v }
 
-// agentMemory answers a seat's memory: its diary and its episodes.
-//
-// Both halves, because they answer different questions. The diary is what this
-// seat chose to remember; the episodes are what it did, summarised. A page
-// showing one without the other reads as a seat with half a history.
-// agentIDOf resolves a seat handle to the derived agent id the diary is keyed
-// by, passing anything else through — a caller that already holds an id is
-// unaffected.
+// agentIDOf resolves a seat handle to the derived agent id the phase history
+// is keyed by, passing anything else through — a caller that already holds an
+// id is unaffected.
 func (s Sources) agentIDOf(handle string) string {
 	if handle == "" || s.Company == nil {
 		return handle
@@ -725,175 +763,64 @@ func (s Sources) agentIDOf(handle string) string {
 	return handle
 }
 
+// seatHandleOf is the HANDLE a memory question names, which is what a seat's
+// lease — and so its holder — is found by. A caller holding the derived agent
+// id rather than the handle (the REST route's `{id}`) is resolved through the
+// chart; anything else is taken as a handle, so a seat that has left the chart
+// is still asked about by the name it had.
+func (s Sources) seatHandleOf(id string) string {
+	organization := s.organization()
+	if organization == nil || organization.AgentSeatByHandle(id) != nil {
+		return id
+	}
+	for role := range organization.AllRoles() {
+		if agentID, ok := organization.AgentIDFor(role); ok && agentID.String() == id {
+			return role.Handle()
+		}
+	}
+	return id
+}
+
+// agentMemory answers a seat's memory: its diary, its episodes, the skills it
+// drafted, what it learned about the people it works with, and whether it
+// onboarded — each with its total — ANSWERED BY THE SEAT'S HOLDER, which the
+// answer names (`held_by`). See [Sources.Memory] for why.
+//
+// `limit` pages every collection (at most [memread.PageLimit]); a profile's
+// summary asks for one, since the totals and the latest reflection travel
+// whatever the page.
 func (s Sources) agentMemory(ctx context.Context, p Params) (any, error) {
-	id := p.String("id")
+	id := strings.TrimSpace(p.String("id"))
 	if id == "" {
 		return nil, fmt.Errorf("%w: agent_memory needs an id", ErrBadParams)
 	}
-	// EVERY key is present on every answer, as an empty list rather than an
-	// absent one. A client cannot tell "this seat has learned nothing" from
-	// "this node does not keep that half" if the key simply is not there, and
-	// both are ordinary states.
-	out := map[string]any{
-		"id":             id,
-		"diary":          []map[string]any{},
-		"episodes":       []map[string]any{},
-		"skills":         []map[string]any{},
-		"skills_total":   0,
-		"counterparties": []map[string]any{},
-		"onboarded_at":   "",
-	}
-	now := s.clock()
-	if s.Diary != nil {
-		// RESOLVED, not passed through. The diary is keyed by the derived
-		// AGENT ID and the dashboard's one identifier for a seat is its
-		// handle, so handing the handle straight to the diary asked it
-		// about a seat it has no rows for — and answered an empty memory
-		// rather than the seat's, which reads identically to a seat that
-		// has not learned anything yet.
-		entries, err := s.Diary.Recent(ctx, s.agentIDOf(id), now, MemoryPageLimit)
-		if err != nil {
-			return nil, err
-		}
-		rows := make([]map[string]any, 0, len(entries))
-		for _, e := range entries {
-			rows = append(rows, diaryRow(e))
-		}
-		out["diary"] = rows
-	}
-	if s.Episodes != nil {
-		// Episodes are keyed by HANDLE and the diary by agent id. The
-		// dashboard has one identifier for a seat, so both are asked with
-		// it and the one that does not recognise it answers nothing —
-		// which is correct rather than an error, and is what a seat with
-		// no episodes yet looks like anyway.
-		episodes, err := s.Episodes.Recent(ctx, id, MemoryPageLimit)
-		if err != nil {
-			return nil, err
-		}
-		rows := make([]map[string]any, 0, len(episodes))
-		for _, e := range episodes {
-			rows = append(rows, episodeRow(e))
-		}
-		out["episodes"] = rows
-	}
-	if s.Skills != nil {
-		// The half that had no query at all. A seat drafts these from its
-		// own repeated work, versions them, and loads them mid-turn — and
-		// until now the operator paying for that could not see one.
-		// The zero ListOptions is the operator's view as much as the
-		// agent's: archived hidden, stale shown — a stale skill still
-		// works and still revives on use, so hiding it would misreport
-		// what the seat can actually load.
-		//
-		// ONE options value feeds both reads below, deliberately: the count
-		// and the listing have to describe the same set, and two literals
-		// here is how a later edit to one of them starts reporting a total
-		// over rows the page could never contain.
-		opts := learning.ListOptions{}
-		// THE TOTAL, ALWAYS, and that is the difference between a page and
-		// a lie — but it comes from a COUNT rather than from the length of
-		// what was read. Taking the whole library apart to show fifty of it
-		// cost the seat's entire catalogue in I/O and allocations on every
-		// open of the panel, and a skill row carries its content and its
-		// frontmatter, so that is a real read of every body the seat has
-		// ever drafted. The store bounds all three collections now: the
-		// diary and the episodes ask for a recency feed, and the skills ask
-		// for a page with the count beside it.
-		//
-		// The count is what keeps the page honest. The panel that renders
-		// the listing counts the rows it was given, so a seat past the cap
-		// would otherwise report exactly [MemoryPageLimit] skills — a
-		// number an operator has no reason to doubt and no way to check.
-		// Every other cut in this tree says so: a config diff answers
-		// `changes_total` beside the listing it bounded, a trace answers
-		// `truncated`, a ledger line appends "+N more".
-		total, err := s.Skills.Count(ctx, id, opts)
-		if err != nil {
-			return nil, err
-		}
-		opts.Limit = MemoryPageLimit
-		skills, err := s.Skills.List(ctx, id, opts)
-		if err != nil {
-			return nil, err
-		}
-		out["skills_total"] = total
-		rows := make([]map[string]any, 0, len(skills))
-		for _, sk := range skills {
-			rows = append(rows, skillRow(sk))
-		}
-		out["skills"] = rows
-	}
-	// THE THIRD MEMORY, and the one that is about somebody ELSE. The diary
-	// is what a seat learned about the work and the episodes are what it
-	// learned about doing it; a counterparty profile is what it learned
-	// about a colleague — how often they interact, what it believes about
-	// them, and when it last checked. The key has been on this answer since
-	// the answer existed, always as an empty list, because nothing read the
-	// store behind it.
-	//
-	// KEYED ON THE HANDLE, which is what `observer_handle` holds — unlike
-	// the diary, whose key is the derived agent id. Both are asked with the
-	// dashboard's one identifier and the one that does not recognise it
-	// answers nothing.
-	profiles, err := s.counterpartiesFor(ctx, id)
-	if err != nil {
-		return nil, err
-	}
-	rows := make([]map[string]any, 0, len(profiles))
-	for _, profile := range profiles {
-		rows = append(rows, counterpartyRow(profile))
-	}
-	out["counterparties"] = rows
-	return out, nil
+	return s.Memory.Memory(ctx, s.seatHandleOf(id), p.Int("limit", 0))
 }
 
-// counterpartyRow is one profile as a screen reads it.
+// memoryOverview answers every agent seat's memory totals — its diary, its
+// episodes, the skills it drafted — and its newest reflection, each counted by
+// the node holding the seat, with the `coverage` naming every holder asked.
 //
-// THE TWO INSTANTS ARE BOTH CARRIED, because they measure different cadences
-// and the difference is the interesting one: `last_updated_at` moves on every
-// interaction and `last_corroborated_at` only when the traits actually
-// changed, so a colleague seen daily whose profile has not moved in months is
-// one this seat has stopped learning about. Carrying one of them would make
-// that state invisible — which is the same state the Plan phase's prefetch
-// demotes on, so a screen showing one number would disagree with the prompt.
-func counterpartyRow(p learning.Profile) map[string]any {
-	subject := map[string]any{"name": p.Subject.Name}
-	if p.Subject.Handle != "" {
-		subject["handle"] = p.Subject.Handle
+// EVERY AGENT SEAT IN THE CHART, in handle order, and no cap: the list this
+// answers is the company's agents, which the chart already bounds, and a list
+// cut at a dozen (the old Knowledge home's) hid exactly the seats a reader went
+// looking for. A seat no node holds is still a row — `held_by: none`, nothing
+// counted — because a seat missing from the list reads as a seat that does not
+// exist.
+func (s Sources) memoryOverview(ctx context.Context, _ Params) (any, error) {
+	organization := s.organization()
+	var handles []string
+	if organization != nil {
+		for role := range organization.AllRoles() {
+			if role.IsAgent() && role.Handle() != "" {
+				handles = append(handles, role.Handle())
+			}
+		}
 	}
-	if p.Subject.ExternalID != "" {
-		subject["external_id"] = p.Subject.ExternalID
-		subject["platform"] = p.Subject.Platform
-	}
-	traits := p.Traits
-	if traits == nil {
-		// AN EMPTY MAP, never null: a profile whose traits failed to
-		// decode and one that has none read identically to a client
-		// that has to guard the field either way.
-		traits = map[string]any{}
-	}
-	return map[string]any{
-		"subject":              subject,
-		"resolved":             p.Subject.Resolved(),
-		"traits":               traits,
-		"interactions":         p.InteractionCount,
-		"first_seen_at":        p.FirstSeenAt,
-		"last_updated_at":      p.LastUpdatedAt,
-		"last_corroborated_at": p.LastCorroboratedAt,
-	}
+	slices.Sort(handles)
+	handles = slices.Compact(handles)
+	return s.Memory.Overview(ctx, handles)
 }
-
-// MemoryPageLimit bounds each collection of a seat's memory page.
-//
-// FIFTY, and every collection asks its own store for that many rather than
-// reading everything and cutting: the diary and the episodes get a recency
-// feed, where "the most recent fifty" IS the question, and the skills get an
-// ordered listing bounded by [learning.ListOptions.Limit]. The skills are a
-// SET the seat loads from rather than a feed, so a page of one says how large
-// the set was — which is why `skills_total` travels beside them, and why it
-// is counted rather than measured off the page.
-const MemoryPageLimit = 50
 
 // countOrNil renders an outcome count, or null when nothing was counted.
 func countOrNil(counts map[string]int, kind string) any {
@@ -1013,6 +940,11 @@ func reconcileFindings(findings []integration.Finding) []map[string]any {
 		// list at all.
 		if len(f.Subjects) > 0 {
 			row["subjects"] = f.Subjects
+		}
+		// WHEN IT LAPSES, as an instant a reader can count down to, on the
+		// one kind that has a date. Absent everywhere else.
+		if !f.ExpiresAt.IsZero() {
+			row["expires_at"] = f.ExpiresAt.UTC().Format(time.RFC3339)
 		}
 		out = append(out, row)
 	}

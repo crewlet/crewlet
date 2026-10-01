@@ -1,6 +1,7 @@
 package engine
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -12,8 +13,10 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/inbox"
 	"github.com/crewlet/crewlet/internal/agent/ledger"
 	"github.com/crewlet/crewlet/internal/agent/ledger/ledgerstore"
+	"github.com/crewlet/crewlet/internal/agent/toolloop"
 	"github.com/crewlet/crewlet/internal/agent/turn"
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/notify"
@@ -57,9 +60,20 @@ type Dispatcher struct {
 	// drops the work entirely.
 	Park func(ctx context.Context, handle string, evs []*events.Event) error
 
-	// Pause stops delivery on a seat's inbox before a park, so the requeued
-	// copies buffer on the queue rather than looping straight back.
-	Pause func(ctx context.Context, handle, reason string) error
+	// Pause takes the named hold on a seat's inbox before a park, so the
+	// requeued copies buffer on the queue rather than looping straight
+	// back. The screening names the hold ([inbox.Screening.Hold]), because
+	// two subsystems hold inboxes this way and each lifts only its own.
+	Pause func(ctx context.Context, handle string, hold inbox.Hold, reason string) error
+
+	// Budget parks the seat when one of its capped token windows is
+	// refusing, and reports the deferral reason naming the window — see
+	// budgetpark.go. An error is a park that could not be taken, which
+	// NAKs the delivery rather than running a turn the counter refuses.
+	//
+	// Nil parks nothing, which is a dispatcher with no counters: every
+	// turn then runs, and its own meter, if it has one, is the gate.
+	Budget func(ctx context.Context, handle string) (reason string, parked bool, err error)
 
 	// Answer offers a delivery to a parked coding run as the reply to the
 	// question it asked, and reports what to DO with the delivery — see
@@ -87,6 +101,20 @@ type Dispatcher struct {
 	// [sandbox.ConversationRef.Answers].
 	Answer func(ctx context.Context, handle string, conv sandbox.ConversationRef,
 		answer string, trigger *events.Event) (sandbox.AnswerDisposition, error)
+
+	// AnswerByTurn hands a person's answer BY TURN — a
+	// [types.SandboxAnswerGiven] on the seat's inbox — to the parked coding
+	// run it names, and reports what to do with the delivery.
+	//
+	// ROUTED BEFORE THE SCREENING, and never a turn: see
+	// [Dispatcher.routeAnswers]. The engine always sets it, to
+	// [Engine.answerRunByTurn], which reads the sandbox runtime current when
+	// the answer arrives and answers [sandbox.AnswerDeferred] while there is
+	// none. Nil — a dispatcher built without the engine — is handed back
+	// exactly as that deferral is: a node with no coordinator cannot resume
+	// a run, so the delivery is the seat's next holder's rather than spent.
+	AnswerByTurn func(ctx context.Context, given types.SandboxAnswerGiven,
+		trigger *events.Event) (sandbox.AnswerDisposition, error)
 
 	// NoteDeferred tells the seat host a consumer stopped, so the next
 	// successful renew resumes it.
@@ -129,7 +157,7 @@ type Dispatcher struct {
 	//
 	// FOR ONE RECORD ONLY: the guard breach a panic that escaped a turn's
 	// own frames publishes. The live projection keys a seat by ROLE, so a
-	// breach addressed by handle alone would move no seat to AFK, and the
+	// breach addressed by handle alone would reach no seat's failure, and the
 	// turn's own telemetry, which does know the role, is exactly what did
 	// not run.
 	//
@@ -296,7 +324,7 @@ func (d *Dispatcher) Dispatch(ctx context.Context, handle string, evs []*events.
 	held := holding{events: evs}
 	defer func() {
 		if panicked := turn.Recovered(recover()); panicked != nil {
-			result = d.recoverPanic(ctx, handle, held.events, panicked)
+			result = d.recoverPanic(ctx, handle, held, panicked)
 		}
 	}()
 	return d.dispatch(ctx, handle, evs, &held)
@@ -320,14 +348,42 @@ func (d *Dispatcher) Dispatch(ctx context.Context, handle string, evs []*events.
 // copies on the queue and the rest unpublished; narrowed afterwards, this
 // would still be claiming the published ones at the moment they stopped being
 // its to claim.
-type holding struct{ events []*events.Event }
+//
+// AND THE RUN, once one exists. A panic after the run id is minted is a panic
+// in a turn that has already announced itself — its start is on the record
+// under that id — so the breach that says why it stopped has to name the same
+// run, or the one row saying the turn began and the one saying it died are
+// joined by nothing. Empty before the mint, which is the honest answer for a
+// panic in a screening stage: no run existed to name.
+type holding struct {
+	events []*events.Event
+	runID  string
+}
 
 // dispatch is [Dispatcher.Dispatch]'s body, separated so the recovery around
 // it is one deferred call rather than a frame every return has to pass. It
 // narrows held at each point where the delivery stops being answerable for an
 // event.
 func (d *Dispatcher) dispatch(ctx context.Context, handle string, evs []*events.Event, held *holding) queue.Result {
-	screening := inbox.Screen(d.conditions(handle), evs)
+	// AN ANSWER BY TURN FIRST, before the screening can park it behind a
+	// held seat or the ledger can read it: it is addressed to a run, never
+	// to the seat, and whatever it becomes it is not a turn.
+	//
+	// ONE READING OF THE CONDITIONS for both, taken once at the top as the
+	// screening's own contract asks: read twice, the answer stage could see
+	// a node that may not run anything and hand the delivery on, and the
+	// screening a moment later a node that may — which would PROCEED with
+	// an answer in the partition and run it as a turn.
+	conditions := d.conditions(handle)
+	evs, answered, settled := d.routeAnswers(ctx, handle, conditions, evs)
+	if settled {
+		return answered
+	}
+	held.events = evs
+	if len(evs) == 0 {
+		return queue.Ack()
+	}
+	screening := inbox.Screen(conditions, evs)
 	if screening.NoteDeferred && d.NoteDeferred != nil {
 		d.NoteDeferred(handle)
 	}
@@ -336,7 +392,7 @@ func (d *Dispatcher) dispatch(ctx context.Context, handle string, evs []*events.
 		return screening.Result()
 	case inbox.ActionPauseAndPark:
 		if d.Pause != nil {
-			if err := d.Pause(ctx, handle, screening.Reason); err != nil {
+			if err := d.Pause(ctx, handle, screening.Hold, screening.Reason); err != nil {
 				// The pause is what stops the requeued copies looping
 				// back at whatever rate the broker will serve. Without it
 				// the park is worse than doing nothing, so NAK and let
@@ -369,6 +425,21 @@ func (d *Dispatcher) dispatch(ctx context.Context, handle string, evs []*events.
 			}
 		}
 		return d.park(ctx, handle, screening.Events, held)
+	}
+
+	// THE BUDGET, BEFORE THE DELIVERY IS CLAIMED: before the completion
+	// ledger reads it, before a parked coding run is offered it as an
+	// answer — resuming one charges tokens exactly as a turn does — and
+	// before any model is asked anything. A seat whose capped window is
+	// refusing cannot run a round, and a turn started anyway is refused on
+	// its first charge and NAKed, again and again, until the broker
+	// dead-letters a healthy message. Parked instead, it waits on its inbox
+	// for the window to turn over. See budgetpark.go.
+	//
+	// AFTER THE SCREENING, whose every non-proceeding outcome already hands
+	// the delivery on without running anything, so it costs those no read.
+	if result, parked := d.parkOnBudget(ctx, handle); parked {
+		return result
 	}
 
 	surviving := d.dropWorked(ctx, handle, screening.Events)
@@ -540,6 +611,9 @@ func (d *Dispatcher) dispatch(ctx context.Context, handle string, evs []*events.
 		Depth:           depth,
 		DelegationChain: chain,
 	}
+	// Held from the mint, before anything below can publish under it — the
+	// turn's own start is the first thing that does. See [holding].
+	held.runID = req.RunID
 	// THE PARTITION, not the identity: this records that N events were
 	// MERGED, and merging is what the partition key decides. The two differ
 	// for a direct message's thread reply, where the record would otherwise
@@ -568,6 +642,15 @@ func (d *Dispatcher) dispatch(ctx context.Context, handle string, evs []*events.
 
 	result, err := d.Turn(ctx, req)
 	if err != nil {
+		// A PERSON ENDED IT, which is neither a broken phase nor a retry:
+		// see [Dispatcher.stopped]. First, because the stop is the account
+		// of the turn's end that is TRUE — a turn stopped after it wrote
+		// outside the engine was ended by somebody, not broken, and one
+		// stopped on a moved seat would be handed to a successor that would
+		// run exactly what the person stopped.
+		if turn.Stopped(err) {
+			return d.stopped(ctx, handle, req, err)
+		}
 		// A broken phase, not a failed turn. WHICH broken phase decides
 		// what to do with the delivery, and `err != nil` does not say:
 		// [turn.Abandon] is the one rule, shared with the sandbox resume.
@@ -605,6 +688,22 @@ func (d *Dispatcher) dispatch(ctx context.Context, handle string, evs []*events.
 					"run_id", req.RunID, "work_key", req.WorkKey, "error", err.Error())
 				return queue.Defer("the seat moved to another node mid-turn")
 			}
+			// AND THE BUDGET STAGE'S CONDITION, found a phase later: a
+			// window that had room when the delivery was claimed and
+			// none by this turn's round. Answered the way that stage
+			// answers it — the seat is parked until the window turns
+			// over — rather than by the NAK below, whose redelivery is
+			// refused the same way until the budget of deliveries runs
+			// out. Below [turn.Abandon] for the reason the seat-moved
+			// branch is: a turn that proved an outward write is
+			// recorded, not run again when the window resets.
+			if errors.Is(err, toolloop.ErrBudgetExhausted) {
+				if result, parked := d.parkOnBudget(ctx, handle); parked {
+					log.InfoContext(ctx, "turn_budget_parked", "seat", handle,
+						"run_id", req.RunID, "work_key", req.WorkKey, "error", err.Error())
+					return result
+				}
+			}
 			// Nothing this turn did can be proven to have left the
 			// engine, and nothing about the failure says it will recur,
 			// so a redelivery really does run it cleanly.
@@ -614,6 +713,30 @@ func (d *Dispatcher) dispatch(ctx context.Context, handle string, evs []*events.
 	}
 	d.recordWorked(ctx, handle, req, result)
 	return queue.Ack()
+}
+
+// parkOnBudget runs the budget stage, reporting the disposition when it parked
+// the seat or could not take the park it decided on.
+//
+// A PARK IS A DEFERRAL, and noted as one, so the seat host resumes the
+// attachment the deferral quiesces on its next renew — the park's own hold is
+// what keeps the resumed attachment from being handed anything until the
+// window turns over. See budgetpark.go for why the two stops have two owners.
+func (d *Dispatcher) parkOnBudget(ctx context.Context, handle string) (queue.Result, bool) {
+	if d.Budget == nil {
+		return queue.Result{}, false
+	}
+	reason, parked, err := d.Budget(ctx, handle)
+	if err != nil {
+		return queue.Nak(err), true
+	}
+	if !parked {
+		return queue.Result{}, false
+	}
+	if d.NoteDeferred != nil {
+		d.NoteDeferred(handle)
+	}
+	return queue.Defer(reason), true
 }
 
 // abandon stops redelivering a trigger whose turn must not run again.
@@ -637,7 +760,9 @@ func (d *Dispatcher) dispatch(ctx context.Context, handle string, evs []*events.
 // that could not be built, a refused budget) proves nothing and keeps its
 // retry. A seat handed to another node mid-turn keeps its retry too, but as a
 // DEFERRAL rather than a NAK: see the branch above, and [seat.Host.Fence] for
-// what detects it.
+// what detects it. So does a refused budget, whose seat is parked until the
+// refusing window turns over rather than NAKed into the same refusal: see
+// [Dispatcher.parkOnBudget].
 //
 // It is not silent. A turn that ran has already published its own completion
 // marked failed (see [Engine.publishTurnCompleted], which fires on the error
@@ -676,6 +801,71 @@ func (d *Dispatcher) abandon(ctx context.Context, handle string, req Request, ca
 	return queue.Ack()
 }
 
+// stopped settles a delivery whose turn a person stopped.
+//
+// SPENT, NOT RETRIED. The trigger is recorded in the completion ledger and the
+// delivery acked, exactly as a finished turn's is, because a NAK would run the
+// turn again — on this node the moment the pause is lifted, or on a peer
+// sooner — and the person stopped it precisely so that it would not go on.
+// What they asked for next is a new ask, and the seat's other mail waits on
+// its held inbox for the resume.
+//
+// ON THE RECORD, three ways, each saying what only it can: the turn's own
+// completion reads `stopped` rather than `failed` (see
+// [Engine.publishTurnCompleted]), this frame publishes
+// [types.AgentTurnStopped] naming who stopped it, and the log line joins the
+// run to the work key. No [types.TurnTriggerSkipped]: the trigger WAS worked,
+// as far as anybody asked it to be.
+func (d *Dispatcher) stopped(ctx context.Context, handle string, req Request, cause error) queue.Result {
+	pause, _ := stopOf(cause)
+	log.InfoContext(ctx, "turn_stopped", "seat", handle, "run_id", req.RunID,
+		"work_key", req.WorkKey, "by", pause.By, "person", pause.Seat,
+		"detail", "a person paused this seat and asked for its running turn to stop; "+
+			"the trigger is recorded as worked rather than redelivered")
+	if d.Completions != nil {
+		now := d.now()
+		for _, ev := range req.Events {
+			if ev == nil || !d.ledgered(ev.Type) {
+				continue
+			}
+			key := workkey.Derive([]string{ev.ID.String()})
+			if err := d.Completions.Record(ctx, handle, key, "", now); err != nil {
+				log.WarnContext(ctx, "stopped_trigger_not_recorded", "seat", handle,
+					"error", err, "detail", "the trigger may be redelivered and run the "+
+						"turn a person stopped once the seat is resumed")
+			}
+		}
+	}
+	if d.Observe != nil {
+		var role, agentID string
+		if d.Identify != nil {
+			role, agentID = d.Identify(handle)
+		}
+		d.Observe(ctx, turnStoppedEvent(handle, role, agentID, req.RunID, req.WorkKey,
+			pause, triggerTrace(req.Events)))
+	}
+	return queue.Ack()
+}
+
+// turnStoppedEvent is the record of a turn a person stopped, built once for
+// both paths a turn runs on — a dispatched turn and a resumed one.
+func turnStoppedEvent(handle, role, agentID, turnID, workKey string,
+	pause coord.SeatPause, trace events.TraceContext,
+) *events.Event {
+	rec := events.New(types.AgentTurnStopped{
+		Agent: agentID, AgentHandle: handle, RoleName: role,
+		TurnID: turnID, WorkKey: workKey,
+		StoppedBy: pause.By, StoppedBySeat: pause.Seat, Reason: pause.Reason,
+	}, trace)
+	// The seat's role, as every turn-scoped event's source is, so the feed
+	// attributes the row to the seat rather than to "system".
+	rec.Source = role
+	if rec.Source == "" {
+		rec.Source = "engine.dispatch"
+	}
+	return rec
+}
+
 // recoverPanic settles a delivery whose handling panicked outside the turn
 // loop.
 //
@@ -683,21 +873,26 @@ func (d *Dispatcher) abandon(ctx context.Context, handle string, req Request, ca
 // [turn.Abandon] gives for every panic: a redelivery runs the same defect on
 // the same input, and a defer would only hand that defect to a peer running the
 // same build. What the panic cost is put on the record instead: the stack in
-// the log, the unhandled-exception guard on the seat, so it renders AFK with a
-// cause rather than as whatever it was last doing, and a skipped-trigger record
+// the log, the unhandled-exception guard on the seat, so it renders its failure
+// with a cause rather than as whatever it was last doing, and a skipped-trigger record
 // per event saying it will not come back.
 //
-// evs is what the delivery still held when it panicked (see [holding]), not
-// everything it arrived with. The work key is recomputed from it, because the
-// panic may have happened before the frame that derives it ran; it is the same
-// derivation, so the breach and the skipped records name the key a completed
-// turn would have carried.
-func (d *Dispatcher) recoverPanic(ctx context.Context, handle string, evs []*events.Event,
+// held is what the delivery still held when it panicked (see [holding]), not
+// everything it arrived with. The work key is recomputed from its events,
+// because the panic may have happened before the frame that derives it ran; it
+// is the same derivation, so the breach and the skipped records name the key a
+// completed turn would have carried. The RUN is not recomputable — it is a
+// mint, not a derivation — so it is whatever the delivery had minted, and
+// nothing when it had not.
+func (d *Dispatcher) recoverPanic(ctx context.Context, handle string, held holding,
 	panicked *turn.PanicError,
 ) queue.Result {
-	log.ErrorContext(ctx, "dispatch_panicked", "seat", handle, "events", len(evs),
-		"panic", panicked.Value, "stack", panicked.Stack)
-	req := Request{Handle: handle, Events: evs, WorkKey: inbox.WorkKeyFor(evs, d.ledgered)}
+	log.ErrorContext(ctx, "dispatch_panicked", "seat", handle, "events", len(held.events),
+		"run_id", held.runID, "panic", panicked.Value, "stack", panicked.Stack)
+	req := Request{
+		RunID: held.runID, Handle: handle, Events: held.events,
+		WorkKey: inbox.WorkKeyFor(held.events, d.ledgered),
+	}
 	d.noteBreach(ctx, handle, req, panicked)
 	return d.abandon(ctx, handle, req, panicked, turn.AbandonedPanicked)
 }
@@ -709,7 +904,7 @@ func (d *Dispatcher) noteBreach(ctx context.Context, handle string, req Request,
 		return
 	}
 	role, agentID := d.Identify(handle)
-	if rec := panicBreach(role, agentID, req.WorkKey, triggerTrace(req.Events), panicked); rec != nil {
+	if rec := panicBreach(role, agentID, req.RunID, req.WorkKey, triggerTrace(req.Events), panicked); rec != nil {
 		d.Observe(ctx, rec)
 	}
 }
@@ -719,11 +914,18 @@ func (d *Dispatcher) noteBreach(ctx context.Context, handle string, req Request,
 //
 // One builder for the two frames that need it, the dispatcher and the sandbox
 // resume, so a breach reads the same whichever path the panic took.
-func panicBreach(role, agentID, turnID string, trace events.TraceContext,
+//
+// BOTH IDENTITIES, as every other breach carries them ([Engine.publishFailure]):
+// the RUN in `turn_id`, because that is the key every turn event is joined on,
+// and the unit of work beside it. The dispatcher's used to put the work key in
+// the turn id's slot — the shape from before ADR-0017 split the two — so the
+// breach of a turn that died joined no turn at all, least of all the one whose
+// start said it had begun.
+func panicBreach(role, agentID, runID, workKey string, trace events.TraceContext,
 	panicked *turn.PanicError,
 ) *events.Event {
 	if role == "" {
-		// A handle this company does not name has no seat to put AFK, and
+		// A handle this company does not name has no seat to fail, and
 		// a breach addressed to nobody moves nothing.
 		return nil
 	}
@@ -732,7 +934,8 @@ func panicBreach(role, agentID, turnID string, trace events.TraceContext,
 		RoleName: role,
 		Kind:     types.GuardUnhandledException,
 		Detail:   events.ClipDiagnostic(panicked.Error()),
-		TurnID:   turnID,
+		TurnID:   runID,
+		WorkKey:  workKey,
 	}, trace)
 	// SOURCED AS THE SEAT, as every turn-level event is (see
 	// [Engine.publishEvent]): a consumer with no other attribution renders
@@ -926,6 +1129,91 @@ func (d *Dispatcher) answered(ctx context.Context, handle string, evs []*events.
 	return disposition, err
 }
 
+// routeAnswers settles every answer BY TURN in a delivery, and returns what is
+// left for the ordinary route.
+//
+// # Before the screening, and why that is safe
+//
+// The screening's park is the one thing an answer must not be subjected to: a
+// seat held by one coding job requeues its mail until the job is done, and an
+// answer to ANOTHER of its runs — one parked on a question, holding nothing —
+// would wait behind a job it has nothing to do with. The chat route's reply is
+// offered from inside that park for the same reason.
+//
+// What the screening decides about the NODE still applies, and is left to it:
+// a node that does not hold the seat, has no turn engine, or is refusing new
+// work under a stale company runs no resume either, so on any of those the
+// whole delivery goes to the screening untouched, which defers or parks it —
+// and an answer that comes back is routed here again. A seat parked on its
+// budget waits the same way: a resume charges tokens exactly as a turn does.
+// And a PAUSED seat takes nothing off its inbox at all, this included, which is
+// what "an answer waits behind a pause" means.
+//
+// # Never a turn
+//
+// Every disposition but one spends the delivery: the answer resumed the run,
+// or the run was not waiting, or it is gone — each announced by the
+// coordinator — and there is nothing else an answer addressed to a run can
+// become. [sandbox.AnswerDeferred] hands the delivery back with a NAK, the
+// spaced return, bounded by the broker's own budget; see
+// [sandbox.Coordinator.AnswerByTurn] for why nothing shorter bounds it.
+//
+// ONE ANSWER PER DELIVERY IN PRACTICE — the event names no conversation, so it
+// partitions on its own id — but the rule holds for any mix: the answers are
+// settled first, a hand-back returns the delivery before anything else in it
+// has run, and what is left goes on as the ordinary delivery it is.
+func (d *Dispatcher) routeAnswers(ctx context.Context, handle string, c inbox.Conditions,
+	evs []*events.Event,
+) ([]*events.Event, queue.Result, bool) {
+	var answers, rest []*events.Event
+	for _, ev := range evs {
+		if _, ok := events.DataAs[*types.SandboxAnswerGiven](ev); ok {
+			answers = append(answers, ev)
+			continue
+		}
+		rest = append(rest, ev)
+	}
+	if len(answers) == 0 {
+		return evs, queue.Result{}, false
+	}
+	if !c.Owned || !c.TurnEngineReady || !c.AdmitsTriggers || c.Paused || c.PauseUnknown {
+		return evs, queue.Result{}, false
+	}
+	if result, parked := d.parkOnBudget(ctx, handle); parked {
+		return nil, result, true
+	}
+	for _, ev := range answers {
+		given, _ := events.DataAs[*types.SandboxAnswerGiven](ev)
+		if d.AnswerByTurn == nil {
+			// THE SAME HAND-BACK a node with no runtime gives: nil is a
+			// dispatcher assembled without the engine (a test's), since
+			// the engine always wires [Engine.answerRunByTurn], which
+			// answers deferred when no coordinator is running. One
+			// return, so the two cannot drift apart.
+			return nil, d.handBackAnswer(handle, fmt.Errorf("this node holds no "+
+				"sandbox coordinator to resume run %s with the answer it was given",
+				given.TurnID)), true
+		}
+		disposition, err := d.AnswerByTurn(ctx, *given, ev)
+		switch {
+		case disposition == sandbox.AnswerDeferred:
+			return nil, d.handBackAnswer(handle, err), true
+		case !disposition.Valid():
+			log.ErrorContext(ctx, "sandbox_answer_disposition_unknown",
+				"agent_handle", handle, "turn_id", given.TurnID,
+				"disposition", disposition.String(),
+				"detail", "the sandbox coordinator answered an answer by turn with no "+
+					"disposition this build knows; it is spent, because an answer "+
+					"addressed to a run is never a turn")
+		case err != nil:
+			log.WarnContext(ctx, "sandbox_answer_by_turn_failed",
+				"agent_handle", handle, "turn_id", given.TurnID,
+				"disposition", disposition.String(), "error", err)
+		}
+	}
+	return rest, queue.Result{}, false
+}
+
 // handBackAnswer returns a delivery a parked coding run is still owed, so the
 // broker offers it again.
 //
@@ -936,9 +1224,9 @@ func (d *Dispatcher) answered(ctx context.Context, handle string, evs []*events.
 // republish handed all of them over in milliseconds. It also SPENDS one of
 // the message's deliveries, which is why [Dispatcher.mayOfferAnswer] stops
 // offering while [sandbox.AnswerDeliveryReserve] of them are still left. And
-// it keeps the message's IDENTITY and its place: a republish is a new message at the tail
-// of the inbox, behind whatever followed it on the same conversation, and one
-// whose delivery budget starts over on every copy.
+// it keeps the message's IDENTITY and its place: a republish is a new message
+// at the tail of the inbox, behind whatever followed it on the same
+// conversation, and one whose delivery budget starts over on every copy.
 //
 // The cause travels into the NAK because the queue logs it and the
 // dead-letter boundary reads it: "this seat is still owed this answer" with
@@ -1341,7 +1629,7 @@ func payloadBody(ev *events.Event) string {
 // count. So the record is written at the one frame that still holds the
 // events — the same reason the work key is derived here.
 //
-// Nothing else emits this event, which is why the Integrations room could
+// Nothing else emits this event, which is why Settings › Integrations could
 // report how many deliveries ARRIVED and not how many turns they became: a
 // seat draining a thread's backlog as one turn looked, from the feed, like a
 // seat that ignored twelve messages.
@@ -1536,8 +1824,19 @@ func ReplyFor(evs []*events.Event) turn.Reply {
 			// useless without it: "somebody is waiting on a tool" is
 			// satisfied by any tool at all, so a founder's Mattermost DM
 			// was closed out by a row in the tracker.
-			if n, ok := events.DataAs[*types.ExternalNotification](ev); ok && n.Addressed {
-				owed = turn.ToolReply(n.NotificationSource)
+			//
+			// UNLESS THE WAKE OWES ANOTHER SURFACE. The answer to a
+			// decision whose asker said it would report the outcome in a
+			// channel arrives from the TRACKER, and on the source alone a
+			// comment on the item would close the turn: the person who
+			// answered was told the outcome would be posted, and it never
+			// was. [types.ExternalNotification.Owes] names the chat
+			// surface instead, and an owed wake is awaited whether or not
+			// its source reads it as addressed — the promise is the
+			// obligation.
+			if n, ok := events.DataAs[*types.ExternalNotification](ev); ok &&
+				(n.Addressed || n.Owes != "") {
+				owed = turn.ToolReply(cmp.Or(n.Owes, n.NotificationSource))
 			}
 
 			// types.A2AMessageType is deliberately absent: that hop wakes

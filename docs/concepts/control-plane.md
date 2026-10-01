@@ -50,6 +50,10 @@ flowchart TD
 
 Only the **current** revision's body is kept there. A node that has fallen behind needs exactly the revision the pointer names and never an older one, so a per-revision history in a bucket with no retention would be unbounded growth for rows nothing would ever read. A node that fetches a revision **adopts** it into its own `company_config` — which is where its history, its diffs and its revert targets are read from, so a node that applied without adopting would serve an epoch its own operator surface cannot show.
 
+**So does the revision's author.** Every revision records who wrote it (`created_by`) and **what** that is (`created_by_kind`): `operator` for a person's credential — an API token on `/config` or `/setup`, or the login running `crewlet config import` or `rekey` — and `node` for the engine's own write — a node seeding the store from its `-company` file (recorded under the node's id), or the reconcile loop removing a disconnected integration's block or reloading after it sealed a credential (recorded as `reconcile loop`). The kind is stated by the writer, because a label cannot say it: nothing stops an operator token being called `node`. The pointer carries the revision's **origin** — author, kind, source and the instant it was written — so a node adopting the revision records the same author as the node that stored it first. Before it did, every other node recorded an adopted revision as written by `peer`, from `fleet`, at the moment it was activated, and the history answered differently depending on which node served it.
+
+The origin is **additive on the wire**. An older build reading a pointer this build published ignores it; this build reading a pointer an older build published finds no origin and records the author as **not recorded** — never as itself, and never as a placeholder name. A node that adopted a revision without its author learns it the next time the fleet points at that revision; an author a node already knows is never overwritten, because the node that stored its own write is the authority on it. Upgrading converts the rows a node already holds (migration `0035`) by the literals the earlier writers used: `node` and `reconcile loop` become `node`, an adoption's `peer` becomes *not recorded*, and everything else — written through `/config`, `/setup` or the CLI under a credential or a login — becomes `operator`. The revision's *parent* is deliberately not carried: it names a revision the adopting node may never have held.
+
 **A node's own active revision is a claim, so only the fleet makes it.** It is what the node's `GET /config` serves, what the node boots on, and what the node offers the fleet at its next start whenever it is newer than the pointer. So a write through the API stores its revision in the history first and marks it the node's active revision only after the pointer has moved to it: a write that loses the compare-and-set stays history, and is never served or republished by the node that took it. And once a node has applied the fleet's epoch, its reconciler keeps the fleet's revision as the node's active one on every tick, correcting a copy that disagrees, whether a local activation failed after the fleet took the write or an offline import had already been superseded when the node started.
 
 The body is whatever the node sealed. With a keyring configured the coordination store holds ciphertext exactly as the node's database does, and a node opens it with the Tier A keyring it was deployed with.
@@ -94,7 +98,7 @@ Each node **re-stamps its key every tick**, not only when it converges, and the 
 A node's **coordination record** of a failure is truncated at 2 000 bytes (not
 characters — the cut is applied to bytes, on a rune boundary). That record is
 re-read by every peer on every posture decision and rendered on the dashboard's
-**Fleet** screen, so one node returning a megabyte of Go error would be paid for
+**Settings › Nodes** screen, so one node returning a megabyte of Go error would be paid for
 by every reader on every tick.
 
 The **`config_revision_applied` event** carries up to 64 KiB of it — thirty
@@ -203,6 +207,7 @@ A config revision and the *values* its `${VAR}` references resolve to are two di
 | Per-role MCP children | **No.** They belong to a seat's *lease*, not to the epoch: spawned when a seat is claimed and torn down when it is released, so a rotated `mcp_env` value reaches one only when its seat next changes hands. |
 | Slack transport | **Yes.** It is rebuilt on every apply (`Engine.reconcileSlack`); what is replaced is an HTTP client and the working-status driver, with no socket to drop. |
 | Mattermost transport | **Yes, when a value it is built from moved.** It holds a websocket per seat, so `Engine.reconcileMattermost` rebuilds only when a fingerprint over the resolved URL, team, status and every seat's resolved bot token, username and channel changes, and a rotated bot token is such a change. |
+| Native tracker projects | **Nothing to rotate, but they are re-stamped.** The chart apply stamps each project with the activation's own instant, and a re-activation is a new activation. It therefore records one "org chart re-applied" change per project, once, however many nodes apply it. Re-applying the *same* activation, which is what every restart does, writes nothing. |
 
 The shared MCP children, and the Mattermost transport above, are the places a comparison does happen, and it is deliberate: a child is a *process*, and restarting every one on every apply would tear down working servers to arrive back where they started. So `Bridge.Reconcile` compares the spec it is handed against the one the child is already running and leaves an unchanged server alone. What makes that safe for a rotation is *what* it compares: the spec's `env`, `headers` and `url` are resolved at the edge before the comparison, so a moved credential reads as a changed spec and restarts that one child. Comparing the stored config entry, where `${VAR}` stays verbatim, would silently stop rotation from reaching MCP children at all; two tests hold that line by re-applying the same document and asserting which children survive it.
 
@@ -254,7 +259,7 @@ Both probes say *why*, because "draining" and "cannot apply epoch 41" call for o
 
 ### Reading a stuck node
 
-Each node's status carries the `error` it failed with, so the first question — *is this the revision or is this the node?* — is answered by the **Fleet** screen, which calls out every node whose applied epoch is behind the target and prints the error it failed with. It is also one request:
+Each node's status carries the `error` it failed with, so the first question — *is this the revision or is this the node?* — is answered by the **Settings › Nodes** screen, which calls out every node whose applied epoch is behind the target and prints the error it failed with. It is also one request:
 
 ```bash
 curl -s -H "Authorization: Bearer $CREWLET_API_TOKEN" \

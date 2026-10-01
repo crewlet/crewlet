@@ -1,12 +1,15 @@
 package engine_test
 
 import (
+	"context"
 	"database/sql"
 	"errors"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/configplane"
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/engine"
@@ -145,6 +148,57 @@ func TestReapplyingOneActivationPutsNoRecordOnTheLog(t *testing.T) {
 	}
 }
 
+// A RESTART ON THE SAME ACTIVATION WRITES NOTHING.
+//
+// The restart is the same store and the same stream opened again, which is
+// what `crewlet run` does after a crash or an upgrade. It applies the chart at
+// boot like any boot, and finding the project already carrying this
+// activation's stamp and values, it decides there is nothing to write — a
+// reconcile, never an operation the ledger is asked to recognise, so it holds
+// however long ago the activation was.
+func TestARestartOnOneActivationWritesNothing(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	boot := func() *config.Bootstrap {
+		return bootstrap(t, func(b *config.Bootstrap) {
+			b.Store.Path = filepath.Join(dir, "crewlet.db")
+			b.Stream.StoreDir = filepath.Join(dir, "stream")
+		})
+	}
+	activated := time.Date(2026, 3, 2, 10, 0, 0, 0, time.UTC)
+	first, err := engine.New(t.Context(), engine.Options{
+		Bootstrap: boot(), Company: parsedCompany(t, chartCompany("builds it")),
+		ActivatedAt: activated,
+	})
+	if err != nil {
+		t.Fatalf("engine.New: %v", err)
+	}
+	_, epoch := eventuallyProject(t, first, "ENG")
+	before := projectHistory(t, first)
+	first.Stop(context.Background())
+
+	restarted := newEngine(t, engine.Options{
+		Bootstrap: boot(), Company: parsedCompany(t, chartCompany("builds it")),
+		ActivatedAt: activated,
+	})
+	// THE BOOT'S OWN APPLY HAS RUN by the time Apply returns below: both
+	// take the engine's apply lock, and a second apply of the activation is
+	// what the reconcile's first tick does after every boot anyway.
+	if _, _, err := restarted.Apply(t.Context(), parsedCompany(t, chartCompany("builds it")),
+		activated); err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	purpose, after := projectRow(t, restarted, "ENG")
+	if purpose != "builds it" || after != epoch {
+		t.Errorf("after the restart the project is (%q, %d), want (\"builds it\", %d)",
+			purpose, after, epoch)
+	}
+	if got := projectHistory(t, restarted); got != before {
+		t.Errorf("a restart on the activation this node already applied wrote %d "+
+			"project record(s) — every restart of every node would", got-before)
+	}
+}
+
 // THE RECONCILER HANDS THE ENGINE THE POINTER'S OWN INSTANT, which is the one
 // every node reads identically — not its own clock, which is this node's
 // alone and later on every node that applies later.
@@ -158,7 +212,8 @@ func TestTheReconcilerAppliesTheChartAtThePointersInstant(t *testing.T) {
 	activated := pinnedNow.Add(-time.Hour)
 	document := yamlToJSON(t, chartCompany("ships it"))
 	id, err := p.store.Configs().InsertActive(t.Context(), store.Revision{
-		Source: "test", CreatedBy: "operator", Summary: "revision",
+		Source: "test", CreatedBy: "operator", CreatedByKind: store.AuthorOperator,
+		Summary: "revision",
 		Payload: document, CreatedAt: activated,
 	})
 	if err != nil {

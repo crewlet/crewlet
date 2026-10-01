@@ -1,9 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { DATA_COLOR_OTHER } from "@crewlethq/ui";
+import { DATA_COLOR_OTHER, dataColor } from "@crewlethq/ui";
 
-import { bandsOf, columnsOf, ghostHeights, unbandedTokens } from "./spend.ts";
-import { phaseColor } from "~/ui/charts.tsx";
-import type { Bucket, TokenSeries } from "~/protocol/types.ts";
+import { bandColor, bandLabel, bandsOf, phaseColor, spentOnly, unbandedTokens } from "./spend.ts";
+import { BANDS, PHASE_BANDS } from "~/contract/spend.ts";
+import type { Bucket, SeriesPoint, TokenSeries } from "~/protocol/types.ts";
 
 function bucket(total: number, extra: Partial<Bucket> = {}): Bucket {
   return {
@@ -11,8 +11,6 @@ function bucket(total: number, extra: Partial<Bucket> = {}): Bucket {
     output_tokens: 0,
     total_tokens: total,
     calls: total > 0 ? 1 : 0,
-    cost_usd: 0,
-    priced_calls: 0,
     ...extra,
   };
 }
@@ -20,15 +18,24 @@ function bucket(total: number, extra: Partial<Bucket> = {}): Bucket {
 function series(over: Partial<TokenSeries> = {}): TokenSeries {
   return {
     group: "phase",
-    bucket: "hour",
-    since: "2026-06-14T12:00:00Z",
-    until: "2026-06-14T14:00:00Z",
+    bucket: "day",
+    since: "2026-06-14T00:00:00Z",
+    until: "2026-06-17T00:00:00Z",
+    from: "2026-06-14",
+    to: "2026-06-16",
+    days: 3,
+    horizon: { days: 181, floor: "2025-12-15" },
     series: [],
     by_group: [],
     totals: bucket(0),
     grouped: bucket(0),
     ...over,
   };
+}
+
+/** One day's point. */
+function point(at: string, b: Bucket, over: Partial<SeriesPoint> = {}): SeriesPoint {
+  return { ...b, at, window: at.slice(0, 10), days: 1, groups: {}, other: bucket(0), ...over };
 }
 
 describe("the legend", () => {
@@ -62,100 +69,78 @@ describe("the legend", () => {
     expect(bands[0]?.color).not.toBe(bands[1]?.color);
   });
 
-  // ONE SCREEN, ONE COLOUR PER PHASE.
+  // ONE COLOUR PER BAND, from the contract, whatever the window's order.
   //
-  // Grouped by phase — which is this screen's default — the time chart drew
-  // its bands from the positional data ramp while the panel directly below it
-  // drew the same phases from `phaseColor`. Two legends on one screen,
-  // disagreeing about the same three words, so a reader who learned "execute
-  // is indigo" from the lower one read the upper one wrong.
-  //
-  // The positional half was worse than inconsistent: `dataColor(i)` is keyed
-  // on a band's ORDER and `by_group` is biggest-first, so a phase changed
-  // colour whenever the window changed which phase was biggest.
-  it("draws a phase in the phase palette, not by its position", () => {
+  // The engine folds every phase into four bands and `BANDS` gives each its
+  // data hue. Positionally, `dataColor(i)` is keyed on a band's ORDER, so a
+  // band would change colour whenever a window changed which one was biggest.
+  it("draws a phase band in its own hue, not by its position", () => {
     const by_group = [
       { ...bucket(100), group: "execute", other: false, folded: 0 },
-      { ...bucket(50), group: "review", other: false, folded: 0 },
+      { ...bucket(50), group: "workers", other: false, folded: 0 },
       { ...bucket(9), group: "", other: true, folded: 2 },
     ];
-    const phases = bandsOf(series({ by_group }), "phase");
-    expect(phases[0]?.color).toBe(phaseColor("execute"));
-    expect(phases[1]?.color).toBe(phaseColor("review"));
-    // THE RESIDUAL IS NEVER A PHASE. It is "the rest", so a fold of three
-    // phases drawn in one of their colours would name one of them.
-    //
-    // Belt and braces rather than load-bearing, and the comment says so
-    // because mutating the branch order does not turn this red: the residual
-    // carries an EMPTY group, and `phaseColor` falls back to exactly this hue
-    // for a phase it does not know. What the assertion holds is the property;
-    // what protects it is two independent reasons, which is the right number
-    // for the one band that must not be mistaken for a value.
-    expect(phases[2]?.color).toBe(DATA_COLOR_OTHER);
-
-    // AND THE ORDER NO LONGER DECIDES IT: the same phase keeps its colour when
-    // the window puts it second.
-    const swapped = bandsOf(
-      series({ by_group: [by_group[1]!, by_group[0]!, by_group[2]!] }),
-      "phase",
-    );
-    expect(swapped.find((b) => b.key === "execute")?.color).toBe(phases[0]?.color);
+    const bands = bandsOf(series({ by_group }), "phase");
+    expect(bands[0]).toMatchObject({ label: "Execute", color: dataColor(0) });
+    expect(bands[1]).toMatchObject({ label: "Workers", color: dataColor(2) });
+    // THE RESIDUAL IS NEVER A BAND.
+    expect(bands[2]?.color).toBe(DATA_COLOR_OTHER);
 
     // Every OTHER grouping keeps the positional ramp: a seat, a model and a
-    // unit have no colour of their own, and giving them one would be colour
-    // carrying identity.
+    // unit have no colour of their own.
     const seats = bandsOf(series({ by_group }), "seat");
-    expect(seats[0]?.color).not.toBe(phaseColor("execute"));
-  });
-});
-
-describe("the columns", () => {
-  const s = series({
-    by_group: [
-      { ...bucket(30), group: "plan", other: false, folded: 0 },
-      { ...bucket(4), group: "", other: true, folded: 2 },
-    ],
-    series: [
-      {
-        ...bucket(30),
-        at: "2026-06-14T12:00:00Z",
-        groups: { plan: bucket(30) },
-        other: bucket(0),
-      },
-      { ...bucket(0), at: "2026-06-14T13:00:00Z", groups: {}, other: bucket(0) },
-      { ...bucket(4), at: "2026-06-14T14:00:00Z", groups: {}, other: bucket(4) },
-    ],
+    expect(seats[1]?.color).toBe(dataColor(1));
+    expect(seats[1]?.label).toBe("workers");
   });
 
-  it("keeps the empty buckets, so a quiet hour is a gap and not a missing column", () => {
-    const cols = columnsOf(s, bandsOf(s));
-    expect(cols.map((c) => c.at)).toHaveLength(3);
-    expect(cols[1]).toMatchObject({ total: 0, parts: [] });
+  // A SEAT IS NAMED AS THE REST OF THE SCREEN NAMES IT: the engine keys the
+  // band on the handle, and the legend reads the chart's name for it — the
+  // handle only for a seat the chart no longer has. Any other grouping keeps
+  // the engine's own label.
+  it("labels a seat band with the seat's name, and nothing else", () => {
+    const by_group = [
+      { ...bucket(90), group: "agent-pm", handle: "agent-pm", other: false, folded: 0 },
+      { ...bucket(10), group: "gone", other: false, folded: 0 },
+    ];
+    const names: Record<string, string> = { "agent-pm": "Agent PM" };
+    const nameOf = (h: string) => names[h] ?? h;
+    expect(bandsOf(series({ by_group }), "seat", nameOf).map((b) => b.label)).toEqual([
+      "Agent PM",
+      "gone",
+    ]);
+    expect(bandsOf(series({ by_group }), "model", nameOf).map((b) => b.label)).toEqual([
+      "agent-pm",
+      "gone",
+    ]);
   });
 
-  it("drops a segment worth nothing but keeps the engine's own total", () => {
-    const cols = columnsOf(s, bandsOf(s));
-    expect(cols[0]?.parts).toEqual([{ key: "plan", value: 30 }]);
-    expect(cols[2]?.parts).toEqual([{ key: "", value: 4 }]);
-    expect(cols[2]?.total).toBe(4);
+  // THE CONTRACT'S HUES ARE ITS STACKING ORDER: `series` is the 1-based data
+  // hue, and a table whose second row took the first hue would draw two bands
+  // in one colour.
+  it("numbers the bands' hues in stacking order", () => {
+    expect(BANDS.map((b) => b.series)).toEqual([1, 2, 3, 4]);
+    expect(bandColor("a-band-this-build-never-met")).toBe(DATA_COLOR_OTHER);
+    expect(bandLabel("a-band-this-build-never-met")).toBe("a-band-this-build-never-met");
   });
 
-  it("orders each column's segments the way the legend reads", () => {
-    const two = series({
-      by_group: [
-        { ...bucket(9), group: "b", other: false, folded: 0 },
-        { ...bucket(1), group: "a", other: false, folded: 0 },
-      ],
-      series: [
-        {
-          ...bucket(10),
-          at: "2026-06-14T12:00:00Z",
-          groups: { a: bucket(1), b: bucket(9) },
-          other: bucket(0),
-        },
-      ],
-    });
-    expect(columnsOf(two, bandsOf(two))[0]?.parts.map((p) => p.key)).toEqual(["b", "a"]);
+  // A PHASE IS DRAWN IN ITS BAND'S HUE. The design system removed its phase
+  // family, so inside a figure a phase is a series — and the only series that
+  // keeps one phase one colour on every chart is the band the engine already
+  // folds it into: a coding run is Execute on the Spend chart and in the live
+  // list alike, and a newer peer's phase is Auxiliary, where the engine counts
+  // it. Four hues, and nothing outside the ramp.
+  it("draws a phase in the hue of the band it folds into", () => {
+    expect(phaseColor("execute")).toBe(dataColor(0));
+    expect(phaseColor("Sandbox")).toBe(dataColor(0));
+    expect(phaseColor("review")).toBe(dataColor(1));
+    expect(phaseColor("subagent")).toBe(dataColor(2));
+    for (const aux of ["auxiliary", "judge", "onboarding", "", "a-phase-from-a-newer-peer"]) {
+      expect(phaseColor(aux)).toBe(dataColor(3));
+    }
+    // Never a key of the object's prototype read as a band.
+    expect(phaseColor("constructor")).toBe(dataColor(3));
+    const drawn = new Set(Object.keys(PHASE_BANDS).map(phaseColor));
+    expect([...drawn].sort()).toEqual([0, 1, 2, 3].map(dataColor).sort());
   });
 });
 
@@ -172,15 +157,17 @@ describe("what falls under no band", () => {
   });
 });
 
-describe("the ghost", () => {
-  it("is the prior window's heights in order, since the two share no instant", () => {
-    const prior = series({
-      series: [
-        { ...bucket(5), at: "2026-06-14T10:00:00Z", groups: {}, other: bucket(0) },
-        { ...bucket(7), at: "2026-06-14T11:00:00Z", groups: {}, other: bucket(0) },
-      ],
-    });
-    expect(ghostHeights(prior)).toEqual([5, 7]);
-    expect(ghostHeights(null)).toEqual([]);
+// A BREAKDOWN OF WHERE TOKENS WENT lists what spent some: the calls that failed
+// before a model answered recorded none, and a bar of nothing named "unknown"
+// read as a model that had answered them.
+describe("a breakdown of where tokens went", () => {
+  it("keeps every bucket that spent, in its order, and drops the ones that spent nothing", () => {
+    const rows = [
+      { model: "stub-sonnet", total_tokens: 1_900_000, calls: 111 },
+      { model: "unknown", total_tokens: 0, calls: 7 },
+      { model: "stub-haiku", total_tokens: 12, calls: 1 },
+    ];
+    expect(spentOnly(rows).map((r) => r.model)).toEqual(["stub-sonnet", "stub-haiku"]);
+    expect(spentOnly([])).toEqual([]);
   });
 });

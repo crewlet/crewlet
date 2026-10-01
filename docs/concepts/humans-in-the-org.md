@@ -54,7 +54,7 @@ units:
 | `contact.atlassian_account_id` | one identity | Atlassian Cloud account ID. One ID covers Jira assignments, Confluence `<ri:user>` mentions and webhook sender attribution on both |
 | `contact.github_login` | one identity | GitHub username: review requests, sender attribution. Lowercased |
 | `contact.gitlab_username` | one identity | GitLab username: assignment, review and mention routing, sender attribution. Lowercased |
-| `contact.crewlet_operator_id` | one identity | One of Tier A's `api.auth.tokens[].id`. Binds that credential to this seat, so a person writing through the dashboard, the REST API or the operator tool server acts as **themselves** — the item they file carries their name and wakes their colleagues. An **attribution, never an address**: the engine never sends as itself, so this id is left out of rosters and `lookup_colleague`, and a seat carrying only this one is reached through their dashboard queue rather than by an @-mention. Leaving a token unbound is ordinary — an operator outside the org chart, a pipeline — and it acts as `operator:<id>` under its own label rather than being refused |
+| `contact.crewlet_operator_id` | one identity | One of Tier A's `api.auth.tokens[].id`, which is always lowercase. Binds that credential to this seat, so a person writing through the dashboard, the REST API or the operator tool server acts as **themselves** — the item they file carries their name and wakes their colleagues. An **attribution, never an address**: the engine never sends as itself, so this id is left out of rosters and `lookup_colleague`, and a seat carrying only this one is reached through their dashboard queue rather than by an @-mention. Leaving a token unbound is ordinary — an operator outside the org chart, a pipeline — and its writes carry the token's own id as the author, with author kind `operator`, rather than being refused. One id can never be bound: `anonymous`, the attribution a disabled `api.auth` guard stamps on every caller. Binding it would make whoever reaches an unguarded engine this person, so the literal is refused naming this field, and a `${VAR}` that resolves to it binds nobody |
 | `email` | no | Indexed so a notification addressed to the address resolves to the seat. **Not** a delivery channel: no agent has an email tool by default |
 | `availability` | no | Free text rendered into a lead's roster (timezone, hours, response expectations) |
 
@@ -79,19 +79,40 @@ an agent reads says so explicitly rather than telling it to @-mention somebody
 it cannot — a message addressed to a handle that resolves to nobody reads to
 everyone else as work handed over.
 
-**The queue is `#/inbox`**, and it is the dashboard's landing screen. Opening it
+**The queue is `#/inbox`**, one click from the landing screen (Home). Opening it
 with an API token resolves that token's id against every seat's
-`crewlet_operator_id` and shows the person it names: their notices, the one
-reason of eighteen that routed each one, and what is waiting on a decision. A
+`crewlet_operator_id` and shows the person it names: first what is waiting on
+their decision — the questions agents put to them, the coding runs parked on a
+question to them, a seat stopped on its budget — then their notices by the
+company's day, each with the one reason of eighteen that routed it. The row
+they open fills the pane beside the list, with the answer to it right there. A
 token bound to no seat is not an error — it is an operator outside the org
 chart — and the screen says so rather than showing somebody else's queue or an
 empty one, naming the line of company configuration that would give it a
 person. `#/me` is the same person's own work, and it is absent for the same
 reason when the token names nobody.
 
-Read and snooze marks are the assistant's to write, not the screen's: the
-dashboard is read-only, and every write in this engine is attributed to
-somebody. What it shows is what the engine recorded.
+Read and snooze marks are the **person's own**, and they are written as that
+person: by their assistant over `/operator/mcp`, or from the dashboard over
+`/operator/act`, which admits a token bound to a seat and nobody else. Every
+write in this engine is attributed to somebody, and a button in a browser
+writes as the person whose token it holds — never as "the dashboard", which is
+nobody. A token bound to no seat has no inbox to mark and is refused there;
+what the screen shows is what the engine recorded.
+
+**Answering an agent's decision.** When an agent asks you to choose, the
+question arrives with its options, the one it recommends and why, and the
+evidence it cites. Each option is a card; pressing one sends it as your
+answer, and "Reply with instructions" answers in your own words instead. The
+pane tells you what happens next: *"&lt;asker&gt; is
+woken with your answer and posts it to #&lt;channel&gt;"* when the agent
+promised to report the outcome in a channel, or *"&lt;asker&gt; continues from
+your answer"* when it did not. The first is enforced, not hoped for: the
+agent's turn is held open until it has posted on that chat surface. It is also
+why **your own** asks cannot carry that promise — the engine keeps it by
+holding the asker's turn, and a person has none, so an ask you put through the
+dashboard or your assistant with an `inform` is refused; post the outcome
+yourself.
 
 **Your own writes count as yours — and the record still names the token.**
 A work item you file through your assistant is attributed to the **credential**
@@ -102,7 +123,7 @@ server to act as a seat. So the item records `sarah` as its reporter, while her
 colleagues assign work to `sarah-chen`.
 
 Both of those are **her**. Every question that answers "mine" — My work's
-seven tabs, the inbox, her own record — matches the seat handle *or* the
+sections, the inbox, her own record — matches the seat handle *or* the
 operator id bound to it, and reports the answer under the seat.
 
 Everything that asks who the caller *is* rather than who wrote it resolves to
@@ -116,8 +137,8 @@ it, so work she files through her assistant wakes her colleagues and not
 her.
 
 Bind the token and your own work is on your own screen; leave it unbound and
-you are an operator outside the chart, acting as `operator:<id>`, which is an
-ordinary state and not an error.
+you are an operator outside the chart, writing under the token's own id with author kind
+`operator`, which is an ordinary state and not an error.
 
 **Your own marks and pins are the person's, and the record still names the
 token.** *Whose* state a document holds and *who wrote it* are two different
@@ -131,7 +152,7 @@ person.
 
 Keyed on the credential, as it was, a bound founder accumulated a second record
 called `founder`: everything their assistant marked was invisible on `#/inbox`,
-which asks under the seat, and `#/me`'s queue tab came back empty. An **unbound
+which asks under the seat, and `#/me`'s queue came back empty. An **unbound
 token is unchanged** — it writes its own record under its own id, which is the
 ordinary state of an operator outside the chart — and records written before a
 company bound its token are still read, the seat's being preferred and the

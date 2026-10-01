@@ -47,6 +47,7 @@ import type {
   CompanyDocument,
   WriteResult,
 } from "~/protocol/index.ts";
+import { classifyConfigRefusal } from "~/protocol/configAnswer.ts";
 import { isRecord } from "./json.ts";
 import type { KeySource } from "./keys.ts";
 import { fromDocument, toDocument } from "./document.ts";
@@ -142,27 +143,23 @@ export function classifySave(
       derived: isRecord(result.derived) ? (result.derived as unknown as Derived) : null,
     };
   }
+  // THE ONE 5xx THAT IS CERTAIN is the drain gate's, which refuses a write
+  // before the handler runs, so it stored nothing and needs no settling
+  // read — where every other 5xx, and an answer that never came, may have
+  // been raised after the revision was stored. `protocol/configAnswer.ts`
+  // draws exactly that line, for every /config writer.
+  const refusal = classifyConfigRefusal(answer);
   const detail =
     typeof body.detail === "string" && body.detail !== ""
       ? body.detail
       : typeof body.error === "string"
         ? body.error
         : "";
-  // THE ONE 5xx THAT IS CERTAIN. The drain gate refuses a write before the
-  // handler runs (internal/api's drainGate wraps the mux), so a `503
-  // draining` stored nothing and needs no settling read — where every other
-  // 5xx may have been raised after the revision was stored.
-  const refusedBeforeStoring = answer.status === 503 && body.error === "draining";
-  if (answer.status === 0 || (answer.status >= 500 && !refusedBeforeStoring)) {
+  if (refusal.kind === "unreachable") {
     return { kind: "unknown", currentRevisionId: null, detail };
   }
-  if (afterUnknown && (answer.status === 409 || answer.status === 412)) {
-    const current = body.current_revision_id;
-    return {
-      kind: "unknown",
-      currentRevisionId: typeof current === "string" && current !== "" ? current : null,
-      detail,
-    };
+  if (afterUnknown && refusal.kind === "conflict") {
+    return { kind: "unknown", currentRevisionId: refusal.currentRevisionId, detail };
   }
   return { kind: "refused", outcome: classifyCheck(answer, attempt.mode, attempt.baseRevision) };
 }

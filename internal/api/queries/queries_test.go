@@ -3,6 +3,7 @@ package queries_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/url"
 	"slices"
 	"testing"
@@ -290,6 +291,33 @@ func TestKeysAreSortedBecauseACallerDependsOnIt(t *testing.T) {
 	for range 16 {
 		if again := p.Keys(); !slices.Equal(again, got) {
 			t.Fatalf("Keys returned %v and then %v", got, again)
+		}
+	}
+}
+
+// A REFUSAL'S SENTENCE IS THE AUTHOR'S, WITHOUT THE CLASS NAME.
+//
+// Both transports carry this beside the `bad_params` code, so it is text a
+// person reads: the sentinel's own words are a Go package naming the class,
+// and they are taken out wherever a refusal wrapped them — at the front, at
+// the end, or under a wrapping that named the question — while the rest,
+// a wrapped cause included, is kept word for word.
+func TestARefusalsDetailIsTheAuthorsSentence(t *testing.T) {
+	t.Parallel()
+	cause := errors.New("tokens: a spend window is 1 to 90 company days")
+	for _, tc := range []struct {
+		name string
+		err  error
+		want string
+	}{
+		{"sentinel first", fmt.Errorf("%w: days=91 is too many", queries.ErrBadParams), "days=91 is too many"},
+		{"sentinel last", fmt.Errorf("name one, not both: %w", queries.ErrBadParams), "name one, not both"},
+		{"wrapped by the question", fmt.Errorf("tokens: %w", fmt.Errorf("%w: %w: days=91", queries.ErrBadParams, cause)),
+			"tokens: tokens: a spend window is 1 to 90 company days: days=91"},
+		{"nothing", nil, ""},
+	} {
+		if got := queries.RefusalDetail(tc.err); got != tc.want {
+			t.Errorf("%s: RefusalDetail = %q, want %q", tc.name, got, tc.want)
 		}
 	}
 }

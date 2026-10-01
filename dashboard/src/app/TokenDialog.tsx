@@ -78,7 +78,7 @@ export function TokenDialog({
       }
       footer={
         <>
-          <Button variant="tertiary" onClick={onClose}>
+          <Button variant="ghost" onClick={onClose}>
             Cancel
           </Button>
           <Button variant="primary" type="submit">

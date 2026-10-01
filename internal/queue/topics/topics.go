@@ -112,6 +112,50 @@ const (
 	// SearchSlice is where one query's assignment table is scattered.
 	// Every node serves it and answers only for its own row.
 	SearchSlice = SearchPrefix + "slice"
+
+	// ObservePrefix prefixes the observability read scatter's subjects —
+	// the fleet's turn-level history, asked of every node's own event
+	// store at query time (internal/eventfan, ADR-0021).
+	//
+	// NOT EVENTS, for SearchPrefix's reason: a history read is the
+	// ephemeral request and reply of [queue.EventQueue.Ask], and a read of
+	// the event log that itself wrote an event would add a row to the log
+	// for every time somebody looked at it.
+	ObservePrefix = "crewlet.observe."
+	// ObserveRead is where one history question is scattered. Every node
+	// serves it and answers from its own store; the asker merges.
+	ObserveRead = ObservePrefix + "read"
+	// ObserveSandboxTail is where a request for a running coding run's live
+	// output is scattered (internal/sandbox, `sandbox_tail`). Every node
+	// serves it and only the incarnation that owns the run answers.
+	ObserveSandboxTail = ObservePrefix + "sandbox_tail"
+
+	// SteerPrefix prefixes the subjects a person's note to a running turn
+	// crosses (internal/agent/steer).
+	//
+	// NOT EVENTS, for SearchPrefix's reason: a note is the ephemeral
+	// request and reply of [queue.EventQueue.Ask]. It is only worth
+	// anything to a turn running now, and a durable copy would outlive
+	// that turn with nobody to discard it. What became of the note is
+	// recorded as an event — by the node that ran the turn, once it knows.
+	SteerPrefix = "crewlet.steer."
+	// SeatSteer is where one note is scattered. Every node serves it and
+	// only the node running the named turn answers.
+	SeatSteer = SteerPrefix + "note"
+
+	// HeldPrefix prefixes the subjects a question only a seat's HOLDER can
+	// answer truthfully crosses — a seat's memory and its conversation
+	// ledger, which every node keeps a copy of and only the holder keeps
+	// current (internal/learning/memread).
+	//
+	// NOT EVENTS, for SearchPrefix's reason: a read is the ephemeral
+	// request and reply of [queue.EventQueue.Ask]. And NOT under
+	// MemoryPrefix, whose `>` is a stream's subject set: a request there
+	// would be captured and retained as a memory row.
+	HeldPrefix = "crewlet.held."
+	// HeldRead is where one such read is scattered. Every node serves it
+	// and only the incarnation the seat's lease names answers.
+	HeldRead = HeldPrefix + "read"
 )
 
 // AgentInbox returns the inbox subject for the seat with this handle.

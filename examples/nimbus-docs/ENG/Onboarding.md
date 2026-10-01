@@ -13,7 +13,7 @@ also serves as code-review fallback for any of the three repos.
 
 ## Repo ownership — read before touching a repo
 
-Read the [Repo Ownership](Repo-Ownership) page (it lives in the LEAD
+Read the **Repo Ownership** page (it lives in the LEAD
 project) in full. The short version: **stay in your repos.** If a story
 you receive belongs to a different engineer, reassign it with a
 comment rather than crossing repo boundaries. Per-role GitLab PATs are

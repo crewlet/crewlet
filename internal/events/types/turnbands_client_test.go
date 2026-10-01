@@ -2,8 +2,6 @@ package types
 
 import (
 	"encoding/json"
-	"fmt"
-	"regexp"
 	"slices"
 	"testing"
 
@@ -16,7 +14,9 @@ import (
 // # What a band entry actually is
 //
 // The dashboard's `lib/turnstory.ts` sorts one turn's non-phase events into
-// the four panels the Turn screen draws, by naming event types in four sets.
+// the four panels the Turn screen draws, by naming event types in four sets —
+// declared in `contract/turnbands.ts`, the one home of every declaration an
+// engine gate holds.
 // Every row it sorts came from ONE read — `EventLog.Turn`, which is
 // `WHERE turn_id = ?` — and that column is filled from the event's own
 // top-level `turn_id` FIELD: `store.ExtractTags` pulls it out of the
@@ -51,7 +51,7 @@ import (
 // it carries its own copy, and every such copy has drifted at least once. The
 // check belongs on the engine side because the engine owns the value.
 //
-// # Two-sided, like the roster it is built on
+// # Two-sided, like the roster it is built on — plus a third
 //
 // One direction stops a band naming a type that can never fill. The other
 // stops the repair being forgotten: [keptOutOfTurnBands] records each decision
@@ -62,9 +62,10 @@ import (
 // the day their payloads were repaired. A reason per entry rather than a
 // set for the reason `events.excluded` gives about its own map: an exclusion
 // and an oversight look identical from the outside, and writing the reason
-// down is what lets the next reader tell them apart.
+// down is what lets the next reader tell them apart. The third direction —
+// every stored, turn-scoped type is placed — is on the test itself.
 
-// turnBands are the declarations in `lib/turnstory.ts` whose members are
+// turnBands are the declarations in `contract/turnbands.ts` whose members are
 // matched against a turn's rows.
 //
 // TURN_STOP rides along although it draws nothing: it is the subset the Turn
@@ -84,9 +85,9 @@ var turnBands = []string{"WENT_WRONG", "GIVEN", "DID", "LEFT_BEHIND", "TURN_STOP
 //
 // Its own declaration, because its shape is its own: the bands are
 // `new Set([...])` and this is `Record<string, string>` keyed on the type with
-// the destination as the value, so one regex cannot read both. Keeping them
-// apart is also what lets the entry below be about the map rather than about
-// a band nobody would find it in.
+// the destination as the value, so the bands are read as their strings and
+// this as its KEYS. Keeping them apart is also what lets the entry below be
+// about the map rather than about a band nobody would find it in.
 const absorbedBand = "ABSORBED"
 
 // notPersisted are absorbed types that never reach the event store at all, so
@@ -148,15 +149,31 @@ var keptOutOfTurnBands = map[string]string{
 
 // TestTurnBandsNameOnlyTurnScopedEvents holds the Turn screen's four bands
 // against the `turn_id` key, both ways.
+//
+// AND EVERY ROW THE TURN QUERY CAN RETURN HAS A PLACE, which is the third
+// direction and the one a new event type trips. The residual band is for a
+// type a NEWER build publishes — the registry is additive-only, so it must
+// still render — and not a default for this build's own: a turn-scoped type
+// that is stored and banded nowhere is drawn under "everything else" on every
+// turn, which is the flat list the bands were introduced to end. So a type
+// this build registers, stores and stamps with a turn id is placed in a band
+// or absorbed, and the decision lands in the same change as the type.
 func TestTurnBandsNameOnlyTurnScopedEvents(t *testing.T) {
 	t.Parallel()
 	stamped, persisted, known := turnScopedTypes(t)
+	placed := map[string]bool{}
+	// unread is whether any declaration could not be read at all — a band
+	// or the absorbed map. The third direction below asks where every type
+	// is PLACED, and a declaration nobody read placed nothing, so asking it
+	// then would report every type that declaration holds as unplaced: a
+	// wall of wrong findings under the one real one.
+	unread := false
 
 	for _, band := range turnBands {
-		body, err := clientsource.Declaration(clientsource.Tree(t),
-			fmt.Sprintf(`(?s)const %s = new Set\(\[(.*?)\]\)`, band))
+		body, err := clientsource.Literal(clientsource.Tree(t), band)
 		if err != nil {
 			t.Errorf("%s: %v", band, err)
+			unread = true
 			continue
 		}
 		names := clientsource.Strings(body)
@@ -166,6 +183,7 @@ func TestTurnBandsNameOnlyTurnScopedEvents(t *testing.T) {
 			continue
 		}
 		for _, name := range names {
+			placed[name] = true
 			switch {
 			case !known[name]:
 				t.Errorf("the Turn screen's %s band names %q, which this build "+
@@ -200,21 +218,26 @@ func TestTurnBandsNameOnlyTurnScopedEvents(t *testing.T) {
 	// declaration has a different shape, checked identically because it makes
 	// the identical promise: the screen draws these rows, so a type here that
 	// the turn query cannot return is an inventory line that never appears.
-	absorbed, err := clientsource.Declaration(clientsource.Tree(t),
-		fmt.Sprintf(`(?s)const %s: Record<string, string> = \{(.*?)\n\}`, absorbedBand))
-	if err != nil {
-		t.Errorf("%s: %v", absorbedBand, err)
-	} else {
+	absorbed, err := clientsource.Literal(clientsource.Tree(t), absorbedBand)
+	var names []string
+	if err == nil {
 		// KEYS, NOT EVERY QUOTED STRING. The map's values are prose — "the
 		// phase card it opens" — so [clientsource.Strings] would read a
 		// destination as an event type and report the whole map as
-		// unregistered.
-		names := absorbedKeys(absorbed)
+		// unregistered. Quoted keys are keys: one holding a dot cannot be
+		// written bare, so the first such type absorbed arrives quoted.
+		names, err = clientsource.Keys(absorbed)
+	}
+	if err != nil {
+		t.Errorf("%s: %v", absorbedBand, err)
+		unread = true
+	} else {
 		if len(names) == 0 {
 			t.Errorf("the Turn screen's %s map names no event type, so this "+
 				"gate certifies nothing for it", absorbedBand)
 		}
 		for _, name := range names {
+			placed[name] = true
 			switch {
 			case !known[name]:
 				t.Errorf("the Turn screen's %s map names %q, which this build "+
@@ -267,6 +290,21 @@ func TestTurnBandsNameOnlyTurnScopedEvents(t *testing.T) {
 		}
 	}
 
+	// THE THIRD DIRECTION: every row the turn query can return has a place.
+	// Asked only when every declaration was read — see `unread`.
+	if !unread {
+		for _, name := range sortedKeys(known) {
+			if stamped[name] && persisted[name] && !placed[name] {
+				t.Errorf("%q is stored and carries a `turn_id`, so the Turn screen's "+
+					"query returns it — and no band in "+
+					"dashboard/src/contract/turnbands.ts places it, so it is drawn "+
+					"under \"everything else\" on every turn it appears in. Put it in "+
+					"the band whose question it answers, or in ABSORBED naming where "+
+					"the screen already draws it", name)
+			}
+		}
+	}
+
 	// THE OTHER DIRECTION. A roster entry is a repair somebody still owes, or
 	// a permanent fact about the event; either way an entry that stopped being
 	// true is an entry that has stopped describing this build.
@@ -280,7 +318,7 @@ func TestTurnBandsNameOnlyTurnScopedEvents(t *testing.T) {
 		if stamped[name] && persisted[name] {
 			t.Errorf("%q now declares a `turn_id` key, so the Turn screen CAN "+
 				"draw it and this roster entry is stale. Put the type back in "+
-				"its band in dashboard/src/lib/turnstory.ts and drop the entry, "+
+				"its band in dashboard/src/contract/turnbands.ts and drop the entry, "+
 				"or say here why it stays out anyway. It was kept out because: "+
 				"%s", name, reason)
 		}
@@ -346,30 +384,6 @@ func turnScopedTypes(t *testing.T) (stamped, persisted, known map[string]bool) {
 	}
 	return stamped, persisted, known
 }
-
-// absorbedKeys reads the TYPE names out of an object-literal body — the token
-// before each `:` — and ignores the prose values.
-func absorbedKeys(body string) []string {
-	var out []string
-	for _, m := range absorbedKey.FindAllStringSubmatch(body, -1) {
-		out = append(out, m[1])
-	}
-	return out
-}
-
-// A key at the start of a line, which is what prettier guarantees for this
-// map and what keeps a colon inside a comment or a value from reading as one.
-//
-// THE QUOTES ARE OPTIONAL BECAUSE TYPESCRIPT MAKES THEM SO, and reading only
-// the bare form is how this gate would stop covering exactly the entries most
-// likely to need it. An object key holding a dot cannot be written bare —
-// `turn.guard_breach`, `phase.tool_skill_blocked` and `prompt.size` are all
-// band members today — so the first one absorbed arrives quoted, matches
-// nothing here, and is checked by nobody. The `len(names) == 0` guard does not
-// notice, because the four unquoted keys beside it still match: the map would
-// report five entries and certify four of them, which is the silent skip this
-// whole file exists to make impossible.
-var absorbedKey = regexp.MustCompile(`(?m)^\s*"?([a-z][a-z0-9_.]*)"?:`)
 
 func sortedKeys(set map[string]bool) []string {
 	out := make([]string, 0, len(set))

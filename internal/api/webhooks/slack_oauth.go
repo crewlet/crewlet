@@ -46,7 +46,7 @@ var slackOAuthPage = template.Must(template.New("slack-oauth").Parse(`<!doctype 
       nothing to do here.</p>
       <p>Go back to the app's <strong>OAuth &amp; Permissions</strong> page,
       copy the <strong>Bot User OAuth Token</strong>, and paste it into this
-      agent's block on the Integrations screen.</p>
+      agent's block in Settings › Integrations.</p>
       <p class="muted">You reached this page because you installed the app
       from its own settings rather than from
       <code>crewlet slack provision</code>, which is the ordinary way to do it

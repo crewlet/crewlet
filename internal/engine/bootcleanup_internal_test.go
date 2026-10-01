@@ -3,12 +3,13 @@ package engine
 import (
 	"context"
 	"path/filepath"
-	"sync/atomic"
+	"sync"
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/queue/jetstream"
+	"github.com/crewlet/crewlet/internal/queue/topics"
 )
 
 // A FAILED BOOT MUST LEAVE NOTHING RUNNING — THE SAME RULE ONE FRAME UP.
@@ -69,11 +70,17 @@ roles:
 // coordinator counts as answered. One left behind by a node whose boot failed
 // is not a leak somebody notices as memory — it is a peer's search silently
 // returning a sixty-fourth of the corpus as a complete answer.
+//
+// PER SUBJECT, because a node registers more than one answerer — the search
+// fan-out's and the fleet history's (internal/eventfan) — and each is a claim
+// a peer relies on: a history answerer left behind by a failed boot answers
+// peers from a store its caller is free to close.
 type servedQueue struct {
 	*jetstream.Queue
 
-	served    atomic.Int64
-	withdrawn atomic.Int64
+	mu        sync.Mutex
+	served    map[string]int
+	withdrawn map[string]int
 }
 
 // Serve registers for real and wraps the withdrawal so it can be counted.
@@ -84,11 +91,22 @@ func (q *servedQueue) Serve(ctx context.Context, subject string,
 	if err != nil {
 		return nil, err
 	}
-	q.served.Add(1)
+	q.mu.Lock()
+	q.served[subject]++
+	q.mu.Unlock()
 	return func(ctx context.Context) error {
-		q.withdrawn.Add(1)
+		q.mu.Lock()
+		q.withdrawn[subject]++
+		q.mu.Unlock()
 		return stop(ctx)
 	}, nil
+}
+
+// counts is how many answerers were registered and withdrawn on one subject.
+func (q *servedQueue) counts(subject string) (served, withdrawn int) {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	return q.served[subject], q.withdrawn[subject]
 }
 
 func TestAFailedBootStopsEverythingItAlreadyStarted(t *testing.T) {
@@ -110,7 +128,7 @@ func TestAFailedBootStopsEverythingItAlreadyStarted(t *testing.T) {
 		t.Fatalf("the stream is %T, not the JetStream backend this case needs",
 			back.Queue)
 	}
-	watched := &servedQueue{Queue: real}
+	watched := &servedQueue{Queue: real, served: map[string]int{}, withdrawn: map[string]int{}}
 	// BORROWED backends, so the failure path leaves them open for the
 	// assertions — and so this case sees what an embedded caller sees,
 	// which is the deployment where nothing at all was closed and the
@@ -126,17 +144,29 @@ func TestAFailedBootStopsEverythingItAlreadyStarted(t *testing.T) {
 			"native start, so move it to whatever step now does")
 	}
 
-	if got := watched.served.Load(); got != 1 {
+	served, withdrawn := watched.counts(topics.SearchSlice)
+	if served != 1 {
 		t.Fatalf("this node registered %d search answerers, want 1 — the boot "+
 			"failed before the native runtime was up, so this case is no "+
-			"longer testing what it says", got)
+			"longer testing what it says", served)
 	}
-	if got := watched.withdrawn.Load(); got != 1 {
+	if withdrawn != 1 {
 		t.Errorf("the boot failed and its search answerer was withdrawn %d "+
 			"times, want 1: this node is still claiming bucket ranges its "+
 			"peers count as answered, and the runtime behind them — the apply "+
 			"loops, the position heartbeat, the donor, the indexer — is still "+
-			"running against a store the caller is free to close", got)
+			"running against a store the caller is free to close", withdrawn)
+	}
+	served, withdrawn = watched.counts(topics.ObserveRead)
+	if served != 1 {
+		t.Fatalf("this node registered %d history answerers, want 1 — the "+
+			"history answerer is armed before the native start, so this case "+
+			"expects exactly one", served)
+	}
+	if withdrawn != 1 {
+		t.Errorf("the boot failed and its history answerer was withdrawn %d "+
+			"times, want 1: peers still ask this node for its turns and it "+
+			"answers them from a store the caller is free to close", withdrawn)
 	}
 
 	admissions, err := back.Fleet.Admissions(context.Background())

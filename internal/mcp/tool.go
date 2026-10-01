@@ -22,6 +22,27 @@ type Result struct {
 	// that is the point — but a reader can tell a tool that ran from one that
 	// refused.
 	Failed bool
+
+	// Refusal classifies a failure for a reader that is not a model, and
+	// only a FIRST-PARTY tool sets it — see [Refusal] for why an MCP
+	// server's failure is left unclassified. Set implies Failed; empty on
+	// a Failed result means "unclassified", never "fine".
+	Refusal Refusal
+
+	// Unknown marks a failed result whose WRITE MAY HAVE LANDED: the tool
+	// made a write and nobody can vouch for its outcome (the append's
+	// acknowledgement was lost, or the node answered before it applied).
+	// Set only by a first-party tool, and only beside [RefusalUnavailable].
+	//
+	// A FLAG BESIDE THE CLASS rather than a class of its own, because the
+	// class answers "can this node serve the call now" — and the answer is
+	// still no — while this answers a different question: whether the
+	// caller has to find out what happened before doing anything else. A
+	// person's surface that read the class alone would tell somebody
+	// "nothing happened" about a write that may have landed, and they would
+	// make it a second time. A model reads [Result.Output], which says all
+	// of this in words.
+	Unknown bool
 }
 
 // Callable is the least a phase surface needs to offer something to a model

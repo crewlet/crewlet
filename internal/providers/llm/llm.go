@@ -100,6 +100,16 @@ type Completion struct {
 	// left it empty.
 	Model string
 
+	// ProviderKey is the providers.llm key of the configured entry that
+	// served THIS call — the operator's name for it, where Model is the
+	// vendor's. Per call for the reason Model is: a chain shared by
+	// concurrent callers can only say which member answered on the answer
+	// itself. A CHAIN fills it in from the member that answered; a bare
+	// backend leaves it empty, because it does not know what it was
+	// configured under. A chain nested in a chain keeps the inner member's,
+	// which is the more specific of the two.
+	ProviderKey string
+
 	Content          string
 	ReasoningContent string
 	ThinkingBlocks   []ThinkingBlock

@@ -152,8 +152,23 @@ func (e *Engine) embedModel() (embeddings.BatchEmbedder, string, bool) {
 		// never to a corpus walk.
 		return nil, "", false
 	}
-	cfg := e.Company().Config.Providers.Embeddings
+	company := e.Company()
+	if company == nil || company.Config == nil {
+		return nil, "", false
+	}
+	cfg := company.Config.Providers.Embeddings
 	if cfg == nil {
+		return nil, "", false
+	}
+	if !company.Config.VectorsEnabled() {
+		// `knowledge.vectors: false` IS AN ANSWER, and it is the only
+		// thing that reads it: a company that keeps an embeddings
+		// provider for its diary and does not want its corpus embedded.
+		// It stops the duty, the coverage gauge and the query vector
+		// together, because all three read this one function — the
+		// switch was declared, validated and documented while every one
+		// of them ignored it, so a company that turned it off was billed
+		// for a vector per document all the same.
 		return nil, "", false
 	}
 	model := e.resolver().Value(cfg.Model)
@@ -161,6 +176,20 @@ func (e *Engine) embedModel() (embeddings.BatchEmbedder, string, bool) {
 		return nil, "", false
 	}
 	return batch, model, true
+}
+
+// queryModel is [Engine.embedModel] as a search's query vector reads it.
+//
+// THE SAME FUNCTION as the duty's, so a query is embedded at exactly the model
+// and width the corpus is: a query vector from any other space ranks against
+// no row, and a search that ranked by meaning against no row would answer
+// empty and call itself complete.
+func (e *Engine) queryModel() (embeddings.Embedder, string, bool) {
+	provider, model, on := e.embedModel()
+	if !on {
+		return nil, "", false
+	}
+	return provider, model, true
 }
 
 // run ticks until the context ends.

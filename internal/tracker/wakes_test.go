@@ -244,7 +244,7 @@ func TestWritingSomebodyElsesPrioritiesWakesThem(t *testing.T) {
 
 	lead := r.writer.As("lead", tracker.AuthorHuman, tracker.Provenance{})
 	if _, err := lead.WritePriorities(t.Context(), "op-prio", "alice",
-		[]string{task.ID}, tracker.PersonAuthority{Lead: true}); err != nil {
+		[]string{task.ID}, nil, tracker.PersonAuthority{Lead: true}); err != nil {
 
 		t.Fatalf("write alice's priorities: %v", err)
 	}
@@ -276,6 +276,53 @@ func TestWritingSomebodyElsesPrioritiesWakesThem(t *testing.T) {
 	}
 }
 
+// A PERSON REORDERING A REPORT'S QUEUE THROUGH THEIR OWN TOKEN IS NAMED AS
+// THEMSELVES — on the stamp the report reads and in the wake the report's seat
+// is given — while the history row still names the credential.
+//
+// The dashboard writes as the person its token is bound to (ADR-0024), so the
+// writer's ACTOR is the token and its SEAT is the person. Keyed on the actor,
+// the stamp said "founder put this order in place" and the wake "founder put
+// ENG-1 at position 1": a token's label, which no screen resolves to a seat
+// and no seat can ask why. Attribution is the audit trail's question and stays
+// the credential; who DECIDED the order is the queue's, and it is a person.
+func TestAReorderThroughABoundTokenNamesThePersonNotTheToken(t *testing.T) {
+	r := newRoundTrip(t)
+	task := r.createTask("The thing to do first")
+
+	token := r.writer.As("founder", tracker.AuthorOperator, tracker.Provenance{
+		OperatorID: "founder", Seat: "jane-founder",
+	})
+	if _, err := token.WritePriorities(t.Context(), "op-bound", "alice",
+		[]string{task.ID}, nil, tracker.PersonAuthority{Person: true}); err != nil {
+		t.Fatalf("a bound person reordering alice's queue: %v", err)
+	}
+	wake := r.lastWake()
+	if wake == nil {
+		t.Fatal("somebody else set alice's queue and she was not told")
+	}
+	if wake.Snapshot.PrioritisedBy != "jane-founder" {
+		t.Errorf("the wake says the order came from %q, want the person "+
+			"jane-founder rather than her credential", wake.Snapshot.PrioritisedBy)
+	}
+	if !strings.HasPrefix(wake.Excerpt, "jane-founder put ") {
+		t.Errorf("the excerpt alice's seat reads is %q, want it to name "+
+			"jane-founder", wake.Excerpt)
+	}
+	r.drain()
+	if got := r.person("alice").PrioritiesSetBy; got != "jane-founder" {
+		t.Errorf("the stamp on alice's queue says %q set it, want jane-founder "+
+			"— a token's id is nobody alice knows", got)
+	}
+	// AND THE AUDIT TRAIL IS UNCHANGED: the record is the credential's.
+	if got := r.strings(
+		`SELECT actor || '/' || actor_kind FROM tracker_history ORDER BY rowid DESC LIMIT 1`,
+	); len(got) != 1 || got[0] != "founder/operator" {
+		t.Fatalf("the history row is authored %v, want the credential and "+
+			"the kind that says it is not a seat", got)
+	}
+}
+
 // AND WRITING YOUR OWN WAKES NOBODY. Re-ordering your own queue is not news to
 // anybody, least of all to you — the one tracker write that vetoes its own
 // delivery per call.
@@ -285,7 +332,7 @@ func TestWritingYourOwnPrioritiesWakesNobody(t *testing.T) {
 
 	mine := r.writer.As("alice", tracker.AuthorAgent, tracker.Provenance{})
 	if _, err := mine.WritePriorities(t.Context(), "op-own", "alice",
-		[]string{task.ID}, tracker.PersonAuthority{}); err != nil {
+		[]string{task.ID}, nil, tracker.PersonAuthority{}); err != nil {
 
 		t.Fatalf("write my own priorities: %v", err)
 	}
@@ -366,7 +413,7 @@ func TestWhoMayWriteSomebodyElsesPriorities(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			writer := r.writer.As(tc.actor, tc.kind, tracker.Provenance{})
 			_, err := writer.WritePriorities(t.Context(), "op-"+tc.actor,
-				"alice", []string{task.ID}, tc.authority)
+				"alice", []string{task.ID}, nil, tc.authority)
 			switch {
 			case tc.allowed && err != nil:
 				t.Fatalf("%s could not write alice's priorities: %v", name, err)

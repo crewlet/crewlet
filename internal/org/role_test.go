@@ -5,6 +5,8 @@ import (
 	"slices"
 	"strings"
 	"testing"
+
+	"github.com/crewlet/crewlet/internal/period"
 )
 
 // human returns a minimal valid human seat, with mutators applied.
@@ -104,7 +106,7 @@ func TestHumanSeatRejectsEveryRuntimeField(t *testing.T) {
 		{"llm_judge", func(r *Role) { r.LLMJudge = ProviderKeys{"gpt-4o"} }},
 		{"llm_sandbox", func(r *Role) { r.LLMSandbox = ProviderKeys{"sb"} }},
 		{"sandbox", func(r *Role) { r.Sandbox = &RoleSandbox{Enabled: true} }},
-		{"token_budget", func(r *Role) { r.TokenBudget = 1000 }},
+		{"token_budget", func(r *Role) { r.TokenBudget = TokenCeilings{period.Day: 1000} }},
 		{"learning_enabled", func(r *Role) { r.LearningEnabled = On() }},
 		{"schedules", func(r *Role) {
 			r.Schedules = []Schedule{{Name: "standup", Cron: "0 9 * * *", Task: "post"}}
@@ -213,7 +215,7 @@ func TestRoleValidateReportsEveryProblemAtOnce(t *testing.T) {
 	// aggregation exists to prevent.
 	r := human(func(r *Role) {
 		r.DeclaredHandle = "Sarah_Chen"
-		r.TokenBudget = 10
+		r.TokenBudget = TokenCeilings{period.Week: 10}
 		r.Contact = &HumanContact{}
 	})
 	err := r.Validate()
@@ -304,6 +306,52 @@ func TestContactRejectsEmbeddedEnvRefs(t *testing.T) {
 				t.Errorf("error does not name %q: %v", tc.field, err)
 			}
 		})
+	}
+}
+
+// THE RESERVED OPERATOR ID IS NOBODY'S. It is what a disabled auth guard
+// stamps on every caller, so a seat bound to it would make everybody who
+// reaches an unguarded engine that person. Refused as a literal — folded,
+// because the lookup that would match it folds — and DROPPED where a ${VAR}
+// resolves to it, since validation cannot always see the environment that
+// value lives in. Only the operator field is reserved: the same text as a
+// GitHub login is somebody's account.
+func TestTheReservedOperatorIDBindsNoSeat(t *testing.T) {
+	t.Parallel()
+	for _, literal := range []string{"anonymous", "Anonymous", " ANONYMOUS "} {
+		c := HumanContact{CrewletOperatorID: literal}
+		c.Normalize()
+		err := c.Validate()
+		if !errors.Is(err, ErrReservedOperatorID) {
+			t.Fatalf("crewlet_operator_id %q: Validate() = %v, want ErrReservedOperatorID",
+				literal, err)
+		}
+		if !strings.Contains(err.Error(), "crewlet_operator_id") {
+			t.Errorf("the refusal does not name the field: %v", err)
+		}
+	}
+	if err := (&HumanContact{GitHubLogin: ReservedOperatorID}).Validate(); err != nil {
+		t.Errorf("a github login spelled like the reserved id was refused: %v", err)
+	}
+
+	ref := &Role{Name: "Ana", Kind: KindHuman,
+		Contact: &HumanContact{SlackUserID: "U1", CrewletOperatorID: "${OPERATOR}"}}
+	if err := ref.Validate(); err != nil {
+		t.Fatalf("a reference is refused before it is resolved: %v", err)
+	}
+	lookup := lookupFrom(map[string]string{"OPERATOR": "Anonymous"})
+	if got := ref.Contact.ResolvedIdentities(lookup); !slices.Equal(got,
+		[]Identity{{TransportSlack, "U1"}}) {
+		t.Errorf("identities = %v: a reference resolving to the reserved id "+
+			"must register no operator binding", got)
+	}
+	if got := ref.ResolvedOperatorID(lookup); got != "" {
+		t.Errorf("ResolvedOperatorID = %q: every disabled-mode write would be "+
+			"read back as this person's", got)
+	}
+	chart := &Organization{Name: "Acme", Roles: []*Role{ref}}
+	if seat := chart.SeatByOperatorID(ReservedOperatorID, lookup); seat != nil {
+		t.Errorf("the disabled guard's caller resolved to seat %q", seat.Handle())
 	}
 }
 
@@ -446,5 +494,38 @@ func TestTheOperatorIDIsAnAttributionAndNotAnAddress(t *testing.T) {
 	only := &HumanContact{CrewletOperatorID: "ops"}
 	if only.IsEmpty() {
 		t.Error("a seat bound to an API token reads as having no identity")
+	}
+}
+
+// A CONTACT'S FIELDS ARE SHOWN AS WRITTEN, one per config key, and each says
+// whether it resolves by the SAME rule the engine consumes identities by — so
+// a field this reports as resolving is one routing uses, and the reserved
+// operator id reached through a variable resolves nowhere.
+func TestContactFieldsResolveAsTheEngineConsumesThem(t *testing.T) {
+	t.Parallel()
+	c := &HumanContact{
+		SlackUserID:        "U0ANA",
+		AtlassianAccountID: "${ATLASSIAN_ID}",
+		GitLabUsername:     "${UNSET_LOGIN}",
+		CrewletOperatorID:  "${OPERATOR}",
+	}
+	lookup := lookupFrom(map[string]string{"ATLASSIAN_ID": "5b10ac", "OPERATOR": ReservedOperatorID})
+	got := c.Fields(lookup)
+	want := []ContactField{
+		{Key: "slack_user_id", Value: "U0ANA", Resolves: true},
+		{Key: "atlassian_account_id", Value: "${ATLASSIAN_ID}", Reference: true, Resolves: true},
+		{Key: "gitlab_username", Value: "${UNSET_LOGIN}", Reference: true},
+		{Key: "crewlet_operator_id", Value: "${OPERATOR}", Reference: true},
+	}
+	if !slices.Equal(got, want) {
+		t.Fatalf("Fields = %+v\nwant %+v", got, want)
+	}
+	// ONE FIELD PER KEY: Atlassian is two identities to the router and one
+	// field to the person who wrote it.
+	if n := len(c.ResolvedIdentities(lookup)); n != 3 {
+		t.Errorf("resolved identities = %d, want slack plus jira and confluence", n)
+	}
+	if (*HumanContact)(nil).Fields(lookup) != nil {
+		t.Error("a nil contact has fields")
 	}
 }

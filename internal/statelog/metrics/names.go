@@ -19,6 +19,7 @@ const (
 	BackupAge                        = "crewlet.backup.age"
 	BackupDuration                   = "crewlet.backup.duration"
 	BackupHolds                      = "crewlet.backup.holds"
+	HistoryAnswers                   = "crewlet.history.answers"
 	StatelogAppliedThrough           = "crewlet.statelog.applied_through"
 	StatelogApplyBatchRows           = "crewlet.statelog.apply.batch.rows"
 	StatelogApplyLagSeconds          = "crewlet.statelog.apply.lag.seconds"

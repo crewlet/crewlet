@@ -259,10 +259,14 @@ via `base_url`.
 
 ### Token budgets (optional)
 
-Control costs with hard caps at the org and/or per-agent level:
+Control costs with ceilings at the org and/or per-agent level, one per
+calendar window on the company's clock — `day`, `week` and `month`, each
+optional:
 
 ```yaml
-token_budget: 500000  # org-wide limit (0 or omit = unlimited)
+token_budget:          # org-wide, every seat together
+  day: 500000          #   a runaway loop burns at most a day's allowance
+  month: 8000000       #   the bill
 
 units:
   - name: Core
@@ -270,22 +274,28 @@ units:
     lead: CTO
     roles:
       - name: CTO
-        token_budget: 100000  # per-agent limit
+        token_budget: {day: 100000}     # this seat alone, on top of the org's
       - name: Engineer
-        token_budget: 50000
+        token_budget: {week: 250000}
 ```
 
-When a budget is exceeded, the agent's turn stops immediately and a
-`BudgetExhausted` event is emitted.
+A day runs from local midnight to midnight, a week is the ISO week from
+Monday, a month the calendar month, and each window opens again on its own
+when it turns over. Leave a key out for no ceiling on that window — `0` is
+refused rather than read as unlimited. When a round would take a window past
+its ceiling, the agent's turn stops immediately and a `budget_exhausted` event
+is emitted, naming the window and when it resets. Until then the agent's new
+messages wait on its inbox rather than being lost, and they are delivered when
+the window turns over — or at once, if you raise the ceiling.
 
 Usage is **durable** — it lives in the fleet's
 [coordination store](../concepts/coordination.md), so it survives restarts and
-is one number for the whole company however many nodes run it. Reset it
-deliberately, against a running node:
+is one number for the whole company however many nodes run it. Read it
+against a running node, and raise a ceiling to make room before a window
+turns over:
 
 ```bash
 crewlet budgets show     # usage per scope, read from the running node
-crewlet budgets reset    # zero everything (or -scope agent:<id>)
 ```
 
 (Usage used to reset on every engine start, which made a cap advisory in
@@ -356,17 +366,20 @@ to go.
 
 ## 4. Watch the first turn
 
-Open the dashboard at <http://localhost:8000/>. It lands on the **Inbox**,
-which is what a person opening this wants first: whether anything is waiting on
-them. With no company activity yet it says so, and lists any condition the
-engine itself raised.
+Open the dashboard at <http://localhost:8000/>. It lands on **Home**, which is
+what a person opening this wants first: how the company is (who is working,
+what waits on you, the work in progress and finished, the tokens spent), the
+decisions only you can make — answered right there, an option of an agent's
+question is a button — who is working now, and what the company has done. With
+no company activity yet each card says so, and a condition the engine itself
+raised takes over the sentence under the greeting.
 
-The rail on the left is the product in eight rows — Inbox, My work, Work,
-Company, Knowledge, Activity, Cost, Admin — and each one opens its own tree
-beside it. `g` then a letter jumps between them.
+The sidebar is the product in nine rows — Home, Inbox, My work, Work, Agents,
+Live, Knowledge, Spend, Settings — and each workspace's sections are tabs in
+its page header. `g` then a letter jumps between them, and `?` lists every key.
 
 Within five minutes the `hello-crewlet` schedule fires a `TaskAssigned` at the
-CEO. **Activity** shows it: *Live now* has the seat working, and **Turns**
+CEO. **Live** shows it: *Now running* has the seat working, and **Turns**
 shows the turn as it runs — Execute, then Review, each phase listing the rounds
 it took, the tools each round called, and the prompts the model actually saw.
 A turn has those two phases: Execute both decides and acts, because the frame
@@ -391,12 +404,26 @@ how it is drawn: a board, a table, a calendar or a timeline over the same rows.
 human seat `contact.crewlet_operator_id` matching one of your
 `api.auth.tokens[].id`, and **My work** and the **Inbox** answer for that
 person. My work is one tab per claim on somebody's attention — what they hold,
-the order somebody put it in, the questions waiting on them — with every count
-on the strip, and a band above it naming whose day is on screen. **Assigned**
-is the work list narrowed to that person: the same Filter, Display and scope
-controls, opening grouped by when each task is due. Until then the dashboard
-says so rather than guessing: an unbound token is an ordinary state, not a
-fault.
+the order somebody put it in, the questions waiting on them and the ones they
+are waiting on — with every count on the strip, and a band above it naming
+whose day is on screen. The **Queue** is the work list narrowed to that
+person: the same Filter, Display and scope controls, opening grouped by when
+each task is due; read in priority order, its rows are reordered by dragging
+them. A question put to them is answered on its row in **Asked of me**. Until
+then the dashboard says so rather than guessing: an unbound token is an
+ordinary state, not a fault.
+
+**⌘K (Ctrl+K elsewhere) searches everything and acts on it.** Type to find a
+screen, a task, a page or a colleague — `#` narrows to tasks, `@` to agents,
+`>` to actions — or paste an event, trace or turn id out of a log to open it.
+Type a question of three words or more and pause, and a bound token gets a
+short answer written from your company's own pages and tasks, with its sources
+and the tokens it spent, charged to the company's budget. From the same box you
+can assign the task you found to an agent, ask an agent about what you typed
+(the answer lands in your Inbox) or file it as a task — each made as you, filed
+in the project on screen or your team's, and where neither says, in the project
+you pick from the list it offers; on a token that is not bound to a person each
+row says why it cannot act instead.
 
 Once bound, **what you file through your own assistant counts as yours** on
 both screens. The record still names the token — a write through
@@ -423,9 +450,9 @@ client at `/operator/mcp` with your API token:
 ```
 
 It gets the same tracker and knowledge-base tools a seat holds — fourteen over
-the tracker and five over the pages — and ten more that no seat is given: the
-saved views, the catalogue write, a person's own queue and inbox, and the
-trash. Its writes are attributed to the token's own name rather than to a
+the tracker and five over the pages — and eleven more that no seat is given:
+the saved views, the catalogue write, a person's own queue and inbox, the
+trash, and the board drag. Its writes are attributed to the token's own name rather than to a
 seat — so an audit can tell your edit from an agent's. See
 [the operator surface](../reference/api-endpoints.md#operatormcp--your-own-assistant).
 
@@ -460,12 +487,13 @@ curl -X PUT http://localhost:8000/config \
   --data-binary @company.yaml
 ```
 
-Or create the company from the dashboard: open **Company** and its
-**Builder** lens (`#/company?lens=builder`). With no configuration active it opens
+Or create the company from the dashboard: open **Agents** and its **Edit
+org** button (`#/agents/edit`). With no configuration active it opens
 on a form that starts the company from a template, has the engine check it,
 and creates it with `PUT /config`. The builder reads and writes `/config`, so
 it asks for an operator token: paste `$CREWLET_API_TOKEN_FOUNDER`. The
-dashboard writes no model provider, so one step stays outside it. Until it is
+dashboard adds no model provider — Settings › Models & keys edits one the
+configuration already declares — so one step stays outside it. Until it is
 done the company runs and no agent seat takes a turn; whatever is sent to a
 seat waits on its inbox. Add `providers.llm` afterwards with
 `crewlet config import` or `PATCH /config`, as the builder's next steps show

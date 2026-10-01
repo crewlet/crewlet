@@ -61,6 +61,12 @@ type Reconciler struct {
 	// not a state this node was ever in.
 	progress atomic.Pointer[applyProgress]
 
+	// recorded is the last apply outcome this node wrote to the fleet view,
+	// which every tick after it writes again — see [Reconciler.refresh].
+	// Written and read by the tick alone; atomic because the tick is not
+	// pinned to one goroutine (Run's loop, or the one-shot CLI path).
+	recorded atomic.Pointer[coord.NodeApply]
+
 	// decided is the last posture this reconciler computed, for the one
 	// reader that cannot afford to compute its own.
 	//
@@ -260,11 +266,11 @@ func (r *Reconciler) Posture(ctx context.Context) configplane.Posture {
 	// outcome as reading it as "not ready", except it takes the whole probe
 	// timeout to get there and the operator learns nothing.
 	//
-	// posturePollBudget is an eighth of the reconcile cadence and inside a
+	// ProbeReadBudget is an eighth of the reconcile cadence and inside a
 	// typical 5s liveness timeout, so a slow plane degrades to the
 	// fail-open PostureServe answer below — which this function's own
 	// comment already promises for a plane it cannot read.
-	ctx, cancel := context.WithTimeout(ctx, posturePollBudget)
+	ctx, cancel := context.WithTimeout(ctx, ProbeReadBudget)
 	defer cancel()
 
 	view, err := r.view(ctx)
@@ -281,18 +287,23 @@ func (r *Reconciler) Posture(ctx context.Context) configplane.Posture {
 	return r.decide(configplane.DecidePosture(view))
 }
 
-// posturePollBudget bounds one posture read.
+// ProbeReadBudget bounds one coordination read made for a health probe: the
+// posture read here, and the envelope's presence count, which the API bounds
+// with this same value and runs BESIDE the posture read rather than after it.
 //
-// AN EIGHTH of the reconcile cadence, so a probe can never outlive the tick
-// that would have corrected what it is reporting, and comfortably inside the
-// 5-second liveness timeout an orchestrator defaults to. What it buys is that
-// a broker which has stopped answering makes /health and /ready slow by two
-// seconds rather than by their caller's entire patience.
+// ONE VALUE FOR BOTH because they are one probe's reads, and a second budget
+// would be a second answer to "how long may a coordination read hold up
+// /health". An EIGHTH of the reconcile cadence, so a probe can never outlive
+// the tick that would have corrected what it is reporting, and comfortably
+// inside the 5-second liveness timeout an orchestrator defaults to. What it
+// buys is that a broker which has stopped answering makes /health and /ready
+// slow by two seconds rather than by their caller's entire patience.
 //
-// Failing this read is SAFE by construction: the caller already treats an
-// unreadable plane as PostureServe, on the reasoning that the safe answer to
-// "am I behind?" is the one that keeps a working company working.
-const posturePollBudget = configplane.ReconcileInterval / 8
+// Failing either read is SAFE by construction: an unreadable plane is
+// PostureServe, on the reasoning that the safe answer to "am I behind?" is the
+// one that keeps a working company working, and an unread presence count is an
+// absent `nodes`, which is what "cannot say" already means on the envelope.
+const ProbeReadBudget = configplane.ReconcileInterval / 8
 
 // decide records a posture for the admission gate and returns it.
 //
@@ -399,13 +410,16 @@ func (r *Reconciler) Tick(ctx context.Context) error {
 		r.publish(progress)
 	}
 	if progress.applied == target.Epoch {
+		r.refresh(ctx, target)
 		r.holdLocalCopy(ctx, target)
 		return nil
 	}
 	if progress.attempts >= configplane.MaxApplyAttempts {
 		// Out of retries on this epoch. The posture already reads this
 		// node as having tried and failed, so it moves toward stuck or
-		// isolated without another counter to keep.
+		// isolated without another counter to keep — and the failure it
+		// recorded stays where its peers read it.
+		r.refresh(ctx, target)
 		return nil
 	}
 	progress.attempts++
@@ -657,16 +671,43 @@ func (r *Reconciler) fetchRevision(ctx context.Context, target coord.Activation)
 		return store.Revision{}, fmt.Errorf("engine: %w: %s",
 			store.ErrNoRevision, target.RevisionID)
 	}
-	revision := store.Revision{
-		ID: target.RevisionID, Source: "fleet", CreatedBy: "peer",
-		Summary: target.Summary, Payload: payload, CreatedAt: target.At,
-	}
+	revision := adopted(target, payload)
 	if err := r.configs.Adopt(ctx, revision); err != nil {
 		r.log.WarnContext(ctx, "revision_not_cached", "revision", target.RevisionID,
 			"error", err, "detail", "the revision is applied; this node's config "+
 				"history will not show it and it will be re-fetched next time")
 	}
 	return revision, nil
+}
+
+// adopted is the local row for a revision the fleet's pointer names.
+//
+// THE ORIGIN'S RECORD, NOT THIS NODE'S. The pointer carries who wrote the
+// revision, how and when, and a peer that stored `peer` from `fleet` at the
+// activation instant instead gave one revision a different author on every
+// node — so the audit screen's answer depended on which node served it, and
+// no node but the origin could say an operator had written it at all.
+//
+// A pointer published by an older build carries no origin. Its author is
+// then EMPTY with an empty kind, which every reader shows as "not recorded":
+// naming this node, or the placeholder, would be a claim nobody made. The
+// source and the instant fall back to what the pointer does say — that the
+// revision came from the fleet, activated then — because those two are true
+// of this node's copy either way.
+func adopted(target coord.Activation, payload []byte) store.Revision {
+	origin := target.Origin
+	revision := store.Revision{
+		ID: target.RevisionID, Source: origin.Source, CreatedBy: origin.Author,
+		CreatedByKind: store.AuthorKind(origin.AuthorKind),
+		Summary:       target.Summary, Payload: payload, CreatedAt: origin.CreatedAt,
+	}
+	if revision.Source == "" {
+		revision.Source = "fleet"
+	}
+	if revision.CreatedAt.IsZero() {
+		revision.CreatedAt = target.At
+	}
+	return revision
 }
 
 // record writes this node's outcome twice, to two surfaces with two
@@ -697,14 +738,48 @@ func (r *Reconciler) record(ctx context.Context, target coord.Activation,
 	if cause != nil {
 		message = cause.Error()
 	}
-	if err := r.plane.RecordApply(ctx, coord.NodeApply{
+	row := coord.NodeApply{
 		NodeID: r.nodeID, Epoch: target.Epoch, RevisionID: target.RevisionID,
 		Status: string(status), Error: message, UpdatedAt: r.now(),
-	}); err != nil {
+	}
+	r.recorded.Store(&row)
+	if err := r.plane.RecordApply(ctx, row); err != nil {
 		r.log.WarnContext(ctx, "apply_status_write_failed", "epoch", target.Epoch,
 			"error", err, "detail", "peers will read this node as stale")
 	}
 	r.publishApplied(ctx, target, status, applied, message)
+}
+
+// refresh writes this node's last outcome for the current target again, with
+// the time of this tick.
+//
+// THE ROW AGES OUT BY DESIGN — the status bucket's TTL is
+// [coord.StatusFreshness], four reconcile intervals, so a node that STOPS
+// reporting vanishes from the fleet view instead of lingering as a healthy
+// row nobody writes — and that design needs every live node to keep writing
+// it. It was written on an APPLY alone, so a node that converged stopped
+// reporting a minute later: the fleet view drew it as having applied nothing
+// ("behind on config", epoch unknown) while its own /health said it served
+// the current epoch, and [Reconciler.peerHealth] on every other node dropped
+// it as stale evidence — so a laggard whose only healthy peer had been
+// current for a minute read the fleet as ISOLATED rather than SHED.
+//
+// Only an outcome this process recorded, and only for the epoch it is about:
+// a node that has not applied since it started has nothing of its own to
+// restate, and one that moved to a new target writes that target's outcome
+// through [Reconciler.record] first. No durable event: the event is the
+// record of an APPLY, and a refresh is not one.
+func (r *Reconciler) refresh(ctx context.Context, target coord.Activation) {
+	last := r.recorded.Load()
+	if last == nil || last.Epoch != target.Epoch {
+		return
+	}
+	row := *last
+	row.UpdatedAt = r.now()
+	if err := r.plane.RecordApply(ctx, row); err != nil {
+		r.log.WarnContext(ctx, "apply_status_write_failed", "epoch", target.Epoch,
+			"error", err, "detail", "peers will read this node as stale")
+	}
 }
 
 // publishApplied puts one node's outcome into the audit event log.

@@ -22,15 +22,11 @@
  * minutes were all inside a silence that claimed to have measured them.
  */
 
-import type {
-  AgentRow,
-  EngineHealth,
-  OrgBudget,
-  SandboxEntry,
-  SandboxRun,
-} from "~/protocol/index.ts";
-import type { MarkName } from "~/ui/glyph.tsx";
-import { roundLabel, runState, staleness } from "./seats.ts";
+import type { AgentRow, BudgetWindow, OrgBudget, SandboxRun } from "~/protocol/index.ts";
+import { PERIOD_ADJECTIVE, waitedOn } from "~/lib/budget.ts";
+import type { EngineHealth } from "~/contract/health.ts";
+import type { GlyphName } from "@crewlethq/icons/glyphs";
+import { activityOf, roundLabel, staleness, stoppedLine, type NameOf } from "./seats.ts";
 
 export type Severity = "critical" | "caution" | "info";
 
@@ -49,7 +45,7 @@ export type Severity = "critical" | "caution" | "info";
  * union, so a new subject is a type error until it has the phrase a reader
  * sees. Neither half is a convention anybody has to remember.
  */
-export type Subject = "engine" | "budget" | "run" | "seat";
+export type Subject = "engine" | "budget" | "run" | "seat" | "round";
 
 /** Each subject as the reader's own words, in the order the clause lists them. */
 export const SUBJECTS: Record<Subject, string> = {
@@ -57,7 +53,65 @@ export const SUBJECTS: Record<Subject, string> = {
   budget: "the company's and every seat's token budget",
   run: "every coding run waiting on an answer",
   seat: "every seat's own state",
+  round: "every round still in flight",
 };
+
+/**
+ * WHERE A CONDITION IS SHOWN — one home per subject, so no condition is drawn
+ * twice and none is drawn nowhere.
+ *
+ *  - `seat`: the Inbox's "Needs a decision" group and Home's count of
+ *    conditions that need a look. A person decides these — raise a ceiling,
+ *    resume a paused seat, look at one that failed.
+ *  - `engine`: the sidebar's health card and Home's status sentence, which
+ *    are what a reader sees on every screen; an engine condition is a fact
+ *    about the product they are looking at, not an item in anybody's queue.
+ *  - `live`: Live › Now running, BESIDE the rounds and runs it is about — a
+ *    quiet round is marked on its own running-turn row (`LiveTurnRow`), and a
+ *    parked run is a row of Waiting on a person with its Answer. A round that
+ *    has not moved is watched, not decided, and a coding run parked on a
+ *    question already reaches the person it asks through their own decisions
+ *    (`decisions`), so the company-wide list of them is live.
+ *
+ * TOTAL OVER [Subject], so a new subject is a type error until it has a home.
+ */
+export type Where = "seat" | "engine" | "live";
+
+export const WHERE_OF: Record<Subject, Where> = {
+  engine: "engine",
+  budget: "seat",
+  run: "live",
+  seat: "seat",
+  round: "live",
+};
+
+/** The subjects shown in one place, as the clause its quiet state says. */
+export function watchedIn(where: Where): string {
+  return joinClauses(
+    (Object.keys(SUBJECTS) as Subject[])
+      .filter((subject) => WHERE_OF[subject] === where)
+      .map((subject) => SUBJECTS[subject]),
+  );
+}
+
+/**
+ * The conditions a PERSON decides — the Inbox's "Needs a decision" rows beside
+ * the asks and runs, and what Home counts as needing a look.
+ *
+ * A SEAT REFUSING ON ITS OWN BUDGET IS LEFT OUT, because the seat the engine
+ * stopped for it is already a decision row of its own
+ * (`components/DecisionRow.tsx`'s `seatConditionsOf`) that names the window
+ * and offers the two ways out; listing the refusal as well would be the one
+ * stop twice.
+ */
+export function conditionsToDecide(queue: readonly Attention[]): Attention[] {
+  return queue.filter((a) => WHERE_OF[a.subject] === "seat" && !a.id.startsWith("seat-budget-"));
+}
+
+/** A condition's row in the Inbox, as `row=` names it. */
+export function conditionKey(id: string): string {
+  return `condition:${id}`;
+}
 
 function joinClauses(parts: readonly string[]): string {
   if (parts.length < 3) return parts.join(" and ");
@@ -67,23 +121,21 @@ function joinClauses(parts: readonly string[]): string {
   return `${parts.slice(0, -1).join(", ")}, and ${parts.at(-1) ?? ""}`;
 }
 
-/**
- * The subjects as one English clause — the sentence the inbox drops in.
- *
- * JOINED HERE, beside the words it joins. `Intl.ListFormat` is the obvious
+/*
+ * THE CLAUSES ARE JOINED HERE, beside the words they join. `Intl.ListFormat` is the obvious
  * alternative and is wrong for this string: it joins in the BROWSER's locale,
  * so a reader on a Japanese one would get "、" between clauses that are
  * themselves hardcoded English, and the assertion that the band names every
  * subject would pass or fail on the machine's locale.
  */
-export const WATCHED: string = joinClauses(Object.values(SUBJECTS));
 
 export interface Attention {
   id: string;
   severity: Severity;
-  /** What this is about. [SUBJECTS] is what the quiet band draws from it. */
+  /** What this is about. [SUBJECTS] is what the quiet band draws from it,
+   *  and [WHERE_OF] where the row is shown. */
   subject: Subject;
-  icon: MarkName;
+  icon: GlyphName;
   /** What happened, in the fewest words that are still true. */
   title: string;
   /** What it costs to leave it, or what to do about it. */
@@ -97,39 +149,38 @@ export interface Attention {
 }
 
 export interface AttentionInput {
-  agents: AgentRow[];
   /**
-   * The live projection, which is what a seat is doing NOW.
-   *
-   * It is the right source for that and the wrong one for anything that
-   * waits: the projection sweeps a sandbox entry at `sandboxEntryMaxAge` (12
-   * hours), so a run parked on a question leaves this list while still
-   * waiting — see `runs`.
+   * Every seat's row, carrying the ENGINE's word for what it is doing
+   * (`activity`). The live sandbox projection used to be an input too, read
+   * for a seat's run state — a second derivation of the one word the engine
+   * now serves — and nothing here reads it any more.
    */
-  sandboxes: SandboxEntry[];
+  agents: AgentRow[];
   /**
    * The DURABLE coding-run rows, which is what is still waiting.
    *
-   * THE SWEEP IS THE WHOLE REASON THIS IS A SECOND INPUT. A run parked on a
-   * question is the longest-lived thing in this list by construction — it is
-   * waiting for a person, who is by definition not there — and it was read
-   * from the projection, which drops it after twelve hours. So the queue lost
-   * the item exactly when it had been ignored long enough to matter, and the
-   * dashboard reported a quiet company.
+   * THE WAITING ROW NEEDS THE RECORD, not the live entry: how long a person
+   * has left to answer is the run's pause window (`pause_ttl_seconds`)
+   * counted from `paused_at`, and only the durable row
+   * carries the window. The live entry says a run is waiting; the record says
+   * for how much longer its box is held.
    */
   runs: SandboxRun[];
-  budget: OrgBudget;
+  /** `null` before the first report: nothing to judge, so nothing is raised. */
+  budget: OrgBudget | null;
   engine: EngineHealth | null;
   connected: boolean;
   authRejected: boolean;
   now: number;
+  /** A person's name by their handle, off the chart: who paused a seat is said by name. */
+  nameOf: NameOf;
 }
 
 const ORDER: Record<Severity, number> = { critical: 0, caution: 1, info: 2 };
 
 export function attentionQueue(input: AttentionInput): Attention[] {
   const out: Attention[] = [];
-  const { agents, sandboxes, runs, budget, engine, connected, authRejected, now } = input;
+  const { agents, runs, budget, engine, connected, authRejected, now, nameOf } = input;
 
   // --- the engine itself ---------------------------------------------------
   if (authRejected) {
@@ -147,7 +198,7 @@ export function attentionQueue(input: AttentionInput): Attention[] {
       id: "offline",
       severity: "critical",
       subject: "engine",
-      icon: "power_settings_new",
+      icon: "power",
       title: "No connection to the engine",
       detail:
         "The page is showing the last state it received and polling a REST snapshot until the socket returns.",
@@ -162,11 +213,11 @@ export function attentionQueue(input: AttentionInput): Attention[] {
       id: "unconfigured",
       severity: "critical",
       subject: "engine",
-      icon: "tune",
+      icon: "sliders-vertical",
       title: "No company configuration is active",
       detail:
         "The engine is running with nothing to run: no seats are spawned, and every inbound webhook is refused with a 503 its sender will retry. Import a company revision.",
-      path: ["admin", "config"],
+      path: ["settings", "config"],
     });
   }
   if (engine?.posture && ["shed", "stuck", "isolated"].includes(engine.posture)) {
@@ -174,13 +225,13 @@ export function attentionQueue(input: AttentionInput): Attention[] {
       id: `posture-${engine.posture}`,
       severity: "critical",
       subject: "engine",
-      icon: "dns",
+      icon: "server",
       title: `This node's control-plane posture is "${engine.posture}"`,
       detail:
         engine.posture === "shed"
           ? "It has released its seats because it could not reach the configuration it is supposed to run."
           : "It cannot converge on the fleet's active configuration.",
-      path: ["admin", "fleet"],
+      path: ["settings", "nodes"],
     });
   }
   if (engine?.shutting_down) {
@@ -188,54 +239,45 @@ export function attentionQueue(input: AttentionInput): Attention[] {
       id: "draining",
       severity: "caution",
       subject: "engine",
-      icon: "power_settings_new",
+      icon: "power",
       title: "This node is draining",
       detail: `${engine.in_flight ?? 0} turn(s) still in flight. Seats are released as each finishes.`,
-      path: ["admin", "fleet"],
+      path: ["settings", "nodes"],
     });
   }
 
   // --- budgets -------------------------------------------------------------
   //
-  // THE REFUSAL FIRST, THE METER AS A BACKSTOP. `refused_at` is the gate's own
-  // record of turning a charge away, kept in the shared counter beside the
-  // spend, so it is fleet-wide and every node reports the same one. It is what
-  // "exhausted" actually means: a refused charge increments NOTHING, so a
-  // company charged in rounds sits just short of its cap for ever and
-  // `used >= max` never comes true. That test is kept beside it because it is
-  // sufficient where it does fire — at or past the cap no further charge can
-  // be accepted — and it covers the moment before the first refusal is stamped.
-  const org = budget?.org;
-  if (org?.refused_at) {
+  // THE ENGINE'S OWN STATE, and no threshold of ours. Every window the live
+  // meter carries is judged where the counter is — `refusing` when the gate
+  // has turned a charge away in it or it has no room for a single token,
+  // `near` at the engine's near fraction — so this list, the Budgets screen
+  // and the meters all say the same thing about one window. A refusal outranks
+  // a near window; within each, the window NAMED is the one that turns over
+  // last, which is when the company has room again without a ceiling raised.
+  const org = budget?.org?.windows;
+  const orgRefusing = waitedOn(org, "refusing");
+  const orgNear = orgRefusing ? undefined : waitedOn(org, "near");
+  if (orgRefusing) {
     out.push({
       id: "org-budget",
       severity: "critical",
       subject: "budget",
-      icon: "token",
-      title: "The company token budget is refusing charges",
-      detail: `Turns are being declined at the budget gate. Last refusal ${org.refused_at}. Raise token_budget or reset the counter.`,
-      path: ["cost"],
-      at: org.refused_at,
+      icon: "coins",
+      title: `The company's ${PERIOD_ADJECTIVE[orgRefusing.period]} token budget is refusing charges`,
+      detail: `${refusalWords(orgRefusing)} Raise token_budget.${orgRefusing.period}, or wait for ${orgRefusing.window} to turn over at ${orgRefusing.resets_at}.`,
+      path: ["spend"],
+      at: orgRefusing.refused_at,
     });
-  } else if (org && org.max > 0 && org.used >= org.max) {
-    out.push({
-      id: "org-budget",
-      severity: "critical",
-      subject: "budget",
-      icon: "token",
-      title: "The company token budget is spent",
-      detail: `${org.used.toLocaleString()} of ${org.max.toLocaleString()} tokens. No further charge can be accepted, so turns are being declined at the gate.`,
-      path: ["cost"],
-    });
-  } else if (org && org.max > 0 && org.used / org.max >= 0.9) {
+  } else if (orgNear) {
     out.push({
       id: "org-budget-near",
       severity: "caution",
       subject: "budget",
-      icon: "token",
-      title: "The company token budget is nearly spent",
-      detail: `${Math.round((org.used / org.max) * 100)}% of the company's token budget is spent. Raise token_budget or reset the counter.`,
-      path: ["cost"],
+      icon: "coins",
+      title: `The company's ${PERIOD_ADJECTIVE[orgNear.period]} token budget is nearly spent`,
+      detail: `${spentWords(orgNear)} Raise token_budget.${orgNear.period}, or wait for ${orgNear.window} to turn over at ${orgNear.resets_at}.`,
+      path: ["spend"],
     });
   }
 
@@ -251,12 +293,12 @@ export function attentionQueue(input: AttentionInput): Attention[] {
       id: `sandbox-${run.turn_id}`,
       severity: "caution",
       subject: "run",
-      icon: "help",
+      icon: "circle-question-mark",
       title: `${run.role || run.agent_handle} is waiting on an answer`,
       detail: waitingDetail(run, now),
-      // THE RUN'S OWN PATH. It was `#/activity/runs?run=`, which the runs
+      // THE RUN'S OWN PATH. It was `#/live/runs?run=`, which the runs
       // screen stopped reading when a run became an object with an address.
-      path: ["activity", "runs", run.turn_id],
+      path: ["live", "runs", run.turn_id],
       // WHEN IT PARKED, not when it started: what this row is about is how
       // long somebody has been waited on, and a run that worked for an hour
       // before asking has been waiting for none of it.
@@ -267,32 +309,37 @@ export function attentionQueue(input: AttentionInput): Attention[] {
 
   // --- seats ---------------------------------------------------------------
   for (const agent of agents) {
-    const state = runState(agent, sandboxes);
+    const state = activityOf(agent);
     if (agent.last_error) {
       out.push({
         id: `error-${agent.role}`,
         severity: "critical",
         subject: "seat",
-        icon: "warning",
+        icon: "triangle-alert",
         title: `${agent.role} stopped: ${agent.last_error.kind || "error"}`,
         detail: agent.last_error.message || "The seat stopped and has not done work since.",
-        path: ["company", "people", String(agent.handle ?? agent.id)],
+        path: ["agents", "seats", String(agent.handle ?? agent.id)],
         at: agent.last_error.at,
         who: String(agent.handle ?? agent.role),
       });
       continue;
     }
-    if (state === "afk") {
+    // A STOPPED SEAT, in the engine's word and for the engine's reason. The
+    // budget's stop has its own row above, which names the window and when
+    // it resets, so it is not said twice.
+    if (state === "stopped" && agent.stopped_reason !== "budget") {
       out.push({
-        id: `afk-${agent.role}`,
+        id: `stopped-${agent.role}`,
         severity: "caution",
         subject: "seat",
         icon: "pause",
-        title: `${agent.role} is AFK`,
-        detail: agent.afk_reason
-          ? `The engine paused it: ${agent.afk_reason}.`
-          : "The engine paused this seat.",
-        path: ["company", "people", String(agent.handle ?? agent.id)],
+        title: `${agent.role} is stopped`,
+        detail: `The seat cannot take work: ${stoppedLine(agent, nameOf)}.`,
+        path: ["agents", "seats", String(agent.handle ?? agent.id)],
+        // WHEN A PERSON PAUSED IT, where one did: the instant the condition
+        // began, which is what orders it among the rest and what its row's
+        // age says.
+        ...(agent.paused?.at ? { at: agent.paused.at } : {}),
         who: String(agent.handle ?? agent.role),
       });
       continue;
@@ -300,13 +347,13 @@ export function attentionQueue(input: AttentionInput): Attention[] {
     // A live call that has not moved is the condition a spinning row hides.
     const call = agent.live_call;
     if (call?.in_progress) {
-      const how = staleness(call.updated_at, now);
+      const how = staleness(call.updated_at, now, agent.turn?.stage);
       if (how) {
         out.push({
           id: `stale-${agent.role}-${call.turn_id}`,
           severity: how === "stalled" ? "critical" : "caution",
-          subject: "seat",
-          icon: "schedule",
+          subject: "round",
+          icon: "clock",
           title:
             how === "stalled"
               ? `${agent.role} has been on one round for over 10 minutes`
@@ -316,39 +363,33 @@ export function attentionQueue(input: AttentionInput): Attention[] {
           // round one lower than the seat page it lands on, and "?" for the
           // opening frame — which is the case this row exists for: a first
           // model round that never came back.
-          detail: `${call.phase} · ${roundLabel(call.round_num).text} — no update since ${call.updated_at}.`,
-          path: ["company", "people", String(agent.handle ?? agent.id)],
-          query: { tab: "model" },
+          detail: `${call.phase} · ${roundLabel(call).text} — no update since ${call.updated_at}.`,
+          // THE OVERVIEW, where the seat's current turn is drawn round by
+          // round — the profile's default tab, so the path alone opens it.
+          path: ["agents", "seats", String(agent.handle ?? agent.id)],
           at: call.updated_at,
           who: String(agent.handle ?? agent.role),
         });
       }
     }
-    // THE SAME PAIR AS THE COMPANY ROW ABOVE: the gate's own refusal stamp
-    // first, the meter as the backstop it is sufficient for.
-    const meter = agent.budget;
-    if (meter?.refused_at) {
+    // A SEAT THAT IS REFUSING, by the engine's state as above. A seat merely
+    // near its own ceiling raises nothing: the company's row covers the one
+    // an operator acts on before it binds, and a caution per seat would bury
+    // it in a company of any size.
+    const refusing = waitedOn(agent.budget?.windows, "refusing");
+    if (refusing) {
       out.push({
         id: `seat-budget-${agent.role}`,
         severity: "caution",
         subject: "budget",
-        icon: "token",
-        title: `${agent.role}'s token budget is refusing charges`,
-        detail: `This seat's turns are being declined at the budget gate. Last refusal ${meter.refused_at}.`,
-        path: ["company", "people", String(agent.handle ?? agent.id)],
-        query: { tab: "cost" },
-        at: meter.refused_at,
-      });
-    } else if (meter && meter.max > 0 && meter.used >= meter.max) {
-      out.push({
-        id: `seat-budget-${agent.role}`,
-        severity: "caution",
-        subject: "budget",
-        icon: "token",
-        title: `${agent.role}'s token budget is spent`,
-        detail: `${meter.used.toLocaleString()} of ${meter.max.toLocaleString()} tokens. This seat's turns are being declined at the gate.`,
-        path: ["company", "people", String(agent.handle ?? agent.id)],
-        query: { tab: "cost" },
+        icon: "coins",
+        title: `${agent.role}'s ${PERIOD_ADJECTIVE[refusing.period]} token budget is refusing charges`,
+        detail: `${refusalWords(refusing)} Raise the seat's token_budget.${refusing.period}, or wait for ${refusing.window} to turn over at ${refusing.resets_at}.`,
+        // THE SETTINGS TAB, where the ceiling that refused is written beside
+        // each window's live meter.
+        path: ["agents", "seats", String(agent.handle ?? agent.id)],
+        query: { tab: "settings" },
+        at: refusing.refused_at,
       });
     }
   }
@@ -400,4 +441,18 @@ function waitingDetail(run: SandboxRun, now: number): string {
   const minutes = total % 60;
   const when = hours > 0 ? `${hours}h ${minutes}m` : `${minutes}m`;
   return `${asked} Its box is reclaimed in ${when}.`;
+}
+
+/** A refusing window in words: the gate's own stamp where it has one, and the
+ *  arithmetic where the window is full but no charge has been turned away yet. */
+function refusalWords(w: BudgetWindow): string {
+  const spent = `${w.used.toLocaleString()} of ${(w.limit ?? 0).toLocaleString()} tokens in ${w.window}.`;
+  return w.refused_at
+    ? `Turns are being declined at the budget gate; last refusal ${w.refused_at}. ${spent}`
+    : `No further charge fits, so turns are being declined at the gate. ${spent}`;
+}
+
+/** A near window's spend in words. */
+function spentWords(w: BudgetWindow): string {
+  return `${w.used.toLocaleString()} of ${(w.limit ?? 0).toLocaleString()} tokens in ${w.window} are spent.`;
 }

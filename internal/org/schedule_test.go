@@ -50,6 +50,12 @@ func TestScheduleValidation(t *testing.T) {
 		{name: "four cron fields", mutate: func(s *Schedule) { s.Cron = "0 9 * *" }, wantErr: true, mentions: "cron"},
 		{name: "six cron fields", mutate: func(s *Schedule) { s.Cron = "0 0 9 * * 1" }, wantErr: true, mentions: "cron"},
 		{name: "unknown zone", mutate: func(s *Schedule) { s.Timezone = "Mars/Olympus" }, wantErr: true, mentions: "timezone"},
+		// A HOST'S OWN CLOCK loads and is still refused: it is whatever
+		// zone the node holding the scheduler duty is set to, so the
+		// schedule would fire at a different instant every time the duty
+		// moved.
+		{name: "the host's own clock", mutate: func(s *Schedule) { s.Timezone = "Local" }, wantErr: true, mentions: "host"},
+		{name: "the host's localtime link", mutate: func(s *Schedule) { s.Timezone = "localtime" }, wantErr: true, mentions: "host"},
 		{name: "negative timeout", mutate: func(s *Schedule) { s.TimeoutSeconds = -1 }, wantErr: true, mentions: "timeout_seconds"},
 		{
 			// Pinning a unit schedule to one seat is a role schedule wearing

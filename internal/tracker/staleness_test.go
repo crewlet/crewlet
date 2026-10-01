@@ -150,13 +150,13 @@ func TestEveryReaderRefusesPastTheCallersOwnStalenessBound(t *testing.T) {
 			func() error {
 				_, err := reader.MyWork(ctx, tracker.MyWorkQuery{
 					Who: tracker.PartyOf("ana"), Level: stale, MaxLag: time.Second,
-				}, now)
+				}, now, time.UTC)
 				return err
 			},
 			func() error {
 				_, err := reader.MyWork(ctx, tracker.MyWorkQuery{
 					Who: tracker.PartyOf("ana"), Level: stale, MaxLagSeq: 1,
-				}, now)
+				}, now, time.UTC)
 				return err
 			}},
 		// THE POINT READS TOO. They took the level alone, on the claim

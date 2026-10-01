@@ -88,3 +88,42 @@ test("focus is opt-in", async () => {
   await new Promise((r) => setTimeout(r, 10));
   expect(query).toHaveBeenCalledTimes(1);
 });
+
+// A WRITE FROM THIS TAB IS READ BACK AT ITS POSITION — every question that
+// takes a floor names it from then on, a poll included, because a poll that
+// came round a second after the write on a node that had not applied it would
+// redraw the row as it was before the press.
+test("a question that takes a floor names this tab's, and a caller's own freshness wins", async () => {
+  const { withFloor } = await import("./useQuery.ts");
+  const { session } = await import("~/protocol/session.ts");
+  session.written("pages", "CREWLET_PAGES_LOG@1:77", []);
+  expect(withFloor("page", JSON.stringify({ id: "p1" }))).toEqual({
+    id: "p1",
+    read_level: "session",
+    min_position: "CREWLET_PAGES_LOG@1:77",
+  });
+  // A question with no floor to take is sent as it was asked.
+  expect(withFloor("viewer", "{}")).toEqual({});
+  // A caller that named its own freshness asked for something specific, and
+  // a staleness bound beside `session` is a request the engine refuses.
+  expect(withFloor("page", JSON.stringify({ id: "p1", max_lag_seq: 5 }))).toEqual({
+    id: "p1",
+    max_lag_seq: 5,
+  });
+});
+
+test("a write from this tab asks the questions it moved again, and no others", async () => {
+  const { session } = await import("~/protocol/session.ts");
+  const query = asked();
+  renderHook(() => useQuery("work_items", {}));
+  renderHook(() => useQuery("pages", {}));
+  await vi.waitFor(() => expect(query).toHaveBeenCalledTimes(2));
+  session.written("tracker", "CREWLET_TRACKER_LOG@1:5", []);
+  await vi.waitFor(() => expect(query).toHaveBeenCalledTimes(3));
+  await new Promise((r) => setTimeout(r, 10));
+  expect(query).toHaveBeenCalledTimes(3);
+  expect(query.mock.calls[2]).toEqual([
+    "work_items",
+    { read_level: "session", min_position: "CREWLET_TRACKER_LOG@1:5" },
+  ]);
+});

@@ -118,6 +118,10 @@ type PageActivityQuery struct {
 	// and one audit surface reads both.
 	ActorKinds []AuthorKind
 
+	// Actor narrows to one writer's changes, by the handle each change was
+	// made under — the company feed's `actor=`.
+	Actor string
+
 	// Since is a lower bound as a composed log position.
 	Since uint64
 
@@ -209,6 +213,10 @@ func readPageActivity(ctx context.Context, tx *sql.Tx, q PageActivityQuery,
 			args = append(args, string(kind))
 		}
 		where = append(where, "h.actor_kind IN ("+strings.Join(marks, ",")+")")
+	}
+	if actor := strings.TrimSpace(q.Actor); actor != "" {
+		where = append(where, "h.actor = ?")
+		args = append(args, actor)
 	}
 	if q.Since > 0 {
 		where = append(where, "h.version > ?")

@@ -15,6 +15,9 @@ import { EMPTY_VALUE } from "@crewlethq/ui";
 import {
   SCOPES,
   STATUSES,
+  STATUS_TONE,
+  STATUS_SHAPE,
+  statusShape,
   TYPE_ICON,
   totalHint,
   anyFilter,
@@ -28,7 +31,10 @@ import {
   calendarWeeks,
   dayKey,
   defaultView,
+  authorOf,
   describeChange,
+  nameAuthor,
+  foldChartReapplies,
   endNote,
   LANDING_SHAPE,
   SCOPE_GROUPS,
@@ -44,6 +50,8 @@ import {
   NO_FILTERS,
   projectKeys,
   scopeOf,
+  scopeOfParams,
+  RECENT_SINCE,
   seededScope,
   shapeOf,
   shiftMonth,
@@ -52,13 +60,14 @@ import {
   typeIcon,
   typeName,
   type LabelContext,
-  type Scope,
   type Shape,
   countedLabel,
   dayLabel,
   monthOrNow,
   pageCount,
   pageNote,
+  targetLabel,
+  unfinished,
 } from "./work.ts";
 import type {
   WorkActivityRecord,
@@ -121,16 +130,14 @@ test("a status takes the project's label, then the shipped one, then itself", ()
 // A TYPE IS AN ICON, and a company's own type is the neutral box rather than
 // nothing: a card with no mark reads as a card whose type failed to load.
 //
-// THE NAMES ARE THE DESIGN SYSTEM'S. They read as Material Symbols rather than
-// as words we chose, which is the point: one vocabulary means the mark a table
-// asks for and the mark `~/ui/glyph.tsx` draws cannot be two different ideas
-// spelled the same. `bug_report` is one of the four this build holds because
-// `@crewlethq/icons` has not vendored it — see `src/ui/symbols/README.md`.
+// THE NAMES ARE THE DESIGN SYSTEM'S — Lucide's — rather than words we chose,
+// which is the point: one vocabulary means the mark a table asks for and the
+// mark `~/ui/glyph.tsx` draws cannot be two different ideas spelled the same.
 test("every shipped type has its own icon and an unknown one falls back", () => {
-  expect(typeIcon("bug")).toBe("bug_report");
+  expect(typeIcon("bug")).toBe("bug");
   expect(typeIcon("milestone")).toBe("flag");
-  expect(typeIcon("incident")).toBe("package_2");
-  expect(typeIcon(undefined)).toBe("package_2");
+  expect(typeIcon("incident")).toBe("package");
+  expect(typeIcon(undefined)).toBe("package");
 });
 
 // AND NO TWO TYPES SHARE A MARK, which is the property the table exists for
@@ -140,6 +147,30 @@ test("every shipped type has its own icon and an unknown one falls back", () => 
 test("no two work types draw the same mark", () => {
   const marks = Object.values(TYPE_ICON);
   expect([...new Set(marks)].sort()).toEqual([...marks].sort());
+});
+
+// A TYPE IS NEVER DRAWN WITH A MARK THAT READS AS A STATUS. The two sit side
+// by side on a row, and `task` once opened every row with the check a
+// delivered task wears, so a list of work nobody had started read as a list of
+// finished work. A status is drawn in its own shapes now, and the kit glyphs
+// that LOOK like one — a ring, a ring with a check — stay off every type.
+test("no work type draws a mark that reads as a status", () => {
+  const statusLike = new Set<string>(["circle", "circle-check"]);
+  for (const [type, mark] of Object.entries(TYPE_ICON)) {
+    expect(statusLike.has(mark), `${type} is drawn as ${mark}`).toBe(false);
+  }
+  expect(statusLike.has(typeIcon("an-unknown-type"))).toBe(false);
+});
+
+// EVERY STATUS HAS A SHAPE OF ITS OWN, so the state reads without its hue:
+// in progress and in review share the active blue, and were once the same
+// empty ring as to-do.
+test("every status is drawn in a shape no other status uses", () => {
+  const shapes = STATUSES.map((s) => STATUS_SHAPE[s.value]);
+  expect(new Set(shapes).size).toBe(STATUSES.length);
+  expect(STATUS_SHAPE.in_progress).toBe("half");
+  expect(STATUS_SHAPE.done).toBe("check");
+  expect(statusShape("a-status-from-a-newer-build")).toBe("ring");
 });
 
 test("a type takes the company's own name for it", () => {
@@ -456,7 +487,16 @@ test("a people delta reads as the seat's name where the chart knew it", () => {
   // EVERY FIELD WHOSE VALUE IS PEOPLE, for the reason the task-id loop above
   // gives: one added to the engine's set and missed here is a column of
   // handles nobody asked for.
-  for (const field of ["assignee", "reporter", "watchers", "muted", "collaborators"]) {
+  for (const field of [
+    "assignee",
+    "reporter",
+    "watchers",
+    "muted",
+    "collaborators",
+    // WHO SET SOMEBODY'S PRIORITIES — a person record's delta, and it printed
+    // "jane-founder" in a log naming every other person.
+    "priorities_set_by",
+  ]) {
     expect(
       describeHistory(change({ fields: { [field]: { from: "", to: "ada" } } }), ctx),
     ).toContain("Ada Lovelace");
@@ -493,6 +533,36 @@ test("a sentence written for one seat is re-addressed to whoever is reading it",
   // NOBODY IN PARTICULAR IS NOT THE OWNER: an anonymous reader is told whose
   // queue it is rather than being addressed as them.
   expect(describeChange(woken, {})).toContain("agent-swe's priorities");
+});
+
+// AND ITS AUTHOR IS NAMED AS THE LOG NAMES PEOPLE. The engine writes the
+// person's HANDLE, for the seat it wakes; the log's reader is a person, who
+// read "maya put ENG-1…" beside rows naming everybody else by name.
+test("an engine-written sentence names its author by name, and a comment is left as typed", () => {
+  const seatName = (h: string) => ({ maya: "Maya Ops", "agent-swe": "Sam Wu" })[h] ?? h;
+  const reordered = record({
+    kind: "prioritised",
+    subject_kind: "person",
+    subject_id: "agent-swe",
+    actor: "U0MAYA",
+    actor_kind: "operator",
+    actor_seat: "maya",
+    excerpt: "maya put ENG-1 at position 1 of your priorities",
+  });
+  expect(describeChange(reordered, { viewer: "ada", seatName })).toBe(
+    "Maya Ops put ENG-1 at position 1 of Sam Wu's priorities",
+  );
+  // A WHOLE HANDLE, never a part of a longer one.
+  expect(nameAuthor("maya-ops-2 and maya", "maya", seatName)).toBe("maya-ops-2 and Maya Ops");
+  // A CREDENTIAL IS NOBODY: an operator with no bound seat is not renamed.
+  expect(authorOf({ actor: "U0ANON", actor_kind: "operator" })).toBe("");
+  // AND A COMMENT IS WHAT SOMEBODY TYPED.
+  expect(
+    describeChange(
+      record({ kind: "comment", subject_key: "ENG-1", actor: "maya", excerpt: "maya will do it" }),
+      { viewer: "ada", seatName },
+    ),
+  ).toBe("maya will do it");
 });
 
 // SCOPED TO A PERSON SUBJECT, because that is the only kind of record the engine
@@ -1050,7 +1120,7 @@ test("the project list comes from the listing, falling back to the rows", () => 
       name: "Engineering",
       unit: { resolved: true },
       lead: {},
-      task_counts: { open: 1, done: 0, closed: 0 },
+      task_counts: { todo: 1, active: 0, done: 0, closed: 0 },
       version: 1,
     },
     {
@@ -1058,7 +1128,7 @@ test("the project list comes from the listing, falling back to the rows", () => 
       name: "Operations",
       unit: { resolved: true },
       lead: {},
-      task_counts: { open: 0, done: 0, closed: 0 },
+      task_counts: { todo: 0, active: 0, done: 0, closed: 0 },
       version: 1,
     },
   ];
@@ -1196,6 +1266,14 @@ test("a count over a windowed question says which window it counted", () => {
     range: { from: "2031-03-31", to: "2031-05-05" },
   });
   expect(countedLabel(6, windowed)).toBe("6 items due in this window");
+});
+
+// A COUNT NAMES THE SCOPE IT COUNTED, so the bar's "25 in Recent" and a
+// project's "Items 19" (its open tasks) are two different figures by their
+// words rather than two numbers both called "items".
+test("a count on a scoped screen names its scope", () => {
+  expect(countedLabel(25, {}, "Recent")).toBe("25 in Recent");
+  expect(countedLabel(1, {}, "Open")).toBe("1 in Open");
 });
 
 // A LIST THAT ENDED AND A LIST THAT WAS CUT OFF END THE SAME WAY without this:
@@ -1494,8 +1572,20 @@ test("the scope segment and the query read one mapping", () => {
       view: {},
       filters: { ...NO_FILTERS, scope },
     });
-    expect(scopeOf(params.status_group as string | undefined), scope).toBe(scope);
+    // READ BACK THROUGH THE VIEW'S OWN PARAMS, which is what a saved view
+    // holds: Recent is `closed_since` rather than a group, and read through
+    // the group alone it came back as All.
+    expect(scopeOfParams(params as Record<string, unknown>), scope).toBe(scope);
     expect(params.status_group ?? "", scope).toBe(SCOPE_GROUPS[scope]);
+    // ONE SEGMENT, ONE QUESTION ABOUT FINISHED WORK: the engine refuses
+    // `closed_since` beside `show_closed`, so Recent carries only the one and
+    // every other segment never the other.
+    if (scope === "recent") {
+      expect(params.closed_since).toBe(RECENT_SINCE);
+      expect(params.show_closed).toBeUndefined();
+    } else {
+      expect(params.closed_since).toBeUndefined();
+    }
   }
 });
 
@@ -1504,7 +1594,7 @@ test("the scope segment and the query read one mapping", () => {
 // ---------------------------------------------------------------------------
 
 // A LOCKED NARROWING IS THE LAST WORD, on every branch and over every other
-// source of the same key. `#/me`'s Assigned tab IS one person's work, so a
+// source of the same key. `#/me`'s Queue IS one person's work, so a
 // saved default, a custom field or a hand-edited `?assignee=` must not widen
 // it past that person — and three of this builder's branches return early, so
 // a lock written inside one of them is a lock two shapes do not have.
@@ -1522,6 +1612,30 @@ test("the host's lock outranks every other source of the key it names", () => {
       lock: { assignee: "ada" },
     });
     expect(params.assignee, shape).toBe("ada");
+  }
+});
+
+// AND AN ASKER'S LOCK IS THE PERSON, ON EVERY SHAPE. Asked by me is held to the
+// questions somebody is waiting on — and `viewer` IS that person, because the
+// engine gives an `asked_by` its second name (the token their assistant writes
+// under) only for the viewer. A branch that dropped the viewer answered a
+// founder's asked-by-me with half their questions; one that dropped the asker
+// answered with the whole company's work.
+test("an asker's lock carries the asker and the same person as the viewer, on every shape", () => {
+  const shapes: Shape[] = ["list", "table", "board", "calendar", "timeline"];
+  for (const shape of shapes) {
+    const params = buildItemsParams({
+      container: "workspace",
+      shape,
+      view: { asked_by: "rui", viewer: "rui" },
+      filters: { ...NO_FILTERS, assignee: "cto" },
+      range: shape === "calendar" ? { from: "2026-03-01", to: "2026-04-05" } : undefined,
+      lock: { asked_by: "ada" },
+    });
+    expect(params.asked_by, shape).toBe("ada");
+    expect(params.viewer, shape).toBe("ada");
+    // THE ASSIGNEE STAYS THE READER'S OWN FILTER under an asker's lock.
+    expect(params.assignee, shape).toBe("cto");
   }
 });
 
@@ -1612,4 +1726,87 @@ test("the grouping picker offers each axis once, and project at workspace scope 
   // AND THE SECOND AXIS NEVER OFFERS THE FIRST, which the engine refuses.
   expect(secondAxisOptions("status", true).some((o) => o.value === "status")).toBe(false);
   expect(secondAxisOptions("status", true)[0]?.value).toBe("");
+});
+
+// THE UNFINISHED WORK IS WAITING AND STARTED TOGETHER. The engine sends the two
+// apart and no longer sends their sum, so a surface asking "how much is left"
+// reads it here — and a sum that dropped either half would under-count every
+// project whose work is in progress.
+test("unfinished work is the waiting and the started together", () => {
+  expect(unfinished({ todo: 4, active: 3, done: 9, closed: 2 })).toBe(7);
+});
+
+// A TARGET IS A DAY, and drawn as the same day wherever the reader is: parsed as
+// UTC midnight it would be the 17th anywhere west of Greenwich.
+test("a target day is drawn as that calendar day", () => {
+  expect(targetLabel("2026-12-18")).toBe(
+    new Date(2026, 11, 18).toLocaleDateString(undefined, {
+      day: "numeric",
+      month: "short",
+      year: "numeric",
+    }),
+  );
+  // A VALUE THAT IS NOT A DAY IS SHOWN AS SENT, rather than as the epoch.
+  expect(targetLabel("soon")).toBe("soon");
+});
+
+// A STATUS'S HUE IS ITS GROUP'S. Amber is the product's word for NEEDS YOU —
+// a seat parked on a question, a decision waiting — and `in_review` drew it,
+// so every task in review read as a task waiting on the reader.
+test("a status is coloured by its group, and review is work moving", () => {
+  expect(STATUS_TONE.in_progress).toBe("info");
+  expect(STATUS_TONE.in_review).toBe(STATUS_TONE.in_progress);
+  expect(STATUS_TONE.done).toBe("positive");
+  // Finished without being delivered claims no delivery.
+  expect(STATUS_TONE.cancelled).toBe("neutral");
+  expect(STATUS_TONE.todo).toBe("neutral");
+  expect(STATUS_TONE.closed).toBe("neutral");
+  // And no status the tracker ships is drawn in the NEEDS-YOU hue.
+  expect(Object.values(STATUS_TONE)).not.toContain("caution");
+  expect(Object.keys(STATUS_TONE)).toHaveLength(STATUSES.length);
+});
+
+// THE CHART EPOCH IS NEVER A CLAUSE A PERSON READS: beside a real change it is
+// dropped, and alone it is the chart being re-applied.
+test("a project's chart epoch is bookkeeping, never printed", () => {
+  const epoch = { chart_epoch: { from: "1790538626", to: "1790538628" } };
+  const project = { kind: "project_updated", subject_kind: "project", subject_id: "ENG" };
+  expect(describeChange(record({ ...project, fields: epoch }), {})).toBe("Org chart re-applied");
+  const mixed = describeChange(
+    record({ ...project, fields: { ...epoch, name: { from: "Core", to: "Platform" } } }),
+    {},
+  );
+  expect(mixed).not.toMatch(/epoch|1790538626/i);
+  expect(mixed).toContain("Platform");
+  // AND ONLY CONSECUTIVE ONES FOLD.
+  const lines = foldChartReapplies([
+    record({ ...project, id: "a", project: "ENG", fields: epoch }),
+    record({ ...project, id: "b", project: "PROD", fields: epoch }),
+    record({ id: "c", fields: { status: { from: "todo", to: "done" } } }),
+    record({ ...project, id: "d", project: "ENG", fields: epoch }),
+  ]);
+  expect(lines.map((l) => (l.kind === "reapply" ? l.projects.join("+") : "record"))).toEqual([
+    "ENG+PROD",
+    "record",
+    "ENG",
+  ]);
+});
+
+// A SAVED VIEW'S RECORD IS ITS STORAGE — container, rank, a params blob — and
+// the log said "Params: – → blocked=true, Rank: – → a1". What a person did was
+// save a view under a name, or change one.
+test("a saved view's change is named by the view, not by its storage", () => {
+  const saved = record({
+    kind: "view_saved",
+    fields: {
+      name: { from: "", to: "Blocked, org-wide" },
+      params: { from: "", to: "blocked=true" },
+      rank: { from: "", to: "a1" },
+    },
+  });
+  expect(describeChange(saved, {})).toBe("Saved the view “Blocked, org-wide”");
+  const renamed = record({ kind: "view_saved", fields: { name: { from: "A", to: "B" } } });
+  expect(describeChange(renamed, {})).toBe("Renamed the view “A” to “B”");
+  const changed = record({ kind: "view_saved", fields: { params: { from: "a", to: "b" } } });
+  expect(describeChange(changed, {})).toBe("Changed a saved view");
 });

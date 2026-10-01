@@ -6,22 +6,17 @@
  * unminified ESM, so `internal/e2e/golden_test.go` can replay a real company's
  * captured socket frames through the client's OWN dispatch table under bare
  * `node`. Nothing in this directory may import React, touch the DOM at module
- * scope, or reach for anything a Node process does not have.
+ * scope, or reach for anything a Node process does not have — and what it
+ * takes from `../contract/`, the declarations an engine test holds, it takes
+ * by a RELATIVE path, because this build has no `~` alias.
  */
 
-export { Store, MAX_EVENTS } from "./store.ts";
+export { Store } from "./store.ts";
 export type { StoreState, Slice } from "./store.ts";
-export { LiveSocket, queryErrorCode } from "./socket.ts";
+export { LiveSocket, QueryError, queryErrorCode } from "./socket.ts";
 export { api } from "./api.ts";
-export { rest, RestError, REQUEST_TIMEOUT_MS, isAbort } from "./rest.ts";
-export {
-  GATE_ACTIONS,
-  GATE_ACTIONS_KEEPING_OPERATION,
-  GATE_REQUEST_TIMEOUT_MS,
-  keepsOperation,
-  layoutOpID,
-  newGateOpID,
-} from "./gate.ts";
+export { rest, RestError, REQUEST_TIMEOUT_MS, isAbort, retryAfterSeconds } from "./rest.ts";
+export { keepsOperation, layoutOpID, newGateOpID } from "./gate.ts";
 export type { GateAction } from "./gate.ts";
 export type { RequestOptions, RestResponse, QueryValue } from "./rest.ts";
 export {
@@ -32,4 +27,10 @@ export {
   onTokenRequested,
   onTokenChanged,
 } from "./authToken.ts";
+// THE WRITE AND THE FLOOR IT RAISES, so the replay can hand a captured
+// `/operator/act` answer to the client's own `act` and read the floor back off
+// the client's own `SessionFloors` — the floor a later read then names.
+export { act } from "./act.ts";
+export type { ActResult } from "./act.ts";
+export { SessionFloors, domainOf } from "./session.ts";
 export type * from "./types.ts";

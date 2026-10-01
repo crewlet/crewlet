@@ -139,7 +139,7 @@ type SeatAppResult struct {
 // [ReconcileSeatApps] walks the seats that HAVE an app and says what is
 // outstanding on each, because each is a different act: install this one,
 // re-create that one. A seat with no app at all is the same act for every one
-// of them — a person creates it from the Integrations screen — so N of those
+// of them — a person creates it from Settings › Integrations — so N of those
 // is one sentence, not N findings, and a fifty-agent company that has just
 // connected does not get fifty rows saying the same thing.
 //
@@ -241,7 +241,7 @@ func (r *SeatAppResult) reconcileSeat(
 			Kind:    integration.FindingApprovalRequired,
 			Subject: seat.Handle,
 			Detail: seat.Handle + " has no GitHub App of its own, so nothing it " +
-				"does on GitHub is its own: create one from the Integrations screen",
+				"does on GitHub is its own: create one from Settings › Integrations",
 		})
 		return nil
 
@@ -405,7 +405,7 @@ func (r *SeatAppResult) reconcileSeat(
 // person at GitHub, because the engine cannot create an app for anybody.
 func (r *SeatAppResult) forget(ctx context.Context, opts SeatAppOptions, seat SeatApp) {
 	detail := seat.Handle + "'s GitHub App no longer exists at GitHub, so nothing " +
-		"it does there is its own: create one from the Integrations screen"
+		"it does there is its own: create one from Settings › Integrations"
 	if opts.Forget != nil {
 		if err := opts.Forget(ctx, seat.Handle); err != nil {
 			// REPORTED, NOT SWALLOWED, and the finding still says the

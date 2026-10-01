@@ -28,13 +28,25 @@ import (
 // So the exclusions below are deliberate, and stated, rather than left as gaps.
 var categories = map[string]string{
 	// Lifecycle: the org coming and going, plus the config changes an
-	// operator is most likely to go looking for after the fact. A seat
+	// operator is most likely to go looking for after the fact — and the
+	// runtime audit, which is the same question asked of everything else
+	// a person did to the company through a running node: every operator
+	// tool call that is not a proven read, and every backup. A seat
 	// coming and going is not here: agent_spawned and agent_terminated are
 	// live-only, and [excluded] says why.
 	"org_started":               "lifecycle",
 	"org_stopped":               "lifecycle",
 	"config_revision_activated": "lifecycle",
 	"config_revision_applied":   "lifecycle",
+	"operator_acted":            "lifecycle",
+	"backup_requested":          "lifecycle",
+	// A person pausing and resuming a seat — the change itself, published
+	// once by the writer whose compare-and-set won. Beside the runtime
+	// audit rather than folded into it: operator_acted records that a call
+	// was made, and these what it changed about the company, so a pause
+	// taken and a pause refused as already taken read differently.
+	"seat_paused":  "lifecycle",
+	"seat_resumed": "lifecycle",
 
 	// Task: work reaching a seat — including a detached sandbox run, which
 	// is the execution of one, and a schedule firing, which creates one.
@@ -53,18 +65,25 @@ var categories = map[string]string{
 	// that a turn was lost, and it is the one an operator goes looking for
 	// after the fact — a live-only failure would be swept before anybody
 	// asked why the work never came back.
-	"sandbox_run_failed":   "task",
+	"sandbox_run_failed": "task",
+	// What an answer to a run's question became, on either route. The chat
+	// route left no record at all, so this is the only account of whether a
+	// person's reply resumed the run, found it already answered, or found it
+	// gone — and of who gave it.
+	"sandbox_run_answered": "task",
 	"scheduled_task_fired": "task",
 
 	"a2a_channel_opened": "a2a",
 	"a2a_message_sent":   "a2a",
 	"a2a_channel_closed": "a2a",
 
-	// DACI is behavioural guidance carried on the org's own chat surfaces,
-	// not an engine subsystem — nothing in Crewlet publishes these four.
-	// They stay mapped as the seam an extension that DOES model decisions
-	// writes through, and they are why the dashboard has a `decision`
-	// category to filter on at all.
+	// Nothing in Crewlet publishes these four. DACI discussion is
+	// behavioural guidance carried on the org's own chat surfaces, and a
+	// decision somebody must make is a structured ask on a work item
+	// (ADR-0023) — a tracker record whose wakes are the tracker's own
+	// `asked` and `answered`, not an event of this category. They stay
+	// mapped as the seam an extension writes through, and they are why the
+	// dashboard has a `decision` category to filter on at all.
 	"decision_requested":     "decision",
 	"decision_resolved":      "decision",
 	"contribution_requested": "decision",
@@ -80,10 +99,16 @@ var categories = map[string]string{
 	"notifications_coalesced": "notification",
 	"turn_trigger_skipped":    "notification",
 
-	// System: the engine talking about itself.
+	// System: the engine talking about itself. A turn's start is stored
+	// beside its completion, because the pair is what bounds a turn in
+	// history: a turn that began and never finished is a start with no
+	// completion, and a reader can only see that if both are rows.
 	"budget_exhausted":             "system",
 	"llm_unavailable":              "system",
+	"agent_turn_started":           "system",
 	"agent_turn_completed":         "system",
+	"agent_turn_stopped":           "system",
+	"agent_turn_steered":           "system",
 	"agent_phase_started":          "system",
 	"agent_phase_completed":        "system",
 	"phase.tool_skill_blocked":     "system",
@@ -111,6 +136,11 @@ var categories = map[string]string{
 	"skill_revived":                "learning",
 	"compaction_requested":         "learning",
 	"compaction_completed":         "learning",
+
+	// A seat reading the knowledge base, stored beside the skill loads it
+	// generalises: which pages the company's staff actually open is the
+	// question a knowledge base is curated against.
+	"knowledge_read": "learning",
 }
 
 // excluded are the types deliberately kept OUT of the event store, each with
@@ -122,7 +152,7 @@ var categories = map[string]string{
 // the next reader able to tell which one they are looking at — and the
 // completeness test prints it.
 var excluded = map[string]string{
-	"agent_turn_progress": "fires once per LLM round as a live-only signal; the " +
+	"agent_turn_progress": "fires as each LLM round opens, answers and runs its tools, as a live-only signal; the " +
 		"matching agent_phase_completed is its durable record, so persisting " +
 		"this would fill the log with intermediate states of rows it also " +
 		"holds finished",
@@ -141,10 +171,10 @@ var excluded = map[string]string{
 		"kept out below",
 	"a2a_message": "the ANSWER is already a row (a2a_message_sent). This " +
 		"event is the wake it puts on the requester's inbox; see a2a_request",
-	"budget_reported": "a SNAPSHOT of the shared token counter, published by " +
+	"budget_meters": "a SNAPSHOT of the shared token counters, published by " +
 		"every node on a 15-second tick, so a durable row per report is about " +
 		"two million a year per node to answer a question the live projection " +
-		"and GET /budgets answer for free. What the audit log holds instead is " +
+		"and the budgets query answer for free. What the audit log holds instead is " +
 		"the spend the counter is charged with, recorded per phase in the " +
 		"agent_phase_completed rows internal/tokens aggregates, so \"what did " +
 		"we spend last month\" is answerable and \"what was the counter " +
@@ -155,6 +185,11 @@ var excluded = map[string]string{
 		"registry is a log line on each node, so a durable row per node " +
 		"would record the same edit once for the wiki and again for every " +
 		"member of the fleet",
+	"sandbox_answer_given": "the WAKE an answer by turn puts on the seat's " +
+		"inbox, and never a turn. What the answer became is " +
+		"sandbox_run_answered, and that a person gave it is their " +
+		"operator_acted row, so categorising this would write a third row " +
+		"for one answer — the reason a2a_request is kept out above",
 	"raw_webhook": "the delivery is ALREADY a row, written by the webhook " +
 		"receiver under its own id with the raw provider bytes as its payload. " +
 		"This event is the wake it publishes onto a seat's inbox, so " +
@@ -173,7 +208,7 @@ var liveOnly = map[string]bool{
 	"agent_turn_progress": true,
 	"agent_spawned":       true,
 	"agent_terminated":    true,
-	"budget_reported":     true,
+	"budget_meters":       true,
 }
 
 // Category names an event type's dashboard category and reports whether the

@@ -1,0 +1,2 @@
+var e=/^[=+\-@\t\r]/;function t(t){return t==null?``:typeof t==`number`?Number.isFinite(t)?String(t):``:`"${(e.test(t)?`'${t}`:t).replaceAll(`"`,`""`)}"`}function n(e,n){return[e.map(t),...n.map(e=>e.map(t))].map(e=>e.join(`,`)).join(`\r
+`)}export{n as t};

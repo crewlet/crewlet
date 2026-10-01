@@ -69,13 +69,18 @@ export interface Property {
   /** Said on hover, where a label needs a sentence a rail has no room for. */
   title?: string;
   /**
-   * The label is an IDENTIFIER rather than a word — an environment variable's
+   * The LABEL is an IDENTIFIER rather than a word — an environment variable's
    * name, a tag's key — and wears the mono face.
+   *
+   * NAMED FOR WHICH SIDE IT MARKS. As `code` it read as "the value is code",
+   * and two rails set it that way — "Key id", "Revision" and "Parent" drew in
+   * the mono face while the ids beside them stayed in sans. A value that is
+   * an identifier is the caller's to set: `<span className="mono">`.
    *
    * A flag rather than a `ReactNode` label, because the label is also this
    * row's React key and its accessible name: a node can be neither.
    */
-  code?: boolean;
+  identifierLabel?: boolean;
 }
 
 export interface PropertyGroup {
@@ -198,7 +203,7 @@ export function PropertiesRail({ groups }: { groups: PropertyGroup[] }) {
             ) : (
               group.properties.map((p, row) => (
                 <Fragment key={p.label}>
-                  <dt title={p.title} className={p.code ? "mono" : undefined}>
+                  <dt title={p.title} className={p.identifierLabel ? "mono" : undefined}>
                     {p.label}
                   </dt>
                   <dd>

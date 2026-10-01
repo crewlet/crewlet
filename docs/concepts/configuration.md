@@ -9,9 +9,11 @@ Crewlet splits configuration into **two tiers** so a founder can evolve their co
 | Tier | Storage | Owner | Update model | Contents |
 |------|---------|-------|--------------|----------|
 | **A** | `crewlet.yaml` on disk | Ops / SRE | Restart-only | The store file, the stream and coordination slots, this node's identity and roles, API host/port and auth, the secret keyring, logging (level, shape and an optional rotating log file) |
-| **B** | The store (`company_config`, versioned) | Founder | Live, API-editable, validated, versioned | Everything else: name, mission, vision, policies, providers (LLM + embeddings), turn engine, learning, MCP servers, notification transports, integrations (Jira / Confluence / Slack / GitHub / GitLab / Forge), org roles & units, token budgets |
+| **B** | The store (`company_config`, versioned) | Founder | Live, API-editable, validated, versioned | Everything else: name, mission, vision, policies, the company's one clock (`timezone`), providers (LLM + embeddings), turn engine, learning, MCP servers, notification transports, integrations (Jira / Confluence / Slack / GitHub / GitLab / Forge), org roles & units, token budgets |
 
 **Tier A** controls *how the engine boots*. **Tier B** is *what the company is*.
+
+The company's clock is Tier B for that reason: *where* a company keeps its hours is a fact about the company, not about the hosts running it, and every node must cut the same day from it. So it is one top-level `timezone` in the company document rather than a host's own clock — `Local` is refused — and rather than a zone per subsystem: the tracker's "today", a person's day and the hour a schedule fires on are one calendar. See [The company's clock](../getting-started/configuration.md#the-companys-clock).
 
 ### Tier A example (`crewlet.yaml`)
 
@@ -319,10 +321,11 @@ log whose first restart leaves the node unable to serve.
 8. **`parties`** — rebuild the party index *before* the epoch is published, so a seat the revision **adds** is addressable the instant the epoch carrying it is current.
 9. **`integrations`**: rebuild the inbound surfaces against the new epoch (Confluence, Datadog, Jira, GitLab, GitHub, and the two chat transports, Slack on every apply and Mattermost when a value it is built from moved), so work items route by the new chart rather than the boot-time one. A third-party app the revision **retires** (its block removed, or `enabled: false` for GitHub and GitLab) has its parser unregistered, so its deliveries route to no seat; GitHub's and GitLab's webhook routes then answer `503` rather than verifying and ingesting a delivery the routing half would drop. Confluence additionally loses its searcher, or every seat would go on searching a wiki the company has removed, with the credential it revoked. Confluence and Jira re-derive a **lead map** from the org (space and project key to unit lead), which is what an unrouted page or issue falls through to. GitLab and GitHub have no lead map; theirs re-resolves the engine credential and the participants lookup that fans a thread out to the seats on it.
    On a node that booted with **no company** there is no inbound edge to rebuild: boot starts one only for a company it already has, because the inbound consumer group is fleet-wide and a node with no parsers would take deliveries its peers can route. So the node's first apply **starts** the edge here, through the same function boot runs, and every later apply reconciles it. A start that fails (the broker refuses the subscription) refuses the apply like a refused build, before the epoch is published, and takes down whatever it had brought up, so the retry starts from nothing.
+   The native tracker's **org chart** is reconciled at this stage too. Its projects are stamped with the activation being applied (the pointer's own instant, to the millisecond and identical on every node), never with the time of the apply. So a re-apply or a restart on the same activation writes nothing, and when several nodes apply one activation at once they contend per project and exactly one writes it (see [Work tracker](../guides/work-tracker.md#projects-and-keys)).
 10. **`epoch`** — publish the new epoch. This is the swap; everything before it built, everything after it reads the now-current company.
 11. **`maintenance`** — rebuild the retention sweep, on a node's **first** company (or the apply that started the native runtime). Its job list is read once, and on a node that booted unconfigured once was before there was a runtime to contribute the operation ledgers, the tracker's repairs and the inbox sweep, or a company to state the conversation horizon — so it swept none of those until a restart. **After** the swap, because it reads those horizons off the current company. The old sweep stops, its in-flight tick waited out, before the new one starts. **Conditional:** only on that first apply, and only on a node that publishes.
 12. **`seat_tools`**: rebuild the registry each seat this node *holds* runs against. **After** the swap, because that registry is a clone of the current epoch's surface: a seat's per-role children are filed into a copy of the builtins plus the shared servers, so a new epoch leaves the copy stale. The children themselves are deliberately untouched (they belong to the seat's lease, not to the epoch; see below), so what is rebuilt is the catalogue a turn is built against, never a process. Reported on every apply, including one where this node holds no seat with per-role children and there is nothing to rebuild.
-13. **`mailboxes`**: ensure a mailbox exists for every seat. **After** the swap, because it reads the seat list off the current company, and until something creates a new role's mailbox every event published to it is dropped rather than retained. When the new epoch has a model provider, this stage also releases every seat inbox the node paused while the company had none, after the seat tools are rebuilt, because the first thing a released inbox does is run a turn. **Conditional:** only where the engine has a node, because `crewlet validate` applies to nothing.
+13. **`mailboxes`**: ensure a mailbox exists for every seat. **After** the swap, because it reads the seat list off the current company, and until something creates a new role's mailbox every event published to it is dropped rather than retained. When the new epoch has a model provider, this stage also releases every seat inbox the node paused while the company had none, after the seat tools are rebuilt, because the first thing a released inbox does is run a turn. In the same place and for the same reason it re-judges every seat parked on its [token budget](../guides/budgets-and-spend.md) against the ceilings this revision states, and drops the pause of any seat the revision removed, so a seat later added under the same handle does not arrive paused by somebody who paused a different role. **Conditional:** only where the engine has a node, because `crewlet validate` applies to nothing.
 14. **`learning_passes`**: hand the background learning loops (episode compaction, the skill curator, clustered synthesis and promotion) the passes this revision turns on, built from its models, credentials and knobs. **After** the swap, because the loops walk the current company's seats: handed over earlier they would run the new revision's passes over the previous company's roster, and a refusal later in the same apply would leave them there for a revision this node never served. The loops themselves are armed once per process and keep their clocks across an apply (see [Agent Learning](agent-learning.md#trigger-threshold-gated-on-a-slow-loop)), so this is also where a node that booted with no company, or a company that gained its first provider, starts running them. Reported on every apply, including one on a node with no store or no worker role, which has no loops to hand anything to.
 15. **`scheduler`**: re-arm the cron loop. After the swap too, and for a sharper version of the same reason: the tick reads schedules off the current company, so arming early would open a window in which the loop fires the outgoing company's crons.
 
@@ -471,9 +474,12 @@ correctly-serving node out of a load balancer's rotation for being behind.
 CREATE TABLE company_config (
     revision_id        TEXT    NOT NULL PRIMARY KEY,
     parent_revision_id TEXT    REFERENCES company_config(revision_id),
-    created_at         INTEGER NOT NULL,          -- unix seconds, UTC
-    created_by         TEXT    NOT NULL,          -- token id, e.g. "founder"
-    source             TEXT    NOT NULL,          -- "api" | "cli" | "api.revert" | "api.entity"
+    created_at         INTEGER NOT NULL,          -- unix microseconds, UTC
+    created_by         TEXT    NOT NULL,          -- a label: token id ("founder"), a
+                                                  -- login, a node id, "reconcile loop"
+    created_by_kind    TEXT    NOT NULL DEFAULT '',  -- what created_by names:
+                                                  -- "operator" | "node" | "" (not recorded)
+    source             TEXT    NOT NULL,          -- "api" | "file" | "rekey" | "fleet"
     summary            TEXT    NOT NULL,          -- short human-readable change note
     payload            TEXT    NOT NULL,          -- the whole document as JSON, or the
                                                   -- sealed envelope when a keyring is set
@@ -488,7 +494,7 @@ CREATE UNIQUE INDEX company_config_one_active_idx
 ```
 
 The types here are the four SQLite has (`TEXT`, `INTEGER`, `REAL`, `BLOB`)
-rather than `UUID` / `TIMESTAMPTZ` / `JSONB`, and a timestamp is unix seconds
+rather than `UUID` / `TIMESTAMPTZ` / `JSONB`, and a timestamp is unix microseconds
 rather than a date type — Turso is SQLite-compatible in both its query language
 and its file format, so that is simply what a column can be. It was also, until
 recently, the intersection of two drivers' dialects; the second driver is
@@ -514,8 +520,10 @@ The difference between the last two is the **admission rules**: rules added afte
 <token>`. Reads serve without one by default.** Tokens are listed in Tier A
 under `api.auth.tokens` and resolved from env vars at API startup. The matched
 token's `id` is recorded as `created_by` on each revision the request produces,
-so revision history carries meaningful attribution (`alice`, `ci-pipeline`,
-`ops`) rather than generic strings.
+with `created_by_kind` `operator`, so revision history carries meaningful
+attribution (`alice`, `ci-pipeline`, `ops`) rather than generic strings — and
+says which revisions the engine wrote itself (`node`), which no token id could.
+See [the API reference](../reference/api-endpoints.md#the-config_audit-query).
 
 Reading is what a dashboard does, and the page that would prompt for a token is
 itself served unauthenticated — the page that asks for a credential cannot
