@@ -2040,8 +2040,9 @@ func (s *stateLog) Serving(ctx context.Context) (bool, statelog.ReadRefusal) {
 }
 
 // copyVerdict is what the estate's router reads of this node's copy of one
-// partition: whether it is WRONG — [stateLog.Healthy]'s question, over the
-// partition's logs alone — and, if not, whether it answers requests now.
+// partition: whether it is WRONG — the question [stateLog.Healthy] asks of
+// every partition through this same verdict, so the lease and the router
+// cannot disagree — and, if not, whether it answers requests now.
 type copyVerdict struct {
 	// fault names the first of the partition's logs whose copy is wrong —
 	// or the partition itself, where its file is not open at all — empty
@@ -2189,25 +2190,35 @@ func (s *stateLog) everyReadiness(ctx context.Context, selected func(*runningLog
 // the outage during which a company most needs its copies to keep answering,
 // and taking one out of service on an unread number is the failure mode
 // `unknown` exists throughout this package to prevent.
+//
+// ONE JUDGEMENT PER PARTITION, the router's ([stateLog.partitionVerdict]):
+// what the lease says of a copy and whether the copy serves must never be two
+// answers. Judged here a second way, a copy whose FILE was shut — a term only
+// the verdict has — stopped serving while its lease went on saying `serving`,
+// so estate_partition_unserved, read off the leases, stayed silent over a
+// fleet whose only copy refused every call.
 func (s *stateLog) Healthy(ctx context.Context) (bool, string) {
 	if s == nil {
 		return true, ""
 	}
-	now := time.Now()
-	for _, running := range s.running() {
-		name := running.key
-		if !running.domain.ReadinessInput() {
-			continue
-		}
-		health, err := s.health(ctx, running)
-		if err != nil {
-			continue
-		}
-		if !health.Healthy(now, running.progress.deferredSinceValue()) {
-			return false, name
+	for _, p := range s.heldPartitions() {
+		if v := s.partitionVerdict(ctx, p); v.fault != "" {
+			return false, v.fault
 		}
 	}
 	return true, ""
+}
+
+// heldPartitions is every partition this node runs a log of, in the layout's
+// order.
+func (s *stateLog) heldPartitions() []statelog.PartitionID {
+	var out []statelog.PartitionID
+	for _, running := range s.running() {
+		if !slices.Contains(out, running.id.Partition) {
+			out = append(out, running.id.Partition)
+		}
+	}
+	return out
 }
 
 // health assembles one domain's readiness from the four places it lives: this

@@ -15,6 +15,7 @@ import (
 	natsjs "github.com/nats-io/nats.go/jetstream"
 
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/estate/partmap"
 	"github.com/crewlet/crewlet/internal/queue/jetstream"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/store"
@@ -448,6 +449,18 @@ func TestALostEstateIsReopenedBeforeAnythingIsAskedOfIt(t *testing.T) {
 			if v := s.partitionVerdict(t.Context(), p); v.fault != p.String() || v.answers {
 				t.Fatalf("a copy whose file is shut is judged %+v, want wrong, naming %s", v, p)
 			}
+			// AND ITS LEASE SAYS SO, from the same judgement: a lease
+			// still saying `serving` over a copy that refuses every call
+			// kept estate_partition_unserved — read off the leases —
+			// silent over a fleet whose only copy was shut.
+			if ok, fault := s.Healthy(t.Context()); ok || fault != p.String() {
+				t.Fatalf("a copy whose file is shut reads Healthy (%v, %q), want wrong, "+
+					"naming %s", ok, fault, p)
+			}
+			if got := (&estateLeaseAccount{runtime: s}).state(t.Context()); got != partmap.PartFaulted {
+				t.Fatalf("the estate lease says %q of a copy whose file is shut, want %q",
+					got, partmap.PartFaulted)
+			}
 
 			if err := s.restoreEstate(s.run); err != nil {
 				t.Fatalf("restore: %v", err)
@@ -458,6 +471,9 @@ func TestALostEstateIsReopenedBeforeAnythingIsAskedOfIt(t *testing.T) {
 			}
 			if v := s.partitionVerdict(t.Context(), p); v.fault == p.String() {
 				t.Fatalf("a copy whose file the restore reopened is still judged shut: %+v", v)
+			}
+			if _, fault := s.Healthy(t.Context()); fault == p.String() {
+				t.Fatal("a copy whose file the restore reopened still reads to its lease as shut")
 			}
 			if !c.below {
 				return
