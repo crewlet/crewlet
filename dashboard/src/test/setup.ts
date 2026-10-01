@@ -8,26 +8,40 @@
  * runs.
  */
 
-import { afterEach, beforeEach } from "vitest";
-import { watchConsole } from "./console.ts";
+import { afterAll, afterEach, beforeEach } from "vitest";
+import { watchFile } from "./console.ts";
 
 // A WARNING IS A FAILURE OF THE CASE THAT PRINTED IT — see `console.ts` for
 // the defects that printed theirs into passing cases. Checked in an
 // `afterEach` registered here, before any suite's own, and hooks unwind in
 // reverse: so it runs after the suite's own teardown, and what an unmount
 // says counts too.
-let stopWatching: (() => string[]) | null = null;
+//
+// AND OF THE FILE, WHEN NO CASE WAS RUNNING: what it says while it loads, in a
+// `beforeAll` or an `afterAll`, or between cases ([watchFile]). The watch
+// starts as this file loads, before the suite's own modules do, and what it
+// heard outside every case fails the `afterAll` registered here, which runs
+// after the file's own.
+const watch = watchFile();
 
 beforeEach(() => {
-  stopWatching = watchConsole();
+  watch.caseStarts();
 });
 
 afterEach(() => {
-  const said = stopWatching?.() ?? [];
-  stopWatching = null;
+  const said = watch.caseEnds();
   if (said.length > 0) {
     throw new Error(
       `this case wrote to the console, which is a defect until shown otherwise — silence one it expects with vi.spyOn(console, …).mockImplementation:\n${said.join("\n")}`,
+    );
+  }
+});
+
+afterAll(() => {
+  const said = watch.fileEnds();
+  if (said.length > 0) {
+    throw new Error(
+      `this file wrote to the console outside any case — while it loaded, in a beforeAll or an afterAll, or between cases — which is a defect until shown otherwise:\n${said.join("\n")}`,
     );
   }
 });

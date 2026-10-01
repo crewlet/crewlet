@@ -56,3 +56,48 @@ export function watchConsole(target: Watched = console): () => string[] {
     return said;
   };
 }
+
+/** One test file's watch, cut into the spans its cases ran in and the rest. */
+export interface FileWatch {
+  /** A case begins: what was said since the last case ended is the file's. */
+  caseStarts(): void;
+  /** A case ends: hands back what was said while it ran. */
+  caseEnds(): string[];
+  /** The file ends: stops watching and hands back everything said outside its cases. */
+  fileEnds(): string[];
+}
+
+/**
+ * Watches `target` from now until the file ends, and says which of what it
+ * heard was said inside a case and which outside every case.
+ *
+ * OUTSIDE A CASE IS NOT OUTSIDE THE RULE. A file says things while its modules
+ * load, in a `beforeAll` (a stylesheet jsdom cannot parse is a console error
+ * there), in an `afterAll`, and after its last case, and a watch that began at
+ * each case's start and ended at its end passed every one of those over in
+ * silence. No case can be blamed for them, so the FILE is: each case's span is
+ * cut out and judged on its own, and what is left is the file's.
+ *
+ * Every cut puts both methods back and watches them afresh, so a case that
+ * silenced a call and never restored it leaves no silence behind it.
+ */
+export function watchFile(target: Watched = console): FileWatch {
+  let watching = watchConsole(target);
+  const outside: string[] = [];
+  const cut = () => {
+    const said = watching();
+    watching = watchConsole(target);
+    return said;
+  };
+  return {
+    caseStarts: () => {
+      outside.push(...cut());
+    },
+    caseEnds: cut,
+    fileEnds: () => {
+      outside.push(...watching());
+      watching = () => [];
+      return outside;
+    },
+  };
+}

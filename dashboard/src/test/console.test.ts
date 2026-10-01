@@ -8,7 +8,7 @@
  */
 
 import { expect, test, vi } from "vitest";
-import { watchConsole } from "./console.ts";
+import { watchConsole, watchFile } from "./console.ts";
 
 function fakeConsole() {
   return { error: vi.fn(), warn: vi.fn() };
@@ -50,6 +50,42 @@ test("stopping puts both methods back as they were, a case's own silencing inclu
   // its silence.
   vi.spyOn(target, "error").mockImplementation(() => {});
   stop();
+  expect(target.error).toBe(error);
+  expect(target.warn).toBe(warn);
+});
+
+// A FILE IS WATCHED OUTSIDE ITS CASES TOO. What it says while it loads, in a
+// `beforeAll`, between two cases or in an `afterAll` is nobody's case — and a
+// watch that ran only from each case's start to its end passed all of it over.
+test("what a file says outside every case is the file's, and inside a case the case's", () => {
+  const target = fakeConsole();
+  const watch = watchFile(target);
+  target.warn("while the file loads");
+  watch.caseStarts();
+  target.error("inside the first case");
+  expect(watch.caseEnds()).toEqual(["console.error: inside the first case"]);
+  target.warn("between the cases");
+  watch.caseStarts();
+  expect(watch.caseEnds()).toEqual([]);
+  target.error("in the file's afterAll");
+  expect(watch.fileEnds()).toEqual([
+    "console.warn: while the file loads",
+    "console.warn: between the cases",
+    "console.error: in the file's afterAll",
+  ]);
+});
+
+test("a file's watch ends with both methods put back, a case's silencing not outliving it", () => {
+  const target = fakeConsole();
+  const { error, warn } = target;
+  const watch = watchFile(target);
+  watch.caseStarts();
+  // A case that silenced and never restored leaves nothing behind its span.
+  vi.spyOn(target, "error").mockImplementation(() => {});
+  watch.caseEnds();
+  target.error("after the case, unsilenced");
+  expect(error).toHaveBeenCalledWith("after the case, unsilenced");
+  expect(watch.fileEnds()).toEqual(["console.error: after the case, unsilenced"]);
   expect(target.error).toBe(error);
   expect(target.warn).toBe(warn);
 });

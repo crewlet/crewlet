@@ -266,7 +266,9 @@ What follows are the prerequisites that legitimately vary by machine.
   **A warning fails the case that printed it.** `src/test/setup.ts` watches
   `console.error` and `console.warn` around every case and fails one that
   wrote to either, after the suite's own teardown so what an unmount says
-  counts too. Vitest shows nothing a passing case prints, so every warning the
+  counts too — and fails the FILE for what it wrote outside every case: while
+  it loaded, in a `beforeAll` or an `afterAll`, or between cases, which no
+  case can be blamed for and a per-case watch never heard. Vitest shows nothing a passing case prints, so every warning the
   suite used to print was a defect nobody saw: a list keyed on a field its
   fixture lacked, a stand-in observer reporting mid-commit, an announcement
   with no live region mounted — the application had none — and the audit
