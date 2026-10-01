@@ -32,11 +32,13 @@ import (
 //     at most [runtime.GOMAXPROCS] at a time ([cpuSlot]).
 //     A holder answers a batch a margin before the asker stops waiting
 //     ([batchMargin]), with every partition it finished, and names the rest
-//     [unservedUnfinished] — asked of it again, since a batch larger than an
-//     attempt is not a failure of the holder, wherever the reply decided
-//     another partition ([partReply.decisive]): a reply deciding none is a
-//     holder that cannot answer them, and the same batch asked again would
-//     be answered the same way.
+//     [unservedUnfinished] — asked of it again wherever the reply decided
+//     another partition ([partReply.decisive]): a read the holder did not
+//     finish may be one its batch started late, which a smaller batch
+//     answers in time, or one that runs long whatever its batch, and
+//     neither end can tell which. A reply deciding none is a holder that
+//     cannot answer them, and the same batch asked again would be answered
+//     the same way.
 //  4. A partition its holder failed is asked of its next holder, within the
 //     caller's deadline — and NEVER again of a holder that already failed it
 //     in this gather: a node that was silent, behind or not serving a moment
@@ -952,13 +954,20 @@ func (r *Router) askBatch(ctx context.Context, plan gatherPlan, node string, bat
 		}
 		return false
 	}
-	// PROGRESS is a reply that DECIDED a partition ([partReply.decisive]):
-	// then what the holder did not finish, or could not fit, is the batch's
-	// size against the attempt or the reply, and is asked of it again in a
-	// smaller batch. A reply that decided NOTHING is a holder that cannot
-	// answer one of these partitions in an attempt or a reply, and each
-	// moves on — asked again, the same batch would get the same answer, once
-	// an attempt until the caller stopped waiting.
+	// PROGRESS is a reply that DECIDED a partition ([partReply.decisive]),
+	// and beside one, every partition the reply left open is asked of the
+	// same holder again, in a batch smaller by what it decided. What the
+	// holder could not FIT is the batch's size against the reply. What it
+	// did not FINISH is one of two things, and neither end can tell which
+	// ([server.answerSlices]): a read started late, behind the batch's
+	// other queries, which a smaller batch answers in time, or a read that
+	// runs long however small its batch. Asking again is what recovers the
+	// first kind, and it costs the second an attempt for every reply that
+	// decides something beside it, until one decides nothing. A reply that
+	// decided NOTHING is a holder that could not answer one of these
+	// partitions in an attempt or a reply, and each moves on — asked again,
+	// the same batch would get the same answer, once an attempt until the
+	// caller stopped waiting.
 	progress := slices.ContainsFunc(rep.Parts, partReply.decisive)
 	newer := false
 	for _, st := range batch {
