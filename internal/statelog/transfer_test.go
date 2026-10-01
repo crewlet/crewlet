@@ -785,3 +785,59 @@ func TestADonorWhoseConnectionIsClosedUnderItReturns(t *testing.T) {
 			"on its context: a donor subscribed to nothing, for good")
 	}
 }
+
+// A DONOR HANDED A CONNECTION ALREADY CLOSED HAD NOTHING TO SERVE OVER, AND
+// SAYS SO AS A FAILED DIAL.
+//
+// [statelog.ErrDonorConnectionClosed] tells the caller the donor HAD been
+// serving, and the engine's loop answers it as a new outage: it redials from
+// its base, a second later, and logs the stop every time. A connection that was
+// closed before Serve could subscribe on it is the opposite — the dial failed,
+// as a refused one does — and called a close, one that arrived closed on every
+// redial would be redialled once a second, with an ERROR line each time, for as
+// long as it went on. The close is staged where it cannot be raced: the dial
+// itself hands back a connection it has closed.
+//
+// Mutation: check the connection for a close before subscribing and answer
+// ErrDonorConnectionClosed, as Serve did, and both checks go red; ignore the
+// subscription's refusal and wait as though serving, and the case times out.
+func TestADonorHandedAClosedConnectionReportsAFailedDial(t *testing.T) {
+	t.Parallel()
+	q, err := js.Open(t.Context(), js.Config{StoreDir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open a broker: %v", err)
+	}
+	t.Cleanup(func() { _ = q.Stop(context.WithoutCancel(t.Context())) })
+	donor, err := statelog.NewDonor(statelog.DonorDeps{
+		NodeID: "closed-on-arrival",
+		Dial: func(context.Context) (*nats.Conn, error) {
+			nc, err := q.DialOwned()
+			if err == nil {
+				nc.Close()
+			}
+			return nc, err
+		},
+		Newest: func() (statelog.Manifest, bool) { return statelog.Manifest{}, true },
+		Path:   func(statelog.Manifest) string { return "" },
+	})
+	if err != nil {
+		t.Fatalf("NewDonor: %v", err)
+	}
+	served := make(chan error, 1)
+	go func() { served <- donor.Serve(t.Context()) }()
+
+	select {
+	case err := <-served:
+		if errors.Is(err, statelog.ErrDonorConnectionClosed) {
+			t.Errorf("Serve answered a connection that arrived closed with %v, "+
+				"which says the donor had been serving: its loop would redial at "+
+				"once and log it as a new outage on every attempt", err)
+		}
+		if err == nil || !errors.Is(err, nats.ErrConnectionClosed) {
+			t.Errorf("Serve returned %v, want a failed dial naming the closed "+
+				"connection (%v)", err, nats.ErrConnectionClosed)
+		}
+	case <-time.After(30 * time.Second):
+		t.Fatal("Serve is waiting on a connection that arrived closed")
+	}
+}

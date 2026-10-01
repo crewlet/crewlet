@@ -294,14 +294,22 @@ func (d *Donor) Serve(ctx context.Context) error {
 		return fmt.Errorf("statelog: open the donor's connection: %w", err)
 	}
 	defer nc.Close()
-	// BEFORE THE SUBSCRIPTIONS, and asked once more after registering:
-	// a status listener hears only the changes after it, and a connection
-	// closed in between would otherwise be waited on for ever.
+	// BEFORE THE SUBSCRIPTIONS, so no close goes unheard: a status
+	// listener hears only the changes after it, and a connection closed
+	// before it is one the client refuses to subscribe on
+	// ([nats.ErrConnectionClosed]), which ends Serve below as a setup that
+	// failed.
+	//
+	// AND THAT IS THE ONLY WAY a connection that arrived closed is told,
+	// never as [ErrDonorConnectionClosed]: that error says the donor HAD
+	// been serving, which the engine's loop answers as a new outage — a
+	// redial from its base a second later, logged every time — so a
+	// connection that arrived closed on every redial, called a close, would
+	// be redialled once a second with a line each time for as long as it
+	// went on. Arriving closed is a dial that gave the donor nothing, and
+	// it is redialled as a refused dial is, on the doubling wait.
 	closed := nc.StatusChanged(nats.CLOSED)
 	defer nc.RemoveStatusListener(closed)
-	if nc.IsClosed() {
-		return donorConnectionClosed(nc)
-	}
 
 	offers, err := nc.Subscribe(SubjectOffer, func(msg *nats.Msg) {
 		d.answerOffer(ctx, msg)
