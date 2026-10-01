@@ -399,9 +399,11 @@ read arrived.
 Leases, budgets, the activation pointer, the trim's positions and every other
 record in the [coordination store](../concepts/coordination.md) are not a log a
 node applies, so none of the four levels describes them and none can be asked
-for. They have one level, fixed: **every read is answered by the bucket's
-stream leader**, so it reflects every write acknowledged anywhere in the fleet
-before it began — read-your-writes, whichever node made the write. It was not
+for. They have one level, fixed: **every read is answered from the bucket's
+stream leader** — a key by the leader itself, a listing by a pass the leader
+closes before any row is handed over — so it reflects every write acknowledged
+anywhere in the fleet before it began: read-your-writes, whichever node made
+the write. It was not
 always: the client reads through any replica, and a replica that had not yet
 applied an acknowledged write answered from before it.
 

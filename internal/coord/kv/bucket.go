@@ -57,15 +57,19 @@
 // leader — is anything in this class past what the pass delivered? — see
 // walk.go.
 //
-// THERE IS NO READ IN THIS PACKAGE THAT A REPLICA ANSWERS, and none is kept
-// where a stale answer looked harmless. The cost of asking the leader is one
-// hop to whichever member holds it, and every read here is either followed by
-// a write conditioned on what it saw (where a stale revision only buys a lost
+// NO ANSWER THIS PACKAGE GIVES IS A REPLICA'S, and none is kept where a stale
+// answer looked harmless. The cost of asking the leader is one hop to
+// whichever member holds it, and every read here is either followed by a
+// write conditioned on what it saw (where a stale revision only buys a lost
 // compare-and-set and another round) or decides something on its own (where a
 // stale answer is a wrong decision). "Harmless" would be a claim about every
-// future caller of a read, and the client's handle is held behind an
-// interface with no read on it, so the claim never has to be made: a read a
-// replica answers does not compile here.
+// future caller of a read, so it is never made. The client's handle is held
+// behind an interface on which no POINT read compiles — not Get, not Create,
+// not a key lister — and whose one read, the Watch a listing's ordered pass is
+// made of, is still a replica's: it has one caller, [orderedPass], whose one
+// caller, [eachEntryUnder], closes the pass on the leader before a single row
+// reaches its caller. A second caller of Watch would be a listing without
+// that close.
 //
 // # What a leader read does not rule out
 //
@@ -116,8 +120,11 @@ import (
 // the writes, each a publish the stream leader arbitrates; the ordered pass a
 // listing starts from (walk.go makes it complete); and the bucket's name.
 //
-// NO READ IS ON IT — not Get, not Create, not a key lister — because every one
-// of those goes through a direct get any replica may answer. See the file doc.
+// NO POINT READ IS ON IT — not Get, not Create, not a key lister — because
+// every one of those goes through a direct get any replica may answer. Watch
+// is on it and is a replica's read too, which is why [orderedPass] is its only
+// caller and every pass is closed on the leader before a row is visited. See
+// the file doc.
 type clientBucket interface {
 	Bucket() string
 	Put(ctx context.Context, key string, value []byte) (uint64, error)

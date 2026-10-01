@@ -150,8 +150,9 @@
 //
 // # Every read is answered by the stream leader
 //
-// Every bucket here is held as a [leaderBucket], whose reads go to the
-// bucket's stream leader and whose handle on the client exposes no read at
+// Every bucket here is held as a [leaderBucket], whose point reads go to the
+// bucket's stream leader, whose listings are closed on that leader before a
+// row is handed over, and whose handle on the client exposes no point read at
 // all, because the client's own Get, Create and listings are served by
 // whichever replica the server picks, and a replica behind an acknowledged
 // write answered from before it — a lease read that misses this node's own

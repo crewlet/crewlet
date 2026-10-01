@@ -119,9 +119,11 @@ it could not see and delete records a node still needed. So:
   pass delivered, before a single row is handed to the caller.
 - **A create's step over a removal reads the marker from the leader.**
 
-There is no read left that a replica answers, including where a stale answer
-looked harmless: the cost of asking the leader is one hop, and "harmless" would
-be a claim about every future caller.
+No answer a caller gets is a replica's alone, including where a stale answer
+looked harmless. A listing's ordered pass is still served by whichever member
+hosts it, but nothing is read out of it until the leader has closed it, and
+every other read asks the leader directly. The cost is one hop, and "harmless"
+would be a claim about every future caller.
 
 **The buckets' own `allow_direct` setting is left as it is.** Turning it off is
 the obvious fix and, on a fleet that already runs, an outage: a bucket keeps the
