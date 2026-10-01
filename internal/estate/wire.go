@@ -189,11 +189,14 @@ const (
 
 	// unservedUnfinished: a gather slice this node had not finished when
 	// the batch had to be answered — a margin before the asker's deadline
-	// ([batchMargin]), with every slice it HAD finished. Not a failure of
-	// this node either: a batch costs more the more partitions it carries,
-	// so the asker asks it again for the rest, unless this reply decided
-	// none at all, which is a holder that cannot answer one of them within
-	// an attempt.
+	// ([batchMargin]), with every slice it HAD finished. It names no
+	// cause, because neither end knows one: the read may have started late,
+	// behind other queries on this node's [CPUs] — the batch's own or
+	// another request's — which asking again recovers; or it may run long
+	// however small its batch, which asking again cannot. So the asker asks
+	// for it again only beside a partition this reply decided
+	// ([partReply.decisive]), and a reply that decided none moves it on as
+	// unreachable ([Router.askBatch]).
 	unservedUnfinished unservedReason = "unfinished"
 )
 
