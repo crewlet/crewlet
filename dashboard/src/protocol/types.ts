@@ -3533,6 +3533,10 @@ export interface WorkActivityRecord {
   /** How a reader tells "nothing was announced" from "nothing happened" —
    *  which is the whole reason a quiet commit still writes a row. */
   notified: boolean;
+  /** An announcement a repair duty issued rather than the write it is about
+   *  — the mirror of a one-sided dependency, or the "ready" an unblocked
+   *  task's assignee never got — so a card read late says why it came then.
+   *  It says nothing about when the broker accepted the commit. */
   late?: boolean;
 }
 

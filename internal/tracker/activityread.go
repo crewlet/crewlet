@@ -100,7 +100,12 @@ type ActivityRecord struct {
 	// be the actor, or may have left.
 	Notified bool `json:"notified"`
 
-	// Late marks a record the broker accepted well after it was authored.
+	// Late is the commit's [Notify.Late], copied by the applier: an
+	// announcement a REPAIR DUTY issued rather than the write it is about —
+	// the mirror of a one-sided dependency, or the "ready" an unblocked
+	// task's assignee never got — so a card read hours after the fact says
+	// why it arrived then. Its authored instant is the duty's, like any
+	// other commit's: it says nothing about when the broker accepted it.
 	Late bool `json:"late,omitempty"`
 }
 
