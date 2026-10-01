@@ -1218,6 +1218,29 @@ of a lag and is refused whatever its `SEQ` reads. The
 position is a heartbeat old, so a node that has only just caught up can be
 refused once more; run the command again.
 
+A readmission that cannot be **judged** is refused as well, with nothing
+written: `503 readmission_unjudged`. On an estate divided into partitions the
+judgement asks a node serving every log the readmission writes, so a partition
+nobody serves — its holders down, or its only copy the one the readmitted node
+kept through its eviction — refuses it, and the line under the node's own hint
+says where to watch for that partition rather than for the node:
+
+```
+crewlet: the node answered 503: readmission_unjudged
+  engine: the readmission of node-4 cannot be judged on tracker@tracker.007: read its readmission bound: estate: no node serves tracker.007 right now
+  no node serving tracker.007 answered, so the standing of its log tracker@tracker.007 cannot be read, and the readmission could not be written there either. Run it again once the partition is served: …
+  `crewlet estate map` shows which nodes hold the partition named above and whether any copy of it serves; once one does, run this again
+```
+
+The node's position is not what is wrong there, so it is not told to catch up.
+Anything else the judgement could not read — the positions register, a
+published floor — is asked again, on this node or through another
+(`-url <that node>`). And either gesture on a node in a
+[capacity window](../guides/retention.md#changing-a-logs-ceiling) is refused `409 not_publishing`
+before anything is judged; its line points at `crewlet retention status`, which
+leads with the window while it is open, since nothing is written to any log
+until the fleet is back in normal mode.
+
 The refusal is the truth about the node rather than the thing keeping your data
 safe. Readmitting a node below the floor used to succeed, and it put back the
 pin the eviction had lifted: the trim, counting that node again, stops

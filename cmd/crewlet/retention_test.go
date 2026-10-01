@@ -18,6 +18,7 @@ import (
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/engine"
+	"github.com/crewlet/crewlet/internal/estate"
 	"github.com/crewlet/crewlet/internal/httpx"
 	"github.com/crewlet/crewlet/internal/httpx/httpxtest"
 	"github.com/crewlet/crewlet/internal/logging"
@@ -838,6 +839,78 @@ func TestARefusedEvictionNamesTheFlagThatForcesIt(t *testing.T) {
 	_, _, err := cli(t, "retention", "evict", "node-4", base, "-confirm", "node-4")
 	if err == nil || !strings.Contains(err.Error(), "LIVE column") {
 		t.Errorf("a live node's refusal never says how to tell its lease lapsed: %v", err)
+	}
+}
+
+// A REFUSAL'S `wait` SAYS WHAT THAT REFUSAL WAITS ON, NOT WHAT ITS VERB USUALLY
+// DOES.
+//
+// Four refusals carry `wait`, each for something different. Rendered by the
+// verb, a readmission refused `readmission_unjudged` — a partition nobody
+// serves — was told to watch the node's SEQ catch up, a number that had already
+// caught up, directly under the node's own hint naming the partition; and
+// either gesture refused `not_publishing` was sent to a lease or a position
+// that had nothing to do with the capacity window it was waiting out. Each is
+// rendered here by the route's own renderer from the engine's own error, so the
+// codes this command switches on are the codes a node sends.
+//
+// AND A 503 GATE REFUSAL IS THE NODE'S ANSWER, not "this node cannot serve
+// that": a partition nobody serves is refused the same way by every node.
+func TestAGateRefusalsWaitNamesWhatItWaitsOn(t *testing.T) {
+	node := newFakeRetentionNode(t)
+	base := bootstrapForURL(t, node.server.URL)
+	// advice is each refusal's own line, which no other refusal's answer
+	// may carry.
+	advice := map[string]string{
+		"eviction_refused":     "LIVE column in `crewlet retention status`",
+		"readmission_refused":  "says when it has caught up",
+		"readmission_unjudged": "`crewlet estate map` shows which nodes hold the partition",
+		"not_publishing":       "leads with the capacity window",
+	}
+	for _, c := range []struct {
+		name, verb, code string
+		err              error
+	}{
+		{"a live lease", "evict", "eviction_refused", fmt.Errorf("engine: evict node node-4: %w",
+			statelog.PermitEviction("node-4", []statelog.Presence{{NodeID: "node-4"}}, false))},
+		{"a node below a floor", "readmit", "readmission_refused",
+			fmt.Errorf("engine: readmit node node-4: %w", &statelog.ReadmissionRefusal{
+				NodeID: "node-4", Domain: "tracker", Published: true, Generation: 1, Seq: 1200,
+				Bound: statelog.ReadmissionBound{Domain: "tracker", Generation: 1,
+					Floor: 9000, First: 8800}})},
+		{"a partition nobody serves", "readmit", "readmission_unjudged",
+			fmt.Errorf("engine: readmit node node-4: %w", &engine.ReadmissionUnjudged{
+				Node: "node-4", Log: "tracker@tracker.007",
+				Err: fmt.Errorf("read its readmission bound: %w",
+					&estate.ErrPartitionUnserved{Partition: "tracker.007"})})},
+		{"an eviction in a capacity window", "evict", "not_publishing",
+			fmt.Errorf("%w: an eviction appends a record to the state log, and this "+
+				"node runs in seal mode", engine.ErrNotPublishing)},
+		{"a readmission in a capacity window", "readmit", "not_publishing",
+			fmt.Errorf("%w: a readmission appends a record to the state log, and this "+
+				"node runs in seal mode", engine.ErrNotPublishing)},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			node.mu.Lock()
+			node.gateErr = c.err
+			node.mu.Unlock()
+			_, _, err := cli(t, "retention", c.verb, "node-4", base, "-confirm", "node-4")
+			if err == nil {
+				t.Fatalf("a refused %s exited zero", c.verb)
+			}
+			said := err.Error()
+			if !strings.HasPrefix(said, "the node answered ") ||
+				!strings.Contains(strings.SplitN(said, "\n", 2)[0], c.code) {
+				t.Errorf("the refusal is not introduced as the node's %s answer:\n%s",
+					c.code, said)
+			}
+			for code, line := range advice {
+				if got := strings.Contains(said, line); got != (code == c.code) {
+					t.Errorf("a %s refusal carries %s's advice %q: %v\n%s", c.code,
+						code, line, got, said)
+				}
+			}
+		})
 	}
 }
 

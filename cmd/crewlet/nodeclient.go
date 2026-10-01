@@ -260,15 +260,45 @@ func (e noAnswer) Unwrap() error { return e.error }
 // field the message does not carry: a gate refusal names what to do as
 // `actions` — a closed set each surface renders in its own words — and
 // `crewlet retention evict` renders them as the flags it has (-force, -op-id),
-// which it can only do if it can read them.
+// which it can only do if it can read them, and which ones it renders depends
+// on the refusal's code.
 type nodeRefusal struct {
 	Status  int
 	Code    string
 	Actions []string
-	msg     string
+
+	// detail and hint are the refusal's own sentences, which the message
+	// carries beneath its first line.
+	detail, hint string
+
+	msg string
 }
 
 func (e *nodeRefusal) Error() string { return e.msg }
+
+// answered is the refusal as the node's own answer, whatever its status: the
+// status and the code, then the detail and the hint.
+func (e *nodeRefusal) answered() string {
+	return fmt.Sprintf("the node answered %d: %s", e.Status,
+		withRefusalDetail(e.Code, e.detail, e.hint))
+}
+
+// asJudgement is the refusal framed as the node's JUDGEMENT of a request — a
+// gate refusal — rather than as a node that cannot serve it.
+//
+// A 503 IS NOT ALWAYS "GO ELSEWHERE". [nodeError] frames one as "this node
+// cannot serve that", which is what a draining node and one built without a
+// route's backend mean. A gesture that could not be judged answers 503 too
+// (`readmission_unjudged`, `eviction_unjudged`), and is about something else
+// entirely — a partition no node serves, a listing nobody could read — which
+// another node answers the same way. Introduced as this node's inability, the
+// refusal contradicted its own hint; framed as the answer it is, as every 409
+// gate refusal is, its code, hint and actions say what it is.
+func (e *nodeRefusal) asJudgement() *nodeRefusal {
+	out := *e
+	out.msg = e.answered()
+	return &out
+}
 
 // nodeError turns a non-200 the NODE wrote into something an operator can act
 // on. Only an answer carrying an engine error code reaches it: one that
@@ -281,7 +311,8 @@ func nodeError(status int, body []byte, sentToken bool) error {
 		Actions []string `json:"actions"`
 	}
 	_ = json.Unmarshal(body, &payload)
-	refusal := &nodeRefusal{Status: status, Code: payload.Error, Actions: payload.Actions}
+	refusal := &nodeRefusal{Status: status, Code: payload.Error, Actions: payload.Actions,
+		detail: payload.Detail, hint: payload.Hint}
 	switch status {
 	case http.StatusUnauthorized, http.StatusForbidden:
 		if !sentToken {
@@ -295,12 +326,12 @@ func nodeError(status int, body []byte, sentToken bool) error {
 		// backend a route needs, and a node DRAINING for a shutdown. The
 		// code says which, and the detail and hint beside it are what say
 		// where to go instead — "draining" on its own names what happened
-		// and not what to do about it.
+		// and not what to do about it. (A gate's 503 is neither, and its
+		// command reads it as the judgement it is: [nodeRefusal.asJudgement].)
 		refusal.msg = "this node cannot serve that: " + withRefusalDetail(
 			payload.Error, payload.Detail, payload.Hint)
 	default:
-		refusal.msg = fmt.Sprintf("the node answered %d: %s", status,
-			withRefusalDetail(payload.Error, payload.Detail, payload.Hint))
+		refusal.msg = refusal.answered()
 	}
 	return refusal
 }

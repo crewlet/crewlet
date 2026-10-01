@@ -761,14 +761,20 @@ func retentionGate(args []string, stdout, stderr io.Writer, evict bool) error {
 		}
 		// A REFUSAL NAMES WHAT TO DO AS ACTIONS, which this command renders
 		// as the flags it has: the node's own sentence names no surface's
-		// controls, because the dashboard renders the same refusal.
+		// controls, because the dashboard renders the same refusal. It is
+		// the node's JUDGEMENT of the gesture, a 503 included
+		// ([nodeRefusal.asJudgement]), and what an action means can turn on
+		// which refusal it came with ([gateAdviceContext.refusal]).
 		var refused *nodeRefusal
 		if errors.As(err, &refused) {
+			refused = refused.asJudgement()
 			advice := gateAdvice(refused.Actions, gateAdviceContext{
-				again: again, forced: forced, readmit: !evict, node: node})
+				again: again, forced: forced, readmit: !evict, node: node,
+				refusal: refused.Code})
 			if len(advice) > 0 {
-				return fmt.Errorf("%w\n  %s", err, strings.Join(advice, "\n  "))
+				return fmt.Errorf("%w\n  %s", refused, strings.Join(advice, "\n  "))
 			}
+			return refused
 		}
 		return err
 	}
@@ -986,6 +992,12 @@ type gateAdviceContext struct {
 	node    string
 	stream  string
 
+	// refusal is the code of the refusal the actions came with — empty
+	// for a log's or the map's line under a 200 — because one action
+	// names a different thing to wait for under each refusal that sends
+	// it ([waitAdvice]).
+	refusal string
+
 	// perLog is a line under one log of a 200, where the same gesture
 	// again is said once below for every log it finishes rather than on
 	// each.
@@ -1028,18 +1040,44 @@ func gateAdvice(actions []string, c gateAdviceContext) []string {
 			out = append(out, "crewlet retention set-capacity "+c.stream+
 				" <bytes> -confirm <bytes>, then run this again with "+c.again)
 		case statelog.GateWait:
-			if c.readmit {
-				out = append(out, "its SEQ in `crewlet retention status`, at the "+
-					"domain's own GEN, says when it has caught up, and `crewlet "+
-					"retention snapshots` whether a peer can donate one; then run this "+
-					"again")
-			} else {
-				out = append(out, "its LIVE column in `crewlet retention status` reads "+
-					"no once the lease has lapsed; then run this again")
+			if line := waitAdvice(c.refusal); line != "" {
+				out = append(out, line)
 			}
 		}
 	}
 	return out
+}
+
+// waitAdvice is where to watch what a refusal's `wait` waits on — keyed on the
+// REFUSAL, never on the verb, because four refusals send it and each waits on
+// something else: an eviction's on the node's lease lapsing, a readmission's on
+// the node catching up, an unjudged readmission's on a partition being served
+// again, and either gesture's `not_publishing` on the fleet leaving a capacity
+// window. Keyed on the verb, an unjudged readmission was told to watch the
+// node catch up — a number that had already caught up, under a hint saying the
+// partition was what it waited on — and a gesture refused `not_publishing` to
+// watch a lease or a position that had nothing to do with it.
+//
+// Nothing for a refusal this build does not know: the node's own hint above
+// the line still says what it waits on, and a guess here would contradict it.
+func waitAdvice(refusal string) string {
+	switch refusal {
+	case "eviction_refused":
+		return "its LIVE column in `crewlet retention status` reads no once the " +
+			"lease has lapsed; then run this again"
+	case "readmission_refused":
+		return "its SEQ in `crewlet retention status`, at the domain's own GEN, " +
+			"says when it has caught up, and `crewlet retention snapshots` whether " +
+			"a peer can donate one; then run this again"
+	case "readmission_unjudged":
+		return "`crewlet estate map` shows which nodes hold the partition named " +
+			"above and whether any copy of it serves; once one does, run this again"
+	case "not_publishing":
+		return "`crewlet retention status` leads with the capacity window while it " +
+			"is open; once the fleet has been restarted into normal mode, run this " +
+			"again"
+	}
+	return ""
 }
 
 // gateRequestTimeout is how long `retention evict` and `readmit` wait for the
