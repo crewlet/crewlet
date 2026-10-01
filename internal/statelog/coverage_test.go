@@ -2,6 +2,7 @@ package statelog_test
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/statelog"
@@ -58,5 +59,22 @@ func TestAMissingReasonOffTheWireIsAValue(t *testing.T) {
 	}
 	if c.Missing[0].Reason.Valid() || c.Notice() == "" {
 		t.Errorf("decoded %+v: the unknown reason must decode as a value and still count", c)
+	}
+}
+
+// A STATED COVERAGE NEVER SENDS A NULL. A read that addressed partitions and
+// heard from none of them carries no answered list, and a client reading
+// `.length` on a null throws where it would read an absent list as empty.
+func TestACoverageSendsNoNull(t *testing.T) {
+	t.Parallel()
+	raw, err := json.Marshal(statelog.Coverage{
+		Addressed: 1,
+		Missing:   []statelog.MissingPartition{{Partition: "tracker.000", Reason: statelog.MissingUnserved}},
+	})
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	if strings.Contains(string(raw), "null") {
+		t.Errorf("a coverage with nothing answered marshals a null: %s", raw)
 	}
 }

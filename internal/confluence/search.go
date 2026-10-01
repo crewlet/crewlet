@@ -86,39 +86,40 @@ func (s *Searcher) CanSearch(seat *org.Role, o *org.Organization) bool {
 	return allowed
 }
 
-// Search implements [knowledge.Searcher].
+// Search implements [knowledge.Searcher]. One corpus, somebody else's, so the
+// answer states no coverage: there is no partition of it to be missing.
 //
 // BEST EFFORT: it never reports an error. Every failure path is an empty
 // result and the prefetch degrades to an empty block — a turn must not die
 // because a wiki was slow.
-func (s *Searcher) Search(ctx context.Context, q knowledge.Query) []knowledge.Hit {
+func (s *Searcher) Search(ctx context.Context, q knowledge.Query) knowledge.Answer {
 	if s == nil || strings.TrimSpace(q.Text) == "" {
-		return nil
+		return knowledge.Answer{}
 	}
 	client, self := s.clientFor(q.Seat)
 	if client == nil {
-		return nil
+		return knowledge.Answer{}
 	}
 	scope := scopeOf(q.Org)
 	allowed, _ := knowledge.Permitted(scope, self)
 	if !allowed {
-		return nil
+		return knowledge.Answer{}
 	}
 	cql := BuildCQL(q.Text, scope, self)
 	if cql == "" {
 		// Belt and braces on the rule above: an empty CQL and a refused
 		// permission are the same condition, and running a search with
 		// neither would search the whole instance.
-		return nil
+		return knowledge.Answer{}
 	}
 
 	pages, err := client.Search(ctx, cql, q.Hits()+overfetch)
 	if err != nil {
 		log.WarnContext(ctx, "confluence_search_failed", "error", err.Error(),
 			"detail", "the turn gets an empty knowledge block")
-		return nil
+		return knowledge.Answer{}
 	}
-	return s.hits(pages, q)
+	return knowledge.Answer{Hits: s.hits(pages, q)}
 }
 
 // hits filters and renders what came back.

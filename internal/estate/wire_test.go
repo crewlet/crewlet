@@ -94,6 +94,17 @@ func uncarried(t *testing.T) map[string]string {
 	for _, spec := range registry {
 		walk(spec.args)
 		walk(spec.result)
+		if spec.part != nil {
+			walk(spec.part)
+		}
+	}
+	// AND THE ENVELOPE EVERY ONE OF THEM TRAVELS IN — a gather's per-
+	// partition reply included — since a field of the request or the reply
+	// that does not cross loses every operation's answer at once.
+	for _, envelope := range []reflect.Type{
+		reflect.TypeFor[request](), reflect.TypeFor[reply](), reflect.TypeFor[partReply](),
+	} {
+		walk(envelope)
 	}
 	return found
 }
@@ -124,7 +135,10 @@ func TestEveryOperationsTypesDecode(t *testing.T) {
 	t.Parallel()
 	for _, name := range slices.Sorted(maps.Keys(registry)) {
 		spec := registry[name]
-		for _, ty := range []reflect.Type{spec.args, spec.result} {
+		for _, ty := range []reflect.Type{spec.args, spec.result, spec.part} {
+			if ty == nil {
+				continue
+			}
 			raw, err := json.Marshal(reflect.New(ty).Elem().Interface())
 			if err != nil {
 				t.Errorf("%s: encode a zero %s: %v", name, ty, err)

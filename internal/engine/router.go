@@ -332,6 +332,26 @@ func (e *Engine) partitionBackend(n *native, p statelog.PartitionID) estate.Back
 			return ok
 		},
 	}
+	if n.log != nil {
+		// WHERE THIS COPY IS, and the barrier a linearizable gather is
+		// read after — each per log, since a partition carries several.
+		b.Applied = func(stream string) statelog.Position {
+			if running := n.log.logOf(stream); running != nil {
+				return running.runner.Committed()
+			}
+			return statelog.Position{}
+		}
+		b.Barrier = func(ctx context.Context, stream string) (statelog.Position, bool, error) {
+			running := n.log.logOf(stream)
+			if running == nil || running.reader == nil {
+				// A LOG WITH NO READ AUTHORITY makes no freshness
+				// claim — the vectors' derived log.
+				return statelog.Position{}, false, nil
+			}
+			at, err := running.reader.Barrier(ctx)
+			return at, true, err
+		}
+	}
 	if n.trackerReader != nil {
 		b.Tracker = n.trackerReader
 	}

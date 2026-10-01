@@ -29,7 +29,7 @@ import (
 // index is this node's own and the rows are the fleet's, which the searcher
 // already reconciles.
 type WorkSearcher interface {
-	Search(ctx context.Context, text string, limit int) ([]tracker.Ranked, error)
+	Search(ctx context.Context, text string, limit int) (tracker.SearchAnswer, error)
 }
 
 // Conversations is the seat's own thread ledger, as this surface needs it.
@@ -70,7 +70,7 @@ func (s Sources) workSearch(ctx context.Context, p Params) (any, error) {
 	if text == "" {
 		return nil, badParams("q", "", nil)
 	}
-	hits, err := s.WorkSearch.Search(ctx, text, p.Int("limit", DefaultSearchLimit))
+	answer, err := s.WorkSearch.Search(ctx, text, p.Int("limit", DefaultSearchLimit))
 	switch {
 	case errors.Is(err, tracker.ErrIndexBuilding):
 		return map[string]any{
@@ -83,12 +83,20 @@ func (s Sources) workSearch(ctx context.Context, p Params) (any, error) {
 	case err != nil:
 		return nil, err
 	}
+	hits := answer.Hits
 	if hits == nil {
 		// An EMPTY SLICE, never null: a client that renders `hits.length`
 		// on the answer should not have to guard the field as well.
 		hits = []tracker.Ranked{}
 	}
-	return map[string]any{"hits": hits, "available": true}, nil
+	out := map[string]any{"hits": hits, "available": true}
+	// AND WHAT IT DID NOT REACH, beside the hits: work in a partition that
+	// did not answer is work this ranking never saw. Absent where the
+	// searcher states none, as on every answer type that carries one.
+	if answer.Coverage.Addressed > 0 {
+		out["coverage"] = answer.Coverage
+	}
+	return out, nil
 }
 
 // The conversation page, and its ceiling.

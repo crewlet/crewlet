@@ -497,13 +497,13 @@ func (s Sources) knowledgeSearch(ctx context.Context, p Params) (any, error) {
 	if text == "" {
 		return out, nil
 	}
-	hits := searcher.Search(ctx, knowledge.Query{
+	answer := searcher.Search(ctx, knowledge.Query{
 		Text:  text,
 		Org:   organization,
 		Limit: KnowledgeHitLimit,
 	})
-	rows := make([]map[string]any, 0, len(hits))
-	for _, hit := range hits {
+	rows := make([]map[string]any, 0, len(answer.Hits))
+	for _, hit := range answer.Hits {
 		rows = append(rows, map[string]any{
 			"id":        hit.PageID,
 			"title":     hit.Title,
@@ -517,6 +517,13 @@ func (s Sources) knowledgeSearch(ctx context.Context, p Params) (any, error) {
 		})
 	}
 	out["hits"] = rows
+	// AND WHAT IT DID NOT REACH, beside the hits rather than folded into a
+	// shorter list: a part of the knowledge base nobody searched is not one
+	// with nothing in it. Absent where the backend states none (Confluence,
+	// one wiki with no partitions), as on every answer type that carries one.
+	if answer.Coverage.Addressed > 0 {
+		out["coverage"] = answer.Coverage
+	}
 	return out, nil
 }
 

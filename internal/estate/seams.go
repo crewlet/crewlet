@@ -101,9 +101,12 @@ func (w Work) Project(ctx context.Context, q tracker.ProjectDetailQuery) (tracke
 	return call(ctx, w.r, opProject, nil, q)
 }
 
-// Search is the tracker's ranked search.
-func (w Work) Search(ctx context.Context, text string, limit int) ([]tracker.Ranked, error) {
-	return call(ctx, w.r, opWorkSearch, nil, workSearchArgs{Text: text, Limit: limit})
+// Search is the tracker's ranked search: every partition holding the corpus
+// of work items asked, the candidates fused, and the partitions that did not
+// answer named on the answer.
+func (w Work) Search(ctx context.Context, text string, limit int) (tracker.SearchAnswer, error) {
+	hits, cov, err := gather(ctx, w.r, opWorkSearch, "", workSearchArgs{Text: text, Limit: limit})
+	return tracker.SearchAnswer{Hits: hits, Coverage: cov}, err
 }
 
 // Workload answers a unit's workload.
@@ -434,9 +437,14 @@ func (Knowledge) Backend() string { return "native" }
 func (Knowledge) CanSearch(*org.Role, *org.Organization) bool { return true }
 
 // Search is BEST EFFORT, as the seam requires: a failure is logged and
-// answers empty, because a turn must not die because the node holding the
+// answers no hits, because a turn must not die because the node holding the
 // index — this one or another — was slow.
-func (k Knowledge) Search(ctx context.Context, q knowledge.Query) []knowledge.Hit {
+//
+// AND IT SAYS WHAT IT DID NOT REACH, failure included: every partition holding
+// the knowledge base's corpus is asked, and one that did not answer is named on
+// the answer's coverage, so "nothing matched" is never what a seat is told
+// about a part of the knowledge base nobody searched.
+func (k Knowledge) Search(ctx context.Context, q knowledge.Query) knowledge.Answer {
 	args := knowledgeArgs{Text: q.Text, Limit: q.Limit, Scoped: q.Org != nil}
 	if q.Seat != nil {
 		args.Seat = q.Seat.Handle()
@@ -444,21 +452,21 @@ func (k Knowledge) Search(ctx context.Context, q knowledge.Query) []knowledge.Hi
 	if q.ExcludeAncestors != nil {
 		args.Exclusion, args.ExcludeAncestors = true, q.ExcludeAncestors
 	}
-	hits, err := call(ctx, k.r, opKnowledgeSearch, nil, args)
+	hits, cov, err := gather(ctx, k.r, opKnowledgeSearch, "", args)
 	if err != nil {
 		log.WarnContext(ctx, "knowledge_search_failed", "error", err.Error(),
-			"detail", "the knowledge block degrades to empty; a turn must not die "+
-				"because the node holding the index was slow")
-		return nil
+			"detail", "the knowledge block degrades to empty and names what it did not "+
+				"reach; a turn must not die because the node holding the index was slow")
+		return knowledge.Answer{Coverage: cov}
 	}
-	return hits
+	return knowledge.Answer{Hits: hits, Coverage: cov}
 }
 
-// Building reports whether the answering node's index is still building,
-// which is what turns an empty block into "still indexing" rather than "the
-// company has written nothing down". False when nothing answers.
+// Building reports whether the index of any partition a search reads is still
+// building, which is what turns an empty block into "still indexing" rather
+// than "the company has written nothing down". False when nothing answers.
 func (k Knowledge) Building(ctx context.Context) bool {
-	building, err := call(ctx, k.r, opKnowledgeBuilding, nil, struct{}{})
+	building, _, err := gather(ctx, k.r, opKnowledgeBuilding, "", struct{}{})
 	return err == nil && building
 }
 

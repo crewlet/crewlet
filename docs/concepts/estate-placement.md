@@ -127,6 +127,34 @@ A read waits up to ten seconds on one holder before the next is asked, a write
 up to a minute (or the caller's own deadline); neither is ever longer than the
 caller's deadline.
 
+### A read across partitions
+
+A read that addresses several partitions — a search over every partition
+holding its corpus — is a **gather**: each partition is answered by a node that
+serves it, and the answers are merged by the read's own order. The asking node
+asks each holder **once**, for all of that holder's partitions together, and
+answers the partitions it serves itself in-process. A partition its holder
+failed is asked of its next holder — and never again of the one that failed
+it, within that read. A batch too large for one reply is answered in pages.
+
+The answer carries what it covered: the partitions that answered, where each of
+their logs was when it was read, and every partition that did **not** answer,
+named with why — `unserved`, `unreachable`, `behind`, `not_holder` or `error`.
+A seat's tools render a missing partition as *N of M partitions did not answer;
+this list may be incomplete*, never as a shorter list; and a read nothing
+answered is refused naming the partitions, as a single partition is.
+
+**What each partition is read at.** A seat's read of one partition is
+`linearizable`, as it always was. Across several it is `session`: each holder
+first reaches the asking node's own writes on that partition's logs **and the
+record whose notification started the turn** — a native notification carries
+its record's position, and the turn hands it to the node's floors before its
+first read. That is "no older than what I wrote and what woke me" without a
+barrier on every log per read. An operator's read stays `linearizable`: each
+holder appends a barrier on each of the partition's logs and answers at or
+after it. A gather of one partition is a single-partition read, so at layout 0
+every read is answered exactly as before.
+
 **Read-your-writes, on every node.** Each node keeps one table of the furthest
 position its writes reached on each log. Every request for a partition carries
 this node's floors on that partition's logs, and whichever holder answers —

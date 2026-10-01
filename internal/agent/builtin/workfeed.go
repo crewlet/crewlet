@@ -154,7 +154,7 @@ func (t *taskActivity) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	if err != nil {
 		return failed(readFailure(tracker.TaskActivityTool, err)), nil
 	}
-	return jsonResult(answer)
+	return jsonResult(activityView{ActivityAnswer: answer, Unanswered: answer.Coverage.Notice()})
 }
 
 type myWork struct{ deps WorkDeps }
@@ -211,5 +211,5 @@ func (t *myWork) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	if err != nil {
 		return failed(readFailure(tracker.MyWorkTool, err)), nil
 	}
-	return jsonResult(out)
+	return jsonResult(myWorkView{MyWork: out, Unanswered: out.Coverage.Notice()})
 }

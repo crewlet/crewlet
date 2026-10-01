@@ -121,6 +121,35 @@
 // through another holder while it was not serving it. Floors on another
 // partition's logs are never carried: no holder of this one could reach them.
 //
+// # A read across partitions is a GATHER, answered at a cut
+//
+// An operation that addresses several partitions — the searches, over every
+// partition holding their corpus — is declared with [defineGather]: a server
+// half answering ONE partition's slice, and a merge over every slice. The
+// router resolves the partitions, asks each holder ONCE for all of its
+// partitions ([request.Slices]), answers this node's own in-process, asks a
+// partition its holder failed of the next holder — never again of one that
+// failed it in this gather — and merges by the operation's own sort key, a
+// paged list resuming each partition from its own cursor (cursor.go). What it
+// covered travels with the answer ([statelog.Coverage]): the partitions that
+// answered, the cut each was read at, and every one that did not, NAMED with
+// why — unserved, unreachable, behind, not a holder, or an error — so an
+// answer short of a partition is never a short list. Nothing answering at all
+// is an error, as it is for one partition. A gather that addresses ONE
+// partition is a single-partition read, asking for the whole answer exactly as
+// a build before gathers does; under layout 0 every gather is one.
+//
+// A slice reads at [statelog.GatherLevel]: a seat's at `session`, floored at
+// this node's writes and at the record whose wake started the turn, and an
+// operator's at `linearizable`, whose holder appends a barrier on each of the
+// partition's logs and answers at or after them. A batch that outgrows one
+// reply ([queue.MaxPayloadBytes]) is answered in pages: what fits, then what
+// did not, asked again alone.
+//
+// A single-partition read whose answer a gather will one day assemble — a
+// board, a person's day, an inbox — reports its coverage too
+// ([op.covered]): one partition, at the cut its holder measured.
+//
 // # What does not cross the wire, and who supplies it
 //
 // Everything that is in-process by nature — the chart seams a query carries

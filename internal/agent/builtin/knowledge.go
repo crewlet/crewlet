@@ -39,7 +39,7 @@ const searchQueryMax = 400
 // about what a knowledge backend is.
 type KnowledgeSearcher interface {
 	CanSearch(seat *org.Role, o *org.Organization) bool
-	Search(ctx context.Context, q knowledge.Query) []knowledge.Hit
+	Search(ctx context.Context, q knowledge.Query) knowledge.Answer
 }
 
 // searchKnowledge searches the team knowledge base on demand.
@@ -151,7 +151,7 @@ func (t *searchKnowledge) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 			"from what you have."}, nil
 	}
 
-	hits := t.search.Search(ctx, knowledge.Query{
+	answer := t.search.Search(ctx, knowledge.Query{
 		Text: query, Seat: seat, Org: company, Limit: searchHits,
 		// AUTO-DRAFTS HIDDEN, the same exclusion the turn-start prefetch
 		// applies. Those pages are unreviewed proposals a synthesis pass
@@ -160,7 +160,17 @@ func (t *searchKnowledge) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		// without anybody agreeing to it.
 		ExcludeAncestors: []string{knowledge.AutoDraftedParent},
 	})
+	hits := answer.Hits
+	// PART OF THE KNOWLEDGE BASE THAT DID NOT ANSWER IS SAID, and never as
+	// "no documents match": its pages are the ones nobody searched.
+	missing := answer.Coverage.Notice()
 	if len(hits) == 0 {
+		if missing != "" {
+			return tools.Result{Output: fmt.Sprintf("No team documents matched %q in "+
+				"what was searched, and %s — part of the knowledge base was not "+
+				"searched, so search again before concluding nothing is written "+
+				"down.", clip(query), missing)}, nil
+		}
 		return tools.Result{Output: fmt.Sprintf(
 			"No team documents match %q. Try different keywords, or work from what "+
 				"you have — not everything is written down.", clip(query))}, nil
@@ -179,6 +189,9 @@ func (t *searchKnowledge) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	// two hundred characters of a runbook.
 	b.WriteString("\nTo read any of these in full, look it up by title with your " +
 		"knowledge-base tools.")
+	if missing != "" {
+		b.WriteString("\n" + missing + ".")
+	}
 	return tools.Result{Output: b.String()}, nil
 }
 

@@ -437,11 +437,26 @@ type Searcher interface {
     // CanSearch is the cheap, no-I/O pre-gate.
     CanSearch(seat *org.Role, o *org.Organization) bool
 
-    // Search returns up to Query.Limit ranked hits. It never reports an
-    // error: every failure path is an empty result.
-    Search(ctx context.Context, q Query) []Hit
+    // Search returns up to Query.Limit ranked hits, and what the search
+    // could not reach. It never reports an error: every failure path is an
+    // answer with no hits.
+    Search(ctx context.Context, q Query) Answer
+}
+
+type Answer struct {
+    Hits     []Hit
+    Coverage statelog.Coverage // the partitions searched; zero on Confluence
 }
 ```
+
+**A search says what it did not reach.** The native knowledge base is searched
+partition by partition — every partition holding its corpus, each by a node
+that serves it — and a partition that did not answer is named on the answer's
+`Coverage`, never left as a shorter list: "nothing matched" and "part of the
+knowledge base was not searched" send a seat to different places. The
+turn-start block and `search_knowledge` render it as *N of M partitions did
+not answer; this list may be incomplete*. Confluence has one corpus, somebody
+else's, and states no coverage.
 
 Contract semantics every backend honors:
 
@@ -535,7 +550,7 @@ Two properties differ from the vendor path and both are visible:
   its children** under its own parent (or the top) rather than leaving them
   pointing at nothing.
 
-The tool-skills container is excluded from every result. A tool skill is machinery the engine injects into a phase, and a seat told to read one as knowledge would follow it as an instruction.
+The tool-skills container is excluded from every result. A tool skill is machinery the engine injects into a phase, and a seat told to read one as knowledge would follow it as an instruction. The exclusion costs a result that page and never a place: the search walks its fused ranking past every page it does not return, so a company whose skills lead a ranking still gets a full answer.
 
 ### Confluence backend — the Confluence searcher
 

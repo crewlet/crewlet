@@ -121,7 +121,7 @@ func TestAnUnscopedSearchOnTheOrgCredentialIsRefused(t *testing.T) {
 	}
 	if hits := searcher.Search(context.Background(), knowledge.Query{
 		Text: "how do we deploy", Org: o, Seat: &org.Role{Name: "SWE"},
-	}); len(hits) != 0 {
+	}).Hits; len(hits) != 0 {
 		t.Fatalf("hits = %+v", hits)
 	}
 }
@@ -149,7 +149,7 @@ func TestASeatWithItsOwnCredentialSearchesUnscoped(t *testing.T) {
 	}
 	hits := searcher.Search(context.Background(), knowledge.Query{
 		Text: "how do we deploy", Org: o, Seat: seat,
-	})
+	}).Hits
 	if len(hits) != 1 || hits[0].Title != "Deploy runbook" {
 		t.Fatalf("hits = %+v", hits)
 	}
@@ -218,7 +218,7 @@ func TestAutoDraftsAreHiddenByAncestorAndByTitle(t *testing.T) {
 
 	hits := searcher.Search(context.Background(), knowledge.Query{
 		Text: "deploy", Org: o, Seat: &org.Role{Name: "SWE"},
-	})
+	}).Hits
 	if len(hits) != 1 || hits[0].Title != "Real page" {
 		t.Fatalf("an unreviewed draft reached a seat's search: %+v", hits)
 	}
@@ -247,7 +247,7 @@ func TestTheSkillsSpaceIsNotKnowledge(t *testing.T) {
 
 	hits := searcher.Search(context.Background(), knowledge.Query{
 		Text: "x", Org: o, Seat: &org.Role{Name: "SWE"},
-	})
+	}).Hits
 	if len(hits) != 1 || hits[0].Container != "ENG" {
 		t.Fatalf("a tool-skill page was returned as knowledge: %+v", hits)
 	}
@@ -270,7 +270,7 @@ func TestASearchFailureIsAnEmptyBlock(t *testing.T) {
 	o.Normalize()
 	if hits := searcher.Search(context.Background(), knowledge.Query{
 		Text: "deploy", Org: o, Seat: &org.Role{Name: "SWE"},
-	}); hits != nil {
+	}).Hits; hits != nil {
 		t.Fatalf("hits = %+v", hits)
 	}
 }

@@ -162,10 +162,12 @@ func TestAStatelessNodeSearchesTheFleetsKnowledge(t *testing.T) {
 		t.Fatal("the stateless node has no knowledge searcher")
 	}
 	waitFor(t, "the stateless node's search to find the page", func() bool {
-		hits := searcher.Search(t.Context(), knowledge.Query{
+		answer := searcher.Search(t.Context(), knowledge.Query{
 			Text: "rollback drain node", Org: p.agent.engine.Company().Org, Limit: 5,
 		})
-		return slices.ContainsFunc(hits, func(h knowledge.Hit) bool { return h.Title == "Rollback runbook" })
+		// AND NOTHING MISSING: the one partition was answered.
+		return answer.Coverage.Complete() && slices.ContainsFunc(answer.Hits,
+			func(h knowledge.Hit) bool { return h.Title == "Rollback runbook" })
 	})
 }
 

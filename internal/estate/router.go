@@ -256,6 +256,12 @@ type exchange struct {
 	// resolve is the partition the arguments address under a layout —
 	// asked again after a refresh, since a new map may be a new layout.
 	resolve func(l statelog.Layout) (statelog.PartitionID, error)
+
+	// answered is told the partition the answer came from and the cut it
+	// was read at, once a holder's answer is the one returned — for an
+	// operation whose answer reports its coverage ([opSpec.covered]). Nil
+	// for every other.
+	answered func(p statelog.PartitionID, at []statelog.Position)
 }
 
 // call runs one operation on a node that serves its partition.
@@ -296,12 +302,37 @@ func call[A, R any](ctx context.Context, r *Router, o op[A, R], actor *Actor, ar
 			}
 			return parts[0], nil
 		}
+		var cov statelog.Coverage
+		if o.cover != nil {
+			// ONE PARTITION, ANSWERED: what a single-partition read covers
+			// is the partition it was read from, at the cut its holder
+			// measured before the read began.
+			x.answered = func(p statelog.PartitionID, at []statelog.Position) {
+				cov = statelog.Coverage{Addressed: 1, Answered: []string{p.String()}, At: cutOf(at)}
+			}
+		}
 		answer, err = r.route(ctx, spec, actor, x)
+		if out, ok := answer.(R); ok && err == nil && o.cover != nil {
+			o.cover(&out, cov)
+			return out, nil
+		}
 	}
 	if out, ok := answer.(R); ok {
 		return out, err
 	}
 	return zero, err
+}
+
+// cutOf is a cut of positions, or nil for none.
+func cutOf(at []statelog.Position) statelog.Cut {
+	if len(at) == 0 {
+		return nil
+	}
+	cut := make(statelog.Cut, len(at))
+	for _, pos := range at {
+		cut[pos.Stream] = pos
+	}
+	return cut
 }
 
 // held is an answer the router keeps while it asks another holder: one a
@@ -499,7 +530,7 @@ func (r *Router) tryLocal(ctx context.Context, spec *opSpec, layout statelog.Lay
 		return nil, false, nil
 	}
 	b.ServerSeams = r.seams
-	value, refusal, why, ran := r.runLocal(ctx, spec, b, layout, p, x, acceptLagging)
+	value, at, refusal, why, ran := r.runLocal(ctx, spec, b, layout, p, x, acceptLagging)
 	switch {
 	case why != "":
 		if refusal == unservedLagging {
@@ -511,6 +542,9 @@ func (r *Router) tryLocal(ctx context.Context, spec *opSpec, layout statelog.Lay
 	case unvouched(spec, value, ran):
 		w.fallback = &held{value: value, err: ran}
 	default:
+		if ran == nil && x.answered != nil {
+			x.answered(p, at)
+		}
 		return value, true, ran
 	}
 	return nil, false, nil
@@ -593,6 +627,9 @@ func (r *Router) settle(spec *opSpec, x exchange, p statelog.PartitionID, node s
 		w.note("%s: unvouched", node)
 		return nil, false, nil
 	}
+	if x.answered != nil {
+		x.answered(p, rep.At)
+	}
 	return value, true, nil
 }
 
@@ -634,25 +671,29 @@ func (r *Router) refresh(ctx context.Context, x exchange, was statelog.Partition
 // with refusal the reason a remote holder would have answered.
 func (r *Router) runLocal(ctx context.Context, spec *opSpec, b Backend, layout statelog.Layout,
 	p statelog.PartitionID, x exchange, acceptLagging bool) (
-	value any, refusal unservedReason, why string, err error) {
+	value any, at []statelog.Position, refusal unservedReason, why string, err error) {
 
 	floors := r.floorsFor(spec, layout, p)
 	reason, detail, obsolete := ready(ctx, r.self, spec, b, p, floors, streamsOf(layout, p),
 		acceptLagging)
 	r.session.Forget(obsolete...)
 	if reason != "" {
-		return nil, reason, detail, nil
+		return nil, nil, reason, detail, nil
+	}
+	if spec.covered && !spec.floorless {
+		// BEFORE THE READ, so the cut is one the answer holds at least.
+		at = appliedAt(b, streamsOf(layout, p))
 	}
 	value, err = x.local(ctx, b)
 	switch {
 	case errors.Is(err, errNoHalf):
-		return nil, unservedNoBackend, fmt.Sprintf("%s runs no native backend for %s",
+		return nil, nil, unservedNoBackend, fmt.Sprintf("%s runs no native backend for %s",
 			r.self, spec.name), nil
 	case errors.Is(err, errNotAdmitting):
-		return nil, unservedNotEstablished, fmt.Sprintf("%s's copy of %s admits no seat yet",
+		return nil, nil, unservedNotEstablished, fmt.Sprintf("%s's copy of %s admits no seat yet",
 			r.self, p), nil
 	}
-	return value, "", "", err
+	return value, at, "", "", err
 }
 
 // floorsFor is the floors a request for spec on p carries: this node's

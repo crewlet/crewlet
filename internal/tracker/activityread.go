@@ -141,6 +141,12 @@ type ActivityAnswer struct {
 	LogLag         *uint64            `json:"log_lag,omitempty"`
 	Complete       bool               `json:"complete"`
 	Incomplete     *Incomplete        `json:"incomplete,omitempty"`
+	// Coverage is which partitions this answer was read from and which it
+	// could not reach, with the cut each was read at — filled by the estate
+	// router that answered the caller, never by this reader, which reads
+	// one partition's rows and knows nothing of the others. A non-empty
+	// Missing is rendered as its Notice, never as the shorter list alone.
+	Coverage statelog.Coverage `json:"coverage,omitzero"`
 }
 
 // MaxActivityRows is how many commits one page carries.

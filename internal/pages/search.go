@@ -3,6 +3,7 @@ package pages
 import (
 	"cmp"
 	"context"
+	"fmt"
 	"strings"
 	"time"
 
@@ -147,26 +148,61 @@ func (s *Searcher) Building(_ context.Context) bool {
 
 // Search returns up to Limit ranked hits. Best effort: every failure path is
 // an empty result.
-func (s *Searcher) Search(ctx context.Context, q knowledge.Query) []knowledge.Hit {
+//
+// ONE CORPUS'S [Searcher.Slice] FUSED BY [MergeSearch] — the same two steps a
+// gather takes over several, so a node answering the whole knowledge base
+// alone and one partition of it among many are ranked by one rule.
+func (s *Searcher) Search(ctx context.Context, q knowledge.Query) knowledge.Answer {
+	slice, err := s.Slice(ctx, q)
+	if err != nil {
+		log.WarnContext(ctx, "pages_search_failed", "error", err.Error(),
+			"detail", "the knowledge block degrades to empty; a turn must not "+
+				"die because an index was slow")
+		return knowledge.Answer{}
+	}
+	return knowledge.Answer{Hits: MergeSearch([]SearchSlice{slice}, q)}
+}
+
+// SearchSlice is what one corpus answers a knowledge search with BEFORE it is
+// fused: its candidates, and every candidate it can show, by the index's key.
+//
+// THE CANDIDATES RATHER THAN A RANKED LIST, because a ranked list is an order
+// and an order means nothing beside another corpus's — see
+// [search.Candidates]. Each corpus that answers sends what the fusion needs
+// to rank it among the others, and the page behind every key it might win,
+// so whoever fuses them can render the winners without asking again.
+type SearchSlice struct {
+	Candidates search.Candidates `json:"candidates"`
+
+	// Hits is the page behind each candidate key, ABSENT for one this
+	// search never returns — a page in the tool-skills container, or one
+	// the index named and could not read back — so the fusion walks past
+	// it to the next rather than counting a hole.
+	Hits map[string]knowledge.Hit `json:"hits,omitempty"`
+}
+
+// Slice answers a knowledge search from this node's corpus, before fusion.
+//
+// AN ERROR RATHER THAN AN EMPTY SLICE, unlike [Searcher.Search]: a corpus
+// that could not answer is a part of the knowledge base the search did not
+// reach, and whoever fuses the slices names it rather than ranking around a
+// silence.
+func (s *Searcher) Slice(ctx context.Context, q knowledge.Query) (SearchSlice, error) {
 	if s.index == nil || strings.TrimSpace(q.Text) == "" {
-		return nil
+		return SearchSlice{}, nil
 	}
 	scope := knowledge.Scope(scopeOf(q.Org))
 	answer, err := s.fan.Search(ctx, search.FanQuery{
 		Text:       q.Text,
 		Containers: scope,
 		Sources:    []string{string(search.SourcePage)},
-		// OVER-FETCHED, because the exclusions below drop hits after
-		// ranking: asking for exactly the limit and then removing three
-		// skill pages would return five results where eight were
-		// available.
-		Limit: q.Hits() * searchOverfetch,
+		// NOT THE CALLER'S LIMIT: what this answers is the candidates,
+		// each method's top FuseN whatever the limit, and the fused cut
+		// the fan-out also makes is not read here.
+		Limit: search.FuseN,
 	})
 	if err != nil {
-		log.WarnContext(ctx, "pages_search_failed", "error", err.Error(),
-			"detail", "the knowledge block degrades to empty; a turn must not "+
-				"die because an index was slow")
-		return nil
+		return SearchSlice{}, err
 	}
 	if answer.Partial() {
 		// LOGGED, NEVER REFUSED. The block is best effort by contract,
@@ -180,24 +216,51 @@ func (s *Searcher) Search(ctx context.Context, q knowledge.Query) []knowledge.Hi
 			"detail", "the answer was complete for what was searched and "+
 				"silent about what was not")
 	}
-	hits, err := s.index.Hydrate(ctx, answer.Hits, q.Text)
-	if err != nil {
-		log.WarnContext(ctx, "pages_search_failed", "error", err.Error(),
-			"detail", "the fused answer could not be read back")
-		return nil
+	out := SearchSlice{Candidates: answer.Candidates}
+	keys := answer.Candidates.Keys()
+	if len(keys) == 0 {
+		return out, nil
 	}
-
-	out := make([]knowledge.Hit, 0, q.Hits())
+	hits, err := s.index.Hydrate(ctx, keys, q.Text)
+	if err != nil {
+		return SearchSlice{}, fmt.Errorf("pages: read back the search's candidates: %w", err)
+	}
+	out.Hits = make(map[string]knowledge.Hit, len(hits))
 	for _, hit := range hits {
 		if s.isExcluded(hit.Container) {
 			continue
 		}
-		out = append(out, knowledge.Hit{
+		out.Hits[hit.Key] = knowledge.Hit{
 			Title:     hit.Title,
 			Container: hit.Container,
 			PageID:    hit.ID,
 			Snippet:   hit.Snippet,
-		})
+		}
+	}
+	return out, nil
+}
+
+// MergeSearch fuses the slices of DISJOINT corpora into one answer of up to
+// q's limit hits, best first ([search.FuseCandidates]).
+//
+// THE FUSED ORDER IS WALKED PAST WHAT CANNOT BE SHOWN, rather than cut first
+// and filtered after: a tool-skill page among the leaders costs the answer
+// that page and never a place, so a company with many skills is not handed a
+// short list. That is what the over-fetch factor this replaced only
+// approximated — three times the limit, cut, then filtered — and a company
+// whose skills filled two thirds of the cut got the short list anyway.
+func MergeSearch(slices []SearchSlice, q knowledge.Query) []knowledge.Hit {
+	cands := make([]search.Candidates, 0, len(slices))
+	for _, slice := range slices {
+		cands = append(cands, slice.Candidates)
+	}
+	out := make([]knowledge.Hit, 0, q.Hits())
+	for _, key := range search.FuseCandidates(cands) {
+		hit, ok := hitFor(slices, key)
+		if !ok {
+			continue
+		}
+		out = append(out, hit)
 		if len(out) == q.Hits() {
 			break
 		}
@@ -205,12 +268,16 @@ func (s *Searcher) Search(ctx context.Context, q knowledge.Query) []knowledge.Hi
 	return out
 }
 
-// searchOverfetch is how many times the limit is asked for before exclusions.
-//
-// Three. The exclusions drop a bounded fraction — tool-skill pages in one
-// reserved container — so a wider factor buys nothing and a narrower one
-// returns short result sets on a company with many skills.
-const searchOverfetch = 3
+// hitFor is the page behind key in whichever slice named it — exactly one,
+// since the corpora are disjoint.
+func hitFor(slices []SearchSlice, key string) (knowledge.Hit, bool) {
+	for _, slice := range slices {
+		if hit, ok := slice.Hits[key]; ok {
+			return hit, true
+		}
+	}
+	return knowledge.Hit{}, false
+}
 
 // isExcluded reports a container a search never returns.
 func (s *Searcher) isExcluded(container string) bool {

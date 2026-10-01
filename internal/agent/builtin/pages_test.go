@@ -49,6 +49,11 @@ type fakeKB struct {
 	// outcome, when set, is every write's outcome — which is how a case
 	// makes a write answer `unknown` without a broker.
 	outcome *statelog.Result
+
+	// listCoverage is what a listing says it covered, and listEmpty a
+	// listing with no pages in what it read.
+	listCoverage statelog.Coverage
+	listEmpty    bool
 }
 
 // written is a write's answer, carrying the pinned outcome where there is one.
@@ -73,11 +78,16 @@ func (f *fakeKB) List(_ context.Context, _ pages.Filter,
 	if f.readErr != nil {
 		return pages.Listing{}, f.readErr
 	}
-	return pages.Listing{
+	out := pages.Listing{
 		Pages:    []pages.Summary{{ID: f.page.Page.ID, Title: f.page.Page.Title}},
 		Level:    fresh.Level,
 		Complete: true,
-	}, nil
+		Coverage: f.listCoverage,
+	}
+	if f.listEmpty {
+		out.Pages = nil
+	}
+	return out, nil
 }
 
 func (f *fakeKB) Get(_ context.Context, ref string,

@@ -637,7 +637,7 @@ func (t *workInbox) Call(ctx context.Context, args map[string]any) (tools.Result
 	if err != nil {
 		return failed(readFailure(tracker.WorkInboxTool, err)), nil
 	}
-	return jsonResult(answer)
+	return jsonResult(inboxView{InboxAnswer: answer, Unanswered: answer.Coverage.Notice()})
 }
 
 // reasonList is the wake reasons as one sentence, DERIVED rather than typed

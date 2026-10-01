@@ -138,7 +138,7 @@ func (f *Fetcher) relevantKnowledge(ctx context.Context, r Request) (string, int
 	if query == "" {
 		return "", 0
 	}
-	hits := f.src.Knowledge.Search(ctx, knowledge.Query{
+	answer := f.src.Knowledge.Search(ctx, knowledge.Query{
 		Text: query, Seat: r.Seat, Org: r.Org, Limit: knowledgeHits,
 		// AUTO-DRAFTS HIDDEN. Those pages are unreviewed proposals a
 		// synthesis pass wrote; an executor cannot tell one from a
@@ -146,22 +146,39 @@ func (f *Fetcher) relevantKnowledge(ctx context.Context, r Request) (string, int
 		// draft becomes policy without anybody agreeing to it.
 		ExcludeAncestors: []string{knowledge.AutoDraftedParent},
 	})
-	if len(hits) == 0 {
-		return EmptyKnowledgeHint, 0
-	}
+	hits := answer.Hits
+	// PART OF THE KNOWLEDGE BASE THAT DID NOT ANSWER IS SAID, never shown
+	// as a shorter list: the block would read as everything the company
+	// has written about the task.
+	missing := answer.Coverage.Notice()
 	bullets := make([]string, 0, len(hits)+1)
 	for _, hit := range hits {
 		bullets = append(bullets, renderHit(hit))
 	}
 	rendered := joinBullets(bullets)
-	if rendered == "" {
+	switch {
+	case rendered == "" && missing != "":
+		return missingKnowledgeHint(missing), 0
+	case rendered == "":
 		return EmptyKnowledgeHint, 0
 	}
 	// THE POINTER IS THE POINT: these are titles and snippets, not the
 	// pages. A seat that acted on a snippet would be acting on the first
 	// two hundred characters of a runbook.
-	return rendered + "\nTo read any of these in full, look it up by title " +
-		"with your knowledge-base tools.", len(hits)
+	rendered += "\nTo read any of these in full, look it up by title " +
+		"with your knowledge-base tools."
+	if missing != "" {
+		rendered += "\n" + missingKnowledgeHint(missing)
+	}
+	return rendered, len(hits)
+}
+
+// missingKnowledgeHint is what the block says when part of the knowledge base
+// did not answer the search: the one sentence every surface renders that as,
+// and what to do about it — which is not "nothing is written down".
+func missingKnowledgeHint(notice string) string {
+	return "(" + notice + " — part of the knowledge base was not searched, so " +
+		"search again before concluding nothing has been written down)"
 }
 
 // knowledgeQuery asks the auxiliary model for a search query.

@@ -1000,10 +1000,14 @@ func (t *listWorkItems) CallForTurn(ctx context.Context, turn *turnctx.Turn, arg
 	// carries every column the query admits whether or not anything is in
 	// it (see internal/tracker's grouping doc), so the question is whether
 	// any column COUNTS anything.
-	if len(answer.Rows) == 0 && boardEmpty(answer.Groups) && answer.Complete {
+	// AND NOTHING IS "NO MATCH" WHILE A PARTITION DID NOT ANSWER: its items
+	// are the ones nobody looked at.
+	if len(answer.Rows) == 0 && boardEmpty(answer.Groups) && answer.Complete &&
+		answer.Coverage.Complete() {
 		return tools.Result{Output: "No work items match that filter."}, nil
 	}
 	result := map[string]any{"count": len(answer.Rows), "items": answer.Rows}
+	noteUnanswered(result, answer.Coverage)
 	if len(answer.Groups) > 0 {
 		result["groups"] = answer.Groups
 		result["groups_overlap"] = answer.GroupsOverlap

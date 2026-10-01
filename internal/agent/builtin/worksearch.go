@@ -40,7 +40,7 @@ import (
 // not been wired — and the tool is then OMITTED rather than refusing at the
 // call, on [Register]'s own rule.
 type WorkSearcher interface {
-	Search(ctx context.Context, text string, limit int) ([]tracker.Ranked, error)
+	Search(ctx context.Context, text string, limit int) (tracker.SearchAnswer, error)
 }
 
 // ---- search_work_items --------------------------------------------------- //
@@ -98,7 +98,7 @@ func (t *searchWorkItems) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		return failed("search_work_items needs `text` — what the work is " +
 			"about, in plain words."), nil
 	}
-	hits, err := t.deps.Search.Search(ctx, text, argInt(args, "limit", 0))
+	answer, err := t.deps.Search.Search(ctx, text, argInt(args, "limit", 0))
 	switch {
 	case errors.Is(err, tracker.ErrIndexBuilding):
 		// NOT AN EMPTY ANSWER. "There is nothing" is what a model acts
@@ -110,7 +110,9 @@ func (t *searchWorkItems) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	case err != nil:
 		return failed(readFailure(tracker.SearchWorkItemsTool, err)), nil
 	}
-	return jsonAnswer(map[string]any{
-		"query": text, "matches": hits, "count": len(hits),
-	}, "Ask for fewer with `limit`.")
+	result := map[string]any{
+		"query": text, "matches": answer.Hits, "count": len(answer.Hits),
+	}
+	noteUnanswered(result, answer.Coverage)
+	return jsonAnswer(result, "Ask for fewer with `limit`.")
 }

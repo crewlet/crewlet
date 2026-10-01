@@ -1,0 +1,1037 @@
+package estate
+
+import (
+	"cmp"
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"maps"
+	"runtime"
+	"slices"
+	"strings"
+	"sync"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	"github.com/crewlet/crewlet/internal/knowledge"
+	"github.com/crewlet/crewlet/internal/pages"
+	"github.com/crewlet/crewlet/internal/queue"
+	"github.com/crewlet/crewlet/internal/queue/memory"
+	"github.com/crewlet/crewlet/internal/search"
+	"github.com/crewlet/crewlet/internal/statelog"
+	"github.com/crewlet/crewlet/internal/tracker"
+)
+
+// GATHERS, exercised over an in-process divided layout: the tracker space in
+// four partitions, the pages space in two, the company space in one
+// ([dividedLayout]) — every partition served by named nodes, each of which a
+// case can make silent, behind, not a holder, lagging, or failing per
+// partition.
+
+// opTestList is a paged gather over every partition carrying the tracker's
+// log, read at a level: the shape the tracker's own lists take when they are
+// gathered, declared here so the framework's level and paging rules are held
+// to a real gather of the real wire.
+var opTestList = defineGather("test.list", everyTrackerPartition,
+	func(ctx context.Context, b Backend, _ statelog.PartitionID, a listArgs) (tracker.Answer, error) {
+		if b.Tracker == nil {
+			return tracker.Answer{}, errNoHalf
+		}
+		return b.Tracker.Tasks(ctx, tracker.Query{
+			Level: a.Level, Session: a.Session, Cursor: a.Cursor, Limit: a.Limit,
+		}, time.Time{})
+	},
+	func(a listArgs, parts []PartResult[tracker.Answer]) (tracker.Answer, error) {
+		rows, next := mergePaged(
+			pagedParts(parts, func(p tracker.Answer) ([]tracker.TaskRow, string) {
+				return p.Rows, p.NextCursor
+			}),
+			func(x, y tracker.TaskRow) int { return cmp.Compare(x.Key, y.Key) },
+			func(r tracker.TaskRow) string { return r.Key }, a.Limit)
+		return tracker.Answer{Rows: rows, NextCursor: encodeGatherCursor(next)}, nil
+	}).
+	leveled(trackerDomain, func(a listArgs) statelog.ReadLevel { return a.Level },
+		func(a listArgs, level statelog.ReadLevel, floor statelog.Position) listArgs {
+			a.Level, a.Session = level, floor
+			return a
+		}).
+	paged(func(a listArgs) string { return a.Cursor },
+		func(a listArgs, own string) listArgs {
+			a.Cursor = own
+			return a
+		})
+
+type listArgs struct {
+	Level   statelog.ReadLevel
+	Session statelog.Position
+	Cursor  string
+	Limit   int
+}
+
+// everyTrackerPartition is every partition carrying the tracker's log.
+func everyTrackerPartition(_ context.Context, l statelog.Layout, _ Resolver, _ listArgs) (
+	[]statelog.PartitionID, error) {
+	var out []statelog.PartitionID
+	for _, log := range l.LogsOf(trackerDomain) {
+		out = append(out, log.Partition)
+	}
+	return out, nil
+}
+
+// trouble is what one node does with one partition.
+type trouble int
+
+const (
+	answers trouble = iota
+	failing
+	behindFloor
+	lags
+	notServing
+	cannotTell
+	noHalves
+)
+
+// partNode is one data node holding some partitions of the divided layout.
+type partNode struct {
+	name string
+
+	mu       sync.Mutex
+	holds    map[statelog.PartitionID]trouble
+	silent   bool
+	requests []request
+	barriers []string
+	levels   map[statelog.PartitionID][]tracker.Query
+	inFlight atomic.Int32
+	peak     atomic.Int32
+
+	// gate, when set, holds every read until it is closed — so a case can
+	// see how many run at once.
+	gate chan struct{}
+}
+
+func (n *partNode) set(change func(*partNode)) {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	change(n)
+}
+
+func (n *partNode) asked() []request {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	return slices.Clone(n.requests)
+}
+
+// For implements [LocalBackends] over the partitions the node holds.
+func (n *partNode) For(_ context.Context, p statelog.PartitionID) (Backend, bool, error) {
+	n.mu.Lock()
+	t, held := n.holds[p]
+	n.mu.Unlock()
+	switch {
+	case !held || t == notServing:
+		return Backend{}, false, nil
+	case t == cannotTell:
+		return Backend{}, false, errors.New("the holding could not be read")
+	}
+	return n.backend(p, t), true, nil
+}
+
+// backend is the node's copy of p.
+func (n *partNode) backend(p statelog.PartitionID, t trouble) Backend {
+	if t == noHalves {
+		return Backend{}
+	}
+	read := partRead{node: n, p: p, t: t}
+	return Backend{
+		Tracker: read, Knowledge: read, WorkSearch: workSearcherOf{read},
+		Committed: func(ctx context.Context, _ statelog.Position) error {
+			if t == behindFloor {
+				<-ctx.Done()
+				return ctx.Err()
+			}
+			return nil
+		},
+		Answers: func(context.Context) bool { return t != lags },
+		Applied: func(stream string) statelog.Position {
+			return statelog.Position{Stream: stream, Generation: 1, Seq: 10}
+		},
+		Barrier: func(_ context.Context, stream string) (statelog.Position, bool, error) {
+			if !trackerStreams[stream] {
+				// ONLY THE TRACKER'S LOGS KEEP A READ INDEX here, as
+				// the vectors' derived log keeps none in the engine.
+				return statelog.Position{}, false, nil
+			}
+			n.mu.Lock()
+			n.barriers = append(n.barriers, stream)
+			n.mu.Unlock()
+			return statelog.Position{Stream: stream, Generation: 1, Seq: 99}, true, nil
+		},
+	}
+}
+
+// trackerStreams is every tracker log's stream, in either layout a case runs.
+var trackerStreams = func() map[string]bool {
+	out := map[string]bool{}
+	for _, l := range []statelog.Layout{layoutZero, dividedLayout} {
+		for _, log := range l.LogsOf(trackerDomain) {
+			stream, _ := l.Stream(log)
+			out[stream] = true
+		}
+	}
+	return out
+}()
+
+// partRead is one partition's reads on one node.
+type partRead struct {
+	TrackerReader
+	node *partNode
+	p    statelog.PartitionID
+	t    trouble
+}
+
+func (r partRead) enter() func() {
+	now := r.node.inFlight.Add(1)
+	for peak := r.node.peak.Load(); now > peak && !r.node.peak.CompareAndSwap(peak, now); {
+		peak = r.node.peak.Load()
+	}
+	r.node.mu.Lock()
+	gate := r.node.gate
+	r.node.mu.Unlock()
+	if gate != nil {
+		<-gate
+	}
+	return func() { r.node.inFlight.Add(-1) }
+}
+
+// rowsOf is the partition's rows: every key K<n> with n in this partition's
+// residue, so the partitions' keys interleave.
+func rowsOf(p statelog.PartitionID) []tracker.TaskRow {
+	from, step := int(p.Index), 4
+	switch p.Space {
+	case statelog.SpaceTracker:
+	case statelog.SpaceEstate:
+		// THE WHOLE ESTATE, every row in its one partition.
+		from, step = 0, 1
+	default:
+		return nil
+	}
+	var out []tracker.TaskRow
+	for n := from; n < 24; n += step {
+		out = append(out, tracker.TaskRow{Key: fmt.Sprintf("K%02d", n), Title: p.String()})
+	}
+	return out
+}
+
+func (r partRead) Tasks(_ context.Context, q tracker.Query, _ time.Time) (tracker.Answer, error) {
+	defer r.enter()()
+	r.node.mu.Lock()
+	if r.node.levels == nil {
+		r.node.levels = map[statelog.PartitionID][]tracker.Query{}
+	}
+	r.node.levels[r.p] = append(r.node.levels[r.p], q)
+	r.node.mu.Unlock()
+	if r.t == failing {
+		return tracker.Answer{}, fmt.Errorf("the read of %s failed on %s: %w", r.p, r.node.name,
+			tracker.ErrNoProject)
+	}
+	var out tracker.Answer
+	for _, row := range rowsOf(r.p) {
+		if q.Cursor != "" && row.Key <= q.Cursor {
+			continue
+		}
+		if q.Limit > 0 && len(out.Rows) == q.Limit {
+			out.NextCursor = out.Rows[len(out.Rows)-1].Key
+			break
+		}
+		out.Rows = append(out.Rows, row)
+	}
+	return out, nil
+}
+
+func (r partRead) Slice(_ context.Context, q knowledge.Query) (pages.SearchSlice, error) {
+	defer r.enter()()
+	if r.t == failing {
+		return pages.SearchSlice{}, fmt.Errorf("the index of %s failed on %s", r.p, r.node.name)
+	}
+	key := "page:" + r.p.String()
+	return pages.SearchSlice{
+		Candidates: search.Candidates{Lexical: []search.Scored{{Key: key, Score: float64(r.p.Index + 1)}}},
+		Hits:       map[string]knowledge.Hit{key: {Title: r.p.String(), Snippet: q.Text}},
+	}, nil
+}
+
+func (r partRead) Building(context.Context) bool { return r.p.Index == 1 }
+
+// workSlice is the tracker's half of a ranked search on this partition —
+// reached through [workSearcherOf], since its knowledge half is also Slice.
+func (r partRead) workSlice(text string) (tracker.SearchSlice, error) {
+	defer r.enter()()
+	if r.t == failing {
+		return tracker.SearchSlice{}, fmt.Errorf("the index of %s failed on %s", r.p, r.node.name)
+	}
+	key := "task:" + r.p.String()
+	return tracker.SearchSlice{
+		Candidates: search.Candidates{Lexical: []search.Scored{{Key: key, Score: float64(r.p.Index + 1)}}},
+		Items:      map[string]tracker.Ranked{key: {ID: r.p.String(), Title: text}},
+	}, nil
+}
+
+// partPlacement is the divided layout, its partitions' holders named by case.
+type partPlacement struct {
+	mu        sync.Mutex
+	layout    statelog.Layout
+	holders   map[statelog.PartitionID][]string
+	epoch     uint64
+	refreshes int
+	onRefresh func(*partPlacement)
+}
+
+func (p *partPlacement) Layout() (statelog.Layout, error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.layout, nil
+}
+
+func (p *partPlacement) Serving(part statelog.PartitionID) ([]string, uint64, error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return slices.Clone(p.holders[part]), p.epoch, nil
+}
+
+func (p *partPlacement) Refresh(context.Context) error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.refreshes++
+	if p.onRefresh != nil {
+		p.onRefresh(p)
+	}
+	return nil
+}
+
+func (p *partPlacement) Unanswered(string) {}
+
+// partFleet is nodes serving the divided layout on one broker.
+type partFleet struct {
+	broker *memory.Broker
+	nodes  map[string]*partNode
+
+	// placement is what the routers route by, and servers what the serving
+	// nodes' own views say — two views, so a case can put them at
+	// different map epochs.
+	placement, servers *partPlacement
+}
+
+// newPartFleet stands up a node per name, each holding the partitions holds
+// gives it, and a placement naming them as each partition's holders in the
+// order given.
+func newPartFleet(t *testing.T, holds map[string][]statelog.PartitionID) *partFleet {
+	t.Helper()
+	f := &partFleet{broker: memory.NewBroker(), nodes: map[string]*partNode{},
+		placement: &partPlacement{layout: dividedLayout,
+			holders: map[statelog.PartitionID][]string{}},
+		servers: &partPlacement{layout: dividedLayout,
+			holders: map[statelog.PartitionID][]string{}}}
+	for _, name := range slices.Sorted(maps.Keys(holds)) {
+		node := &partNode{name: name, holds: map[statelog.PartitionID]trouble{}}
+		for _, p := range holds[name] {
+			node.holds[p] = answers
+			f.placement.holders[p] = append(f.placement.holders[p], name)
+			f.servers.holders[p] = append(f.servers.holders[p], name)
+		}
+		f.nodes[name] = node
+		q := f.client(t)
+		stop, err := Serve(t.Context(), recorder{q: q, node: node}, name, node, f.servers,
+			ServerSeams{})
+		if err != nil {
+			t.Fatalf("serve %s: %v", name, err)
+		}
+		t.Cleanup(func() { _ = stop(context.Background()) })
+	}
+	return f
+}
+
+func (f *partFleet) client(t *testing.T) *memory.Queue {
+	t.Helper()
+	q := f.broker.Client()
+	if err := q.Start(t.Context()); err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	t.Cleanup(func() { _ = q.Stop(context.Background()) })
+	return q
+}
+
+// router is a router on self, serving in-process what local holds.
+func (f *partFleet) router(t *testing.T, self string, local *partNode) *Router {
+	t.Helper()
+	opts := RouterOptions{Queue: f.client(t), Self: self, Placement: f.placement,
+		Session: NewSession()}
+	if local != nil {
+		opts.Local = local
+	}
+	r, err := NewRouter(opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r.readBudget = 300 * time.Millisecond
+	return r
+}
+
+// recorder records every request a node is asked and answers nothing while
+// the node is silent.
+type recorder struct {
+	q    *memory.Queue
+	node *partNode
+}
+
+func (r recorder) Serve(ctx context.Context, subject string, h queue.AnswerFunc) (queue.Unsubscribe, error) {
+	return r.q.Serve(ctx, subject, func(ctx context.Context, raw []byte) ([]byte, error) {
+		var req request
+		_ = json.Unmarshal(raw, &req)
+		r.node.mu.Lock()
+		r.node.requests = append(r.node.requests, req)
+		silent := r.node.silent
+		r.node.mu.Unlock()
+		if silent {
+			return nil, errors.New("this node is gone")
+		}
+		return h(ctx, raw)
+	})
+}
+
+// workSearcherOf makes a partRead a [WorkSearcher].
+type workSearcherOf struct{ partRead }
+
+func (w workSearcherOf) Slice(_ context.Context, text string) (tracker.SearchSlice, error) {
+	return w.workSlice(text)
+}
+
+func tp(i uint16) statelog.PartitionID {
+	return statelog.PartitionID{Space: statelog.SpaceTracker, Index: i}
+}
+
+func pp(i uint16) statelog.PartitionID {
+	return statelog.PartitionID{Space: statelog.SpacePages, Index: i}
+}
+
+var company = statelog.PartitionID{Space: statelog.SpaceCompany}
+
+// listAll is a gathered list of every row, read from r as an operator reads.
+func listAll(t *testing.T, r *Router, limit int, cursor string) (tracker.Answer, statelog.Coverage, error) {
+	t.Helper()
+	return gather(t.Context(), r, opTestList, statelog.SurfaceOperator,
+		listArgs{Level: statelog.ReadLinearizable, Limit: limit, Cursor: cursor})
+}
+
+// ONE REQUEST PER HOLDER, carrying every partition it is asked for, and every
+// partition answered — merged in the list's own order across partitions.
+func TestAGatherAsksEachHolderOnceForAllItsPartitions(t *testing.T) {
+	t.Parallel()
+	f := newPartFleet(t, map[string][]statelog.PartitionID{
+		"data-a": {tp(0), tp(1), company},
+		"data-b": {tp(2), tp(3)},
+	})
+	r := f.router(t, "agent-1", nil)
+	answer, cov, err := listAll(t, r, 0, "")
+	if err != nil {
+		t.Fatalf("gather: %v", err)
+	}
+	if got := len(answer.Rows); got != 24 {
+		t.Fatalf("the gather answered %d rows, want all 24 of the four partitions", got)
+	}
+	if !slices.IsSortedFunc(answer.Rows, func(x, y tracker.TaskRow) int { return cmp.Compare(x.Key, y.Key) }) {
+		t.Errorf("the rows are not in the list's own order across partitions: %v", answer.Rows)
+	}
+	if !cov.Complete() || cov.Addressed != 5 || len(cov.Answered) != 5 {
+		t.Errorf("coverage = %+v, want all five tracker partitions answered", cov)
+	}
+	for name, want := range map[string][]string{
+		"data-a": {"company.000", "tracker.000", "tracker.001"},
+		"data-b": {"tracker.002", "tracker.003"},
+	} {
+		asked := f.nodes[name].asked()
+		if len(asked) != 1 {
+			t.Fatalf("%s was asked %d times, want once for all its partitions", name, len(asked))
+		}
+		got := slices.Sorted(slices.Values(asked[0].Partitions))
+		if !slices.Equal(got, want) || !asked[0].Slices {
+			t.Errorf("%s was asked %v (slices %v), want %v as slices", name, got, asked[0].Slices, want)
+		}
+	}
+}
+
+// A PARTITION THAT DID NOT ANSWER IS NAMED, WITH WHY — never a short list.
+//
+// Each of the five reasons a holder can give is held to its name, and in each
+// case the partitions that did answer are in the answer and the one that did
+// not is on its coverage, so a reader is told the list may be incomplete.
+func TestAPartitionThatDidNotAnswerIsNamedWithItsReason(t *testing.T) {
+	t.Parallel()
+	for name, tc := range map[string]struct {
+		arrange func(f *partFleet)
+		want    statelog.MissingReason
+	}{
+		"nobody serves it": {
+			arrange: func(f *partFleet) {
+				f.placement.mu.Lock()
+				f.placement.holders[tp(2)] = nil
+				f.placement.mu.Unlock()
+			},
+			want: statelog.MissingUnserved,
+		},
+		"its holder does not answer": {
+			arrange: func(f *partFleet) { f.nodes["data-b"].set(func(n *partNode) { n.silent = true }) },
+			want:    statelog.MissingUnreachable,
+		},
+		"its holder is behind the asker's floor": {
+			arrange: func(f *partFleet) {
+				f.nodes["data-b"].set(func(n *partNode) { n.holds[tp(2)] = behindFloor })
+			},
+			want: statelog.MissingBehind,
+		},
+		"its holder no longer serves it": {
+			arrange: func(f *partFleet) {
+				f.nodes["data-b"].set(func(n *partNode) { n.holds[tp(2)] = notServing })
+			},
+			want: statelog.MissingNotHolder,
+		},
+		"the read failed there": {
+			arrange: func(f *partFleet) {
+				f.nodes["data-b"].set(func(n *partNode) { n.holds[tp(2)] = failing })
+			},
+			want: statelog.MissingError,
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			f := newPartFleet(t, map[string][]statelog.PartitionID{
+				"data-a": {tp(0), tp(1), tp(3), company},
+				"data-b": {tp(2)},
+			})
+			tc.arrange(f)
+			r := f.router(t, "agent-1", nil)
+			// LONGER THAN THE HOLDER'S FLOOR WAIT, so a holder that is
+			// behind says so before the asker stops listening.
+			r.readBudget = statelog.ReadBudget + time.Second
+			// A FLOOR ON EVERY TRACKER LOG, which is what a holder that is
+			// behind is behind.
+			for _, p := range []statelog.PartitionID{tp(0), tp(1), tp(2), tp(3), company} {
+				stream, _ := dividedLayout.Stream(statelog.LogID{Domain: trackerDomain, Partition: p})
+				r.Observe(statelog.Position{Stream: stream, Generation: 1, Seq: 5})
+			}
+			answer, cov, err := listAll(t, r, 0, "")
+			if err != nil {
+				t.Fatalf("a gather with four partitions answering failed: %v", err)
+			}
+			if len(answer.Rows) != 18 {
+				t.Errorf("answered %d rows, want the 18 of the partitions that answered",
+					len(answer.Rows))
+			}
+			if len(cov.Missing) != 1 || cov.Missing[0].Partition != "tracker.002" ||
+				cov.Missing[0].Reason != tc.want {
+				t.Fatalf("missing = %+v, want tracker.002 named %q", cov.Missing, tc.want)
+			}
+			const notice = "1 of 5 partitions did not answer; this list may be incomplete"
+			if cov.Notice() != notice || len(cov.Answered) != 4 {
+				t.Errorf("coverage %+v renders %q, want %q", cov, cov.Notice(), notice)
+			}
+		})
+	}
+}
+
+// A PARTITION ITS HOLDER FAILED IS ASKED OF ITS NEXT HOLDER, and never again of
+// the one that failed it — in the same gather, whatever else that holder is
+// asked.
+func TestAFailedPartitionMovesOnAndNeverBack(t *testing.T) {
+	t.Parallel()
+	f := newPartFleet(t, map[string][]statelog.PartitionID{
+		"data-a": {tp(0), tp(1), tp(2), tp(3), company},
+		"data-b": {tp(0), tp(1), tp(2), tp(3), company},
+	})
+	r := f.router(t, "agent-1", nil)
+	firstName := r.order(tp(2), []string{"data-a", "data-b"})[0]
+	first := f.nodes[firstName]
+	second := "data-a"
+	if firstName == "data-a" {
+		second = "data-b"
+	}
+	first.set(func(n *partNode) { n.holds[tp(2)] = notServing })
+
+	answer, cov, err := listAll(t, r, 0, "")
+	if err != nil || !cov.Complete() || len(answer.Rows) != 24 {
+		t.Fatalf("gather = (%d rows, %+v, %v), want every row from the next holder",
+			len(answer.Rows), cov, err)
+	}
+	timesAsked := 0
+	for _, req := range first.asked() {
+		if slices.Contains(req.Partitions, "tracker.002") {
+			timesAsked++
+		}
+	}
+	if timesAsked != 1 {
+		t.Errorf("%s was asked tracker.002 %d times, want once — it failed it", firstName, timesAsked)
+	}
+	tookIt := false
+	for _, req := range f.nodes[second].asked() {
+		tookIt = tookIt || slices.Contains(req.Partitions, "tracker.002")
+	}
+	if !tookIt {
+		t.Errorf("%s, the partition's next holder, was never asked for it", second)
+	}
+}
+
+// NOTHING ANSWERED IS AN ERROR, never an empty list — the partitions' own
+// errors, each keeping its identity — and a gather of ONE partition fails as a
+// single-partition read does, with that partition's own error.
+func TestAGatherNothingAnsweredIsAnErrorNamingEveryPartition(t *testing.T) {
+	t.Parallel()
+	f := newPartFleet(t, map[string][]statelog.PartitionID{
+		"data-a": {tp(0), tp(1), tp(2), tp(3), company},
+	})
+	f.nodes["data-a"].set(func(n *partNode) { n.silent = true })
+	r := f.router(t, "agent-1", nil)
+	_, cov, err := listAll(t, r, 0, "")
+	var unserved *ErrPartitionUnserved
+	if err == nil || !errors.As(err, &unserved) {
+		t.Fatalf("a gather nobody answered = %v, want an error naming the partitions", err)
+	}
+	for _, p := range []string{"tracker.000", "tracker.003", "company.000"} {
+		if !strings.Contains(err.Error(), p) {
+			t.Errorf("the error %q does not name %s", err, p)
+		}
+	}
+	if len(cov.Missing) != 5 || len(cov.Answered) != 0 {
+		t.Errorf("coverage = %+v, want all five missing", cov)
+	}
+
+	// ONE PARTITION: its own error, with its identity.
+	one := newPartFleet(t, map[string][]statelog.PartitionID{"data-a": {statelog.EstatePartition}})
+	one.placement.layout, one.servers.layout = layoutZero, layoutZero
+	one.nodes["data-a"].set(func(n *partNode) { n.holds[statelog.EstatePartition] = failing })
+	_, _, err = gather(t.Context(), one.router(t, "agent-1", nil), opTestList,
+		statelog.SurfaceSeat, listArgs{Level: statelog.ReadLinearizable})
+	if !errors.Is(err, tracker.ErrNoProject) {
+		t.Fatalf("a one-partition gather that failed = %v, want its read's own error", err)
+	}
+}
+
+// A GATHER OF ONE PARTITION IS A SINGLE-PARTITION READ: it asks for the whole
+// answer, at the level the read itself names — the request a build before
+// gathers sends and answers — so nothing a layout-0 fleet reads changes.
+func TestAGatherOfOnePartitionIsASingleRead(t *testing.T) {
+	t.Parallel()
+	f := newPartFleet(t, map[string][]statelog.PartitionID{"data-a": {statelog.EstatePartition}})
+	f.placement.layout, f.servers.layout = layoutZero, layoutZero
+	r := f.router(t, "agent-1", nil)
+	answer, cov, err := gather(t.Context(), r, opTestList, statelog.SurfaceSeat,
+		listArgs{Level: statelog.ReadLinearizable, Limit: 4})
+	if err != nil {
+		t.Fatalf("gather: %v", err)
+	}
+	asked := f.nodes["data-a"].asked()
+	if len(asked) != 1 || asked[0].Slices || asked[0].Level != "" {
+		t.Fatalf("asked %+v, want one whole request at the read's own level", asked)
+	}
+	reads := f.nodes["data-a"].levels[statelog.EstatePartition]
+	if len(reads) != 1 || reads[0].Level != statelog.ReadLinearizable {
+		t.Errorf("the read ran at %+v, want the seat's own linearizable — a single-"+
+			"partition read is not a gather", reads)
+	}
+	if len(answer.Rows) != 4 || cov.Addressed != 1 ||
+		!slices.Equal(cov.Answered, []string{"estate.000"}) || len(cov.At) == 0 {
+		t.Errorf("answer %d rows, coverage %+v; want 4 rows, estate.000 answered with its cut",
+			len(answer.Rows), cov)
+	}
+
+	// AND A REQUEST FROM A BUILD BEFORE GATHERS — no slices, no partitions —
+	// is answered whole, as it always was.
+	raw, _ := json.Marshal(request{Op: "knowledge.search",
+		Args: json.RawMessage(`{"Text":"deploys","Limit":3}`)})
+	replies, err := f.client(t).Ask(t.Context(), Subject("data-a"), raw, 1)
+	if err != nil || len(replies) != 1 {
+		t.Fatalf("ask = (%d, %v)", len(replies), err)
+	}
+	var rep reply
+	if err := json.Unmarshal(replies[0], &rep); err != nil {
+		t.Fatal(err)
+	}
+	var hits []knowledge.Hit
+	if err := json.Unmarshal(rep.Result, &hits); err != nil || len(hits) != 1 || rep.Parts != nil {
+		t.Fatalf("an older asker's search was answered %+v (%v), want its whole list", rep, err)
+	}
+}
+
+// AN OPERATOR'S GATHER IS LINEARIZABLE: each holder appends one barrier on each
+// of its partitions' logs that keeps a read index, applies through it, and
+// answers at or after it — a `session` read floored at the barrier, never a
+// second barrier — with the barriers as the cut it answered at.
+func TestAnOperatorsGatherBarriersEachPartitionsLog(t *testing.T) {
+	t.Parallel()
+	f := newPartFleet(t, map[string][]statelog.PartitionID{
+		"data-a": {tp(0), tp(1), tp(2), tp(3), company},
+	})
+	r := f.router(t, "agent-1", nil)
+	_, cov, err := listAll(t, r, 0, "")
+	if err != nil {
+		t.Fatalf("gather: %v", err)
+	}
+	node := f.nodes["data-a"]
+	node.mu.Lock()
+	barriers := slices.Clone(node.barriers)
+	levels := node.levels
+	node.mu.Unlock()
+	if len(barriers) != 5 {
+		t.Fatalf("barriers on %v, want one on each of the five tracker logs", barriers)
+	}
+	for _, p := range []statelog.PartitionID{tp(0), tp(3), company} {
+		stream, _ := dividedLayout.Stream(statelog.LogID{Domain: trackerDomain, Partition: p})
+		reads := levels[p]
+		if len(reads) != 1 || reads[0].Level != statelog.ReadSession || reads[0].Session.Seq != 99 ||
+			reads[0].Session.Stream != stream {
+			t.Errorf("%s was read %+v, want once at session floored at its barrier", p, reads)
+		}
+		if cov.At[stream].Seq != 99 {
+			t.Errorf("the cut holds %v for %s, want its barrier", cov.At[stream], stream)
+		}
+	}
+	// THE VECTORS' LOG KEEPS NO READ INDEX, so the cut holds where it was.
+	vectors, _ := dividedLayout.Stream(statelog.LogID{Domain: vectorsDomain, Partition: tp(0)})
+	if cov.At[vectors].Seq != 10 {
+		t.Errorf("the cut holds %v for the vectors' log, want where it was applied", cov.At[vectors])
+	}
+}
+
+// A SEAT'S GATHER IS SESSION, floored at what the node has observed on each
+// partition's log — its own writes, and the trigger that woke its turn — and
+// appends no barrier at all.
+func TestASeatsGatherReadsEachPartitionAtItsOwnFloor(t *testing.T) {
+	t.Parallel()
+	f := newPartFleet(t, map[string][]statelog.PartitionID{
+		"data-a": {tp(0), tp(1), tp(2), tp(3), company},
+	})
+	r := f.router(t, "agent-1", nil)
+	stream, _ := dividedLayout.Stream(statelog.LogID{Domain: trackerDomain, Partition: tp(1)})
+	trigger := statelog.Position{Stream: stream, Generation: 1, Seq: 42}
+	r.Observe(trigger)
+	if _, _, err := gather(t.Context(), r, opTestList, statelog.SurfaceSeat,
+		listArgs{Level: statelog.LevelFor(statelog.SurfaceSeat, "")}); err != nil {
+		t.Fatalf("gather: %v", err)
+	}
+	node := f.nodes["data-a"]
+	node.mu.Lock()
+	defer node.mu.Unlock()
+	if len(node.barriers) != 0 {
+		t.Errorf("a seat's gather appended barriers on %v", node.barriers)
+	}
+	if got := node.levels[tp(1)]; len(got) != 1 || got[0].Level != statelog.ReadSession ||
+		got[0].Session != trigger {
+		t.Errorf("tracker.001 was read %+v, want session floored at the trigger %v", got, trigger)
+	}
+	if got := node.levels[tp(2)]; len(got) != 1 || got[0].Level != statelog.ReadSession ||
+		!got[0].Session.IsZero() {
+		t.Errorf("tracker.002 was read %+v, want session with no floor of another log's", got)
+	}
+	for _, req := range node.requests {
+		if req.Level != statelog.ReadSession {
+			t.Errorf("a slice was asked at %q, want session", req.Level)
+		}
+	}
+}
+
+// THIS NODE'S OWN PARTITIONS ARE ANSWERED IN-PROCESS, at most GOMAXPROCS at a
+// time, and only the rest are asked of the fleet.
+func TestThisNodesPartitionsAreAnsweredInProcess(t *testing.T) {
+	t.Parallel()
+	f := newPartFleet(t, map[string][]statelog.PartitionID{
+		"data-a": {tp(0), tp(1)},
+		"data-b": {tp(2), tp(3), company},
+	})
+	local := f.nodes["data-a"]
+	r := f.router(t, "data-a", local)
+	answer, cov, err := listAll(t, r, 0, "")
+	if err != nil || !cov.Complete() || len(answer.Rows) != 24 {
+		t.Fatalf("gather = (%d rows, %+v, %v)", len(answer.Rows), cov, err)
+	}
+	if asked := local.asked(); len(asked) != 0 {
+		t.Errorf("this node was asked over the broker for its own partitions: %+v", asked)
+	}
+	if asked := f.nodes["data-b"].asked(); len(asked) != 1 {
+		t.Errorf("data-b was asked %d times, want once for its three partitions", len(asked))
+	}
+}
+
+// THE IN-PROCESS PARTITIONS RUN CONCURRENTLY, AND NO MORE THAN THE CPUS AT
+// ONCE: each is a read of a local file, so more at once only queues on the CPU.
+func TestLocalPartitionsRunConcurrentlyWithinTheCPUs(t *testing.T) {
+	t.Parallel()
+	wide := statelog.Layout{Number: 1, Spaces: []statelog.SpaceLayout{
+		{Space: statelog.SpaceTracker, Partitions: 32, Domains: []string{"tracker"}},
+	}}
+	var all []statelog.PartitionID
+	for i := range uint16(32) {
+		all = append(all, tp(i))
+	}
+	f := newPartFleet(t, map[string][]statelog.PartitionID{"data-a": all})
+	f.placement.layout, f.servers.layout = wide, wide
+	local := f.nodes["data-a"]
+	gate := make(chan struct{})
+	local.set(func(n *partNode) { n.gate = gate })
+	r := f.router(t, "data-a", local)
+	done := make(chan error, 1)
+	go func() {
+		_, _, err := listAll(t, r, 0, "")
+		done <- err
+	}()
+	cpus := int32(runtime.GOMAXPROCS(0))
+	deadline := time.Now().Add(5 * time.Second)
+	for local.inFlight.Load() < min(cpus, 32) && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+	time.Sleep(20 * time.Millisecond)
+	close(gate)
+	if err := <-done; err != nil {
+		t.Fatalf("gather: %v", err)
+	}
+	if peak := local.peak.Load(); peak != min(cpus, 32) {
+		t.Errorf("%d partitions read at once, want %d — every CPU and no more", peak, min(cpus, 32))
+	}
+}
+
+// A BATCH THAT OUTGROWS ONE REPLY IS ANSWERED IN PAGES: what fits, then what
+// did not, asked again alone — and a slice too large to fit even alone is the
+// error that says so, naming the partition, never a silence.
+func TestABatchThatOutgrowsTheReplyIsAnsweredInPages(t *testing.T) {
+	t.Parallel()
+	f := newPartFleet(t, nil)
+	node := &partNode{name: "data-a", holds: map[statelog.PartitionID]trouble{}}
+	for _, p := range []statelog.PartitionID{tp(0), tp(1), tp(2), tp(3), company} {
+		node.holds[p] = answers
+		f.placement.holders[p] = []string{"data-a"}
+		f.servers.holders[p] = []string{"data-a"}
+	}
+	f.nodes["data-a"] = node
+	srv := server{self: "data-a", local: node, placement: f.servers,
+		// ROOM FOR TWO OF THE FOUR FULL SLICES (about 1.25 KiB each)
+		// beside the headroom.
+		ceiling: replyHeadroom + 2700}
+	stop, err := recorder{q: f.client(t), node: node}.Serve(t.Context(), Subject("data-a"),
+		func(ctx context.Context, raw []byte) ([]byte, error) { return srv.answer(ctx, raw), nil })
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = stop(context.Background()) })
+
+	r := f.router(t, "agent-1", nil)
+	answer, cov, err := listAll(t, r, 0, "")
+	if err != nil || !cov.Complete() || len(answer.Rows) != 24 {
+		t.Fatalf("gather = (%d rows, %+v, %v), want every row across pages", len(answer.Rows), cov, err)
+	}
+	if asked := node.asked(); len(asked) < 2 {
+		t.Errorf("the batch was answered in %d request(s), want it paged over several", len(asked))
+	}
+
+	// A SLICE TOO LARGE EVEN ALONE: the four full partitions are each the
+	// error naming the size, and the empty one still answers.
+	srv.ceiling = replyHeadroom + 600
+	_, cov, err = listAll(t, r, 0, "")
+	if err != nil {
+		t.Fatalf("gather: %v", err)
+	}
+	if len(cov.Missing) != 4 || !slices.Equal(cov.Answered, []string{"company.000"}) {
+		t.Fatalf("coverage = %+v, want the four full partitions missing", cov)
+	}
+	for _, m := range cov.Missing {
+		if m.Reason != statelog.MissingError || !strings.Contains(m.Detail, "narrow the read") {
+			t.Errorf("%s is missing as %q (%s), want the error naming its size",
+				m.Partition, m.Reason, m.Detail)
+		}
+	}
+	// AND WHEN THAT IS EVERY PARTITION, the gather is that error.
+	narrow := statelog.Layout{Number: 1, Spaces: []statelog.SpaceLayout{
+		{Space: statelog.SpaceTracker, Partitions: 4, Domains: []string{"tracker"}},
+	}}
+	for _, view := range []*partPlacement{f.placement, f.servers} {
+		view.mu.Lock()
+		view.layout = narrow
+		view.mu.Unlock()
+	}
+	if _, _, err := listAll(t, r, 0, ""); !errors.Is(err, queue.ErrTooLarge) {
+		t.Errorf("err = %v, want queue.ErrTooLarge naming the size", err)
+	}
+}
+
+// A LIST PAGED ACROSS PARTITIONS RESUMES EACH PARTITION WHERE IT LEFT OFF:
+// every row exactly once, in the list's own order — and a partition missing
+// from one page is not a partition out of rows.
+func TestAPagedGatherResumesEachPartitionWhereItLeftOff(t *testing.T) {
+	t.Parallel()
+	f := newPartFleet(t, map[string][]statelog.PartitionID{
+		"data-a": {tp(0), tp(1), tp(2), tp(3), company},
+	})
+	r := f.router(t, "agent-1", nil)
+	var seen []string
+	cursor := ""
+	for page := 0; ; page++ {
+		if page == 2 {
+			// ONE PARTITION GOES MISSING FOR A PAGE.
+			f.nodes["data-a"].set(func(n *partNode) { n.holds[tp(2)] = failing })
+		}
+		if page == 3 {
+			f.nodes["data-a"].set(func(n *partNode) { n.holds[tp(2)] = answers })
+		}
+		answer, _, err := listAll(t, r, 5, cursor)
+		if err != nil {
+			t.Fatalf("page %d: %v", page, err)
+		}
+		for _, row := range answer.Rows {
+			seen = append(seen, row.Key)
+		}
+		if answer.NextCursor == "" {
+			break
+		}
+		cursor = answer.NextCursor
+		if page > 20 {
+			t.Fatal("the pages never ended")
+		}
+	}
+	var want []string
+	for n := range 24 {
+		want = append(want, fmt.Sprintf("K%02d", n))
+	}
+	sorted := slices.Sorted(slices.Values(seen))
+	if !slices.Equal(sorted, want) {
+		t.Fatalf("paged through %v, want every row exactly once", seen)
+	}
+}
+
+// A CURSOR THIS LIST DID NOT MINT IS REFUSED BY NAME, never read as the start.
+func TestAGatherCursorItDidNotMintIsRefused(t *testing.T) {
+	t.Parallel()
+	f := newPartFleet(t, map[string][]statelog.PartitionID{"data-a": {tp(0)}})
+	_, _, err := listAll(t, f.router(t, "agent-1", nil), 5, "K07")
+	if !errors.Is(err, ErrBadCursor) {
+		t.Fatalf("err = %v, want ErrBadCursor", err)
+	}
+	next := map[statelog.PartitionID]string{tp(0): "", tp(3): "K11"}
+	got, err := decodeGatherCursor(encodeGatherCursor(next))
+	if err != nil || len(got) != 2 || got[tp(3)] != "K11" || got[tp(0)] != "" {
+		t.Fatalf("the cursor read back as (%v, %v), want %v", got, err, next)
+	}
+}
+
+// A NOT-HOLDER FROM A NEWER MAP REFRESHES THE GATHER'S VIEW ONCE, and the
+// partition is asked of the holder the fresh map names.
+func TestANotHolderFromANewerMapRefreshesTheGather(t *testing.T) {
+	t.Parallel()
+	f := newPartFleet(t, map[string][]statelog.PartitionID{
+		"data-a": {tp(0), tp(1), tp(2), tp(3), company},
+		"data-b": {tp(2)},
+	})
+	f.placement.mu.Lock()
+	f.placement.holders[tp(2)] = []string{"data-a"}
+	f.placement.epoch = 3
+	f.placement.onRefresh = func(p *partPlacement) {
+		p.holders[tp(2)] = []string{"data-b"}
+		p.epoch = 4
+	}
+	f.placement.mu.Unlock()
+	// THE SERVER'S OWN VIEW IS NEWER than the asker's: tracker.002 moved.
+	f.servers.mu.Lock()
+	f.servers.epoch = 4
+	f.servers.mu.Unlock()
+	f.nodes["data-a"].set(func(n *partNode) { n.holds[tp(2)] = notServing })
+	r := f.router(t, "agent-1", nil)
+	answer, cov, err := listAll(t, r, 0, "")
+	if err != nil || len(answer.Rows) != 24 || !cov.Complete() {
+		t.Fatalf("gather = (%d rows, %+v, %v), want tracker.002 from the fresh map's holder",
+			len(answer.Rows), cov, err)
+	}
+	if f.placement.refreshes != 1 {
+		t.Errorf("refreshed %d times, want once", f.placement.refreshes)
+	}
+}
+
+// A COPY THAT LAGS IS ASKED LAST, never refused for lagging: the partition's
+// only holder lags, and is asked again to answer anyway.
+func TestAGatherAsksALaggingCopyLastRatherThanMissingIt(t *testing.T) {
+	t.Parallel()
+	f := newPartFleet(t, map[string][]statelog.PartitionID{
+		"data-a": {tp(0), tp(1), tp(2), tp(3), company},
+	})
+	f.nodes["data-a"].set(func(n *partNode) { n.holds[tp(1)] = lags })
+	answer, cov, err := listAll(t, f.router(t, "agent-1", nil), 0, "")
+	if err != nil || !cov.Complete() || len(answer.Rows) != 24 {
+		t.Fatalf("gather = (%d rows, %+v, %v), want the lagging copy's rows too",
+			len(answer.Rows), cov, err)
+	}
+	var accepted bool
+	for _, req := range f.nodes["data-a"].asked() {
+		accepted = accepted || (req.AcceptLagging && slices.Equal(req.Partitions, []string{"tracker.001"}))
+	}
+	if !accepted {
+		t.Error("the lagging copy was never asked to answer anyway")
+	}
+}
+
+// THE SEARCHES ARE GATHERS over their corpus — the knowledge base's over the
+// pages space, the work items' over the tracker space's partitions that index
+// them — fused across partitions, with what did not answer named.
+func TestTheSearchesAreGathersOverTheirCorpus(t *testing.T) {
+	t.Parallel()
+	f := newPartFleet(t, map[string][]statelog.PartitionID{
+		"data-a": {tp(0), tp(1), pp(0), company},
+		"data-b": {tp(2), tp(3), pp(1)},
+	})
+	r := f.router(t, "agent-1", nil)
+	got := r.Knowledge().Search(t.Context(), knowledge.Query{Text: "deploys", Limit: 5})
+	if !got.Coverage.Complete() || got.Coverage.Addressed != 2 || len(got.Hits) != 2 {
+		t.Fatalf("knowledge search = %+v, want both pages partitions' hits", got)
+	}
+	// FUSED BY SCORE, so pages.001's stronger candidate ranks first.
+	if got.Hits[0].Title != "pages.001" {
+		t.Errorf("the fused order is %v, want pages.001 first", got.Hits)
+	}
+	if !r.Knowledge().Building(t.Context()) {
+		t.Error("pages.001's index is building and the search said it was not")
+	}
+	// THE WORK ITEMS' CORPUS IS THE TRACKER SPACE'S, and not the company
+	// space's catalogue, which carries the tracker's log and indexes nothing.
+	work, err := r.Work().Search(t.Context(), "retry backoff", 10)
+	if err != nil || work.Coverage.Addressed != 4 || len(work.Hits) != 4 ||
+		slices.Contains(work.Coverage.Answered, "company.000") {
+		t.Fatalf("work search = (%+v, %v), want the four tracker partitions' hits", work, err)
+	}
+	if work.Hits[0].ID != "tracker.003" || work.Hits[3].Rank != 4 {
+		t.Errorf("the fused order is %v, want tracker.003 first and ranks counted 1..4", work.Hits)
+	}
+
+	f.nodes["data-b"].set(func(n *partNode) { n.silent = true })
+	got = r.Knowledge().Search(t.Context(), knowledge.Query{Text: "deploys", Limit: 5})
+	if len(got.Hits) != 1 || len(got.Coverage.Missing) != 1 ||
+		got.Coverage.Missing[0].Partition != "pages.001" ||
+		got.Coverage.Missing[0].Reason != statelog.MissingUnreachable {
+		t.Fatalf("with pages.001's holder gone the search answered %+v, want it named", got)
+	}
+}
+
+// A SINGLE-PARTITION READ WHOSE ANSWER A GATHER WILL ONE DAY ASSEMBLE SAYS WHAT
+// IT COVERED: the one partition it was read from and the cut its holder
+// measured before the read began — answered in-process or by a peer alike.
+func TestASingleReadSaysWhatItCovered(t *testing.T) {
+	t.Parallel()
+	f := newFleet(t, "data-a")
+	for name, r := range map[string]*Router{
+		"by a peer":    f.client,
+		"by this node": f.router(t, "data-a", f.nodes["data-a"]),
+	} {
+		answer, err := r.Work().Tasks(t.Context(), tracker.Query{}, time.Now())
+		if err != nil {
+			t.Fatalf("%s: tasks: %v", name, err)
+		}
+		cov := answer.Coverage
+		if cov.Addressed != 1 || !slices.Equal(cov.Answered, []string{"estate.000"}) ||
+			!cov.Complete() || cov.At[trackerStream].Seq != 7 {
+			t.Errorf("%s: coverage = %+v, want estate.000 answered at its holder's cut", name, cov)
+		}
+	}
+}

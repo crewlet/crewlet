@@ -18,6 +18,7 @@ import (
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/providers/llm"
 	"github.com/crewlet/crewlet/internal/providers/llm/chain"
+	"github.com/crewlet/crewlet/internal/statelog"
 )
 
 // ── the fakes ──
@@ -178,6 +179,10 @@ type searcher struct {
 	queries []knowledge.Query
 	cannot  bool
 
+	// coverage is what the search says it covered — a partition missing
+	// from it is part of the knowledge base nobody searched.
+	coverage statelog.Coverage
+
 	// building reports the backend's index as still catching up. A real
 	// one that keeps no index does not implement this at all, which is
 	// why the fetcher reaches it through an optional interface — the
@@ -191,11 +196,11 @@ func (s *searcher) CanSearch(*org.Role, *org.Organization) bool { return !s.cann
 
 func (s *searcher) Building(context.Context) bool { return s.building }
 
-func (s *searcher) Search(_ context.Context, q knowledge.Query) []knowledge.Hit {
+func (s *searcher) Search(_ context.Context, q knowledge.Query) knowledge.Answer {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.queries = append(s.queries, q)
-	return s.hits
+	return knowledge.Answer{Hits: s.hits, Coverage: s.coverage}
 }
 
 func (s *searcher) asked() []knowledge.Query {
@@ -429,7 +434,7 @@ func (panickingSearcher) Backend() string { return "fake" }
 
 func (panickingSearcher) CanSearch(*org.Role, *org.Organization) bool { return true }
 
-func (p panickingSearcher) Search(context.Context, knowledge.Query) []knowledge.Hit {
+func (p panickingSearcher) Search(context.Context, knowledge.Query) knowledge.Answer {
 	panic(p.mark("a malformed hit"))
 }
 
@@ -708,6 +713,34 @@ func TestTheModelWritesTheSearchQuery(t *testing.T) {
 	// on the first two hundred characters of a runbook.
 	if !strings.Contains(got, "look it up by title") {
 		t.Fatalf("the block does not say to open the page:\n%s", got)
+	}
+}
+
+// PART OF THE KNOWLEDGE BASE THAT DID NOT ANSWER IS SAID, never shown as a
+// shorter block: with hits, the block names what was not searched beside them;
+// with none, it says so instead of "no team documents surfaced" — which a seat
+// reads as the company having written nothing about the task.
+func TestAKnowledgeBlockMissingAPartitionSaysSo(t *testing.T) {
+	t.Parallel()
+	short := statelog.Coverage{Addressed: 4, Answered: []string{"pages.000", "pages.002", "pages.003"},
+		Missing: []statelog.MissingPartition{{Partition: "pages.001", Reason: statelog.MissingUnreachable}}}
+	const notice = "1 of 4 partitions did not answer; this list may be incomplete"
+
+	got := fetch(t, prefetch.Sources{
+		Knowledge: &searcher{coverage: short, hits: []knowledge.Hit{{Title: "Staging runbook"}}},
+		Models:    models{provider: &aux{answers: []string{"staging proxy"}}},
+	}, request(t)).RelevantKnowledge
+	if !strings.Contains(got, "Staging runbook") || !strings.Contains(got, notice) {
+		t.Fatalf("a block missing a partition rendered:\n%s\nwant the hit and %q", got, notice)
+	}
+
+	got = fetch(t, prefetch.Sources{
+		Knowledge: &searcher{coverage: short},
+		Models:    models{provider: &aux{answers: []string{"staging proxy"}}},
+	}, request(t)).RelevantKnowledge
+	if got == prefetch.EmptyKnowledgeHint || !strings.Contains(got, notice) {
+		t.Fatalf("an empty block missing a partition rendered %q, want %q rather than "+
+			"\"nothing surfaced\"", got, notice)
 	}
 }
 

@@ -17,6 +17,7 @@ import (
 	"github.com/crewlet/crewlet/internal/pages"
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/queue/memory"
+	"github.com/crewlet/crewlet/internal/search"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tracker"
 )
@@ -153,12 +154,15 @@ func (f *fakeNode) Comment(_ context.Context, _ pages.Actor, _ string,
 	return pages.Comment{Body: in.Body}, pages.Written{}, nil
 }
 
-func (f *fakeNode) Search(_ context.Context, q knowledge.Query) []knowledge.Hit {
+func (f *fakeNode) Slice(_ context.Context, q knowledge.Query) (pages.SearchSlice, error) {
 	f.note("search")
 	f.mu.Lock()
 	f.queries = append(f.queries, q)
 	f.mu.Unlock()
-	return []knowledge.Hit{{Title: "found on " + f.name}}
+	return pages.SearchSlice{
+		Candidates: search.Candidates{Lexical: []search.Scored{{Key: "page:" + f.name, Score: 1}}},
+		Hits:       map[string]knowledge.Hit{"page:" + f.name: {Title: "found on " + f.name}},
+	}, nil
 }
 
 func (f *fakeNode) Building(context.Context) bool { return false }
@@ -204,6 +208,9 @@ func (f *fakeNode) backend() Backend {
 			defer f.mu.Unlock()
 			f.asked = append(f.asked, "admits")
 			return !f.notAdmitting
+		},
+		Applied: func(stream string) statelog.Position {
+			return statelog.Position{Stream: stream, Generation: 1, Seq: 7}
 		},
 	}
 }

@@ -27,6 +27,7 @@ type stubWork struct {
 	routing      tracker.RoutingAnswer
 	routingQuery tracker.RoutingQuery
 	ranked       []tracker.Ranked
+	coverage     statelog.Coverage
 	searchText   string
 	searchLimit  int
 	query        tracker.Query
@@ -142,9 +143,9 @@ func (s *stubWork) Routing(_ context.Context, q tracker.RoutingQuery, _ time.Tim
 // [queries.WorkSearcher]. It is on this type for the harness's convenience
 // only; the surface takes the two independently, and a case that wants a node
 // with a board and no index leaves `WorkSearch` nil.
-func (s *stubWork) Search(_ context.Context, text string, limit int) ([]tracker.Ranked, error) {
+func (s *stubWork) Search(_ context.Context, text string, limit int) (tracker.SearchAnswer, error) {
 	s.searchText, s.searchLimit = text, limit
-	return s.ranked, s.err
+	return tracker.SearchAnswer{Hits: s.ranked, Coverage: s.coverage}, s.err
 }
 
 func (s *stubWork) Tasks(_ context.Context, q tracker.Query, _ time.Time) (tracker.Answer, error) {

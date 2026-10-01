@@ -188,7 +188,7 @@ func TestAPageBecomesSearchable(t *testing.T) {
 	waitFor(t, "the page to become searchable", func() bool {
 		hits = searcher.Search(t.Context(), knowledge.Query{
 			Text: "rollback drain node", Org: n.engine.Company().Org, Limit: 5,
-		})
+		}).Hits
 		return len(hits) > 0
 	})
 	if hits[0].Title != "Rollback runbook" {

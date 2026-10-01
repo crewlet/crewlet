@@ -4,11 +4,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/knowledge"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/pages"
+	"github.com/crewlet/crewlet/internal/search"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/store"
 	"github.com/crewlet/crewlet/internal/tracker"
@@ -91,9 +93,10 @@ type TrackerWriter interface {
 	PurgeTask(ctx context.Context, opID, id, project, reason string) (tracker.WriteResult, error)
 }
 
-// WorkSearcher is the tracker's ranked search.
+// WorkSearcher is the tracker's ranked search over one partition's corpus,
+// before the fusion a gather makes across partitions ([tracker.MergeSearch]).
 type WorkSearcher interface {
-	Search(ctx context.Context, text string, limit int) ([]tracker.Ranked, error)
+	Slice(ctx context.Context, text string) (tracker.SearchSlice, error)
 }
 
 // PageReader is the knowledge base's read side.
@@ -123,10 +126,12 @@ type PageWriter interface {
 		body string) (pages.Comment, pages.Written, error)
 }
 
-// KnowledgeSearcher is the native knowledge search, with the one question a
-// caller asks of an empty answer.
+// KnowledgeSearcher is the native knowledge search over one partition's
+// corpus, before the fusion a gather makes across partitions
+// ([pages.MergeSearch]), with the one question a caller asks of an empty
+// answer.
 type KnowledgeSearcher interface {
-	Search(ctx context.Context, q knowledge.Query) []knowledge.Hit
+	Slice(ctx context.Context, q knowledge.Query) (pages.SearchSlice, error)
 	Building(ctx context.Context) bool
 }
 
@@ -168,6 +173,19 @@ type Backend struct {
 	// a lag of zero — the gate every node's seat admission asks of the copy
 	// that will serve it ([Router.Serves]). Only admission's ping reads it.
 	Admits func(ctx context.Context) bool
+
+	// Applied is where this copy's applier of one of the partition's logs
+	// has committed, read BEFORE a read that reports its coverage begins —
+	// so the cut it reports is a lower bound on what the answer holds
+	// ([statelog.Coverage.At]). Nil states no cut.
+	Applied func(stream string) statelog.Position
+
+	// Barrier appends a barrier on one of the partition's logs and waits
+	// for this copy to apply through it ([statelog.Reader.Barrier]) — the
+	// `linearizable` half of a gather slice. False where the log keeps no
+	// read index: it makes no freshness claim (the vectors' derived log),
+	// and where it was is what [Backend.Applied] says.
+	Barrier func(ctx context.Context, stream string) (statelog.Position, bool, error)
 
 	// ServerSeams are the node's own, partition-free: the dispatcher sets
 	// them on every backend it hands an operation.
@@ -211,6 +229,7 @@ var errNotAdmitting = errors.New("estate: this copy admits no seat yet")
 var (
 	trackerDomain = tracker.Domain{}.Name()
 	pagesDomain   = pages.Domain{}.Name()
+	vectorsDomain = search.Domain{}.Name()
 )
 
 // ---- the tracker's reads ------------------------------------------------ //
@@ -227,7 +246,8 @@ var opTasks = define("tracker.tasks", opRead, wholeDomain[tasksArgs](trackerDoma
 		}
 		a.Query.Units = b.Units
 		return b.Tracker.Tasks(ctx, a.Query, a.Now)
-	})
+	}).covered(
+	func(a *tracker.Answer, c statelog.Coverage) { a.Coverage = c })
 
 type taskArgs struct {
 	IDOrKey string
@@ -325,7 +345,8 @@ var opActivity = define("tracker.activity", opRead, wholeDomain[activityArgs](tr
 			return tracker.ActivityAnswer{}, errNoHalf
 		}
 		return b.Tracker.Activity(ctx, a.Query, a.Now)
-	})
+	}).covered(
+	func(a *tracker.ActivityAnswer, c statelog.Coverage) { a.Coverage = c })
 
 type myWorkArgs struct {
 	Query tracker.MyWorkQuery
@@ -338,7 +359,8 @@ var opMyWork = define("tracker.my_work", opRead, wholeDomain[myWorkArgs](tracker
 			return tracker.MyWork{}, errNoHalf
 		}
 		return b.Tracker.MyWork(ctx, a.Query, a.Now)
-	})
+	}).covered(
+	func(w *tracker.MyWork, c statelog.Coverage) { w.Coverage = c })
 
 var opProjects = define("tracker.projects", opRead, wholeDomain[tracker.ProjectQuery](trackerDomain), false,
 	func(ctx context.Context, b Backend, _ *Actor, q tracker.ProjectQuery) (tracker.ProjectListing, error) {
@@ -347,7 +369,8 @@ var opProjects = define("tracker.projects", opRead, wholeDomain[tracker.ProjectQ
 		}
 		q.Units = b.Units
 		return b.Tracker.Projects(ctx, q)
-	})
+	}).covered(
+	func(l *tracker.ProjectListing, c statelog.Coverage) { l.Coverage = c })
 
 var opProject = define("tracker.project", opRead, wholeDomain[tracker.ProjectDetailQuery](trackerDomain), false,
 	func(ctx context.Context, b Backend, _ *Actor, q tracker.ProjectDetailQuery) (tracker.ProjectDetail, error) {
@@ -363,15 +386,23 @@ type workSearchArgs struct {
 	Limit int
 }
 
-// NO FLOOR: the ranked search reads the lexical index, which each node's
-// own walk maintains on its own schedule behind the applier, so a floor on
-// the log would promise a visibility the index does not give.
-var opWorkSearch = define("tracker.search", opRead, wholeDomain[workSearchArgs](trackerDomain), false,
-	func(ctx context.Context, b Backend, _ *Actor, a workSearchArgs) ([]tracker.Ranked, error) {
+// THE RANKED SEARCH IS A GATHER over every partition holding the corpus of
+// work items: each answers its candidates, and the fusion is made where they
+// are all held ([tracker.MergeSearch]) — the arithmetic one corpus is ranked
+// by.
+//
+// NO FLOOR: the ranked search reads the lexical index, which each node's own
+// walk maintains on its own schedule behind the applier, so a floor on the log
+// would promise a visibility the index does not give.
+var opWorkSearch = defineGather("tracker.search", corpusOf[workSearchArgs](trackerDomain),
+	func(ctx context.Context, b Backend, _ statelog.PartitionID, a workSearchArgs) (tracker.SearchSlice, error) {
 		if b.WorkSearch == nil {
-			return nil, errNoHalf
+			return tracker.SearchSlice{}, errNoHalf
 		}
-		return b.WorkSearch.Search(ctx, a.Text, a.Limit)
+		return b.WorkSearch.Slice(ctx, a.Text)
+	},
+	func(a workSearchArgs, parts []PartResult[tracker.SearchSlice]) ([]tracker.Ranked, error) {
+		return tracker.MergeSearch(answered(parts), a.Limit), nil
 	}).floorless()
 
 type workloadArgs struct {
@@ -403,7 +434,8 @@ var opInbox = define("tracker.read_inbox", opRead, wholeDomain[inboxArgs](tracke
 			return tracker.InboxAnswer{}, errNoHalf
 		}
 		return b.Tracker.Inbox(ctx, a.Query, a.Now)
-	})
+	}).covered(
+	func(a *tracker.InboxAnswer, c statelog.Coverage) { a.Coverage = c })
 
 type routingArgs struct {
 	Query tracker.RoutingQuery
@@ -817,7 +849,8 @@ var opListPages = define("pages.list", opRead, wholeDomain[listPagesArgs](pagesD
 			return pages.Listing{}, errNoHalf
 		}
 		return b.Pages.List(ctx, a.Filter, a.Fresh)
-	})
+	}).covered(
+	func(l *pages.Listing, c statelog.Coverage) { l.Coverage = c })
 
 type getPageArgs struct {
 	Ref   string
@@ -994,37 +1027,67 @@ type knowledgeArgs struct {
 	Exclusion        bool
 }
 
-var opKnowledgeSearch = define("knowledge.search", opRead, wholeDomain[knowledgeArgs](pagesDomain), false,
-	func(ctx context.Context, b Backend, _ *Actor, a knowledgeArgs) ([]knowledge.Hit, error) {
+// query is the search a request names, against the serving node's own chart:
+// the seat's role and the org whose read scope applies.
+func (a knowledgeArgs) query(b Backend) knowledge.Query {
+	q := knowledge.Query{Text: a.Text, Limit: a.Limit}
+	if a.Exclusion {
+		q.ExcludeAncestors = a.ExcludeAncestors
+		if q.ExcludeAncestors == nil {
+			q.ExcludeAncestors = []string{}
+		}
+	}
+	if b.Seat != nil {
+		seat, o := b.Seat(a.Seat)
+		if a.Seat != "" {
+			q.Seat = seat
+		}
+		if a.Scoped {
+			q.Org = o
+		}
+	}
+	return q
+}
+
+// THE KNOWLEDGE SEARCH IS A GATHER over every partition holding the knowledge
+// base's corpus, on [opWorkSearch]'s terms: each partition answers its
+// candidates and the pages behind them, and the fusion is made where they are
+// all held ([pages.MergeSearch]).
+var opKnowledgeSearch = defineGather("knowledge.search", corpusOf[knowledgeArgs](pagesDomain),
+	func(ctx context.Context, b Backend, _ statelog.PartitionID, a knowledgeArgs) (pages.SearchSlice, error) {
 		if b.Knowledge == nil {
-			return nil, errNoHalf
+			return pages.SearchSlice{}, errNoHalf
 		}
-		q := knowledge.Query{Text: a.Text, Limit: a.Limit}
-		if a.Exclusion {
-			q.ExcludeAncestors = a.ExcludeAncestors
-			if q.ExcludeAncestors == nil {
-				q.ExcludeAncestors = []string{}
-			}
-		}
-		if b.Seat != nil {
-			seat, o := b.Seat(a.Seat)
-			if a.Seat != "" {
-				q.Seat = seat
-			}
-			if a.Scoped {
-				q.Org = o
-			}
-		}
-		return b.Knowledge.Search(ctx, q), nil
+		return b.Knowledge.Slice(ctx, a.query(b))
+	},
+	func(a knowledgeArgs, parts []PartResult[pages.SearchSlice]) ([]knowledge.Hit, error) {
+		return pages.MergeSearch(answered(parts), knowledge.Query{Limit: a.Limit}), nil
 	}).floorless()
 
-var opKnowledgeBuilding = define("knowledge.building", opRead, wholeDomain[struct{}](pagesDomain), false,
-	func(ctx context.Context, b Backend, _ *Actor, _ struct{}) (bool, error) {
+// WHETHER AN INDEX IS STILL BUILDING is asked of every partition a search
+// reads: an empty answer is "still indexing" if ANY of them is, since that
+// partition's documents are the ones the answer could not have found.
+var opKnowledgeBuilding = defineGather("knowledge.building", corpusOf[struct{}](pagesDomain),
+	func(ctx context.Context, b Backend, _ statelog.PartitionID, _ struct{}) (bool, error) {
 		if b.Knowledge == nil {
 			return false, errNoHalf
 		}
 		return b.Knowledge.Building(ctx), nil
+	},
+	func(_ struct{}, parts []PartResult[bool]) (bool, error) {
+		return slices.Contains(answered(parts), true), nil
 	}).floorless()
+
+// answered is the values of the partitions that answered, in order.
+func answered[P any](parts []PartResult[P]) []P {
+	out := make([]P, 0, len(parts))
+	for _, p := range parts {
+		if p.Missing == nil {
+			out = append(out, p.Value)
+		}
+	}
+	return out
+}
 
 // served is what a node runs, as a seat's admission asks it.
 type served struct {

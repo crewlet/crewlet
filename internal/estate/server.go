@@ -41,7 +41,8 @@ func Serve(ctx context.Context, q Server, self string, local LocalBackends,
 	case self == "":
 		return nil, errors.New("estate: serve needs this node's id — it is the subject other nodes ask")
 	}
-	srv := server{self: self, local: local, placement: placement, seams: seams}
+	srv := server{self: self, local: local, placement: placement, seams: seams,
+		ceiling: queue.MaxPayloadBytes}
 	return q.Serve(ctx, Subject(self), func(ctx context.Context, raw []byte) ([]byte, error) {
 		return srv.answer(ctx, raw), nil
 	})
@@ -53,6 +54,11 @@ type server struct {
 	local     LocalBackends
 	placement Placement
 	seams     ServerSeams
+
+	// ceiling is the most one reply may carry — the broker's
+	// ([queue.MaxPayloadBytes]), held so a test can make a gather batch
+	// outgrow it without eight mebibytes of answers.
+	ceiling int
 }
 
 // answer runs one request and ALWAYS answers: a node that stayed silent
@@ -81,9 +87,17 @@ func (s server) answer(ctx context.Context, raw []byte) []byte {
 		ctx, cancel = context.WithDeadline(ctx, req.Deadline)
 		defer cancel()
 	}
+	if req.Slices && spec.slice != nil {
+		// A GATHER BATCH: every partition the request names, each
+		// answered or refused on its own.
+		return encodeReply(s.answerSlices(ctx, spec, req))
+	}
 	b := Backend{}
+	var p statelog.PartitionID
+	var layout statelog.Layout
 	if spec.partitions != nil {
-		p, err := s.partitionOf(ctx, spec, req)
+		var err error
+		p, err = s.partitionOf(ctx, spec, req)
 		if err != nil {
 			out.Err = encodeError(fmt.Errorf("estate: %s: %w", req.Op, err))
 			return encodeReply(out)
@@ -109,7 +123,7 @@ func (s server) answer(ctx context.Context, raw []byte) []byte {
 			return encodeReply(out)
 		}
 		b = served
-		layout, err := s.placement.Layout()
+		layout, err = s.placement.Layout()
 		if err != nil {
 			out.Err = encodeError(fmt.Errorf("estate: %s: read which layout the fleet runs: %w",
 				req.Op, err))
@@ -126,7 +140,20 @@ func (s server) answer(ctx context.Context, raw []byte) []byte {
 		}
 	}
 	b.ServerSeams = s.seams
-	result, err := spec.serve(ctx, b, req.Actor, req.Args)
+	var result any
+	var err error
+	if spec.whole != nil {
+		// A GATHER OF ONE PARTITION, which is a single-partition read: its
+		// slice and the merge of that one slice, at the read's own level.
+		result, out.At, err = spec.whole(ctx, b, sliceAsk{
+			partition: p, layout: layout, floors: req.Floors, cursor: req.Cursors[p.String()],
+		}, req.Args)
+	} else {
+		if spec.covered && !spec.floorless {
+			out.At = appliedAt(b, streamsOf(layout, p))
+		}
+		result, err = spec.serve(ctx, b, p, req.Actor, req.Args)
+	}
 	switch {
 	case errors.Is(err, errNoHalf):
 		out.Unserved, out.Detail = unservedNoBackend, fmt.Sprintf(

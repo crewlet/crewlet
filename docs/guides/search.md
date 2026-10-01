@@ -185,6 +185,25 @@ broker. A search that returned nothing because the broker hiccupped would be a
 fleet-wide outage of a read every node can serve alone, so only the *peers'*
 ranges can go missing.
 
+### A partition that does not answer
+
+The bucket division above is how one partition's corpus is scanned. A search
+is also asked of every **partition** holding its corpus — the knowledge base's
+partitions for `search_knowledge` and the turn-start block, the tracker's for
+`search_work_items` — each answered by a node that serves it, and the answers
+are merged exactly as the buckets' are: each partition returns its best
+candidates per method *with their scores*, and the asking node merges each
+method by score and fuses once. Under layout 0 there is one partition, so this
+is the search it has always been.
+
+A partition that does not answer is **named** on the answer rather than left
+as a shorter list — which partition, and why: nobody serves it, its holder did
+not answer, was behind, no longer serves it, or failed. A seat is told *N of M
+partitions did not answer; this list may be incomplete*, and an empty answer
+with a partition missing is never told "nothing matched". The bucket coverage
+above stays what it is, beside it: the two say different things — a range of a
+partition's corpus unscanned, and a partition not asked at all.
+
 ---
 
 ## If search is slow

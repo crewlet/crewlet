@@ -55,8 +55,12 @@ type fakeTracker struct {
 
 	// searched is every text the ranked search was asked for, and ranked
 	// what it answers with.
-	searched  []string
-	ranked    []tracker.Ranked
+	searched []string
+	ranked   []tracker.Ranked
+
+	// coverage is what every gathered answer the fake gives says it
+	// covered — a partition missing from it is work nobody read.
+	coverage  statelog.Coverage
 	searchErr error
 	patched   []tracker.TaskPatch
 	ifMatch   []uint64
@@ -298,16 +302,16 @@ func (f *fakeTracker) depends(actor builtin.Actor) builtin.WorkDepender {
 // Search implements [builtin.WorkSearcher]: the fake in its fifth shape, for
 // the one read here that is a RANKING rather than a filter.
 func (f *fakeTracker) Search(_ context.Context, text string,
-	limit int) ([]tracker.Ranked, error) {
+	limit int) (tracker.SearchAnswer, error) {
 
 	f.searched = append(f.searched, text)
 	if f.searchErr != nil {
-		return nil, f.searchErr
+		return tracker.SearchAnswer{}, f.searchErr
 	}
 	if limit <= 0 || limit > len(f.ranked) {
-		return f.ranked, nil
+		return tracker.SearchAnswer{Hits: f.ranked, Coverage: f.coverage}, nil
 	}
-	return f.ranked[:limit], nil
+	return tracker.SearchAnswer{Hits: f.ranked[:limit], Coverage: f.coverage}, nil
 }
 
 // merges is its fourth, for the second sequence.
@@ -1323,6 +1327,7 @@ func (f *fakeTracker) Inbox(_ context.Context, q tracker.InboxQuery,
 
 	f.inboxQuery = q
 	return tracker.InboxAnswer{
+		Coverage:       f.coverage,
 		Handle:         q.Who.Handle,
 		PrimaryReasons: tracker.DefaultPrimaryReasons,
 		Notices: []tracker.InboxNotice{{

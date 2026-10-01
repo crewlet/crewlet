@@ -22,20 +22,25 @@ type itemRanker struct {
 	index *search.Indexer
 }
 
-// RankItems implements [tracker.Ranker].
-func (r itemRanker) RankItems(ctx context.Context, text string,
-	limit int) ([]tracker.RankedDoc, error) {
+// Candidates implements [tracker.Ranker]: each method's top candidates over
+// this node's corpus of work items, and the item behind each with the index's
+// excerpt.
+func (r itemRanker) Candidates(ctx context.Context, text string) (
+	search.Candidates, map[string]tracker.RankedDoc, error) {
 
 	if r.fan == nil || r.index == nil {
-		return nil, nil
+		return search.Candidates{}, nil, nil
 	}
 	answer, err := r.fan.Search(ctx, search.FanQuery{
 		Text:    text,
 		Sources: []string{string(search.SourceTask)},
-		Limit:   limit,
+		// NOT THE CALLER'S LIMIT: what this answers is the candidates,
+		// each method's top FuseN whatever the limit, and the fused cut
+		// the fan-out also makes is not read here.
+		Limit: search.FuseN,
 	})
 	if err != nil {
-		return nil, err
+		return search.Candidates{}, nil, err
 	}
 	// PARTIAL IS NOT REFUSED, for the reason the knowledge search gives:
 	// an answer over part of the corpus beats none. What differs here is
@@ -49,15 +54,19 @@ func (r itemRanker) RankItems(ctx context.Context, text string,
 			"detail", "the ranking was complete for what was searched and "+
 				"silent about what was not")
 	}
-	hits, err := r.index.Hydrate(ctx, answer.Hits, text)
+	keys := answer.Candidates.Keys()
+	if len(keys) == 0 {
+		return answer.Candidates, nil, nil
+	}
+	hits, err := r.index.Hydrate(ctx, keys, text)
 	if err != nil {
-		return nil, err
+		return search.Candidates{}, nil, err
 	}
-	out := make([]tracker.RankedDoc, 0, len(hits))
+	docs := make(map[string]tracker.RankedDoc, len(hits))
 	for _, hit := range hits {
-		out = append(out, tracker.RankedDoc{ID: hit.ID, Snippet: hit.Snippet})
+		docs[hit.Key] = tracker.RankedDoc{ID: hit.ID, Snippet: hit.Snippet}
 	}
-	return out, nil
+	return answer.Candidates, docs, nil
 }
 
 // Building implements [tracker.Ranker].

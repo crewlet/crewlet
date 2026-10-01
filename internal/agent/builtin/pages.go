@@ -210,10 +210,11 @@ func (t *listPages) CallForTurn(ctx context.Context, turn *turnctx.Turn, args ma
 	if err != nil {
 		return failed(readFailure(ListPagesTool, err)), nil
 	}
-	if len(got.Pages) == 0 {
+	if len(got.Pages) == 0 && got.Coverage.Complete() {
 		return tools.Result{Output: "No pages match that filter."}, nil
 	}
 	out := map[string]any{"count": len(got.Pages), "pages": got.Pages}
+	noteUnanswered(out, got.Coverage)
 	// AND WHAT THE ANSWER COULD NOT ACCOUNT FOR. A listing served over a
 	// deferred scope may be missing pages, and a model that reads a short
 	// list as the whole truth writes the duplicate.

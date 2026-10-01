@@ -64,6 +64,19 @@ const (
 	// An unanswered one is reported as [ErrOutcomeUnknown] and never asked
 	// again.
 	opOnceWrite
+
+	// opGatherRead addresses SEVERAL partitions and is answered per
+	// partition as [opRead] is — each by any serving holder of it — with
+	// one rule of its own: a partition is never asked again of a holder
+	// that already failed it in this gather. See gather.go.
+	//
+	// A slice asked at `linearizable` is the BARRIER half of a gather: its
+	// holder appends a barrier on each of the partition's logs, applies
+	// through them, and answers at or after them — the cut they
+	// established. It fails over exactly as any slice does, so it is the
+	// same class asked at a level ([request.Level]), not a class of its
+	// own: a class is what a failover may do, and nothing differs.
+	opGatherRead
 )
 
 // request is one operation, as the asking node sends it.
@@ -103,6 +116,23 @@ type request struct {
 	// older build ignores it and refuses again, which is the answer it gave
 	// before.
 	AcceptLagging bool `json:"accept_lagging,omitempty"`
+
+	// Slices asks a gather operation for each of Partitions' own answer
+	// ([reply.Parts]) rather than the operation's whole one — the asker
+	// holds every partition's and merges them. A gather that addresses ONE
+	// partition is a single-partition read and never sets it, which is
+	// also what an older build's asker sends: the serving node answers
+	// such a request whole, exactly as before gathers.
+	Slices bool `json:"slices,omitempty"`
+
+	// Level is the level each partition of a gather slice is read at
+	// ([statelog.GatherLevel]), set where the operation reads a log at a
+	// level and empty where it does not.
+	Level statelog.ReadLevel `json:"level,omitempty"`
+
+	// Cursors are a paged gather's per-partition cursors, by partition id:
+	// each partition resumes from its own, which only it can read.
+	Cursors map[string]string `json:"cursors,omitempty"`
 }
 
 // unservedReason is why a node answered without running an operation.
@@ -140,6 +170,15 @@ const (
 	// `not_holder`: it carries no epoch, since the asker's map is not what
 	// is in question, and the asker moves on without reading its map again.
 	unservedHoldingUnknown unservedReason = "holding_unknown"
+
+	// unservedOverflow: a gather slice this node ANSWERED and could not
+	// fit in the reply beside the slices before it — the reply has a
+	// ceiling ([queue.MaxPayloadBytes]) and a batch of partitions can
+	// outgrow it. Not a failure of this node, so the asker asks it again
+	// for the overflowed partitions alone; a slice that does not fit even
+	// alone is answered as an error naming its size instead, so every
+	// reply answers at least one partition.
+	unservedOverflow unservedReason = "overflow"
 )
 
 // reply is what a serving node answers.
@@ -166,6 +205,39 @@ type reply struct {
 	// a position on a generation the log has since abandoned — so the
 	// asker drops them rather than carrying a floor nobody can satisfy.
 	Obsolete []string `json:"obsolete,omitempty"`
+
+	// At is where each of the partition's logs was when a read whose
+	// answer reports its coverage began ([statelog.Coverage.At]) — a lower
+	// bound on what the answer holds. Empty for every other operation, and
+	// from an older build, whose answer then states no cut.
+	At []statelog.Position `json:"at,omitempty"`
+
+	// Parts is a gather's answer per partition, one per partition the
+	// request named, when it asked for [request.Slices].
+	Parts []partReply `json:"parts,omitempty"`
+}
+
+// partReply is one partition's answer within a gather batch: what [reply]
+// says about a whole request, said about one of its partitions.
+type partReply struct {
+	Partition string `json:"partition"`
+
+	// Unserved is set when this node did not run the read for this
+	// partition — the same reasons a whole request is refused for, and
+	// [unservedOverflow] — and says why. Epoch is this node's map epoch,
+	// set with `not_holder`.
+	Unserved unservedReason `json:"unserved,omitempty"`
+	Epoch    uint64         `json:"epoch,omitempty"`
+	Detail   string         `json:"detail,omitempty"`
+
+	// Result is the partition's answer and Err its failure. At most one.
+	Result json.RawMessage `json:"result,omitempty"`
+	Err    *wireError      `json:"error,omitempty"`
+
+	// At is where each of the partition's logs was when its read began —
+	// or the barriers it was read after, at `linearizable`. Empty for a
+	// read that is not of a log's rows.
+	At []statelog.Position `json:"at,omitempty"`
 }
 
 // opSpec is one operation's declaration: what it is called, how a failover
@@ -198,7 +270,45 @@ type opSpec struct {
 	// is not the log's rows at a position — see [opWorkSearch].
 	floorless bool
 
-	serve func(ctx context.Context, b Backend, actor *Actor, raw json.RawMessage) (any, error)
+	// covered operations' answers report what they covered
+	// ([statelog.Coverage]): the partitions they addressed and the cut each
+	// was read at, which the serving node measures before it runs the read
+	// ([reply.At]). Every gather is; a single-partition read whose answer
+	// a gather will one day assemble is declared so ([op.covered]).
+	covered bool
+
+	// serve runs a single-partition operation on p — the zero partition
+	// for one that addresses none. Nil for a gather, which [opSpec.whole]
+	// answers instead.
+	serve func(ctx context.Context, b Backend, p statelog.PartitionID, actor *Actor,
+		raw json.RawMessage) (any, error)
+
+	// part is a gather's per-partition answer type; slice is its server
+	// half for one partition of several — that partition's answer before
+	// any merge, with the positions its logs were at ([partReply.At]) —
+	// and whole is its answer when it addresses ONE partition, which is a
+	// single-partition read: the slice and the merge of that one slice.
+	// All three nil for every other operation.
+	part  reflect.Type
+	slice func(ctx context.Context, b Backend, s sliceAsk, raw json.RawMessage) (
+		any, []statelog.Position, error)
+	whole func(ctx context.Context, b Backend, s sliceAsk, raw json.RawMessage) (
+		any, []statelog.Position, error)
+}
+
+// sliceAsk is what one partition's slice of a gather is asked under.
+type sliceAsk struct {
+	partition statelog.PartitionID
+	layout    statelog.Layout
+
+	// level is the gather's per-partition level, empty for an operation
+	// that reads no log at one; floors are the asker's on the partition's
+	// logs, already waited for.
+	level  statelog.ReadLevel
+	floors []statelog.Position
+
+	// cursor is this partition's own cursor in a paged gather.
+	cursor string
 }
 
 // op is a typed handle on one registered operation: its declaration, and its
@@ -209,6 +319,10 @@ type op[A, R any] struct {
 	spec       *opSpec
 	serve      func(ctx context.Context, b Backend, actor *Actor, args A) (R, error)
 	partitions partitionsFunc[A]
+
+	// cover sets what the answer covered on it, for an operation declared
+	// [op.covered]; nil otherwise.
+	cover func(*R, statelog.Coverage)
 }
 
 // partitionsFunc resolves an operation's arguments to the partitions it
@@ -266,7 +380,8 @@ func define[A, R any](name string, class opClass, partitions partitionsFunc[A], 
 		}
 		return serve(ctx, b, who, args)
 	}
-	spec.serve = func(ctx context.Context, b Backend, who *Actor, raw json.RawMessage) (any, error) {
+	spec.serve = func(ctx context.Context, b Backend, _ statelog.PartitionID, who *Actor,
+		raw json.RawMessage) (any, error) {
 		args, err := decode(raw)
 		if err != nil {
 			return nil, err
@@ -288,5 +403,14 @@ func (o op[A, R]) ungated() op[A, R] {
 // [opSpec.floorless].
 func (o op[A, R]) floorless() op[A, R] {
 	o.spec.floorless = true
+	return o
+}
+
+// covered declares that this operation's answer reports what it covered, and
+// how: cover sets the coverage on the answer the router hands its caller —
+// see [opSpec.covered].
+func (o op[A, R]) covered(cover func(*R, statelog.Coverage)) op[A, R] {
+	o.spec.covered = true
+	o.cover = cover
 	return o
 }

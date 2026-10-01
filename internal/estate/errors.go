@@ -98,6 +98,7 @@ var sentinels = []sentinel{
 	{"statelog.ErrWrongPartition", statelog.ErrWrongPartition},
 	{"statelog.ErrWrongStream", statelog.ErrWrongStream},
 
+	{"estate.ErrBadCursor", ErrBadCursor},
 	{"estate.ErrOutcomeUnknown", ErrOutcomeUnknown},
 	{"estate.ErrNoDataNode", ErrNoDataNode},
 	{"estate.ErrUnaddressed", ErrUnaddressed},

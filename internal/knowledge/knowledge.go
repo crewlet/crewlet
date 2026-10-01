@@ -44,6 +44,7 @@ import (
 	"strings"
 
 	"github.com/crewlet/crewlet/internal/org"
+	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/textcut"
 )
 
@@ -173,12 +174,30 @@ type Searcher interface {
 	// own to answer would cost more than it saves.
 	CanSearch(seat *org.Role, o *org.Organization) bool
 
-	// Search returns up to Limit ranked hits.
+	// Search returns up to Limit ranked hits, and what the search could
+	// not reach.
 	//
 	// BEST EFFORT: it never reports an error. Every failure path is an
 	// empty result, and the prefetch degrades to an empty block rather
 	// than failing a turn because a wiki was slow.
-	Search(ctx context.Context, q Query) []Hit
+	Search(ctx context.Context, q Query) Answer
+}
+
+// Answer is one search's hits, best first, and what it could not reach.
+type Answer struct {
+	Hits []Hit
+
+	// Coverage is what a search answered PARTITION BY PARTITION covered —
+	// the engine's own knowledge base, whose corpus a partitioned estate
+	// divides. A partition that did not answer is a part of the corpus
+	// this answer never searched, and a caller renders a non-empty
+	// [statelog.Coverage.Missing] as its [statelog.Coverage.Notice], never
+	// as the shorter list alone: "nothing matched" and "part of the
+	// knowledge base was not searched" send a seat to different places.
+	//
+	// THE ZERO VALUE for a backend with no partitions — Confluence, whose
+	// one corpus is somebody else's — which states nothing missing.
+	Coverage statelog.Coverage
 }
 
 // Scope normalises an org-wide read scope: trimmed, uppercased, deduped,

@@ -35,6 +35,12 @@ import (
 // tests, a reader handed rows directly — or from a backend that has no
 // partitions at all. It names nothing missing, so it renders no notice, which
 // is exactly what such a read can honestly say.
+//
+// ON THE WIRE IT IS ABSENT: every answer type carries its coverage `omitzero`,
+// so a read that stated none sends no field at all rather than a coverage of
+// nothing — `{"addressed":0}` would claim the read addressed no partition —
+// and the lists inside a stated one are omitted when empty rather than sent as
+// null, which a client reading `.length` on them would throw on.
 
 // Coverage is what a gathered answer covered.
 type Coverage struct {
@@ -43,7 +49,7 @@ type Coverage struct {
 	Addressed int `json:"addressed"`
 
 	// Answered is every partition that answered, by its id (`tracker.007`).
-	Answered []string `json:"answered"`
+	Answered []string `json:"answered,omitempty"`
 
 	// Missing is every partition that did not, and why.
 	Missing []MissingPartition `json:"missing,omitempty"`

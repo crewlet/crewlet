@@ -5,6 +5,8 @@ import (
 	"database/sql"
 	"fmt"
 
+	"github.com/crewlet/crewlet/internal/search"
+	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/store"
 )
 
@@ -58,11 +60,12 @@ type Ranked struct {
 	Snippet string `json:"snippet,omitempty"`
 }
 
-// RankedDoc is one hit as the INDEX knows it, before this package says what it
-// is a hit ON.
+// RankedDoc is one candidate as the INDEX knows it, before this package says
+// what it is a hit ON.
 //
-// NO SCORE, for [Ranked.Rank]'s reason: the order IS the ranking by the time a
-// fused answer reaches a caller.
+// NO SCORE, for [Ranked.Rank]'s reason: the scores travel in the candidates
+// beside it ([search.Candidates]), and what a hit carries out of a fusion is
+// its place.
 type RankedDoc struct {
 	ID      string
 	Snippet string
@@ -74,8 +77,10 @@ type RankedDoc struct {
 // two halves of this search are two reads rather than a join — the same estate
 // boundary every other reader here crosses the same way.
 type Ranker interface {
-	// RankItems returns work-item ids in rank order, best first.
-	RankItems(ctx context.Context, text string, limit int) ([]RankedDoc, error)
+	// Candidates is each method's top candidates for text, with scores, by
+	// the index's own document key — and the work item behind each key, with
+	// the index's excerpt of it.
+	Candidates(ctx context.Context, text string) (search.Candidates, map[string]RankedDoc, error)
 
 	// Building reports an index that has not caught up with this node's
 	// own rows, so a caller can tell "nothing matched" from "not indexed
@@ -94,7 +99,7 @@ const SearchLimit = 20
 // MaxSearchLimit caps what a caller may ask for.
 const MaxSearchLimit = 50
 
-// Searcher answers a ranked item search.
+// Searcher answers a ranked item search over this node's corpus.
 type Searcher struct {
 	db   store.PartitionReader
 	rank Ranker
@@ -113,19 +118,41 @@ func NewSearcher(db store.PartitionReader, rank Ranker) *Searcher {
 // is nothing" — which it would otherwise act on by filing a duplicate.
 var ErrIndexBuilding = fmt.Errorf("tracker: the search index is still building")
 
-// Search ranks the company's work items against plain text.
-func (s *Searcher) Search(ctx context.Context, text string, limit int) ([]Ranked, error) {
-	switch {
-	case s == nil || s.rank == nil || s.db.IsZero():
-		return nil, fmt.Errorf("tracker: this node has no search index")
-	case limit <= 0:
-		limit = SearchLimit
-	case limit > MaxSearchLimit:
-		limit = MaxSearchLimit
+// SearchAnswer is a ranked search's hits, best first, and what it covered.
+type SearchAnswer struct {
+	Hits []Ranked `json:"hits"`
+
+	// Coverage is what a search answered PARTITION BY PARTITION covered —
+	// see [statelog.Coverage]. A partition that did not answer is work
+	// this search never ranked, and a caller renders a non-empty Missing as
+	// its Notice rather than as the shorter list.
+	Coverage statelog.Coverage `json:"coverage,omitzero"`
+}
+
+// SearchSlice is what one corpus answers a ranked search with BEFORE it is
+// fused: its candidates, and every work item it can show, by the index's key.
+//
+// THE CANDIDATES RATHER THAN A RANKED LIST, for [search.Candidates]' reason:
+// a list's order means nothing beside another corpus's, so each corpus sends
+// what the fusion ranks it by, and the item behind every key it might win.
+type SearchSlice struct {
+	Candidates search.Candidates `json:"candidates"`
+
+	// Items is the work item behind each candidate key, ABSENT for one
+	// indexed and removed since — the index is behind this node's rows by
+	// design — so the fusion walks past it rather than reporting an item
+	// nobody can open.
+	Items map[string]Ranked `json:"items,omitempty"`
+}
+
+// Slice answers a ranked search from this node's corpus, before fusion.
+func (s *Searcher) Slice(ctx context.Context, text string) (SearchSlice, error) {
+	if s == nil || s.rank == nil || s.db.IsZero() {
+		return SearchSlice{}, fmt.Errorf("tracker: this node has no search index")
 	}
-	docs, err := s.rank.RankItems(ctx, text, limit)
+	cands, docs, err := s.rank.Candidates(ctx, text)
 	if err != nil {
-		return nil, err
+		return SearchSlice{}, err
 	}
 	if len(docs) == 0 {
 		// THE GATE IS ASKED ONLY ON AN EMPTY ANSWER, because that is the
@@ -133,18 +160,16 @@ func (s *Searcher) Search(ctx context.Context, text string, limit int) ([]Ranked
 		// found it whether or not the index is still catching up, and
 		// asking every time would put one indexed count on every call.
 		if s.rank.Building(ctx) {
-			return nil, ErrIndexBuilding
+			return SearchSlice{}, ErrIndexBuilding
 		}
-		return nil, nil
+		return SearchSlice{Candidates: cands}, nil
 	}
 	rows, err := s.itemsByID(ctx, docs)
 	if err != nil {
-		return nil, err
+		return SearchSlice{}, err
 	}
-	// IN THE INDEX'S ORDER, not the database's. The rank is the whole
-	// answer here, and a SQL read returns rows in whatever order suits it.
-	out := make([]Ranked, 0, len(docs))
-	for _, doc := range docs {
+	out := SearchSlice{Candidates: cands, Items: make(map[string]Ranked, len(docs))}
+	for key, doc := range docs {
 		row, held := rows[doc.ID]
 		if !held {
 			// INDEXED AND GONE. The index is behind this node's own
@@ -153,21 +178,62 @@ func (s *Searcher) Search(ctx context.Context, text string, limit int) ([]Ranked
 			// rather than reported as an item nobody can open.
 			continue
 		}
-		// THE PLACE IS COUNTED OVER WHAT SURVIVES, so a hit dropped
-		// above leaves no gap in the numbering a reader would take for
-		// a result that went missing.
-		row.Snippet, row.Rank = doc.Snippet, len(out)+1
-		out = append(out, row)
+		row.Snippet = doc.Snippet
+		out.Items[key] = row
 	}
 	return out, nil
 }
 
-// itemsByID reads what a ranked hit has to carry, for one batch of ids.
+// MergeSearch fuses the slices of DISJOINT corpora into one ranked answer of up
+// to limit items, best first ([search.FuseCandidates]).
 //
-// ONE QUERY over the whole batch rather than a read per hit: the ids come from
-// a ranking that is already bounded by [MaxSearchLimit], and a read per hit
-// would answer each from a different instant.
-func (s *Searcher) itemsByID(ctx context.Context, docs []RankedDoc) (map[string]Ranked, error) {
+// THE PLACE IS COUNTED OVER WHAT SURVIVES, so an item dropped as gone leaves no
+// gap in the numbering a reader would take for a result that went missing —
+// and the fused order is walked past it rather than cut first, so a removed
+// item costs the answer that item and never a place.
+func MergeSearch(slices []SearchSlice, limit int) []Ranked {
+	switch {
+	case limit <= 0:
+		limit = SearchLimit
+	case limit > MaxSearchLimit:
+		limit = MaxSearchLimit
+	}
+	cands := make([]search.Candidates, 0, len(slices))
+	for _, slice := range slices {
+		cands = append(cands, slice.Candidates)
+	}
+	out := make([]Ranked, 0, limit)
+	for _, key := range search.FuseCandidates(cands) {
+		row, ok := itemFor(slices, key)
+		if !ok {
+			continue
+		}
+		row.Rank = len(out) + 1
+		out = append(out, row)
+		if len(out) == limit {
+			break
+		}
+	}
+	return out
+}
+
+// itemFor is the item behind key in whichever slice named it — exactly one,
+// since the corpora are disjoint.
+func itemFor(slices []SearchSlice, key string) (Ranked, bool) {
+	for _, slice := range slices {
+		if row, ok := slice.Items[key]; ok {
+			return row, true
+		}
+	}
+	return Ranked{}, false
+}
+
+// itemsByID reads what a ranked hit has to carry, for one batch of candidates.
+//
+// ONE QUERY over the whole batch rather than a read per hit: the candidates
+// are bounded by twice [search.FuseN], and a read per hit would answer each
+// from a different instant.
+func (s *Searcher) itemsByID(ctx context.Context, docs map[string]RankedDoc) (map[string]Ranked, error) {
 	ids := make([]any, 0, len(docs))
 	for _, doc := range docs {
 		ids = append(ids, doc.ID)

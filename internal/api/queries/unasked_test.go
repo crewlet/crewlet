@@ -12,6 +12,7 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/ledger/ledgerstore"
 	"github.com/crewlet/crewlet/internal/api/queries"
 	"github.com/crewlet/crewlet/internal/learning"
+	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tracker"
 )
 
@@ -109,6 +110,30 @@ func TestSearchDefaultsToTheScreensPageRatherThanTheTools(t *testing.T) {
 	// the index would rank it against terms nobody typed.
 	if w.searchText != "billing" {
 		t.Errorf("text = %q, want it trimmed", w.searchText)
+	}
+}
+
+// A SEARCH THAT DID NOT REACH EVERY PARTITION SAYS SO, beside the hits rather
+// than as a shorter list — and one whose searcher states no coverage at all
+// sends no coverage, rather than one claiming it addressed nothing.
+func TestAWorkSearchSaysWhatItDidNotReach(t *testing.T) {
+	t.Parallel()
+	missing := statelog.Coverage{
+		Addressed: 2,
+		Answered:  []string{"tracker.000"},
+		Missing:   []statelog.MissingPartition{{Partition: "tracker.001", Reason: statelog.MissingUnreachable}},
+	}
+	w := &stubWork{coverage: missing}
+	got := answeredMap(t, queries.Sources{Work: &stubWork{}, WorkSearch: w},
+		"work_search", map[string]any{"q": "billing"})
+	if cov, ok := got["coverage"].(statelog.Coverage); !ok || cov.Complete() {
+		t.Errorf("coverage = %#v, want the partition that did not answer", got["coverage"])
+	}
+
+	unstated := answeredMap(t, queries.Sources{Work: &stubWork{}, WorkSearch: &stubWork{}},
+		"work_search", map[string]any{"q": "billing"})
+	if cov, present := unstated["coverage"]; present {
+		t.Errorf("a search stating no coverage sent %#v", cov)
 	}
 }
 
