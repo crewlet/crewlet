@@ -1862,8 +1862,11 @@ var auth = {
 	* session cookie and ends the one it replaces.
 	*/
 	stepUp: async (body) => await rest.post("/auth/step-up", body),
-	/** Who this browser is signed in as. */
-	session: async () => await rest.get("/auth/session"),
+	/**
+	* Who this browser is signed in as — ended by `signal` where the caller
+	* passes one, for a read a newer one has superseded.
+	*/
+	session: async (signal) => await rest.get("/auth/session", signal),
 	/**
 	* End this browser's session. The engine clears the cookie whatever its
 	* own write did, so an answer at all means this browser holds no session.

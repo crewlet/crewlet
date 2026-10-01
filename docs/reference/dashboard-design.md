@@ -3141,24 +3141,26 @@ trusted when it IS blank. Four distinctions the product makes everywhere:
   credential listing with its reference index, and the org chart's guarded
   reads (`useChartRead`, `lib/chartReads.ts`: a seat's runtime half on its
   page, the chart behind the tool and knowledge pages), which also ask again
-  on every org push, and the Audit screen's credential listing, on the minute
-  its other three sources poll at. It replaced six hand-written loaders, each
-  with its own generation counter, failure mapping and idea of when to ask
-  again, and each wrong about a different case — the chart's read a request
-  nobody answered as `failed` and asked again only on the next push, under a
-  panel promising to fill in "when it does", and a gateway's `404` as a seat
-  the chart does not hold (its `failed` now carries which failure it met, and
-  the panel draws that through `QueryState`); the audit's read the credentials
-  once, at mount, and dropped every failure in silence under a header saying
-  the rows covered them (the header now says what is missing and why). It
-  keeps the last
-  answer through any failure but a refusal on authority (a reader refused is
-  shown nothing they were refused), starts from nothing when its question
-  changes — in the very render that carries the new question, since each
-  answer is stamped with the question it answers, where a reset written by an
-  effect left one render drawing the last question's answer as finished — and
-  arms every next ask where the answer lands (`lib/reread.ts`),
-  at the wait `restRetryMs` decides: a `503` the engine wrote is drawn as
+  on every org push, the Audit screen's credential listing, on the minute its
+  other three sources poll at, and the identity menu's `GET /auth/session`. It
+  replaced seven hand-written loaders, each with its own generation counter,
+  failure mapping and idea of when to ask again, and each wrong about a
+  different case — the chart's read a request nobody answered as `failed` and
+  asked again only on the next push, under a panel promising to fill in "when
+  it does", and a gateway's `404` as a seat the chart does not hold (its
+  `failed` now carries which failure it met, and the panel draws that through
+  `QueryState`); the audit's read the credentials once, at mount, and dropped
+  every failure in silence under a header saying the rows covered them (the
+  header now says what is missing and why); and the identity menu's read the
+  session once, so a person the socket refuses, for whom that read is the only
+  way to the sign-outs, lost the menu to one request lost on the way. It keeps
+  the last answer through any failure but a refusal on authority (a reader
+  refused is shown nothing they were refused), starts from nothing when its
+  question changes — in the very render that carries the new question, since
+  each answer is stamped with the question it answers, where a reset written
+  by an effect left one render drawing the last question's answer as finished
+  — and arms every next ask where the answer lands (`lib/reread.ts`), at the
+  wait `restRetryMs` decides: a `503` the engine wrote is drawn as
   `unavailable` (the credential listing drew it as a fault on the node, and
   the pass history as "No pass has run on this node") and asked again when it
   says, never at its zero; a failure with no hint keeps the cadence of the

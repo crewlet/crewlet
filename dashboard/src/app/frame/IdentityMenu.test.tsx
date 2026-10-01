@@ -220,6 +220,54 @@ describe("what the menu offers", () => {
     await waitFor(() => expect(reloads).toHaveBeenCalledWith("#/login"));
   });
 
+  // AND A SESSION READ NOTHING ANSWERED IS ASKED AGAIN ON ITS OWN. For the
+  // people above it is the only way to the sign-outs, and it was read once:
+  // one request lost on the way left them with no menu until a reload.
+  test("a session read nothing answered is asked again, and the sign-outs arrive", async () => {
+    vi.useFakeTimers();
+    try {
+      let reads = 0;
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async () => {
+          reads++;
+          if (reads === 1) throw new TypeError("Failed to fetch");
+          return new Response(JSON.stringify((PERSON as { body: unknown }).body), {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          });
+        }),
+      );
+      const store = new Store();
+      const socket = new LiveSocket(store);
+      (socket as unknown as { query: () => Promise<unknown> }).query = () => new Promise(() => {});
+      render(
+        <ClientContext.Provider value={{ store, socket }}>
+          <Router>
+            <ToastProvider>
+              <LayerHost>
+                <IdentityMenu />
+              </LayerHost>
+            </ToastProvider>
+          </Router>
+        </ClientContext.Provider>,
+      );
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(0);
+      });
+      expect(reads).toBe(1);
+      expect(screen.queryByRole("button", { name: "jane.doe" })).toBeNull();
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(1_000);
+      });
+      expect(reads).toBe(2);
+      expect(screen.getByRole("button", { name: "jane.doe" })).toBeDefined();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   // A TAB OPENED WITH A SESSION ALREADY IN THE BROWSER learns who it is read
   // by here, since no sign-in in it said — and a sign-in later in this tab is
   // decided against it. One already recorded is never overwritten.

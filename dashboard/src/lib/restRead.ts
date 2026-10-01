@@ -2,10 +2,10 @@
  * Reading a REST answer, as a hook — `useQuery`'s twin for the reads no
  * socket question answers: the Integrations screen's setup listing, its pass
  * history and one pass, the credential listing with its reference index, the
- * org chart's guarded reads (`./chartReads.ts`), and the Audit screen's
- * credential rows.
+ * org chart's guarded reads (`./chartReads.ts`), the Audit screen's
+ * credential rows, and the identity menu's session.
  *
- * SIX HAND-WRITTEN LOADERS became this, and each had got a different case
+ * SEVEN HAND-WRITTEN LOADERS became this, and each had got a different case
  * wrong. Every one carried its own generation counter, its own loading flag,
  * its own mapping of a failure and its own idea of when to ask again, and the
  * case none of them could express was the one that stood longest: a request

@@ -100,8 +100,12 @@ export const auth = {
   stepUp: async (body: { password: string; code?: string }): Promise<SignedIn> =>
     (await rest.post("/auth/step-up", body)) as SignedIn,
 
-  /** Who this browser is signed in as. */
-  session: async (): Promise<SessionAnswer> => (await rest.get("/auth/session")) as SessionAnswer,
+  /**
+   * Who this browser is signed in as — ended by `signal` where the caller
+   * passes one, for a read a newer one has superseded.
+   */
+  session: async (signal?: AbortSignal): Promise<SessionAnswer> =>
+    (await rest.get("/auth/session", signal)) as SessionAnswer,
 
   /**
    * End this browser's session. The engine clears the cookie whatever its

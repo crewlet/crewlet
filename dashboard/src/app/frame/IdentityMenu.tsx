@@ -32,12 +32,13 @@
  * settle.
  */
 
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { Avatar, Button, Menu, useToast, type MenuEntry } from "@crewlethq/ui";
 import { PersonGlyph } from "@crewlethq/icons/glyphs";
 import { useNavigator } from "~/app/router.tsx";
 import { refusalText } from "~/lib/refusal.ts";
 import { adoptReader } from "~/lib/reader.ts";
+import { useRestRead } from "~/lib/restRead.ts";
 import { goSignIn, signOut, signOutEverywhere } from "~/lib/session.ts";
 import { useViewer } from "~/lib/viewer.ts";
 import { auth, type SessionAnswer } from "~/protocol/index.ts";
@@ -51,27 +52,29 @@ import { AuthenticatorDialog, RecoveryCodesDialog } from "~/routes/signin/Second
  * ASKED UNLESS THE VIEWER HAS ANSWERED NOBODY — before it has answered too,
  * see the note above — and again when the viewer's login moves, which is a
  * different session.
+ *
+ * AND ASKED AGAIN ON ITS OWN WHEN NOTHING ANSWERED IT, because it is the
+ * shared REST read (`~/lib/restRead.ts`). It was read once and every failure
+ * dropped, and for the people the note above is about — the ones the socket
+ * refuses — this read is the ONLY way to the sign-outs: one request past its
+ * deadline, or lost on the way, left them with no menu at all until a reload.
+ * A refusal is still an answer and is not asked again on a timer: a browser
+ * holding no session is told so by the engine.
  */
 function useSessionAnswer(enabled: boolean, login: string): SessionAnswer | null {
-  const [answer, setAnswer] = useState<SessionAnswer | null>(null);
-  useEffect(() => {
-    setAnswer(null);
-    if (!enabled) return;
-    let live = true;
-    auth.session().then(
-      (session) => {
-        // A TAB OPENED WITH A SESSION ALREADY IN THE BROWSER learns who it is
-        // read by here, since no sign-in in it ever said (`lib/reader.ts`).
-        adoptReader(session.person);
-        if (live) setAnswer(session);
-      },
-      () => {},
-    );
-    return () => {
-      live = false;
-    };
-  }, [enabled, login]);
-  return answer;
+  return useRestRead(
+    // A DIFFERENT LOGIN IS A DIFFERENT SESSION, so it is a different question
+    // and starts from nothing.
+    `/auth/session as ${login}`,
+    async (signal) => {
+      const session = await auth.session(signal);
+      // A TAB OPENED WITH A SESSION ALREADY IN THE BROWSER learns who it is
+      // read by here, since no sign-in in it ever said (`lib/reader.ts`).
+      adoptReader(session.person);
+      return session;
+    },
+    { enabled },
+  ).data;
 }
 
 export function IdentityMenu() {
