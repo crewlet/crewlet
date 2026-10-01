@@ -6,7 +6,7 @@
  * before it.
  */
 
-import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { Router } from "~/app/router.tsx";
 import { ClientContext } from "~/lib/store-hooks.ts";
@@ -390,16 +390,32 @@ describe("the read lenses", () => {
 
   const settings = { revisionId: "r-saved", parentRevisionId: "r1", epoch: 4 };
 
+  /**
+   * Lets the shared health read answer, and renders what it says.
+   *
+   * EVERY CASE READS THE PAGE ONCE THE ANSWER IS IN. Until the read answers,
+   * the page knows of no applied epoch and draws the note whatever the node
+   * has applied, so a `findBy` that found the note at once said nothing about
+   * the answer — an off-by-one in the comparison passed the first case — and
+   * the absence the second case asks about is a claim only after it. The
+   * answer is the stubbed socket's promise, so `act` runs it to the end.
+   */
+  async function healthAnswered() {
+    await act(async () => {});
+  }
+
   test("say they still draw the previous revision until this node applies the saved one", async () => {
     recordSavedChanges({ settings, chart: null });
     mountCompany(3);
-    expect(await screen.findByText(/still applying settings revision/)).toBeDefined();
+    await healthAnswered();
+    expect(screen.getByText(/still applying settings revision/)).toBeDefined();
   });
 
   test("say nothing once the node has applied it", async () => {
     recordSavedChanges({ settings, chart: null });
     mountCompany(4);
-    await waitFor(() => expect(screen.queryByText(/still applying/)).toBeNull());
+    await healthAnswered();
+    expect(screen.queryByText(/still applying/)).toBeNull();
   });
 
   test("name the chart's changes beside a revision this node has not applied", async () => {
@@ -408,7 +424,8 @@ describe("the read lenses", () => {
       chart: { position: "CREWLET_CHART_LOG@1:12", appliedHere: false },
     });
     mountCompany(3);
-    const note = await screen.findByText(/still applying settings revision/);
+    await healthAnswered();
+    const note = screen.getByText(/still applying settings revision/);
     expect(note.textContent).toContain("and the org chart's changes");
   });
 });
