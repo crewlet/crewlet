@@ -260,10 +260,12 @@ func LevelFor(s Surface, asked ReadLevel) ReadLevel {
 // at what woke it
 //
 // `linearizable` across a gather is a barrier on EVERY log it addresses, per
-// read: at ten thousand seats, three or so gathers a turn and sixty-four
-// tracker partitions, about 670 barrier appends a second and gigabytes a day of
-// records that every holder applies — to establish a freshness a seat does not
-// need. What a seat needs from a list is to see what it wrote and what woke
+// read: at ten thousand seats (3.47 turns a second between them), three or so
+// gathers a turn and the default two hundred and fifty-six tracker partitions,
+// about 2,700 barrier appends a second — some 23 GB a day at a hundred bytes a
+// record, every one applied by every holder of its log — to establish a
+// freshness a seat does not need. The figure scales with the partition count,
+// so a deployment that raises it pays more, never less. What a seat needs from a list is to see what it wrote and what woke
 // it. Both are positions this node already holds: every write's own, and the
 // position of the record whose wake started the turn, which the turn hands the
 // node's floors before its first read. A `session` read waits for exactly
