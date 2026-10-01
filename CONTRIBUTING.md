@@ -237,8 +237,11 @@ What follows are the prerequisites that legitimately vary by machine.
   and never flushed — one timeout read as the rest of the file failing. The
   builder's testkit retires a lens when the case that mounted it finishes
   (`onTestFinished`), closes the scope a settle holds, and refuses every wait
-  through it from then on; `testkit.test.tsx` holds each of those waits to
-  it.
+  through it from then on. A suite that waits for the page without a lens —
+  a move landing, an element the page draws — waits through `waitInCase`
+  (`viewTestkit.tsx`), which listens for the event with no deadline and is
+  refused the same way, because the next case's page does exactly what such
+  a wait listens for. `testkit.test.tsx` holds each of those waits to it.
 
   **The built dashboard is committed**, so building the ENGINE needs neither
   node nor npm. Changing the dashboard does: run `make dashboard` and commit

@@ -29,6 +29,7 @@ import {
   pressInView,
   settle,
 } from "./testkit.tsx";
+import { waitInCase } from "./viewTestkit.tsx";
 
 afterEach(() => {
   cleanup();
@@ -122,4 +123,57 @@ test("a case that ends while it waits for a request", async () => {
 test("stops at that wait for a request", async () => {
   expect(await left.request).toMatch(ended("reached"));
   await nextLensDraws();
+});
+
+// A WAIT OUTSIDE THE LENS. A suite that mounts no lens through this harness —
+// the company screen's, the node editor's — waits for the page with
+// [waitInCase], and the same holds: the next case's page does what such a
+// wait listens for (a mount writes a hash, a lens draws its toolbar), so one
+// still listening takes it and hands the next case's page to a case that
+// already failed.
+let stoppedListening = false;
+
+test("a case that ends while it waits for something the page does", () => {
+  left.event = outcome(
+    waitInCase<void>("the landing", (done) => {
+      const moved = () => {
+        if (location.hash === ON_THE_TABLE) done();
+      };
+      window.addEventListener("hashchange", moved);
+      return () => {
+        stoppedListening = true;
+        window.removeEventListener("hashchange", moved);
+      };
+    }),
+  );
+});
+
+test("stops at that wait and stops listening, whatever the next mount writes", async () => {
+  // Mounted FIRST, so the hash this mount writes is the landing that wait
+  // would take if it were still listening.
+  await nextLensDraws(ON_THE_TABLE);
+  expect(await left.event).toMatch(/^the landing: the case that waited for it has ended/);
+  expect(stoppedListening).toBe(true);
+});
+
+// AND A GESTURE THAT THROWS ENDS ITS WAIT AT ONCE. The case fails on the
+// gesture's own error, and nothing awaits the wait any more: left listening,
+// its refusal at the case's end would be a rejection nobody handles, which
+// the runner reports as an error of the whole run.
+test("a gesture that throws stops its wait and fails with its own error", async () => {
+  let listening = false;
+  const wait = waitInCase<void>(
+    "the landing",
+    () => {
+      listening = true;
+      return () => {
+        listening = false;
+      };
+    },
+    () => {
+      throw new Error("no such control");
+    },
+  );
+  await expect(wait).rejects.toThrow("no such control");
+  expect(listening).toBe(false);
 });

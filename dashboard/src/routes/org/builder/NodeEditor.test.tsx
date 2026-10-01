@@ -13,7 +13,7 @@
  * credential, masked or referenced, reaches the page.
  */
 
-import { act, cleanup, fireEvent, getConfig, screen, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, screen, within } from "@testing-library/react";
 import { afterEach, describe, expect, test, vi } from "vitest";
 import type { ChartRead, ChartSeat, CompanyDocument } from "~/protocol/index.ts";
 import { REDACTED } from "~/lib/format.ts";
@@ -31,7 +31,7 @@ import type { PlacedProblem } from "./model/problems.ts";
 import { ACKNOWLEDGEMENT_TEXT } from "./dialogParts.tsx";
 import type { EditorSectionName } from "./BuilderContext.tsx";
 import { NodeEditor } from "./NodeEditor.tsx";
-import { renderInBuilder, type HarnessOptions } from "./viewTestkit.tsx";
+import { renderInBuilder, waitInCase, type HarnessOptions } from "./viewTestkit.tsx";
 import { checkedEdit, checkWith, findingOn, record } from "./testState.ts";
 import { Callout } from "@crewlethq/ui";
 import { drawnClasses, isDrawnAs } from "~/testing.tsx";
@@ -349,23 +349,27 @@ describe("the unsaved-changes prompt", () => {
    * that nothing asked was read before there was anything to ask. jsdom
    * dispatches `hashchange` and `popstate` as tasks of their own, and a held
    * move is undone with a second traversal, so the landing is the first of
-   * those events to find the browser on `landsOn`. Waited for outside `act`,
-   * because the guard that undoes a held move runs in the router's listener
-   * and its question renders from it; then `act` renders that question.
+   * those events to find the browser on `landsOn`. Waited for outside `act`
+   * and ended with the case ([waitInCase]), because the guard that undoes a
+   * held move runs in the router's listener and its question renders from
+   * it; then `act` renders that question.
    */
   async function move(go: () => void, landsOn: string): Promise<void> {
-    const landed = new Promise<void>((resolve) => {
-      const moved = () => {
-        if (location.hash !== landsOn) return;
-        window.removeEventListener("hashchange", moved);
-        window.removeEventListener("popstate", moved);
-        resolve();
-      };
-      window.addEventListener("hashchange", moved);
-      window.addEventListener("popstate", moved);
-    });
-    act(go);
-    await getConfig().asyncWrapper(() => landed);
+    await waitInCase<void>(
+      "move",
+      (done) => {
+        const moved = () => {
+          if (location.hash === landsOn) done();
+        };
+        window.addEventListener("hashchange", moved);
+        window.addEventListener("popstate", moved);
+        return () => {
+          window.removeEventListener("hashchange", moved);
+          window.removeEventListener("popstate", moved);
+        };
+      },
+      go,
+    );
     await act(async () => {});
   }
 

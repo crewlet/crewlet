@@ -18,11 +18,11 @@
  * a fixed size and each card by what it holds.
  */
 
-import { act, render } from "@testing-library/react";
+import { act, getConfig, render } from "@testing-library/react";
 import { OrgNodeLabel } from "@crewlethq/ui";
 import { treeCanvasParts } from "~/testing.tsx";
 import { useCallback, useMemo, useReducer, useRef, useState, type ReactNode } from "react";
-import { vi } from "vitest";
+import { onTestFinished, vi } from "vitest";
 import { Router } from "~/app/router.tsx";
 import type { AgentRow, ConfigProblem, ConfigWarning, SandboxEntry } from "~/protocol/index.ts";
 import { BuilderContext, type BuilderApi, type BuilderViewHandle } from "./BuilderContext.tsx";
@@ -188,6 +188,87 @@ export function renderInBuilder(
     </BuilderHarness>,
   );
   return { ...rendered, state: () => probe.state, spies };
+}
+
+/**
+ * Waits for something the browser or the page does on its own — an event the
+ * page fires, an element it draws — with NO DEADLINE, and ENDS WITH ITS CASE.
+ *
+ * `arm` starts listening and returns how to stop; it calls `done` once what
+ * it listens for has happened, which may be at once. `go`, when given, is the
+ * gesture that sets it in motion, made inside `act` after `arm` is listening
+ * so nothing it causes can be missed.
+ *
+ * OUTSIDE `act`, through the library's own wrapper, for the reason a `findBy`
+ * waits there: what is waited for is usually a render, and `act` holds every
+ * render back until its callback resolves, so a wait inside one waits for
+ * itself.
+ *
+ * AN EVENT RATHER THAN A POLL, because a poll carries a deadline: `findBy`
+ * and `waitFor` gave the page one second of real time, which a loaded runner
+ * spent before the page had drawn, so the same case passed or failed on how
+ * busy the machine was. This resolves the moment the thing happens, on any
+ * machine, and a page that never does it fails the case at its own budget.
+ *
+ * REFUSED WHEN THE CASE ENDS, for the reason the lens harness retires its
+ * waits ([settle] in `testkit.tsx`): a case that times out is failed, not
+ * stopped, and a wait still listening would be satisfied by the next case's
+ * page — a hash the next mount writes, a toolbar the next case draws — and
+ * hand that page to a case that already failed, whose next `act` then
+ * interleaves with the live case's and leaves React's one act scope count
+ * raised for every case after it.
+ */
+export async function waitInCase<T>(
+  what: string,
+  arm: (done: (value: T) => void) => () => void,
+  go?: () => void,
+): Promise<T> {
+  // Whether the wait is still listening, and how it stops: held on one
+  // object because `arm` returns the stop from inside the promise's executor.
+  const wait = { open: true, stop: () => {} };
+  let refuse: (cause: Error) => void = () => {};
+  const outcome = new Promise<T>((resolve, reject) => {
+    refuse = reject;
+    let armed = false;
+    let early = false;
+    const done = (value: T) => {
+      if (!wait.open) return;
+      wait.open = false;
+      if (armed) wait.stop();
+      else early = true;
+      resolve(value);
+    };
+    wait.stop = arm(done);
+    armed = true;
+    if (early) wait.stop();
+  });
+  /** Stops listening, once; says whether this call is the one that did. */
+  const close = (): boolean => {
+    if (!wait.open) return false;
+    wait.open = false;
+    wait.stop();
+    return true;
+  };
+  onTestFinished(() => {
+    if (!close()) return;
+    refuse(
+      new Error(
+        `${what}: the case that waited for it has ended — this is that case, still running after its time ran out`,
+      ),
+    );
+  });
+  if (go) {
+    // A GESTURE THAT THROWS — a control it presses is not drawn — ends the
+    // wait there: nothing will await it, so its refusal at the case's end
+    // would be a rejection nobody handles, reported as a second failure.
+    try {
+      act(go);
+    } catch (err) {
+      close();
+      throw err;
+    }
+  }
+  return (await getConfig().asyncWrapper(() => outcome)) as T;
 }
 
 type Sizer = (el: Element) => { width: number; height: number } | null;
