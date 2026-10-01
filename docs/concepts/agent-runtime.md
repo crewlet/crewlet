@@ -291,7 +291,13 @@ flowchart TD
    publishing, and "wait until nothing is running" never comes true.
 5. **Wait for in-flight handlers**, indefinitely: running turns finish their
    rounds until the count hits 0, with `drain_in_progress` logging the
-   in-flight count every 10 s. A turn parked on a
+   in-flight count every 10 s. The one stop that does not wait is a node that
+   [stopped itself](seat-ownership.md#the-node-whose-broker-is-gone-and-why-it-leaves-too)
+   because its own connection to the stream was closed for good: every
+   delivery is acknowledged over that connection, so nothing a running turn
+   concludes can be, and a peer runs each of them again. That drain ends this
+   step at once, cancels the running turns rather than finishing them twice,
+   and logs `drain_cut` (see *Watching the drain* below). A turn parked on a
    [detached coding run](code-sandbox.md) is not one of them. It suspended
    when the run detached and its trigger is already recorded as worked, which
    is exactly why coding work is detached: a drain that waited for a real
@@ -318,7 +324,7 @@ flowchart TD
 
 **Let LLMs finish their rounds — but only the running ones.** The drain distinguishes two kinds of in-flight turn. Turns already past the concurrency gate (model rounds under way) run to completion: they may have fired side effects, and abandoning that work buys a faster deploy by throwing away what was nearly done. Turns delivered before the quiesce but still *waiting* for a slot abort immediately — they have called no model and fired nothing, so their trigger is simply deferred. Without this split, a backlog parked behind `max_concurrent` would run full multi-minute executor → reviewer turns one after another during a shutdown that waits for them indefinitely.
 
-**No engine-level timeout on the drain.** Step 5 waits as long as in-flight turns need, and the listener stays up for all of it. We don't try to second-guess "too long", because the host already provides that cutoff:
+**No engine-level timeout on the drain.** On a signal, step 5 waits as long as in-flight turns need, and the listener stays up for all of it. We don't try to second-guess "too long", because the host already provides that cutoff:
 
 - **Interactive:** a second Ctrl+C tells us you're done waiting.
 - **Kubernetes:** `terminationGracePeriodSeconds` (default 30 s) — after which the kubelet sends SIGKILL.
@@ -346,7 +352,7 @@ duplicate — the [completion ledger](seat-ownership.md#the-completion-ledger)
 covers a turn that *finished*, and this one did not. That is the trade-off
 you opted into by sending the second signal.
 
-**Watching the drain.** On the dashboard and over the API, for as long as it lasts: the listener closes only once the drain has completed, so the dashboard shows the node as draining with its in-flight count, `GET /health` reports it, and `GET /ready` names the reason. The log says the same and outlives the process: `engine_draining` on the first signal, with what is being waited for and how to stop waiting, then `drain_in_progress` with the in-flight count every 10 seconds, then `drain_complete`, `api_stopped` and `engine_stopped`. Set [`logging.file`](../guides/deployment.md#the-log-file) if you want that record to survive the terminal it was watched in: the file is closed last of everything, after the drain and after the trace flush, so `engine_stopped` is in it. A node that [stops itself](seat-ownership.md#the-node-whose-broker-is-gone-and-why-it-leaves-too) because its broker connection is gone takes the same drain with no signal behind it: `engine_fatal` comes first, naming the cause, then the same lines in the same order, and it exits with status 1. One thing differs when the connection it lost is the **queue's own**: no turn still running can be acknowledged over it, so a peer will run each of them again, and the drain does not wait for them — it cancels them and ends at once, logging `drain_cut` with how many it cancelled before `drain_complete`. When only the coordination store's connection was lost, acknowledgements still land and the drain waits as above.
+**Watching the drain.** On the dashboard and over the API, for as long as it lasts: the listener closes only once the drain has completed, so the dashboard shows the node as draining with its in-flight count, `GET /health` reports it, and `GET /ready` names the reason. The log says the same and outlives the process: `engine_draining` on the first signal, with what is being waited for and how to stop waiting, then `drain_in_progress` with the in-flight count every 10 seconds, then `drain_complete`, `api_stopped` and `engine_stopped`. Set [`logging.file`](../guides/deployment.md#the-log-file) if you want that record to survive the terminal it was watched in: the file is closed last of everything, after the drain and after the trace flush, so `engine_stopped` is in it. A node that [stops itself](seat-ownership.md#the-node-whose-broker-is-gone-and-why-it-leaves-too) because its broker connection is gone takes the same drain with no signal behind it: `engine_fatal` comes first, naming the cause, then the same lines in the same order, and it exits with status 1. One thing differs when the connection it lost is the **queue's own**: no turn still running can be acknowledged over it, so a peer will run each of them again, and the drain does not wait for them — it cancels them and ends at once, logging `drain_cut` with the in-flight count it stopped waiting for before `drain_complete`. When only the coordination store's connection was lost, acknowledgements still land and the drain waits as above.
 
 A node's drain is reported **by that node**: its own probes, its own dashboard and its own log. It gives up its presence at step 2, so a peer's **Fleet** screen stops listing it rather than showing it draining. On a split deployment a `-roles ingress` node drains the same way; it holds no seats and runs no turns, so its drain is short.
 
