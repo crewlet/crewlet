@@ -191,8 +191,9 @@ func TestTheTrackersGateReaderKeepsTheSharedRule(t *testing.T) {
 				Encode:  encodeSuiteRecord,
 				Kinds:   suiteKinds(),
 			},
-			Reader: func(db store.PartitionReader) statelog.Gates { return tracker.NewGates(db) },
-			Kind:   string(tracker.KindTask),
+			Reader:       func(db store.PartitionReader) statelog.Gates { return tracker.NewGates(db) },
+			Kind:         string(tracker.KindTask),
+			SubjectKinds: kindNames(tracker.ObjectKinds),
 			Create: func(id, writer, opID string) ([]byte, error) {
 				return gateSuiteRecord(tracker.TaskSubject(id), tracker.OpCreate,
 					writer, opID, newTask(id))
@@ -221,6 +222,17 @@ func TestTheTrackersGateReaderKeepsTheSharedRule(t *testing.T) {
 			},
 		}
 	})
+}
+
+// kindNames is every kind the tracker writes, as the strings its envelope
+// carries — the build's own list rather than one kept beside it, so a kind
+// added to the domain is a kind the gate family asks about.
+func kindNames(kinds []tracker.ObjectKind) []string {
+	out := make([]string, 0, len(kinds))
+	for _, k := range kinds {
+		out = append(out, string(k))
+	}
+	return out
 }
 
 // gateSuiteRecord is one record the gate family applies, written by writer.

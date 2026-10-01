@@ -211,8 +211,9 @@ func TestThePagesGateReaderKeepsTheSharedRule(t *testing.T) {
 				Encode:  encodeSuiteRecord,
 				Kinds:   suiteKinds(),
 			},
-			Reader: func(db store.PartitionReader) statelog.Gates { return pages.NewGates(db) },
-			Kind:   string(pages.KindPage),
+			Reader:       func(db store.PartitionReader) statelog.Gates { return pages.NewGates(db) },
+			Kind:         string(pages.KindPage),
+			SubjectKinds: kindNames(pages.ObjectKinds),
 			Create: func(id, writer, opID string) ([]byte, error) {
 				return gateSuiteRecord(pages.TitleSubject(suiteContainer, "Page "+id),
 					pages.OpCreate, writer, opID, pages.CreatePayload{
@@ -243,6 +244,17 @@ func TestThePagesGateReaderKeepsTheSharedRule(t *testing.T) {
 			},
 		}
 	})
+}
+
+// kindNames is every kind the knowledge base writes, as the strings its
+// envelope carries — the build's own list rather than one kept beside it, so a
+// kind added to the domain is a kind the gate family asks about.
+func kindNames(kinds []pages.ObjectKind) []string {
+	out := make([]string, 0, len(kinds))
+	for _, k := range kinds {
+		out = append(out, string(k))
+	}
+	return out
 }
 
 // gateSuiteRecord is one record the gate family applies, written by writer.

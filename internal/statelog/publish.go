@@ -244,6 +244,14 @@ type Fence interface {
 //     below the purge is reported `deleted` too. What is reported is the gate
 //     that holds the record NOW, which is the one a caller can act on; which
 //     gate fired first at p is the applier's `statelog_record_gated` line.
+//   - THE MARKER COVERS THE SUBJECTS THE APPLIER'S DOES, which may be more
+//     than its object's own: a tracker turn is a record about its task, on a
+//     subject of its own kind, and every applier drops it under the task's
+//     marker. A reader that asked about the object's own subject alone told
+//     such a write that nothing gated it, and the write resolved as a record
+//     applied without its ledger row. So each domain states the set once,
+//     for both of its sides, and the family asks the applier about every
+//     subject kind a record can carry rather than taking the domain's word.
 //   - THE PURGE'S OWN RECORD IS EXEMPT FROM ITS OWN MARKER, by operation id,
 //     and from that gate alone: it still falls through to the eviction
 //     window, because the exemption says nothing about its writer.
