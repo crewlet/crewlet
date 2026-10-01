@@ -11,7 +11,6 @@ import (
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/iam"
-	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
@@ -432,22 +431,43 @@ func (d DomainGate) Remedy() statelog.GateRemedy {
 		case statelog.ReasonFloorUnknown:
 			return retry("the trim floor could not be read: the same gesture " +
 				"under the same operation id finishes it once coordination answers")
+		case statelog.ReasonEvictionUnknown:
+			return retry("this node could not read its own eviction state, which " +
+				"clears the moment it reads again: then the same gesture under the " +
+				"same operation id finishes it")
 		case statelog.ReasonBelowFloor:
 			return retry("this node is adopting a peer's snapshot: the same "+
 				"gesture under the same operation id finishes it once it has, here "+
 				"or through another node", statelog.GateOtherNode)
 		}
+		// EVERY OTHER REASON, in the framework's own two classes rather
+		// than one: a reason that clears on this node by itself
+		// ([statelog.Reason.Retryable]) is offered the retry — this arm
+		// told an operator no retry cleared `eviction_unknown`, which the
+		// next read of the state does — and every reason is advised in
+		// the REFUSAL'S OWN WORDS, because they are what say what clears
+		// it: the limit that refused a record too large and what moves
+		// it, the broker's words on a refusal it named. Reduced to the
+		// reason's name, both reached the operator as a word with no
+		// remedy, while the remedy written for one of them — "check the
+		// broker's max_payload", on a bare queue.ErrTooLarge — sat on a
+		// branch no refusal reached: every too-large answer the state log
+		// gives is this typed refusal.
+		own := ""
+		if refusal.Detail != "" {
+			own = " — " + refusal.Detail
+		}
+		if refusal.Reason.Retryable() {
+			return retry("this refusal clears on this node by itself: " +
+				string(refusal.Reason) + own)
+		}
 		return statelog.GateRemedy{
-			Detail: "no retry clears this refusal: " + string(refusal.Reason),
+			Detail: "no retry clears this refusal: " + string(refusal.Reason) + own,
 		}
 	}
 	if errors.Is(d.Err, statelog.ErrConflict) {
 		return retry("the node's gate subject kept changing under this write: the " +
 			"same gesture under the same operation id finishes it")
-	}
-	if errors.Is(d.Err, queue.ErrTooLarge) {
-		return statelog.GateRemedy{Detail: "the record is larger than the broker " +
-			"carries, which no retry changes: check the broker's max_payload"}
 	}
 	return retry("the write failed before it could answer: the same gesture under " +
 		"the same operation id finishes it")

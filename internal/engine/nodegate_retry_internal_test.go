@@ -4,7 +4,6 @@ import (
 	"context"
 	"database/sql"
 	"errors"
-	"fmt"
 	"maps"
 	"slices"
 	"strings"
@@ -560,8 +559,24 @@ func TestAGateLogIsAdvisedARetryOnlyWhereOneCanFinishIt(t *testing.T) {
 			actions: []statelog.GateAction{statelog.GateRestore}, detail: "backup"},
 		"unnamed refusal": {gate: refused(statelog.Reason("from_a_newer_build")),
 			detail: "from_a_newer_build"},
-		"too large": {gate: DomainGate{Err: fmt.Errorf("statelog: record: %w",
-			queue.ErrTooLarge)}, detail: "max_payload"},
+		"eviction unknown": {gate: refused(statelog.ReasonEvictionUnknown),
+			actions: []statelog.GateAction{retry}, detail: "eviction state"},
+		// THE SHAPE A TOO-LARGE RECORD ACTUALLY HAS — a typed refusal whose
+		// detail names the limit that refused it and what moves it. A bare
+		// wrapped queue.ErrTooLarge stood here, which the state log never
+		// answers, so this row certified a branch no refusal reached while
+		// the real one was advised in its reason's name alone.
+		"too large": {gate: DomainGate{Stream: "CREWLET_PAGES_LOG",
+			Err: &statelog.Unavailable{Reason: statelog.ReasonRecordTooLarge,
+				Detail: "the record is 9000000 bytes before its signature and no " +
+					"retry places it, here or on any node: the NATS server's " +
+					"max_payload refused it",
+				Cause: queue.ErrTooLarge}},
+			detail: "the NATS server's max_payload refused it"},
+		"broker refused": {gate: DomainGate{Stream: "CREWLET_PAGES_LOG",
+			Err: &statelog.Unavailable{Reason: statelog.ReasonBrokerRefused,
+				Detail: "the broker refused the append: stream is sealed"}},
+			detail: "stream is sealed"},
 		// AN UNKNOWN THIS NODE'S LEDGER CANNOT VOUCH FOR is answered the
 		// same way to the same gesture every time here, so it is sent to a
 		// node whose ledger reaches back that far — never round the loop.
@@ -589,6 +604,48 @@ func TestAGateLogIsAdvisedARetryOnlyWhereOneCanFinishIt(t *testing.T) {
 			if !a.Valid() {
 				t.Errorf("%s: action %q is not one this build names", name, a)
 			}
+		}
+	}
+}
+
+// A REFUSAL THAT CLEARS BY ITSELF IS NEVER ADVISED THAT NO RETRY CLEARS IT, and
+// one with no sentence of its own is advised in its own words.
+//
+// The table above names the reasons the gate has a sentence for. Every other
+// reason fell through to one arm that offered no action and named the reason
+// alone — which told an operator no retry cleared `eviction_unknown`, a state
+// the next read clears, and reduced a too-large record and a refusal the broker
+// named to a word, when the refusal's own detail is what says which limit to
+// raise or what the broker objected to. So every reason this build names is
+// walked: a retryable one offers the retry, the framework's own class
+// ([statelog.Reason.Retryable]) deciding rather than a list here, and every
+// one either carries its refusal's detail or is one the table gives a sentence.
+//
+// Mutation: drop the retryable arm and the eviction_unknown case and the first
+// half goes red; stop carrying the detail and the second does.
+func TestEveryGateRefusalIsAdvisedInItsOwnClassAndWords(t *testing.T) {
+	t.Parallel()
+	const words = "the refusal's own words"
+	// The reasons the table above gives a sentence of their own, which
+	// stands in for the detail.
+	sentenced := map[statelog.Reason]bool{
+		statelog.ReasonEvicted: true, statelog.ReasonWrongStream: true,
+		statelog.ReasonLogFull: true, statelog.ReasonSuperseded: true,
+		statelog.ReasonOpReused: true, statelog.ReasonSkew: true,
+		statelog.ReasonBehind: true, statelog.ReasonDeferred: true,
+		statelog.ReasonFloorUnknown: true, statelog.ReasonBelowFloor: true,
+		statelog.ReasonEvictionUnknown: true,
+	}
+	for _, reason := range statelog.Reasons() {
+		remedy := DomainGate{Stream: "CREWLET_PAGES_LOG",
+			Err: &statelog.Unavailable{Reason: reason, Detail: words}}.Remedy()
+		if reason.Retryable() && !remedy.Offers(statelog.GateRetrySameOp) {
+			t.Errorf("%s clears on this node by itself, and the gate advises %v: %q",
+				reason, remedy.Actions, remedy.Detail)
+		}
+		if !sentenced[reason] && !strings.Contains(remedy.Detail, words) {
+			t.Errorf("%s is advised %q, without the refusal's own detail", reason,
+				remedy.Detail)
 		}
 	}
 }

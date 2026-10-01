@@ -4088,7 +4088,7 @@ a fresh one is equally safe.
 
 | Action | What the operator does | Where the gate answers it |
 |---|---|---|
-| `retry_same_op` | Send the same request again with the answer's `op_id` | An `unknown` outcome (unless it is `unvouched`), a lost race, a failure before the write answered, and a refusal that clears on its own (`behind`, `deferred`, `floor_unknown`, `below_floor`); `503 eviction_unjudged` |
+| `retry_same_op` | Send the same request again with the answer's `op_id` | An `unknown` outcome (unless it is `unvouched`), a lost race, a failure before the write answered, and a refusal that clears on its own (`behind`, `deferred`, `floor_unknown`, `below_floor`, `eviction_unknown`); `503 eviction_unjudged` |
 | `new_gesture` | Start a new gesture, without `op_id` | `superseded` — the operation's record landed and a later gate record on the same node has undone it since (an eviction retried after a readmission) — and `op_reused`, an operation id that already names a record on another object |
 | `force` | Send the eviction again with `force=true` | `409 eviction_refused`, `503 eviction_unjudged` |
 | `other_node` | Send it, with the same `op_id`, through another node the fleet still counts | `evicted` (this node is evicted itself), an `unvouched` unknown (this node's ledger cannot say whether the record landed), and beside `retry_same_op` on `deferred` and `below_floor` |
@@ -4098,8 +4098,10 @@ a fresh one is equally safe.
 | `restore` | Restore the store and the stream from one backup | `skew` |
 
 A log with a `hint` and **no** `actions` is one no gesture clears — a record
-larger than its log's declared largest or the broker's `max_payload`, or a
-refusal reason this build has no word for — and the hint says what does. Only `retry_same_op` makes the same
+larger than its log's declared largest or the broker's `max_payload`, a
+refusal the broker named, or a refusal reason this build has no word for — and
+the hint carries the refusal's own detail, which says what does: the limit
+that refused a record and what moves it, or the broker's words. Only `retry_same_op` makes the same
 request, sent again **now**, the remedy. But four actions — `retry_same_op`,
 `other_node`, `reanchor` and `set_capacity` — keep the gesture's own `op_id` as
 how it is finished once the operator has acted: a gesture sent afresh after
