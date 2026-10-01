@@ -3140,7 +3140,17 @@ trusted when it IS blank. Four distinctions the product makes everywhere:
   listing. There a `503` the engine wrote is drawn as `unavailable` (the
   credential listing drew it as a fault on the node, and the pass history as
   "No pass has run on this node") and asked again when it says, and a
-  failure with no hint keeps whatever cadence the screen already had. The table is keyed on the protocol's `QueryErrorCode` union, so a
+  failure with no hint keeps whatever cadence the screen already had. Every
+  failure of those reads is drawn through ONE mapping (`restFailure`, the
+  REST twin of `queryFailure`) — a refusal on authority, a request that never
+  arrived as `closed`, the engine's `503` as `unavailable`, anything else as a
+  fault — because each screen that mapped its own forgot a different case:
+  the setup listing drew nothing for a `500`, one pass drew nothing under its
+  row, and a FIRST read of the pass history that failed was drawn as "No pass
+  has run on this node". And each of those reads asks again when the socket
+  comes back (`useRereadOnReconnect`), as `useQuery` does, which is what makes
+  the `closed` banner's "reads again once the socket is back" true of a REST
+  read. The table is keyed on the protocol's `QueryErrorCode` union, so a
   code added to the union without a sentence here is a compile error, and a Go
   test in `internal/api/stream` pins that union to the codes the engine sends —
   and a second one pins those codes to the engine's own

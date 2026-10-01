@@ -59,21 +59,22 @@ import { SecretDialog } from "./SecretDialog.tsx";
 import { RemoveSecretDialog } from "./RemoveSecretDialog.tsx";
 import { fmtDateTime, plural, tsKey } from "~/lib/format.ts";
 import { useNow } from "~/lib/clock.ts";
-import { useReread } from "~/lib/reread.ts";
+import { useReread, useRereadOnReconnect } from "~/lib/reread.ts";
 import { authorLabel, throughOf } from "~/lib/attribution.ts";
-import { rest, RestError, restRetryMs } from "~/protocol/index.ts";
+import { rest, RestError, restFailure, restRetryMs } from "~/protocol/index.ts";
 import type {
   ConfigReference,
   LogRefusal,
   QueryErrorCode,
   QueryRefusal,
+  RestFailure,
   SecretRow,
 } from "~/protocol/index.ts";
 import { PageActions } from "~/app/frame/PageActions.tsx";
 import { PageNote } from "~/app/frame/PageNote.tsx";
 
 /**
- * A REST refusal as the CODE [QueryState] is keyed on.
+ * A failed read of the list as the pair [QueryState] is keyed on.
  *
  * THE BANNER IS A TABLE OVER `QueryErrorCode`, not a place to put a sentence:
  * this screen handed it prose, the lookup missed every time, and a 401 —
@@ -82,27 +83,19 @@ import { PageNote } from "~/app/frame/PageNote.tsx";
  * banner instead of the auth-gated one. The sentence even promised a button
  * that only exists inside the entry that was being skipped.
  *
- * The other REST statuses this surface can answer with are mapped rather than
- * folded into the generic failure, because each means something different to
- * whoever is reading: status 0 is `offline()` — the request never reached the
- * engine — a 404 on the LIST route is the whole surface being unregistered,
- * which `secretsapi.Routes` does on a process that cannot reach the fleet's
- * coordination store, and a `503` THE ENGINE WROTE ([RestError.retryHint]) is
- * `unavailable`: the node understood the read and cannot answer it here — yet,
- * or (no `Retry-After`) until somebody acts, which the banner then says. It
- * was folded into the fault, "its log says what went wrong", which sent an
- * operator watching a node catch up to read a log holding no fault, and the
- * read was never asked again; [useCredentials] asks it again when the engine
- * says, which is what the `unavailable` banner promises. Everything else is a
- * fault on the node.
+ * EVERY OTHER CASE IS [restFailure]'s, the one reading every REST screen
+ * shares: a request that never reached the engine is `closed`, a `503` the
+ * engine wrote is `unavailable` — it was drawn here as a fault on the node,
+ * "its log says what went wrong", for a node only catching up — and anything
+ * else is a fault. The one case that is this route's own is a 404, which on
+ * the LIST route is the whole surface being unregistered: `secretsapi.Routes`
+ * does that on a process that cannot reach the fleet's coordination store.
  */
-function refusalCode(err: unknown): QueryErrorCode {
-  if (!(err instanceof RestError)) return "query_failed";
-  if (err.unauthorized) return "unauthorized";
-  if (err.status === 0) return "closed";
-  if (err.status === 404) return "unknown_query";
-  if (err.retryHint !== null) return "unavailable";
-  return "query_failed";
+function failureOf(err: unknown): RestFailure {
+  if (err instanceof RestError && err.status === 404) {
+    return { error: "unknown_query", refusal: null };
+  }
+  return restFailure(err);
 }
 
 /**
@@ -111,7 +104,7 @@ function refusalCode(err: unknown): QueryErrorCode {
  * Only the reference index needs this: its refusal is a caption under the
  * caution banner in the removal confirmation, where there is no `QueryState`
  * to key a code on and the engine's own words are what an operator acts on.
- * The list's refusal goes through [refusalCode] instead — see there for why a
+ * The list's refusal goes through [failureOf] instead — see there for why a
  * sentence must never reach the banner.
  */
 function refusalSentence(err: unknown): string {
@@ -224,8 +217,9 @@ function useCredentials(enabled = true): Credentials {
       if (generation.current !== mine) return null;
       // The last good list stays on screen. A refusal to refresh is not a
       // reason to tell an operator the company holds no credentials.
-      setError(refusalCode(err));
-      setRefusal(err instanceof RestError ? err.refusal : null);
+      const failure = failureOf(err);
+      setError(failure.error);
+      setRefusal(failure.refusal);
       return err;
     } finally {
       // ANSWERED, not answered WELL: a refusal is a state this screen
@@ -270,12 +264,12 @@ function useCredentials(enabled = true): Credentials {
   // AND ASKED AGAIN WHEN THE ENGINE SAYS. Nothing polls this surface, so a
   // `503` the engine wrote — a node whose identity estate or chart is behind,
   // one draining — was drawn as a fault and never read again until somebody
-  // reloaded; it is `unavailable` now ([refusalCode]), whose banner says the
+  // reloaded; it is `unavailable` now ([failureOf]), whose banner says the
   // screen asks again on its own, and this is what makes that true: the pair
   // is read again after the SOONER of the two reads' hints ([restRetryMs]),
   // since either may be the one that clears. A hint of zero is never on a
-  // timer and a failure with no hint (a fault, a refusal on authority, a
-  // request that never arrived) waits for a person, as it always did.
+  // timer, and a failure with no hint (a fault, a refusal on authority) waits
+  // for a person. A request that never arrived is the one exception, below.
   const reload = useCallback(async () => {
     generation.current++;
     const mine = generation.current;
@@ -309,6 +303,13 @@ function useCredentials(enabled = true): Credentials {
   useEffect(() => {
     if (enabled) void reload();
   }, [enabled, reload]);
+
+  // AND THE SOCKET COMING BACK reads again, as it re-asks every socket
+  // question. A read that never reached the engine is drawn `closed`, whose
+  // banner says the screen reads again once the socket is back — and nothing
+  // here did, so the banner stood until a reload.
+  const rereadAll = useCallback(() => void reload(), [reload]);
+  useRereadOnReconnect(rereadAll, enabled);
 
   // Grouped by name, because one credential routinely has several readers: a
   // seat's bot_token and its mcp_env entry are two pointers at one row, and

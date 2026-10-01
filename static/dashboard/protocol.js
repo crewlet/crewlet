@@ -599,6 +599,56 @@ function restRetryMs(err, otherwise) {
 	return hint === null ? otherwise : retryAfterMs(hint);
 }
 /**
+* A failed REST read in `QueryState`'s terms: the code its banner is chosen
+* by, and the refusal that lets the banner say what would change the answer.
+*
+* THE REST TWIN OF `queryFailure`, for a screen that reads over REST and draws
+* its failure the way a socket question's is drawn. Each such screen used to
+* map a failure for itself, and each forgot a different case: the credential
+* listing drew an engine `503` as a fault on the node, the Integrations
+* listing drew nothing for any failure but a refusal and a `503`, and the pass
+* history drew a first read that failed as "No pass has run on this node" — an
+* answer about the integration that nobody gave.
+*
+* - A refusal on AUTHORITY (`401`, `403`) is `unauthorized`, carrying the rule
+*   and the grants it named.
+* - A request that never reached the engine (status 0 — the network, a request
+*   past its deadline) is `closed`: nothing refused it. Its banner says the
+*   screen reads again once the socket is back, so a screen that draws it
+*   reads again when the socket reconnects (`useRereadOnReconnect`).
+* - A `503` the engine wrote ([RestError.retryHint]) is `unavailable`, with
+*   its state-log code and hint: the banner says the screen asks again on its
+*   own, or — at zero — that asking will not change it.
+* - Anything else is `query_failed`, a fault on the node: a `500`, or an
+*   answer something in front of the engine wrote.
+*
+* A `404` is the CALLER'S to read first, because what it means is the route's
+* — the credential surface unregistered on this process, or one pass nobody
+* remembers — and reading it here would say one of those about the other.
+*/
+function restFailure(err) {
+	if (!(err instanceof RestError)) return {
+		error: "query_failed",
+		refusal: null
+	};
+	if (err.unauthorized) return {
+		error: "unauthorized",
+		refusal: err.refusal
+	};
+	if (err.status === 0) return {
+		error: "closed",
+		refusal: null
+	};
+	if (err.retryHint !== null) return {
+		error: "unavailable",
+		refusal: err.refusal
+	};
+	return {
+		error: "query_failed",
+		refusal: null
+	};
+}
+/**
 * The seconds a `Retry-After` header names, or null for none. The engine
 * writes whole seconds and never an HTTP date; anything else is not its
 * answer and is read as none.
@@ -1772,4 +1822,4 @@ var auth = {
 	}
 };
 //#endregion
-export { GATE_ACTIONS, GATE_ACTIONS_KEEPING_OPERATION, GATE_REQUEST_TIMEOUT_MS, LiveSocket, MAX_EVENTS, QueryRefusedError, REQUEST_TIMEOUT_MS, RETRY_AFTER_MAX_MS, RestError, Store, UNAVAILABLE_RETRY_MS, api, auth, confirmStepUp, currentSessionNeed, isAbort, isLogRefusal, keepsOperation, layoutOpID, needSession, newGateOpID, onSessionNeed, queryErrorCode, queryFailure, refusedGrants, rest, restRetryMs, retryAfterMs, sessionNeedsEnrolment, sessionRestored, setStepUpConfirmer, unavailableRetryMs };
+export { GATE_ACTIONS, GATE_ACTIONS_KEEPING_OPERATION, GATE_REQUEST_TIMEOUT_MS, LiveSocket, MAX_EVENTS, QueryRefusedError, REQUEST_TIMEOUT_MS, RETRY_AFTER_MAX_MS, RestError, Store, UNAVAILABLE_RETRY_MS, api, auth, confirmStepUp, currentSessionNeed, isAbort, isLogRefusal, keepsOperation, layoutOpID, needSession, newGateOpID, onSessionNeed, queryErrorCode, queryFailure, refusedGrants, rest, restFailure, restRetryMs, retryAfterMs, sessionNeedsEnrolment, sessionRestored, setStepUpConfirmer, unavailableRetryMs };

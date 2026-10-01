@@ -1,5 +1,6 @@
 /**
- * The one timer a screen's hand-rolled REST read asks itself again on.
+ * The one timer a screen's hand-rolled REST read asks itself again on — and,
+ * beside it, the one event: the socket coming back (`useRereadOnReconnect`).
  *
  * `useQuery` asks the socket and arms its own next ask. A screen reading over
  * REST — the Integrations screen's `/setup` reads, the credential listing —
@@ -19,6 +20,7 @@
  */
 
 import { useCallback, useEffect, useMemo, useRef } from "react";
+import { useConnection } from "./store-hooks.ts";
 
 export interface Reread {
   /** Ask `read` again after `ms`, replacing whatever was armed; `null` arms nothing. */
@@ -43,4 +45,30 @@ export function useReread(): Reread {
     [cancel],
   );
   return useMemo(() => ({ after, cancel }), [after, cancel]);
+}
+
+/**
+ * Ask `read` again when the live socket comes back after being down — the
+ * REST twin of `useQuery`'s re-ask on a reconnect.
+ *
+ * WHAT MAKES A `closed` BANNER TRUE on a screen that reads over REST. A read
+ * that never reached the engine is drawn as `closed`, whose sentence says the
+ * screen reads again once the socket is back ([restFailure]); a REST loader
+ * has no socket of its own, so without this nothing read again until somebody
+ * reloaded or changed tabs. The socket reconnecting is the moment the engine
+ * is reachable again — the two share the origin — and an answer from before
+ * it is about an engine that has since moved, which is why `useQuery`
+ * re-asks there by default.
+ *
+ * A TRANSITION, not a state: only a socket that was down and is back asks,
+ * never one that was connected all along, and a change of `read` asks
+ * nothing on its own.
+ */
+export function useRereadOnReconnect(read: () => void, enabled = true): void {
+  const { connected } = useConnection();
+  const was = useRef(connected);
+  useEffect(() => {
+    if (enabled && connected && !was.current) read();
+    was.current = connected;
+  }, [connected, enabled, read]);
 }

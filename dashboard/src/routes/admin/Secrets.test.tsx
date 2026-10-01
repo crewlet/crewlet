@@ -16,21 +16,43 @@
  */
 
 import { act, cleanup, fireEvent, render as rtlRender, screen } from "@testing-library/react";
-import { afterEach, expect, test, vi } from "vitest";
+import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { CredentialPeek, Secrets } from "./Secrets.tsx";
 import type { ReactElement } from "react";
 import { Router } from "~/app/router.tsx";
+import { ClientContext } from "~/lib/store-hooks.ts";
+import { LiveSocket, Store } from "~/protocol/index.ts";
 
 /**
- * A screen renders inside the Router.
+ * The client the screen renders under. The lists are REST reads, but they
+ * read again when the live socket comes back — what their `closed` banner
+ * promises — so the case that holds that moves this store's connection.
+ * Nothing dials.
+ */
+let store = new Store();
+
+beforeEach(() => {
+  store = new Store();
+});
+
+/**
+ * A screen renders inside the Router, under the client.
  *
  * The grid every list is drawn with keeps its sort and its visible columns in
  * the URL — see `app/frame/DataGrid.tsx` — so it reads the route, and a bare
  * `render()` throws "useRoute outside a Router". Wrapping here rather than in
  * every case keeps each assertion about the screen.
  */
+function wrapped(ui: ReactElement): ReactElement {
+  return (
+    <ClientContext.Provider value={{ store, socket: new LiveSocket(store) }}>
+      <Router>{ui}</Router>
+    </ClientContext.Provider>
+  );
+}
+
 function render(ui: ReactElement) {
-  return rtlRender(<Router>{ui}</Router>);
+  return rtlRender(wrapped(ui));
 }
 
 // The shape internal/api/secretsapi writes: names, provenance, key id. There
@@ -285,11 +307,7 @@ test("a peek closed while its read is in flight is not read again", async () => 
     });
     expect(reads).toBe(1);
 
-    view.rerender(
-      <Router>
-        <CredentialPeek name="" />
-      </Router>,
-    );
+    view.rerender(wrapped(<CredentialPeek name="" />));
     await act(async () => {
       await vi.advanceTimersByTimeAsync(60_000);
     });
@@ -297,6 +315,31 @@ test("a peek closed while its read is in flight is not read again", async () => 
   } finally {
     vi.useRealTimers();
   }
+});
+
+/**
+ * A READ THAT NEVER REACHED THE ENGINE IS DRAWN `closed`, AND READ AGAIN WHEN
+ * THE SOCKET IS BACK — which is what that banner says. Nothing polls this
+ * surface, so the banner stood until somebody reloaded: the promise was the
+ * socket question's, and this screen asks none.
+ */
+test("a list that never arrived is read again when the socket comes back", async () => {
+  let failed = false;
+  const spy = stubFetch((path) => {
+    if (path === "/secrets" && !failed) {
+      failed = true;
+      throw new TypeError("Failed to fetch");
+    }
+    if (path === "/secrets") return ok(body);
+    return ok(references);
+  });
+  render(<Secrets />);
+  expect(await screen.findByText(/connection went away/)).toBeDefined();
+  expect(listReads(spy)).toBe(1);
+
+  act(() => store.setConnected(true));
+  expect(await screen.findByText("GITHUB_TOKEN")).toBeDefined();
+  expect(listReads(spy)).toBe(2);
 });
 
 // THE VALUE IS THE BODY, not a field of a document. `PUT /secrets/{name}`

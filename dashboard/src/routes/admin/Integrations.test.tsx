@@ -1574,9 +1574,26 @@ test("the engine's refusal is reported beside the agent it was refused for", asy
 // --- the listing, and when it is worth reading again ---------------------- //
 
 import { act } from "@testing-library/react";
+import type { ReactElement } from "react";
 import { useSetup } from "./Integrations.tsx";
+import { ClientContext } from "~/lib/store-hooks.ts";
+import { LiveSocket, Store } from "~/protocol/index.ts";
 
-/** The hook alone: it reaches for `rest` and for no context at all. */
+/**
+ * The hook under a client: it reads over `rest`, and asks the client only
+ * when the live socket comes back, which is when it reads again. Nothing
+ * dials.
+ */
+function underClient(ui: ReactElement): ReactElement {
+  const store = new Store();
+  return (
+    <ClientContext.Provider value={{ store, socket: new LiveSocket(store) }}>
+      {ui}
+    </ClientContext.Provider>
+  );
+}
+
+/** The hook alone, drawn as what it read. */
 function Probe() {
   const setup = useSetup();
   return (
@@ -1604,7 +1621,7 @@ test("the roster is read again when the tab comes back", async () => {
       });
     }),
   );
-  render(<Probe />);
+  render(underClient(<Probe />));
   await waitFor(() => expect(calls).toEqual(["/setup/integrations"]));
 
   // A TAB GOING AWAY IS NOT A REASON TO READ ANYTHING. Nobody is looking.
@@ -1645,7 +1662,7 @@ test("a refused listing names the grant the refusal named", async () => {
         ),
     ),
   );
-  render(<NeedsProbe />);
+  render(underClient(<NeedsProbe />));
   await waitFor(() => expect(screen.getByTestId("needs").textContent).toBe("true:config:read"));
 });
 

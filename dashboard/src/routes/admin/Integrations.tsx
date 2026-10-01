@@ -62,7 +62,7 @@ import { ObjectHeader, type Fact } from "~/app/frame/ObjectHeader.tsx";
 import { href, useNavigator } from "~/app/router.tsx";
 import { useNow } from "~/lib/clock.ts";
 import { needsSentence } from "~/lib/refusal.ts";
-import { useReread } from "~/lib/reread.ts";
+import { useReread, useRereadOnReconnect } from "~/lib/reread.ts";
 import { fmtDate, fmtDateTime, plural, relTime, tsKey } from "~/lib/format.ts";
 import { useRecheck } from "./recheck.ts";
 import { VendorMark, type Vendor } from "~/ui/VendorMark.tsx";
@@ -71,7 +71,7 @@ import { useOrg } from "~/lib/store-hooks.ts";
 import { indexOrg, seatLookup } from "~/lib/seats.ts";
 import { SetupDialog } from "./SetupDialog.tsx";
 import { DisconnectDialog } from "./DisconnectDialog.tsx";
-import { isLogRefusal, rest, RestError, restRetryMs, type LogRefusal } from "~/protocol/index.ts";
+import { rest, RestError, restFailure, restRetryMs, type RestFailure } from "~/protocol/index.ts";
 import { goSignIn } from "~/lib/session.ts";
 import type {
   EventRecord,
@@ -1725,22 +1725,23 @@ function SeatBadge({ satisfied, finding }: { satisfied: boolean; finding?: Recon
 }
 
 /**
- * The engine's own `503` behind a failed REST read — its state-log code, its
- * words and when to ask again ([RestError.refusal], which reads the
- * `Retry-After` and takes its absence as the engine's zero) — or null for any
- * other failure, a `503` something in front of the engine wrote included,
- * since nobody at the engine decided one.
+ * Why a REST read on this screen failed, as the pair `QueryState` draws
+ * ([restFailure]) — or null for a refusal on AUTHORITY, which every read here
+ * draws as its own `guarded` sentence naming the grant it takes.
  *
- * Every REST read on this screen draws one as `QueryState`'s `unavailable`
- * banner — "asks again on its own", or, at zero, that asking again will not
- * change it — and asks again exactly when it says (`~/lib/reread.ts`). A
- * `503` was none of these reads' business before: the listing went quiet with
- * no buttons and nothing asked again, and the pass history blanked into "No
- * pass has run on this node" and waited out its minute.
+ * EVERY FAILURE IS SAID, never only the engine's `503`. That was the one this
+ * screen had learned to draw — "asks again on its own", or at zero that asking
+ * will not change it, and asked again exactly when it said (`~/lib/reread.ts`)
+ * — and every other failure still drew nothing or a lie: the listing went
+ * quiet with no buttons and no banner for a `500` or a request that never
+ * arrived, the pass history said "No pass has run on this node" when its FIRST
+ * read failed, and one pass drew nothing under the row that opened it. A
+ * request that never reached the engine is `closed`, whose banner promises a
+ * read once the socket is back, and each read here keeps that promise
+ * (`useRereadOnReconnect`).
  */
-function unavailableOf(err: unknown): LogRefusal | null {
-  const said = err instanceof RestError ? err.refusal : null;
-  return said !== null && isLogRefusal(said) ? said : null;
+function failureOf(err: unknown): RestFailure | null {
+  return err instanceof RestError && err.unauthorized ? null : restFailure(err);
 }
 
 /**
@@ -1778,18 +1779,17 @@ export function useSetup(): {
    */
   loading: boolean;
   /**
-   * The engine's own `503` behind a listing it could not read — see
-   * [unavailableOf] — or null. The screen draws it as the banner every other
-   * read of a node that cannot answer here draws, and reads again when it
-   * says.
+   * Why the listing could not be read, other than a refusal on authority —
+   * see [failureOf] — or null. The screen draws it as the banner a socket
+   * question's failure draws, and reads again when that banner says it will.
    */
-  unavailable: LogRefusal | null;
+  failure: RestFailure | null;
   reload: () => void;
 } {
   const [listing, setListing] = useState<SetupListing | null>(null);
   const [guarded, setGuarded] = useState(false);
   const [needs, setNeeds] = useState<string[]>([]);
-  const [unavailable, setUnavailable] = useState<LogRefusal | null>(null);
+  const [failure, setFailure] = useState<RestFailure | null>(null);
   const [loading, setLoading] = useState(true);
   const reread = useReread();
 
@@ -1832,7 +1832,7 @@ export function useSetup(): {
           setListing(answer);
           setGuarded(false);
           setNeeds([]);
-          setUnavailable(null);
+          setFailure(null);
         } catch (err) {
           if (generation.current !== mine) return;
           // A refusal is not an empty answer. The screen keeps every read it
@@ -1840,7 +1840,7 @@ export function useSetup(): {
           setListing(null);
           setGuarded(err instanceof RestError && err.unauthorized);
           setNeeds(err instanceof RestError ? err.grants : []);
-          setUnavailable(unavailableOf(err));
+          setFailure(failureOf(err));
           // NOTHING POLLS THIS ROUTE, so a node that said "ask me in two
           // seconds" was asked again only when somebody changed tabs. It is
           // asked when it says, and a failure it gave no hint for waits for
@@ -1871,6 +1871,9 @@ export function useSetup(): {
     document.addEventListener("visibilitychange", onVisible);
     return () => document.removeEventListener("visibilitychange", onVisible);
   }, [reload]);
+  // AND WHEN THE SOCKET COMES BACK, which is what a `closed` banner promises.
+  const rereadQuietly = useCallback(() => reload(true), [reload]);
+  useRereadOnReconnect(rereadQuietly);
 
   return {
     byKey: new Map((listing?.tools ?? []).map((t) => [t.key, t])),
@@ -1878,7 +1881,7 @@ export function useSetup(): {
     guarded,
     needs,
     loading,
-    unavailable,
+    failure,
     reload,
   };
 }
@@ -2141,8 +2144,8 @@ export function useSetupRuns(kinds: string[]): {
   scope: string;
   guarded: boolean;
   needs: string[];
-  /** The engine's own `503` behind the last read, or null — see [unavailableOf]. */
-  unavailable: LogRefusal | null;
+  /** Why the last read failed, other than on authority — see [failureOf]. */
+  failure: RestFailure | null;
   loading: boolean;
 } {
   // THE KEY IS THE DEPENDENCY, not the array. A caller derives its kinds from
@@ -2153,7 +2156,7 @@ export function useSetupRuns(kinds: string[]): {
   const [scope, setScope] = useState("");
   const [guarded, setGuarded] = useState(false);
   const [needs, setNeeds] = useState<string[]>([]);
-  const [unavailable, setUnavailable] = useState<LogRefusal | null>(null);
+  const [failure, setFailure] = useState<RestFailure | null>(null);
   const [loading, setLoading] = useState(key !== "");
   const reread = useReread();
   // THE CADENCE THE LAST GOOD ANSWER SET, which a failure the engine gave no
@@ -2184,7 +2187,7 @@ export function useSetupRuns(kinds: string[]): {
         // a request nobody made.
         setRuns([]);
         setScope("");
-        setUnavailable(null);
+        setFailure(null);
         setLoading(false);
         return;
       }
@@ -2202,7 +2205,7 @@ export function useSetupRuns(kinds: string[]): {
           setScope(answers.find((answer) => answer.scope)?.scope ?? "");
           setGuarded(false);
           setNeeds([]);
-          setUnavailable(null);
+          setFailure(null);
           // QUIET, every re-read on its own: one that blanked the table into
           // its skeleton once a minute would take the row an operator was
           // reading out from under them to say nothing new.
@@ -2222,11 +2225,13 @@ export function useSetupRuns(kinds: string[]): {
           // A REFUSED READER IS SHOWN NOTHING it was refused. Any other
           // failure KEEPS the last reading: it was a history blanked into "No
           // pass has run on this node" by one failed quiet poll, which is a
-          // claim about the integration that nobody made.
+          // claim about the integration that nobody made. And it is SAID
+          // ([failureOf]) — with nothing kept, a first read that failed drew
+          // that same empty history.
           if (refused) setRuns([]);
           setGuarded(refused);
           setNeeds(err instanceof RestError ? err.grants : []);
-          setUnavailable(unavailableOf(err));
+          setFailure(failureOf(err));
           // THE ENGINE'S HINT IN PLACE OF THE NEXT TICK, sooner or later —
           // a node that said two seconds is not left for a minute, one that
           // said thirty is not asked at four — and a hint of zero stops the
@@ -2255,8 +2260,11 @@ export function useSetupRuns(kinds: string[]): {
     document.addEventListener("visibilitychange", onVisible);
     return () => document.removeEventListener("visibilitychange", onVisible);
   }, [reload]);
+  // AND WHEN THE SOCKET COMES BACK, which is what a `closed` banner promises.
+  const rereadQuietly = useCallback(() => reload(true), [reload]);
+  useRereadOnReconnect(rereadQuietly);
 
-  return { runs, scope, guarded, needs, unavailable, loading };
+  return { runs, scope, guarded, needs, failure, loading };
 }
 
 /**
@@ -2282,15 +2290,18 @@ export function useSetupRun(
   missing: boolean;
   guarded: boolean;
   needs: string[];
-  /** The engine's own `503` behind the last read, or null — see [unavailableOf]. */
-  unavailable: LogRefusal | null;
+  /**
+   * Why the last read failed, other than on authority or as a pass nobody
+   * remembers — see [failureOf].
+   */
+  failure: RestFailure | null;
   loading: boolean;
 } {
   const [run, setRun] = useState<SetupRun | null>(null);
   const [missing, setMissing] = useState(false);
   const [guarded, setGuarded] = useState(false);
   const [needs, setNeeds] = useState<string[]>([]);
-  const [unavailable, setUnavailable] = useState<LogRefusal | null>(null);
+  const [failure, setFailure] = useState<RestFailure | null>(null);
   const [loading, setLoading] = useState(false);
   const reread = useReread();
   // Whether the last good answer was a pass still RUNNING, which a failure the
@@ -2313,7 +2324,7 @@ export function useSetupRun(
       if (kind === "" || id === "") {
         setRun(null);
         setMissing(false);
-        setUnavailable(null);
+        setFailure(null);
         setLoading(false);
         following.current = false;
         return;
@@ -2329,7 +2340,7 @@ export function useSetupRun(
           setMissing(false);
           setGuarded(false);
           setNeeds([]);
-          setUnavailable(null);
+          setFailure(null);
           // FOLLOWED TO ITS END, and only while it is going: the row that
           // opened this may have been a pass that was running when the list
           // answered.
@@ -2350,7 +2361,7 @@ export function useSetupRun(
           setMissing(gone);
           setGuarded(refused);
           setNeeds(err instanceof RestError ? err.grants : []);
-          setUnavailable(unavailableOf(err));
+          setFailure(gone ? null : failureOf(err));
           reread.after(
             gone || refused ? null : restRetryMs(err, following.current ? PASS_POLL_MS : null),
             () => read(true),
@@ -2364,8 +2375,12 @@ export function useSetupRun(
   );
 
   useEffect(() => read(), [read]);
+  // AND WHEN THE SOCKET COMES BACK, which is what a `closed` banner promises:
+  // a pass that was not being followed is otherwise never read again.
+  const rereadQuietly = useCallback(() => read(true), [read]);
+  useRereadOnReconnect(rereadQuietly);
 
-  return { run, missing, guarded, needs, unavailable, loading };
+  return { run, missing, guarded, needs, failure, loading };
 }
 
 /**
@@ -2488,7 +2503,7 @@ function concludedLine(run: SetupRun): string {
  */
 export function SetupPasses({ entry, kinds }: { entry: Entry; kinds: string[] }) {
   const now = useNow();
-  const { runs, scope, guarded, needs, unavailable, loading } = useSetupRuns(kinds);
+  const { runs, scope, guarded, needs, failure, loading } = useSetupRuns(kinds);
   // WHICH PASS IS OPEN, as the surface AND the id rather than the id alone:
   // the detail route is keyed on both, and a tool has several kinds — an id on
   // its own could not say which surface's pass it was once the listing that
@@ -2512,14 +2527,15 @@ export function SetupPasses({ entry, kinds }: { entry: Entry; kinds: string[] })
       </Card>
     );
   }
-  if (unavailable) {
+  if (failure) {
     // NOT AN EMPTY HISTORY EITHER, and not the last one read as though it
-    // were current: this node could not answer, and the banner says whether
-    // the panel asks again on its own or asking will not change it.
+    // were current: the read failed, and the banner says why — a node that
+    // cannot answer yet, one that refuses until somebody acts, a request that
+    // never arrived, a fault — and whether the panel reads again on its own.
     return (
       <Card>
         <Card.Header icon={<RefreshGlyph size="sm" />}>Provisioning passes</Card.Header>
-        <QueryState error="unavailable" refusal={unavailable} loading={false} />
+        <QueryState error={failure.error} refusal={failure.refusal} loading={false} />
       </Card>
     );
   }
@@ -2687,7 +2703,7 @@ function PassDetail({
   name: string;
   now: number;
 }) {
-  const { run, missing, guarded, needs, unavailable, loading } = useSetupRun(kind, id);
+  const { run, missing, guarded, needs, failure, loading } = useSetupRun(kind, id);
 
   if (loading && !run) return <Skeleton variant="text" rows={4} label="Loading" />;
   if (missing) {
@@ -2713,7 +2729,11 @@ function PassDetail({
       </div>
     );
   }
-  if (unavailable) return <QueryState error="unavailable" refusal={unavailable} loading={false} />;
+  // A READ THAT FAILED IS SAID, whatever failed — it drew nothing at all under
+  // the row that opened it for anything but the engine's own `503`.
+  if (failure) {
+    return <QueryState error={failure.error} refusal={failure.refusal} loading={false} />;
+  }
   if (!run) return null;
 
   const state = passState(run);
@@ -3208,12 +3228,14 @@ export function Integrations({ kind }: { kind?: string }) {
           </Button>
         </Callout>
       )}
-      {/* A NODE THAT COULD NOT READ THE LISTING, which is not a company with
+      {/* A LISTING THAT COULD NOT BE READ, which is not a company with
           nothing to set up: the cards offer no way to connect until it
-          answers, and the banner says whether this screen asks again on its
-          own or asking will not change it. */}
-      {setup.unavailable && (
-        <QueryState error="unavailable" refusal={setup.unavailable} loading={false} />
+          answers, and the banner says why — a node that cannot answer yet or
+          refuses until somebody acts, a request that never arrived, a fault —
+          and whether this screen reads again on its own. Any failure but a
+          refusal on authority drew nothing here but that `503`. */}
+      {setup.failure && (
+        <QueryState error={setup.failure.error} refusal={setup.failure.refusal} loading={false} />
       )}
 
       {/* ONE OBJECT, ONE HEADER. `#/admin/integrations/{kind}` is a page about

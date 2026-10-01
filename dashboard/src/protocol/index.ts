@@ -28,9 +28,10 @@ export {
   REQUEST_TIMEOUT_MS,
   isAbort,
   refusedGrants,
+  restFailure,
   restRetryMs,
 } from "./rest.ts";
-export type { RequestOptions, RestResponse, QueryValue } from "./rest.ts";
+export type { RequestOptions, RestFailure, RestResponse, QueryValue } from "./rest.ts";
 export {
   GATE_ACTIONS,
   GATE_ACTIONS_KEEPING_OPERATION,

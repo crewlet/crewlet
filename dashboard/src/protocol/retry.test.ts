@@ -5,7 +5,7 @@
  */
 
 import { describe, expect, test } from "vitest";
-import { RestError, restRetryMs } from "./rest.ts";
+import { RestError, restFailure, restRetryMs } from "./rest.ts";
 import { RETRY_AFTER_MAX_MS, retryAfterMs, UNAVAILABLE_RETRY_MS } from "./retry.ts";
 import { unavailableRetryMs } from "./socket.ts";
 
@@ -76,5 +76,34 @@ describe("a failed REST read's wait", () => {
   ])("is the screen's own after %s", (_, err) => {
     expect(restRetryMs(err, 60_000)).toBe(60_000);
     expect(restRetryMs(err, null)).toBeNull();
+  });
+});
+
+// AND WHAT ITS BANNER SAYS, which is what says whether the screen asks again:
+// a REST screen that mapped its own failures forgot a different case each
+// time, and drew nothing, or a fault for a node catching up.
+describe("a failed REST read's banner", () => {
+  test.each([
+    ["a refusal on authority", new RestError(403, { error: "unauthorized" }), "unauthorized"],
+    ["nobody signed in", new RestError(401, { error: "invalid_token" }), "unauthorized"],
+    ["a request that never arrived", new RestError(0, { error: "unreachable" }), "closed"],
+    ["the engine's 503", new RestError(503, { error: "identity_unavailable" }, 2), "unavailable"],
+    ["the engine's 503 with no hint", new RestError(503, { error: "unavailable" }), "unavailable"],
+    ["a proxy's 503", new RestError(503, {}, 5), "query_failed"],
+    ["a fault", new RestError(500, { error: "internal_error" }), "query_failed"],
+    ["something that is not a refusal at all", new TypeError("boom"), "query_failed"],
+  ])("after %s is the matching code", (_, err, code) => {
+    expect(restFailure(err).error).toBe(code);
+  });
+
+  test("carries what lets the banner say what would change it", () => {
+    expect(restFailure(new RestError(503, { error: "unavailable" }, 12)).refusal).toEqual({
+      code: null,
+      detail: null,
+      retryAfter: 12,
+    });
+    expect(
+      restFailure(new RestError(403, { error: "unauthorized", grants: ["secrets:read"] })).refusal,
+    ).toEqual({ reason: "unauthorized", grants: ["secrets:read"] });
   });
 });

@@ -11,11 +11,35 @@
  * the answer; these hold that each read takes it at its word.
  */
 
-import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, render as rtlRender, screen } from "@testing-library/react";
+import type { ReactElement } from "react";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { CATALOG, SetupPasses, useSetup, useSetupRun, useSetupRuns } from "./Integrations.tsx";
 import { Router } from "~/app/router.tsx";
+import { ClientContext } from "~/lib/store-hooks.ts";
+import { isLogRefusal, LiveSocket, Store, type RestFailure } from "~/protocol/index.ts";
 import type { SetupRun } from "~/protocol/types.ts";
+
+/**
+ * The client every read here is rendered under: each re-reads when the live
+ * socket comes back, which is what its `closed` banner promises, so the case
+ * that holds that moves this store's connection. Nothing dials.
+ */
+let store = new Store();
+
+function render(ui: ReactElement) {
+  return rtlRender(
+    <ClientContext.Provider value={{ store, socket: new LiveSocket(store) }}>
+      <Router>{ui}</Router>
+    </ClientContext.Provider>,
+  );
+}
+
+/** The hint behind a failure the engine wrote `503`, or "-" for any other. */
+function hintOf(failure: RestFailure | null): number | string {
+  const refusal = failure?.error === "unavailable" ? failure.refusal : null;
+  return refusal !== null && isLogRefusal(refusal) ? refusal.retryAfter : "-";
+}
 
 /**
  * The fetches each path received, in order, and WHEN on the fake clock: a
@@ -81,6 +105,7 @@ async function wait(ms: number) {
 
 beforeEach(() => {
   asked = [];
+  store = new Store();
   vi.useFakeTimers();
 });
 
@@ -98,7 +123,9 @@ function Listing() {
   const setup = useSetup();
   return (
     <span data-testid="listing">
-      {setup.loading ? "loading" : `${setup.unavailable?.retryAfter ?? "-"}:${setup.byKey.size}`}
+      {setup.loading
+        ? "loading"
+        : `${setup.failure?.error ?? "ok"}:${hintOf(setup.failure)}:${setup.byKey.size}`}
     </span>
   );
 }
@@ -108,25 +135,27 @@ function Listing() {
 test("a listing the node could not read is read again when it says", async () => {
   answering({ [LISTING]: [unavailable(12), () => json({ tools: [] }, 200)] });
   render(<Listing />);
-  await vi.waitFor(() => expect(screen.getByTestId("listing").textContent).toBe("12:0"));
+  await vi.waitFor(() =>
+    expect(screen.getByTestId("listing").textContent).toBe("unavailable:12:0"),
+  );
   await wait(20_000);
   expect(gaps(LISTING)).toEqual([12]);
-  expect(screen.getByTestId("listing").textContent).toBe("-:0");
+  expect(screen.getByTestId("listing").textContent).toBe("ok:-:0");
 });
 
 test("a listing the engine said waiting will not clear is not read again on a timer", async () => {
   answering({ [LISTING]: [unavailable()] });
   render(<Listing />);
-  await vi.waitFor(() => expect(screen.getByTestId("listing").textContent).toBe("0:0"));
+  await vi.waitFor(() => expect(screen.getByTestId("listing").textContent).toBe("unavailable:0:0"));
   await wait(600_000);
   expect(reads(LISTING)).toBe(1);
 });
 
 function History() {
-  const { runs, unavailable } = useSetupRuns(["jira"]);
+  const { runs, failure } = useSetupRuns(["jira"]);
   return (
     <span data-testid="history">
-      {runs.map((r) => r.state).join(",")}|{unavailable?.retryAfter ?? "-"}
+      {runs.map((r) => r.state).join(",")}|{hintOf(failure)}
     </span>
   );
 }
@@ -180,10 +209,10 @@ test("a failure with no hint keeps the poll's cadence", async () => {
 });
 
 function Pass() {
-  const { run, unavailable } = useSetupRun("jira", "r1");
+  const { run, failure } = useSetupRun("jira", "r1");
   return (
     <span data-testid="pass">
-      {run?.state ?? "none"}|{unavailable?.retryAfter ?? "-"}
+      {run?.state ?? "none"}|{hintOf(failure)}
     </span>
   );
 }
@@ -208,11 +237,7 @@ test("one pass is asked again when the engine says, and kept meanwhile", async (
 test("the pass panel draws a node that could not answer, not an empty history", async () => {
   answering({ [RUNS]: [unavailable(12)] });
   const entry = CATALOG.find((e) => e.surfaces.some((s) => s.key === "jira"))!;
-  render(
-    <Router>
-      <SetupPasses entry={entry} kinds={["jira"]} />
-    </Router>,
-  );
+  render(<SetupPasses entry={entry} kinds={["jira"]} />);
   await vi.waitFor(() => expect(screen.getByText(/cannot answer yet/)).toBeTruthy());
   expect(screen.queryByText(/No pass has run/)).toBeNull();
 });
@@ -235,11 +260,7 @@ test("opening another pass never shows the last one's reading under it", async (
     [`${RUNS}/r2`]: [() => json({ error: "internal_error" }, 500)],
   });
   const entry = CATALOG.find((e) => e.surfaces.some((s) => s.key === "jira"))!;
-  render(
-    <Router>
-      <SetupPasses entry={entry} kinds={["jira"]} />
-    </Router>,
-  );
+  render(<SetupPasses entry={entry} kinds={["jira"]} />);
   // NEWEST FIRST, the grid's own order: the first pass, then the second.
   const rows = () => [...document.querySelectorAll<HTMLElement>(".grid-row[data-row-index]")];
   await vi.waitFor(() => expect(rows()).toHaveLength(2));
@@ -251,4 +272,82 @@ test("opening another pass never shows the last one's reading under it", async (
   await vi.waitFor(() => expect(reads(`${RUNS}/r2`)).toBe(1));
   await wait(0);
   expect(screen.queryByText("what the first pass found")).toBeNull();
+  // AND WHAT HAPPENED TO ITS OWN READ IS SAID, where it drew nothing at all.
+  expect(screen.getByText(/tried to answer and failed/)).toBeTruthy();
+});
+
+// EVERY FAILURE IS SAID, not only the engine's `503`. These reads had learned
+// to draw that one; anything else drew nothing (the listing, one pass) or a
+// claim nobody made — a FIRST read of the history that failed was drawn as
+// "No pass has run on this node", the very sentence a failed poll was stopped
+// from blanking into.
+test("a first read of the history that failed is said, never drawn as no passes", async () => {
+  answering({ [RUNS]: [() => json({ error: "internal_error" }, 500)] });
+  const entry = CATALOG.find((e) => e.surfaces.some((s) => s.key === "jira"))!;
+  render(<SetupPasses entry={entry} kinds={["jira"]} />);
+  await vi.waitFor(() => expect(screen.getByText(/tried to answer and failed/)).toBeTruthy());
+  expect(screen.queryByText(/No pass has run/)).toBeNull();
+});
+
+test.each([
+  ["a fault", () => json({ error: "internal_error" }, 500), "query_failed"],
+  [
+    "a request that never arrived",
+    (): Response => {
+      throw new TypeError("Failed to fetch");
+    },
+    "closed",
+  ],
+])("a listing that failed with %s says so", async (_, answer, code) => {
+  answering({ [LISTING]: [answer] });
+  render(<Listing />);
+  await vi.waitFor(() => expect(screen.getByTestId("listing").textContent).toBe(`${code}:-:0`));
+});
+
+// A `closed` BANNER SAYS THE SCREEN READS AGAIN ONCE THE SOCKET IS BACK, and
+// for a REST read nothing did: there is no socket question behind it to be
+// re-asked, so the banner stood until a reload. The socket coming back is the
+// engine being reachable again, and each of these reads asks then — the
+// listing here, since nothing else ever asks it again on its own.
+test("a read that never arrived is read again when the socket comes back", async () => {
+  answering({
+    [LISTING]: [
+      () => {
+        throw new TypeError("Failed to fetch");
+      },
+      () => json({ tools: [] }, 200),
+    ],
+  });
+  render(<Listing />);
+  await vi.waitFor(() => expect(screen.getByTestId("listing").textContent).toBe("closed:-:0"));
+  await wait(600_000);
+  expect(reads(LISTING)).toBe(1);
+
+  act(() => store.setConnected(true));
+  await vi.waitFor(() => expect(screen.getByTestId("listing").textContent).toBe("ok:-:0"));
+  expect(reads(LISTING)).toBe(2);
+});
+
+// AND THE OTHER TWO READS KEEP THE SAME PROMISE: the history, idle, would not
+// otherwise ask for a minute, and a pass that was not being followed never.
+test.each([
+  ["the history", RUNS, () => render(<History />)],
+  ["one pass", ONE, () => render(<Pass />)],
+])("%s that never arrived is read again when the socket comes back", async (_, path, mount) => {
+  answering({
+    [path]: [
+      () => {
+        throw new TypeError("Failed to fetch");
+      },
+      path === ONE ? () => json(run("done"), 200) : listed("done"),
+    ],
+  });
+  mount();
+  await vi.waitFor(() => expect(reads(path)).toBe(1));
+  await wait(1_000);
+  expect(reads(path)).toBe(1);
+
+  act(() => store.setConnected(true));
+  await wait(0);
+  expect(reads(path)).toBe(2);
 });
