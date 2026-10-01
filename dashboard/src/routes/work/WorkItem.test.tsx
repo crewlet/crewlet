@@ -1023,10 +1023,20 @@ test("links and subtasks to two tasks under one key open each as itself", async 
   expect(hrefs().filter((h) => h === DUPLICATE_HREF).length).toBe(2);
   expect(hrefs().filter((h) => h === CLAIMANT_HREF).length).toBe(2);
 
-  // AND A SUBTASK PEEKS BY THE SAME ADDRESS IT LINKS TO.
-  const subtask = [...container.querySelectorAll<HTMLAnchorElement>(".work-subtasks a")].find((a) =>
-    a.textContent?.includes(DUPLICATE_TITLE),
-  )!;
-  fireEvent.click(subtask);
+  // AND A SUBTASK PEEKS BY THE SAME ADDRESS IT LINKS TO, and the one the rail
+  // holds is drawn as the open one — matched on its key, both of the pair
+  // would light up, or neither.
+  const subtask = (title: string) =>
+    [...container.querySelectorAll<HTMLAnchorElement>(".work-subtasks a")].find((a) =>
+      a.textContent?.includes(title),
+    )!;
+  fireEvent.click(subtask(DUPLICATE_TITLE));
   await waitFor(() => expect(peekNow()).toBe(`item:${DUPLICATE}`));
+  await waitFor(() => expect(subtask(DUPLICATE_TITLE).classList.contains("selected")).toBe(true));
+  expect(subtask(CLAIMANT_TITLE).classList.contains("selected")).toBe(false);
+
+  fireEvent.click(subtask(CLAIMANT_TITLE));
+  await waitFor(() => expect(peekNow()).toBe(`item:${SHARED_KEY}`));
+  await waitFor(() => expect(subtask(CLAIMANT_TITLE).classList.contains("selected")).toBe(true));
+  expect(subtask(DUPLICATE_TITLE).classList.contains("selected")).toBe(false);
 });

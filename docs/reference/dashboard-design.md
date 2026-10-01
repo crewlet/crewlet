@@ -1101,7 +1101,11 @@ selected one reads zero and the rail is a dead end.
 
 **`peek` is one key, one component, one rule.** A plain click peeks; ⌘-click,
 middle-click and the rail's `Open ↗` go to the page. Inside a peek `[` and `]`
-step through the list it was opened from and `esc` closes it. Opening the rail
+step through the list it was opened from and `esc` closes it. Every list a
+plain click peeks from draws the row the rail holds as the open one — the work
+list in every shape, the search, and an item's own subtasks — matched on the
+same reference the peek was opened with, so the mark and the rail cannot name
+two different rows. Opening the rail
 **pushes** — Back closes it, which is what a reader means by Back with a panel
 open — and moving it **replaces**, because four objects walked through one open
 rail are one place the reader has been, exactly as four ticked chips are one

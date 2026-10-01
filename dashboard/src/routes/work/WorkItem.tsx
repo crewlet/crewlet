@@ -94,7 +94,7 @@ import { useViewer } from "~/lib/viewer.ts";
 import { PropertiesRail } from "~/app/frame/PropertiesRail.tsx";
 import type { PropertyGroup } from "~/app/frame/PropertiesRail.tsx";
 import { ObjectHeader, type Fact, type SetBy } from "~/app/frame/ObjectHeader.tsx";
-import { usePeekControls } from "~/app/frame/DetailRail.tsx";
+import { usePeek, usePeekControls } from "~/app/frame/DetailRail.tsx";
 import { pathOf, refToken } from "~/app/frame/objects.ts";
 import { attribution, type ChangeField } from "~/lib/attribution.ts";
 import type {
@@ -567,6 +567,7 @@ export function Subtasks({
   refusal,
   chrome,
   peek,
+  selected,
 }: {
   rows: WorkSummary[];
   error?: string | null;
@@ -585,6 +586,13 @@ export function Subtasks({
    * and the peek passes nothing: see [ItemBody].
    */
   peek?: (row: WorkSummary) => void;
+  /**
+   * The ADDRESS of the item the rail holds, so the child it holds is drawn as
+   * the open one — see `itemAddress`. Every other list that peeks marks its
+   * open row; this one peeked and marked nothing, so a reader with a subtask
+   * in the rail could not see which of the list it was.
+   */
+  selected?: string;
 }) {
   if (error) {
     return (
@@ -611,7 +619,13 @@ export function Subtasks({
       <Card.Header count={rows.length}>
         <Card.Title>Subtasks</Card.Title>
       </Card.Header>
-      <RowList rows={rows} chrome={chrome} hrefOf={(row) => href(itemPath(row))} onOpen={peek} />
+      <RowList
+        rows={rows}
+        chrome={chrome}
+        hrefOf={(row) => href(itemPath(row))}
+        onOpen={peek}
+        selected={selected}
+      />
     </Card>
   );
 }
@@ -675,6 +689,7 @@ export function ItemBody({
   // and would otherwise have to thread it through for one line of prose.
   const viewer = useViewer();
   const { open: openPeek } = usePeekControls();
+  const open = usePeek();
   const [tab, setTab] = useParam("thread", "comments");
   // WHICH CHANGE'S ROUTING IS OPEN. A filter rather than a section: stepping
   // through the announced changes must not fill the back stack.
@@ -746,6 +761,7 @@ export function ItemBody({
         refusal={children.refusal}
         chrome={chrome}
         peek={flush ? undefined : (row) => openPeek({ kind: "item", id: itemAddress(row) })}
+        selected={!flush && open?.kind === "item" ? open.id : undefined}
       />
 
       {(item.checklists ?? []).map((list) => (
