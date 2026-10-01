@@ -340,7 +340,8 @@ type Options struct {
 	// QueueBackend names the broker, for the health body.
 	QueueBackend string
 
-	// Now is injectable so a test can pin the timestamps.
+	// Now is injectable so a test can pin the timestamps. It is the
+	// questions' clock too unless [queries.Sources.Now] pins one of its own.
 	Now func() time.Time
 
 	// HealthInterval overrides the shared tick's cadence.
@@ -606,6 +607,16 @@ func New(opts Options) (*App, error) {
 	sources := opts.Sources
 	if sources.Health == nil {
 		sources.Health = func(ctx context.Context) any { return a.health(ctx) }
+	}
+	// ONE CLOCK PER APP. The questions read [queries.Sources.Now] while the
+	// stream service and the webhook edge read [Options.Now], so a caller
+	// that pinned the app's clock and not the sources' had its pushes and
+	// deliveries at the pinned instant and its answers on the wall clock —
+	// and a test that pinned the app to compare one question across both
+	// transports compared two wall-clock readings instead. A caller that
+	// pinned the sources' own clock keeps it.
+	if sources.Now == nil {
+		sources.Now = now
 	}
 	if sources.State == nil {
 		sources.State = state

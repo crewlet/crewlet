@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"strings"
-	"time"
 
 	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/tracker"
@@ -81,7 +80,7 @@ func (s Sources) workInbox(ctx context.Context, p Params) (any, error) {
 		}
 		q.Since = at
 	}
-	answer, err := s.Work.Inbox(ctx, q, time.Now().UTC())
+	answer, err := s.Work.Inbox(ctx, q, s.clock())
 	switch {
 	case errors.Is(err, tracker.ErrBadQuery):
 		// THE CALLER'S, like a malformed `since` above: a cursor that is

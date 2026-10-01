@@ -215,7 +215,7 @@ func (s Sources) workRouting(ctx context.Context, p Params) (any, error) {
 		MaxLag:      fresh.MaxLag,
 		MaxLagSeq:   fresh.MaxLagSeq,
 		MinPosition: fresh.MinPosition,
-	}, time.Now().UTC())
+	}, s.clock())
 	if err != nil {
 		return nil, err
 	}

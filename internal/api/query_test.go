@@ -197,6 +197,29 @@ func TestBothTransportsAnswerTheSameQuestionIdentically(t *testing.T) {
 	}
 }
 
+// AN APP'S CLOCK IS THE CLOCK ITS QUESTIONS ARE ANSWERED ON.
+//
+// The case above asks each question once per transport, at two instants, and
+// compares the answers — so an answer that reads the wall clock can only agree
+// with itself when both asks land in the same second. `tokens` labels its
+// window with the instant it was asked, and the case failed under load when
+// its REST ask and its socket ask straddled a second: the app's clock was
+// pinned ([seededApp]), and never reached the questions, which kept a wall
+// clock of their own.
+func TestAPinnedAppClockPinsItsAnswers(t *testing.T) {
+	t.Parallel()
+	a := seededApp(t, nil)
+	status, body := overREST(t, a, "tokens", nil)
+	if status != http.StatusOK {
+		t.Fatalf("tokens: status = %d (%v)", status, body)
+	}
+	answer, _ := body.(map[string]any)
+	if want := clock.Format(time.RFC3339); answer["until"] != want {
+		t.Errorf("tokens ends at %v, want the app's clock %s — an answer on the "+
+			"wall clock differs from itself one second later", answer["until"], want)
+	}
+}
+
 func TestAFilterIsHonouredOnBothTransports(t *testing.T) {
 	t.Parallel()
 	// The specific divergence the shared accessors exist to prevent: a

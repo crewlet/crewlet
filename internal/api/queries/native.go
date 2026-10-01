@@ -136,7 +136,7 @@ type PageReader interface {
 // ---- work -------------------------------------------------------------- //
 
 func (s Sources) workItems(ctx context.Context, p Params) (any, error) {
-	now := time.Now().UTC()
+	now := s.clock()
 	// THROUGH THE EXPANSION, so a `view=` or a `preset=` is the set of
 	// defaults it stands for rather than a key nothing reads.
 	//
@@ -443,7 +443,7 @@ func (s Sources) workPerson(ctx context.Context, p Params) (any, error) {
 		MaxLag:      fresh.MaxLag,
 		MaxLagSeq:   fresh.MaxLagSeq,
 		MinPosition: fresh.MinPosition,
-	}, time.Now().UTC())
+	}, s.clock())
 	if err != nil {
 		return nil, err
 	}
@@ -666,7 +666,7 @@ func (s Sources) workWorkload(ctx context.Context, p Params) (any, error) {
 		Units: s.chartUnits(),
 		Level: fresh.Level, MaxLag: fresh.MaxLag, MaxLagSeq: fresh.MaxLagSeq,
 		MinPosition: fresh.MinPosition,
-	}, time.Now().UTC())
+	}, s.clock())
 	if err != nil {
 		return nil, err
 	}
@@ -787,7 +787,7 @@ func (s Sources) workActivity(ctx context.Context, p Params) (any, error) {
 		notified := p.Bool("notified", true)
 		q.Notified = &notified
 	}
-	answer, err := s.Work.Activity(ctx, q, time.Now().UTC())
+	answer, err := s.Work.Activity(ctx, q, s.clock())
 	switch {
 	case errors.Is(err, tracker.ErrNoTask):
 		return nil, ErrNotFound
@@ -829,7 +829,7 @@ func (s Sources) workMyWork(ctx context.Context, p Params) (any, error) {
 		// see [freshness] and [Sources.workItems].
 		Level: fresh.Level, MaxLag: fresh.MaxLag, MaxLagSeq: fresh.MaxLagSeq,
 		MinPosition: fresh.MinPosition,
-	}, time.Now().UTC())
+	}, s.clock())
 	if err != nil {
 		return nil, err
 	}

@@ -281,8 +281,16 @@ type Sources struct {
 	// lease carries, never the raw `node.id` field.
 	NodeID string
 
-	// Now is injectable so a test can pin the lease countdowns and the
-	// next-run projection.
+	// Now is the ONE clock every answer here reads, injectable so a caller
+	// can pin it. Nil is the wall clock.
+	//
+	// EVERY ANSWER, not the few that happened to be written against it:
+	// `tokens` and seven of the tracker's answers read the wall clock
+	// beside it, so a caller that pinned this still had answers that moved
+	// with the wall — and `tokens` labels its window with the instant it
+	// was asked, so one question asked twice, a second apart, answered
+	// twice differently. A source walk in clock_test.go holds it: nothing
+	// in this package reads the wall clock but [Sources.clock].
 	Now func() time.Time
 }
 
@@ -302,12 +310,13 @@ type ScheduleRuns interface {
 		scopeID, name string, limit int) ([]schedule.Run, error)
 }
 
-// clock reads the injected time, or the wall clock.
+// clock reads the injected time, or the wall clock, in UTC either way. It is
+// the only read of the wall clock in this package — see [Sources.Now].
 func (s Sources) clock() time.Time {
 	if s.Now == nil {
 		return time.Now().UTC()
 	}
-	return s.Now()
+	return s.Now().UTC()
 }
 
 // ErrUnavailable is a question this node understood and cannot answer HERE:
@@ -760,7 +769,7 @@ func (s Sources) tokens(ctx context.Context, p Params) (any, error) {
 	// asked for: `since` is floored at the retention window, so a request
 	// for a year answered over thirty days and headed "a year" is a lie
 	// about the numbers beside it.
-	opts.Since, opts.Until = q.Window(time.Now())
+	opts.Since, opts.Until = q.Window(s.clock())
 
 	// The live window, unfiltered, is the one the projection can answer —
 	// and only when the caller named no instants of their own, since the
