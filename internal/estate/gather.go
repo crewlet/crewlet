@@ -1137,7 +1137,9 @@ func runPart(ctx context.Context, self string, spec *opSpec, b Backend, s sliceA
 // give up reports a moment after it is told, and answering at the instant it
 // is told would race that report and name a partition unfinished that was
 // merely behind. A read that has not reported even then is unfinished too, and
-// named as what it is — a read that kept going after it was told to stop.
+// named as what it is — a read that kept going after it was told to stop, which
+// says nothing of whether it started late behind the batch's other queries, so
+// it is asked again like any other unfinished slice.
 func (s server) answerSlices(ctx context.Context, spec *opSpec, req request) reply {
 	out := reply{Node: s.self}
 	layout, err := s.placement.Layout()
@@ -1212,12 +1214,23 @@ collect:
 	}
 	for i, name := range req.Partitions {
 		if !finished[i] {
-			// A READ THAT DID NOT RETURN once told to stop — never the
-			// batch's size: a wait or a query that gives up when told
-			// to reports through [server.answerPart], as unfinished or
-			// behind, before the batch is answered. So what is known
-			// is that this read kept going, and a smaller batch, down
-			// to one partition, would be answered the same way.
+			// A READ THAT DID NOT RETURN once told to stop: a wait, a
+			// CPU place not yet taken, and a query that gives up when
+			// told to all report through [server.answerPart], as
+			// unfinished or behind, before the batch is answered. That
+			// this read kept going is ALL this node knows, and all the
+			// detail says — never WHY. A query that takes no notice of
+			// its context may have started just before the stop,
+			// behind the batch's other queries on this node's CPUs,
+			// and would answer in good time in a smaller batch; or it
+			// may run long however small its batch. So it is
+			// unfinished rather than decided: the asker asks for it
+			// again beside a partition this reply decided, which is
+			// what recovers the first kind, and moves it on as
+			// unreachable once a reply decides nothing beside it,
+			// which is where the second kind ends ([Router.askBatch]).
+			// Answered here as a failure, every partition a CPU-bound
+			// batch started late would be lost.
 			parts[i] = partReply{Partition: name, Unserved: unservedUnfinished,
 				Detail: fmt.Sprintf("%s's read of %s had not returned %s", s.self, name, cut)}
 		}

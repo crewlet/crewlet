@@ -108,6 +108,7 @@ type partNode struct {
 	holds    map[statelog.PartitionID]trouble
 	silent   bool
 	requests []request
+	replies  []reply
 	barriers []string
 	levels   map[statelog.PartitionID][]tracker.Query
 	inFlight atomic.Int32
@@ -125,6 +126,10 @@ type partNode struct {
 
 	// delay is how long each read takes.
 	delay time.Duration
+
+	// deaf is how long each read takes WITHOUT A LOOK AT ITS CONTEXT — a
+	// query that keeps going after it is told to stop.
+	deaf time.Duration
 }
 
 func (n *partNode) set(change func(*partNode)) {
@@ -137,6 +142,13 @@ func (n *partNode) asked() []request {
 	n.mu.Lock()
 	defer n.mu.Unlock()
 	return slices.Clone(n.requests)
+}
+
+// answered is every reply the node sent, in the order it sent them.
+func (n *partNode) answered() []reply {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	return slices.Clone(n.replies)
 }
 
 // For implements [LocalBackends] over the partitions the node holds.
@@ -258,7 +270,7 @@ func (r partRead) Tasks(ctx context.Context, q tracker.Query, _ time.Time) (trac
 		r.node.levels = map[statelog.PartitionID][]tracker.Query{}
 	}
 	r.node.levels[r.p] = append(r.node.levels[r.p], q)
-	delay := r.node.delay
+	delay, deaf := r.node.delay, r.node.deaf
 	r.node.mu.Unlock()
 	if delay > 0 {
 		select {
@@ -267,6 +279,7 @@ func (r partRead) Tasks(ctx context.Context, q tracker.Query, _ time.Time) (trac
 			return tracker.Answer{}, ctx.Err()
 		}
 	}
+	time.Sleep(deaf)
 	if r.t == stalls {
 		<-ctx.Done()
 		return tracker.Answer{}, ctx.Err()
@@ -435,7 +448,15 @@ func (r recorder) Serve(ctx context.Context, subject string, h queue.AnswerFunc)
 		if silent {
 			return nil, errors.New("this node is gone")
 		}
-		return h(ctx, raw)
+		out, err := h(ctx, raw)
+		if err == nil {
+			var rep reply
+			_ = json.Unmarshal(out, &rep)
+			r.node.mu.Lock()
+			r.node.replies = append(r.node.replies, rep)
+			r.node.mu.Unlock()
+		}
+		return out, err
 	})
 }
 
@@ -1368,6 +1389,68 @@ func TestAReadThatKeepsGoingIsNamedRatherThanItsBatch(t *testing.T) {
 		t.Errorf("data-b was asked %d times, want once — a reply deciding nothing moves "+
 			"its partition on", len(asked))
 	}
+}
+
+// A READ ITS BATCH STARTED LATE IS ASKED AGAIN, AND ANSWERED: on one CPU a
+// batch's queries run one after another, so a query that takes no notice of
+// its context can take the CPU just before the stop, behind the batch's other
+// queries, and still be running when the batch is answered — late because of
+// its batch rather than its own cost. Its holder cannot tell which, so it names
+// the read unfinished, and the asker asks for it again beside the partitions
+// the reply decided, in a batch small enough to answer it. Answered as a
+// failure — what a read that keeps going would be if a smaller batch fared no
+// better — every partition a CPU-bound batch started late was lost.
+func TestAReadItsBatchStartedLateIsAnsweredWhenAskedAgain(t *testing.T) {
+	t.Parallel()
+	f, node, srv := ceilingFleet(t, queue.MaxPayloadBytes)
+	srv.cpus = 1
+	// A QUARTER OF THE ATTEMPT EACH, deaf to the stop, so the batch's five
+	// reads cannot all run in one: the fourth takes the CPU at three
+	// quarters of the attempt — before the stop, a tenth of it before the
+	// end — and is still running when the batch is answered, and the fifth
+	// is still waiting for the CPU when the stop comes. Asked again, the two
+	// take half an attempt.
+	const attempt = 2 * time.Second
+	node.set(func(n *partNode) { n.deaf = attempt / 4 })
+	r := f.router(t, "agent-1", nil)
+	r.readBudget = attempt
+	answer, cov, err := listAll(t, r, 0, "")
+	if err != nil || !cov.Complete() || len(answer.Rows) != 24 {
+		t.Fatalf("gather = (%d rows, %+v, %v), want every partition, the one its batch "+
+			"started late included", len(answer.Rows), cov, err)
+	}
+	replies := node.answered()
+	if len(replies) == 0 {
+		t.Fatal("the holder sent no reply")
+	}
+	var late []string
+	for _, part := range replies[0].Parts {
+		if part.Unserved == unservedUnfinished && strings.Contains(part.Detail, "had not returned") {
+			late = append(late, part.Partition)
+		}
+	}
+	if len(late) != 1 {
+		t.Fatalf("the first reply named %v as reads that kept going after they were told to "+
+			"stop, want the one read the batch started late: %+v", late, replies[0].Parts)
+	}
+	asked := node.asked()
+	if len(asked) != 2 || !slices.Contains(asked[1].Partitions, late[0]) {
+		t.Errorf("the holder was asked %d times, the second for %v, want a second batch "+
+			"carrying %s", len(asked), partitionsOf(asked[1:]), late[0])
+	}
+	if !slices.Contains(cov.Answered, late[0]) {
+		t.Errorf("%s, which its batch started late, is not among the answered %v",
+			late[0], cov.Answered)
+	}
+}
+
+// partitionsOf is the partitions each request names, in the order asked.
+func partitionsOf(asked []request) [][]string {
+	var out [][]string
+	for _, req := range asked {
+		out = append(out, req.Partitions)
+	}
+	return out
 }
 
 // A PARTITION THE HOLDER DID NOT FINISH IS NAMED UNFINISHED HOWEVER LITTLE ROOM
