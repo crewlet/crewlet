@@ -6,7 +6,7 @@
  * in Retention.test.tsx must not see.
  */
 
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, expect, test, vi } from "vitest";
 import { engineFile } from "~/test/engineFiles.ts";
 import type {
@@ -133,23 +133,20 @@ test("a complete gesture reopens as itself until the report shows it", async () 
     </Router>,
   );
 
-  fireEvent.click(screen.getByRole("button", { name: "Evict…" }));
-  fireEvent.change(screen.getByLabelText("Type node-4 to confirm"), {
-    target: { value: "node-4" },
-  });
-  fireEvent.click(screen.getByRole("button", { name: "Evict" }));
-  await waitFor(() => expect(screen.getByText(/Durable on every log/)).toBeTruthy());
+  fireEvent.click(rowButton("node-4", "Evict…"));
+  await evict("node-4");
+  expect(within(gate("node-4")).getByText(/Durable on every log/)).toBeTruthy();
   // THE REPORT IS ASKED AGAIN AT ONCE, rather than at the next poll.
   expect(refetch).toHaveBeenCalled();
 
-  fireEvent.click(screen.getAllByRole("button", { name: "Close" })[0]!);
+  close("node-4");
   // NOT "Evict…" — which would start a second gesture over the logs this one
   // already holds.
-  fireEvent.click(screen.getByRole("button", { name: "Eviction sent…" }));
-  expect(screen.getByText(/Durable on every log/)).toBeTruthy();
+  fireEvent.click(rowButton("node-4", "Eviction sent…"));
+  expect(within(gate("node-4")).getByText(/Durable on every log/)).toBeTruthy();
   expect(screen.queryByLabelText("Type node-4 to confirm")).toBeNull();
   expect(sent.length).toBe(1);
-  fireEvent.click(screen.getAllByRole("button", { name: "Close" })[0]!);
+  close("node-4");
 
   // ONCE THE REPORT SHOWS IT, it is let go of: the node's own state decides.
   query.data = report([node({ evicted })]);
@@ -158,7 +155,7 @@ test("a complete gesture reopens as itself until the report shows it", async () 
       <RetentionPanels />
     </Router>,
   );
-  await waitFor(() => expect(screen.getByRole("button", { name: "Readmit…" })).toBeTruthy());
+  expect(rowButton("node-4", "Readmit…")).toBeTruthy();
 });
 
 // WHAT IS HELD AGAINST A REPORT: every gesture a request can still finish, and
@@ -323,13 +320,10 @@ test("the row offers a new eviction once a readmission elsewhere overtook this o
     </Router>,
   );
   fireEvent.click(rowButton("node-4", "Evict…"));
-  fireEvent.change(screen.getByLabelText("Type node-4 to confirm"), {
-    target: { value: "node-4" },
-  });
-  fireEvent.click(screen.getByRole("button", { name: "Evict" }));
-  await waitFor(() => expect(screen.getByText(/evicted on every log/)).toBeTruthy());
-  fireEvent.click(screen.getAllByRole("button", { name: "Close" })[0]!);
-  expect(screen.getByRole("button", { name: "Eviction sent…" })).toBeTruthy();
+  await evict("node-4");
+  expect(within(gate("node-4")).getByText(/evicted on every log/)).toBeTruthy();
+  close("node-4");
+  expect(rowButton("node-4", "Eviction sent…")).toBeTruthy();
 
   // READMITTED FROM THE COMMAND LINE, and the serving node has applied past
   // both of this gesture's records: node-4 reads counted, and the row is
@@ -340,23 +334,49 @@ test("the row offers a new eviction once a readmission elsewhere overtook this o
       <RetentionPanels />
     </Router>,
   );
-  await waitFor(() => expect(screen.queryByRole("button", { name: "Eviction sent…" })).toBeNull());
   expect(rowButton("node-4", "Evict…")).toBeTruthy();
+  expect(() => rowButton("node-4", "Eviction sent…")).toThrow();
 });
 
 /**
- * The gate button on one node's row: the one whose nearest ancestor naming a
- * node names this one — the row, whose first cell is the node id.
+ * The gate button on one node's row, asked for by role INSIDE that row.
+ *
+ * A row is found by the node id it holds rather than by a role query over the
+ * page: asked by name across the whole page, every button of every panel was
+ * a candidate whose accessible name jsdom computed — the costliest line of the
+ * cases that press these, profiled.
  */
 function rowButton(nodeId: string, name: string): HTMLElement {
-  const rowOf = (b: HTMLElement): string => {
-    for (let at = b.parentElement; at; at = at.parentElement) {
-      const text = at.textContent ?? "";
-      if (/node-\d/.test(text)) return text;
-    }
-    return "";
-  };
-  const button = screen.getAllByRole("button", { name }).find((b) => rowOf(b).includes(nodeId));
-  if (!button) throw new Error(`no ${name} button on ${nodeId}'s row`);
-  return button;
+  const rows = [...document.querySelectorAll<HTMLElement>(".grid-row")].filter((row) =>
+    (row.textContent ?? "").includes(nodeId),
+  );
+  for (const row of rows) {
+    const button = within(row).queryByRole("button", { name });
+    if (button) return button;
+  }
+  throw new Error(`no ${name} button on ${nodeId}'s row`);
+}
+
+/** The gesture's dialog about `nodeId`. */
+const gate = (nodeId: string): HTMLElement =>
+  screen.getByRole("dialog", { name: new RegExp(` ${nodeId}$`) });
+
+/**
+ * Types the node's id into the open gesture's confirmation and presses Evict,
+ * then renders the answer. The stubbed engine answers at once, so what the
+ * dialog does with it is promises, which `act` runs to the end — no deadline
+ * to poll against.
+ */
+async function evict(nodeId: string): Promise<void> {
+  const dialog = gate(nodeId);
+  fireEvent.change(within(dialog).getByLabelText(`Type ${nodeId} to confirm`), {
+    target: { value: nodeId },
+  });
+  fireEvent.click(within(dialog).getByRole("button", { name: "Evict" }));
+  await act(async () => {});
+}
+
+/** Closes the gesture's dialog with its own Close. */
+function close(nodeId: string): void {
+  fireEvent.click(within(gate(nodeId)).getAllByRole("button", { name: "Close" })[0]!);
 }

@@ -324,7 +324,15 @@ const answering = (what: string) =>
     ? Promise.resolve({ totals: { total_tokens: 0, calls: 0 }, by_model: [], by_turn: [] })
     : Promise.resolve({ llm_history: [], next: "" });
 
-/** Let every settled promise land, and the renders they cause. */
+/**
+ * Let every settled promise land, and the renders they cause.
+ *
+ * THE WAY EVERY CASE HERE WAITS, rather than a `findBy` that polls the page
+ * against a one-second deadline: what this screen waits for is the socket's
+ * and the stubbed engine's answers, which are promises, so `act` runs them and
+ * the renders they cause to the end — on a loaded machine as surely as on an
+ * idle one.
+ */
 async function settle() {
   await act(async () => {
     await Promise.resolve();
@@ -340,7 +348,8 @@ test("the settings the projection does not carry are read from the chart, by han
   mount("#/company/people/ceo", answering);
 
   // The chain, in the order the fallback walks it.
-  expect(await screen.findByText("fast")).toBeDefined();
+  await settle();
+  expect(screen.getByText("fast")).toBeDefined();
   expect(screen.getByText("backup")).toBeDefined();
   const read = chartReads.find((r) => r.path === "/chart/seats/ceo");
   expect(read?.query.get("runtime")).toBe("true");
@@ -352,11 +361,13 @@ test("the settings the projection does not carry are read from the chart, by han
 // or the mask, and neither is shown as though it were an address.
 test("a sealed address is shown as the reference it is, and a masked one as hidden", async () => {
   mount("#/company/people/ceo", answering);
-  expect(await screen.findByText("${CHART_SEAT_CEO_EMAIL_0A1B2C3D}")).toBeDefined();
+  await settle();
+  expect(screen.getByText("${CHART_SEAT_CEO_EMAIL_0A1B2C3D}")).toBeDefined();
   cleanup();
 
   mount("#/company/people/ada", answering);
-  expect(await screen.findByText("A literal value is set (hidden)")).toBeDefined();
+  await settle();
+  expect(screen.getByText("A literal value is set (hidden)")).toBeDefined();
   expect(document.body.textContent).not.toContain("__redacted__");
 });
 
@@ -366,13 +377,13 @@ test("a refused re-read takes the guarded settings off the page", async () => {
   const { store } = mount("#/company/people/ceo", answering, () =>
     refuse ? refusing : servingChart,
   );
-  expect(await screen.findByText("fast")).toBeDefined();
+  await settle();
+  expect(screen.getByText("fast")).toBeDefined();
 
   refuse = true;
   // An org push is what follows a chart write, and it re-reads the chart.
   act(() => store.applyOrg({ ...projection }));
 
-  await screen.findByRole("tab", { name: "Cost" });
   await settle();
   expect(screen.queryByText("fast")).toBeNull();
 
@@ -414,7 +425,9 @@ test("a runtime half the chart withheld is said to be withheld, never drawn as e
 test("a credential is never printed, and a reference is shown as the name it is", async () => {
   mount("#/company/people/dev-a?tab=access", answering);
 
-  expect(await screen.findByText("U0FOUNDER")).toBeDefined();
+  await settle();
+
+  expect(screen.getByText("U0FOUNDER")).toBeDefined();
   // The mask says only that something is set, and a credential field that is
   // not one whole reference is hidden the same way.
   expect(screen.getAllByText("A literal value is set (hidden)").length).toBe(2);
@@ -423,7 +436,8 @@ test("a credential is never printed, and a reference is shown as the name it is"
   // What the home unit gives the seat is merged in, the seat's own winning —
   // and a reference NAMES a secret rather than being one, so it is shown. The
   // unit is read by its KEY, which is what the seat's row names it by.
-  expect(await screen.findByText("${ENGINEERING_GITHUB_HOST}")).toBeDefined();
+  await settle();
+  expect(screen.getByText("${ENGINEERING_GITHUB_HOST}")).toBeDefined();
   expect(chartReads.some((r) => r.path === "/chart/units/engineering")).toBe(true);
 });
 
@@ -438,7 +452,9 @@ test("a credential is never printed, and a reference is shown as the name it is"
 test("a unit schedule this seat runs is on its schedules tab", async () => {
   mount("#/company/people/ceo?tab=schedules", answering);
 
-  expect(await screen.findByText("standup")).toBeDefined();
+  await settle();
+
+  expect(screen.getByText("standup")).toBeDefined();
   // Named as the unit's rather than as this seat's own, because whose
   // schedule it is decides who can change it.
   expect(screen.getByText("Engineering")).toBeDefined();
@@ -453,7 +469,8 @@ test("a unit schedule this seat runs is on its schedules tab", async () => {
 // will never fire looked exactly like one firing tomorrow.
 test("a schedule the engine cannot fire is marked, not left blank", async () => {
   const { store } = mount("#/company/people/ceo?tab=schedules", answering);
-  await screen.findByText("weekly-review");
+  await settle();
+  expect(screen.getByText("weekly-review")).toBeDefined();
 
   act(() => {
     store.applySchedules({
@@ -478,7 +495,9 @@ test("a schedule the engine cannot fire is marked, not left blank", async () => 
     });
   });
 
-  expect(await screen.findByText("cannot fire")).toBeDefined();
+  await settle();
+
+  expect(screen.getByText("cannot fire")).toBeDefined();
 });
 
 // THE WORK TAB IS TWO READS, AND ONLY ONE OF THEM IS ANYBODY'S.
@@ -511,7 +530,8 @@ test("a reader without the credential gets the open list and not the private que
   });
 
   // The floor, which needs no credential.
-  expect(await screen.findByText("Ship the thing")).toBeDefined();
+  await settle();
+  expect(screen.getByText("Ship the thing")).toBeDefined();
   // And the honest sentence where the scoped blocks would be.
   expect(screen.getByText(/theirs to read/i)).toBeDefined();
   // NOT ASKED AT ALL. Asking and rendering the refusal is the shape this

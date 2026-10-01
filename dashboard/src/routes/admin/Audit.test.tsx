@@ -19,7 +19,7 @@
  *     screen silent about that is claiming those rows do not exist.
  */
 
-import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 
 import { Audit, auditCsv } from "./Audit.tsx";
@@ -95,6 +95,20 @@ const mount = () =>
     </Router>,
   );
 
+/**
+ * Lets every answer the stubbed socket and fetch give land, and renders what
+ * they change.
+ *
+ * NOT A POLL. A `waitFor` gave the screen a second of real time to show a
+ * row, re-reading the whole document each time it looked — a hundred rows of
+ * it, in the case whose page is full — and on a loaded machine the second ran
+ * out while the grid was still rendering. The answers are promises, so `act`
+ * runs them, and the renders they cause, to the end, however long that takes.
+ */
+async function answered(): Promise<void> {
+  await act(async () => {});
+}
+
 /** The parameters one question was actually asked with. */
 function asked(query: ReturnType<typeof serving>, what: QueryName): Record<string, unknown> {
   const calls = query.mock.calls as unknown as [string, Record<string, unknown>?][];
@@ -105,7 +119,8 @@ function asked(query: ReturnType<typeof serving>, what: QueryName): Record<strin
 test("both history feeds are asked for who was writing, not for a list of people", async () => {
   const query = serving({ work_activity: { records: [], complete: true } });
   mount();
-  await waitFor(() => expect(asked(query, "work_activity").actor_kinds).toBeTruthy());
+  await answered();
+  expect(asked(query, "work_activity").actor_kinds).toBeTruthy();
 
   for (const what of ["work_activity", "page_activity"] as const) {
     const kinds = String(asked(query, what).actor_kinds ?? "");
@@ -159,7 +174,9 @@ test("a tracker commit, a page change and a config revision land in one list", a
   });
   mount();
 
-  await waitFor(() => expect(screen.getByText("took it off the board")).toBeTruthy());
+  await answered();
+
+  expect(screen.getByText("took it off the board")).toBeTruthy();
   expect(screen.getByText("rewrote the rollback step")).toBeTruthy();
   expect(screen.getByText("turn on the Slack integration")).toBeTruthy();
   // AND EVERY ROW SAYS WHICH KIND OF WRITER MADE IT, which is the fact that
@@ -185,7 +202,8 @@ test("a purge names its key and does not link to a page that is gone", async () 
     },
   });
   mount();
-  await waitFor(() => expect(screen.getByText("duplicate of ENG-4")).toBeTruthy());
+  await answered();
+  expect(screen.getByText("duplicate of ENG-4")).toBeTruthy();
   // BY ROLE, not by walking up from a span: a grid wraps each cell, so the
   // wrapper's own `closest("a")` is null whether or not the anchor is INSIDE
   // it — an assertion that passes either way.
@@ -196,7 +214,8 @@ test("a purge names its key and does not link to a page that is gone", async () 
   cleanup();
   serving({ work_activity: { records: [commit()], complete: true } });
   mount();
-  await waitFor(() => expect(screen.getByText("took it off the board")).toBeTruthy());
+  await answered();
+  expect(screen.getByText("took it off the board")).toBeTruthy();
   expect(screen.getByRole("link", { name: "ENG-9" })).toBeTruthy();
 });
 
@@ -229,14 +248,13 @@ test("a source whose page stops inside the window says so", async () => {
     },
   });
   mount();
-  await waitFor(() =>
-    expect(screen.getByText(/does not reach the start of this window/)).toBeTruthy(),
-  );
+  await answered();
+  // Found once: a text query walks every element of the page, and this page
+  // is a hundred rows.
+  const caption = screen.getByText(/does not reach the start of this window/);
   // AND IT NAMES WHICH SOURCE. "Some of this may be missing" is a caption
   // nobody can act on; "Knowledge answered one page" says where to look.
-  expect(screen.getByText(/does not reach the start of this window/).textContent).toContain(
-    "Knowledge",
-  );
+  expect(caption.textContent).toContain("Knowledge");
 });
 
 // THE EXPORT IS WHAT IS ON SCREEN.
@@ -310,7 +328,8 @@ test("a refused credential listing names the grant, and the other sources stand"
   );
   serving({ work_activity: { records: [commit()], complete: true } });
   mount();
-  expect(await screen.findByText(/Listing the credentials' writes needs config:read/)).toBeTruthy();
+  await answered();
+  expect(screen.getByText(/Listing the credentials' writes needs config:read/)).toBeTruthy();
   expect(screen.getByText("took it off the board")).toBeTruthy();
   expect(screen.queryByText(/across the tracker, the knowledge base/)).toBeNull();
 });
