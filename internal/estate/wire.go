@@ -348,9 +348,11 @@ type sliceAsk struct {
 	// cursor is this partition's own cursor in a paged gather.
 	cursor string
 
-	// cpus is this node's ([CPUs]): the place the slice's QUERY takes,
-	// after its waits. Nil for a whole read, whose one query takes none.
-	cpus *CPUs
+	// cpus is the request's share of this node's [CPUs] ([CPUs.share]):
+	// the place the slice's QUERY takes, after its waits, shared with the
+	// request's other slices. Nil for a whole read, whose one query takes
+	// none.
+	cpus *cpuShare
 }
 
 // op is a typed handle on one registered operation: its declaration, and its

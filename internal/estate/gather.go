@@ -29,7 +29,8 @@ import (
 //     its partitions ([request.Partitions], [request.Slices]). The partitions
 //     this node serves are answered in-process, concurrently, their queries
 //     taking this node's [CPUs] — the same places as every batch it answers
-//     for another node, at most one query per CPU across all of them.
+//     for another node, at most one query per CPU across all of them, shared
+//     fairly between the requests waiting for them.
 //     A holder answers a batch a margin before the asker stops waiting
 //     ([batchMargin]), with every partition it finished, and names the rest
 //     [unservedUnfinished] — asked of it again wherever the reply decided
@@ -820,12 +821,14 @@ func (r *Router) runRound(ctx context.Context, plan gatherPlan, round gatherRoun
 	// THIS NODE'S OWN PARTITIONS, all at once, their QUERIES taking this
 	// node's [CPUs] — never a cap of the round's own, which would run a
 	// query per CPU beside every batch this node is answering, and beside
-	// every other gather of its own.
+	// every other gather of its own — as ONE REQUEST's share of them, as a
+	// batch this node answers for another is one.
+	share := r.cpus.share()
 	for _, st := range round.local {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			r.runLocalPart(ctx, plan, st, acceptLagging, &mu)
+			r.runLocalPart(ctx, plan, st, share, acceptLagging, &mu)
 		}()
 	}
 	ask := func(node string, batch []*partState) {
@@ -845,12 +848,13 @@ func (r *Router) runRound(ctx context.Context, plan gatherPlan, round gatherRoun
 }
 
 // runLocalPart answers one partition from this node's own copy, through the
-// same gates a remote holder puts in front of it.
+// same gates a remote holder puts in front of it, its query taking a place
+// through the round's share of this node's [CPUs].
 //
 // THE READ RUNS WITHOUT THE ROUND'S LOCK, which guards only the settlement:
 // another partition's answer must not wait on this one's file.
 func (r *Router) runLocalPart(ctx context.Context, plan gatherPlan, st *partState,
-	acceptLagging bool, mu *sync.Mutex) {
+	share *cpuShare, acceptLagging bool, mu *sync.Mutex) {
 
 	b, ok, unknown := r.local.For(ctx, st.p)
 	var out partRun
@@ -859,7 +863,7 @@ func (r *Router) runLocalPart(ctx context.Context, plan gatherPlan, st *partStat
 		ask := sliceAsk{partition: st.p, layout: plan.layout, level: plan.level,
 			floors: r.floorsFor(plan.spec, plan.layout, st.p), cursor: plan.cursors[st.p]}
 		if !plan.whole {
-			ask.cpus = r.cpus
+			ask.cpus = share
 		}
 		out = runPart(ctx, r.self, plan.spec, b, ask, plan.args, plan.whole, acceptLagging)
 		r.session.Forget(out.obsolete...)
@@ -1178,9 +1182,12 @@ func (s server) answerSlices(ctx context.Context, spec *opSpec, req request) rep
 	// BUFFERED FOR EVERY PARTITION, so one still running when the batch
 	// is answered finishes into it rather than blocking for ever.
 	results := make(chan answered, len(req.Partitions))
+	// ONE SHARE FOR THE BATCH: its queries take the node's [CPUs] as one
+	// request's, beside every other batch and gather the node is running.
+	share := s.cpus.share()
 	for i, name := range req.Partitions {
 		go func() {
-			part, gone := s.answerPart(work, spec, layout, req, name)
+			part, gone := s.answerPart(work, spec, layout, req, name, share)
 			results <- answered{i: i, part: part, gone: gone}
 		}()
 	}
@@ -1272,10 +1279,11 @@ func batchMargin(remaining time.Duration) time.Duration {
 }
 
 // answerPart is one partition's slice, as this node answers it under the
-// batch's context: a read the batch's own ending cut short is answered
+// batch's context, its query taking a place through the batch's share of the
+// node's [CPUs]: a read the batch's own ending cut short is answered
 // [unservedUnfinished], never as the error the cancellation made of it.
 func (s server) answerPart(ctx context.Context, spec *opSpec, layout statelog.Layout,
-	req request, name string) (partReply, []statelog.Position) {
+	req request, name string, share *cpuShare) (partReply, []statelog.Position) {
 
 	out := partReply{Partition: name}
 	p, err := statelog.ParsePartitionID(name)
@@ -1298,7 +1306,7 @@ func (s server) answerPart(ctx context.Context, spec *opSpec, layout statelog.La
 	b.ServerSeams = s.seams
 	run := runPart(ctx, s.self, spec, b, sliceAsk{
 		partition: p, layout: layout, level: req.Level, floors: req.Floors, cursor: req.Cursors[name],
-		cpus: s.cpus,
+		cpus: share,
 	}, req.Args, false, req.AcceptLagging)
 	switch {
 	case run.reason != "":

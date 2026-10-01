@@ -163,7 +163,12 @@
 // [LocalBackends] hands to both its server and its router, so every batch the
 // node answers for another and every gather it answers in-process run at most
 // a query per CPU between them: a bound per batch was multiplied by however
-// many batches the node was answering at once.
+// many batches the node was answering at once. And the places are SHARED
+// FAIRLY BETWEEN REQUESTS rather than handed out first come, first served: a
+// batch is answered before its asker stops waiting, so one whose queries
+// waited behind every query an earlier batch had queued was answered with none
+// of them run, and a holder that was merely busy lost the read every partition
+// of it.
 //
 // A single-partition read whose answer a gather will one day assemble — a
 // board, a person's day, an inbox — reports its coverage too

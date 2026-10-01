@@ -146,11 +146,17 @@ every partition in it on rather than being asked for again. A holder waits for
 every partition's floor at once, and a node runs at most one of these
 per-partition queries per CPU at a time across **everything** it is running
 them for — every batch it is answering for other nodes and every read across
-partitions of its own — since they all share its processors; a query waits its
-turn behind those that asked before it. The CPUs are the process's as the Go
-runtime counts them, which follows the container's CPU limit as it changes. A
-read of a single partition is one query per request and does not count against
-that bound.
+partitions of its own — since they all share its processors. Those places are
+shared fairly between the requests waiting for them rather than first come,
+first served: the next one goes to the request holding the fewest, and among
+those to the one whose turn it is, a request going to the back of the line each
+time one of its queries starts. So a read that arrives behind another's large
+batch waits for at most a turn of each request ahead of it, never for every
+query that batch queued — long enough, on a busy holder, for the later read to
+be answered before any of its own queries had run. The CPUs are the process's
+as the Go runtime counts them, which follows the container's CPU limit as it
+changes. A read of a single partition is one query per request and does not
+count against that bound.
 
 The answer carries what it covered: the partitions that answered, where each of
 their logs was when it was read, and every partition that did **not** answer,

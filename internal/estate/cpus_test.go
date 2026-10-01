@@ -3,6 +3,8 @@ package estate
 import (
 	"context"
 	"errors"
+	"fmt"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -30,7 +32,11 @@ func places(n int32) *atomic.Int32 {
 func queued(c *CPUs) int {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	return len(c.waiting)
+	n := 0
+	for _, s := range c.waiting {
+		n += len(s.queue)
+	}
+	return n
 }
 
 // heldBy is how many of c's places are taken.
@@ -52,15 +58,16 @@ func waitFor(t *testing.T, what string, done func() bool) {
 	}
 }
 
-// taking takes a place on c in its own goroutine, returning once the take has
-// reached c — at a place or in the queue, each of which counts it once — and
-// answers the channel its give-back (nil for an error) arrives on.
-func taking(ctx context.Context, t *testing.T, c *CPUs) <-chan func() {
+// taking takes a place through s in its own goroutine, returning once the take
+// has reached s's CPUs — at a place or in the queue, each of which counts it
+// once — and answers the channel its give-back (nil for an error) arrives on.
+func taking(ctx context.Context, t *testing.T, s *cpuShare) <-chan func() {
 	t.Helper()
+	c := s.cpus
 	before := queued(c) + heldBy(c)
 	got := make(chan func(), 1)
 	go func() {
-		give, err := c.take(ctx)
+		give, err := s.take(ctx)
 		if err != nil {
 			give = nil
 		}
@@ -80,31 +87,109 @@ func admitted(got <-chan func()) (func(), bool) {
 	}
 }
 
-// A PLACE GIVEN BACK GOES TO THE LONGEST WAITER: a query waits behind every
-// one that asked before it, so a batch of a hundred and fifty partitions
-// cannot keep a later batch's few waiting until all of its own have run.
-func TestAPlaceGivenBackGoesToTheLongestWaiter(t *testing.T) {
+// taken takes a place through s at once, failing the case where it waits.
+func taken(t *testing.T, s *cpuShare) func() {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(t.Context(), time.Second)
+	defer cancel()
+	give, err := s.take(ctx)
+	if err != nil {
+		t.Fatalf("a free place was not taken at once: %v", err)
+	}
+	return give
+}
+
+// letInNext is which of the waiting queries was let in — exactly one, the
+// moment a place was given back — and its give-back.
+func letInNext(t *testing.T, waiting map[string]<-chan func()) (string, func()) {
+	t.Helper()
+	deadline := time.After(5 * time.Second)
+	for {
+		for name, got := range waiting {
+			select {
+			case give := <-got:
+				delete(waiting, name)
+				if give == nil {
+					t.Fatalf("%s's take failed, want it let in", name)
+				}
+				return name, give
+			default:
+			}
+		}
+		select {
+		case <-deadline:
+			t.Fatal("a place was given back and no waiting query was let in")
+		case <-time.After(time.Millisecond):
+		}
+	}
+}
+
+// A PLACE GIVEN BACK GOES TO THE REQUEST AT THE FRONT OF THE LINE, and a
+// request goes to the back of it each time one of its queries is let in — so
+// requests take turns at the node's CPUs, and one that arrives behind another
+// waits for at most a turn of each request ahead of it, never for every query
+// those requests queued before it. First come, first served across requests
+// answered a later batch's queries only once an earlier batch's had all run,
+// past the moment the later batch had to be answered.
+func TestAPlaceGivenBackGoesToTheRequestAtTheFrontOfTheLine(t *testing.T) {
 	t.Parallel()
 	c := placesOf(places(1))
-	give, err := c.take(t.Context())
-	if err != nil {
-		t.Fatal(err)
+	a := c.share()
+	give := taken(t, a)
+	waiting := map[string]<-chan func(){}
+	waiting["a2"] = taking(t.Context(), t, a)
+	waiting["a3"] = taking(t.Context(), t, a)
+	b := c.share()
+	waiting["b1"] = taking(t.Context(), t, b)
+	waiting["b2"] = taking(t.Context(), t, b)
+	waiting["c1"] = taking(t.Context(), t, c.share())
+	var order []string
+	for len(waiting) > 0 {
+		give()
+		var name string
+		name, give = letInNext(t, waiting)
+		order = append(order, name)
+		if held := heldBy(c); held != 1 {
+			t.Fatalf("%d places held of one", held)
+		}
 	}
-	first := taking(t.Context(), t, c)
-	second := taking(t.Context(), t, c)
 	give()
-	giveFirst, ok := admitted(first)
-	if !ok {
-		t.Fatal("the place given back went to nobody, want the query that waited longest")
+	if want := []string{"a2", "b1", "c1", "a3", "b2"}; !slices.Equal(order, want) {
+		t.Errorf("the places given back went to %v, want %v — a turn for each request in "+
+			"the line, each going to the back of it once let in", order, want)
 	}
-	if _, ok := admitted(second); ok {
-		t.Fatal("the later waiter was let in beside the first, on one place")
+}
+
+// A PLACE GIVEN BACK GOES TO THE REQUEST HOLDING FEWEST, ahead of one before it
+// in the line: requests share the CPUs equally, and turns alone handed a
+// request already holding most of them one more, ahead of a request holding
+// fewer.
+func TestAPlaceGivenBackGoesToTheRequestHoldingFewest(t *testing.T) {
+	t.Parallel()
+	c := placesOf(places(4))
+	a := c.share()
+	defer taken(t, a)()
+	defer taken(t, a)()
+	b := c.share()
+	defer taken(t, b)()
+	giveC := taken(t, c.share())
+	// a, two places and at the front of the line, the place it took last
+	// let in before b's; b, one place.
+	waiting := map[string]<-chan func(){
+		"a": taking(t.Context(), t, a),
 	}
-	giveFirst()
-	if giveSecond, ok := admitted(second); !ok {
-		t.Fatal("the second waiter was never let in")
-	} else {
-		giveSecond()
+	waiting["b"] = taking(t.Context(), t, b)
+	giveC()
+	name, give := letInNext(t, waiting)
+	defer give()
+	if name != "b" {
+		t.Errorf("the place given back went to %s, holding two, want b, holding one", name)
+	}
+	for other, got := range waiting {
+		if give, ok := admitted(got); ok {
+			give()
+			t.Errorf("%s was let in beside %s on one place given back", other, name)
+		}
 	}
 }
 
@@ -115,17 +200,14 @@ func TestARaisedLimitLetsAWaiterInAtTheNextTake(t *testing.T) {
 	t.Parallel()
 	limit := places(1)
 	c := placesOf(limit)
-	give, err := c.take(t.Context())
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer give()
-	waiter := taking(t.Context(), t, c)
+	s := c.share()
+	defer taken(t, s)()
+	waiter := taking(t.Context(), t, s)
 	limit.Store(2)
 	// THE NEXT TAKE sees the raise, lets the waiter in ahead of itself, and
 	// waits behind it — two places, both taken.
 	behind, cancel := context.WithCancel(t.Context())
-	late := taking(behind, t, c)
+	late := taking(behind, t, s)
 	gave, ok := admitted(waiter)
 	if !ok {
 		t.Fatal("the waiter was not let in when the limit rose, want it in at the next take")
@@ -143,16 +225,10 @@ func TestACutLimitLetsNobodyInUntilThePlacesHeldFallUnderIt(t *testing.T) {
 	t.Parallel()
 	limit := places(2)
 	c := placesOf(limit)
-	giveA, err := c.take(t.Context())
-	if err != nil {
-		t.Fatal(err)
-	}
-	giveB, err := c.take(t.Context())
-	if err != nil {
-		t.Fatal(err)
-	}
+	s := c.share()
+	giveA, giveB := taken(t, s), taken(t, s)
 	limit.Store(1)
-	waiter := taking(t.Context(), t, c)
+	waiter := taking(t.Context(), t, c.share())
 	giveA()
 	if _, ok := admitted(waiter); ok {
 		t.Fatal("a waiter was let in beside a running query on one place")
@@ -173,12 +249,9 @@ func TestACutLimitLetsNobodyInUntilThePlacesHeldFallUnderIt(t *testing.T) {
 func TestAWaiterWhoseContextEndsLeavesTheQueue(t *testing.T) {
 	t.Parallel()
 	c := placesOf(places(1))
-	give, err := c.take(t.Context())
-	if err != nil {
-		t.Fatal(err)
-	}
+	give := taken(t, c.share())
 	ctx, cancel := context.WithCancel(t.Context())
-	gone := taking(ctx, t, c)
+	gone := taking(ctx, t, c.share())
 	cancel()
 	if give := <-gone; give != nil {
 		t.Fatal("a query whose context ended was handed a place")
@@ -186,15 +259,17 @@ func TestAWaiterWhoseContextEndsLeavesTheQueue(t *testing.T) {
 	if n := queued(c); n != 0 {
 		t.Fatalf("%d queries still queued after the only waiter gave up", n)
 	}
+	c.mu.Lock()
+	shares := len(c.waiting)
+	c.mu.Unlock()
+	if shares != 0 {
+		t.Fatalf("%d requests still in the line with nothing waiting", shares)
+	}
 	give()
 	if held := heldBy(c); held != 0 {
 		t.Fatalf("%d places held after the only query gave its back", held)
 	}
-	again, err := c.take(t.Context())
-	if err != nil {
-		t.Fatal(err)
-	}
-	again()
+	taken(t, c.share())()
 }
 
 // A PLACE LET IN AS ITS CONTEXT ENDED IS GIVEN BACK: the place was handed over
@@ -203,11 +278,10 @@ func TestAWaiterWhoseContextEndsLeavesTheQueue(t *testing.T) {
 func TestAPlaceLetInAsItsContextEndedIsGivenBack(t *testing.T) {
 	t.Parallel()
 	c := placesOf(places(1))
-	if _, err := c.take(t.Context()); err != nil {
-		t.Fatal(err)
-	}
+	first := c.share()
+	taken(t, first)
 	ctx, cancel := context.WithCancel(t.Context())
-	got := taking(ctx, t, c)
+	got := taking(ctx, t, c.share())
 	// PARKED in its wait before the race is staged.
 	time.Sleep(20 * time.Millisecond)
 	c.mu.Lock()
@@ -217,6 +291,7 @@ func TestAPlaceLetInAsItsContextEndedIsGivenBack(t *testing.T) {
 	cancel()
 	time.Sleep(20 * time.Millisecond)
 	c.held--
+	first.held--
 	c.admit()
 	c.mu.Unlock()
 	if give := <-got; give != nil {
@@ -228,11 +303,7 @@ func TestAPlaceLetInAsItsContextEndedIsGivenBack(t *testing.T) {
 		t.Fatalf("%d places held with no query running, want the place handed to a "+
 			"waiter that was leaving given back", held)
 	}
-	give, err := c.take(t.Context())
-	if err != nil {
-		t.Fatal(err)
-	}
-	give()
+	taken(t, c.share())()
 }
 
 // TWO BATCHES TOGETHER RUN NO MORE QUERIES THAN THE HOLDER'S CPUS: the bound is
@@ -350,5 +421,78 @@ func TestCopiesWithoutCPUsAreRefused(t *testing.T) {
 		t.Error("NewRouter took copies whose CPUs are nil")
 	} else if !strings.Contains(err.Error(), "LocalBackends.CPUs") {
 		t.Errorf("NewRouter's refusal %q does not name LocalBackends.CPUs", err)
+	}
+}
+
+// A BATCH THAT ARRIVES BEHIND ANOTHER ON A BUSY HOLDER STILL GETS ITS SHARE of
+// the holder's CPUs within its own attempt. Each batch is answered a margin
+// before its asker stops waiting, and a reply that decided nothing moves every
+// partition in it on — so a batch whose queries waited behind every query an
+// earlier batch had queued lost every partition, from a holder that was busy
+// and nothing worse, and with no other holder the whole read was refused.
+func TestABatchBehindAnotherOnABusyHolderGetsItsShare(t *testing.T) {
+	t.Parallel()
+	f, node, _ := ceilingFleet(t, queue.MaxPayloadBytes)
+	node.placesFor(1)
+	// FIVE READS TO A BATCH, each a fifth of the attempt and then some, so
+	// no batch's reads fit in one attempt on the holder's one CPU and the
+	// first batch is still running its own when the second's ends.
+	const read, attempt = 300 * time.Millisecond, 1500 * time.Millisecond
+	node.set(func(n *partNode) { n.delay = read })
+	done := make(chan error, 2)
+	gatherOn := func(r *Router) {
+		r.readBudget = attempt
+		answer, cov, err := listAll(t, r, 0, "")
+		if err == nil && (!cov.Complete() || len(answer.Rows) != 24) {
+			err = fmt.Errorf("%d rows, missing %+v", len(answer.Rows), cov.Missing)
+		}
+		done <- err
+	}
+	go gatherOn(f.router(t, "agent-1", nil))
+	// EVERY QUERY OF THE FIRST BATCH at the place or waiting for it before
+	// the second batch asks.
+	waitFor(t, "the first batch's five queries", func() bool {
+		return int(node.inFlight.Load())+queued(node.CPUs()) == 5
+	})
+	go gatherOn(f.router(t, "agent-2", nil))
+	for range 2 {
+		if err := <-done; err != nil {
+			t.Errorf("gather: %v, want every partition of both reads from a holder "+
+				"that was busy and nothing worse", err)
+		}
+	}
+}
+
+// THIS NODE'S OWN GATHER IS ONE REQUEST, as a batch it answers for another is
+// one: each of its partitions taking its place as a request of its own, a
+// batch arriving behind them waited for every one — first come, first served
+// again, by the back door — and lost every partition to its stop.
+func TestThisNodesOwnGatherTakesItsCPUsAsOneRequest(t *testing.T) {
+	t.Parallel()
+	every := []statelog.PartitionID{tp(0), tp(1), tp(2), tp(3), company}
+	f := newPartFleet(t, map[string][]statelog.PartitionID{"data-a": every})
+	node := f.nodes["data-a"]
+	node.placesFor(1)
+	const read, attempt = 300 * time.Millisecond, 1500 * time.Millisecond
+	node.set(func(n *partNode) { n.delay = read })
+	done := make(chan error, 2)
+	gatherOn := func(r *Router) {
+		r.readBudget = attempt
+		answer, cov, err := listAll(t, r, 0, "")
+		if err == nil && (!cov.Complete() || len(answer.Rows) != 24) {
+			err = fmt.Errorf("%d rows, missing %+v", len(answer.Rows), cov.Missing)
+		}
+		done <- err
+	}
+	go gatherOn(f.router(t, "data-a", node))
+	waitFor(t, "data-a's own five queries", func() bool {
+		return int(node.inFlight.Load())+queued(node.CPUs()) == 5
+	})
+	go gatherOn(f.router(t, "agent-1", nil))
+	for range 2 {
+		if err := <-done; err != nil {
+			t.Errorf("gather: %v, want every partition of both reads from a holder "+
+				"that was busy and nothing worse", err)
+		}
 	}
 }
