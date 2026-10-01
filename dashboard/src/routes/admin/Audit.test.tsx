@@ -226,28 +226,39 @@ test("a purge names its key and does not link to a page that is gone", async () 
 // window this screen cannot honestly claim to have covered.
 test("a source whose page stops inside the window says so", async () => {
   const old = new Date(Date.now() - 60_000).toISOString();
+  // THE PAGE ANSWERS LAST, once the other three sources have, so its hundred
+  // rows are rendered twice — for the answer, and again as the grid takes the
+  // keyboard — rather than three times: answered beside the others, the
+  // credentials' answer, a REST read landing a few turns after the socket's,
+  // rendered every row once more. On an idle machine the case went from
+  // 700 ms to 575.
+  let answerThePage: (page: unknown) => void = () => {};
   serving({
     work_activity: { records: [], complete: true },
-    // A FULL PAGE whose oldest row is still inside the window: the page
-    // filled up before it reached the start, so there are older rows the
-    // screen never saw.
-    page_activity: {
-      changes: Array.from({ length: 100 }, (_, i) => ({
-        id: `p-${i}`,
-        page_id: "pg-1",
-        kind: "saved",
-        actor: "ada",
-        actor_kind: "human",
-        at: old,
-        log_seq: 100 - i,
-        title: "Deploy runbook",
-        container: "ENG",
-        excerpt: `edit ${i}`,
-      })),
-      complete: true,
-    },
+    page_activity: new Promise((resolve) => {
+      answerThePage = resolve;
+    }),
   });
   mount();
+  await answered();
+  // A FULL PAGE whose oldest row is still inside the window: the page filled
+  // up before it reached the start, so there are older rows the screen never
+  // saw.
+  answerThePage({
+    changes: Array.from({ length: 100 }, (_, i) => ({
+      id: `p-${i}`,
+      page_id: "pg-1",
+      kind: "saved",
+      actor: "ada",
+      actor_kind: "human",
+      at: old,
+      log_seq: 100 - i,
+      title: "Deploy runbook",
+      container: "ENG",
+      excerpt: `edit ${i}`,
+    })),
+    complete: true,
+  });
   await answered();
   // Found once: a text query walks every element of the page, and this page
   // is a hundred rows.
