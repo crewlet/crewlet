@@ -273,11 +273,15 @@ const (
 	// refuses against before the append leaves the process. The embedded
 	// broker's is the contract's own ceiling, and a connection held to less
 	// is refused when the queue opens, so a record inside its declaration
-	// meets this only on a server that holds the node to less AFTER it
-	// booted — a cluster member configured apart from the one it checked,
-	// or a server whose limit was lowered under it. An operator raises it on
-	// every server, and on the account the node signs in to where that
-	// states a limit of its own.
+	// meets this only on a server the client has RECONNECTED to since it
+	// booted, which is the one moment it reads a limit again — a cluster
+	// member configured apart from the one it checked, or a server restarted
+	// with a smaller limit. A limit lowered by a live reload never reaches
+	// this arm: the server tells its connections nothing, the client sends,
+	// and the server closes the connection over the record, which the node
+	// stops for (internal/queue/jetstream's connectionLoss). An operator
+	// raises it on every server, and on the account the node signs in to
+	// where that states a limit of its own.
 	limitMaxPayload sizeLimit = iota
 
 	// limitStreamMsgSize is the stream's own max_msg_size: every state
@@ -317,13 +321,18 @@ func tooLargeDetail(limit sizeLimit, words string) string {
 	// NAMING WHEN AS WELL AS THE SETTING: a node refuses at boot a
 	// connection held to less than the contract, so an operator reading
 	// this has a node that started and a max_payload they may well have set
-	// — on the member it started against, and not on the one it reached
-	// since, or before somebody lowered it.
+	// — on the member it started against, and not on the one it reconnected
+	// to since. And only a RECONNECT: the client reads a limit from a
+	// server's INFO and nowhere else, so a limit lowered by a live reload
+	// is never this refusal (the server closes the connection over the
+	// record instead, and the node stops naming it), and naming one here
+	// would send an operator to a reload that cannot have caused it.
 	return fmt.Sprintf("the NATS server's max_payload refused it (%s) — a "+
 		"connection held to less than the %d bytes this build sends at most is "+
-		"refused at boot, so this is a server that holds it to less since: a "+
-		"cluster member it reconnected to, or a server whose limit was lowered "+
-		"under it. So raise max_payload on every server of the cluster this fleet "+
-		"dials, and on the account it signs in to where that states one, or split "+
-		"the change into smaller writes", words, queue.MaxPayloadBytes)
+		"refused at boot, so this is a server this node reconnected to since "+
+		"that holds it to less: a cluster member configured apart from the "+
+		"others, or a server restarted with a smaller limit. So raise "+
+		"max_payload on every server of the cluster this fleet dials, and on the "+
+		"account it signs in to where that states one, or split the change into "+
+		"smaller writes", words, queue.MaxPayloadBytes)
 }

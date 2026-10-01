@@ -85,9 +85,13 @@ func TestEveryBrokerRefusalIsClassifiedByWhatFixesIt(t *testing.T) {
 				"(the server's max_payload): %w", nats.ErrMaxPayload), faultTooLarge,
 			[]string{"max_payload refused it", "raise max_payload",
 				"every server of the cluster", "refused at boot",
+				"reconnected to since", "restarted with a smaller limit",
 				"the account it signs in to",
 				"split the change", "8388608-byte limit"},
-			[]string{"max_msg_size", "file store"}},
+			// NEVER A LIVE RELOAD: the client is told of no limit but
+			// on a reconnect, so a reloaded one closes the connection
+			// rather than reaching this refusal.
+			[]string{"max_msg_size", "file store", "lowered"}},
 		{"a message too large for the file store",
 			wire(server.NewJSStreamStoreFailedError(server.ErrMsgTooLarge)), faultTooLarge,
 			[]string{"file store", "no server setting raises", "split the change",

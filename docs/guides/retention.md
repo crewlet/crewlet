@@ -822,9 +822,11 @@ the broker holds a peer on another build to it too. Two more limits can refuse
 a record, and the detail says which it was: the file store's per-record limit,
 and a NATS server's `max_payload` — never that of the server a node started
 against, since a node refuses to start against one that holds it to less than
-8 MiB, but that of one that has since: a cluster member configured apart from
-the others, or a server whose limit was lowered under it (see
-[Deployment](deployment.md#an-external-nats-server)). See
+8 MiB, but that of one it has reconnected to since: a cluster member
+configured apart from the others, or a server restarted with a smaller limit.
+A limit lowered by a live reload is never such a refusal, because the client
+is not told of it: the server closes the connection over the record, and the
+node [stops itself](deployment.md#an-external-nats-server). See
 [Read consistency](consistency.md#a-writes-refusals).
 
 A full log costs `linearizable` reads, because those append a barrier — which
