@@ -178,9 +178,12 @@ const (
 	// ceiling ([queue.MaxPayloadBytes]) and a batch of partitions can
 	// outgrow it. Not a failure of this node, so the asker asks it again
 	// for the partitions that overflowed — in a reply that DECIDED another
-	// partition ([partReply.decisive]); a slice that can never fit is
-	// answered as an error naming its size instead ([fitParts]), so every
-	// reply decides at least one partition and the batch always shrinks.
+	// partition ([partReply.decisive]). A slice that can never fit is
+	// answered as an error naming its size instead, and where no decision
+	// fits beside the batch's notes the first is answered as its error
+	// regardless ([fitParts]): so a reply in which the holder decided
+	// anything carries a decided partition, and the batch asked of it again
+	// is smaller.
 	unservedOverflow unservedReason = "overflow"
 
 	// unservedUnfinished: a gather slice this node had not finished when

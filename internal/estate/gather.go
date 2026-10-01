@@ -1322,7 +1322,7 @@ func isCancellation(err error) bool {
 // every slice that fits whole, and every other one answered [unservedOverflow]
 // instead, so the asker asks again for those.
 //
-// # Every reply decides a partition
+// # A reply with a decision carries one
 //
 // The asker asks again only beside a DECISIVE part ([partReply.decisive]): a
 // reply with none is a batch it would send this holder again, answered the
@@ -1337,6 +1337,12 @@ func isCancellation(err error) bool {
 // are the notes of the partitions the holder did not finish fitted, in what
 // room is left: they decide nothing, and counted as what made a reply
 // progress they once kept an oversized slice from ever being answered.
+//
+// So a reply carries a decided partition whenever the holder decided ANY — a
+// result, an error, a refusal. A batch it decided nothing of, every partition
+// [unservedUnfinished], is answered as that and decides nothing: the asker
+// moves each of those partitions on rather than asking for them again
+// ([Router.askBatch]), since the same batch would be answered the same way.
 //
 // MEASURED, not estimated — the envelope as it encodes, and each part as the
 // reply will encode it — because what a body costs on the wire is a property

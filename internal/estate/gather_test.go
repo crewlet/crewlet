@@ -1165,7 +1165,8 @@ func TestABatchThatOutgrowsTheReplyIsAnsweredInPages(t *testing.T) {
 }
 
 // A SLICE TOO LARGE TO SEND BESIDE ONE ITS HOLDER DID NOT FINISH IS ITS SIZE
-// ERROR, and the gather ends: every reply decides at least one partition. The
+// ERROR, and the gather ends: a reply in which the holder decided anything
+// carries a decided partition. The
 // note of a partition the holder did not finish decides nothing — the asker
 // asks it again — and counted as what made the reply progress, it kept an
 // oversized slice from ever being answered as its error, so the same batch

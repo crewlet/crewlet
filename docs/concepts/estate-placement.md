@@ -138,11 +138,12 @@ failed is asked of its next holder — and never again of the one that failed
 it, within that read. A batch too large for one reply is answered in pages,
 and a batch that takes longer than one attempt is answered shortly before the
 asker would stop waiting, with every partition the holder finished; the rest
-are asked of it again. Every reply settles at least one partition, so a batch
-always shrinks: a partition whose answer is too large for any reply is the
-`error` that names its size, and a reply that settled nothing moves every
-partition in it on rather than being asked for again. A holder waits for every
-partition's floor at once and runs at most one query per CPU at a time.
+are asked of it again. A reply in which the holder settled anything carries at
+least one settled partition, so a batch asked of that holder again is always
+smaller: a partition whose answer is too large for any reply is the `error`
+that names its size, and a reply in which the holder finished nothing moves
+every partition in it on rather than being asked for again. A holder waits for
+every partition's floor at once and runs at most one query per CPU at a time.
 
 The answer carries what it covered: the partitions that answered, where each of
 their logs was when it was read, and every partition that did **not** answer,
