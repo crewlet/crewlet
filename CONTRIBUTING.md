@@ -257,8 +257,10 @@ What follows are the prerequisites that legitimately vary by machine.
   `checked` and `navigate`, and a suite's own helper takes them as arguments;
   a suite that only lets a stubbed engine's answers land takes its
   `answered()` from its own mount, built by `flushInCase`
-  (`src/test/inCase.ts`), which refuses once its case has finished. Both used
-  to be module-level, and a late `settle()` settled the NEXT case's lens.
+  (`src/test/inCase.ts`), which refuses once its case has finished — and a
+  case that holds the page's timers advances them as the flush's `step`, so
+  the refusal comes before the timers move. Both used to be module-level, and
+  a late `settle()` settled the NEXT case's lens.
   `src/test/inCase.test.ts` and `testkit.test.tsx` each hold one such pair.
 
   **A warning fails the case that printed it.** `src/test/setup.ts` watches

@@ -9,7 +9,9 @@
  * Through the module-level `answered()` every suite used to keep, the late
  * flush opened an `act` beside the live case and returned as though nothing
  * were wrong: a function every case shares cannot tell the case calling it now
- * from one still running after its time ran out. The case's own flush can.
+ * from one still running after its time ran out. The case's own flush can —
+ * and refuses before the step a case hands it, since that step is the move
+ * (advancing the timers) that would reach the next case's page.
  */
 
 import { expect, test } from "vitest";
@@ -18,6 +20,8 @@ import { flushInCase } from "./inCase.ts";
 /** What the late flush came to: "returned", or why it refused. */
 let late: Promise<string> = Promise.resolve("never started");
 let release: () => void = () => {};
+/** Whether the late flush's step ran — the move a late case must not make. */
+let stepped = false;
 
 test("a case that ends while it waits for something of its own", async () => {
   const answered = flushInCase();
@@ -27,7 +31,11 @@ test("a case that ends while it waits for something of its own", async () => {
   });
   late = (async () => {
     await own;
-    await answered();
+    // A STEP, as a case that holds the timers takes one: advancing them fires
+    // whatever is armed — by then, the next case's timers.
+    await answered(() => {
+      stepped = true;
+    });
   })().then(
     () => "returned",
     (cause: unknown) => (cause instanceof Error ? cause.message : String(cause)),
@@ -40,6 +48,14 @@ test("is refused its next flush, rather than acting beside the next case", async
   const answered = flushInCase();
   release();
   expect(await late).toMatch(/^answered: the case that rendered this page has ended/);
-  // And the live case's own flush is unaffected.
-  await expect(answered()).resolves.toBeUndefined();
+  // REFUSED BEFORE ITS STEP, not only before its flush.
+  expect(stepped).toBe(false);
+  // And the live case's own flush, step and all, is unaffected.
+  let mine = false;
+  await expect(
+    answered(() => {
+      mine = true;
+    }),
+  ).resolves.toBeUndefined();
+  expect(mine).toBe(true);
 });

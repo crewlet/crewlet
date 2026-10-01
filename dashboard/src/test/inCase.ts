@@ -34,8 +34,16 @@
 import { act } from "@testing-library/react";
 import { onTestFinished } from "vitest";
 
-/** Lets every answer the page has out land, and renders what they change. */
-export type Answered = () => Promise<void>;
+/**
+ * Lets every answer the page has out land, and renders what they change.
+ *
+ * `step`, when given, is taken first in an `act` of its own — the move that
+ * makes the page ask again, such as advancing the timers a case holds. It is
+ * the flush's rather than the caller's because the refusal has to come BEFORE
+ * it: a late case that moved the timers and was refused only at the flush had
+ * already fired the next case's.
+ */
+export type Answered = (step?: () => void) => Promise<void>;
 
 /**
  * A flush for the case running now, refused once that case has finished.
@@ -48,12 +56,13 @@ export function flushInCase(): Answered {
   onTestFinished(() => {
     open = false;
   });
-  return async () => {
+  return async (step) => {
     if (!open) {
       throw new Error(
         "answered: the case that rendered this page has ended — this is that case, still running after its time ran out",
       );
     }
+    if (step) act(step);
     await act(async () => {});
   };
 }
