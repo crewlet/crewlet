@@ -33,9 +33,20 @@ import (
 // assembling a handful of interface values — cheaper than the mutex a cached
 // one would need.
 func (e *Engine) prefetcher(company *Company) *prefetch.Fetcher {
+	return prefetch.New(e.prefetchSources(company))
+}
+
+// prefetchSources assembles what [Engine.prefetcher] builds its fetcher from.
+func (e *Engine) prefetchSources(company *Company) prefetch.Sources {
 	src := prefetch.Sources{
 		Knowledge: e.Knowledge(),
-		Models:    company.Models,
+		// METERED, like every other completion made on a seat's behalf.
+		// The memory filter, the knowledge query and the episode summary
+		// each send a full prompt on EVERY turn, and resolved off the bare
+		// registry that spend reached no counter: a seat at its ceiling
+		// kept paying for its turn-start context and the window an
+		// operator reads understated it. See learningbudget.go.
+		Models: e.meteredModelsFor(company),
 		// The chat surfaces' READ half, which is how a seat woken in a
 		// thread is handed the thread. Empty on a node running no chat
 		// transport, which renders the unreadable hint rather than
@@ -66,7 +77,7 @@ func (e *Engine) prefetcher(company *Company) *prefetch.Fetcher {
 	// recall to an empty block — both first-class states in the prefetch
 	// rather than failures.
 	src.Embed = e.embedder()
-	return prefetch.New(src)
+	return src
 }
 
 // prefetchFor renders one turn's context blocks.

@@ -484,6 +484,27 @@ Every telemetry write (`Skills.MarkUsed`, the `skill_used` and `knowledge_read` 
 
 ---
 
+## What the auxiliary calls cost
+
+Every completion made on a seat's behalf, the auxiliary calls on this page
+included, is charged to the seat's [`token_budget`](../guides/deployment.md)
+counter and the company's, in the windows current when it returns. For the
+auxiliary calls one wrapper at the model seam does it: the learning workers
+and the turn-start prefetch both resolve their model through the engine's
+metered registry, so a worker added later is charged without anyone wiring a
+charge. Because an auxiliary call's size is known only from its answer, each
+one is **recorded** after it returns, past the ceiling included; where a gate reads the room left first, it decides whether the
+work starts at all:
+
+| Path | Calls | Gate before it starts |
+|---|---|---|
+| Turn loop | every executor and reviewer round | the round's own meter |
+| Round-cap extension judge | one call per exhausted phase | charged on the turn's meter after it answers |
+| Coding sandbox | the box's whole run | the seat's headroom, read before the run launches; the spend is recorded when the run is collected |
+| Turn-start prefetch | memory filter, knowledge query, episode summary | the [budget park](agent-runtime.md#the-budget-park): a seat with no room has its delivery parked, so no prefetch runs |
+| Reflection pass | persist decider, profiler, refiner, single-turn induction | the pass's [no-budget skip](#7-reflector-the-orchestrator) |
+| Background learning | episode compaction, clustered synthesis, skill promotion | none: each call is recorded, but these passes do not read the room left before they start |
+
 ## Integration points
 
 | Touchpoint | Role |

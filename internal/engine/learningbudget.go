@@ -17,16 +17,22 @@ import (
 // `token_budget` was enforced in exactly two places: the turn loop
 // (run.go's meterFor) and the coding sandbox. Every other completion this
 // engine makes on a seat's behalf — the persist decider on every completed
-// turn, the counterparty profiler, the episode-compaction summarizer —
-// resolved a model through learning.Models and called Provider.Complete
-// directly. That spend was never charged, so a company sitting at its
-// ceiling kept paying for auxiliary work forever AND the fleet counter an
-// operator reads understated what the company had actually spent.
+// turn, the counterparty profiler, the episode-compaction summarizer, and
+// the turn-start prefetch's memory filter, knowledge query and episode
+// summary on EVERY turn — resolved a model through a Models seam and called
+// Provider.Complete directly. That spend was never charged, so a company
+// sitting at its ceiling kept paying for auxiliary work forever AND the
+// fleet counter an operator reads understated what the company had actually
+// spent.
 //
 // The fix is one wrapper at the SEAM rather than a charge call at each site.
-// Every learning worker resolves its model through Models.Head; wrapping
-// that is what makes a worker added later charge without anyone remembering
-// to wire it. A charge call per site is the shape that let this happen.
+// Every learning worker and the prefetch resolve their model through
+// Models.Head, handed [Engine.meteredModelsFor]; wrapping that is what makes
+// a worker added later charge without anyone remembering to wire it. A
+// charge call per site is the shape that let this happen. What is charged
+// elsewhere: the turn loop's own rounds through meterFor's meter, the
+// round-cap extension judge through that same meter (the runner charges it
+// after the call), and a coding run when its spend is collected.
 
 // meteredModels charges every completion a learning worker makes.
 //
@@ -190,8 +196,9 @@ func seatHandle(seat *org.Role) string {
 	return seat.Handle()
 }
 
-// meteredModelsFor is the seat-model seam every learning worker resolves
-// through, with charging attached wherever there is a fleet to count on.
+// meteredModelsFor is the seat-model seam every learning worker and the
+// turn-start prefetch resolve through, with charging attached wherever there
+// is a fleet to count on.
 func (e *Engine) meteredModelsFor(c *Company) learningModels {
 	if c == nil || c.Models == nil {
 		return nil

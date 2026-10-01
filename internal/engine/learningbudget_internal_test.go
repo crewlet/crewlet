@@ -10,9 +10,11 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/agent/phase"
+	"github.com/crewlet/crewlet/internal/agent/prefetch"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
 	coordmem "github.com/crewlet/crewlet/internal/coord/memory"
+	"github.com/crewlet/crewlet/internal/knowledge"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/period"
 	"github.com/crewlet/crewlet/internal/providers/llm"
@@ -321,5 +323,67 @@ func TestLearningWorkersResolveModelsThroughTheMeter(t *testing.T) {
 				fn.Name.Name, fset.Position(call.Pos()))
 			return false
 		})
+	}
+}
+
+// searchableKnowledge is a knowledge backend that will always search, so the
+// prefetch's knowledge block reaches its auxiliary query call.
+type searchableKnowledge struct{}
+
+func (searchableKnowledge) Backend() string                             { return "test" }
+func (searchableKnowledge) CanSearch(*org.Role, *org.Organization) bool { return true }
+func (searchableKnowledge) Search(context.Context, knowledge.Query) knowledge.Result {
+	return knowledge.Result{}
+}
+
+// queryingProvider answers a usable search query at a known token cost.
+type queryingProvider struct{ in, out, calls int }
+
+func (p *queryingProvider) Model() string { return "test-model" }
+
+func (p *queryingProvider) Complete(context.Context, llm.Request) (*llm.Completion, error) {
+	p.calls++
+	return &llm.Completion{Model: "test-model", Content: "deploy runbook",
+		InputTokens: p.in, OutputTokens: p.out}, nil
+}
+
+// THE TURN-START PREFETCH'S AUXILIARY CALLS ARE CHARGED.
+//
+// The memory filter, the knowledge query and the episode summary each send a
+// full prompt on EVERY turn, and the prefetch resolved them off the bare
+// registry — so that spend reached no counter, a seat at its ceiling went on
+// paying for its turn-start context, and the window an operator reads
+// understated it. This drives a real Fetch through the engine's own sources
+// and reads both counters back.
+func TestThePrefetchsAuxiliaryCompletionsAreCharged(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	fleet := coordmem.NewFleet()
+	seat := &org.Role{Name: "Dev"}
+	c := meteredCompany(config.TokenBudget{}, seat)
+	provider := &queryingProvider{in: 300, out: 25}
+	models, err := phase.NewRegistry([]phase.Entry{{Key: "aux", Provider: provider}})
+	if err != nil {
+		t.Fatalf("NewRegistry: %v", err)
+	}
+	c.Models = models
+	e := &Engine{backends: &Backends{Fleet: fleet}}
+
+	src := e.prefetchSources(c)
+	src.Knowledge = searchableKnowledge{}
+	prefetch.New(src).Fetch(ctx, prefetch.Request{
+		Seat: seat, Org: c.Org, Task: "ship the release", TurnID: "run-1",
+	})
+	if provider.calls != 1 {
+		t.Fatalf("the auxiliary model was called %d times, want the one knowledge "+
+			"query — the case exercises nothing otherwise", provider.calls)
+	}
+	windows := coord.WindowsAt(time.Now(), time.UTC)
+	for _, scope := range []string{coord.OrgScope, scopeOf(t, c, seat)} {
+		u, err := fleet.Used(ctx, scope, windows)
+		if err != nil || u.In(period.Day).Used != 325 {
+			t.Errorf("%s's day = (%+v, %v), want the 325 tokens the prefetch's "+
+				"knowledge query spent", scope, u.In(period.Day), err)
+		}
 	}
 }
