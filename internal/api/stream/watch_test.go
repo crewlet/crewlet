@@ -14,6 +14,7 @@ import (
 	"github.com/coder/websocket"
 
 	"github.com/crewlet/crewlet/internal/api/auth"
+	"github.com/crewlet/crewlet/internal/api/httpjson"
 	"github.com/crewlet/crewlet/internal/api/stream"
 	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/config"
@@ -121,6 +122,13 @@ func TestAWatchThisNodeCannotDecideIsNotInstalled(t *testing.T) {
 // not be read, ZERO where waiting will not change it — and the hint ALONE:
 // what the directory says about a login names the seat it is bound to, so its
 // words stay in the node's log.
+//
+// AND IT IS A QUERY'S HINT OVER THE SAME CAUSE ([stream.UnavailableOf]), never
+// one the watch works out for itself: one tab told two different times to come
+// back about one unreadable chart is the disagreement that reading exists to
+// make impossible. The last case is the one that holds that rather than the
+// three values: [stream.ErrNoCompany] is a cause the reading answers with a
+// hint of its own, which the state log's rule alone reads as the health tick.
 func TestAnUndecidableWatchSaysWhenToAskAgain(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
@@ -134,9 +142,15 @@ func TestAnUndecidableWatchSaysWhenToAskAgain(t *testing.T) {
 			Detail: "40 000 records behind", RetryAfter: 12 * time.Second}, 12},
 		{"a chart log waiting will not clear", &statelog.Refused{Code: statelog.RefuseLogFull,
 			Detail: "raise the stream's byte ceiling"}, 0},
+		{"a cause the shared reading has a hint of its own for", stream.ErrNoCompany,
+			httpjson.NoActiveRevisionRetry.Seconds()},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
+			if query := float64(stream.UnavailableOf(tc.cause).RetryAfter); query != tc.want {
+				t.Fatalf("a query refused over this cause is told %v and the case wants %v: "+
+					"the watch has to say what the query says", query, tc.want)
+			}
 			f := newWatchSocket(t, &leadChart{err: tc.cause},
 				map[string]string{"token:lead": "platform-lead"})
 			conn := f.open(t, "lead-token-long-enough-to-pass")

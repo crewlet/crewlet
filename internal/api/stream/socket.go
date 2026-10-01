@@ -17,7 +17,6 @@ import (
 	"github.com/crewlet/crewlet/internal/api/httpjson"
 	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/iam"
-	"github.com/crewlet/crewlet/internal/statelog"
 )
 
 // The close codes this socket ends a connection with, on top of the ones the
@@ -584,11 +583,11 @@ func readLoop(ctx context.Context, conn *websocket.Conn,
 //   - UNDECIDABLE (the chart could not be read): nothing is installed either,
 //     and an `unavailable` error frame says when to try again — its
 //     `retry_after`, zero where waiting will not change the answer
-//     ([watchAnswer.frame]). It is the
-//     only answer that is not a guess: installing would hand a seat's frames
-//     to somebody this node could not show was allowed them, and a refusal
-//     would tell a lead they lead nobody because this node is behind — the
-//     mistake authz's three-valued chart exists to make unrepresentable.
+//     ([watchAnswer.frame]). It is the only answer that is not a guess:
+//     installing would hand a seat's frames to somebody this node could not
+//     show was allowed them, and a refusal would tell a lead they lead nobody
+//     because this node is behind — the mistake authz's three-valued chart
+//     exists to make unrepresentable.
 //
 // WHY THE PREVIOUS WATCH IS DROPPED on a refused or undecidable one: a watch
 // is a screen saying where it now is ([Hub.Watch] keeps one seat per socket
@@ -744,13 +743,21 @@ func (a *watchAnswer) Error() string { return "stream: watch refused: " + string
 // frame is the error frame the answer is sent as.
 //
 // AN `unavailable` ONE SAYS WHEN TO ASK AGAIN, like every other `unavailable`
-// frame on this socket ([Unavailable]): a `retry_after` by
-// [statelog.RetryAfter]'s rule over what could not be read — [HealthInterval]
-// where nothing better is known — and ZERO where waiting will not change it, a
-// chart or a directory whose log is full or holds a record this node cannot
-// decode. It went out bare, which is the frame a node too old to say sends, so
-// the dashboard re-asked at its own fixed interval a watch this node would
-// refuse until an operator acted, for as long as the tab stayed open.
+// frame on this socket: a `retry_after` over what could not be read —
+// [HealthInterval] where nothing better is known — and ZERO where waiting will
+// not change it, a chart or a directory whose log is full or holds a record
+// this node cannot decode. It went out bare, which is the frame a node too old
+// to say sends, so the dashboard re-asked at its own fixed interval a watch
+// this node would refuse until an operator acted, for as long as the tab
+// stayed open.
+//
+// THE HINT IS [UnavailableOf]'s, taken whole rather than worked out here from
+// the same two calls. That reading is the one every query's `unavailable`
+// takes on both transports, and its own doc says no surface decides the hint
+// for itself: a copy of its arithmetic here would agree with it only until
+// the reading learned a case of its own — as it did for a node with no
+// company — and then a watch and a query refused over one cause would tell
+// the same tab two different times to come back.
 //
 // THE HINT ALONE, never the refusal's code or words. A client does one thing
 // with a watch's `unavailable` — decides when to send the watch again — and the
@@ -761,9 +768,7 @@ func (a *watchAnswer) frame(id int64) Envelope {
 	env := Envelope{Kind: KindError, ID: id, What: watchWhat, Error: a.code,
 		Refused: a.refused}
 	if a.code == CodeUnavailable {
-		env.Unavailable = &Unavailable{
-			RetryAfter: httpjson.RetrySeconds(statelog.RetryAfter(a.cause, HealthInterval)),
-		}
+		env.Unavailable = &Unavailable{RetryAfter: UnavailableOf(a.cause).RetryAfter}
 	}
 	return env
 }
