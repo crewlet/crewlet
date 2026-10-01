@@ -1210,7 +1210,8 @@ export interface MapProbation {
 /**
  * A node barred from a map — evicted — that the map does not hold: removed,
  * forgotten or never seen. Should it come back it joins as a member out, placed
- * on nothing, until it is put back.
+ * on nothing, until it is readmitted — the only gesture that lifts a bar. A put
+ * back (`/estate/in`) of a barred node is refused (`barred_member`).
  */
 export interface MapBar {
   node: string;
@@ -1231,9 +1232,11 @@ export interface MapMember {
   out_reason?: string;
   out_at?: string;
   /**
-   * Barred — evicted — absent while it is not: out until it is put back,
-   * whatever becomes of its membership. `out_by`, `out_reason` and `out_at` are
-   * the bar's where no out of an operator's own was recorded beside it.
+   * Barred — evicted — absent while it is not: out until it is readmitted,
+   * whatever becomes of its membership: a removal does not lift it, as it lifts
+   * an out, and a put back of it is refused (`barred_member`). `out_by`,
+   * `out_reason` and `out_at` are the bar's where no out of an operator's own
+   * was recorded beside it.
    */
   barred?: boolean;
   /**

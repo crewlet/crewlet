@@ -171,8 +171,12 @@ export interface PlacedEstate {
   leaving: number;
   moves: number;
   members: EstateMember[];
+  /** Removed and not seen back — except a node an eviction bars, listed under `barred` alone. */
   removed: MapRemoval[];
-  /** Nodes barred — evicted — that the map does not hold: placed on nothing should they return. */
+  /**
+   * Nodes barred — evicted — that the map does not hold: placed on nothing
+   * should they return, until they are readmitted.
+   */
   barred: MapBar[];
   partitions: EstatePartition[];
 }
