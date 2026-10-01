@@ -423,7 +423,12 @@ func openStream(ctx context.Context, b *config.Bootstrap, cfg jetstream.Config) 
 		return nil, nil, fmt.Errorf("engine: stream client: %w", err)
 	}
 	out := &Backends{Queue: q, stopServer: server.Shutdown}
-	conn, err := server.Conn()
+	// WATCHED, through the queue: this connection holds every lease the
+	// node renews, so NATS closing it for good is the node's loss exactly
+	// as the queue's own connection closing is, and the queue reports both
+	// as one ([jetstream.Queue.Lost]). A donor's second connection is the
+	// one that is not — see [jetstream.Queue.DialOwned].
+	conn, err := q.DialWatched()
 	if err != nil {
 		out.Close(ctx)
 		return nil, nil, fmt.Errorf("engine: coordination connection: %w", err)

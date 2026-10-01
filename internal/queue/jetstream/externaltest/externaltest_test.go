@@ -3,6 +3,7 @@ package externaltest_test
 import (
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/nats-io/nats-server/v2/server"
 	"github.com/nats-io/nats.go"
@@ -64,4 +65,84 @@ func TestARestartChangesTheLimitAndKeepsTheStreams(t *testing.T) {
 		t.Errorf("a restart with no limit of its own reads %d, want nats-server's "+
 			"default %d", got, server.MAX_PAYLOAD_SIZE)
 	}
+}
+
+// A RELOAD CHANGES THE RUNNING SERVER AND LEAVES ITS CLIENTS WHERE THEY ARE.
+//
+// What the suites that use it stage is an operator's LIVE reload, which is a
+// different gesture from a restart in exactly the way that matters to them: a
+// connected client is not reconnected, so it learns nothing the server does not
+// send it — nats-server sends no INFO for a reloaded max_payload — while a new
+// connection reads the reloaded figure. A Reload that restarted would hand a
+// case a client that had reconnected and read the new limit, and the close for
+// good the case exists to stage would never happen.
+//
+// Mutation: implement Reload as a stop and a start on the same port and the
+// reconnect row goes red; build the reloaded set from scratch rather than from
+// the running one and the reload is refused for changing what cannot be
+// reloaded.
+func TestAReloadChangesTheServerAndNotItsClients(t *testing.T) {
+	t.Parallel()
+	const before, after = 8 << 20, 2 << 20
+	srv := externaltest.Start(t, before)
+	nc, err := nats.Connect(srv.URL())
+	if err != nil {
+		t.Fatalf("connect: %v", err)
+	}
+	t.Cleanup(nc.Close)
+
+	srv.Reload(after)
+
+	if err := nc.FlushTimeout(5 * time.Second); err != nil {
+		t.Fatalf("a round trip after the reload: %v", err)
+	}
+	if nc.Reconnects != 0 {
+		t.Errorf("the client reconnected %d time(s) across a reload: it was a "+
+			"restart, and the client has read the new limit", nc.Reconnects)
+	}
+	if got := nc.MaxPayload(); got != before {
+		t.Errorf("the connected client reads %d after a reload to %d, want the "+
+			"%d it was told when it connected", got, after, before)
+	}
+	fresh, err := nats.Connect(srv.URL())
+	if err != nil {
+		t.Fatalf("connect after the reload: %v", err)
+	}
+	t.Cleanup(fresh.Close)
+	if got := fresh.MaxPayload(); got != after {
+		t.Errorf("a connection opened after the reload reads %d, want the "+
+			"reloaded %d", got, after)
+	}
+}
+
+// A RESTART AS ANOTHER CONFIGURATION IS THAT CONFIGURATION, ON THE SAME ADDRESS.
+//
+// What the suites that use it stage is a server that stopped admitting a
+// running client — its credentials rotated — so the restarted server has to be
+// at the address the client is reconnecting to, and has to be the new
+// configuration rather than the one Start was given, or the client is simply
+// admitted again and the case stages nothing.
+//
+// Mutation: restart from Start's configuration and the old credential is
+// admitted; restart on a fresh port and the new one finds nobody.
+func TestARestartAsAnotherConfigurationIsThatConfiguration(t *testing.T) {
+	t.Parallel()
+	srv := externaltest.Start(t, 8<<20, func(o *server.Options) { o.Authorization = "before" })
+	url := srv.URL()
+
+	srv.RestartAs(func(o *server.Options) { o.Authorization = "after" })
+
+	if srv.URL() != url {
+		t.Fatalf("the restarted server is at %s, not %s where its clients reconnect",
+			srv.URL(), url)
+	}
+	if nc, err := nats.Connect(url, nats.Token("before")); err == nil {
+		nc.Close()
+		t.Error("the restarted server admits the credential it was rotated away from")
+	}
+	nc, err := nats.Connect(url, nats.Token("after"))
+	if err != nil {
+		t.Fatalf("the restarted server refuses the credential it was configured with: %v", err)
+	}
+	nc.Close()
 }

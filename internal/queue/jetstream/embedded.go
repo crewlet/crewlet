@@ -149,19 +149,6 @@ func (s *Server) Client(ctx context.Context) (*Queue, error) {
 	return newQueueOn(ctx, s.cfg, s.embedded, false)
 }
 
-// Conn returns a NATS connection to this server, for subsystems that ride
-// the same broker without going through the queue contract — the KV
-// coordination backend is the one that matters, and sharing the broker is
-// what makes the single-binary topology one service rather than two.
-//
-// The caller owns the connection and must close it.
-func (s *Server) Conn() (*nats.Conn, error) {
-	if s.embedded == nil {
-		return nil, errors.New("jetstream: server is shut down")
-	}
-	return s.embedded.connect()
-}
-
 // RoutePeers names the cluster members this server currently holds a route
 // to, sorted, and never itself.
 //
@@ -631,12 +618,16 @@ func (e *embeddedServer) awaitClusterReady(ctx context.Context, replicas int) er
 // the reconnect watch installed beside it — this and [dial] are the only two
 // places this package opens one, so the queue's own, the coordination
 // store's and a donor's second connection cannot differ about it.
-func (e *embeddedServer) connect() (*nats.Conn, error) {
+//
+// loss is where a close NATS makes for good is recorded, and nil for a
+// connection whose owner is the one to notice — see [watchClose].
+func (e *embeddedServer) connect(loss *connectionLoss) (*nats.Conn, error) {
 	opts := []nats.Option{
 		nats.Timeout(acceptBudget(e.clustered)),
 		nats.ReconnectHandler(reconnectWatch{
 			log: logging.Get("queue.jetstream"), embedded: true}.reconnected),
 	}
+	opts = append(opts, watchClose(loss, true, "")...)
 	var nc *nats.Conn
 	var err error
 	if e.inProcess {
@@ -696,7 +687,8 @@ func joinURLs(urls []string) string {
 
 // dial opens a NATS connection to an external server with this package's own
 // reconnect policy, held to the transport's contract. The caller owns the
-// connection and must close it.
+// connection and must close it; loss is where a close NATS makes for good is
+// recorded, and nil where the caller is the one to notice — see [watchClose].
 //
 // UNEXPORTED, because a caller outside this package reaches it through a
 // queue: [Queue.DialOwned] is how a subsystem gets a second connection with
@@ -704,11 +696,12 @@ func joinURLs(urls []string) string {
 // already proved. An exported Dial beside it was kept for a caller that would
 // otherwise reimplement the option list, and none ever existed — it was code
 // with no caller, indistinguishable from code whose caller nobody had found.
-func dial(cfg Config) (*nats.Conn, error) {
+func dial(cfg Config, loss *connectionLoss) (*nats.Conn, error) {
 	opts, err := dialOptions(cfg)
 	if err != nil {
 		return nil, err
 	}
+	opts = append(opts, watchClose(loss, false, cfg.URL)...)
 	nc, err := nats.Connect(cfg.URL, opts...)
 	if err != nil {
 		// NAMED BY HOST AND PORT, never by cfg.URL itself: stream.url may

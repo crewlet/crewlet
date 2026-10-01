@@ -249,7 +249,7 @@ func TestAnEmbeddedBrokerWithoutTheCeilingFailsTheBootAndBlamesTheBuild(t *testi
 			return func() { _ = q.Stop(context.WithoutCancel(t.Context())) }, nil
 		}},
 		{"the coordination store's", func() (func(), error) {
-			nc, err := (&Server{embedded: broken}).Conn()
+			nc, err := (&Queue{embedded: broken, lost: newConnectionLoss()}).DialWatched()
 			if err != nil {
 				return nil, err
 			}
@@ -381,9 +381,9 @@ func TestAReconnectToAServerBelowTheContractIsNamed(t *testing.T) {
 			t.Fatalf("Client: %v", err)
 		}
 		t.Cleanup(func() { _ = q.Stop(context.WithoutCancel(t.Context())) })
-		coord, err := server.Conn()
+		coord, err := q.DialWatched()
 		if err != nil {
-			t.Fatalf("Conn: %v", err)
+			t.Fatalf("DialWatched: %v", err)
 		}
 		t.Cleanup(coord.Close)
 		owned, err := q.DialOwned()

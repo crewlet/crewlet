@@ -151,6 +151,16 @@ The logging flags override the Tier A `logging:` block **only when they are actu
 
 The four overrides — `-roles`, `-api-host`, `-api-port` and `-log-file` — are the fields whose right value depends on *where the process is running* rather than on what the company is: which job this node does, where its HTTP surface binds, and which path on this host its log lands on. Everything else in Tier A belongs in the file, where it can be reviewed — including the log file's own shape and rotation caps, which describe the disk rather than the invocation.
 
+**How it exits says why it stopped**, which is what a supervisor's restart policy reads:
+
+| Status | Why |
+|---|---|
+| `0` | A signal (`SIGINT`, `SIGTERM`) stopped it, after the drain and the teardown |
+| `1` | It could not start — a refused config, a store or broker it could not open — **or it stopped itself** because a broker connection it cannot run without was [closed for good](../concepts/seat-ownership.md#the-node-whose-broker-is-gone-and-why-it-leaves-too): the last stderr line, `crewlet: the node stopped itself: …`, names the cause and what to change, after the same drain and teardown a signal takes |
+| `75` | The [watchdog](../concepts/seat-ownership.md#the-wedged-node-and-why-it-leaves) ended a wedged process, with no shutdown at all |
+
+Both non-zero statuses are a node that wants restarting, so run it under something that restarts a process that exits non-zero (`Restart=on-failure`, a container restart policy).
+
 ### `-dev-principal`, and why it is a flag
 
 Opening the dashboard on a laptop means having a token, and the reflex is to

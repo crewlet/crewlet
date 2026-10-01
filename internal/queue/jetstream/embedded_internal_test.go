@@ -172,7 +172,7 @@ func TestAConnectionToItsOwnBrokerHandshakesWithinTheAcceptBudget(t *testing.T) 
 		for _, clustered := range []bool{false, true} {
 			e := *c.server
 			e.clustered = clustered
-			nc, err := e.connect()
+			nc, err := e.connect(nil)
 			if err != nil {
 				t.Fatalf("%s: connect: %v", c.name, err)
 			}

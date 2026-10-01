@@ -97,7 +97,7 @@ func TestTheClientIsToldTheCeiling(t *testing.T) {
 	}
 	t.Cleanup(e.shutdown)
 
-	nc, err := e.connect()
+	nc, err := e.connect(nil)
 	if err != nil {
 		t.Fatalf("connect: %v", err)
 	}

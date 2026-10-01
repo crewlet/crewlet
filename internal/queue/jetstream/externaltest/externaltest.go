@@ -1,7 +1,8 @@
 // Package externaltest starts an EXTERNAL NATS server for a test — the
 // `stream.type: nats` topology, a server outside this engine's own
 // configuration whose max_payload and authentication are its operator's — and
-// restarts it under a running client with another max_payload.
+// restarts it under a running client with another max_payload, or reloads its
+// options live under one.
 //
 // # Why a package
 //
@@ -48,6 +49,12 @@ type Server struct {
 	store     string
 	configure []func(*server.Options)
 	ns        *server.Server
+
+	// opts is what the running server was configured from, kept for
+	// [Server.Reload]: nats-server reloads a whole option set, so a reload
+	// is these with one change rather than a fresh set that would also
+	// differ in every field nothing meant to change.
+	opts server.Options
 }
 
 // Start starts one announcing maxPayload — nats-server's own default, 1 MiB,
@@ -70,6 +77,10 @@ func (s *Server) start(port int, maxPayload int32) {
 	for _, c := range s.configure {
 		c(opts)
 	}
+	// A COPY, taken before NewServer: the server writes its derived
+	// defaults back into the set it is handed, and a reload built from
+	// those would be a set nobody configured.
+	s.opts = *opts
 	ns, err := server.NewServer(opts)
 	if err != nil {
 		s.t.Fatalf("configure an external NATS server: %v", err)
@@ -95,6 +106,52 @@ func (s *Server) URL() string { return s.ns.ClientURL() }
 func (s *Server) HostPort() string {
 	addr := s.ns.Addr().(*net.TCPAddr)
 	return net.JoinHostPort(addr.IP.String(), strconv.Itoa(addr.Port))
+}
+
+// Reload lowers or raises the running server's max_payload LIVE — no restart,
+// so a connected client is not reconnected and is told only what the server
+// chooses to send it, which for a reloaded max_payload is nothing: nats-server
+// applies it to the connections it holds without an INFO. That is the
+// operator's gesture this package exists to stage beside a restart.
+//
+// MAX_PAYLOAD AND NOTHING ELSE, because it is the one reload that is safe to
+// stage under a client that is using the server. nats-server's authorization
+// reload rewrites account state its client read loops read without a lock,
+// which the race detector reports inside nats-server itself whenever a
+// connected node is mid-request; a case that changes what the server admits
+// restarts it instead ([Server.RestartAs]).
+//
+// A later [Server.Restart] or [Server.RestartAs] starts from the reloaded
+// limit.
+func (s *Server) Reload(maxPayload int32) {
+	s.t.Helper()
+	next := s.opts
+	// THE PORT THE SERVER BOUND, since a random one (-1) reloaded as
+	// written is a change of port, which nats-server refuses to reload.
+	next.Port = s.ns.Addr().(*net.TCPAddr).Port
+	next.MaxPayload = maxPayload
+	s.opts = next
+	// ReloadOptions takes ownership of the set it is handed.
+	handed := next
+	if err := s.ns.ReloadOptions(&handed); err != nil {
+		s.t.Fatalf("reload the external NATS server's max_payload: %v", err)
+	}
+}
+
+// RestartAs stops the server and starts it again on its own port and its own
+// store, at the max_payload it announces now, configured by configure in place
+// of what [Start] was given — and waits only for the server.
+//
+// For a case whose subject is a server that no longer admits a running client:
+// its credentials rotated, say. Such a client never reconnects, so nothing
+// here waits for it; what the case waits for is what the client does about
+// being refused.
+func (s *Server) RestartAs(configure ...func(*server.Options)) {
+	s.t.Helper()
+	port := s.ns.Addr().(*net.TCPAddr).Port
+	s.stop()
+	s.configure = configure
+	s.start(port, s.opts.MaxPayload)
 }
 
 // Restart stops the server and starts it again on its own port and its own

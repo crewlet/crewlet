@@ -274,6 +274,11 @@ type Queue struct {
 	nc         *nats.Conn
 	js         jetstream.JetStream
 
+	// lost is where this queue's own connection, and every second one
+	// dialled through [Queue.DialWatched], records being closed for good.
+	// See [Queue.Lost].
+	lost *connectionLoss
+
 	// attachments holds one entry per (topic, group) this process
 	// consumes, keyed by the PAIR. Keying by topic alone breaks twice
 	// over: a pause hold outlives its attachment so a re-attaching node
@@ -336,6 +341,7 @@ func newQueueOn(ctx context.Context, cfg Config, embedded *embeddedServer, owns 
 		attachments: map[attachKey][]*attachment{},
 		holds:       map[attachKey]map[string]struct{}{},
 		streams:     map[string]struct{}{},
+		lost:        newConnectionLoss(),
 	}
 
 	// HELD TO THE CONTRACT BEFORE ANYTHING IS PROVISIONED: both dials
@@ -345,9 +351,9 @@ func newQueueOn(ctx context.Context, cfg Config, embedded *embeddedServer, owns 
 	// carriesTheContract.
 	var err error
 	if embedded != nil {
-		q.nc, err = embedded.connect()
+		q.nc, err = embedded.connect(q.lost)
 	} else {
-		q.nc, err = dial(cfg)
+		q.nc, err = dial(cfg, q.lost)
 	}
 	if err != nil {
 		return nil, fmt.Errorf("connect nats: %w", err)
@@ -907,7 +913,8 @@ func tooLarge(nc *nats.Conn, verb, subject string, size int) string {
 
 // Conn exposes this client's NATS connection, for subsystems that ride the
 // same broker outside the queue contract (the KV coordination backend).
-// The queue keeps ownership: closing it is Stop's job, not the caller's.
+// The queue keeps ownership: closing it is Stop's job, not the caller's — and
+// NATS closing it for good is [Queue.Lost]'s to report.
 func (q *Queue) Conn() *nats.Conn { return q.nc }
 
 // DialOwned opens a SECOND connection to the same broker, which the caller
@@ -929,16 +936,65 @@ func (q *Queue) Conn() *nats.Conn { return q.nc }
 // So the ownership is in the name. Callers that ride the shared connection
 // take [Queue.Conn] and must not close it; callers with their own lifetime
 // take this and must.
+//
+// # And so is the LOSS
+//
+// NATS can close this connection for good under its owner, as it can every
+// connection — see [connectionLoss] — and here that is the OWNER's to notice,
+// never this node's to stop for: [Queue.Lost] does not report it. Its caller is
+// a subsystem with a lifetime of its own, the donor, which serves PEERS — a node
+// whose donor is down still serves its own company, as a donor that cannot be
+// armed at all does not gate the boot — so a donor's connection closing must
+// cost the fleet one donor, and never this node its seats. A
+// connection whose loss IS the node's is [Queue.DialWatched]'s.
 func (q *Queue) DialOwned() (*nats.Conn, error) {
+	return q.dialSecond(nil)
+}
+
+// DialWatched opens a second connection to the same broker, which the caller
+// owns and closes like [Queue.DialOwned]'s — and whose close for good this queue
+// reports as its OWN loss ([Queue.Lost]).
+//
+// For a subsystem the node cannot run without that has a connection of its own
+// rather than [Queue.Conn]: the coordination store on an embedded broker, which
+// holds every lease this node renews. Dialled unwatched, NATS closing it left a
+// node consuming work over the queue's connection while every renewal failed —
+// the "alive to its peers, deaf to its work" split from the other side, and
+// reported by nothing.
+func (q *Queue) DialWatched() (*nats.Conn, error) {
+	return q.dialSecond(q.lost)
+}
+
+// dialSecond is the one dial both of those take, apart only in whether a close
+// for good is recorded.
+func (q *Queue) dialSecond(loss *connectionLoss) (*nats.Conn, error) {
 	if q.embedded != nil {
-		return q.embedded.connect()
+		return q.embedded.connect(loss)
 	}
 	if q.cfg.URL == "" {
 		return nil, fmt.Errorf("jetstream: this queue has no embedded server " +
 			"and no URL, so a second connection cannot be opened")
 	}
-	return dial(q.cfg)
+	return dial(q.cfg, loss)
 }
+
+// Lost is closed once NATS has closed, FOR GOOD, this queue's own connection or
+// a second one dialled through [Queue.DialWatched] — and [Queue.LostCause] then
+// says which, why, and what to change.
+//
+// Never closed by this queue's own [Queue.Stop], nor by an owner closing what
+// [Queue.DialWatched] gave it: see [connectionLoss] for why only a close the
+// client made itself counts, and which closes those are.
+//
+// ON THIS BACKEND AND NOT THE CONTRACT. The memory twin holds no connection to
+// lose, so [queue.EventQueue] has nothing to promise here; the engine asks
+// whichever queue it runs on whether it has this method, as it asks for
+// [Queue.Conn].
+func (q *Queue) Lost() <-chan struct{} { return q.lost.done }
+
+// LostCause is the sentence a node stops with once [Queue.Lost] is closed, and
+// nil before.
+func (q *Queue) LostCause() error { return q.lost.lostCause() }
 
 // Backend names this backend for operator display. Nothing may branch on it.
 func (q *Queue) Backend() string {

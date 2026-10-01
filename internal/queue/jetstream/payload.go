@@ -67,7 +67,11 @@ import (
 // makes the server close the connection with `Maximum Payload Violation` —
 // a refusal the client treats as final, so the connection is CLOSED for good
 // rather than reconnected. Measured against nats-server v2.15.0 and nats.go
-// v1.54.0. The deployment guide tells an operator never to lower it that way.
+// v1.54.0. What this side CAN do is notice: [connectionLoss] records that
+// close, the node stops on it and exits naming the setting, and the restart its
+// supervisor makes meets this check, which refuses the lowered limit by name.
+// The deployment guide still tells an operator never to lower it that way,
+// because the noticing is an outage of every node the reload reached.
 func carriesTheContract(nc *nats.Conn, embedded bool) error {
 	// NAMED BEFORE THE ROUND TRIP: a connection that drops during it no
 	// longer says which member it was talking to, and that member is the

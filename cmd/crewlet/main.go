@@ -1258,7 +1258,27 @@ func runEngine(args []string, stderr io.Writer) (err error) {
 	// claimed anything yet, which is work with nowhere to go.
 	go reconciler.Run(ctx)
 
-	<-ctx.Done()
+	// A NODE STOPS FOR ONE OF TWO REASONS, and both take the one shutdown
+	// below: a signal, which is somebody else's decision, or the engine
+	// reporting it has lost something it cannot run without — a broker
+	// connection NATS closed for good (see [engine.Engine.Fatal]). That one
+	// used to be noticed by nothing: the process went on with no connection
+	// to publish, consume or renew a lease over, healthy to a liveness probe,
+	// until a person restarted it. Now it drains, tears down in the ordinary
+	// order and RETURNS the cause, which main prints and exits non-zero on,
+	// so whatever supervises the process restarts it — the seat watchdog's
+	// rule for a wedged event loop, reached by the graceful path because
+	// nothing here is wedged.
+	var fatal error
+	select {
+	case <-ctx.Done():
+	case <-e.Fatal():
+		fatal = e.FatalCause()
+		log.ErrorContext(ctx, "engine_fatal", "error", fatal,
+			"detail", "this node cannot go on running: it stops the way a signal "+
+				"stops it and exits non-zero, for whatever supervises it to start "+
+				"it again")
+	}
 
 	// HAND THE SIGNALS BACK before draining, so a SECOND interrupt kills
 	// the process. Until this runs, signal.NotifyContext is still the
@@ -1304,7 +1324,17 @@ func runEngine(args []string, stderr io.Writer) (err error) {
 	// runtime's kill grace, or the operator's second interrupt that the
 	// stop() above just re-armed. Both already have one and can see things
 	// this process cannot.
+	//
+	// THE SAME DRAIN ON A FATAL, with no signal behind it and so no kill
+	// grace running. It still ends: every write the turns in flight make
+	// against a closed connection fails at once rather than waiting on a
+	// broker, so the drain lasts as long as whatever those turns are already
+	// waiting on, and a second shutdown path that skipped it would be one
+	// more order to keep correct.
 	shutdown(context.WithoutCancel(ctx), e, surface, log)
+	if fatal != nil {
+		return fmt.Errorf("the node stopped itself: %w", fatal)
+	}
 	return nil
 }
 

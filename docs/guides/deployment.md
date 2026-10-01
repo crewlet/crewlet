@@ -446,6 +446,34 @@ accept budget: the loop tries the URLs in turn, and a member that silently
 drops packets holds every attempt at it for that long before a member that
 answers is asked, which is time the node spends not renewing its leases.
 
+**A connection the client gives up on is a node restart.** Reconnecting for
+ever covers a server that goes away and comes back. It does not cover the
+cases where the NATS client itself closes the connection *for good* and stops
+asking:
+
+- a message larger than a `max_payload` that was lowered under the running
+  node (see [below](#the-largest-message-every-server-must-carry));
+- the server refusing this node's credentials, and refusing them again on the
+  reconnect after it — `credentials` or `token` changed, revoked or expired,
+  or the server's own authorization reloaded so it no longer admits them;
+- any other error the server sends that the client does not treat as
+  transient.
+
+A node in that state has nothing to publish, consume or renew a lease over,
+and it used to stay up anyway — answering its liveness probe, its seats lapsing
+to peers, until somebody restarted it. It now **stops itself**: it logs
+`jetstream_connection_closed_for_good` and `engine_fatal`, drains and tears
+down exactly as it does on `SIGTERM`, and exits with status **1**, printing on
+stderr what closed, why, and what to change. Run it under something that
+restarts a process which exits non-zero — a systemd unit with
+`Restart=on-failure`, a container restart policy, a Kubernetes deployment —
+and the node comes back by itself once the cause is fixed. The same applies
+to the connection the coordination store rides on an embedded broker, and to
+this node's own embedded broker going away under it. A snapshot donor's
+connection is the one exception: it serves *peers*, and a node whose donor is
+down still serves its own company, so that connection closing never stops the
+node.
+
 **The account needs more than publish and subscribe.** A node creates what it
 uses, on every start and idempotently: the six engine streams
 (`CREWLET_AGENT`, `CREWLET_EVENTS`, `CREWLET_NOTIFICATIONS`,
@@ -541,7 +569,9 @@ limit leaves the node nothing to size against but its own disk, and a server's
 own cap then refuses what does not fit, by name. See
 [Replication](replication.md#how-the-byte-ceilings-are-sized).
 
-**And a `max_payload` of at least 8 MiB, on every server.** That is the largest
+#### The largest message every server must carry
+
+**A `max_payload` of at least 8 MiB, on every server.** That is the largest
 single message the engine sends — an event, a webhook delivery, a state-log
 record at the largest its log declares (the tracker's, the knowledge base's
 and the vector changelog's are 8 MiB less 4 KiB, which is 8 MiB on the wire
@@ -584,9 +614,19 @@ a reloaded `max_payload` to the connections it already holds without telling
 their clients, so a node goes on believing its server carries 8 MiB, and the
 first message past the new limit makes the server close the connection with
 `Maximum Payload Violation`. The NATS client treats that refusal as final and
-does not reconnect, so the node is left with no connection to the broker —
-no publish, no consumer, no lease renewal — until it is restarted, and
-restarted it refuses to start, naming `max_payload`.
+does not reconnect, so the node
+[stops itself](#an-external-nats-server) and exits with status 1, naming the
+setting:
+
+```text
+crewlet: the node stopped itself: engine: stream: jetstream: the NATS server stream.url reaches (nats://nats-1.internal:4222) closed this node's connection for good (nats: Maximum Payload Violation): a message this node sent was larger than the max_payload the server now holds the connection to, a limit lowered under the running node — a live reload, which nats-server applies to the connections it holds without telling them — below the 8388608 bytes this build sends at most. Set max_payload: 8MB in the configuration of every server stream.url reaches, and wherever the account this node signs in to, or its user, states a payload limit of its own, raise that too; a node restarted against a server still below it refuses to start, naming the setting
+```
+
+Restarted against a server still below 8 MiB, it refuses to start with the
+boot refusal above. So a reload that lowers the limit takes down every node
+whose next large message reaches it, and they stay down until the limit is
+raised again — which is the outcome to want from a broker that can no longer
+carry what they send, and the reason not to lower it.
 
 **Replication is asked for, not assumed.** `stream.replicas` is the replica
 count the engine requests for each of those streams and buckets, and it

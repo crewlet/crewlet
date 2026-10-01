@@ -152,6 +152,42 @@ func TestAnEmbeddedKVStoreRidesTheStreamsOwnConnection(t *testing.T) {
 	}
 }
 
+// THE COORDINATION STORE'S CONNECTION IS ONE THE NODE HEARS LOSING.
+//
+// On an embedded broker the store rides a connection of its own beside the
+// queue's, and it holds every lease this node renews — so NATS closing it for
+// good is a node with no leases, and the queue reports it with its own
+// connection's (jetstream.Queue.Lost). That is only true of a connection dialled
+// watched: the client is told to call a closed handler for a close it made, and
+// told not to for the node's own Close at shutdown. A connection dialled the
+// way a donor's is carries neither, and its loss would be heard by nothing.
+//
+// Mutation: open it with DialOwned and both halves go red.
+func TestTheCoordinationConnectionIsWatched(t *testing.T) {
+	t.Parallel()
+	b := bootstrap(t, func(b *config.Bootstrap) {
+		b.Stream.StoreDir = filepath.Join(t.TempDir(), "stream")
+		b.Coordination.Type = config.CoordinationEmbeddedKV
+	})
+	back, err := openBackends(t, b)
+	if err != nil {
+		t.Fatalf("OpenBackends: %v", err)
+	}
+	t.Cleanup(func() { back.Close(t.Context()) })
+	conn := back.Conn()
+	if conn == nil {
+		t.Fatal("an embedded topology answered no coordination connection")
+	}
+	if conn.Opts.ClosedCB == nil {
+		t.Error("the coordination store's connection has no closed handler, so " +
+			"NATS closing it for good leaves the node holding leases it cannot renew")
+	}
+	if !conn.Opts.NoCallbacksAfterClientClose {
+		t.Error("the coordination store's connection reports the node's own " +
+			"Close at shutdown as a lost broker")
+	}
+}
+
 func TestLocalCoordinationNeedsNoBroker(t *testing.T) {
 	t.Parallel()
 	// The default. One node, no quorum, no network — and the coordination
