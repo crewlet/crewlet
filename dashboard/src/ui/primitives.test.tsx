@@ -19,7 +19,8 @@
  */
 
 import { StrictMode } from "react";
-import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { act } from "~/test/inCase.ts";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { CopyButton, DownloadButton, PhaseTag } from "./primitives.tsx";
 

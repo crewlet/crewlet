@@ -4,7 +4,8 @@
  * changed hands.
  */
 
-import { act, cleanup, fireEvent, screen, within } from "@testing-library/react";
+import { cleanup, fireEvent, screen, within } from "@testing-library/react";
+import { act } from "~/test/inCase.ts";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { chartPrint, fingerprint, fromChart } from "./model/document.ts";
 import { EMPTY_DRAFT } from "./model/draft.ts";

@@ -15,7 +15,8 @@
  * value.
  */
 
-import { act, cleanup, render, screen } from "@testing-library/react";
+import { cleanup, render, screen } from "@testing-library/react";
+import { act } from "~/test/inCase.ts";
 import { afterEach, beforeEach, expect, test } from "vitest";
 
 import { ConfigScreen } from "./Config.tsx";

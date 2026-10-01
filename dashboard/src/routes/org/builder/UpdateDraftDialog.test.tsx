@@ -5,7 +5,8 @@
  * changed waits for a choice.
  */
 
-import { act, cleanup, fireEvent, screen, within } from "@testing-library/react";
+import { cleanup, fireEvent, screen, within } from "@testing-library/react";
+import { act } from "~/test/inCase.ts";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { COMPANY_KEY } from "./model/keys.ts";
 import type { Conflict } from "./model/operations.ts";

@@ -25,9 +25,9 @@
  */
 
 import { cleanup, render, screen, within } from "@testing-library/react";
+import { answered } from "~/test/inCase.ts";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { Router } from "~/app/router.tsx";
-import { flushInCase } from "~/test/inCase.ts";
 import { ClientContext } from "~/lib/store-hooks.ts";
 import { LiveSocket, Store } from "~/protocol/index.ts";
 import { CompanyScreen } from "~/routes/company/Company.tsx";
@@ -51,10 +51,10 @@ afterEach(() => {
 });
 
 /**
- * The company screen at `hash`, against a scripted engine, and the case's
- * flush that lets the stubbed socket's answers land ([flushInCase]).
+ * The company screen at `hash`, against a scripted engine. A case lets the
+ * stubbed socket's answers land with [answered].
  */
-function mount(hash: string) {
+function mount(hash: string): void {
   Object.defineProperty(globalThis, "WebSocket", { writable: true, value: InertWebSocket });
   location.hash = hash;
   new Engine(company()).install();
@@ -64,14 +64,13 @@ function mount(hash: string) {
   const socket = new LiveSocket(store);
   (socket as unknown as { query: (what: string) => Promise<unknown> }).query = () =>
     Promise.resolve(null);
-  const page = render(
+  render(
     <ClientContext.Provider value={{ store, socket }}>
       <Router>
         <CompanyScreen />
       </Router>
     </ClientContext.Provider>,
   );
-  return { ...page, answered: flushInCase() };
 }
 
 /** The lens strip's options, in the order it draws them. */
@@ -148,7 +147,7 @@ test("the builder lens mounts the builder, and the read lenses do not", async ()
 test("the read lenses say they still draw the company before the save; the builder does not", async () => {
   const settings = { revisionId: "r-saved", parentRevisionId: "r1", epoch: 4 };
   recordSavedChanges({ settings, chart: null });
-  const { answered } = mount("#/company?lens=chart");
+  mount("#/company?lens=chart");
   await answered();
   expect(screen.getByText(/still applying settings revision/)).toBeDefined();
   cleanup();

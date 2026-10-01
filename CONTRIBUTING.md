@@ -236,32 +236,40 @@ What follows are the prerequisites that legitimately vary by machine.
   `waitFor`. Those are not a pattern to copy — a suite you write, or a case
   you change, waits for the work.
 
-  **A wait the harness owns ends with its case.** A case that times out is
-  failed, not stopped: its function goes on running beside the cases after
-  it, and React keeps one `act` scope count for the process, so an `act` it
-  opens beside the next case's leaves every later render in the file queued
-  and never flushed — one timeout read as the rest of the file failing. The
-  builder's testkit retires a lens when the case that mounted it finishes
-  (`onTestFinished`), closes the scope a settle holds, and refuses every wait
-  through it from then on. A suite that waits for the page without a lens —
-  a move landing, an element the page draws — waits through `waitInCase`
-  (`viewTestkit.tsx`), which listens for the event with no deadline and is
-  refused the same way, because the next case's page does exactly what such
-  a wait listens for. `testkit.test.tsx` holds each of those waits to it.
+  **What a case does ends with the case.** A case that times out is failed,
+  not stopped: its function goes on running beside the cases after it.
+  React keeps one `act` scope count for the process, so an `act` it opens
+  beside the next case's leaves every later render in the file queued and
+  never flushed — one timeout read as the rest of the file failing — and a
+  `findBy` or `waitFor` it still has out polls the next case's page, where it
+  can find what that case drew. So every case runs in an async context of
+  its own (`aroundEach` in `src/test/setup.ts`), and `src/test/inCase.ts`
+  binds to it: its `act`, which is the only one a suite imports, and the
+  library's own waits and `fireEvent`, through the library's `asyncWrapper`
+  and `eventWrapper`. When the case ends, every act scope and wait it still
+  has out is closed before the next case begins, and everything it asks for
+  after that is refused before it opens. Node carries the context through
+  the case's own awaits and timers, so a case that timed out inside a promise
+  of its own and resumes later still reads its own, ended case — which is
+  what a helper every case shares (`answered()`, a suite's `settle()`) could
+  not tell before, and why the flush used to be handed to each case. A case
+  that holds the page's timers advances them as `answered`'s `step`, so the
+  refusal comes before the timers move. `src/test/inCase.test.tsx` holds each
+  of these to a pair: a case that ends with something out, and the case
+  after it, which reads what the late one came to.
 
-  **And a case waits only on what it mounted.** A wait the harness cannot see
-  — a promise of the case's own — is not woken by any of the above, so a case
-  that timed out inside one resumes whenever it ends, possibly after the next
-  case has mounted. So nothing a case waits through is found in a variable
-  every case shares: `mountBuilder` hands the case its lens's `settle`,
-  `checked` and `navigate`, and a suite's own helper takes them as arguments;
-  a suite that only lets a stubbed engine's answers land takes its
-  `answered()` from its own mount, built by `flushInCase`
-  (`src/test/inCase.ts`), which refuses once its case has finished — and a
-  case that holds the page's timers advances them as the flush's `step`, so
-  the refusal comes before the timers move. Both used to be module-level, and
-  a late `settle()` settled the NEXT case's lens.
-  `src/test/inCase.test.ts` and `testkit.test.tsx` each hold one such pair.
+  **And the harness's own waits end with it too.** The builder's testkit
+  retires a lens when the case that mounted it finishes (`onTestFinished`):
+  it wakes every wait on the lens's engine, which holds answers back until
+  the case releases them — a wait the binding could close but not wake. A
+  suite that waits for the page without a lens — a move landing, an element
+  the page draws — waits through `waitInCase` (`viewTestkit.tsx`), which
+  listens for the event with no deadline and stops listening the same way.
+  And a case waits only on the lens it mounted: `mountBuilder` hands the
+  case its lens's `settle`, `checked` and `navigate`, because those used to
+  be found in a variable the last mount wrote, and a late `settle()` settled
+  the NEXT case's lens — a value, which no context makes right.
+  `testkit.test.tsx` holds each of those waits to a pair.
 
   **A warning fails the case that printed it.** `src/test/setup.ts` watches
   `console.error` and `console.warn` around every case and fails one that

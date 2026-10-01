@@ -7,7 +7,8 @@
  * the sixty-second poll that used to be the only way the badge moved.
  */
 
-import { act, cleanup, render } from "@testing-library/react";
+import { cleanup, render } from "@testing-library/react";
+import { act } from "~/test/inCase.ts";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { Shell } from "./Shell.tsx";
 import { Router } from "./router.tsx";

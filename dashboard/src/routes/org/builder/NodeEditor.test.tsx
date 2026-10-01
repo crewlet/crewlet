@@ -13,7 +13,8 @@
  * credential, masked or referenced, reaches the page.
  */
 
-import { act, cleanup, fireEvent, screen, within } from "@testing-library/react";
+import { cleanup, fireEvent, screen, within } from "@testing-library/react";
+import { act } from "~/test/inCase.ts";
 import { afterEach, describe, expect, test, vi } from "vitest";
 import type { ChartRead, ChartSeat, CompanyDocument } from "~/protocol/index.ts";
 import { REDACTED } from "~/lib/format.ts";

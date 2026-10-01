@@ -9,7 +9,8 @@
  * hold the application, not a harness, to mounting it.
  */
 
-import { act, cleanup, render, screen } from "@testing-library/react";
+import { cleanup, render, screen } from "@testing-library/react";
+import { act } from "~/test/inCase.ts";
 import { announce } from "@crewlethq/ui";
 import { afterEach, beforeEach, expect, test } from "vitest";
 import { App } from "./App.tsx";

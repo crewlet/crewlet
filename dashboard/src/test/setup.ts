@@ -1,15 +1,28 @@
 /**
  * What jsdom does not provide, and the component suites need — the one thing
- * it puts off that is better done before the first case — and the one rule
- * every case is held to: it says nothing to the console it did not expect.
+ * it puts off that is better done before the first case — and the two rules
+ * every case is held to: it says nothing to the console it did not expect,
+ * and nothing it does reaches the case after it.
  *
  * Kept to the genuine gaps. A polyfill that changes behaviour rather than
  * supplying a missing API would make the suite agree with a browser nobody
  * runs.
  */
 
-import { afterAll, afterEach, beforeEach } from "vitest";
+import { afterAll, afterEach, aroundEach, beforeEach } from "vitest";
 import { watchFile } from "./console.ts";
+import { bindTestingLibrary, runCase } from "./inCase.ts";
+
+// A CASE ENDS WITH ITSELF — see `inCase.ts` for the late case that timed out
+// and acted, waited and clicked on the next case's page. Every case runs in
+// a context of its own, from its first `beforeEach` to its last
+// `onTestFinished`, and the library's waits and events read which case they
+// belong to from it; when the case ends, what it still has out is ended and
+// what it asks for after is refused, before the next case begins.
+bindTestingLibrary();
+aroundEach(async (runTest) => {
+  await runCase(runTest);
+});
 
 // A WARNING IS A FAILURE OF THE CASE THAT PRINTED IT — see `console.ts` for
 // the defects that printed theirs into passing cases. Checked in an

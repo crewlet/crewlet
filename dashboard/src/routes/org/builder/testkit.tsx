@@ -29,7 +29,8 @@
  * Builder rather than any one view.
  */
 
-import { act, fireEvent, getConfig, render, screen, within } from "@testing-library/react";
+import { fireEvent, getConfig, render, screen, within } from "@testing-library/react";
+import { act } from "~/test/inCase.ts";
 import { onTestFinished, vi } from "vitest";
 import type { ReactNode } from "react";
 import { AppAnnouncer } from "~/app/announcer.tsx";

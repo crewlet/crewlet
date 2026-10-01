@@ -21,12 +21,12 @@
  */
 
 import { Profiler } from "react";
-import { act, cleanup, render, screen } from "@testing-library/react";
+import { cleanup, render, screen } from "@testing-library/react";
+import { act, answered } from "~/test/inCase.ts";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 
 import { Audit, auditCsv } from "./Audit.tsx";
 import { Router } from "~/app/router.tsx";
-import { flushInCase } from "~/test/inCase.ts";
 import { useClient, useConnection, useOrg } from "~/lib/store-hooks.ts";
 import type { QueryName } from "~/protocol/index.ts";
 import {
@@ -105,24 +105,23 @@ function serving(answers: Partial<Record<QueryName, unknown>> = {}) {
 }
 
 /**
- * The screen, and the flush that lets every answer the stubbed socket and
- * fetch give land and renders what they change ([flushInCase]).
+ * The screen. A case lets every answer the stubbed socket and fetch give land,
+ * and renders what they change, with [answered].
  *
  * NOT A POLL. A `waitFor` gave the screen a second of real time to show a
  * row, re-reading the whole document each time it looked — a hundred rows of
  * it, in the case whose page is full — and on a loaded machine the second ran
  * out while the grid was still rendering. The answers are promises, so `act`
  * runs them, and the renders they cause, to the end, however long that takes.
- * And the flush is the CASE's, refused once it has ended, so a case still
+ * And the flush is refused once the case that asks has ended, so a case still
  * running after its time ran out cannot open an `act` beside the next one.
  */
-function mount() {
-  const page = render(
+function mount(): void {
+  render(
     <Router>
       <Audit />
     </Router>,
   );
-  return { ...page, answered: flushInCase() };
 }
 
 /** The parameters one question was actually asked with. */
@@ -134,7 +133,7 @@ function asked(query: ReturnType<typeof serving>, what: QueryName): Record<strin
 // IT ASKS BY KIND, ON BOTH FEEDS.
 test("both history feeds are asked for who was writing, not for a list of people", async () => {
   const query = serving({ work_activity: { records: [], complete: true } });
-  const { answered } = mount();
+  mount();
   await answered();
   expect(asked(query, "work_activity").actor_kinds).toBeTruthy();
 
@@ -234,7 +233,6 @@ test("a tick of the clock draws nothing on the audit", async () => {
       </Router>
     </Profiler>,
   );
-  const answered = flushInCase();
   await answered();
   expect(screen.getByText("edit 19")).toBeTruthy();
   const settled = commits;
@@ -281,7 +279,7 @@ test("a tracker commit, a page change and a config revision land in one list", a
       },
     ],
   });
-  const { answered } = mount();
+  mount();
 
   await answered();
 
@@ -310,7 +308,7 @@ test("a purge names its key and does not link to a page that is gone", async () 
       complete: true,
     },
   });
-  const { answered } = mount();
+  mount();
   await answered();
   expect(screen.getByText("duplicate of ENG-4")).toBeTruthy();
   // BY ROLE, not by walking up from a span: a grid wraps each cell, so the
@@ -384,7 +382,7 @@ test("a source whose page stops inside the window says so", async () => {
       answerThePage = resolve;
     }),
   });
-  const { answered } = mount();
+  mount();
   await answered();
   // A FULL PAGE whose oldest row is still inside the window: the page filled
   // up before it reached the start, so there are older rows the screen never
@@ -421,7 +419,7 @@ test("a tracker page that stops inside the window says so, and one that covers i
   serving({
     work_activity: { records: [commit()], next_cursor: "CREWLET_WORK_LOG@1:1", complete: true },
   });
-  const { answered } = mount();
+  mount();
   await answered();
   expect(
     screen.getByText(/Work answered one page, which does not reach the start of this window/),
@@ -597,7 +595,7 @@ test("a refused credential listing names the grant, and the other sources stand"
       ),
   );
   serving({ work_activity: { records: [commit()], complete: true } });
-  const { answered } = mount();
+  mount();
   await answered();
   expect(screen.getByText(/Listing the credentials' writes needs config:read/)).toBeTruthy();
   expect(screen.getByText("took it off the board")).toBeTruthy();
@@ -704,7 +702,7 @@ test("a reader's own window cuts every source at the end they named", async () =
       revision("rev-after", to + 60_000, "after the window"),
     ],
   });
-  const { answered } = mount();
+  mount();
   await answered();
   expect(asked(query, "work_activity").to).toBe(iso(to));
   expect(screen.getByText("inside the window")).toBeTruthy();

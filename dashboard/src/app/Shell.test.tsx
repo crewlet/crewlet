@@ -11,7 +11,8 @@
  */
 
 import type { ReactNode } from "react";
-import { act, cleanup, render, screen } from "@testing-library/react";
+import { cleanup, render, screen } from "@testing-library/react";
+import { act } from "~/test/inCase.ts";
 import { afterEach, beforeEach, describe, expect, test } from "vitest";
 import { Shell, usePageCoverage } from "./Shell.tsx";
 import { Router } from "./router.tsx";

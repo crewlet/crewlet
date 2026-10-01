@@ -10,7 +10,8 @@
  * included, as "no acknowledgement, this is the case to retry".
  */
 
-import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act } from "~/test/inCase.ts";
 import { afterEach, expect, test, vi } from "vitest";
 import { engineFile } from "~/test/engineFiles.ts";
 import { GATE_REQUEST_TIMEOUT_MS } from "~/protocol/index.ts";

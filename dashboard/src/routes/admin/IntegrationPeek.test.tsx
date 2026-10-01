@@ -11,7 +11,8 @@
  * screen's cards did the same under a refused or failed listing.
  */
 
-import { act, cleanup, render, screen } from "@testing-library/react";
+import { cleanup, render, screen } from "@testing-library/react";
+import { act } from "~/test/inCase.ts";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { IntegrationPeek, Integrations } from "./Integrations.tsx";
 import { Router } from "~/app/router.tsx";

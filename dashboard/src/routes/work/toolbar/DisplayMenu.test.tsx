@@ -16,6 +16,7 @@
  */
 
 import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
+import { answered } from "~/test/inCase.ts";
 import { afterEach, expect, test, vi } from "vitest";
 
 import { DisplayMenu, type DisplayMenuProps } from "./DisplayMenu.tsx";
@@ -23,7 +24,6 @@ import { ItemsView } from "../ItemsView.tsx";
 import { columnChoices } from "../shapes/Grid.tsx";
 import { Router } from "~/app/router.tsx";
 import { pick } from "~/testing.tsx";
-import { flushInCase, type Answered } from "~/test/inCase.ts";
 import { useClient, useConnection, useOrg } from "~/lib/store-hooks.ts";
 import { groupAxisOptions, secondAxisOptions, SORTS, type Shape } from "~/lib/work.ts";
 import type { QueryName, WorkSummary } from "~/protocol/index.ts";
@@ -373,8 +373,8 @@ const task: WorkSummary = {
 };
 
 /**
- * The list, and the case's flush that lets the stubbed socket's answers land
- * and renders what they leave ([flushInCase]).
+ * The list. A case lets the stubbed socket's answers land, and renders what
+ * they leave, with [answered].
  *
  * NOT A POLL. A `findBy` or a `waitFor` re-ran its query on every change to
  * the page and every fifty milliseconds against a one-second deadline, each
@@ -382,16 +382,15 @@ const task: WorkSummary = {
  * button on it — and on a loaded machine the deadline passed before the list
  * had drawn. The answers are promises, so `act` runs them, and the renders
  * they cause, to the end, however long that takes; and the flush is refused
- * once its case has ended, so a case still running after its time ran out
- * opens no `act` beside the next one.
+ * once the case that asks has ended, so a case still running after its time
+ * ran out opens no `act` beside the next one.
  */
-function mountList() {
-  const page = render(
+function mountList(): void {
+  render(
     <Router>
       <ItemsView />
     </Router>,
   );
-  return { ...page, answered: flushInCase() };
 }
 
 /** The list's own bar, where the Display menu's trigger is drawn. */
@@ -402,7 +401,7 @@ function workBar(): HTMLElement {
 }
 
 /** The Display menu of the mounted list, opened from the list's own bar. */
-async function openOnScreen(answered: Answered) {
+async function openOnScreen() {
   await answered();
   fireEvent.click(
     within(workBar()).getByRole("button", { name: /^(List|Board|Table|Calendar|Timeline)/ }),
@@ -416,8 +415,8 @@ async function openOnScreen(answered: Answered) {
 // and no validation can catch it, because every name in it is legal in both.
 test("the Columns control writes the active shape's own key and never the other", async () => {
   serving({ work_items: { items: [task], groups: [], total_hint: 1, complete: true } });
-  const { answered } = mountList();
-  await openOnScreen(answered);
+  mountList();
+  await openOnScreen();
   expect(screen.getByText("Columns")).toBeTruthy();
   const optional = columnChoices("list", true).find((c) => c.optional);
   if (!optional) throw new Error("the list set has no optional column to tick");
@@ -430,7 +429,7 @@ test("the Columns control writes the active shape's own key and never the other"
   location.hash = "#/work?shape=table";
   serving({ work_items: { items: [task], groups: [], total_hint: 1, complete: true } });
   mountList();
-  await openOnScreen(answered);
+  await openOnScreen();
   expect(screen.getByText("Columns")).toBeTruthy();
   const tableOptional = columnChoices("table", true).find((c) => c.optional);
   if (!tableOptional) throw new Error("the table set has no optional column to tick");
@@ -463,8 +462,8 @@ test("switching the shape keeps the order and the view the reader is on", async 
     },
     work_items: { items: [task], groups: [], total_hint: 1, complete: true },
   });
-  const { answered } = mountList();
-  await openOnScreen(answered);
+  mountList();
+  await openOnScreen();
   fireEvent.click(shapeButton("Board"));
   await answered();
   expect(location.hash).toContain("shape=board");
@@ -491,7 +490,7 @@ test("moving to another saved view keeps the arrangement", async () => {
     },
     work_items: { items: [task], groups: [], total_hint: 1, complete: true },
   });
-  const { answered } = mountList();
+  mountList();
   await answered();
   fireEvent.click(screen.getByRole("tab", { name: "Two" }));
   await answered();

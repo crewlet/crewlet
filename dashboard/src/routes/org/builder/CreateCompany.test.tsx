@@ -5,7 +5,8 @@
  * is never written over or replayed onto.
  */
 
-import { act, cleanup, fireEvent, screen, within } from "@testing-library/react";
+import { cleanup, fireEvent, screen, within } from "@testing-library/react";
+import { act } from "~/test/inCase.ts";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import type { CompanyDocument } from "~/protocol/index.ts";
 import { clearSavedChanges } from "./savedChanges.ts";

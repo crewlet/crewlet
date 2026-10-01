@@ -15,7 +15,8 @@
  * as "nothing points at it".
  */
 
-import { act, cleanup, fireEvent, render as rtlRender, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render as rtlRender, screen } from "@testing-library/react";
+import { act } from "~/test/inCase.ts";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { CredentialPeek, Secrets } from "./Secrets.tsx";
 import type { ReactElement } from "react";

@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { render, cleanup, act } from "@testing-library/react";
+import { render, cleanup } from "@testing-library/react";
+import { act } from "~/test/inCase.ts";
 import { LayerHost, Modal } from "@crewlethq/ui";
 import { PrefixWindow, isTyping, useKeyChords, type Chord, type Sequence } from "./keys.ts";
 

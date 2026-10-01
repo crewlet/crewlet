@@ -8,7 +8,8 @@
  * a node that may already be struggling.
  */
 
-import { act, cleanup, render } from "@testing-library/react";
+import { cleanup, render } from "@testing-library/react";
+import { act } from "~/test/inCase.ts";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { useReread, useRereadOnReconnect, type Reread } from "./reread.ts";
 import { ClientContext } from "./store-hooks.ts";

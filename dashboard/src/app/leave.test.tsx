@@ -9,7 +9,8 @@
  * only undone, so these drive the real history the way a browser does.
  */
 
-import { act, cleanup, fireEvent, render, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, waitFor } from "@testing-library/react";
+import { act } from "~/test/inCase.ts";
 import { useEffect } from "react";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import {

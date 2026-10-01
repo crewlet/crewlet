@@ -19,7 +19,8 @@
  * engine twice, once for a stale window and once for the real one.
  */
 
-import { act, cleanup, render, screen } from "@testing-library/react";
+import { cleanup, render, screen } from "@testing-library/react";
+import { act } from "~/test/inCase.ts";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 
 import { useClockReading, useNow, useToday } from "./clock.ts";

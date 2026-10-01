@@ -1596,7 +1596,7 @@ test("the engine's refusal is reported beside the agent it was refused for", asy
 
 // --- the listing, and when it is worth reading again ---------------------- //
 
-import { act } from "@testing-library/react";
+import { act } from "~/test/inCase.ts";
 import type { ReactElement } from "react";
 import { useSetup } from "./Integrations.tsx";
 import { ClientContext } from "~/lib/store-hooks.ts";

@@ -7,7 +7,8 @@
  * The header and the strip rendered; below them was nothing at all.
  */
 
-import { act, cleanup, renderHook } from "@testing-library/react";
+import { cleanup, renderHook } from "@testing-library/react";
+import { act } from "~/test/inCase.ts";
 import { afterEach, beforeEach, describe, expect, test } from "vitest";
 
 import { Router } from "../router.tsx";

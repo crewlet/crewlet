@@ -20,7 +20,8 @@
  * jsdom has no layout, so `LayoutObserver` reports sizes (see `viewTestkit`).
  */
 
-import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
+import { act } from "~/test/inCase.ts";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import type { AgentRow, ChartRead } from "~/protocol/index.ts";
 import type { ChartKind } from "./BuilderContext.tsx";

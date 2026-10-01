@@ -9,7 +9,8 @@
  * is recorded again from an answer that said otherwise.
  */
 
-import { act, renderHook } from "@testing-library/react";
+import { renderHook } from "@testing-library/react";
+import { act } from "~/test/inCase.ts";
 import { afterEach, expect, test } from "vitest";
 import {
   clearSavedChanges,

@@ -7,6 +7,7 @@
  */
 
 import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
+import { answered } from "~/test/inCase.ts";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { Router } from "~/app/router.tsx";
 import { ClientContext } from "~/lib/store-hooks.ts";
@@ -30,7 +31,6 @@ import {
   pressInView,
 } from "./testkit.tsx";
 import { SETTLE_MS } from "~/routes/admin/recheck.ts";
-import { flushInCase, type Answered } from "~/test/inCase.ts";
 import { toastText } from "~/testing.tsx";
 
 beforeEach(() => {
@@ -220,15 +220,14 @@ describe("what the strip says of the chart", () => {
 describe("in the builder", () => {
   /**
    * Saves an edit of the CEO, and a rename of the company with it when
-   * `settings` — and hands the case the waits of what it mounted: the lens's,
-   * and the flush its strip's own reads land through ([readAgain]).
+   * `settings` — and hands the case the waits of the lens it mounted.
    */
   async function save(
     engine: Engine,
     query: (what: string) => unknown,
     { settings = false }: { settings?: boolean } = {},
-  ): Promise<MountedLens & { answered: Answered }> {
-    const lens = { ...mountBuilder({ engine, query }), answered: flushInCase() };
+  ): Promise<MountedLens> {
+    const lens = mountBuilder({ engine, query });
     const { settle, checked } = lens;
     await checked();
     pressInView("Edit CEO");
@@ -261,11 +260,10 @@ describe("in the builder", () => {
 
   /**
    * Moves the page's timers past the strip's second read, and renders what it
-   * found — through the CASE'S OWN flush, so a case still running after its
-   * time ran out is refused before it advances the timers the next case holds.
-   * A function every case shares could not tell the two apart.
+   * found — as the flush's step, so a case still running after its time ran
+   * out is refused before it advances the timers the next case holds.
    */
-  async function readAgain(answered: Answered) {
+  async function readAgain() {
     await answered(() => vi.advanceTimersByTime(SETTLE_MS));
   }
 
@@ -273,7 +271,7 @@ describe("in the builder", () => {
     holdTheTimers();
     const engine = new Engine(company());
     let applied = 1;
-    const { answered } = await save(
+    await save(
       engine,
       (what) => (what === "stream" ? { status: "ok", applied_epoch: applied } : null),
       { settings: true },
@@ -288,7 +286,7 @@ describe("in the builder", () => {
       "#/admin/config?lens=diff&revision=r-saved&against=r1",
     );
     applied = 2;
-    await readAgain(answered);
+    await readAgain();
     expect(strip().textContent).toContain("Applied.");
   });
 
@@ -308,7 +306,7 @@ describe("in the builder", () => {
         },
       ],
     });
-    const { answered } = await save(engine, (what) => (what === "retention" ? retention() : null));
+    await save(engine, (what) => (what === "retention" ? retention() : null));
     const strip = screen.getByText(/Saved the org chart at/);
     expect(strip.textContent).toContain("CREWLET_CHART_LOG@1:11");
     expect(strip.textContent).toContain("The nodes are applying it.");
@@ -316,7 +314,7 @@ describe("in the builder", () => {
     expect(screen.queryByRole("link", { name: "View changes" })).toBeNull();
     expect(screen.queryByRole("button", { name: "Copy settings as YAML" })).toBeNull();
     through = 11;
-    await readAgain(answered);
+    await readAgain();
     expect(screen.getByText(/Saved the org chart at/).textContent).toContain("Applied.");
   });
 
@@ -381,9 +379,9 @@ describe("in the builder", () => {
 
 describe("the read lenses", () => {
   /**
-   * The company screen over a node that has applied `appliedEpoch`, and the
-   * case's own flush, which lets the shared health read answer and renders
-   * what it says.
+   * The company screen over a node that has applied `appliedEpoch`. A case
+   * lets the shared health read answer, and renders what it says, with
+   * [answered].
    *
    * EVERY CASE READS THE PAGE ONCE THE ANSWER IS IN. Until the read answers,
    * the page knows of no applied epoch and draws the note whatever the node
@@ -391,12 +389,8 @@ describe("the read lenses", () => {
    * the answer — an off-by-one in the comparison passed the first case — and
    * the absence the second case asks about is a claim only after it. The
    * answer is the stubbed socket's promise, so `act` runs it to the end.
-   *
-   * THE FLUSH IS THE CASE'S ([flushInCase]) rather than a helper every case in
-   * the block shares, which could not tell the case calling it from one still
-   * running after its time ran out.
    */
-  function mountCompany(appliedEpoch: number): { answered: Answered } {
+  function mountCompany(appliedEpoch: number): void {
     Object.defineProperty(globalThis, "WebSocket", { writable: true, value: InertWebSocket });
     location.hash = "#/company";
     const store = new Store();
@@ -412,21 +406,20 @@ describe("the read lenses", () => {
         </Router>
       </ClientContext.Provider>,
     );
-    return { answered: flushInCase() };
   }
 
   const settings = { revisionId: "r-saved", parentRevisionId: "r1", epoch: 4 };
 
   test("say they still draw the previous revision until this node applies the saved one", async () => {
     recordSavedChanges({ settings, chart: null });
-    const { answered } = mountCompany(3);
+    mountCompany(3);
     await answered();
     expect(screen.getByText(/still applying settings revision/)).toBeDefined();
   });
 
   test("say nothing once the node has applied it", async () => {
     recordSavedChanges({ settings, chart: null });
-    const { answered } = mountCompany(4);
+    mountCompany(4);
     await answered();
     expect(screen.queryByText(/still applying/)).toBeNull();
   });
@@ -436,7 +429,7 @@ describe("the read lenses", () => {
       settings,
       chart: { position: "CREWLET_CHART_LOG@1:12", appliedHere: false },
     });
-    const { answered } = mountCompany(3);
+    mountCompany(3);
     await answered();
     const note = screen.getByText(/still applying settings revision/);
     expect(note.textContent).toContain("and the org chart's changes");

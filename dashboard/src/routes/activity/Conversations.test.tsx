@@ -15,7 +15,8 @@
  * every tick takes the reader's text selection with it.
  */
 
-import { act, cleanup, render, screen } from "@testing-library/react";
+import { cleanup, render, screen } from "@testing-library/react";
+import { act } from "~/test/inCase.ts";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 
 import { Conversations } from "./Conversations.tsx";

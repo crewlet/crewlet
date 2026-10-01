@@ -9,7 +9,8 @@
  * exchange is sent once, in the header, and kept nowhere.
  */
 
-import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { act, answered } from "~/test/inCase.ts";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { App } from "~/app/App.tsx";
 import { Router } from "~/app/router.tsx";
@@ -18,7 +19,6 @@ import { recentsKey } from "~/lib/recents.ts";
 import { page } from "~/lib/session.ts";
 import { starsKey } from "~/lib/starred.ts";
 import { ClientContext } from "~/lib/store-hooks.ts";
-import { flushInCase, type Answered } from "~/test/inCase.ts";
 import { currentSessionNeed, LiveSocket, Store, sessionRestored } from "~/protocol/index.ts";
 
 class InertWebSocket {
@@ -114,8 +114,8 @@ const SIGNED_IN: Answer = {
 };
 
 /**
- * The application, and the case's flush that lets the stubbed engine's
- * answers land and renders the page they leave ([flushInCase]).
+ * The application. A case lets the stubbed engine's answers land, and renders
+ * the page they leave, with [answered].
  *
  * NOT A POLL, and the settled page rather than the first one that matched.
  * A `waitFor` gave every step a second of real time, re-reading the page at
@@ -124,8 +124,8 @@ const SIGNED_IN: Answer = {
  * — the enrolment case below was once green on exactly that. The engine's
  * answers are promises, so `act` runs them and the renders they cause to the
  * end, and what is read is where the page came to rest. The flush is refused
- * once its case has ended, so a case still running after its time ran out
- * opens no `act` beside the next one.
+ * once the case that asks has ended, so a case still running after its time
+ * ran out opens no `act` beside the next one.
  */
 function mount() {
   const store = new Store();
@@ -138,7 +138,7 @@ function mount() {
       </Router>
     </ClientContext.Provider>,
   );
-  return { reconnect, answered: flushInCase() };
+  return { reconnect };
 }
 
 function type(label: RegExp | string, value: string) {
@@ -157,7 +157,7 @@ function alerts(): string[] {
 }
 
 /** The one refusal the form is showing, once it shows one. */
-async function refusal(answered: Answered): Promise<string> {
+async function refusal(): Promise<string> {
   await answered();
   expect(alerts()).toHaveLength(1);
   return alerts()[0]!;
@@ -188,7 +188,7 @@ describe("signing in with a password", () => {
       "GET /auth/session": NOBODY,
       "POST /auth/login": SIGNED_IN,
     });
-    const { reconnect, answered } = mount();
+    const { reconnect } = mount();
     const depth = history.length;
 
     type(/login or email/i, "jane.doe");
@@ -218,12 +218,12 @@ describe("signing in with a password", () => {
         },
       },
     });
-    const { answered } = mount();
+    mount();
     type(/login or email/i, "jane.doe");
     type(/^password$/i, "wrong horse battery staple");
     fireEvent.click(screen.getByRole("button", { name: "Sign in" }));
 
-    const alert = await refusal(answered);
+    const alert = await refusal();
     expect(alert).toBe("Those sign-in details were not accepted. Check them and try again.");
     // STILL HERE: a mistyped password is not a lost session.
     expect(location.hash).toBe(`#/login?next=${encodeURIComponent(NEXT)}`);
@@ -236,7 +236,7 @@ describe("signing in with a password", () => {
       "GET /auth/session": NOBODY,
       "POST /auth/login": [{ status: 401, body: { error: "second_factor_required" } }, SIGNED_IN],
     });
-    const { answered } = mount();
+    mount();
     // THE CONTROL: nothing asks for a code before the password has proved
     // itself, because only the engine knows whether this person holds one.
     expect(screen.queryByLabelText(/^code$/i)).toBeNull();
@@ -273,12 +273,12 @@ describe("signing in with a password", () => {
         headers: { "Retry-After": "16" },
       },
     });
-    const { answered } = mount();
+    mount();
     type(/login or email/i, "jane.doe");
     type(/^password$/i, "correct horse battery staple");
     fireEvent.click(screen.getByRole("button", { name: "Sign in" }));
 
-    const alert = await refusal(answered);
+    const alert = await refusal();
     expect(alert).toContain("Try again in 16 seconds.");
     expect((screen.getByRole("button", { name: "Sign in" }) as HTMLButtonElement).disabled).toBe(
       true,
@@ -295,7 +295,7 @@ describe("signing in with a password", () => {
       },
       "POST /auth/totp": { status: 200, body: { secret: "JBSWY3DPEHPK3PXP", uri: "otpauth://x" } },
     });
-    const { reconnect, answered } = mount();
+    const { reconnect } = mount();
     // FROM THE REAL BROWSER'S STATE: the screen's own session read answered
     // 401, which records that nobody is signed in. Without this the case
     // passed while the enrolment was routed straight back to this form — a
@@ -332,7 +332,7 @@ describe("signing in with the deployment's token", () => {
         body: { ...(SIGNED_IN.body as object), login: "token:ops" },
       },
     });
-    const { reconnect, answered } = mount();
+    const { reconnect } = mount();
     fireEvent.click(screen.getByRole("button", { name: /use an api token instead/i }));
     type("API token", "the-break-glass-token-value-long-enough");
     fireEvent.click(screen.getByRole("button", { name: "Sign in with the token" }));
@@ -359,7 +359,7 @@ describe("signing in with the deployment's token", () => {
       "GET /auth/config": { status: 200, body: { backend: "none" } },
       "GET /auth/session": NOBODY,
     });
-    const { answered } = mount();
+    mount();
     await answered();
     screen.getByText(/signs nobody in with a password/i);
     expect(screen.queryByLabelText(/^password$/i)).toBeNull();
@@ -376,7 +376,7 @@ describe("a browser that is already signed in", () => {
         body: { person: "p-1", login: "jane.doe", kind: "person", status: "signed_in" },
       },
     });
-    const { reconnect, answered } = mount();
+    const { reconnect } = mount();
     await answered();
     const carry = screen.getByRole("button", { name: "Continue as jane.doe" });
     // NOT SENT ON UNASKED: "sign in as somebody else" is a thing people mean.
@@ -408,7 +408,7 @@ describe("a sign-in in a tab somebody else was reading", () => {
     });
     noteReader("p-9");
     sessionStorage.setItem("crewlet_org_draft", "{}");
-    const { reconnect, answered } = mount();
+    const { reconnect } = mount();
     type(/login or email/i, "jane.doe");
     type(/^password$/i, "correct horse battery staple");
     fireEvent.click(screen.getByRole("button", { name: "Sign in" }));
@@ -433,7 +433,7 @@ describe("a sign-in in a tab somebody else was reading", () => {
       },
     });
     noteReader("p-9");
-    const { answered } = mount();
+    mount();
     type(/login or email/i, "jane.doe");
     type(/^password$/i, "correct horse battery staple");
     fireEvent.click(screen.getByRole("button", { name: "Sign in" }));
@@ -452,7 +452,7 @@ describe("a sign-in in a tab somebody else was reading", () => {
     });
     noteReader("p-1");
     sessionStorage.setItem("crewlet_org_draft", "{}");
-    const { reconnect, answered } = mount();
+    const { reconnect } = mount();
     type(/login or email/i, "jane.doe");
     type(/^password$/i, "correct horse battery staple");
     fireEvent.click(screen.getByRole("button", { name: "Sign in" }));
@@ -480,7 +480,7 @@ describe("a sign-in in a tab somebody else was reading", () => {
       localStorage.setItem(key, "[]");
     }
     localStorage.setItem("crewlet_rail_collapsed", "1");
-    const { answered } = mount();
+    mount();
     type(/login or email/i, "jane.doe");
     type(/^password$/i, "correct horse battery staple");
     fireEvent.click(screen.getByRole("button", { name: "Sign in" }));
@@ -506,7 +506,7 @@ describe("a sign-in in a tab somebody else was reading", () => {
     // ANOTHER TAB'S READER, whose session ended with no sign-out: the tab
     // that knew them is gone, and their lists are still in the browser.
     localStorage.setItem(recentsKey("p-9"), "[]");
-    const { answered } = mount();
+    mount();
     type(/login or email/i, "jane.doe");
     type(/^password$/i, "correct horse battery staple");
     fireEvent.click(screen.getByRole("button", { name: "Sign in" }));

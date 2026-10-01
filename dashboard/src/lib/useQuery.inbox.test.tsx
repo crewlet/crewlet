@@ -10,7 +10,8 @@
  * and later ones join it.
  */
 
-import { act, cleanup, render } from "@testing-library/react";
+import { cleanup, render } from "@testing-library/react";
+import { act } from "~/test/inCase.ts";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { ClientContext } from "./store-hooks.ts";
 import { INBOX_SETTLE_MS, useQuery } from "./useQuery.ts";
