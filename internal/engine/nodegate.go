@@ -370,9 +370,10 @@ type GateResult struct {
 	Node string
 	OpID string
 
-	// Domains is one entry per identity-claiming log the node is counted
-	// on, in the register's order of domains — every one of them, whatever it
-	// answered.
+	// Domains is one entry per identity-claiming log the gesture writes —
+	// for an eviction the logs the node is counted on, for a readmission
+	// every one ([countedGateLogs]) — in the register's order of domains,
+	// every one of them, whatever it answered.
 	Domains []DomainGate
 
 	// Map is what the gesture did to the estate map, nil under a layout
@@ -851,12 +852,13 @@ func (d DomainGate) landedNowhere(at statelog.Position, who string) string {
 		"gesture's record again", d.Stream, at, d.window(), who)
 }
 
-// NodeGate is the gesture, over every identity-claiming log the node it names
-// is counted on.
+// NodeGate is the gesture, over every identity-claiming log it concerns: for
+// an eviction the logs the node it names is counted on, for a readmission
+// every one ([countedGateLogs]).
 type NodeGate struct {
-	// logs is every identity-claiming log the named node is counted on AT
-	// THE GESTURE, each with this node's writer or the route to a node that
-	// writes it:
+	// logs is every identity-claiming log the gesture concerns AT THE
+	// GESTURE ([countedGateLogs]), each with this node's writer or the route
+	// to a node that writes it:
 	// looked up at every call rather than captured when the gate was
 	// built, because the logs a node runs change while it runs
 	// ([stateLog.startLogs], [stateLog.stopLogs]). A captured set wrote
