@@ -1985,6 +1985,22 @@ func (s *stateLog) logEndsOf(domain string, l *jetstream.DomainLog,
 // and would come back to only by adopting a copy; and since the readmission is
 // also what puts it back in the estate map, it could never be put back at all.
 //
+// BUT EVERY LOG IT WRITES IS ASKED, judged or not. A readmission is written on
+// every identity-claiming log ([countedGateLogs]), since where the node is
+// evicted is a fact only each log's rows hold, and the estate map takes the
+// node back only once every one of them has ([ErrMapAwaitsLogs]). So a log
+// whose partition no node serves is one no readmission can finish, whether or
+// not the node would be counted there. Asked only on the logs it is judged on,
+// a readmission with an unserved partition elsewhere was written on every
+// other log and left the map waiting on the one nobody could write, offering a
+// retry that answered the same until that partition was served — the node
+// counted again on the logs it had reached while the map still barred it.
+// Asked here, the same partition refuses the readmission before anything is
+// written ([ReadmissionUnjudged]), saying what it waits on. The question is
+// the judged logs' own read ([estate.Router.ReadmissionBound]) with its bound
+// not judged: a node serving the log answered for it, which is what the
+// write is about to need.
+//
 // Every read that fails is an error and REFUSES: a register nobody could list
 // is not a register without the node in it, a holder table nobody could read
 // is not one that names nobody, and a floor nobody could read is not a low one.
@@ -2012,16 +2028,29 @@ func (s *stateLog) Readmissible(ctx context.Context, nodeID string, holders part
 	if err != nil {
 		return unjudged("", fmt.Errorf("read the published trim floors: %w", err))
 	}
-	// EVERY LOG IT WOULD BE COUNTED ON, each read where it is written: this
-	// node's own copy where it writes the log, and a holder of the log's
-	// partition where the gesture sends the record there — read all at once,
-	// as the gesture then writes them.
-	bounds := make([]statelog.ReadmissionBound, len(counted))
-	errs := make([]error, len(counted))
+	// EVERY LOG IT WRITES, each read where it is written: this node's own
+	// copy where it writes the log, and a holder of the log's partition
+	// where the gesture sends the record there — read all at once, as the
+	// gesture then writes them. A log the node would be counted on is
+	// judged on the bound read; any other is only ASKED, because its
+	// record is written there all the same ([countedGateLogs]) and a log
+	// nobody serves is one no readmission can finish — see the doc.
+	writes, err := s.identityLogs()
+	if err != nil {
+		return unjudged("", fmt.Errorf("which logs the readmission writes: %w", err))
+	}
+	bounds := make([]statelog.ReadmissionBound, len(writes))
+	judged := make([]bool, len(writes))
+	errs := make([]error, len(writes))
 	var wg sync.WaitGroup
-	for i, id := range counted {
+	for i, id := range writes {
+		judged[i] = slices.Contains(counted, id)
 		if running := s.gateWrites(id); running != nil {
-			bounds[i], errs[i] = s.readmissionBound(ctx, running, floors)
+			// THIS NODE WRITES IT, so it is served: only a log it is
+			// judged on has anything to read here.
+			if judged[i] {
+				bounds[i], errs[i] = s.readmissionBound(ctx, running, floors)
+			}
 			continue
 		}
 		if route == nil {
@@ -2038,13 +2067,20 @@ func (s *stateLog) Readmissible(ctx context.Context, nodeID string, holders part
 		})
 	}
 	wg.Wait()
+	var judging []statelog.ReadmissionBound
 	for i, err := range errs {
-		if err != nil {
-			return unjudged(counted[i].String(), fmt.Errorf("read its readmission "+
+		switch {
+		case err != nil && judged[i]:
+			return unjudged(writes[i].String(), fmt.Errorf("read its readmission "+
 				"bound: %w", err))
+		case err != nil:
+			return unjudged(writes[i].String(), fmt.Errorf("ask a node serving it, "+
+				"which writes the readmission there: %w", err))
+		case judged[i]:
+			judging = append(judging, bounds[i])
 		}
 	}
-	return statelog.PermitReadmission(nodeID, register, bounds)
+	return statelog.PermitReadmission(nodeID, register, judging)
 }
 
 // boundRoute reads a log's readmission bound on a node that serves the log's

@@ -166,49 +166,89 @@ func TestAReadmissionIsJudgedOnTheLogsItSendsElsewhere(t *testing.T) {
 	}
 }
 
-// A READMISSION ON A LOG NOBODY SERVES IS UNJUDGED, AND SAYS WHAT IT WAITS ON.
+// A READMISSION ON A LOG NOBODY SERVES IS UNJUDGED, AND SAYS WHAT IT WAITS ON —
+// WHETHER OR NOT THE NODE WOULD BE COUNTED THERE.
 //
-// A readmission is judged once against every log the node would be counted on,
-// so a log whose partition no node serves — its holders down, or its only copy
-// the one the barred machine kept through its eviction — refuses it whole, with
-// nothing written. That refusal used to be a bare error the API answered `500
-// gate_failed`, with nothing to say that the gesture could not finish until
-// the partition was served again, nor that a barred machine's own copy is what
-// a node the map names in its place adopts. It is a [ReadmissionUnjudged] now,
-// naming the log, whose remedy is to wait for what the sentence names.
+// A log whose partition no node serves — its holders down, or its only copy
+// the one the barred machine kept through its eviction — refuses a
+// readmission whole, with nothing written. That refusal used to be a bare
+// error the API answered `500 gate_failed`, with nothing to say that the
+// gesture could not finish until the partition was served again, nor that a
+// barred machine's own copy is what a node the map names in its place adopts.
+// It is a [ReadmissionUnjudged] now, naming the log, whose remedy is to wait
+// for what the sentence names.
+//
+// AND ON A LOG THE NODE IS NOT COUNTED ON TOO. A readmission is written on every
+// identity-claiming log, and the estate map takes the node back only once every
+// one has, so a partition nobody serves stops it wherever it is. Asked only on
+// the logs the node would be counted on — here tracker.000 alone, the one
+// partition the map names it a holder of, and the only log its eviction wrote —
+// the readmission went through the judgement, was written on tracker.000 and
+// the pages log, answered tracker.001 "no node serves it", and left the map's
+// in waiting on a log a retry could only answer the same way about, with the
+// node counted again on tracker.000 and the map still barring it.
 func TestAReadmissionOnALogNobodyServesIsUnjudged(t *testing.T) {
 	t.Parallel()
-	e, s, _ := aPartitionedStateLog(t)
-	const node = "node-barred"
-	gone := &sync.Map{}
-	gate := aGateServedElsewhereBy(t, e, s, node,
-		servedBy{layout: s.layout, node: s.nodeID, gone: gone})
-	evicted, err := gate.Evict(t.Context(), GateRequest{Node: node, By: "ops",
-		OpID: statelog.NewOpID(time.Now(), "evict-barred")})
-	if err != nil || !evicted.Complete() {
-		t.Fatalf("evict %s = %+v (%v), want complete", node, evicted, err)
-	}
+	tracker0 := statelog.PartitionID{Space: statelog.SpaceTracker, Index: 0}
 	unserved := statelog.PartitionID{Space: statelog.SpaceTracker, Index: 1}
-	gone.Store(unserved, true)
-	before := endsByKey(t, s)
+	for _, c := range []struct {
+		name string
+		// holds is the partitions the map names the node a holder of,
+		// nil for every one; evicted is the logs its eviction writes.
+		holds   []statelog.PartitionID
+		evicted []string
+	}{
+		{"a log it would be counted on", nil,
+			[]string{"tracker@tracker.000", "tracker@tracker.001", "pages@pages.000"}},
+		{"a log it would not be counted on", []statelog.PartitionID{tracker0},
+			[]string{"tracker@tracker.000"}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			e, s, _ := aPartitionedStateLog(t)
+			const node = "node-barred"
+			gone := &sync.Map{}
+			gate := aGateServedElsewhereBy(t, e, s, node,
+				servedBy{layout: s.layout, node: s.nodeID, gone: gone}, c.holds)
+			evicted, err := gate.Evict(t.Context(), GateRequest{Node: node, By: "ops",
+				OpID: statelog.NewOpID(time.Now(), "evict-barred")})
+			if err != nil || !evicted.Complete() {
+				t.Fatalf("evict %s = %+v (%v), want complete", node, evicted, err)
+			}
+			var wrote []string
+			for _, d := range evicted.Domains {
+				wrote = append(wrote, d.Domain)
+			}
+			if !slices.Equal(wrote, c.evicted) {
+				t.Fatalf("the eviction wrote %v, want %v — the case is not the one it "+
+					"names", wrote, c.evicted)
+			}
+			gone.Store(unserved, true)
+			before := endsByKey(t, s)
 
-	res, err := gate.Readmit(t.Context(), GateRequest{Node: node, By: "ops",
-		OpID: statelog.NewOpID(time.Now(), "readmit-barred")})
-	var unjudged *ReadmissionUnjudged
-	if !errors.As(err, &unjudged) {
-		t.Fatalf("a readmission with %s unserved answered %+v (%v), want unjudged", unserved, res, err)
-	}
-	if want := (statelog.LogID{Domain: "tracker", Partition: unserved}).String(); unjudged.Log != want {
-		t.Errorf("the readmission is unjudged on %q, want the unserved log %q", unjudged.Log, want)
-	}
-	remedy := unjudged.Remedy()
-	if !slices.Equal(remedy.Actions, []statelog.GateAction{statelog.GateWait}) ||
-		!strings.Contains(remedy.Detail, "adopted that copy from "+node) {
-		t.Errorf("the remedy is %+v, want to wait for the partition to be served — "+
-			"naming the barred node's own copy as what a node in its place adopts", remedy)
-	}
-	if after := endsByKey(t, s); !maps.Equal(after, before) {
-		t.Errorf("an unjudged readmission wrote: the logs ended at %v and now at %v", before, after)
+			res, err := gate.Readmit(t.Context(), GateRequest{Node: node, By: "ops",
+				OpID: statelog.NewOpID(time.Now(), "readmit-barred")})
+			var unjudged *ReadmissionUnjudged
+			if !errors.As(err, &unjudged) {
+				t.Fatalf("a readmission with %s unserved answered %+v (%v), want unjudged",
+					unserved, res, err)
+			}
+			if want := (statelog.LogID{Domain: "tracker", Partition: unserved}).String(); unjudged.Log != want {
+				t.Errorf("the readmission is unjudged on %q, want the unserved log %q",
+					unjudged.Log, want)
+			}
+			remedy := unjudged.Remedy()
+			if !slices.Equal(remedy.Actions, []statelog.GateAction{statelog.GateWait}) ||
+				!strings.Contains(remedy.Detail, "adopted that copy from "+node) {
+				t.Errorf("the remedy is %+v, want to wait for the partition to be served — "+
+					"naming the barred node's own copy as what a node in its place adopts",
+					remedy)
+			}
+			if after := endsByKey(t, s); !maps.Equal(after, before) {
+				t.Errorf("an unjudged readmission wrote: the logs ended at %v and now at %v",
+					before, after)
+			}
+		})
 	}
 }
 
@@ -254,13 +294,14 @@ func evictThroughTheRouter(t *testing.T, e *Engine, s *stateLog, node string) Ga
 // never a backend the test built. node is named a holder of every partition.
 func aGateServedElsewhere(t *testing.T, e *Engine, s *stateLog, node string) *NodeGate {
 	t.Helper()
-	return aGateServedElsewhereBy(t, e, s, node, servedBy{layout: s.layout, node: s.nodeID})
+	return aGateServedElsewhereBy(t, e, s, node, servedBy{layout: s.layout, node: s.nodeID}, nil)
 }
 
 // aGateServedElsewhereBy is [aGateServedElsewhere] routing by placement, whose
-// one serving holder is s's node.
+// one serving holder is s's node, with node named a holder of the partitions
+// in holds — of every partition where holds is nil.
 func aGateServedElsewhereBy(t *testing.T, e *Engine, s *stateLog, node string,
-	placement servedBy) *NodeGate {
+	placement servedBy, holds []statelog.PartitionID) *NodeGate {
 
 	t.Helper()
 	q, ok := e.backends.Queue.(interface {
@@ -285,11 +326,14 @@ func aGateServedElsewhereBy(t *testing.T, e *Engine, s *stateLog, node string,
 	}
 	asker := &stateLog{layout: s.layout, holding: statelog.ServesOnly(), fleet: s.fleet,
 		mode: s.mode}
-	everywhere := fixedHolders{}
-	for _, p := range s.layout.Partitions() {
-		everywhere[p] = []statelog.Presence{{NodeID: node}}
+	if holds == nil {
+		holds = s.layout.Partitions()
 	}
-	gate, err := newNodeGate(asker, e.backends.Coord, everywhere, nil, router,
+	held := fixedHolders{}
+	for _, p := range holds {
+		held[p] = []statelog.Presence{{NodeID: node}}
+	}
+	gate, err := newNodeGate(asker, e.backends.Coord, held, nil, router,
 		e.backends.Store, "node-a", nil)
 	if err != nil {
 		t.Fatalf("the node gate: %v", err)

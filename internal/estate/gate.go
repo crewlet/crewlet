@@ -69,7 +69,12 @@ import (
 // the same partition by the same function. Judged only on the logs the asking
 // node runs, a readmission was refused on none of the others and then written
 // on all of them through their holders — putting back, unannounced, the very
-// pin the eviction was run to lift.
+// pin the eviction was run to lift. The same read is made of every OTHER log a
+// readmission writes, its bound unjudged, because a log whose partition no
+// node serves is one the readmission cannot be written on: refused there
+// before anything is written, it waits for that partition, where written
+// everywhere else first it held the estate map's part on a log no retry could
+// reach.
 
 // OpStatelogGate is the operation's name on the wire.
 const OpStatelogGate = "statelog.gate"

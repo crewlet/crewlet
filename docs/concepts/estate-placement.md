@@ -428,8 +428,10 @@ be served again — by the node the map names in its place, adopting that copy.
 log has taken the node back: until then the map's part answers that it waits
 for the logs, and the same operation id finishes both, on any node
 ([the retention guide](../guides/retention.md#eviction) says how). A log whose
-partition no node serves cannot take the node back at all, so a readmission is
-refused before anything is written (`readmission_unjudged`) until one does —
+partition no node serves cannot take the node back at all — whether or not the
+node would be counted on it, since a readmission is written on every log — so a
+readmission is refused before anything is written (`readmission_unjudged`) until
+one does —
 its holders returning, or, where its only copy is the barred machine's own, the
 node the map names in its place adopting that copy from it. A gesture
 reaches every log from whichever node it runs on: the node writes the logs of

@@ -596,8 +596,12 @@ same rule reads per partition, and three things follow from it:
   floor and first surviving sequence the writing node's fence holds a node to
   — read from a node that serves its partition, and a bound no holder could
   give refuses the readmission rather than passing it unjudged:
-  `readmission_unjudged`, with nothing written. Where no node serves the
-  partition at all it waits on that, and the refusal says so — including
+  `readmission_unjudged`, with nothing written. Every **other** log it writes
+  is asked of a node serving it too, its bound not judged: the map takes the
+  node back only once every log has, so a log nobody serves is one no
+  readmission can finish, whether or not the node would be counted there.
+  Where no node serves a partition it writes, the readmission waits on that,
+  and the refusal says so — including
   the case where the partition's only copy is the one the readmitted node
   kept through its eviction, which nobody writes while it is barred: a node
   the estate map names in its place adopts that copy from it (a node keeps

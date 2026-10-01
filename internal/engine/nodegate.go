@@ -73,7 +73,10 @@ import (
 // that judgement reads each such log where it is written: a readmission's
 // bound on a log this node does not write is read on a holder of its
 // partition ([stateLog.Readmissible]), since that node's fence is the one the
-// node is held to. So one
+// node is held to; and a log it writes and is not judged on is asked of a
+// holder too, so that a partition nobody serves refuses the readmission
+// before anything is written rather than leaving it written everywhere else
+// and its map part waiting on a log no retry can reach. So one
 // gesture on any node reaches every log, and each log's answer names the node
 // that wrote it where that is not this one ([DomainGate.Writer]), because a
 // refusal is about the node whose authority gave it.
@@ -298,8 +301,10 @@ func (e *GateUnjudged) Remedy() statelog.GateRemedy {
 // against could not be read: nothing was written anywhere.
 //
 // A READMISSION IS JUDGED ONCE, against every log the node would be counted on
+// and with a node serving every other log it writes asked for that log
 // ([stateLog.Readmissible]), so one input nobody could read refuses it whole —
-// a floor nobody could read is not a low one. Its own type, beside
+// a floor nobody could read is not a low one, and a log nobody serves is one
+// the readmission cannot be written on. Its own type, beside
 // [*statelog.ReadmissionRefusal], because the remedy differs: a refusal says
 // the node is below a floor and must catch up, this says the judgement could
 // not be made, and — for a log no node serves — what has to happen before it
@@ -307,7 +312,8 @@ func (e *GateUnjudged) Remedy() statelog.GateRemedy {
 type ReadmissionUnjudged struct {
 	Node string
 
-	// Log is the log whose bound could not be read, by its register key —
+	// Log is the log whose bound could not be read, or that no node serving
+	// it answered for, by its register key —
 	// empty where what failed is the fleet's (the positions register, the
 	// published floors, the partitions' holders).
 	Log string
