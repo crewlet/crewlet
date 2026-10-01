@@ -29,7 +29,7 @@
  */
 
 import { act, fireEvent, getConfig, render, screen, within } from "@testing-library/react";
-import { vi } from "vitest";
+import { onTestFinished, vi } from "vitest";
 import type { ReactNode } from "react";
 import { Router } from "~/app/router.tsx";
 import { REDACTED } from "~/lib/format.ts";
@@ -274,7 +274,13 @@ export class Engine {
   readonly ledger = new Map<string, { status: number; body: unknown }>();
   script: Script = () => null;
   /** What [reached] is waiting for, asked again as each request arrives. */
-  private waiting: { holds: () => boolean; resolve: () => void }[] = [];
+  private waiting: {
+    holds: () => boolean;
+    resolve: () => void;
+    reject: (cause: Error) => void;
+  }[] = [];
+  /** Whether the case that mounted a lens on this engine has ended ([retire]). */
+  private retired = false;
 
   constructor(company: Company | null, revision = "r1") {
     this.settings = company ? clone(company.settings) : null;
@@ -297,12 +303,25 @@ export class Engine {
    * outside it: the request is usually sent from an effect of a render, and
    * `act` holds every render back until its callback resolves, so a case that
    * waited for the request inside `act` waited for itself.
+   *
+   * REFUSED ONCE THE CASE HAS ENDED ([Lens.retire]), and a wait already out is
+   * ended with it: the request it waits for is now never coming, and the
+   * library's wrapper puts back React's act environment only when its wait
+   * ends, so one left waiting kept that switch off for the cases after it.
    */
   reached(holds: () => boolean): Promise<void> {
+    if (this.retired) return Promise.reject(caseEnded("reached"));
     if (holds()) return Promise.resolve();
     return getConfig().asyncWrapper(
-      () => new Promise<void>((resolve) => this.waiting.push({ holds, resolve })),
+      () => new Promise<void>((resolve, reject) => this.waiting.push({ holds, resolve, reject })),
     ) as Promise<void>;
+  }
+
+  /** Ends every [reached] wait, and refuses the next: the case that waited has ended. */
+  retire(): void {
+    this.retired = true;
+    for (const w of this.waiting) w.reject(caseEnded("reached"));
+    this.waiting = [];
   }
 
   /** The requests with this method and path, in order. */
@@ -1012,8 +1031,102 @@ class CountingTransport implements EngineTransport {
  */
 const SETTLE_ROUNDS = 100;
 
+/**
+ * Why a harness wait refused: the case that mounted the lens has ended, and
+ * the code asking is that case still running after it was failed.
+ */
+function caseEnded(what: string): Error {
+  return new Error(
+    `${what}: the case that mounted this lens has ended — this is that case, still running after its time ran out`,
+  );
+}
+
+/**
+ * One mounted lens, and the case that mounted it.
+ *
+ * A CASE THAT TIMES OUT IS NOT STOPPED. Vitest fails it and starts the next,
+ * but its function is a promise nothing can cancel, and it goes on running
+ * beside the cases after it, waking at whatever it was waiting for. Through
+ * this harness, each of those wakings was an `act` — and React keeps ONE act
+ * scope count for the process, restoring on exit whatever count it found on
+ * entry: two cases' act scopes interleaving left it raised for good, and every
+ * later `act` in the file then queued its renders and flushed none of them.
+ * One timed-out case turned the rest of its file into "the Builder draws no
+ * toolbar".
+ *
+ * So the lens ENDS WITH ITS CASE ([retire], registered by [mountBuilder]),
+ * before the next case begins: every wait through it — a settle, a move, a
+ * wait for a request — is woken and refuses with [caseEnded], the act scope a
+ * settle round holds is closed, and a wait asked for after that finds no lens
+ * mounted. What this cannot reach is a case that resumes from a wait of its
+ * OWN only once the next case has mounted: [mounted] would hand it that
+ * case's lens. Every wait in the builder suites is the harness's, or an `act`
+ * that ends within a few turns, long before the next case mounts.
+ */
+class Lens {
+  retired = false;
+  private finish!: () => void;
+  /** Resolves when the case that mounted the lens has ended. */
+  readonly ended = new Promise<void>((resolve) => {
+    this.finish = resolve;
+  });
+  /** The act scope a settle round holds open, while one does. */
+  private round: Promise<void> | null = null;
+
+  constructor(
+    readonly clock: SuiteClock,
+    readonly transport: CountingTransport,
+    private readonly engine: Engine,
+  ) {}
+
+  /** Throws when the case has ended; called after every wait the harness makes. */
+  refuseIfEnded(what: string): void {
+    if (this.retired) throw caseEnded(what);
+  }
+
+  /**
+   * Runs `body` inside `act`, and refuses afterwards if the case ended while
+   * it ran. Every scope a settle opens goes through here, so [retire] can wait
+   * for the open one to close.
+   */
+  async inAct(body: () => Promise<void>): Promise<void> {
+    const round = (async () => {
+      await act(body);
+    })();
+    this.round = round;
+    try {
+      await round;
+    } finally {
+      if (this.round === round) this.round = null;
+    }
+    this.refuseIfEnded("settle");
+  }
+
+  /**
+   * Ends the lens with its case: wakes every wait through it and its engine,
+   * and returns once the act scope a settle round held is closed.
+   */
+  async retire(): Promise<void> {
+    this.retired = true;
+    if (mounted === this) mounted = null;
+    this.finish();
+    this.engine.retire();
+    await this.round?.catch(() => {});
+  }
+}
+
 /** The lens a suite mounted last: what [settle] waits for. */
-let mounted: { clock: SuiteClock; transport: CountingTransport } | null = null;
+let mounted: Lens | null = null;
+
+/** The lens a wait is for, or a refusal naming why there is none. */
+function current(what: string): Lens {
+  if (!mounted) {
+    throw new Error(
+      `${what}: no lens is mounted — mount one with mountBuilder, or this is a case still running after its time ran out`,
+    );
+  }
+  return mounted;
+}
 
 /**
  * Waits until the lens has nothing left in motion, and the page shows it.
@@ -1039,15 +1152,22 @@ let mounted: { clock: SuiteClock; transport: CountingTransport } | null = null;
  * NEVER WHILE THE SUITE HOLDS AN ANSWER the lens is waiting for: that request
  * is out until the suite releases it. Wait for the request with
  * [Engine.reached] instead.
+ *
+ * AND NOT ONCE ITS CASE HAS ENDED: see [Lens].
  */
 export async function settle(): Promise<void> {
-  const lens = mounted;
-  if (!lens) throw new Error("settle: no lens is mounted");
+  await settleLens(current("settle"));
+}
+
+async function settleLens(lens: Lens): Promise<void> {
   for (let round = 0; round < SETTLE_ROUNDS; round++) {
+    lens.refuseIfEnded("settle");
     if (lens.transport.out.size > 0) {
       const out = [...lens.transport.out];
-      await act(async () => {
-        await Promise.allSettled(out);
+      // OR UNTIL THE CASE ENDS: an answer the case held back is never given
+      // once it has, and this scope would stay open beside the next case.
+      await lens.inAct(async () => {
+        await Promise.race([Promise.allSettled(out), lens.ended]);
       });
       continue;
     }
@@ -1059,7 +1179,7 @@ export async function settle(): Promise<void> {
     // Nothing out and nothing due: one more turn for what the last answer
     // set in motion without a request — a socket query, an effect — and done
     // only if that turn started nothing either.
-    await act(async () => {});
+    await lens.inAct(async () => {});
     const next = lens.clock.nextDue();
     const quiet =
       lens.transport.out.size === 0 &&
@@ -1081,21 +1201,32 @@ export async function settle(): Promise<void> {
  * events — and the next one is all that is waited for. At least one event is
  * waited for, because the hash a move is undone to is often the hash it
  * started on, and read at once it would say the move had already landed.
+ *
+ * FOR THIS CASE'S LENS ONLY: a wait still out when the case ends is woken and
+ * refused, since the next case's mount writes a hash of its own and could
+ * otherwise be the landing this one was waiting for.
  */
 export async function navigate(go: () => void, landsOn: string): Promise<void> {
+  const lens = current("navigate");
+  let stop = () => {};
   const landed = new Promise<void>((resolve) => {
     const moved = () => {
       if (location.hash !== landsOn) return;
+      stop();
+      resolve();
+    };
+    stop = () => {
       window.removeEventListener("hashchange", moved);
       window.removeEventListener("popstate", moved);
-      resolve();
     };
     window.addEventListener("hashchange", moved);
     window.addEventListener("popstate", moved);
   });
   act(go);
-  await getConfig().asyncWrapper(() => landed);
-  await settle();
+  await getConfig().asyncWrapper(() => Promise.race([landed, lens.ended]));
+  stop();
+  lens.refuseIfEnded("navigate");
+  await settleLens(lens);
 }
 
 /** The Builder's toolbar, where its check status and its own controls are drawn. */
@@ -1162,7 +1293,9 @@ export function mountBuilder({
     Promise.resolve(query(what));
   const clock = new SuiteClock();
   const transport = new CountingTransport(restTransport);
-  mounted = { clock, transport };
+  const lens = new Lens(clock, transport, engine);
+  mounted = lens;
+  onTestFinished(() => lens.retire());
   const view = render(
     <ClientContext.Provider value={{ store, socket }}>
       <Router>

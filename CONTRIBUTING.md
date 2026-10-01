@@ -219,16 +219,26 @@ What follows are the prerequisites that legitimately vary by machine.
   and `waitFor` poll the page against a one-second deadline, so a case that
   waited that way for a screen to finish passed on a quiet machine and failed
   on a loaded one — four full runs sharing four cores each failed two to four
-  of the org builder's cases, none of which had done anything wrong. A screen that takes its time as an argument is handed time the suite
-  moves: the builder's testkit mounts the lens on a `SuiteClock`, and
-  `settle()` waits for every answer the lens has out and every timer due
-  within the check's debounce. One that does not is flushed with `act` where
-  its work is promises, or driven by fake timers faked only for the calls
-  that arm and cancel one. And a role query is scoped with `within` to the
-  toolbar, dialog or chart it is about: asked by name, it computes the
-  accessible name of every candidate in its container, and in jsdom each
-  element of each name costs a computed style matched against the whole
-  user-agent stylesheet.
+  of the org builder's cases, none of which had done anything wrong. A
+  screen that takes its time as an argument is handed time the suite moves:
+  the builder's testkit mounts the lens on a `SuiteClock`, and `settle()`
+  waits for every answer the lens has out and every timer due within the
+  check's debounce. One that does not is flushed with `act` where its work is
+  promises, or driven by fake timers faked only for the calls that arm and
+  cancel one. And a role query is scoped with `within` to the toolbar, dialog
+  or chart it is about: asked by name, it computes the accessible name of
+  every candidate in its container, and in jsdom each element of each name
+  costs a computed style matched against the whole user-agent stylesheet.
+
+  **A wait the harness owns ends with its case.** A case that times out is
+  failed, not stopped: its function goes on running beside the cases after
+  it, and React keeps one `act` scope count for the process, so an `act` it
+  opens beside the next case's leaves every later render in the file queued
+  and never flushed — one timeout read as the rest of the file failing. The
+  builder's testkit retires a lens when the case that mounted it finishes
+  (`onTestFinished`), closes the scope a settle holds, and refuses every wait
+  through it from then on; `testkit.test.tsx` holds each of those waits to
+  it.
 
   **The built dashboard is committed**, so building the ENGINE needs neither
   node nor npm. Changing the dashboard does: run `make dashboard` and commit
