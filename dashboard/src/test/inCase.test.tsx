@@ -1,11 +1,14 @@
 /**
  * What a case does ends with the case.
  *
- * Each pair below is what a timeout leaves behind, without the deadline: the
- * first case ends with something still out — a wait of its OWN that nothing in
- * the harness can see, an `act` scope, a `findBy` — and the case after it
- * draws its own page, releases what the first one waited for, and reads what
- * the late case came to.
+ * Each pair below is a case that RUNS OUT OF ITS TIME with something still
+ * out — a wait of its OWN that nothing in the harness can see, an `act` scope,
+ * a `findBy` — and the case after it, which draws its own page, releases what
+ * the first one waited for, and reads what the late case came to. The
+ * timeout is real: the first case is `test.fails` with a budget of
+ * [RUNS_OUT], waiting on something that never comes inside it, so what is
+ * checked is what Vitest itself does with a case it has given up on — fails
+ * it, starts the next, and leaves its function running.
  *
  * Through the library alone, every one of these reached the second case: the
  * late `act` ran its body beside it, the open scope held React's act count
@@ -33,6 +36,13 @@ function settled(work: Promise<unknown>): Promise<string> {
 const ENDED =
   "the case that asked has ended — this is that case, still running after its time ran out";
 
+/**
+ * The budget each first case runs out of. It is always spent, since what the
+ * case waits for comes only in the next case, so it sets how long the file
+ * takes and nothing else.
+ */
+const RUNS_OUT = 100;
+
 /* A late act, and a late flush whose step would move the timers. */
 
 let release: () => void = () => {};
@@ -41,29 +51,34 @@ let lateFlush: Promise<string> = Promise.resolve("never started");
 /** Whether a late move's body ran — the move a late case must not make. */
 let lateMoved = false;
 
-test("a case that ends while it waits for something of its own", () => {
-  const own = new Promise<void>((resolve) => {
-    release = resolve;
-  });
-  lateAct = settled(
-    (async () => {
-      await own;
-      await act(async () => {
-        lateMoved = true;
-      });
-    })(),
-  );
-  lateFlush = settled(
-    (async () => {
-      await own;
-      // A STEP, as a case that holds the timers takes one: advancing them
-      // fires whatever is armed — by then, the next case's timers.
-      await answered(() => {
-        lateMoved = true;
-      });
-    })(),
-  );
-});
+test.fails(
+  "a case that runs out of time while it waits for something of its own",
+  async () => {
+    const own = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    lateAct = settled(
+      (async () => {
+        await own;
+        await act(async () => {
+          lateMoved = true;
+        });
+      })(),
+    );
+    lateFlush = settled(
+      (async () => {
+        await own;
+        // A STEP, as a case that holds the timers takes one: advancing them
+        // fires whatever is armed — by then, the next case's timers.
+        await answered(() => {
+          lateMoved = true;
+        });
+      })(),
+    );
+    await Promise.all([lateAct, lateFlush]);
+  },
+  RUNS_OUT,
+);
 
 test("is refused its next act and its next flush, before either moves", async () => {
   release();
@@ -81,21 +96,26 @@ test("is refused its next act and its next flush, before either moves", async ()
   expect(mine).toBe(2);
 });
 
-/* An act scope still open when its case ends. */
+/* An act scope still open when its case runs out of time. */
 
 let unhold: () => void = () => {};
 let openScope: Promise<string> = Promise.resolve("never started");
 
-test("a case that ends inside an act scope of its own", () => {
-  const held = new Promise<void>((resolve) => {
-    unhold = resolve;
-  });
-  openScope = settled(
-    act(async () => {
-      await held;
-    }),
-  );
-});
+test.fails(
+  "a case that runs out of time inside an act scope of its own",
+  async () => {
+    const held = new Promise<void>((resolve) => {
+      unhold = resolve;
+    });
+    openScope = settled(
+      act(async () => {
+        await held;
+      }),
+    );
+    await openScope;
+  },
+  RUNS_OUT,
+);
 
 function Counter() {
   const [presses, setPresses] = useState(0);
@@ -112,7 +132,7 @@ test("finds that scope closed when it begins, so its own renders land", async ()
   unhold();
 });
 
-/* A findBy still polling when its case ends. */
+/* A findBy still polling when its case runs out of time. */
 
 let polling = "pending";
 /** The act environment as the first case found it, before its wait set it aside. */
@@ -122,12 +142,20 @@ function actEnvironment(): unknown {
   return (globalThis as { IS_REACT_ACT_ENVIRONMENT?: unknown }).IS_REACT_ACT_ENVIRONMENT;
 }
 
-test("a case that ends while a findBy of its own polls", () => {
-  environment = actEnvironment();
-  void settled(screen.findByText("drawn by the next case")).then((what) => {
-    polling = what;
-  });
-});
+test.fails(
+  "a case that runs out of time while a findBy of its own polls",
+  async () => {
+    environment = actEnvironment();
+    // The wait's own deadline is the library's second, ten times the case's
+    // budget, so it is still polling when the case is given up on.
+    const found = settled(screen.findByText("drawn by the next case"));
+    void found.then((what) => {
+      polling = what;
+    });
+    await found;
+  },
+  RUNS_OUT,
+);
 
 test("finds that wait refused, and the act environment it set aside put back", async () => {
   expect(actEnvironment()).toBe(environment);
@@ -144,23 +172,28 @@ let releaseLate: () => void = () => {};
 let lateWait: Promise<string> = Promise.resolve("never started");
 let lateClick: Promise<string> = Promise.resolve("never started");
 
-test("a case that ends with a wait and a click still to make", () => {
-  const own = new Promise<void>((resolve) => {
-    releaseLate = resolve;
-  });
-  lateWait = settled(
-    (async () => {
-      await own;
-      await screen.findByRole("button", { name: "the next case's" });
-    })(),
-  );
-  lateClick = settled(
-    (async () => {
-      await own;
-      fireEvent.click(screen.getByRole("button", { name: "the next case's" }));
-    })(),
-  );
-});
+test.fails(
+  "a case that runs out of time with a wait and a click still to make",
+  async () => {
+    const own = new Promise<void>((resolve) => {
+      releaseLate = resolve;
+    });
+    lateWait = settled(
+      (async () => {
+        await own;
+        await screen.findByRole("button", { name: "the next case's" });
+      })(),
+    );
+    lateClick = settled(
+      (async () => {
+        await own;
+        fireEvent.click(screen.getByRole("button", { name: "the next case's" }));
+      })(),
+    );
+    await Promise.all([lateWait, lateClick]);
+  },
+  RUNS_OUT,
+);
 
 test("is refused both, rather than finding and pressing this case's control", async () => {
   let presses = 0;

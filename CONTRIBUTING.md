@@ -256,8 +256,9 @@ What follows are the prerequisites that legitimately vary by machine.
   not tell before, and why the flush used to be handed to each case. A case
   that holds the page's timers advances them as `answered`'s `step`, so the
   refusal comes before the timers move. `src/test/inCase.test.tsx` holds each
-  of these to a pair: a case that ends with something out, and the case
-  after it, which reads what the late one came to.
+  of these to a pair: a case that really runs out of its time with something
+  out (`test.fails` on a budget it always spends), and the case after it,
+  which reads what the late one came to.
 
   **And the harness's own waits end with it too.** The builder's testkit
   retires a lens when the case that mounted it finishes (`onTestFinished`):
