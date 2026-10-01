@@ -3126,7 +3126,9 @@ trusted when it IS blank. Four distinctions the product makes everywhere:
   and to reload once somebody has acted, rather than that it is catching up;
   re-asks of a read an operator has to unblock are a loop, not a retry. The
   same reading governs the shared health read, the snapshot the page polls
-  while its socket is down, a seat watch the engine could not decide, the org
+  while its socket is down, the next dial after a handshake the engine
+  refused `503` (whose zero alone keeps the reconnect backoff — see the live
+  socket below), a seat watch the engine could not decide, the org
   builder's check — which waits out a `503`'s `Retry-After` in place of its
   own backoff and stops retrying a `503` the engine wrote with none — and the
   disconnect dialog, whose wait on a `surface_busy` surface is that refusal's
@@ -3429,7 +3431,13 @@ rendered idle from the first phase to the last.
   signed in, and sends the reader to the sign-in; 426 means the session was
   accepted; a `403 second_factor_enrolment_required` stops the dialling and
   sends them to the enrolment. The loop otherwise keeps dialling on its
-  backoff, because a sign-in in another tab gives this one the cookie too.
+  backoff, because a sign-in in another tab gives this one the cookie too —
+  except that a `503` the engine wrote (a node that cannot read its identity
+  estate yet) times the next dial by its `Retry-After`, sooner or later than
+  the backoff would have, bounded like every hint. A `503` with no
+  `Retry-After`, and one something in front of the engine wrote, keep the
+  backoff rather than stopping the loop: a dial may reach another node, which
+  is what a zero says to do, and the loop is the tab's only way back.
 - **A frame arrives already encoded, and two tabs in the same posture get the
   byte-identical one.** The engine marshals a push once per POSTURE present on
   the node, not once per connection: what a client receives is decided by the

@@ -307,7 +307,9 @@ node means nothing was done.
 > never opened sends no close frame — so the dashboard re-asks over plain HTTP
 > to tell "nobody is signed in" from "the engine is down", and sends the reader
 > to its sign-in screen on the first. Without it a reader whose session ended
-> sees "retrying" for ever.
+> sees "retrying" for ever. The same re-ask reads a `503 identity_unavailable`
+> — a node that cannot read its identity estate yet — and dials again when its
+> `Retry-After` says rather than on its own backoff.
 >
 > **`api.auth.max_grants` clamps a person exactly as it clamps a token.** The
 > ceiling is applied when the request is resolved, not written anywhere, so

@@ -601,13 +601,27 @@ function restRetryMs(err, otherwise) {
 * The seconds a `Retry-After` header names, or null for none. The engine
 * writes whole seconds and never an HTTP date; anything else is not its
 * answer and is read as none.
-*
-* Exported for the one read that does not go through [request] — the
-* degraded-mode snapshot (`api.ts`) — so both read the header one way.
 */
 function retryAfterOf(response) {
 	const raw = response.headers.get("Retry-After")?.trim() ?? "";
 	return /^\d+$/.test(raw) ? Number(raw) : null;
+}
+/**
+* [RestError.retryHint] for a refused response that did not come through
+* [request] — the degraded-mode snapshot (`api.ts`) and the socket's
+* plain-HTTP re-ask of a refused handshake (`socket.ts`), each of which reads
+* the response itself.
+*
+* ONE READING for both, because each needs the same three steps — the body
+* read as an envelope whatever it holds, the header read as whole seconds, and
+* the rule for which `503` is the engine's — and each spelled them out for
+* itself, which is how two copies come to disagree about a proxy's `503`.
+* Consumes the body.
+*/
+async function retryHintOf(response) {
+	const body = await response.json().catch(() => null);
+	const envelope = body !== null && typeof body === "object" ? body : {};
+	return new RestError(response.status, envelope, retryAfterOf(response)).retryHint;
 }
 /**
 * A refusal that never reached the engine: DNS, a dropped connection, a proxy
@@ -875,14 +889,10 @@ var api = {
 async snapshot() {
 	try {
 		const response = await fetch(location.origin + "/stream/snapshot", { credentials: "same-origin" });
-		if (!response.ok) {
-			const body = await response.json().catch(() => null);
-			const envelope = body !== null && typeof body === "object" ? body : {};
-			return {
-				state: "unread",
-				retryAfter: new RestError(response.status, envelope, retryAfterOf(response)).retryHint
-			};
-		}
+		if (!response.ok) return {
+			state: "unread",
+			retryAfter: await retryHintOf(response)
+		};
 		return {
 			state: "read",
 			snapshot: await response.json()
@@ -1308,9 +1318,12 @@ var LiveSocket = class {
 	* So the status is fetched where a browser will hand it over. A plain GET of
 	* the same path runs the same guard, with the same cookie, and stops one line
 	* short of the upgrade: 401 is nobody signed in, 426 (Upgrade Required)
-	* means the session was accepted and only the missing header stopped it. A
-	* throw is the network, which is not an auth problem and must not send
-	* anybody to sign in.
+	* means the session was accepted and only the missing header stopped it, and
+	* a `503` the engine wrote is a node that could not decide the handshake yet
+	* — its identity estate unreadable for a moment — which says in its
+	* `Retry-After` when to dial again (see `redialWhenSaid`). A throw is the
+	* network, which is not an auth problem and must not send anybody to sign
+	* in.
 	*/
 	async probeRefusal() {
 		if (this.isClosed) return;
@@ -1320,12 +1333,46 @@ var LiveSocket = class {
 				cache: "no-store"
 			});
 			if (res.status === 401) this.authRejected();
+			else if (res.status === 503) await this.redialWhenSaid(res);
 			else if (res.status === 403) {
 				const body = await res.json().catch(() => null);
 				if (body?.error === "second_factor_enrolment_required") this.enrolmentRequired();
 				else this.accessRefused(body?.detail ?? "");
 			}
 		} catch {}
+	}
+	/**
+	* A refused handshake's `503`: dial again when the engine said, in place of
+	* the backoff.
+	*
+	* THE HINT WAS ON THE WIRE AND THE LOOP NEVER READ IT. A node that cannot
+	* read its identity estate answers every guarded route, this handshake
+	* included, `503` with a `Retry-After` of two seconds — the estate's own
+	* catch-up scale — and the loop went on doubling its own wait: a few refused
+	* dials in, a tab was sitting out sixteen or thirty seconds where its node
+	* had said two, and on the first refusal it dialled at one second, before the
+	* node had said it could answer. Waited out through `retryAfterMs`, like
+	* every other hint: exactly, and bounded at `RETRY_AFTER_MAX_MS`.
+	*
+	* ONLY THE ENGINE'S `503`, by the rule `RestError.retryHint` keeps — a proxy
+	* in front of a node that is down writes one too, and that is the backoff's
+	* case. The probe runs beside the reconnect rather than before it, so the
+	* hint can land with the next dial already out; the dial it schedules then
+	* finds one in flight and does nothing (`connect`), and that dial's own
+	* close schedules what follows it.
+	*
+	* A ZERO KEEPS THE BACKOFF rather than stopping the loop, unlike every other
+	* re-ask in this dashboard, because a dial is not a re-ask of this one node:
+	* behind a balancer the next one may reach another — which is what a zero
+	* tells a client to do — and the loop is this tab's only way back to any
+	* engine. Its backoff already caps it at one dial every thirty seconds. No
+	* handshake refusal the engine writes today carries a zero; this says what a
+	* future one would get.
+	*/
+	async redialWhenSaid(res) {
+		const hint = await retryHintOf(res);
+		const wait = hint === null ? null : retryAfterMs(hint);
+		if (wait !== null) this.scheduleReconnect(wait);
 	}
 	/**
 	* The engine knows who this browser is and will not serve it this surface.
@@ -1459,11 +1506,19 @@ var LiveSocket = class {
 		}
 		this.inflight.clear();
 	}
-	scheduleReconnect() {
+	/**
+	* Dial again after the backoff — or after `after` ms, where the engine said
+	* when (`redialWhenSaid`), which replaces the dial already scheduled and
+	* leaves the backoff's count where it was.
+	*/
+	scheduleReconnect(after) {
 		if (this.isClosed || this.refused) return;
 		clearTimeout(this.reconnectTimer);
-		const delay = Math.min(1e3 * 2 ** Math.min(this.attempt, 10), MAX_BACKOFF_MS);
-		this.attempt++;
+		let delay = after;
+		if (delay === void 0) {
+			delay = Math.min(1e3 * 2 ** Math.min(this.attempt, 10), MAX_BACKOFF_MS);
+			this.attempt++;
+		}
 		this.reconnectTimer = setTimeout(() => this.connect(), delay);
 	}
 	startPing() {

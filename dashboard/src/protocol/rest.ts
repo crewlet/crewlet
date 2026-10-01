@@ -226,13 +226,29 @@ export function restRetryMs(err: unknown, otherwise: number | null): number | nu
  * The seconds a `Retry-After` header names, or null for none. The engine
  * writes whole seconds and never an HTTP date; anything else is not its
  * answer and is read as none.
- *
- * Exported for the one read that does not go through [request] — the
- * degraded-mode snapshot (`api.ts`) — so both read the header one way.
  */
-export function retryAfterOf(response: Response): number | null {
+function retryAfterOf(response: Response): number | null {
   const raw = response.headers.get("Retry-After")?.trim() ?? "";
   return /^\d+$/.test(raw) ? Number(raw) : null;
+}
+
+/**
+ * [RestError.retryHint] for a refused response that did not come through
+ * [request] — the degraded-mode snapshot (`api.ts`) and the socket's
+ * plain-HTTP re-ask of a refused handshake (`socket.ts`), each of which reads
+ * the response itself.
+ *
+ * ONE READING for both, because each needs the same three steps — the body
+ * read as an envelope whatever it holds, the header read as whole seconds, and
+ * the rule for which `503` is the engine's — and each spelled them out for
+ * itself, which is how two copies come to disagree about a proxy's `503`.
+ * Consumes the body.
+ */
+export async function retryHintOf(response: Response): Promise<number | null> {
+  const body = (await response.json().catch(() => null)) as unknown;
+  const envelope =
+    body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
+  return new RestError(response.status, envelope, retryAfterOf(response)).retryHint;
 }
 
 /**

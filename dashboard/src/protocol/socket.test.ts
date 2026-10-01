@@ -45,6 +45,8 @@ let fetches: string[] = [];
 let fetchInits: (RequestInit | undefined)[] = [];
 let probeStatus = 426;
 let probeBody: unknown = {};
+/** The headers the plain-HTTP re-ask answers with — a `Retry-After`, say. */
+let probeHeaders: Record<string, string> = {};
 /** How long the plain-HTTP re-ask takes to answer. */
 let probeDelayMs = 0;
 /** What the degraded-mode snapshot read answers: by default nothing the engine wrote. */
@@ -57,6 +59,7 @@ beforeEach(() => {
   fetchInits = [];
   probeStatus = 426;
   probeBody = {};
+  probeHeaders = {};
   probeDelayMs = 0;
   snapshotAnswer = async () => new Response("{}", { status: 503 });
   Object.defineProperty(globalThis, "WebSocket", { writable: true, value: ScriptedWebSocket });
@@ -68,7 +71,10 @@ beforeEach(() => {
       fetchInits.push(init);
       if (url.endsWith("/ws/stream")) {
         if (probeDelayMs > 0) await new Promise((resolve) => setTimeout(resolve, probeDelayMs));
-        return new Response(JSON.stringify(probeBody), { status: probeStatus });
+        return new Response(JSON.stringify(probeBody), {
+          status: probeStatus,
+          headers: probeHeaders,
+        });
       }
       return snapshotAnswer();
     }),
@@ -193,6 +199,73 @@ describe("the engine's close codes", () => {
     dial(1).closeWith(1006);
     await vi.advanceTimersByTimeAsync(120_000);
     expect(ScriptedWebSocket.dials).toHaveLength(2);
+  });
+});
+
+// A HANDSHAKE THE ENGINE COULD NOT DECIDE YET SAYS WHEN TO DIAL AGAIN. A node
+// that cannot read its identity estate answers the handshake `503` with a
+// `Retry-After`, and the loop went on doubling its own wait whatever that
+// said: a dial at one second on the first refusal, before the node had said
+// it could answer, and sixteen or thirty seconds a few refusals in, where it
+// had said two. Only the engine's own `503` says so, and a zero is no wait at
+// all for THIS node — which is the backoff's case, since the next dial may
+// reach another.
+describe("a handshake the engine could not decide yet", () => {
+  const dials = () => ScriptedWebSocket.dials.length;
+  const engineBusy = (retryAfter?: number) => {
+    probeStatus = 503;
+    probeBody = {
+      error: "identity_unavailable",
+      message: "This node cannot read its identity estate right now.",
+    };
+    probeHeaders = retryAfter === undefined ? {} : { "Retry-After": String(retryAfter) };
+  };
+
+  test("is dialled again when its Retry-After says, not at the backoff's second", async () => {
+    engineBusy(12);
+    started();
+    dial(0).closeWith(1006);
+    await vi.advanceTimersByTimeAsync(0);
+    await vi.advanceTimersByTimeAsync(11_999);
+    expect(dials()).toBe(1);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(dials()).toBe(2);
+  });
+
+  // SOONER THAN THE BACKOFF HAS GROWN TO, as well as later than it started:
+  // every refused dial is answered by the hint, never by a wait that doubles.
+  test("keeps the hint's cadence however many dials it refuses", async () => {
+    engineBusy(2);
+    started();
+    for (let n = 0; n < 6; n++) {
+      dial(n).closeWith(1006);
+      await vi.advanceTimersByTimeAsync(0);
+      await vi.advanceTimersByTimeAsync(1_999);
+      expect(dials()).toBe(n + 1);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(dials()).toBe(n + 2);
+    }
+  });
+
+  // THE CONTROLS: a `503` the engine wrote with no `Retry-After`, and one
+  // something in front of it wrote, keep the backoff — first dial at a second.
+  test.each([
+    ["a zero", () => engineBusy()],
+    [
+      "a proxy's 503",
+      () => {
+        probeStatus = 503;
+        probeBody = {};
+        probeHeaders = { "Retry-After": "12" };
+      },
+    ],
+  ])("after %s keeps the backoff", async (_, answer) => {
+    answer();
+    started();
+    dial(0).closeWith(1006);
+    await vi.advanceTimersByTimeAsync(0);
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(dials()).toBe(2);
   });
 });
 

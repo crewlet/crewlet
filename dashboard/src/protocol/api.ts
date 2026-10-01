@@ -18,7 +18,7 @@
  * use it.
  */
 
-import { RestError, retryAfterOf } from "./rest.ts";
+import { retryHintOf } from "./rest.ts";
 import type { Snapshot } from "./types.ts";
 
 /**
@@ -57,13 +57,7 @@ export const api = {
       if (!response.ok) {
         // WHOSE REFUSAL, read by the rule every other read takes: only a
         // 503 carrying the engine's own error code carries its hint.
-        const body = (await response.json().catch(() => null)) as unknown;
-        const envelope =
-          body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
-        return {
-          state: "unread",
-          retryAfter: new RestError(response.status, envelope, retryAfterOf(response)).retryHint,
-        };
+        return { state: "unread", retryAfter: await retryHintOf(response) };
       }
       return { state: "read", snapshot: (await response.json()) as Snapshot };
     } catch {

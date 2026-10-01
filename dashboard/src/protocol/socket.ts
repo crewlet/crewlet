@@ -18,6 +18,7 @@
  */
 
 import { api } from "./api.ts";
+import { retryHintOf } from "./rest.ts";
 import { retryAfterMs, UNAVAILABLE_RETRY_MS } from "./retry.ts";
 import { needSession } from "./session.ts";
 import type { Store } from "./store.ts";
@@ -520,9 +521,12 @@ export class LiveSocket {
    * So the status is fetched where a browser will hand it over. A plain GET of
    * the same path runs the same guard, with the same cookie, and stops one line
    * short of the upgrade: 401 is nobody signed in, 426 (Upgrade Required)
-   * means the session was accepted and only the missing header stopped it. A
-   * throw is the network, which is not an auth problem and must not send
-   * anybody to sign in.
+   * means the session was accepted and only the missing header stopped it, and
+   * a `503` the engine wrote is a node that could not decide the handshake yet
+   * — its identity estate unreadable for a moment — which says in its
+   * `Retry-After` when to dial again (see `redialWhenSaid`). A throw is the
+   * network, which is not an auth problem and must not send anybody to sign
+   * in.
    */
   private async probeRefusal(): Promise<void> {
     if (this.isClosed) return;
@@ -532,6 +536,7 @@ export class LiveSocket {
       // is the network or a proxy, neither of which the reader fixes by
       // signing in.
       if (res.status === 401) this.authRejected();
+      else if (res.status === 503) await this.redialWhenSaid(res);
       else if (res.status === 403) {
         const body = (await res.json().catch(() => null)) as {
           error?: string;
@@ -549,6 +554,40 @@ export class LiveSocket {
       // Offline, or a proxy that refuses the request outright. The reconnect
       // loop already covers it.
     }
+  }
+
+  /**
+   * A refused handshake's `503`: dial again when the engine said, in place of
+   * the backoff.
+   *
+   * THE HINT WAS ON THE WIRE AND THE LOOP NEVER READ IT. A node that cannot
+   * read its identity estate answers every guarded route, this handshake
+   * included, `503` with a `Retry-After` of two seconds — the estate's own
+   * catch-up scale — and the loop went on doubling its own wait: a few refused
+   * dials in, a tab was sitting out sixteen or thirty seconds where its node
+   * had said two, and on the first refusal it dialled at one second, before the
+   * node had said it could answer. Waited out through `retryAfterMs`, like
+   * every other hint: exactly, and bounded at `RETRY_AFTER_MAX_MS`.
+   *
+   * ONLY THE ENGINE'S `503`, by the rule `RestError.retryHint` keeps — a proxy
+   * in front of a node that is down writes one too, and that is the backoff's
+   * case. The probe runs beside the reconnect rather than before it, so the
+   * hint can land with the next dial already out; the dial it schedules then
+   * finds one in flight and does nothing (`connect`), and that dial's own
+   * close schedules what follows it.
+   *
+   * A ZERO KEEPS THE BACKOFF rather than stopping the loop, unlike every other
+   * re-ask in this dashboard, because a dial is not a re-ask of this one node:
+   * behind a balancer the next one may reach another — which is what a zero
+   * tells a client to do — and the loop is this tab's only way back to any
+   * engine. Its backoff already caps it at one dial every thirty seconds. No
+   * handshake refusal the engine writes today carries a zero; this says what a
+   * future one would get.
+   */
+  private async redialWhenSaid(res: Response): Promise<void> {
+    const hint = await retryHintOf(res);
+    const wait = hint === null ? null : retryAfterMs(hint);
+    if (wait !== null) this.scheduleReconnect(wait);
   }
 
   /**
@@ -705,11 +744,19 @@ export class LiveSocket {
     this.inflight.clear();
   }
 
-  private scheduleReconnect(): void {
+  /**
+   * Dial again after the backoff — or after `after` ms, where the engine said
+   * when (`redialWhenSaid`), which replaces the dial already scheduled and
+   * leaves the backoff's count where it was.
+   */
+  private scheduleReconnect(after?: number): void {
     if (this.isClosed || this.refused) return;
     clearTimeout(this.reconnectTimer);
-    const delay = Math.min(1000 * 2 ** Math.min(this.attempt, 10), MAX_BACKOFF_MS);
-    this.attempt++;
+    let delay = after;
+    if (delay === undefined) {
+      delay = Math.min(1000 * 2 ** Math.min(this.attempt, 10), MAX_BACKOFF_MS);
+      this.attempt++;
+    }
     this.reconnectTimer = setTimeout(() => this.connect(), delay);
   }
 
