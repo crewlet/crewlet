@@ -5,13 +5,13 @@ import (
 	"context"
 	"log/slog"
 	"net"
-	"strconv"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/nats-io/nats-server/v2/server"
 	"github.com/nats-io/nats.go"
+
+	"github.com/crewlet/crewlet/internal/queue/jetstream/externaltest"
 )
 
 // NO SENTENCE NAMING A SERVER CARRIES THE CREDENTIAL ITS URL HOLDS.
@@ -173,30 +173,12 @@ func openRefused(t *testing.T, url string) error {
 	return err
 }
 
-// credentialedServer starts a NATS server with JetStream at nats-server's own
-// default max_payload, authenticating as auth configures it, and answers its
-// host and port.
+// credentialedServer starts an external NATS server at nats-server's own
+// default max_payload, which the queue refuses, authenticating as auth
+// configures it, and answers its host and port.
 func credentialedServer(t *testing.T, auth func(*server.Options)) string {
 	t.Helper()
-	opts := &server.Options{
-		Host: "127.0.0.1", Port: -1, NoLog: true, NoSigs: true,
-		JetStream: true, StoreDir: t.TempDir(),
-	}
-	auth(opts)
-	ns, err := server.NewServer(opts)
-	if err != nil {
-		t.Fatalf("configure the server: %v", err)
-	}
-	go ns.Start()
-	t.Cleanup(func() {
-		ns.Shutdown()
-		ns.WaitForShutdown()
-	})
-	if !ns.ReadyForConnections(30 * time.Second) {
-		t.Fatal("the server never became ready")
-	}
-	addr := ns.Addr().(*net.TCPAddr)
-	return net.JoinHostPort(addr.IP.String(), strconv.Itoa(addr.Port))
+	return externaltest.Start(t, 0, auth).HostPort()
 }
 
 // assertNamesWithoutSecret fails where said carries secret, or does not carry

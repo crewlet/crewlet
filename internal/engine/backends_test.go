@@ -20,6 +20,7 @@ import (
 	"github.com/crewlet/crewlet/internal/engine"
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/queue"
+	"github.com/crewlet/crewlet/internal/queue/jetstream/externaltest"
 	"github.com/crewlet/crewlet/internal/queue/topics"
 	"github.com/crewlet/crewlet/internal/secrets"
 	"github.com/crewlet/crewlet/internal/sourcetree"
@@ -774,7 +775,7 @@ func TestABootAgainstAServerBelowTheContractIsRefusedByName(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			url := operatorNATS(t, tc.maxPayload)
+			url := externaltest.Start(t, tc.maxPayload).URL()
 			b := bootstrap(t, func(b *config.Bootstrap) {
 				b.Stream.Type = config.StreamNATS
 				b.Stream.URL = url
@@ -816,29 +817,6 @@ func TestABootAgainstAServerBelowTheContractIsRefusedByName(t *testing.T) {
 			}
 		})
 	}
-}
-
-// operatorNATS starts a NATS server with JetStream outside the engine's own
-// configuration — an operator's, announcing maxPayload or nats-server's own
-// default where it is zero — and answers its client URL.
-func operatorNATS(t *testing.T, maxPayload int32) string {
-	t.Helper()
-	ns, err := natsserver.NewServer(&natsserver.Options{
-		Host: "127.0.0.1", Port: -1, NoLog: true, NoSigs: true,
-		JetStream: true, StoreDir: t.TempDir(), MaxPayload: maxPayload,
-	})
-	if err != nil {
-		t.Fatalf("configure an operator's server: %v", err)
-	}
-	go ns.Start()
-	t.Cleanup(func() {
-		ns.Shutdown()
-		ns.WaitForShutdown()
-	})
-	if !ns.ReadyForConnections(30 * time.Second) {
-		t.Fatal("the operator's server never became ready")
-	}
-	return ns.ClientURL()
 }
 
 // THE WIDTH IS LEARNED ONCE AND THEN HELD.

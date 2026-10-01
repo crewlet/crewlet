@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"net"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -20,6 +19,7 @@ import (
 	"github.com/nats-io/nats.go"
 
 	"github.com/crewlet/crewlet/internal/queue"
+	"github.com/crewlet/crewlet/internal/queue/jetstream/externaltest"
 )
 
 // A SERVER THAT CANNOT CARRY THE CONTRACT IS REFUSED WHEN THE QUEUE OPENS.
@@ -54,7 +54,7 @@ func TestAServerBelowTheContractIsRefusedWhenTheQueueOpens(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			srv := startOperatorServer(t, tc.maxPayload)
+			srv := externaltest.Start(t, tc.maxPayload)
 			announced := tc.maxPayload
 			if announced == 0 {
 				announced = server.MAX_PAYLOAD_SIZE
@@ -301,9 +301,9 @@ func TestAnEmbeddedBrokerWithoutTheCeilingFailsTheBootAndBlamesTheBuild(t *testi
 func TestASecondConnectionToAnOperatorsServerIsHeldToTheContract(t *testing.T) {
 	t.Parallel()
 	const limit = queue.MaxPayloadBytes / 4
-	srv := startOperatorServer(t, queue.MaxPayloadBytes)
+	srv := externaltest.Start(t, queue.MaxPayloadBytes)
 	q := newQueueWith(t, Config{URL: srv.URL()})
-	srv.restart(limit, q.Conn())
+	srv.Restart(limit, q.Conn())
 
 	nc, err := q.DialOwned()
 	if err == nil {
@@ -349,7 +349,7 @@ func TestAReconnectToAServerBelowTheContractIsNamed(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			srv := startOperatorServer(t, tc.maxPayload)
+			srv := externaltest.Start(t, tc.maxPayload)
 			nc, err := nats.Connect(srv.URL())
 			if err != nil {
 				t.Fatalf("connect: %v", err)
@@ -444,14 +444,14 @@ func TestAReconnectToAServerBelowTheContractIsNamed(t *testing.T) {
 func TestAMessageTooLargeNamesTheServersOwnLimit(t *testing.T) {
 	t.Parallel()
 	const limit = queue.MaxPayloadBytes / 4
-	srv := startOperatorServer(t, queue.MaxPayloadBytes)
+	srv := externaltest.Start(t, queue.MaxPayloadBytes)
 	q := newQueueWith(t, Config{URL: srv.URL()})
 	// Provisioned against the server the queue opened on, as a node's log
 	// is at boot; the restarted server recovers it from its store.
 	if err := q.EnsureDomainStream(t.Context(), probeDomain()); err != nil {
 		t.Fatalf("EnsureDomainStream: %v", err)
 	}
-	srv.restart(limit, q.Conn())
+	srv.Restart(limit, q.Conn())
 	size := limit + 1024
 	names := strconv.Itoa(limit) + "-byte limit"
 
@@ -510,68 +510,4 @@ func TestAMessageTooLargeNamesTheServersOwnLimit(t *testing.T) {
 			}
 		}
 	})
-}
-
-// operatorServer is a NATS server outside this package's own configuration —
-// an operator's, whose max_payload is its own — which a case can restart under
-// a running client announcing another.
-type operatorServer struct {
-	t     *testing.T
-	store string
-	ns    *server.Server
-}
-
-// startOperatorServer starts one with JetStream, announcing maxPayload — or
-// nats-server's own default where it is zero — and stops it when the test
-// ends.
-func startOperatorServer(t *testing.T, maxPayload int32) *operatorServer {
-	t.Helper()
-	s := &operatorServer{t: t, store: t.TempDir()}
-	s.start(-1, maxPayload)
-	t.Cleanup(s.stop)
-	return s
-}
-
-func (s *operatorServer) start(port int, maxPayload int32) {
-	s.t.Helper()
-	ns, err := server.NewServer(&server.Options{
-		Host: "127.0.0.1", Port: port, NoLog: true, NoSigs: true,
-		JetStream: true, StoreDir: s.store, MaxPayload: maxPayload,
-	})
-	if err != nil {
-		s.t.Fatalf("configure an operator's server: %v", err)
-	}
-	go ns.Start()
-	if !ns.ReadyForConnections(30 * time.Second) {
-		ns.Shutdown()
-		s.t.Fatal("the operator's server never became ready")
-	}
-	s.ns = ns
-}
-
-func (s *operatorServer) stop() {
-	s.ns.Shutdown()
-	s.ns.WaitForShutdown()
-}
-
-// URL is the server's client address.
-func (s *operatorServer) URL() string { return s.ns.ClientURL() }
-
-// restart stops the server and starts it again on its own port and its own
-// store, announcing maxPayload, and waits until nc has reconnected to it and
-// reads the new limit — which is what the client refuses against from then on.
-func (s *operatorServer) restart(maxPayload int32, nc *nats.Conn) {
-	s.t.Helper()
-	port := s.ns.Addr().(*net.TCPAddr).Port
-	s.stop()
-	s.start(port, maxPayload)
-	deadline := time.Now().Add(30 * time.Second)
-	for !nc.IsConnected() || nc.MaxPayload() != int64(maxPayload) {
-		if time.Now().After(deadline) {
-			s.t.Fatalf("the client did not reconnect to the restarted server "+
-				"within 30s (connected=%v, reading a max_payload of %d, want %d)",
-				nc.IsConnected(), nc.MaxPayload(), maxPayload)
-		}
-		time.Sleep(20 * time.Millisecond)
-	}
 }

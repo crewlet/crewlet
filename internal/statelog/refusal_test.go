@@ -2,16 +2,13 @@ package statelog_test
 
 import (
 	"errors"
-	"net"
 	"testing"
-	"time"
 
-	"github.com/nats-io/nats-server/v2/server"
-	"github.com/nats-io/nats.go"
 	"github.com/nats-io/nats.go/jetstream"
 
 	"github.com/crewlet/crewlet/internal/queue"
 	js "github.com/crewlet/crewlet/internal/queue/jetstream"
+	"github.com/crewlet/crewlet/internal/queue/jetstream/externaltest"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
@@ -55,9 +52,9 @@ func TestAnOversizedRecordIsRefusedOnceAsTooLarge(t *testing.T) {
 			if tc.payload == 0 {
 				h = newHarnessFor(t, tc.domain)
 			} else {
-				srv := startOperatorServer(t, queue.MaxPayloadBytes)
+				srv := externaltest.Start(t, queue.MaxPayloadBytes)
 				h = newHarnessOn(t, tc.domain, js.Config{URL: srv.URL()})
-				srv.restart(tc.payload, h.q.Conn())
+				srv.Restart(tc.payload, h.q.Conn())
 			}
 			_, err := h.writeSized(probeSubject("a"), "op-large", tc.size)
 			if !errors.Is(err, queue.ErrTooLarge) {
@@ -85,69 +82,6 @@ func (unreservedDomain) Stream() statelog.StreamSpec {
 	spec := probeDomain{}.Stream()
 	spec.MaxRecordBytes = statelog.MaxTransportRecordBytes
 	return spec
-}
-
-// operatorServer is a NATS server outside the queue's own configuration — an
-// operator's, whose max_payload is its own — which a case can restart under a
-// running log announcing another.
-type operatorServer struct {
-	t     *testing.T
-	store string
-	ns    *server.Server
-}
-
-// startOperatorServer starts one with JetStream, announcing maxPayload, and
-// stops it when the test ends.
-func startOperatorServer(t *testing.T, maxPayload int32) *operatorServer {
-	t.Helper()
-	s := &operatorServer{t: t, store: t.TempDir()}
-	s.start(-1, maxPayload)
-	t.Cleanup(s.stop)
-	return s
-}
-
-func (s *operatorServer) start(port int, maxPayload int32) {
-	s.t.Helper()
-	ns, err := server.NewServer(&server.Options{
-		Host: "127.0.0.1", Port: port, NoLog: true, NoSigs: true,
-		JetStream: true, StoreDir: s.store, MaxPayload: maxPayload,
-	})
-	if err != nil {
-		s.t.Fatalf("configure an operator's server: %v", err)
-	}
-	go ns.Start()
-	if !ns.ReadyForConnections(30 * time.Second) {
-		ns.Shutdown()
-		s.t.Fatal("the operator's server never became ready")
-	}
-	s.ns = ns
-}
-
-func (s *operatorServer) stop() {
-	s.ns.Shutdown()
-	s.ns.WaitForShutdown()
-}
-
-// URL is the server's client address.
-func (s *operatorServer) URL() string { return s.ns.ClientURL() }
-
-// restart stops the server and starts it again on its own port and its own
-// store, announcing maxPayload, and waits until nc has reconnected to it and
-// reads the new limit — which is what the client refuses against from then on.
-func (s *operatorServer) restart(maxPayload int32, nc *nats.Conn) {
-	s.t.Helper()
-	port := s.ns.Addr().(*net.TCPAddr).Port
-	s.stop()
-	s.start(port, maxPayload)
-	deadline := time.Now().Add(30 * time.Second)
-	for !nc.IsConnected() || nc.MaxPayload() != int64(maxPayload) {
-		if time.Now().After(deadline) {
-			s.t.Fatalf("the client did not reconnect to the restarted server "+
-				"within 30s (connected=%v, reading a max_payload of %d, want %d)",
-				nc.IsConnected(), nc.MaxPayload(), maxPayload)
-		}
-		time.Sleep(20 * time.Millisecond)
-	}
 }
 
 // NO DECLARATION ADMITS A RECORD THE TRANSPORT CANNOT CARRY.
