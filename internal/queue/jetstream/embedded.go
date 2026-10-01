@@ -657,9 +657,9 @@ func embeddedReconnects(clustered bool) int {
 // places this package opens one, so the queue's own, the coordination
 // store's and a donor's second connection cannot differ about it.
 //
-// loss is where a close NATS makes for good is recorded, and nil for a
-// connection whose owner is the one to notice — see [watchClose].
-func (e *embeddedServer) connect(loss *connectionLoss) (*nats.Conn, error) {
+// at says where a close NATS makes for good is recorded, and is the zero value
+// for a connection whose owner is the one to notice — see [watched].
+func (e *embeddedServer) connect(at watched) (*nats.Conn, error) {
 	opts := []nats.Option{
 		nats.Timeout(acceptBudget(e.clustered)),
 		nats.MaxReconnects(embeddedReconnects(e.clustered)),
@@ -681,7 +681,7 @@ func (e *embeddedServer) connect(loss *connectionLoss) (*nats.Conn, error) {
 		// logger rather than its default's raw stderr: see [clientErrors].
 		nats.ErrorHandler(clientErrors{log: logging.Get("queue.jetstream")}.reported),
 	}
-	opts = append(opts, watchClose(loss, true, "")...)
+	opts = append(opts, watchClose(at, true, "")...)
 	var nc *nats.Conn
 	var err error
 	if e.inProcess {
@@ -741,8 +741,9 @@ func joinURLs(urls []string) string {
 
 // dial opens a NATS connection to an external server with this package's own
 // reconnect policy, held to the transport's contract. The caller owns the
-// connection and must close it; loss is where a close NATS makes for good is
-// recorded, and nil where the caller is the one to notice — see [watchClose].
+// connection and must close it; at says where a close NATS makes for good is
+// recorded, and is the zero value where the caller is the one to notice — see
+// [watched].
 //
 // UNEXPORTED, because a caller outside this package reaches it through a
 // queue: [Queue.DialOwned] is how a subsystem gets a second connection with
@@ -750,12 +751,12 @@ func joinURLs(urls []string) string {
 // already proved. An exported Dial beside it was kept for a caller that would
 // otherwise reimplement the option list, and none ever existed — it was code
 // with no caller, indistinguishable from code whose caller nobody had found.
-func dial(cfg Config, loss *connectionLoss) (*nats.Conn, error) {
+func dial(cfg Config, at watched) (*nats.Conn, error) {
 	opts, err := dialOptions(cfg)
 	if err != nil {
 		return nil, err
 	}
-	opts = append(opts, watchClose(loss, false, cfg.URL)...)
+	opts = append(opts, watchClose(at, false, cfg.URL)...)
 	nc, err := nats.Connect(cfg.URL, opts...)
 	if err != nil {
 		// NAMED BY HOST AND PORT, never by cfg.URL itself: stream.url may

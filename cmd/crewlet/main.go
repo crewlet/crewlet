@@ -1308,12 +1308,26 @@ func runEngine(args []string, stderr io.Writer) (err error) {
 		probes = "/health stays 200, /ready answers 503 and every route " +
 			"that would start new work answers 503"
 	}
-	log.InfoContext(ctx, "engine_draining",
-		"in_flight", e.Backends().Queue.InFlightCount(),
-		"detail", "the turns already running finish before this node stops; "+
-			"until they have, "+probes,
-		"hint", "a second interrupt exits at once, leaving those turns to be "+
-			"redelivered once their ack window elapses")
+	//
+	// AND WHAT IT WAITS FOR IS CONDITIONAL on which connection a fatal lost.
+	// With the queue's own gone the drain waits for nothing — the turns are
+	// cancelled, see the shutdown below — and a line promising they finish
+	// first would describe a drain this node is not running.
+	draining := []any{"in_flight", e.Backends().Queue.InFlightCount(),
+		"detail", "the turns already running finish before this node stops; " +
+			"until they have, " + probes,
+		"hint", "a second interrupt exits at once, leaving those turns to be " +
+			"redelivered once their ack window elapses"}
+	select {
+	case <-e.AcksLost():
+		draining = []any{"in_flight", e.Backends().Queue.InFlightCount(),
+			"detail", "this node's own broker connection is closed for good, so " +
+				"nothing the turns still running conclude can be acknowledged and " +
+				"whichever node takes each seat runs it again: they are cancelled " +
+				"rather than waited for, and the drain ends at once"}
+	default:
+	}
+	log.InfoContext(ctx, "engine_draining", draining...)
 
 	// Detached from the signal context, which is already cancelled: that is
 	// what woke us. The drain waits for in-flight turns, bounded only by the
@@ -1326,11 +1340,17 @@ func runEngine(args []string, stderr io.Writer) (err error) {
 	// this process cannot.
 	//
 	// THE SAME DRAIN ON A FATAL, with no signal behind it and so no kill
-	// grace running. It still ends: every write the turns in flight make
-	// against a closed connection fails at once rather than waiting on a
-	// broker, so the drain lasts as long as whatever those turns are already
-	// waiting on, and a second shutdown path that skipped it would be one
-	// more order to keep correct.
+	// grace running, and it still ends — for a reason that depends on which
+	// connection went. With the QUEUE'S OWN gone the drain stops waiting at
+	// once and cancels the turns still running ([node.Node.Drain]): nothing
+	// they conclude can be acknowledged, so a peer runs each of them again
+	// and finishing them here would only make every side effect twice. With
+	// only the COORDINATION STORE'S gone every ack still lands, so the drain
+	// waits for the turns as a signal's does, and they end on their own:
+	// every lease and ledger write they make over the closed connection
+	// fails at once rather than waiting on a broker. Either way the order
+	// after the drain is the one a signal takes, and a second shutdown path
+	// that skipped it would be one more order to keep correct.
 	shutdown(context.WithoutCancel(ctx), e, surface, log)
 	if fatal != nil {
 		return fmt.Errorf("the node stopped itself: %w", fatal)

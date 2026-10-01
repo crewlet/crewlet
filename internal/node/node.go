@@ -132,6 +132,20 @@ type Config struct {
 	SweepInterval     time.Duration
 }
 
+// acksLoss is what a node asks of its queue about the connection every
+// delivery is settled over: the jetstream backend's [jetstream.Queue.AcksLost],
+// closed once that connection is closed for good.
+//
+// DECLARED HERE, by the one consumer, rather than on the queue contract: the
+// memory twin settles nothing over a connection that can be lost, so it has
+// nothing to promise and does not have this — and a queue that does not is one
+// whose drain is never cut short, which is the true answer for it. Asked of
+// the queue itself rather than handed in beside it, so the node cannot be
+// given one queue's deliveries and another's signal.
+type acksLoss interface {
+	AcksLost() <-chan struct{}
+}
+
 // MailboxRegistry is the fleet record a node writes before it creates a seat's
 // mailbox. Declared here, by the consumer; internal/maintenance implements it,
 // beside the sweep that reads the record back.
@@ -154,6 +168,19 @@ type Node struct {
 
 	// turns is the per-node concurrency gate every turn passes through.
 	turns *gate
+
+	// acksLost is the queue's [acksLoss] signal, and nil — never closed —
+	// for a queue without one.
+	acksLost <-chan struct{}
+
+	// cut is closed by a drain cut short because the turns'
+	// acknowledgements can no longer land, and ends every turn running then
+	// or started after. See [Node.Drain]. Never closed otherwise — a drain
+	// that can wait, waits. A channel rather than a context held here,
+	// because what it carries is one node-lifetime fact and not a request's
+	// scope: each turn's own context stays the delivery's, threaded in.
+	cut     chan struct{}
+	cutOnce sync.Once
 
 	// attached records which seats this node currently consumes, so a
 	// release detaches exactly what an acquire attached. Guarded because
@@ -188,6 +215,10 @@ func New(cfg Config) (*Node, error) {
 		attached: map[string]struct{}{},
 		mail:     newMailboxes(),
 		turns:    newGate(cfg.MaxConcurrent),
+		cut:      make(chan struct{}),
+	}
+	if q, ok := cfg.Queue.(acksLoss); ok {
+		n.acksLost = q.AcksLost()
 	}
 
 	host, err := seat.New(seat.Config{
@@ -352,6 +383,24 @@ func (n *Node) seatReleaseBudget() time.Duration {
 // the exact cost step 3 exists to avoid, paid precisely when a caller took
 // this doc's advice and passed a deadline.
 //
+// # Unless the acknowledgements are gone
+//
+// The wait is worth its length because a turn that finishes is ACKNOWLEDGED:
+// its outcome is recorded and nobody runs it again. Once the queue reports its
+// acks lost ([acksLoss]) — its own connection closed for good, the one every
+// delivery is settled over — no running turn's outcome can be, so the broker
+// hands each delivery to whichever node takes its seat and that node runs it
+// again. Finishing it here would buy nothing but a second copy of every side
+// effect (a chat post, a comment, a tracker write) and a later exit. So step 3 ends
+// AT ONCE and every turn still running is CANCELLED, and the rest proceeds as
+// before: the seats are released, in the same order, on the same budget. The
+// cut is one-way — a turn started after it is cancelled as it starts — which
+// matches the only thing that closes the channel, a node that is stopping.
+//
+// Nothing else cuts it. A node that lost only a second connection (the
+// coordination store's, on an embedded broker) stops too, but its acks still
+// land, so its drain waits like a signal's.
+//
 // Drain does not stop the node: a drained node still renews presence-free and
 // the layers beneath are all reversible, so it could be told to claim again.
 // Stop is what ends it.
@@ -385,8 +434,38 @@ func (n *Node) Drain(ctx context.Context) {
 		}
 	}
 
+	// THE WAIT ENDS THE MOMENT THE ACKS ARE LOST, whether they were lost
+	// before the drain began (the usual order: the loss is what stopped the
+	// node) or while it waits. A watcher rather than a check per interval,
+	// because the interval is ten seconds of turns making side effects
+	// nobody will record. Its lifetime is this call's: the deferred cancel
+	// ends it however the loop below ends.
+	wait, endWait := context.WithCancel(ctx)
+	defer endWait()
+	if n.acksLost != nil {
+		go func() {
+			select {
+			case <-n.acksLost:
+				endWait()
+			case <-wait.Done():
+			}
+		}()
+	}
+
 	for {
-		remaining, err := n.cfg.Queue.WaitForHandlers(ctx, drainLogInterval)
+		remaining, err := n.cfg.Queue.WaitForHandlers(wait, drainLogInterval)
+		if n.acksGone() {
+			n.cutOnce.Do(func() { close(n.cut) })
+			if remaining > 0 {
+				n.log.Warn("drain_cut", "in_flight", remaining,
+					"detail", "the queue's own broker connection is closed for "+
+						"good, so nothing the running turns conclude can be "+
+						"acknowledged and each would be run again by whichever "+
+						"node takes its seat: they are cancelled rather than "+
+						"waited for")
+			}
+			break
+		}
 		if err != nil {
 			n.log.Warn("drain_wait_failed", "error", err)
 			break
@@ -489,6 +568,21 @@ func (n *Node) runTurn(ctx context.Context, handle string, evs []*events.Event) 
 		return queue.Defer("node is draining, so this turn was not started")
 	}
 	defer release()
+	// ENDED BY A DRAIN THAT CANNOT WAIT FOR IT, and by nothing else here:
+	// once the queue's acknowledgements can no longer land, this turn's
+	// outcome will not be recorded and its seat's successor runs the same
+	// delivery again, so every side effect it makes from then on is made
+	// twice. See [Node.Drain]. The watcher's lifetime is the turn's: the
+	// deferred cancel ends it however the turn returns.
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	go func() {
+		select {
+		case <-n.cut:
+			cancel()
+		case <-ctx.Done():
+		}
+	}()
 	return n.cfg.Turn(ctx, handle, evs)
 }
 
@@ -581,6 +675,18 @@ func (n *Node) ResumeClaiming(ctx context.Context) {
 
 // InFlightTurns is how many turns hold a concurrency slot right now.
 func (n *Node) InFlightTurns() int { return n.turns.inFlight() }
+
+// acksGone reports whether the queue's [acksLoss] signal has closed. A queue
+// without one leaves the channel nil, which never has, and the default arm
+// answers that.
+func (n *Node) acksGone() bool {
+	select {
+	case <-n.acksLost:
+		return true
+	default:
+		return false
+	}
+}
 
 // Attached reports the seats this node currently consumes. Diagnostics and
 // the fleet suite's "attached to exactly what I own" assertion read it.

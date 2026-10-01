@@ -333,7 +333,7 @@ func TestAnUnreadableTLSPathIsNamedBeforeDialling(t *testing.T) {
 			// A URL nothing listens on: the point is that the TLS
 			// material is refused BEFORE anything is dialled, so the
 			// error must not be a connection failure.
-			_, err := dial(Config{URL: "nats://127.0.0.1:1", TLS: tc.tls}, nil)
+			_, err := dial(Config{URL: "nats://127.0.0.1:1", TLS: tc.tls}, watched{})
 			if err == nil {
 				t.Fatal("an unreadable TLS path dialled anyway")
 			}

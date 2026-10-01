@@ -62,23 +62,47 @@ import (
 // the next connection a peer-facing subsystem dials — and every such close is
 // LOGGED, but the node is stopping already, and a cause that changed between
 // the reader looking and the reader reporting would name the wrong one.
+//
+// # Why the queue's own connection is told apart
+//
+// The node stops for any of them; what differs is what the turns it is still
+// running can achieve on the way down. Every delivery this
+// queue made is acknowledged, nacked or deferred over the queue's OWN
+// connection, so once that one is gone nothing a running turn concludes can be
+// recorded: the broker hands the message to whichever node takes the seat once
+// its ack window elapses, and that node runs it again — every chat post, every
+// comment, every tracker write a second time. Its loss therefore ends the drain
+// at once ([Queue.AcksLost]), while the coordination store's connection closing
+// alone leaves every ack still landing, and the drain waits for the turns as a
+// signal's does. A second [sync.Once] rather than a flag on the first close,
+// because the queue's own connection is routinely the SECOND to go — the
+// coordination store's can close first on an embedded broker that stopped —
+// and the first close names the cause while this one decides the drain.
 type connectionLoss struct {
 	once  sync.Once
 	done  chan struct{}
 	cause error
+
+	acksOnce sync.Once
+	acks     chan struct{}
 }
 
 func newConnectionLoss() *connectionLoss {
-	return &connectionLoss{done: make(chan struct{})}
+	return &connectionLoss{done: make(chan struct{}), acks: make(chan struct{})}
 }
 
-// record keeps the first cause and closes done. Written before the close, so a
-// reader that has seen done closed reads the cause it was closed for.
-func (l *connectionLoss) record(cause error) {
+// record keeps the first cause and closes done, and closes acks as well when
+// the connection that closed is the one deliveries settle over. The cause is
+// written before done is closed, so a reader that has seen done closed reads
+// the cause it was closed for.
+func (l *connectionLoss) record(cause error, settles bool) {
 	l.once.Do(func() {
 		l.cause = cause
 		close(l.done)
 	})
+	if settles {
+		l.acksOnce.Do(func() { close(l.acks) })
+	}
 }
 
 // lostCause is the recorded cause, or nil while nothing has been lost.
@@ -94,6 +118,21 @@ func (l *connectionLoss) lostCause() error {
 	}
 }
 
+// watched is what a dial is told about the connection it opens: where NATS
+// closing it for good is recorded, and whether it is the queue's OWN.
+//
+// The zero value is an UNWATCHED connection, whose owner is the one to notice
+// its loss — a snapshot donor's ([Queue.DialOwned]).
+type watched struct {
+	loss *connectionLoss
+	// settles marks the queue's own connection: the one every delivery the
+	// queue made is acknowledged, nacked and deferred over, whose loss
+	// [Queue.AcksLost] reports. Exactly one connection per queue carries
+	// it; a second one [Queue.DialWatched] opens does not, because a node
+	// whose coordination connection is gone still settles what it runs.
+	settles bool
+}
+
 // lossWatch is the closed handler a watched connection is given: what a
 // sentence about that connection names, and where its close is recorded.
 //
@@ -101,6 +140,7 @@ func (l *connectionLoss) lostCause() error {
 // then tell the handler a connection was given is this one.
 type lossWatch struct {
 	loss     *connectionLoss
+	settles  bool
 	log      *slog.Logger
 	embedded bool
 	// server names the server for a sentence. Fixed at the dial, because
@@ -111,18 +151,19 @@ type lossWatch struct {
 }
 
 // watchClose is the option pair that makes a connection's close for good a
-// node's loss — or nothing, where loss is nil and the connection's owner is the
-// one to notice (a snapshot donor's: see [Queue.DialOwned]).
+// node's loss — or nothing, where the connection is unwatched and its owner is
+// the one to notice (a snapshot donor's: see [Queue.DialOwned]).
 //
 // The pair, never the handler alone: without NoCallbacksAfterClientClose the
 // client calls the handler for its owner's own Close as well, and every
 // graceful stop would read as a lost broker.
-func watchClose(loss *connectionLoss, embedded bool, url string) []nats.Option {
-	if loss == nil {
+func watchClose(at watched, embedded bool, url string) []nats.Option {
+	if at.loss == nil {
 		return nil
 	}
-	w := lossWatch{loss: loss, log: logging.Get("queue.jetstream"),
-		embedded: embedded, server: lostServer(embedded, url)}
+	w := lossWatch{loss: at.loss, settles: at.settles,
+		log: logging.Get("queue.jetstream"), embedded: embedded,
+		server: lostServer(embedded, url)}
 	return []nats.Option{nats.NoCallbacksAfterClientClose(), nats.ClosedHandler(w.closed)}
 }
 
@@ -142,11 +183,15 @@ func lostServer(embedded bool, url string) string {
 // LOGGED ON EVERY WATCHED CONNECTION and recorded only for the first, for the
 // reason [connectionLoss] gives: each close is a fact an operator may want, the
 // cause a node stops for is one.
+//
+// The line says WHETHER IT WAS THE QUEUE'S OWN, because the two outcomes differ
+// for the turns still running: with the queue's own gone none of them can be
+// acknowledged any more, and with only a second one gone every ack still lands.
 func (w lossWatch) closed(nc *nats.Conn) {
 	cause := lostConnection(w.server, nc.LastError(), w.embedded)
 	w.log.Error("jetstream_connection_closed_for_good",
-		"server", w.server, "error", cause.Error())
-	w.loss.record(cause)
+		"server", w.server, "carries_acks", w.settles, "error", cause.Error())
+	w.loss.record(cause, w.settles)
 }
 
 // lostConnection is the sentence a node stops with: what closed, why, and what

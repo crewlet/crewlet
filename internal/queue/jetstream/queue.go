@@ -276,7 +276,7 @@ type Queue struct {
 
 	// lost is where this queue's own connection, and every second one
 	// dialled through [Queue.DialWatched], records being closed for good.
-	// See [Queue.Lost].
+	// See [Queue.Lost], and [Queue.AcksLost] for the queue's own alone.
 	lost *connectionLoss
 
 	// attachments holds one entry per (topic, group) this process
@@ -349,11 +349,16 @@ func newQueueOn(ctx context.Context, cfg Config, embedded *embeddedServer, owns 
 	// message this build sends, so that is a boot refused by name rather
 	// than a node that serves and fails its first large write. See
 	// carriesTheContract.
+	//
+	// THE ONE CONNECTION THAT SETTLES: every consumer this queue attaches
+	// fetches and acknowledges over it, so its close for good is the one
+	// [Queue.AcksLost] reports.
 	var err error
+	own := watched{loss: q.lost, settles: true}
 	if embedded != nil {
-		q.nc, err = embedded.connect(q.lost)
+		q.nc, err = embedded.connect(own)
 	} else {
-		q.nc, err = dial(cfg, q.lost)
+		q.nc, err = dial(cfg, own)
 	}
 	if err != nil {
 		return nil, fmt.Errorf("connect nats: %w", err)
@@ -949,7 +954,7 @@ func (q *Queue) Conn() *nats.Conn { return q.nc }
 // never this node its seats. A connection whose loss IS the node's is
 // [Queue.DialWatched]'s.
 func (q *Queue) DialOwned() (*nats.Conn, error) {
-	return q.dialSecond(nil)
+	return q.dialSecond(watched{})
 }
 
 // DialWatched opens a second connection to the same broker, which the caller
@@ -962,21 +967,25 @@ func (q *Queue) DialOwned() (*nats.Conn, error) {
 // node consuming work over the queue's connection while every renewal failed —
 // the "alive to its peers, deaf to its work" split from the other side, and
 // reported by nothing.
+//
+// It does NOT close [Queue.AcksLost]: no delivery this queue made is settled
+// over it, so a node that lost only this one still acknowledges every turn it
+// finishes.
 func (q *Queue) DialWatched() (*nats.Conn, error) {
-	return q.dialSecond(q.lost)
+	return q.dialSecond(watched{loss: q.lost})
 }
 
 // dialSecond is the one dial both of those take, apart only in whether a close
 // for good is recorded.
-func (q *Queue) dialSecond(loss *connectionLoss) (*nats.Conn, error) {
+func (q *Queue) dialSecond(at watched) (*nats.Conn, error) {
 	if q.embedded != nil {
-		return q.embedded.connect(loss)
+		return q.embedded.connect(at)
 	}
 	if q.cfg.URL == "" {
 		return nil, fmt.Errorf("jetstream: this queue has no embedded server " +
 			"and no URL, so a second connection cannot be opened")
 	}
-	return dial(q.cfg, loss)
+	return dial(q.cfg, at)
 }
 
 // Lost is closed once NATS has closed, FOR GOOD, this queue's own connection or
@@ -996,6 +1005,21 @@ func (q *Queue) Lost() <-chan struct{} { return q.lost.done }
 // LostCause is the sentence a node stops with once [Queue.Lost] is closed, and
 // nil before.
 func (q *Queue) LostCause() error { return q.lost.lostCause() }
+
+// AcksLost is closed once NATS has closed THIS QUEUE'S OWN connection for good:
+// the one every delivery it made is acknowledged, nacked and deferred over.
+//
+// From then on no handler still running can have its outcome recorded, so the
+// broker hands what it is running to a successor once the ack window elapses,
+// and whatever the handler does from here on is done twice. That is what a
+// drain asks this for: a turn it would otherwise wait for is now only work to
+// be duplicated, so it is cancelled rather than waited for.
+//
+// [Queue.Lost] is the wider fact and closes first or together with this one: a
+// second connection [Queue.DialWatched] opened closing for good closes Lost and
+// NOT this, because deliveries never settle over it. On this backend and not
+// the contract, for [Queue.Lost]'s reason.
+func (q *Queue) AcksLost() <-chan struct{} { return q.lost.acks }
 
 // Backend names this backend for operator display. Nothing may branch on it.
 func (q *Queue) Backend() string {

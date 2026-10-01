@@ -40,7 +40,8 @@ import (
 //
 // Mutation: wait on the signal context alone in runEngine and the node never
 // exits; return nil after the shutdown and the exit status is the probe's own;
-// skip the shutdown and the order row goes red.
+// skip the shutdown and the order row goes red; have Engine.AcksLost answer
+// nothing and the engine_draining row does.
 func TestANodeWhoseBrokerConnectionIsClosedForGoodExitsNamingIt(t *testing.T) {
 	// Not parallel, for the drain probe's reason: a whole node in a second
 	// process.
@@ -176,6 +177,29 @@ api:
 			t.Errorf("docs/guides/deployment.md prints no exit line starting %q, "+
 				"which is how main writes one", prefix)
 		}
+	}
+
+	// AND THE DRAIN SAYS IT WAITS FOR NOTHING. The connection lost is the
+	// queue's own, the one every delivery is acknowledged over, so the drain
+	// cancels the turns still running rather than finishing them for a peer
+	// to run again — and the line an operator reads before it must not
+	// promise that they finish first.
+	var draining struct {
+		Detail string `json:"detail"`
+	}
+	for line := range strings.SplitSeq(output.String(), "\n") {
+		var record struct {
+			Msg string `json:"msg"`
+		}
+		if json.Unmarshal([]byte(line), &record) == nil && record.Msg == "engine_draining" {
+			_ = json.Unmarshal([]byte(line), &draining)
+			break
+		}
+	}
+	if !strings.Contains(draining.Detail, "cancelled rather than waited for") {
+		t.Errorf("engine_draining says %q: the queue's own connection is gone, so "+
+			"the line should say the running turns are cancelled and the drain "+
+			"ends at once", draining.Detail)
 	}
 
 	// AND THROUGH THE ORDINARY SHUTDOWN: said, drained, stopped — the order a

@@ -3,8 +3,8 @@ package engine
 import "fmt"
 
 // brokerLoss is what the engine asks of the queue it runs on about the
-// connection under it: the jetstream backend's [jetstream.Queue.Lost] and
-// [jetstream.Queue.LostCause].
+// connection under it: the jetstream backend's [jetstream.Queue.Lost],
+// [jetstream.Queue.LostCause] and [jetstream.Queue.AcksLost].
 //
 // DECLARED HERE, by the one consumer, rather than on the queue contract: the
 // memory twin holds no connection that can be closed under it, so it has
@@ -13,6 +13,7 @@ import "fmt"
 type brokerLoss interface {
 	Lost() <-chan struct{}
 	LostCause() error
+	AcksLost() <-chan struct{}
 }
 
 // Fatal is closed once this node has lost something it cannot run without, and
@@ -46,6 +47,25 @@ func (e *Engine) FatalCause() error {
 	}
 	if cause := lost.LostCause(); cause != nil {
 		return fmt.Errorf("engine: stream: %w", cause)
+	}
+	return nil
+}
+
+// AcksLost is closed once the loss behind [Engine.Fatal] includes the QUEUE'S
+// OWN connection — the one every delivery is acknowledged over — rather than
+// only the coordination store's beside it.
+//
+// The drain reads the same fact from the queue itself and acts on it: it stops
+// waiting for the turns still running and cancels them, because nothing they
+// conclude can be acknowledged and a peer will run each of them again (see
+// [node.Node.Drain]). This is for a caller that has to SAY so before the drain
+// begins — `crewlet run`'s engine_draining line, which otherwise promises an
+// operator that the running turns finish first.
+//
+// Nil — a channel that never closes — on a queue with no connection to lose.
+func (e *Engine) AcksLost() <-chan struct{} {
+	if lost, ok := e.backends.Queue.(brokerLoss); ok {
+		return lost.AcksLost()
 	}
 	return nil
 }

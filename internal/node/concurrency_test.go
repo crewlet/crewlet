@@ -39,6 +39,15 @@ type gatedNode struct {
 
 func gatedFleet(t *testing.T, ceiling int, turn node.TurnFunc, seats ...string) *gatedNode {
 	t.Helper()
+	return gatedFleetOn(t, ceiling, nil, turn, seats...)
+}
+
+// gatedFleetOn is gatedFleet with the node's own queue passed through wrap
+// first, for a case that gives the node a capability the twin does not have.
+// A nil wrap hands it the twin as it is.
+func gatedFleetOn(t *testing.T, ceiling int, wrap func(queue.EventQueue) queue.EventQueue,
+	turn node.TurnFunc, seats ...string) *gatedNode {
+	t.Helper()
 	broker := qmem.NewBroker()
 	backend := &coordmem.Backend{}
 
@@ -51,6 +60,9 @@ func gatedFleet(t *testing.T, ceiling int, turn node.TurnFunc, seats ...string) 
 		return q
 	}
 	nodeQueue, publisher := client(), client()
+	if wrap != nil {
+		nodeQueue = wrap(nodeQueue)
+	}
 	for _, h := range seats {
 		if _, err := publisher.EnsureSubscription(t.Context(),
 			inbox(h), inboxGroup(h)); err != nil {

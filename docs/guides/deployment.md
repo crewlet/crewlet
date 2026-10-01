@@ -463,13 +463,19 @@ A node in that state has nothing to publish, consume or renew a lease over,
 and it used to stay up anyway — answering its liveness probe, its seats lapsing
 to peers, until somebody restarted it. It now **stops itself**: it logs
 `jetstream_connection_closed_for_good` and `engine_fatal`, drains and tears
-down exactly as it does on `SIGTERM`, and exits with status **1**, printing on
-stderr what closed, why, and what to change. Run it under something that
+down in the order it does on `SIGTERM`, and exits with status **1**, printing on
+stderr what closed, why, and what to change. The one difference from a
+`SIGTERM` is the drain over a lost connection to the stream: every delivery is
+acknowledged over it, so no turn still running can be, and whichever node
+takes its seat runs it again — the drain cancels those turns rather than
+finishing them twice, and ends at once (`drain_cut`). Run it under something that
 restarts a process which exits non-zero — a systemd unit with
 `Restart=on-failure`, a container restart policy, a Kubernetes deployment —
 and the node comes back by itself once the cause is fixed. The same applies
-to the connection the coordination store rides on an embedded broker, and to
-this node's own embedded broker going away under it: a connection to it tries
+to the second connection the coordination store holds on an embedded broker —
+whose loss alone leaves every acknowledgement landing, so that drain waits for
+the running turns as `SIGTERM`'s does — and to this node's own embedded broker
+going away under it: a connection to it tries
 again once a second for as long as a boot gives that broker to accept one —
 30 seconds solo, 2 minutes on a cluster member — and nothing but a restart
 brings a broker in this process back. It tries that member and no other: a

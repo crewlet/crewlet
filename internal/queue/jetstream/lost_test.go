@@ -186,6 +186,63 @@ func TestAConnectionClosedForGoodIsReportedOnceWithItsCause(t *testing.T) {
 	})
 }
 
+// ONLY THE QUEUE'S OWN CONNECTION CLOSING LOSES THE ACKS.
+//
+// Every delivery the queue made is settled over its own connection, so that one
+// closing for good is what makes a running turn's outcome unrecordable — and
+// what a drain stops waiting on. A second watched connection closing (the
+// coordination store's, on an embedded broker) stops the node too, but every
+// ack still lands, so it must NOT read as lost acks: a drain cut there would
+// cancel turns whose outcome the broker was about to record.
+//
+// Staged on an operator's server, through the one gesture that closes ONE
+// connection and leaves the other: a max_payload lowered by a live reload and a
+// message past it, sent first on the second connection and then on the queue's.
+//
+// Mutation: dial DialWatched's connection as the one that settles and the first
+// half goes red; dial the queue's own without it, or record a close without
+// asking which connection it was, and the second half does.
+func TestOnlyTheQueuesOwnConnectionClosingLosesTheAcks(t *testing.T) {
+	t.Parallel()
+	const limit = queue.MaxPayloadBytes / 4
+	srv := externaltest.Start(t, queue.MaxPayloadBytes)
+	q := newQueueWith(t, Config{URL: srv.URL()})
+	second, err := q.DialWatched()
+	if err != nil {
+		t.Fatalf("DialWatched: %v", err)
+	}
+	t.Cleanup(second.Close)
+
+	srv.Reload(limit)
+	sendPast(t, second, limit)
+	first := lost(t, q)
+	select {
+	case <-q.AcksLost():
+		t.Fatalf("a second watched connection closing for good (%v) reported the "+
+			"queue's acks lost, so a drain would cancel turns whose outcome still "+
+			"lands over the queue's own connection", first)
+	case <-time.After(quietFor):
+	}
+	if q.nc.IsClosed() {
+		t.Fatal("the queue's own connection closed with the second one: the case " +
+			"staged nothing it can tell apart")
+	}
+
+	sendPast(t, q.nc, limit)
+	select {
+	case <-q.AcksLost():
+	case <-time.After(lostWithin):
+		t.Fatalf("the queue's own connection was closed for good (%v) and its "+
+			"acks were not reported lost within %s, so a drain would go on "+
+			"waiting for turns nothing can acknowledge", q.nc.Status(), lostWithin)
+	}
+	// And the cause a node stops for is still the first close's.
+	if got := q.LostCause(); got == nil || got.Error() != first.Error() {
+		t.Errorf("the queue's own close rewrote the cause:\nfirst: %v\nnow:   %v",
+			first, got)
+	}
+}
+
 // A CLOSE THIS NODE MADE ITSELF IS NOT A LOSS — and nor is a close of a
 // connection whose owner is the one to notice it.
 //
