@@ -830,7 +830,7 @@ interface GridRowProps<T> {
  * draws those two rows; a parent rendering for a reason of its own — a poll
  * that brought the same rows back, a filter typed above the grid — draws none;
  * and a row whose object, columns or state moved is drawn again. A poll's
- * answer keeps the objects of the rows it did not change (`lib/share.ts`), so
+ * answer keeps the objects of the rows it did not change (`protocol/share.ts`), so
  * what a poll draws is what it changed. Built
  * inline, every one of those drew every row: a `j` on a hundred-row grid was a
  * hundred rows, and a screen's own render was every row of every grid on it.

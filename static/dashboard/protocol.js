@@ -134,9 +134,12 @@ var PRINT_CHARS = 64;
 /**
 * Which bucket a value is looked for in: a SHALLOW print of it.
 *
-* A BUCKET, NOT A VERDICT: two deep-equal values always print alike, and a
-* match is confirmed by the deep comparison, so two values that print alike
-* and differ are told apart there. SHALLOW AND SHORT because it is taken of
+* A BUCKET, NOT A VERDICT: two deep-equal values whose keys run in one order
+* print alike — every row one encoder wrote and every row one derivation built
+* — and a match is confirmed by the deep comparison, so two values that print
+* alike and differ are told apart there. Two that differ only in the ORDER of
+* their keys are deep-equal and print apart, which costs that row a drawing
+* and never a wrong answer. SHALLOW AND SHORT because it is taken of
 * every row of a list each time anything in that list moves, and a row may be
 * large — a phase record carries its whole prompts and response, and a full
 * print of each would be megabytes of string built to find one new row at the
