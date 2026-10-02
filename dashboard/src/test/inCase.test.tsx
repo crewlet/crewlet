@@ -3,25 +3,27 @@
  *
  * Each pair below is a case that RUNS OUT OF ITS TIME with something still
  * out — a wait of its OWN that nothing in the harness can see, an `act` scope,
- * a scope inside a scope or a wait inside one, a `findBy`, a poll on a fake
- * clock — and the case after it, which draws its own page, releases what the
- * first one waited for, and reads what the late case came to. The timeout is
- * real: the first case is `test.fails` with a budget of [RUNS_OUT], waiting
- * on something that never comes inside it, so what is checked is what Vitest
- * itself does with a case it has given up on — fails it, starts the next, and
- * leaves its function running. And the case after it first holds it to having
- * failed by that timeout and by nothing else ([runsOut]).
+ * a scope inside a scope or a wait inside one, a `findBy`, a render or a
+ * cleanup still to make, a poll on a fake clock — and the case after it,
+ * which draws its own page, releases what the first one waited for, and reads
+ * what the late case came to. The timeout is real: the first case is
+ * `test.fails` with a budget of [RUNS_OUT], waiting on something that never
+ * comes inside it, so what is checked is what Vitest itself does with a case
+ * it has given up on — fails it, starts the next, and leaves its function
+ * running. And the case after it first holds it to having failed by that
+ * timeout and by nothing else ([runsOut]).
  *
  * Through the library alone, every one of these reached the second case: the
  * late `act` ran its body beside it, the open scope held React's act count
  * raised so the second case's own render never landed, the polling `findBy`
- * held the act environment set aside, and the late wait and click found and
- * pressed the second case's control. Ended in any order but innermost first,
- * a scope inside a scope left the count raised just the same, and a wait
- * inside a scope put back the scope's environment over the case's. And
- * Vitest's own `vi.waitFor` moved the next case's fake clock. Each assertion
- * below goes red when the matching half of `inCase.ts` or `cases.ts` is taken
- * away.
+ * held the act environment set aside, the late wait and click found and
+ * pressed the second case's control, and the late render and cleanup drew
+ * into the second case's page and took it away. Ended in any order but
+ * innermost first, a scope inside a scope left the count raised just the
+ * same, and a wait inside a scope put back the scope's environment over the
+ * case's. And Vitest's own `vi.waitFor` moved the next case's fake clock.
+ * Each assertion below goes red when the matching half of `inCase.ts` or
+ * `cases.ts` is taken away.
  */
 
 import { act, answered, cleanup, fireEvent, poll, render, renderHook, screen } from "./inCase.ts";

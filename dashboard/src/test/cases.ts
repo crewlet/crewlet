@@ -1,14 +1,14 @@
 /**
  * A case's lifetime, as everything it does sees it — and the one wait that
  * needs no testing library to bind. Imported by tests only; suites reach it
- * through `inCase.ts`, which binds the library's `act`, waits and events to
- * what this module keeps.
+ * through `inCase.ts`, which binds the library's `act`, renders, waits and
+ * events to what this module keeps.
  *
  * # A case that times out is failed, not stopped
  *
  * Its function is a promise nothing can cancel. Vitest fails it and starts
  * the next case, and the function goes on running beside the cases after it,
- * waking at whatever it was waiting for — and four things it does then reach
+ * waking at whatever it was waiting for — and five things it does then reach
  * the next case:
  *
  * - AN `act`. React keeps ONE act scope count for the process and restores on
@@ -24,6 +24,10 @@
  *   which is the act scope's restore-on-exit hazard again.
  * - AN EVENT (`fireEvent`), dispatched inside the library's `act` onto
  *   whatever the late case found — the next case's controls.
+ * - A RENDER OR A CLEANUP (`render`, `renderHook`, `rerender`, `unmount`,
+ *   `cleanup`), each in an `act` of the library's own that opens and closes
+ *   in one turn — but a render draws into the next case's page, and a
+ *   cleanup unmounts every page the library mounted, the next case's too.
  * - A POLL (`vi.waitFor`), which before every look advances whatever fake
  *   clock is installed — by then the next case's, whose timers it fires — and
  *   looks at the next case's page. Vitest's own cannot be bound, so a suite
@@ -58,9 +62,9 @@
  * each unwound before the next is ended, because each puts back on exit what
  * it found on entry and only the reverse of the order they opened puts back
  * the case's own. So React's scope count and the act environment are back to
- * what the next case expects before it starts. Every act, wait, event or poll
- * the case asks for after that is REFUSED before it opens, naming why
- * ([caseEnded]).
+ * what the next case expects before it starts. Every act, render, cleanup,
+ * wait, event or poll the case asks for after that is REFUSED before it
+ * opens, naming why ([caseEnded]).
  *
  * # Why this is not `inCase.ts`
  *
