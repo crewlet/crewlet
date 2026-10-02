@@ -3,7 +3,8 @@
  *
  * Each pair below is a case that RUNS OUT OF ITS TIME with something still
  * out — a wait of its OWN that nothing in the harness can see, an `act` scope,
- * a scope inside a scope or a wait inside one, a `findBy`, a render or a
+ * a scope inside a scope or a wait inside one, a wait that found what it
+ * looked for and is held in a turn of a fake clock, a `findBy`, a render or a
  * cleanup still to make, a poll on a fake clock — and the case after it,
  * which draws its own page, releases what the first one waited for, and reads
  * what the late case came to. The timeout is real: the first case is
@@ -21,9 +22,10 @@
  * into the second case's page and took it away. Ended in any order but
  * innermost first, a scope inside a scope left the count raised just the
  * same, and a wait inside a scope put back the scope's environment over the
- * case's. And Vitest's own `vi.waitFor` moved the next case's fake clock.
- * Each assertion below goes red when the matching half of `inCase.ts` or
- * `cases.ts` is taken away.
+ * case's. A wait held in the library's own turn of a fake clock could not be
+ * ended at all, so neither was the scope round it. And Vitest's own
+ * `vi.waitFor` moved the next case's fake clock. Each assertion below goes red
+ * when the matching half of `inCase.ts` or `cases.ts` is taken away.
  */
 
 import { act, answered, cleanup, fireEvent, poll, render, renderHook, screen } from "./inCase.ts";
@@ -225,6 +227,44 @@ test("finds the act environment the late case began with", async () => {
   scopedWaitRanOut();
   expect(actEnvironment()).toBe(environmentBefore);
   expect(await scopedWait).toBe(`findBy/waitFor: ${ENDED}`);
+});
+
+/* A wait that found what it looked for, held in a turn of a fake clock, inside a scope. */
+
+let heldWait: Promise<string> = Promise.resolve("never started");
+/** The act environment as the case found it, before its scope and its wait each set it. */
+let environmentBeforeHeld: unknown = "unread";
+
+const heldTurnRanOut = runsOut(
+  "a case that runs out of time in the turn after a wait that found, on a fake clock",
+  async () => {
+    vi.useFakeTimers();
+    onTestFinished(() => {
+      vi.useRealTimers();
+    });
+    environmentBeforeHeld = actEnvironment();
+    render(<p>drawn by the late case</p>);
+    heldWait = settled(
+      act(async () => {
+        // FOUND AT ONCE, and then held: before it puts the environment back,
+        // a wait lets one turn of the page's timer pass, and on this clock
+        // nothing moves that timer.
+        await screen.findByText("drawn by the late case");
+      }),
+    );
+    await heldWait;
+  },
+);
+
+test("finds that wait and the scope round it ended, so its own renders land", async () => {
+  heldTurnRanOut();
+  expect(actEnvironment()).toBe(environmentBeforeHeld);
+  render(<Counter />);
+  fireEvent.click(screen.getByRole("button"));
+  expect(screen.getByRole("button").textContent).toBe("pressed 1");
+  // The wait had found what it looked for, so it hands that back; the late
+  // case is refused at the scope round it, the next thing it asks for.
+  expect(await heldWait).toBe(`act: ${ENDED}`);
 });
 
 /* A findBy still polling when its case runs out of time. */

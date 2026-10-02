@@ -18,8 +18,9 @@
  *   leaves a scope open — but each moves the page, and the page by then is
  *   the next case's.
  * - The library's waits (`findBy*`, `waitFor`) and events (`fireEvent`),
- *   through its two hooks, `asyncWrapper` and `eventWrapper`, wrapped once
- *   as this module loads ([bindTestingLibrary]).
+ *   through its two hooks, `asyncWrapper` and `eventWrapper`, set once as
+ *   this module loads ([bindTestingLibrary]) — a wait's restated, so every
+ *   step of it ends with its case ([waitUntilEnded]).
  *
  * What is not ended: the library's poll behind a wait that was refused goes
  * on to its own one-second deadline, but its answer goes nowhere and it opens
@@ -177,15 +178,71 @@ export async function answered(step?: () => void): Promise<void> {
   await act(async () => {});
 }
 
+/** Where React reads whether it runs under `act`, which every wait sets aside. */
+const reactGlobals = globalThis as { IS_REACT_ACT_ENVIRONMENT?: unknown };
+
+/**
+ * The library's own wrapper around a wait, for a wait a case makes, with
+ * each step it can be held at ended by `end`, its case's end. It sets the act
+ * environment aside, waits, lets one turn of the page's timer pass so what
+ * the wait set off lands before the environment is put back, and puts it
+ * back.
+ *
+ * RESTATED RATHER THAN WRAPPED, because that turn of the timer is the one
+ * step a race around the wait does not reach, and it can be held. The
+ * library takes `setTimeout` as the page has it, which under Vitest's fake
+ * timers is a fake one nothing moves — the library advances Jest's clock
+ * there and no other. So a wait that FOUND what it looked for sat in that
+ * turn until its case ran out of time, and the case's end could not unwind
+ * it: the act environment stayed set aside, and the end, which ends each
+ * scope only once the one opened inside it has unwound, waited on it for
+ * ever and ended none of the scopes outside it, so the next case's renders
+ * were queued into a scope nobody closed.
+ *
+ * The two steps end differently, because they are different facts. A wait
+ * still looking when its case ends is REFUSED: what it would find by then is
+ * the next case's. A wait that already found is not refused — what it found
+ * was the case's own — so the end only cuts its turn short, and the wait
+ * hands back what it found as the library would have; whatever the late
+ * case asks for next is refused there. Refused here instead, it pre-empted
+ * the refusal a harness wait gives in its own words (the builder's testkit
+ * wakes its waits with the lens's end, and they land in this turn).
+ *
+ * Everything else is the library's to the letter, so a live case waits
+ * exactly as it did — the same timer, fake or not, the same environment set
+ * aside and put back. The one branch left out advances Jest's fake clock,
+ * and no suite here runs under Jest.
+ */
+async function waitUntilEnded<T>(wait: () => Promise<T>, end: Promise<void>): Promise<T> {
+  const refused = end.then(() => {
+    throw caseEnded("findBy/waitFor");
+  });
+  const before = reactGlobals.IS_REACT_ACT_ENVIRONMENT;
+  reactGlobals.IS_REACT_ACT_ENVIRONMENT = false;
+  try {
+    const found = await Promise.race([wait(), refused]);
+    await Promise.race([
+      new Promise<void>((resolve) => {
+        setTimeout(resolve, 0);
+      }),
+      end,
+    ]);
+    return found;
+  } finally {
+    reactGlobals.IS_REACT_ACT_ENVIRONMENT = before;
+  }
+}
+
 /**
  * Binds the library's waits and events to the case whose async context makes
  * them. Run once, as this module loads — after the library, which it imports,
  * has configured itself.
  *
- * A WAIT RACES ITS CASE'S END INSIDE THE LIBRARY'S OWN WRAPPER, so when the
- * case ends the wrapper unwinds — it puts back the act environment it set
- * aside — before the next case begins, and the case is handed the refusal
- * rather than an element the next case drew.
+ * A WAIT IN A CASE ENDS WITH ITS CASE AT EVERY STEP ([waitUntilEnded]), so
+ * when the case ends the wait unwinds — it puts back the act environment it
+ * set aside — before the next case begins, and a wait still looking is
+ * handed the refusal rather than an element the next case drew. A wait
+ * outside every case is the library's own.
  */
 function bindTestingLibrary(): void {
   const { asyncWrapper: waitAsLibrary, eventWrapper: dispatchAsLibrary } = getConfig();
@@ -199,10 +256,7 @@ function bindTestingLibrary(): void {
         return Promise.reject(refusal);
       }
       const out = life.open();
-      const ended = out.ended.then(() => {
-        throw caseEnded("findBy/waitFor");
-      });
-      return out.track(waitAsLibrary(() => Promise.race([wait(), ended])));
+      return out.track(waitUntilEnded(wait, out.ended));
     },
     eventWrapper: (dispatch) => {
       caseOf("fireEvent")?.refuse("fireEvent");
