@@ -11,7 +11,7 @@
  * nothing else on the screen calls.
  */
 
-import { cleanup, render, screen } from "@testing-library/react";
+import { answered, cleanup, render, screen } from "~/test/inCase.ts";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 
 const headlines = vi.hoisted(() => [] as string[]);
@@ -32,7 +32,6 @@ import { Router } from "~/app/router.tsx";
 import { ClientContext } from "~/lib/store-hooks.ts";
 import { LiveSocket, Store } from "~/protocol/index.ts";
 import type { EventEnvelope } from "~/protocol/index.ts";
-import { flushInCase } from "~/test/inCase.ts";
 
 class InertWebSocket {
   static CONNECTING = 0;
@@ -104,7 +103,7 @@ function mount() {
       </Router>
     </ClientContext.Provider>,
   );
-  return { store, answered: flushInCase() };
+  return { store, answered };
 }
 
 test("another seat's phase draws none of this seat's turn cards", async () => {

@@ -353,7 +353,7 @@ test("changes to two tasks under one key link to their own two tasks", async () 
       complete: true,
     },
   });
-  const { answered } = mount();
+  mount();
   await answered();
   const hrefs = screen
     .getAllByRole("link", { name: SHARED_KEY })
@@ -457,7 +457,7 @@ test("a tracker answer that is incomplete or behind is named as the tracker's", 
     },
     page_activity: { changes: [], complete: true, log_seq: 7, applied_through: 7 },
   });
-  const { answered } = mount();
+  mount();
   await answered();
   const header = screen.getByText(/This answer is incomplete/).textContent ?? "";
   expect(header).toContain(
@@ -482,7 +482,7 @@ test("a knowledge base answer that is behind is named as the knowledge base's", 
     work_activity: { records: [commit()], complete: true, log_seq: 5, applied_through: 5 },
     page_activity: { changes: [], complete: false, log_seq: 30, applied_through: 12 },
   });
-  const { answered } = mount();
+  mount();
   await answered();
   const header = screen.getByText(/has not applied yet/).textContent ?? "";
   expect(header).toContain("Knowledge: This answer is incomplete.");
@@ -501,7 +501,7 @@ test("a source served at a level of unknown age is named as that source's", asyn
     work_activity: { records: [commit()], complete: true, read_level: "stale" },
     page_activity: { changes: [], complete: true, read_level: "consistent_prefix" },
   });
-  const { answered } = mount();
+  mount();
   await answered();
   const header = screen.getByText(/could not measure its own distance/).textContent ?? "";
   expect(header).toContain(
@@ -518,7 +518,7 @@ test("sources that answered whole leave the header's claim standing", async () =
     work_activity: { records: [commit()], complete: true, log_seq: 5, applied_through: 5 },
     page_activity: { changes: [], complete: true, log_seq: 7, applied_through: 7 },
   });
-  const { answered } = mount();
+  mount();
   await answered();
   expect(screen.queryByText(/This answer is incomplete|has not applied yet/)).toBeNull();
   expect(screen.getByText(/Every write a person or a token made/)).toBeTruthy();

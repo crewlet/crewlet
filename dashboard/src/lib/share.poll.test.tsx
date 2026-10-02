@@ -12,7 +12,7 @@
  */
 
 import { useMemo } from "react";
-import { act, cleanup, render } from "@testing-library/react";
+import { act, cleanup, render } from "~/test/inCase.ts";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 
 import { DataGrid, type GridColumn } from "~/app/frame/DataGrid.tsx";

@@ -9,7 +9,7 @@
  * draw ([countingGrid]).
  */
 
-import { act, cleanup, render } from "@testing-library/react";
+import { act, cleanup, render } from "~/test/inCase.ts";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 
 vi.mock("~/app/frame/DataGrid.tsx", async (importOriginal) => {

@@ -10,7 +10,7 @@
  * count the rows the screen's own cells draw ([countingGrid]).
  */
 
-import { act, cleanup, render, screen } from "@testing-library/react";
+import { act, cleanup, render, screen } from "~/test/inCase.ts";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 
 vi.mock("~/app/frame/DataGrid.tsx", async (importOriginal) => {
