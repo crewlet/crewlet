@@ -125,14 +125,17 @@ function bound(pattern: unknown): string[] {
 }
 
 /**
- * The name a member expression reaches: `X.act`, or `X["act"]` — a computed
- * member spelled by a variable is the variable's value, which no reading of
- * the source can know.
+ * The name a property key spells: `act`, or `["act"]` — a computed key
+ * spelled by a variable is the variable's value, which no reading of the
+ * source can know.
  */
+function keyName(computed: unknown, key: unknown): string | null {
+  return !computed || (isNode(key) && key.type === "Literal") ? nameOf(key) : null;
+}
+
+/** The name a member expression reaches: `X.act`, or `X["act"]` ([keyName]). */
 function memberName(node: Node): string | null {
-  return !node.computed || (isNode(node.property) && node.property.type === "Literal")
-    ? nameOf(node.property)
-    : null;
+  return keyName(node.computed, node.property);
 }
 
 /** What one file reaches, as its parsed tree says. */
@@ -180,6 +183,31 @@ function read(file: string, text: string): Reading {
   const bind = (name: string) => bindings.set(name, (bindings.get(name) ?? 0) + 1);
   let importsBindingAct = false;
   let callsAct = false;
+
+  /**
+   * What a destructuring takes off an import — `const { waitFor } = vi`,
+   * `({ act: flush } = React)` — which reaches the member exactly as a `.`
+   * does, under a name the member rule below never sees and the call rule
+   * does not know.
+   */
+  const takeOff = (pattern: unknown, object: unknown): void => {
+    if (!isNode(pattern) || pattern.type !== "ObjectPattern") return;
+    if (!isNode(object) || object.type !== "Identifier") return;
+    const name = object.name as string;
+    const carrier = vitest.get(name);
+    const from = wholes.get(name);
+    for (const property of pattern.properties as Node[]) {
+      if (property.type !== "Property") continue;
+      const taken = keyName(property.computed, property.key);
+      if (taken === null) continue;
+      if (carrier !== undefined && POLLS.get(carrier)!.has(taken)) {
+        reaches.push(`${carrier}.${taken}`);
+      }
+      if (from !== undefined && taken === "act" && REACT_ACTS.has(from)) {
+        reaches.push(`${name}.act`);
+      }
+    }
+  };
 
   // THE IMPORTS FIRST, which are all at the top level: a member is judged by
   // what its object was imported from, and the walk below meets a statement
@@ -276,22 +304,13 @@ function read(file: string, text: string): Reading {
           callsAct = true;
         }
         break;
-      case "VariableDeclarator": {
+      case "VariableDeclarator":
         bound(node.id).forEach(bind);
-        // `const { waitFor } = vi`, which takes the poll off its carrier.
-        const carrier =
-          isNode(node.init) && node.init.type === "Identifier"
-            ? vitest.get(node.init.name as string)
-            : undefined;
-        if (carrier === undefined || !isNode(node.id) || node.id.type !== "ObjectPattern") break;
-        for (const property of node.id.properties as Node[]) {
-          const taken = property.type === "Property" ? nameOf(property.key) : null;
-          if (taken !== null && POLLS.get(carrier)!.has(taken)) {
-            reaches.push(`${carrier}.${taken}`);
-          }
-        }
+        takeOff(node.id, node.init);
         break;
-      }
+      case "AssignmentExpression":
+        takeOff(node.left, node.right);
+        break;
       case "FunctionDeclaration":
       case "FunctionExpression":
       case "ArrowFunctionExpression":
@@ -378,6 +397,21 @@ const SHAPES: { shape: string; file?: string; source: string; reading: Partial<R
     reading: { reaches: ["R.act"] },
   },
   {
+    shape: "React's act taken off its default import under another name",
+    source: `import React from "react"; const { act: flush } = React; flush(() => {});`,
+    reading: { reaches: ["React.act"], callsAct: false },
+  },
+  {
+    shape: "React's act taken off a namespace in an assignment",
+    source: `import * as R from "react"; let flush; ({ ["act"]: flush } = R);`,
+    reading: { reaches: ["R.act"] },
+  },
+  {
+    shape: "the rest of React taken off its default import",
+    source: `import React from "react"; const { useState, useEffect: effect } = React; ({ useMemo: effect } = React);`,
+    reading: { reaches: [] },
+  },
+  {
     shape: "React's act re-exported from the test utilities",
     source: `export { act } from "react-dom/test-utils";`,
     reading: { reaches: [`re-exports act from "react-dom/test-utils"`] },
@@ -455,6 +489,16 @@ const SHAPES: { shape: string; file?: string; source: string; reading: Partial<R
     shape: "Vitest's waitFor taken off vi",
     source: `import { vi } from "vitest"; const { waitFor } = vi; await waitFor(() => {});`,
     reading: { reaches: ["vi.waitFor"] },
+  },
+  {
+    shape: "Vitest's waitFor taken off vi in an assignment",
+    source: `import { vi } from "vitest"; let poll; ({ waitFor: poll } = vi);`,
+    reading: { reaches: ["vi.waitFor"] },
+  },
+  {
+    shape: "a key computed from a variable, which is not the name the variable has",
+    source: `import { vi } from "vitest"; const waitFor = "useFakeTimers"; const { [waitFor]: fake } = vi; fake();`,
+    reading: { reaches: [] },
   },
   {
     shape: "the rest of vi, which is not a poll",
