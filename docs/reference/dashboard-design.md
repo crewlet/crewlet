@@ -3427,7 +3427,14 @@ trusted when it IS blank. Four distinctions the product makes everywhere:
   missing and neither where nor what would bring them back; and an answer of
   unknown age by its read level, as the chip says it. Never as the page's
   coverage: the two feeds are two logs, and one being behind says nothing about
-  the other, the configuration or the credentials.
+  the other, the configuration or the credentials. The two positions are
+  PACKED on the wire — (generation × 2^40) + sequence, so they compare with a
+  plain `<` across a re-anchor — and `appliedThrough` unpacks them to print
+  (`positionWords`): the bare sequence in a log's first generation, and
+  `generation:sequence` past it, because printed raw every position after a
+  re-anchor was a thirteen-digit number naming neither. The stride is the
+  engine's `statelog.GenerationStride`, and a gate in internal/api holds the
+  dashboard's copy (`GENERATION_STRIDE`) to it.
 - **An empty CONTAINER** vs **a query that matched nothing.** A container says
   its own emptiness, from what it already knows about itself, before the list
   it holds has answered anything — and that state REPLACES the list rather than

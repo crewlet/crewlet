@@ -566,11 +566,38 @@ export function unreadableRemedy(incomplete: WorkIncomplete | undefined): string
 /** What a node whose applied prefix stops short of its position is doing. */
 export const HOLDS_UNAPPLIED = "This node holds records it has not applied yet";
 
+/**
+ * How many sequences one generation of a state log spans in a PACKED position:
+ * 2^40, the engine's `statelog.GenerationStride`, which a gate in internal/api
+ * holds this copy to.
+ *
+ * `applied_through` and `log_seq` are packed — (generation × 2^40) + seq — so
+ * they ORDER correctly with a plain `<` across a re-anchor, and that comparison
+ * stays on the packed values. What a person reads is not packed: printed raw,
+ * every position after a log's first re-anchor was a thirteen-digit number
+ * ("applied through 1099511627817 of 1099511627832") that names neither the
+ * generation nor how far behind the node is. Exact as a JS number while the
+ * generation is under 2^13, which no log reaches — a generation moves only when
+ * an operator re-anchors one.
+ */
+export const GENERATION_STRIDE = 1_099_511_627_776;
+
+/**
+ * A packed log position as a person reads it: the sequence alone in the first
+ * generation, where every log starts and almost all stay, and `generation:seq`
+ * past it, so a re-anchored log says which generation it is in.
+ */
+export function positionWords(packed: number): string {
+  const generation = Math.floor(packed / GENERATION_STRIDE);
+  const seq = packed - generation * GENERATION_STRIDE;
+  return generation === 0 ? `${seq}` : `${generation}:${seq}`;
+}
+
 /** "applied through 41 of 88" for an answer whose node is behind its log, or null. */
 export function appliedThrough(facts: CoverageFacts | null | undefined): string | null {
   if (facts?.applied_through === undefined || facts.log_seq === undefined) return null;
   return facts.applied_through < facts.log_seq
-    ? `applied through ${facts.applied_through} of ${facts.log_seq}`
+    ? `applied through ${positionWords(facts.applied_through)} of ${positionWords(facts.log_seq)}`
     : null;
 }
 

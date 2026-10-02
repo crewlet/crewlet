@@ -15,7 +15,13 @@ import { cleanup, render } from "@testing-library/react";
 import { afterEach, expect, test } from "vitest";
 
 import { StateBar } from "~/app/frame/StateBar.tsx";
-import { Coverage, type CoverageFacts } from "./work.tsx";
+import {
+  Coverage,
+  GENERATION_STRIDE,
+  appliedThrough,
+  positionWords,
+  type CoverageFacts,
+} from "./work.tsx";
 
 afterEach(cleanup);
 
@@ -57,4 +63,24 @@ test("an incomplete answer that counted nothing names no scope and no remedy", (
   expect(said).toContain("This answer is incomplete.");
   expect(said).not.toContain("Affected");
   expect(said).not.toContain("Record version");
+});
+
+// A POSITION IS PACKED ON THE WIRE AND READ UNPACKED. `applied_through` and
+// `log_seq` are (generation × 2^40) + seq, so after a log's first re-anchor
+// the raw numbers were thirteen digits a reader could not place. The first
+// generation, where nearly every log lives, still reads as the bare sequence.
+test("a re-anchored log's position reads as its generation and sequence", () => {
+  const at = (generation: number, seq: number) => generation * GENERATION_STRIDE + seq;
+  expect(positionWords(at(0, 41))).toBe("41");
+  expect(positionWords(at(1, 41))).toBe("1:41");
+  expect(appliedThrough({ applied_through: at(0, 41), log_seq: at(0, 88) })).toBe(
+    "applied through 41 of 88",
+  );
+  expect(appliedThrough({ applied_through: at(1, 41), log_seq: at(2, 3) })).toBe(
+    "applied through 1:41 of 2:3",
+  );
+  // THE COMPARISON STAYS PACKED: a node a generation behind is behind even
+  // where its sequence is higher, and one caught up across a re-anchor is not.
+  expect(appliedThrough({ applied_through: at(1, 900), log_seq: at(2, 3) })).not.toBeNull();
+  expect(appliedThrough({ applied_through: at(2, 3), log_seq: at(2, 3) })).toBeNull();
 });
