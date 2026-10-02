@@ -707,8 +707,8 @@ func (t *listWorkItems) Parameters() map[string]any {
 			},
 			"parent": map[string]any{
 				"type": "string",
-				"description": "A key or id: lists that item's SUBTASKS. For " +
-					"reading a piece of work broken down.",
+				"description": "An item, to list its SUBTASKS — for reading " +
+					"a piece of work broken down. " + itemRef,
 			},
 			"reporter": map[string]any{
 				"type":        "string",
@@ -1011,7 +1011,7 @@ func (t *getWorkItem) Parameters() map[string]any {
 		"properties": map[string]any{
 			"item": map[string]any{
 				"type":        "string",
-				"description": "The item key (ENG-42) or its id.",
+				"description": "The item to read. " + itemRef,
 			},
 			"include": map[string]any{
 				"type": "array",
@@ -1258,8 +1258,8 @@ func (t *createWorkItem) Parameters() map[string]any {
 			},
 			"parent": map[string]any{
 				"type": "string",
-				"description": "The id or key of the item this belongs under. " +
-					"A subtask lives in its parent's project.",
+				"description": "The item this belongs under — a subtask " +
+					"lives in its parent's project. " + itemRef,
 			},
 			"fields": map[string]any{
 				"type": "object",
@@ -1278,8 +1278,8 @@ func (t *createWorkItem) Parameters() map[string]any {
 			},
 			"waiting_on": map[string]any{
 				"type": "array",
-				"description": "Items this one is blocked BY, as keys or ids. " +
-					"A plain list here, unlike update_work_item: a new item " +
+				"description": "Items this one is blocked BY. " + itemRefs +
+					" A plain list here, unlike update_work_item: a new item " +
 					"has no dependencies to replace.",
 				"items": map[string]any{"type": "string"},
 			},
@@ -1517,14 +1517,14 @@ func (t *createWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn, ar
 		// below would be one this attempt minted for a task that may never
 		// have landed — or, where this node's ledger cannot vouch for the
 		// operation, no key at all beside an "outcome" a model reads past.
-		return createUnknown(actor, opID, got), nil
+		return createUnknown(actor, opID, task.ID, got), nil
 	}
 	t.deps.settle(ctx, got.Position)
-	answer := withOperation(map[string]any{
-		"key": got.Key, "id": task.ID, "status": task.Status,
+	answer := withOperation(receiptItem(map[string]any{
+		"id": task.ID, "status": task.Status,
 		"assignee": task.Assignee, "outcome": string(got.Outcome), "position": positionOf(got.Position),
 		"labels_created": declared, "version": got.Version,
-	}, actor)
+	}, task.ID, got.Key, got.KeyCollision), actor)
 	if len(got.Warnings) > 0 {
 		answer["warnings"] = got.Warnings
 	}
@@ -1541,7 +1541,8 @@ func (t *createWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn, ar
 			// tell a model its item was not filed, and the next
 			// attempt would file a second one — which is also what
 			// the generic failure text's "call it again" did.
-			answer["dependencies_failed"] = dependencyFailure(got.Key, task.ID, err)
+			answer["dependencies_failed"] = dependencyFailure(task.ID, got.Key,
+				got.KeyCollision, err)
 			return jsonResult(answer)
 		}
 		t.deps.settle(ctx, result.Position)
@@ -1568,10 +1569,11 @@ func (t *createWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn, ar
 //
 // What it tells the caller to do next is [unknownNext]'s, which every
 // tracker write that can answer `unknown` shares.
-func createUnknown(actor Actor, opID string, got tracker.WriteResult) tools.Result {
+func createUnknown(actor Actor, opID, id string, got tracker.WriteResult) tools.Result {
 	filed := ""
 	if got.Key != "" {
-		filed = fmt.Sprintf(" If this attempt filed it, it is %s.", got.Key)
+		filed = fmt.Sprintf(" If this attempt filed it, it is %s.",
+			tracker.ItemNamed(id, got.Key, got.KeyCollision))
 	}
 	return unknownWrite(actor, CreateWorkItemTool, "the work item was filed",
 		opID, got.Unvouched, filed+" "+unknownNext(got.Unvouched,
@@ -1695,12 +1697,21 @@ func restateNext(look string) string {
 // else first. The item is named and the dependencies are finished on IT:
 // update_work_item takes the whole `waiting_on` set and records whatever of it
 // is still missing, under an operation of its own, on every surface alike.
-func dependencyFailure(key, id string, err error) string {
-	return fmt.Sprintf("The item WAS filed, as %s (%s), but recording what it "+
+//
+// THE CALL IT PRESCRIBES NAMES THE ITEM'S ADDRESS ([tracker.ItemAddress]): an
+// item filed on a key another task already holds is reached by its id, and the
+// call on its key would set the dependencies of that other task.
+func dependencyFailure(id, key string, collision bool, err error) string {
+	filed := key + " (" + id + ")"
+	if collision {
+		filed = tracker.ItemNamed(id, key, collision)
+	}
+	return fmt.Sprintf("The item WAS filed, as %s, but recording what it "+
 		"waits on did not finish: %v. Do NOT call create_work_item again — that "+
 		"files a second item. Set its dependencies with update_work_item on %s, "+
 		"giving the same waiting_on: it records whichever of them are still "+
-		"missing, and says so if one cannot be.", key, id, err, key)
+		"missing, and says so if one cannot be.", filed, err,
+		tracker.ItemAddress(id, key, collision))
 }
 
 // updateDependencyFailure explains an update whose PATCH landed and whose
@@ -1713,12 +1724,12 @@ func dependencyFailure(key, id string, err error) string {
 // still missing — while the whole call reworded is a new operation that sets
 // every field a second time, and refused as stale by the patch it already
 // landed if it names `if_match`.
-func updateDependencyFailure(key string, err error) string {
+func updateDependencyFailure(item tracker.TaskDetail, err error) string {
 	return fmt.Sprintf("The change to %s WAS made, but its dependency change "+
 		"did not finish: %v. Do not report the dependencies as set. Set them "+
 		"with update_work_item on %s giving only the same waiting_on and "+
 		"blocking: it records whichever of them are still missing, and says so "+
-		"if one cannot be.", key, err, key)
+		"if one cannot be.", item.Named(), err, item.Address())
 }
 
 // resolveRef turns what a model typed — a key like ENG-7, or an id — into the
@@ -2031,7 +2042,7 @@ func (t *updateWorkItem) Parameters() map[string]any {
 		"properties": map[string]any{
 			"item": map[string]any{
 				"type":        "string",
-				"description": "The item key (ENG-42) or its id.",
+				"description": "The item to change. " + itemRef,
 			},
 			"status":   map[string]any{"type": "string", "description": "One of: " + statusList() + "."},
 			"assignee": map[string]any{"type": "string", "description": "A seat's handle, or \"\" to unassign."},
@@ -2054,7 +2065,7 @@ func (t *updateWorkItem) Parameters() map[string]any {
 				"type": "string",
 				"description": "Closing this as a duplicate: the item that " +
 					"survives. Set the status as well — the link records WHY, " +
-					"and the status records that it is closed.",
+					"and the status records that it is closed. " + itemRef,
 			},
 			"watch": map[string]any{
 				"type": "boolean",
@@ -2077,9 +2088,9 @@ func (t *updateWorkItem) Parameters() map[string]any {
 					"to set — filing your own work into your own team is " +
 					"what `unit` on create_work_item does.",
 			},
-			"waiting_on":   setArgSchema("The items this one is blocked BY. Each is a key or an id."),
-			"blocking":     setArgSchema("The items blocked BY this one. Each is a key or an id."),
-			"linked":       setArgSchema("Related items, with no blocking meaning. Each is a key or an id."),
+			"waiting_on":   setArgSchema("The items this one is blocked BY. " + itemRefs),
+			"blocking":     setArgSchema("The items blocked BY this one. " + itemRefs),
+			"linked":       setArgSchema("Related items, with no blocking meaning. " + itemRefs),
 			"linked_pages": setArgSchema("Knowledge-base pages this item references, by page id."),
 			"fields": map[string]any{
 				"type": "object",
@@ -2257,9 +2268,9 @@ func (t *updateWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn, ar
 		var labelRefusal *tools.Result
 		if declared, labelRefusal = t.deps.declareLabels(ctx, actor, labelWrite{
 			tool:   t.Name(),
-			before: "changing " + before.Task.Key,
+			before: "changing " + before.Named(),
 			notMade: fmt.Sprintf("Nothing it asked of %s was written by this "+
-				"call.", before.Task.Key),
+				"call.", before.Named()),
 			then: "makes the change",
 			twice: "applies the change a second time, and is refused as " +
 				"stale if it names `if_match`",
@@ -2267,15 +2278,15 @@ func (t *updateWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn, ar
 				"holds its record",
 			look: fmt.Sprintf("the change may have landed where this node "+
 				"cannot see it: read %s with get_work_item to see whether it "+
-				"is there rather than making it any other way", before.Task.Key),
+				"is there rather than making it any other way", before.Address()),
 		}, args, before.Task.Project, *patch.Tags); labelRefusal != nil {
 			return *labelRefusal, nil
 		}
 	}
 
-	answer := withOperation(map[string]any{
-		"key": before.Task.Key, "labels_created": declared,
-	}, actor)
+	answer := withOperation(receiptOf(map[string]any{
+		"labels_created": declared,
+	}, before), actor)
 	// patchedAt is where the patch landed, when it ran: the dependency step
 	// below replaces the answer's position only with a LATER one.
 	var patchedAt statelog.Position
@@ -2303,7 +2314,7 @@ func (t *updateWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn, ar
 			// names a version the item may never have had. And the
 			// dependencies wait for it — the same call made again answers
 			// this write first and writes them after, once.
-			return updateUnknown(actor, opID, got, before.Task,
+			return updateUnknown(actor, opID, got, before,
 				!change.Empty()), nil
 		}
 		t.deps.settle(ctx, got.Position)
@@ -2331,8 +2342,7 @@ func (t *updateWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn, ar
 			// is two writes and only the second failed, so the default
 			// failure's "the change was NOT made" was false about every
 			// field the first one set.
-			answer["dependencies_failed"] = updateDependencyFailure(
-				before.Task.Key, err)
+			answer["dependencies_failed"] = updateDependencyFailure(before, err)
 			return jsonResult(answer)
 		case err != nil:
 			return writeFailed(actor, UpdateWorkItemTool, err), nil
@@ -2385,11 +2395,11 @@ func (t *updateWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn, ar
 // is the one thing that can say the change is there — or that somebody else's
 // is, which the thread and history on the same read tell apart.
 func updateUnknown(actor Actor, opID string, got tracker.WriteResult,
-	before tracker.Task, dependencies bool) tools.Result {
+	before tracker.TaskDetail, dependencies bool) tools.Result {
 
 	look := fmt.Sprintf("Read %s with get_work_item (a version past %d means "+
-		"something landed, and its history says whether it was this)", before.Key,
-		before.Version)
+		"something landed, and its history says whether it was this)",
+		before.Address(), before.Task.Version)
 	next := unknownNext(got.Unvouched, sameCall(actor, UpdateWorkItemTool), look,
 		"it is applied a second time, and refused as stale if it names `if_match`")
 	if dependencies {
@@ -2397,7 +2407,7 @@ func updateUnknown(actor Actor, opID string, got tracker.WriteResult,
 			"it stopped here, before them."
 	}
 	return unknownWrite(actor, UpdateWorkItemTool,
-		fmt.Sprintf("the change to %s landed", before.Key), opID, got.Unvouched, next)
+		fmt.Sprintf("the change to %s landed", before.Named()), opID, got.Unvouched, next)
 }
 
 // declareLabels declares the labels a write is about to use that its project
@@ -2791,7 +2801,7 @@ func (t *commentOnWorkItem) Parameters() map[string]any {
 		"properties": map[string]any{
 			"item": map[string]any{
 				"type":        "string",
-				"description": "The item key (ENG-42) or its id.",
+				"description": "The item to comment on. " + itemRef,
 			},
 			"body": map[string]any{
 				"type": "string",
@@ -2959,18 +2969,18 @@ func (t *commentOnWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		// it answered — when an operation this node's ledger cannot
 		// vouch for is answered without publishing anything at all.
 		return unknownWrite(actor, CommentOnWorkTool,
-			fmt.Sprintf("the comment on %s was posted", before.Task.Key), opID,
+			fmt.Sprintf("the comment on %s was posted", before.Named()), opID,
 			got.Unvouched, unknownNext(got.Unvouched,
 				sameCall(actor, CommentOnWorkTool),
-				fmt.Sprintf("Read %s's thread with get_work_item", before.Task.Key),
+				fmt.Sprintf("Read %s's thread with get_work_item", before.Address()),
 				"that is a second comment")), nil
 	}
 	t.deps.settle(ctx, got.Position)
-	answer := withOperation(map[string]any{
-		"comment_id": comment.ID, "item": before.Task.Key,
-		"mentioned": comment.Mentions, "outcome": string(got.Outcome), "position": positionOf(got.Position),
+	answer := withOperation(receiptOf(map[string]any{
+		"comment_id": comment.ID,
+		"mentioned":  comment.Mentions, "outcome": string(got.Outcome), "position": positionOf(got.Position),
 		"version": got.Version,
-	}, actor)
+	}, before), actor)
 	if comment.Ask != "" {
 		answer["asked"] = comment.Ask
 	}

@@ -54,6 +54,12 @@ then its id:
 
 - every row a list, a search, an item or a feed returns carries the flag
   beside the key;
+- a tool's receipt names the task in `item` — the reference to hand back to
+  the next call — with `key` beside it and `key_collision` where the two
+  differ, and a create or a move whose new key another task already holds
+  says so; every argument that takes a task says to use the id for a row
+  carrying the flag, and a write whose outcome is unknown says which task to
+  read by the same rule;
 - a wake about a flagged task names its id under **Task:** and in the block
   that says what to read, with a **Key:** line saying which key it holds and
   why that key opens another task; and an excerpt that names one — a lead's

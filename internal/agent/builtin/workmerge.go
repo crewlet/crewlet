@@ -62,13 +62,13 @@ func (t *mergeWorkItem) Parameters() map[string]any {
 		"properties": map[string]any{
 			"item": map[string]any{
 				"type": "string",
-				"description": "The DUPLICATE — the item that is closed. Its " +
-					"key (ENG-42) or its id.",
+				"description": "The DUPLICATE — the item that is closed. " +
+					itemRef,
 			},
 			"into": map[string]any{
 				"type": "string",
 				"description": "The item that SURVIVES and carries the work " +
-					"on. Its key or its id.",
+					"on. " + itemRef,
 			},
 			"move_subtasks": map[string]any{
 				"type": "boolean",
@@ -125,7 +125,7 @@ func (t *mergeWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	}
 	if survivor == before.Task.ID {
 		return failed(fmt.Sprintf("%s cannot be folded into itself.",
-			before.Task.Key)), nil
+			before.Named())), nil
 	}
 
 	// THE SNAPSHOT DESCRIBES WHAT THE MERGE LEAVES, because that is what
@@ -148,7 +148,7 @@ func (t *mergeWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		return failedBy(err, fmt.Sprintf("merge_work_item was refused: %v. Move %s "+
 			"into the surviving item's project with move_work_item first — its "+
 			"subtasks go with it — or merge with `move_subtasks: false`, which "+
-			"leaves them under the duplicate.", err, before.Task.Key)), nil
+			"leaves them under the duplicate.", err, before.Address())), nil
 	}
 	if err != nil {
 		return writeFailed(actor, tracker.MergeWorkItemTool, err), nil
@@ -159,19 +159,19 @@ func (t *mergeWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		// error of its own, so this is the seam's contract held here
 		// rather than an implementation's habit trusted.
 		return unknownWrite(actor, tracker.MergeWorkItemTool,
-			fmt.Sprintf("%s was merged", before.Task.Key), opID, got.Unvouched,
+			fmt.Sprintf("%s was merged", before.Named()), opID, got.Unvouched,
 			unknownNext(got.Unvouched, sameCall(actor, tracker.MergeWorkItemTool),
 				fmt.Sprintf("Read %s with get_work_item — a merged item is "+
-					"cancelled and links the one it was folded into", before.Task.Key),
+					"cancelled and links the one it was folded into", before.Address()),
 				"it merges it a second time")), nil
 	}
 	t.deps.settle(ctx, got.Position)
-	return jsonResult(withOperation(map[string]any{
-		"key": before.Task.Key, "merged_into": survivor,
+	return jsonResult(withOperation(receiptOf(map[string]any{
+		"merged_into":    survivor,
 		"subtasks_moved": moveSubtasks(args),
 		"status":         string(tracker.StatusCancelled),
 		"outcome":        string(got.Outcome), "position": positionOf(got.Position), "version": got.Version,
-	}, actor))
+	}, before), actor))
 }
 
 // moveSubtasks reads the one knob this verb has, and ABSENT IS TRUE.

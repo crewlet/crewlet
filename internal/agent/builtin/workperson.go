@@ -134,7 +134,8 @@ func (t *setPriorities) Parameters() map[string]any {
 			},
 			"items": map[string]any{
 				"type": "array", "items": map[string]any{"type": "string"},
-				"description": "Work item ids or keys, most important first.",
+				"description": "The work items, most important first. " +
+					itemRefs,
 			},
 		},
 		"required": []string{"items"},

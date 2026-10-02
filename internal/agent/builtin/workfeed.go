@@ -54,8 +54,8 @@ func (t *taskActivity) Parameters() map[string]any {
 		"properties": map[string]any{
 			"task": map[string]any{
 				"type": "string",
-				"description": "One task's whole history, by key or id — " +
-					"including keys it used to have.",
+				"description": "One task's whole history, by any key it " +
+					"has had or by its id. " + itemRef,
 			},
 			"project": map[string]any{
 				"type":        "string",

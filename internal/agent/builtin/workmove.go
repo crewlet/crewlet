@@ -67,9 +67,8 @@ func (t *moveWorkItem) Parameters() map[string]any {
 		"type": "object",
 		"properties": map[string]any{
 			"item": map[string]any{
-				"type": "string",
-				"description": "The top-level item to move: its key (ENG-42) " +
-					"or its id.",
+				"type":        "string",
+				"description": "The top-level item to move. " + itemRef,
 			},
 			"project": map[string]any{
 				"type":        "string",
@@ -124,7 +123,12 @@ func (t *moveWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	// lead of the project the item is in NOW asked the lead of the TARGET:
 	// a seat leading ENG and not OPS was told to ask OPS's lead for a move
 	// that had already happened, and never learned it had.
-	from := before.Task.Key
+	//
+	// `from` is the KEY it is leaving, which is what `moved_from` reports —
+	// what the item was called, not a reference to it. The prose names the
+	// item as it can be opened NOW ([tracker.TaskDetail.Named]), because a
+	// duplicate of a key named by the key alone is the claimant.
+	from, named := before.Task.Key, before.Named()
 	if before.Task.Project == target {
 		from = replacedKey(before.Task)
 	} else if refused := t.deps.mayWrite(ctx, authz.Action(t.Name()), authz.Object{
@@ -148,7 +152,7 @@ func (t *moveWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	case errors.As(err, &stopped):
 		// THE ROOT MOVED — whatever stopped the walk, and an unknown step
 		// included, since the root's own move is not the step in doubt.
-		return t.deps.moveStopped(ctx, actor, from, got, stopped)
+		return t.deps.moveStopped(ctx, actor, from, named, got, stopped)
 	case err != nil:
 		return writeFailed(actor, tracker.MoveWorkItemTool, err), nil
 	}
@@ -158,19 +162,19 @@ func (t *moveWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		// [unknownWrite], and [mergeWorkItem] for why the seam's contract
 		// is held here.
 		return unknownWrite(actor, tracker.MoveWorkItemTool,
-			fmt.Sprintf("%s moved to %s", from, target), opID,
+			fmt.Sprintf("%s moved to %s", named, target), opID,
 			got.Unvouched, unknownNext(got.Unvouched,
 				sameCall(actor, tracker.MoveWorkItemTool),
 				fmt.Sprintf("Read %s with get_work_item — its key and project "+
-					"say where it is now", before.Task.Key),
+					"say where it is now", before.Address()),
 				"it is refused, because the item is already there")), nil
 	}
 	t.deps.settle(ctx, got.Position)
-	return jsonResult(withOperation(map[string]any{
-		"key": got.Key, "moved_from": from, "project": target,
+	return jsonResult(withOperation(receiptItem(map[string]any{
+		"moved_from": from, "project": target,
 		"outcome": string(got.Outcome), "position": positionOf(got.Position),
 		"version": got.Version,
-	}, actor))
+	}, before.Task.ID, got.Key, got.KeyCollision), actor))
 }
 
 // moveStopped answers a cross-project move whose ROOT landed in the target and
@@ -197,13 +201,13 @@ func (t *moveWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 // finishes the walk on its own once nobody holds its claim, which is the
 // remedy where this caller has no repeat that is the same operation, or where
 // this node cannot vouch for the task the walk stopped at.
-func (d WorkDeps) moveStopped(ctx context.Context, actor Actor, from string,
+func (d WorkDeps) moveStopped(ctx context.Context, actor Actor, from, named string,
 	got tracker.WriteResult, stopped *tracker.MoveStopped) (tools.Result, error) {
 
 	const tool = tracker.MoveWorkItemTool
 	as := ""
 	if stopped.Key != "" {
-		as = " as " + stopped.Key
+		as = " as " + tracker.ItemNamed(stopped.Root, stopped.Key, stopped.KeyCollision)
 	}
 	duty := "the tracker duty finishes the walk on its own once nobody is " +
 		"walking it — read the item with get_work_item to see it done"
@@ -231,7 +235,7 @@ func (d WorkDeps) moveStopped(ctx context.Context, actor Actor, from string,
 			"operation, and a new one is refused.", duty, tool)
 	}
 	d.settle(ctx, got.Position)
-	answer := map[string]any{
+	answer := receiptItem(map[string]any{
 		"moved_from": from, "project": stopped.Target,
 		"outcome": string(got.Outcome), "position": positionOf(got.Position),
 		"version":          got.Version,
@@ -239,12 +243,9 @@ func (d WorkDeps) moveStopped(ctx context.Context, actor Actor, from string,
 		"move_stopped": fmt.Sprintf("%s moved to %s%s, but only %d of the %d "+
 			"tasks under it followed before the walk stopped (%v); the rest are "+
 			"still in their old project. Do not report it as done, and do not "+
-			"move it again as a new call. %s", from, stopped.Target, as,
+			"move it again as a new call. %s", named, stopped.Target, as,
 			stopped.Followed, stopped.Of, stopped.Err, next),
-	}
-	if stopped.Key != "" {
-		answer["key"] = stopped.Key
-	}
+	}, stopped.Root, stopped.Key, stopped.KeyCollision)
 	if stopped.Waiting != "" {
 		answer["move_waits_for"] = stopped.Waiting
 	}
