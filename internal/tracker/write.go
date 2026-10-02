@@ -698,7 +698,7 @@ func (w *Writer) updateTask(ctx context.Context, opID, id, project string,
 			if err := scope.covers(current.Dependents); err != nil {
 				return statelog.Decision{}, err
 			}
-			decision, err := w.decide(stamp, subject, OpPatch, kind, scope, opID,
+			decision, err := w.decide(ctx, tx, stamp, subject, OpPatch, kind, scope, opID,
 				charged, notify, at)
 			if err != nil {
 				return statelog.Decision{}, err
@@ -902,7 +902,7 @@ func (w *Writer) MoveTasks(ctx context.Context, opID, project string,
 			// history: it changes where a card sits and nothing about
 			// what the work is, so waking anybody for it would make a
 			// board's own drag a source of inbox traffic.
-			return w.decide(stamp, subject, OpPatch, "", scope, opID, RankOrder{
+			return w.decide(ctx, tx, stamp, subject, OpPatch, "", scope, opID, RankOrder{
 				V: DocumentVersion, Project: project, Placements: placements,
 			}, nil, at)
 		},
@@ -945,8 +945,8 @@ func (w *Writer) WriteDocument(ctx context.Context, opID string, subject Subject
 		Scope:   scope.Resolve(subject),
 		OpID:    opID,
 		Pattern: statelog.PatternArbitrated,
-		Decide: func(_ *sql.Tx, stamp statelog.Stamp) (statelog.Decision, error) {
-			return w.decide(stamp, subject, OpPatch, kind, scope, opID, document, notify, at)
+		Decide: func(tx *sql.Tx, stamp statelog.Stamp) (statelog.Decision, error) {
+			return w.decide(ctx, tx, stamp, subject, OpPatch, kind, scope, opID, document, notify, at)
 		},
 	})
 }
@@ -972,8 +972,8 @@ func (w *Writer) RecordTurn(ctx context.Context, opID, taskID, project string,
 		Scope:   scope.Resolve(subject),
 		OpID:    opID,
 		Pattern: statelog.PatternAdditive,
-		Decide: func(_ *sql.Tx, stamp statelog.Stamp) (statelog.Decision, error) {
-			return w.decide(stamp, subject, OpTurn, "", scope, opID, payload, nil, at)
+		Decide: func(tx *sql.Tx, stamp statelog.Stamp) (statelog.Decision, error) {
+			return w.decide(ctx, tx, stamp, subject, OpTurn, "", scope, opID, payload, nil, at)
 		},
 	})
 }
@@ -1042,9 +1042,9 @@ func checkChangeKind(subject Subject, op OpKind, kind ChangeKind, notify *Notify
 // every record this domain ever published named nobody and the gate had no
 // node to drop. Both now arrive as the framework's [statelog.Stamp], which the
 // publisher checks on the encoded record before it appends anything.
-func (w *Writer) decide(stamp statelog.Stamp, subject Subject, op OpKind,
-	kind ChangeKind, scope ScopeSet, opID string, payload any, notify *Notify,
-	at time.Time) (statelog.Decision, error) {
+func (w *Writer) decide(ctx context.Context, tx *sql.Tx, stamp statelog.Stamp,
+	subject Subject, op OpKind, kind ChangeKind, scope ScopeSet, opID string,
+	payload any, notify *Notify, at time.Time) (statelog.Decision, error) {
 
 	if err := checkChangeKind(subject, op, kind, notify); err != nil {
 		return statelog.Decision{}, err
@@ -1055,10 +1055,20 @@ func (w *Writer) decide(stamp statelog.Stamp, subject Subject, op OpKind,
 	// chart resolves the same way — and this is the one place every record
 	// passes through. See people.go.
 	notify = identified(w.chart(), notify)
-	if err := notify.Validate(); err != nil {
+	// AND EVERY WAKE SAYS WHETHER ITS KEY OPENS ITS TASK, here for the same
+	// reason: a caller builds the wake from a task it read OUTSIDE this
+	// snapshot, or — on a create or a move — before the key it carries
+	// existed at all, and a wake that left it to each path would be one path
+	// forgetting it from naming the claimant to the seat woken about the
+	// duplicate. See [Snapshot.KeyCollision].
+	notify, err := collided(ctx, tx, subject, notify)
+	if err != nil {
 		return statelog.Decision{}, err
 	}
-	if err := scope.Validate(); err != nil {
+	if err = notify.Validate(); err != nil {
+		return statelog.Decision{}, err
+	}
+	if err = scope.Validate(); err != nil {
 		return statelog.Decision{}, err
 	}
 	if scope.Subject && scope.Container == "" && subject.Kind.RequiresAProject() {
@@ -1100,6 +1110,30 @@ func (w *Writer) decide(stamp statelog.Stamp, subject Subject, op OpKind,
 			op, subject, len(encoded), MaxCommitBytes)
 	}
 	return statelog.Decision{Payload: encoded}, nil
+}
+
+// collided is a wake with [Snapshot.KeyCollision] derived from the key
+// directory in the decide's own snapshot ([keyHeldByAnother]), or nil for a
+// record that wakes nobody.
+//
+// A COPY, because a decide runs again on every rejected round and the caller's
+// wake is the value each round starts from: written in place, a round's
+// answer would be read as the caller's statement by the next one.
+func collided(ctx context.Context, tx *sql.Tx, subject Subject,
+	notify *Notify) (*Notify, error) {
+
+	if notify == nil {
+		return nil, nil
+	}
+	task := notify.Snapshot.TaskID(subject)
+	held, err := keyHeldByAnother(ctx, tx, notify.Snapshot.Key, task)
+	if err != nil {
+		return nil, fmt.Errorf("tracker: read whether key %s opens task %s "+
+			"for the wake on %s: %w", notify.Snapshot.Key, task, subject, err)
+	}
+	out := *notify
+	out.Snapshot.KeyCollision = held
+	return &out, nil
 }
 
 // wire is the framework's subject for one of this domain's.

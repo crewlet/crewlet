@@ -1061,6 +1061,34 @@ type Snapshot struct {
 	// duplicating the id a record already carries is a second place for it
 	// to disagree with itself.
 	Task string `json:"task,omitempty"`
+
+	// KeyCollision says [Snapshot.Key] opens ANOTHER task — one that claimed
+	// the key first — so the task this wake points at is reached only by its
+	// id ([Snapshot.Address]). Without it a seat woken about the duplicate of
+	// a key was told the key, read it with get_work_item, and answered on the
+	// claimant.
+	//
+	// DERIVED BY THE WRITER, never stated by a caller: [Writer.decide] reads
+	// the key directory in the decide's own snapshot ([keyHeldByAnother]) for
+	// every record that carries a notification, and overwrites whatever the
+	// caller's wake held. A writer's reading, which a concurrent create can
+	// overtake — see that function for what that costs.
+	//
+	// READ BY THE PARSER ALONE AND NEVER BY THE APPLIER, which is what lets it
+	// ride every record at the version it was already written at. A build that
+	// does not know the field drops it on decode, writes exactly the rows a
+	// newer one writes (the inbox derives its own `subject_key_collision` from
+	// the directory at read), and renders the wake by its key as it always
+	// did — so a rolling upgrade costs a wake naming the key and never two
+	// nodes holding different rows. A field the applier DID read would need a
+	// record version for the reason [recordVersionOf] gives.
+	KeyCollision bool `json:"key_collision,omitempty"`
+}
+
+// Address is the reference that opens the task this wake points at: its key,
+// or its id where another task claimed the key first. See [ItemAddress].
+func (s Snapshot) Address(subject Subject) string {
+	return ItemAddress(s.TaskID(subject), s.Key, s.KeyCollision)
 }
 
 // TaskID is the task this wake points at, or empty when it points at none.

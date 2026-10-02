@@ -270,7 +270,7 @@ func (w *Writer) tombstone(ctx context.Context, opID, id, project string,
 				// task is in the state the caller asked for.
 				return statelog.Decision{}, nil
 			}
-			decision, err := w.decide(stamp, subject, OpTombstone, ChangeRemoved, scope,
+			decision, err := w.decide(ctx, tx, stamp, subject, OpTombstone, ChangeRemoved, scope,
 				opID, TaskPatch{Removed: &removal}, notify, at)
 			if err != nil {
 				return statelog.Decision{}, err
@@ -320,7 +320,7 @@ func (w *Writer) clearTombstone(ctx context.Context, opID, id, project string,
 				return statelog.Decision{}, nil
 			}
 			*live = false
-			decision, err := w.decide(stamp, subject, OpRestore, ChangeRestored, scope,
+			decision, err := w.decide(ctx, tx, stamp, subject, OpRestore, ChangeRestored, scope,
 				opID, TaskPatch{Removed: &Tombstone{}}, notify, at)
 			if err != nil {
 				return statelog.Decision{}, err

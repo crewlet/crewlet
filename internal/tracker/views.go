@@ -264,7 +264,7 @@ func (w *Writer) WriteView(ctx context.Context, opID string, view View,
 					post.Rank = current.Rank
 				}
 			}
-			return w.decide(stamp, subject, OpPatch, ChangeViewSaved, scope, opID,
+			return w.decide(ctx, tx, stamp, subject, OpPatch, ChangeViewSaved, scope, opID,
 				post, nil, at)
 		},
 	})

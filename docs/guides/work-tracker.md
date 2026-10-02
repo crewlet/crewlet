@@ -42,6 +42,23 @@ A numbering **gap** is normal and permanent. `ENG-7` exists, `ENG-8` never did,
 the two costs a number rather than risking two tasks sharing a key. A key is
 what people paste into chat, so it can never be ambiguous.
 
+**Two tasks under one key** is the one way it can be anyway: a key counter
+restored beside work it had already numbered mints numbers that work holds,
+and a counter and a task are different records, so nothing can refuse the
+second task. The task that **claimed** the key first keeps it — every link,
+chat message and tool call naming the key opens that one, on every node — and
+every other holder is flagged `key_collision` (`flag=key_collision` lists them)
+and is reached by its **id**. Everything that names a task to somebody who
+will act on the name follows one rule — its key, unless the flag is set, and
+then its id:
+
+- every row a list, a search, an item or a feed returns carries the flag
+  beside the key;
+- a wake about a flagged task names its id under **Task:** and in the block
+  that says what to read, with a **Key:** line saying which key it holds and
+  why that key opens another task; and an excerpt that names one — a lead's
+  priorities, a purge — names the id with the key beside it.
+
 ### What a project row carries about its work
 
 Beside its own settings, every project carries two facts the engine maintains

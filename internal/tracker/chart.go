@@ -166,7 +166,7 @@ func (w *Writer) applyChartProject(ctx context.Context, at int64,
 			if !held {
 				verb, kind = OpCreate, ChangeProjectCreated
 			}
-			decision, err := w.decide(stamp, subject, verb, kind, scope,
+			decision, err := w.decide(ctx, tx, stamp, subject, verb, kind, scope,
 				op, next, nil, now)
 			if err != nil {
 				return statelog.Decision{}, err

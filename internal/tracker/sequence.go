@@ -214,6 +214,17 @@ type WriteResult struct {
 	Key  string
 	Rank Rank
 
+	// KeyCollision says Key opens ANOTHER task — one that claimed it first,
+	// which is what a counter restored beside newer work mints — so the task
+	// this write landed is reached only by its id ([ItemAddress]). Read from
+	// the key directory in the snapshot that decided the write, or that read
+	// the task back ([keyHeldByAnother]); false wherever Key is empty.
+	//
+	// ON THE RECEIPT because the receipt is the first thing that names the
+	// duplicate: a create after a counter restore is what PRODUCES one, and
+	// a caller handed the key alone acts on the claimant with its next call.
+	KeyCollision bool
+
 	// Applied and Failed are a bulk gesture's per-task outcome. A bulk
 	// write is NOT atomic and never was: Applied is every task whose change
 	// is durable — applied here, or pending — and Failed says, per task,
@@ -500,10 +511,14 @@ func (w *Writer) landedTask(ctx context.Context, result statelog.Result,
 		return out, nil
 	}
 	var task Task
-	var held bool
+	var held, collision bool
 	if err := w.db.Replicated().Read(ctx, func(tx *sql.Tx) error {
 		var err error
 		task, held, err = readTask(ctx, tx, id)
+		if err != nil || !held {
+			return err
+		}
+		collision, err = keyHeldByAnother(ctx, tx, task.Key, id)
 		return err
 	}); err != nil {
 		return out, fmt.Errorf("tracker: task %s was filed by an earlier copy of "+
@@ -514,7 +529,7 @@ func (w *Writer) landedTask(ctx context.Context, result statelog.Result,
 			"earlier copy of this operation and is no longer on this node", id))
 		return out, nil
 	}
-	out.Key, out.Rank = task.Key, task.Rank
+	out.Key, out.Rank, out.KeyCollision = task.Key, task.Rank, collision
 	return out, nil
 }
 
@@ -568,6 +583,9 @@ func (w *Writer) writeTask(ctx context.Context, opID string, task Task,
 
 	subject := TaskSubject(task.ID)
 	scope := ScopeSet{Subject: true, Container: task.Project}
+	// WHETHER THE KEY THIS CREATE TOOK IS ANOTHER TASK'S, from the snapshot
+	// the last round decided in — the round whose record was published.
+	var collision bool
 	result, err := w.publish(ctx, statelog.Request{
 		Subject: wire(subject),
 		Scope:   scope.Resolve(subject),
@@ -587,12 +605,18 @@ func (w *Writer) writeTask(ctx context.Context, opID string, task Task,
 			if present > 0 {
 				return statelog.Decision{}, statelog.ErrExists
 			}
-			return w.decide(stamp, subject, OpCreate, ChangeCreated, scope, opID,
+			held, err := keyHeldByAnother(ctx, tx, task.Key, task.ID)
+			if err != nil {
+				return statelog.Decision{}, fmt.Errorf("tracker: read whether "+
+					"key %s is already another task's: %w", task.Key, err)
+			}
+			collision = held
+			return w.decide(ctx, tx, stamp, subject, OpCreate, ChangeCreated, scope, opID,
 				task, notify, at)
 		},
 	})
 	return WriteResult{
-		Result: result, Warnings: bodyWarnings(task.Body),
+		Result: result, Warnings: bodyWarnings(task.Body), KeyCollision: collision,
 	}, err
 }
 
@@ -646,7 +670,7 @@ func (w *Writer) mintKey(ctx context.Context, opID, project string, k int,
 			next := Counter{
 				V: DocumentVersion, Project: project, Last: counter.Last + k,
 			}
-			decision, err := w.decide(stamp, subject, OpPatch, "", scope, opID,
+			decision, err := w.decide(ctx, tx, stamp, subject, OpPatch, "", scope, opID,
 				next, nil, at)
 			if err != nil {
 				return statelog.Decision{}, err
@@ -1329,6 +1353,10 @@ type MoveStopped struct {
 	// get of Root answers.
 	Root, Key string
 
+	// KeyCollision says Key opens ANOTHER task — one that claimed it first —
+	// so the root is reached by Root, its id. See [WriteResult.KeyCollision].
+	KeyCollision bool
+
 	// Target is the project the root is in now.
 	Target string
 
@@ -1336,10 +1364,12 @@ type MoveStopped struct {
 	// and Of how many there are.
 	Followed, Of int
 
-	// Waiting is the key of a task under the root that is in the TRASH
-	// and still in the old project: frozen, so nothing carries it until
-	// somebody restores it — or purges it, which takes it out of the
-	// subtree. Empty for every other stop.
+	// Waiting is the ADDRESS of a task under the root that is in the TRASH
+	// and still in the old project — its key, or its id where another task
+	// claimed that key first ([ItemAddress]), since it is what a caller
+	// hands a restore: frozen, so nothing carries it until somebody
+	// restores it — or purges it, which takes it out of the subtree. Empty
+	// for every other stop.
 	Waiting string
 
 	// OpID is the move's operation — what finishes it.
@@ -1483,6 +1513,11 @@ func (w *Writer) MoveTaskToProject(ctx context.Context, opID, taskID, target str
 		subtree []Task
 		carried []Tag
 		arrived bool
+
+		// rootCollision is whether the root's CURRENT key opens another
+		// task, read beside it: what a move already in the target answers
+		// with, and names its root by when its walk stops.
+		rootCollision bool
 	)
 	if w.db == nil {
 		return WriteResult{}, fmt.Errorf("tracker: this writer has no store, " +
@@ -1511,6 +1546,10 @@ func (w *Writer) MoveTaskToProject(ctx context.Context, opID, taskID, target str
 			// ALREADY THERE: a re-run of this move, or somebody else's
 			// — which of the two is the ledger's to say, not this read.
 			arrived = true
+			if rootCollision, err = keyHeldByAnother(ctx, tx, current.Key,
+				taskID); err != nil {
+				return err
+			}
 			subtree, err = readSubtree(ctx, tx, taskID)
 			return err
 		}
@@ -1548,7 +1587,7 @@ func (w *Writer) MoveTaskToProject(ctx context.Context, opID, taskID, target str
 		return WriteResult{}, err
 	}
 	if arrived {
-		return w.finishMove(ctx, opID, root, target, subtree)
+		return w.finishMove(ctx, opID, root, rootCollision, target, subtree)
 	}
 	if len(subtree) > MaxDescendants {
 		return WriteResult{}, fmt.Errorf("tracker: task %s has %d descendants "+
@@ -1667,7 +1706,7 @@ func (w *Writer) MoveTaskToProject(ctx context.Context, opID, taskID, target str
 // THIS operation moved the root, and a Decide that does run means somebody
 // else did, which is a refusal. Then the rest follows it ([Writer.followRoot]).
 func (w *Writer) finishMove(ctx context.Context, opID string, root Task,
-	target string, subtree []Task) (WriteResult, error) {
+	rootCollision bool, target string, subtree []Task) (WriteResult, error) {
 
 	subject := TaskSubject(root.ID)
 	scope := ScopeSet{Subject: true, Container: target}
@@ -1695,11 +1734,11 @@ func (w *Writer) finishMove(ctx context.Context, opID string, root Task,
 	}
 	// The root is in the target and keyed there, so a stop past this point
 	// is [Writer.followRoot]'s own [MoveStopped].
-	if err := w.followRoot(ctx, opID, root, subtree); err != nil {
+	if err := w.followRoot(ctx, opID, root, rootCollision, subtree); err != nil {
 		return WriteResult{Result: answered}, err
 	}
 	out := WriteResult{Result: answered}
-	out.Key, out.Rank = root.Key, root.Rank
+	out.Key, out.Rank, out.KeyCollision = root.Key, root.Rank, rootCollision
 	return out, nil
 }
 
@@ -1719,9 +1758,10 @@ func (w *Writer) finishAbandonedMove(ctx context.Context, opID, id string) (bool
 			"cannot read the subtree an abandoned move left behind")
 	}
 	var (
-		root    Task
-		subtree []Task
-		marked  bool
+		root      Task
+		subtree   []Task
+		marked    bool
+		collision bool
 	)
 	err := w.db.Replicated().Read(ctx, func(tx *sql.Tx) error {
 		current, held, err := readTask(ctx, tx, id)
@@ -1735,13 +1775,16 @@ func (w *Writer) finishAbandonedMove(ctx context.Context, opID, id string) (bool
 			return nil
 		}
 		root, marked = current, true
+		if collision, err = keyHeldByAnother(ctx, tx, current.Key, id); err != nil {
+			return err
+		}
 		subtree, err = readSubtree(ctx, tx, id)
 		return err
 	})
 	if err != nil || !marked {
 		return false, err
 	}
-	return true, w.followRoot(ctx, opID, root, subtree)
+	return true, w.followRoot(ctx, opID, root, collision, subtree)
 }
 
 // carryStragglers carries into a root's project every live task under it that
@@ -1762,9 +1805,10 @@ func (w *Writer) carryStragglers(ctx context.Context, opID, id string) (int, err
 			"cannot read the subtree a move left a task behind in")
 	}
 	var (
-		root    Task
-		subtree []Task
-		left    int
+		root      Task
+		subtree   []Task
+		left      int
+		collision bool
 	)
 	err := w.db.Replicated().Read(ctx, func(tx *sql.Tx) error {
 		current, held, err := readTask(ctx, tx, id)
@@ -1782,6 +1826,9 @@ func (w *Writer) carryStragglers(ctx context.Context, opID, id string) (int, err
 		if err != nil {
 			return err
 		}
+		if collision, err = keyHeldByAnother(ctx, tx, current.Key, id); err != nil {
+			return err
+		}
 		root = current
 		for _, descendant := range all {
 			if descendant.Removed != nil {
@@ -1797,7 +1844,7 @@ func (w *Writer) carryStragglers(ctx context.Context, opID, id string) (int, err
 	if err != nil || left == 0 {
 		return 0, err
 	}
-	if err := w.followRoot(ctx, opID, root, subtree); err != nil {
+	if err := w.followRoot(ctx, opID, root, collision, subtree); err != nil {
 		return 0, err
 	}
 	return left, nil
@@ -1833,8 +1880,12 @@ func (w *Writer) carryStragglers(ctx context.Context, opID, id string) (int, err
 //
 // EVERY FAILURE IS A [MoveStopped]: the root is in its project before this
 // runs, so whatever stops the pass stops a move that has happened.
+//
+// rootCollision is whether the root's key opens another task, read beside the
+// root by the caller ([keyHeldByAnother]), so a stop names the root the way a
+// caller can open it.
 func (w *Writer) followRoot(ctx context.Context, opID string, root Task,
-	subtree []Task) error {
+	rootCollision bool, subtree []Task) error {
 
 	var left, frozen []Task
 	for _, descendant := range subtree {
@@ -1848,7 +1899,8 @@ func (w *Writer) followRoot(ctx context.Context, opID string, root Task,
 	}
 	carried := len(subtree) - len(left) - len(frozen)
 	stop := func(followed int, waiting string, err error) error {
-		return &MoveStopped{Root: root.ID, Key: root.Key, Target: root.Project,
+		return &MoveStopped{Root: root.ID, Key: root.Key,
+			KeyCollision: rootCollision, Target: root.Project,
 			Followed: followed, Of: len(subtree), Waiting: waiting, OpID: opID,
 			Err: err}
 	}
@@ -1885,11 +1937,12 @@ func (w *Writer) followRoot(ctx context.Context, opID string, root Task,
 		}
 	}
 	if len(frozen) > 0 {
-		return stop(carried+len(left), frozen[0].Key, fmt.Errorf("tracker: "+
-			"task %s (%s) under %s is in the trash and still in project %s, and "+
-			"a removed task is frozen — the move waits for it: restore it and "+
-			"the next pass carries it into %s, or purge it", frozen[0].Key,
-			frozen[0].ID, root.ID, frozen[0].Project, root.Project))
+		return stop(carried+len(left), w.addressOf(ctx, frozen[0]),
+			fmt.Errorf("tracker: task %s (%s) under %s is in the trash and "+
+				"still in project %s, and a removed task is frozen — the move "+
+				"waits for it: restore it and the next pass carries it into %s, "+
+				"or purge it", frozen[0].Key, frozen[0].ID, root.ID,
+				frozen[0].Project, root.Project))
 	}
 	// AFTER WHAT THIS PASS MOVED, for the reason the sequence's own last
 	// append waits: [carriedAll] asks this node's rows whether anything
@@ -1898,6 +1951,27 @@ func (w *Writer) followRoot(ctx context.Context, opID string, root Task,
 		return stop(carried+len(left), "", err)
 	}
 	return nil
+}
+
+// addressOf is the reference a caller opens a task by: its key, or its id where
+// another task claimed the key first ([ItemAddress]).
+//
+// ITS ID WHEREVER THE DIRECTORY CANNOT BE READ, because the id is the one
+// reference that is never wrong — only less readable — and this names a task
+// to somebody about to act on it.
+func (w *Writer) addressOf(ctx context.Context, task Task) string {
+	if w.db == nil {
+		return task.ID
+	}
+	var collision bool
+	if err := w.db.Replicated().Read(ctx, func(tx *sql.Tx) error {
+		var err error
+		collision, err = keyHeldByAnother(ctx, tx, task.Key, task.ID)
+		return err
+	}); err != nil {
+		return task.ID
+	}
+	return ItemAddress(task.ID, task.Key, collision)
 }
 
 // endMove takes a root's mid-move mark down: the walk's last append.
@@ -1965,14 +2039,15 @@ func (w *Writer) moveStopped(ctx context.Context, result WriteResult, opID strin
 	if errors.As(err, &stop) {
 		return err
 	}
+	collision := result.KeyCollision
 	if result.Collapsed {
-		key = ""
+		key, collision = "", false
 		if landed, readErr := w.landedTask(ctx, result.Result, root.ID); readErr == nil {
-			key = landed.Key
+			key, collision = landed.Key, landed.KeyCollision
 		}
 	}
-	return &MoveStopped{Root: root.ID, Key: key, Target: target,
-		Followed: followed, Of: of, OpID: opID, Err: err}
+	return &MoveStopped{Root: root.ID, Key: key, KeyCollision: collision,
+		Target: target, Followed: followed, Of: of, OpID: opID, Err: err}
 }
 
 // laterOf is the later of two positions on one log, the zero position being
@@ -2006,11 +2081,32 @@ func (w *Writer) moveOne(ctx context.Context, opID string, task Task,
 	if mark {
 		patch.Moving = &mark
 	}
+	// WHETHER THE KEY THIS STEP LANDS THE TASK UNDER IS ANOTHER TASK'S,
+	// read in the snapshot the step decides in — the key is the one the
+	// applier composes from the mint, so no row holds it yet and the
+	// directory is the only thing that can say. Assigned on every round;
+	// the last is the one whose record was published.
+	var key string
+	if mint != nil {
+		key = fmt.Sprintf("%s-%d", target, mint.N)
+	}
+	var collision bool
 	// NO NOTIFICATION AND NO HISTORY BUMP on a descendant, whose caller
 	// passes none: a subtree that moved wakes the people watching the
 	// root, not everybody watching every task beneath it.
-	return w.UpdateTask(ctx, opID, task.ID, task.Project, NoIfMatch, patch,
-		ChangeMoved, notify)
+	result, err := w.updateTask(ctx, opID, task.ID, task.Project, NoIfMatch,
+		patch, ChangeMoved, notify,
+		func(ctx context.Context, tx *sql.Tx, _ Task, patch TaskPatch) (TaskPatch, error) {
+			held, err := keyHeldByAnother(ctx, tx, key, task.ID)
+			if err != nil {
+				return TaskPatch{}, fmt.Errorf("tracker: read whether key %s "+
+					"is already another task's: %w", key, err)
+			}
+			collision = held
+			return patch, nil
+		})
+	result.KeyCollision = collision
+	return result, err
 }
 
 // carriedTags is every tag the tasks a move carries hold, as their own project
@@ -2136,7 +2232,7 @@ func (w *Writer) claimAlias(ctx context.Context, opID, key, taskID string,
 				return statelog.Decision{}, fmt.Errorf("tracker: key %s belongs "+
 					"to task %s, so it cannot be aliased to %s", key, owner, taskID)
 			}
-			return w.decide(stamp, subject, OpCreate, "", scope, opID, KeyAlias{
+			return w.decide(ctx, tx, stamp, subject, OpCreate, "", scope, opID, KeyAlias{
 				Key: key, TaskID: taskID,
 			}, nil, at)
 		},

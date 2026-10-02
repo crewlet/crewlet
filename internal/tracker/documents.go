@@ -210,6 +210,38 @@ func readAlias(ctx context.Context, tx *sql.Tx, key string) (string, bool, error
 	return task, true, nil
 }
 
+// keyHeldByAnother reports whether opening key reaches a task OTHER than id —
+// [resolveTaskID]'s answer to the key, asked about one of its holders inside a
+// write's own snapshot.
+//
+// THE DIRECTORY AND NOTHING ELSE, for the reasons [keyOpensAnother] gives for
+// the same question in SQL: it is what the resolver asks first, and it is what
+// the applier derives `key_collision` from ([flagKeyCollisions]), so a task
+// this answers true for is one the applier flags or has flagged. It answers
+// for a key a row does not hold yet — a create's, a move's freshly minted one
+// — which the row's own column cannot.
+//
+// A WRITER'S READING, AND IT CAN BE OVERTAKEN: two creates racing for one key
+// a restored counter minted both read an unclaimed key, and the one applied
+// second is flagged although its writer read no claim. Nothing keyed on the
+// answer depends on it being final — a wake's conversation is the task's id
+// ([Prompt.PartitionKey]) — and what it costs when overtaken is one wake or
+// one receipt naming the key, beside the id, of a task the next read reports
+// flagged.
+//
+// An empty key or an empty id is never a collision: an empty key opens
+// nothing, and a key beside no task names nothing it could fail to open.
+func keyHeldByAnother(ctx context.Context, tx *sql.Tx, key, id string) (bool, error) {
+	if key == "" || id == "" {
+		return false, nil
+	}
+	claimant, held, err := readAlias(ctx, tx, key)
+	if err != nil {
+		return false, err
+	}
+	return held && claimant != id, nil
+}
+
 // readChildBatch is one batch of a task's DIRECT children.
 //
 // # Why direct children rather than the subtree

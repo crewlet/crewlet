@@ -206,6 +206,17 @@ type TaskDetail struct {
 	Incomplete     *Incomplete        `json:"incomplete,omitempty"`
 }
 
+// Address is the reference that opens the task this answer is about: its key,
+// or its id where another task claimed the key first. See [ItemAddress].
+func (d TaskDetail) Address() string {
+	return ItemAddress(d.Task.ID, d.Task.Key, d.KeyCollision)
+}
+
+// Named is how prose names the task this answer is about. See [ItemNamed].
+func (d TaskDetail) Named() string {
+	return ItemNamed(d.Task.ID, d.Task.Key, d.KeyCollision)
+}
+
 // TaskUnits is a task's two unit references as a reader renders them.
 //
 // BOTH HALVES, ALWAYS, because they answer different questions and a screen

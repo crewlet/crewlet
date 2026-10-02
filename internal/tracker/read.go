@@ -132,6 +132,25 @@ func ItemAddress(id, key string, collision bool) string {
 	return key
 }
 
+// ItemNamed is how PROSE names a task to somebody who may act on the name: its
+// address ([ItemAddress]), with the key beside an id that stands in for it.
+//
+// THE KEY TOO, because an id alone tells a reader nothing about which task it
+// is, and SAYING WHY, because a reader shown an id where every other task is
+// shown a key reads it as a fault — and goes back to the key, which opens
+// the claimant. A task that answers to its key is named by the key alone, and
+// one with no key by its id: there is nothing to put beside it.
+//
+// A tool's ARGUMENT is never built from this — an argument takes the address
+// and nothing else.
+func ItemNamed(id, key string, collision bool) string {
+	address := ItemAddress(id, key, collision)
+	if key == "" || address == key {
+		return address
+	}
+	return address + " (its key " + key + " opens another task)"
+}
+
 // Blocker is one dependency edge as the task that waits on it sees it.
 //
 // THE STATE TRAVELS WITH THE EDGE rather than being looked up per end,

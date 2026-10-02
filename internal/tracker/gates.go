@@ -347,7 +347,7 @@ type PurgeResult struct {
 // NIL WHEN THERE IS NO LEAD: a company with nobody to
 // tell is told nothing, and the record still names itself `purged` because the
 // kind is the writer's and not the notification's.
-func purgeWake(task Task, reason, actor string, leads Leads) *Notify {
+func purgeWake(task Task, collision bool, reason, actor string, leads Leads) *Notify {
 	if leads == nil {
 		return nil
 	}
@@ -360,7 +360,7 @@ func purgeWake(task Task, reason, actor string, leads Leads) *Notify {
 		Snapshot: Snapshot{
 			Key: task.Key, Project: task.Project, ProjectLead: lead,
 		},
-		Excerpt: purgeExcerpt(task, reason, actor),
+		Excerpt: purgeExcerpt(task, collision, reason, actor),
 	}
 }
 
@@ -371,11 +371,15 @@ func purgeWake(task Task, reason, actor string, leads Leads) *Notify {
 // window, which is the one thing this operation is for. The key is an
 // identifier the person already has in whatever ticket asked for the purge.
 //
+// AND THE ID BESIDE IT where another task claimed that key first
+// ([ItemNamed]): the key then names a task that was NOT purged, and a lead
+// told "ENG-7 was purged" opens ENG-7 to find it still there.
+//
 // The REASON is the operator's own sentence and is kept, cut to fit: it is
 // why they did it, and a record of an irreversible act with no reason on it is
 // the shape nobody can audit afterwards.
-func purgeExcerpt(task Task, reason, actor string) string {
-	out := task.Key + " was purged"
+func purgeExcerpt(task Task, collision bool, reason, actor string) string {
+	out := ItemNamed(task.ID, task.Key, collision) + " was purged"
 	if actor != "" {
 		out += " by " + actor
 	}
@@ -429,17 +433,22 @@ func (w *Writer) PurgeTask(ctx context.Context, opID, id, project, reason string
 				// than to come back to it — see [absentTask].
 				return statelog.Decision{}, absentTask(ctx, tx, id, "task")
 			}
+			collision, err := keyHeldByAnother(ctx, tx, current.Key, current.ID)
+			if err != nil {
+				return statelog.Decision{}, fmt.Errorf("tracker: read whether "+
+					"key %s opens task %s: %w", current.Key, current.ID, err)
+			}
 			// THE PURGER AS THEY ARE CALLED NOW, because the excerpt is
 			// prose the lead reads and nothing rewrites afterwards: the
 			// writer's actor is the seat's IDENTITY (people.go), and "purged
 			// by cto" about a seat that answers to chief names somebody the
 			// lead cannot find — the rule [Writer.prioritisedWake]'s own
 			// excerpt follows.
-			decision, err := w.decide(stamp, subject, OpPurge, ChangePurged, scope, opID, struct {
+			decision, err := w.decide(ctx, tx, stamp, subject, OpPurge, ChangePurged, scope, opID, struct {
 				V      int    `json:"v"`
 				Reason string `json:"reason,omitempty"`
-			}{V: GateRecordVersion, Reason: reason}, purgeWake(current, reason,
-				seatnames.CurrentOf(w.chart(), w.Actor), w.Leads), at)
+			}{V: GateRecordVersion, Reason: reason}, purgeWake(current, collision,
+				reason, seatnames.CurrentOf(w.chart(), w.Actor), w.Leads), at)
 			if err != nil {
 				return statelog.Decision{}, err
 			}
@@ -514,8 +523,8 @@ func (w *Writer) gateNode(ctx context.Context, opID, nodeID string, readmit bool
 			}
 			return statelog.GateStanding(opID, nodeID, readmit, held, row, found)
 		},
-		Decide: func(_ *sql.Tx, stamp statelog.Stamp) (statelog.Decision, error) {
-			return w.decide(stamp, subject, OpEviction, "", scope, opID, Eviction{
+		Decide: func(tx *sql.Tx, stamp statelog.Stamp) (statelog.Decision, error) {
+			return w.decide(ctx, tx, stamp, subject, OpEviction, "", scope, opID, Eviction{
 				V: GateRecordVersion, NodeID: nodeID,
 				EvictedBy: w.Actor, EvictedAt: at, Readmitted: readmit,
 			}, nil, at)

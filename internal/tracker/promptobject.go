@@ -65,11 +65,12 @@ func promptPriorities(b *strings.Builder, n notify.Inbound, parties notify.Parti
 	if body := strings.TrimSpace(n.Body); body != "" {
 		b.WriteString("\n**What changed:** " + body)
 	}
-	if key := meta[MetaTaskKey]; key != "" {
+	if key := metaAddress(meta); key != "" {
 		b.WriteString("\n**Top of your list:** " + key)
 		if title := meta[MetaTitle]; title != "" {
 			b.WriteString(" — " + title)
 		}
+		promptCollision(b, meta)
 	}
 	b.WriteString("\n")
 
@@ -79,7 +80,7 @@ func promptPriorities(b *strings.Builder, n notify.Inbound, parties notify.Parti
 		" priority field, and it is not a board order — it is your own queue," +
 		" and this change to it was made by somebody else.\n")
 
-	if key := meta[MetaTaskKey]; key != "" {
+	if key := metaAddress(meta); key != "" {
 		b.WriteString("\n## Get full context" +
 			"\nRead **" + key + "** with `" + GetWorkItemTool + "` before" +
 			" deciding anything, and see the whole list with `" + MyWorkTool +

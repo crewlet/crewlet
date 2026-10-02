@@ -55,7 +55,7 @@ func (Prompt) Source() string { return Source }
 // the seat can begin reasoning from the trigger. A bare transition carries no
 // prose at all and is a pointer at a task the seat must read first.
 func (Prompt) RequiresRecon(n notify.Inbound) bool {
-	if n.Metadata[MetaTaskKey] == "" {
+	if metaAddress(n.Metadata) == "" {
 		return false
 	}
 	switch ChangeKind(n.EventType) {
@@ -302,6 +302,7 @@ func promptOpener(b *strings.Builder, n notify.Inbound, parties notify.Parties,
 func promptHeader(b *strings.Builder, n notify.Inbound, parties notify.Parties) {
 	meta := n.Metadata
 	b.WriteString("\n\n**Task:** " + n.Subject)
+	promptCollision(b, meta)
 	if lead := changeLead(meta, promptSender(n, parties)); lead != "" {
 		b.WriteString("\n**What happened:** " + lead)
 	}
@@ -469,9 +470,37 @@ func orDash(value string) string {
 	return value
 }
 
+// metaAddress is the reference that opens the task a wake points at: its key,
+// or its id where another task claimed the key first ([ItemAddress]). Empty for
+// a wake that points at no task.
+//
+// EVERY REFERENCE A PROMPT HANDS A SEAT IS BUILT HERE, because a seat acts on
+// what it is shown: a wake about the duplicate of a key that named the key
+// sent the seat to read — and comment on, and reassign — the task that
+// claimed it.
+func metaAddress(meta map[string]string) string {
+	return ItemAddress(meta[MetaTaskID], meta[MetaTaskKey],
+		meta[MetaKeyCollision] == "true")
+}
+
+// promptCollision says, under the task's own name, why a wake names it by its
+// id: its key is one another task claimed first, and opens that task.
+//
+// SAID RATHER THAN LEFT TO THE ID, because a seat that sees an id where it is
+// used to a key, and the key in the deltas or the title, reaches for the key.
+func promptCollision(b *strings.Builder, meta map[string]string) {
+	if meta[MetaKeyCollision] != "true" || meta[MetaTaskKey] == "" {
+		return
+	}
+	key, id := meta[MetaTaskKey], meta[MetaTaskID]
+	b.WriteString("\n**Key:** " + key + " — another task claimed this key " +
+		"first, so **" + key + "** opens THAT task. This one is reached only " +
+		"by its id, **" + id + "**: use the id in every call about it.")
+}
+
 // promptContext is the recon pointer.
 func promptContext(b *strings.Builder, meta map[string]string) {
-	key := meta[MetaTaskKey]
+	key := metaAddress(meta)
 	if key == "" {
 		return
 	}

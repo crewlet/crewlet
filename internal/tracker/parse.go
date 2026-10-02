@@ -18,16 +18,23 @@ import (
 // and a typo in either is a field that silently renders empty — which looks
 // exactly like a change that had nothing to say.
 const (
-	MetaTaskKey    = "item_key"
-	MetaTaskID     = "item_id"
-	MetaProject    = "project"
-	MetaStatus     = "status"
-	MetaAssignee   = "assignee"
-	MetaRecordID   = "change_id"
-	MetaChangeKind = "change_kind"
-	MetaTitle      = "title"
-	MetaExcerpt    = "excerpt"
-	MetaLate       = "late"
+	MetaTaskKey = "item_key"
+	MetaTaskID  = "item_id"
+
+	// MetaKeyCollision is "true" when [MetaTaskKey] opens ANOTHER task —
+	// one that claimed the key first — so the task is reached by
+	// [MetaTaskID] alone. Absent otherwise, and absent on a wake from a
+	// record whose writer predates [Snapshot.KeyCollision], which then
+	// renders by its key as it always did. Read through [metaAddress].
+	MetaKeyCollision = "item_key_collision"
+	MetaProject      = "project"
+	MetaStatus       = "status"
+	MetaAssignee     = "assignee"
+	MetaRecordID     = "change_id"
+	MetaChangeKind   = "change_kind"
+	MetaTitle        = "title"
+	MetaExcerpt      = "excerpt"
+	MetaLate         = "late"
 
 	// MetaDeltas is WHAT MOVED, already rendered — one `field: from → to`
 	// line per delta the record carries, written by [changedText].
@@ -237,6 +244,14 @@ func (p *Parser) inbound(record MutationRecord, reg *notify.Registry) notify.Inb
 		// the change itself.
 		metadata[MetaLate] = "true"
 	}
+	if snapshot.KeyCollision && metadata[MetaTaskID] != "" {
+		// THE KEY IS NOT THIS TASK'S ADDRESS: it opens the task that
+		// claimed it first, and the prompt has to send the seat to the id
+		// instead. Only beside an id, which is the address it stands in
+		// for — a flag with no id to go to would leave the prompt nothing
+		// to name.
+		metadata[MetaKeyCollision] = "true"
+	}
 	return notify.Inbound{
 		Source:    Source,
 		EventType: string(record.Notify.Kind),
@@ -253,8 +268,13 @@ func (p *Parser) inbound(record MutationRecord, reg *notify.Registry) notify.Inb
 // priority list would be the first false sentence a recipient reads — and the
 // subject is also what a digest coalesces on, so a wrong noun there is wrong
 // in every summary too.
+//
+// AND IT NAMES THE TASK BY ITS ADDRESS ([Snapshot.Address]) — the id where
+// another task claimed its key first — because it is the first reference the
+// seat is shown, under **Task:**, and a key there is one a seat types into
+// get_work_item and lands on the claimant with.
 func subjectLine(snapshot Snapshot, subject Subject, kind ChangeKind) string {
-	key := snapshot.Key
+	key := snapshot.Address(subject)
 	if key == "" {
 		key = objectLabel(subject)
 	}

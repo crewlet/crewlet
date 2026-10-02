@@ -276,6 +276,16 @@ func (w *Writer) prioritisedWake(ctx context.Context, tx *sql.Tx, handle string,
 		// card. Silence is the honest degradation.
 		return nil, nil
 	}
+	// THE EXCERPT NAMES THE TASK AS ITS READER WOULD OPEN IT, because it is
+	// the line a seat is handed as "what changed": a duplicate of a key
+	// named by the key alone sends the seat to the task that claimed it.
+	// The snapshot's own flag is derived again by [Writer.decide], from the
+	// same snapshot, so the two cannot disagree.
+	collision, err := keyHeldByAnother(ctx, tx, top.Key, top.ID)
+	if err != nil {
+		return nil, fmt.Errorf("tracker: read whether key %s opens task %s: %w",
+			top.Key, top.ID, err)
+	}
 	return &Notify{
 		Kind: ChangePrioritised,
 		Snapshot: Snapshot{
@@ -295,7 +305,8 @@ func (w *Writer) prioritisedWake(ctx context.Context, tx *sql.Tx, handle string,
 			Position:      1,
 		},
 		Excerpt: fmt.Sprintf("%s put %s at position 1 of your priorities",
-			seatnames.CurrentOf(w.chart(), w.Actor), top.Key),
+			seatnames.CurrentOf(w.chart(), w.Actor),
+			ItemNamed(top.ID, top.Key, collision)),
 	}, nil
 }
 
@@ -468,7 +479,7 @@ func (w *Writer) writePersonNotifying(ctx context.Context, opID, handle string,
 			if err != nil {
 				return statelog.Decision{}, err
 			}
-			return w.decide(stamp, subject, OpPatch, kind, scope, opID, post, notify, at)
+			return w.decide(ctx, tx, stamp, subject, OpPatch, kind, scope, opID, post, notify, at)
 		},
 	})
 }

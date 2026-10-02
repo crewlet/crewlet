@@ -161,7 +161,7 @@ func (w *Writer) WriteProject(ctx context.Context, opID, key string,
 			if !changed {
 				return statelog.Decision{}, nil
 			}
-			decision, err := w.decide(stamp, subject, OpPatch, ChangeProjectUpdated,
+			decision, err := w.decide(ctx, tx, stamp, subject, OpPatch, ChangeProjectUpdated,
 				scope, opID, next, nil, at)
 			if err != nil {
 				return statelog.Decision{}, err
