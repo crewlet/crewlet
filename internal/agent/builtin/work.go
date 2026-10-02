@@ -2284,7 +2284,7 @@ func (t *updateWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn, ar
 		}
 	}
 
-	answer := withOperation(receiptOf(map[string]any{
+	answer := withOperation(ReceiptOf(map[string]any{
 		"labels_created": declared,
 	}, before), actor)
 	// patchedAt is where the patch landed, when it ran: the dependency step
@@ -2976,7 +2976,7 @@ func (t *commentOnWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 				"that is a second comment")), nil
 	}
 	t.deps.settle(ctx, got.Position)
-	answer := withOperation(receiptOf(map[string]any{
+	answer := withOperation(ReceiptOf(map[string]any{
 		"comment_id": comment.ID,
 		"mentioned":  comment.Mentions, "outcome": string(got.Outcome), "position": positionOf(got.Position),
 		"version": got.Version,

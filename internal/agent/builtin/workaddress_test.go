@@ -338,7 +338,7 @@ func walkArguments(prefix string, schema map[string]any, fn func(path, descripti
 func TestNoToolNamesATaskByAKeyOutsideTheAddressRule(t *testing.T) {
 	t.Parallel()
 	allowed := map[string]string{
-		"receiptOf": "the receipt helper: it puts the key BESIDE the address " +
+		"ReceiptOf": "the receipt helper: it puts the key BESIDE the address " +
 			"it computes, never in its place",
 		"WorkDeps.parentParty": "a wake's TaskParty carries the key as data " +
 			"beside the id it routes on, and shows it to nobody as a reference",
@@ -382,7 +382,7 @@ func TestNoToolNamesATaskByAKeyOutsideTheAddressRule(t *testing.T) {
 				found[owner] = true
 				if _, ok := allowed[owner]; !ok {
 					t.Errorf("%s: %s reads a task's key off a detail — name the "+
-						"task through its Address or Named, or receiptOf, or "+
+						"task through its Address or Named, or ReceiptOf, or "+
 						"declare here why the key is what this text means",
 						name, owner)
 				}

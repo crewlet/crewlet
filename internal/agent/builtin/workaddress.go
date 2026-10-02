@@ -20,7 +20,7 @@ import "github.com/crewlet/crewlet/internal/tracker"
 //   - A RECEIPT names the task in `item` — the reference to hand back, the
 //     value every `item` argument takes — beside `key`, what the task is
 //     called, and `key_collision` where the two differ, so a reader can tell
-//     an id standing in for a key from a fault ([receiptItem]).
+//     an id standing in for a key from a fault ([receiptItem], [ReceiptOf]).
 //   - An INSTRUCTION to call a tool on the task names its address, bare,
 //     because the caller copies it into an argument ([tracker.TaskDetail.Address]).
 //   - PROSE about the task names its address with the key beside it and why
@@ -69,7 +69,12 @@ func receiptItem(answer map[string]any, id, key string, collision bool) map[stri
 	return answer
 }
 
-// receiptOf is [receiptItem] for a task the tool read before writing.
-func receiptOf(answer map[string]any, before tracker.TaskDetail) map[string]any {
+// ReceiptOf is [receiptItem] for a task the caller read before writing.
+//
+// EXPORTED FOR THE VERBS NO TOOL MAKES — the human write surface's rank move
+// and comment edit write through the tracker themselves — so their receipts
+// name the item by the same rule, in the same three fields, as every tool's
+// they sit beside on that surface.
+func ReceiptOf(answer map[string]any, before tracker.TaskDetail) map[string]any {
 	return receiptItem(answer, before.Task.ID, before.Task.Key, before.KeyCollision)
 }

@@ -150,7 +150,7 @@ func (t *removeWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 				"it changes nothing, since the item is already there")), nil
 	}
 	t.deps.settle(ctx, got.Position)
-	return jsonResult(withOperation(receiptOf(map[string]any{
+	return jsonResult(withOperation(ReceiptOf(map[string]any{
 		"removed": true,
 		"outcome": string(got.Outcome), "position": positionOf(got.Position), "version": got.Version,
 	}, before), actor))
@@ -258,7 +258,7 @@ func (t *restoreWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 				"it is refused, since there is nothing left to restore")), nil
 	}
 	t.deps.settle(ctx, got.Position)
-	return jsonResult(withOperation(receiptOf(map[string]any{
+	return jsonResult(withOperation(ReceiptOf(map[string]any{
 		"restored": true,
 		"outcome":  string(got.Outcome), "position": positionOf(got.Position), "version": got.Version,
 	}, before), actor))
@@ -296,7 +296,7 @@ func (d WorkDeps) subtreeStopped(ctx context.Context, actor Actor, tool string,
 			"new operation decides afresh and finishes it.", tool, item.Address())
 	}
 	d.settle(ctx, got.Position)
-	return jsonResult(withOperation(receiptOf(map[string]any{
+	return jsonResult(withOperation(ReceiptOf(map[string]any{
 		done:      true,
 		"outcome": string(got.Outcome), "position": positionOf(got.Position),
 		"version":          got.Version,

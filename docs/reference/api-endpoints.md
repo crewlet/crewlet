@@ -3678,7 +3678,11 @@ never a seat — because a tool skill is injected into every seat's turn and
 writing one rewrites the prompt the company runs under. A remark on one is an
 ordinary comment. See [who may write where](../concepts/knowledge-system.md#who-may-write-where).
 
-`{key}` is an item's key (`ENG-42`) or its id; `{id}` is a page's id. A body
+`{key}` is an item's key (`ENG-42`) or its id — and its id for an item flagged
+`key_collision`, whose key opens the task that claimed it first. A receipt
+names the item it is about in `item`, by that same rule, with `key` beside it
+and `key_collision: true` where the two differ: `item` is what to put back in
+the path. `{id}` is a page's id. A body
 naming a different object than the path is refused `400` rather than
 overwritten, and a route that is a narrower door onto a wider tool — `/depend`,
 `/relate`, `/tags`, a project's policy — refuses an argument that belongs to

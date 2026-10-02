@@ -305,7 +305,7 @@ func (s *served) postRank(w http.ResponseWriter, r *http.Request) {
 			httpjson.FailWith(w, http.StatusUnprocessableEntity, httpjson.CodeRefused,
 				map[string]string{"detail": fmt.Sprintf("%s is in %s and %s is "+
 					"in %s — an item is placed among its own project's items",
-					neighbour.Task.Key, neighbour.Task.Project, item.Task.Key,
+					neighbour.Named(), neighbour.Task.Project, item.Named(),
 					item.Task.Project)})
 			return
 		}
@@ -332,10 +332,13 @@ func (s *served) postRank(w http.ResponseWriter, r *http.Request) {
 		failErr(w, err, key)
 		return
 	}
-	answer(w, key, result.Outcome, result.Unvouched, map[string]any{
-		"item": item.Task.Key, "outcome": string(result.Outcome),
+	// THE ITEM BY ITS ADDRESS, as every tool's receipt on this surface
+	// names it ([builtin.ReceiptOf]): `item` is what a client puts back in
+	// the path, and a key another task claimed first opens that task.
+	answer(w, key, result.Outcome, result.Unvouched, builtin.ReceiptOf(map[string]any{
+		"outcome":  string(result.Outcome),
 		"position": positionOf(result.Position),
-	})
+	}, item))
 }
 
 // patchItemComment rewrites one remark on a work item, AS ITS AUTHOR.
@@ -361,7 +364,7 @@ func (s *served) patchItemComment(w http.ResponseWriter, r *http.Request) {
 	if len(detail.Comments) == 0 {
 		httpjson.FailWith(w, http.StatusNotFound, httpjson.CodeNotFound,
 			map[string]string{"detail": "there is no comment " + cid + " on " +
-				detail.Task.Key})
+				detail.Named()})
 		return
 	}
 	stored := detail.Comments[0]
@@ -392,11 +395,11 @@ func (s *served) patchItemComment(w http.ResponseWriter, r *http.Request) {
 		failErr(w, err, key)
 		return
 	}
-	answer(w, key, result.Outcome, result.Unvouched, map[string]any{
-		"item": detail.Task.Key, "comment_id": cid, "edited": true,
+	answer(w, key, result.Outcome, result.Unvouched, builtin.ReceiptOf(map[string]any{
+		"comment_id": cid, "edited": true,
 		"outcome": string(result.Outcome), "position": positionOf(result.Position),
 		"version": result.Version,
-	})
+	}, detail))
 }
 
 // postPurge destroys an item and every row it produced, on every node.

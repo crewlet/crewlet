@@ -166,7 +166,7 @@ func (t *mergeWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 				"it merges it a second time")), nil
 	}
 	t.deps.settle(ctx, got.Position)
-	return jsonResult(withOperation(receiptOf(map[string]any{
+	return jsonResult(withOperation(ReceiptOf(map[string]any{
 		"merged_into":    survivor,
 		"subtasks_moved": moveSubtasks(args),
 		"status":         string(tracker.StatusCancelled),
