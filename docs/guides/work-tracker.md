@@ -1407,6 +1407,17 @@ The single exception is **`unblocked`**, and it is the exception because it is
 about a *different* task: closing a blocker is exactly the moment to be told
 that your own other work became workable.
 
+**A task's wakes are one conversation, named by the task's id.** Wakes about
+one task that queue up while a seat is busy are merged into one digest turn,
+and every turn a seat takes on a task is filed in that task's
+[conversation ledger](../concepts/conversation-sessions.md), so its next turn
+picks the thread up where it left off. Both are keyed on the task's **id**
+(`work:task:<id>`), never on its key: two tasks can hold one key — see
+`key_collision` — and keyed on it a seat woken about the duplicate was handed
+the claimant's changes and the claimant's history as its own; and a move to
+another project gives a task a new key without ending its thread. A
+`prioritised` wake joins the conversation of the task it put first.
+
 The order puts **what this change did to you** ahead of **the role you hold**.
 Being @-mentioned, being asked a question, having your question answered, and
 learning that somebody's work now waits on yours all outrank being the

@@ -144,9 +144,11 @@ func TestNonTaskWakesDoNotShareOneConversation(t *testing.T) {
 			continue
 		}
 		wake := objectWake(kind, "")
-		// The person wake carries a task key and keys on it, which is
-		// right: a priorities write IS about that task.
+		// The person wake carries a task and keys on it, which is right:
+		// a priorities write IS about that task. Without one it is about
+		// nothing but the person's own list.
 		delete(wake.Metadata, tracker.MetaTaskKey)
+		delete(wake.Metadata, tracker.MetaTaskID)
 		key := tracker.Prompt{}.PartitionKey(wake.Metadata, "")
 		if key == "" {
 			t.Errorf("%q has no partition key", kind)
@@ -154,9 +156,9 @@ func TestNonTaskWakesDoNotShareOneConversation(t *testing.T) {
 		}
 		// THE OBJECT IS BOTH KEYS: a task (or the object a non-task wake
 		// names) is one thing that is both the merge unit and the durable
-		// thread, so the identity delegates. A divergence would break the
-		// alignment the key is chosen for — a chat thread about ENG-42 and
-		// the tracker activity on it landing in one ledger.
+		// thread, so the identity delegates. A divergence would let one
+		// coalesced trigger's ledger entry depend on which constituent
+		// sorted first.
 		if got := (tracker.Prompt{}).ConversationIdentity(wake.Metadata, ""); got != key {
 			t.Errorf("%q: identity %q diverged from the partition key %q", kind, got, key)
 		}

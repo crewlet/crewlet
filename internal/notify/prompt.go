@@ -113,9 +113,9 @@ type Prompt interface {
 	// the ledger key would depend on which event sorted first.
 	//
 	// For eight of the nine sources the two coincide, because an issue
-	// key, a page id, a monitor id and a task key are each one object that
-	// is both the merge unit and the durable thread; those delegate in one
-	// line. [ChatPrompt] is where they differ, and its doc shows the
+	// key, a page id, a monitor id and a task's id are each one object
+	// that is both the merge unit and the durable thread; those delegate
+	// in one line. [ChatPrompt] is where they differ, and its doc shows the
 	// invariant deciding the answer.
 	ConversationIdentity(metadata map[string]string, subject string) string
 

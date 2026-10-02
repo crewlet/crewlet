@@ -87,15 +87,41 @@ func (Prompt) Addressed(n notify.Inbound) bool {
 	return Reason(n.Metadata[MetaVia]).Addressed()
 }
 
-// PartitionKey implements [notify.Prompt]: the task is the conversation.
+// PartitionKey implements [notify.Prompt]: the TASK is the conversation, and
+// it is named by its ID.
 //
-// THE KEY rather than the uuid, because the key is what a person pastes into
-// chat and what a seat writes in a commit message — so a chat thread about
-// ENG-42 and the tracker activity on it land in one ledger, which is the whole
-// point of a conversation key.
+// # The id and never the key
+//
+// A key is an ADDRESS — what a person pastes into chat and types into a tool
+// call — and an address is not one task for the life of the deployment:
+//
+//   - TWO TASKS CAN HOLD ONE KEY. A counter restored beside newer work mints
+//     numbers those tasks already hold, and the applier flags every holder but
+//     the claimant `key_collision` rather than refuse a record the broker
+//     committed. Keyed on the key, wakes about the two coalesced into ONE
+//     digest and their turns shared ONE ledger, so a seat woken about the
+//     duplicate was handed the claimant's thread as its own history.
+//   - A KEY MOVES. A cross-project move re-keys the task (ENG-7 becomes OPS-3),
+//     and keyed on the key its conversation started over under the new one:
+//     the ledger of every turn the seat had taken on it was filed where its
+//     next turn never looked, and a coding run parked on a question asked
+//     from the task could not be matched by the answer posted on it.
+//
+// The id is the one name a task never shares and never gives up. The key was
+// chosen once so "a chat thread about ENG-42 and the tracker activity on it
+// land in one ledger" — which never happened: the spine namespaces every
+// source-local key ([notify.Namespaced]), so `work:ENG-42` and a chat
+// thread's key were never one string.
+//
+// `task:<id>`, IN THE GRAMMAR A NON-TASK WAKE'S OBJECT ALREADY USES, so the two
+// can never collide, and a task-subject wake keys exactly as its own object
+// would. The id is the one the WAKE points at ([Snapshot.TaskID]) rather than
+// the subject's: a `prioritised` wake is written on a person and is about the
+// task at the top of their list, so it joins that task's conversation, as it
+// did while both keyed on the task's key.
 func (Prompt) PartitionKey(metadata map[string]string, _ string) string {
-	if key := metadata[MetaTaskKey]; key != "" {
-		return key
+	if id := metadata[MetaTaskID]; id != "" {
+		return string(KindTask) + ":" + id
 	}
 	// A NON-TASK WAKE KEYS ON ITS OWN OBJECT. Falling through to an empty
 	// key would put every person-scoped wake in the company into ONE
@@ -107,13 +133,11 @@ func (Prompt) PartitionKey(metadata map[string]string, _ string) string {
 	return ""
 }
 
-// ConversationIdentity implements [notify.Prompt]: the same task key.
+// ConversationIdentity implements [notify.Prompt]: the same task, by its id.
 //
 // The two coincide because a task (or the object a non-task wake names) is
-// one object that is both the merge unit and the durable thread. The
-// alignment the key above is chosen for is a CONVERSATION-side claim — a chat
-// thread about ENG-42 and the tracker activity on it land in one ledger — and
-// it survives only as long as this delegation does.
+// one object that is both the merge unit and the durable thread, so every
+// event in a partition carries the identity the partition itself names.
 func (p Prompt) ConversationIdentity(metadata map[string]string, subject string) string {
 	return p.PartitionKey(metadata, subject)
 }

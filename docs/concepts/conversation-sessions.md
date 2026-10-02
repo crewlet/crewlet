@@ -162,7 +162,10 @@ off the one that wrote it, and `entry_id` says nothing about what a row
 
 `conversation_key` holds the **conversation identity**: the `{source}:{local}`
 grammar of [the event system](event-system.md#inbox-batching--coalescing) —
-`jira:POC-7`, `slack:C9:1718.001`, `github:acme/api#42`. It is the durable
+`jira:POC-7`, `slack:C9:1718.001`, `github:acme/api#42`, and `work:task:<id>`
+for a task in the engine's own tracker, which is named by its id because its key
+is not one task for ever: two tasks can hold one key, and a move re-keys a task
+without ending its thread. It is the durable
 thread, NOT the partition key the seat's inbox coalesces on. The two are the
 same string for every source but chat, and for chat they differ on exactly one
 surface: **a direct message is one conversation however it is threaded**, so it
