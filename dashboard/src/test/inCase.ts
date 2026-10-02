@@ -25,6 +25,17 @@
  * What is not ended: the library's poll behind a wait that was refused goes
  * on to its own one-second deadline, but its answer goes nowhere and it opens
  * no scope; and a late case can still READ the page, which moves nothing.
+ *
+ * Nor is what a late case writes to the page's globals ITSELF — the fake
+ * clock through `vi`, `location.hash`, a stub — and that is a boundary, not
+ * an oversight. Every act, wait and poll here rejects at its case's end, so
+ * a late case is thrown out at the first of them it awaits. What of its own
+ * it can still run is the `catch` or `finally` that throw passes through,
+ * and whatever follows an await of something none of them is — a promise it
+ * made, a stubbed answer. No hook of the library's or Vitest's carries a
+ * write there, and `location`'s members cannot be wrapped at all: jsdom
+ * defines them on the object itself, unconfigurable, as the platform's
+ * `[LegacyUnforgeable]` requires.
  */
 
 import {

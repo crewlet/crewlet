@@ -265,17 +265,23 @@ What follows are the prerequisites that legitimately vary by machine.
   innermost first, because each puts back on exit the act count or act
   environment it found on entry, and closed in any other order a scope opened
   inside another left React's count raised — and everything it asks for after
-  that is refused before it opens. Node carries the context through the case's
-  own awaits and timers, so a case that timed out inside a promise of its own
-  and resumes later still reads its own, ended case — which is what a helper
-  every case shares (`answered()`, a suite's `settle()`) could not tell before,
-  and why the flush used to be handed to each case. A case that holds the
-  page's timers advances them as `answered`'s `step`, so the refusal comes
-  before the timers move. `src/test/inCase.test.tsx` holds each of these to a
-  pair: a case that really runs out of its time with something out
-  (`test.fails` on a budget it always spends), and the case after it, which
-  first holds it to having failed by that timeout — `test.fails` passes on any
-  failure at all — and then reads what the late one came to.
+  that is refused before it opens. What the binding does not reach is what a
+  late case writes to the page's globals itself — the fake clock through `vi`,
+  `location.hash`, a stub — in a `catch` or `finally` its refusal passes
+  through, or past an await of something that is none of the above, such as a
+  promise of its own: every act, wait and poll rejects at its case's end, which
+  throws a late case out at the first of them it awaits. Node carries the
+  context through the case's own awaits and timers, so a case that timed out
+  inside a promise of its own and resumes later still reads its own, ended case
+  — which is what a helper every case shares (`answered()`, a suite's
+  `settle()`) could not tell before, and why the flush used to be handed to
+  each case. A case that holds the page's timers advances them as `answered`'s
+  `step`, so the refusal comes before the timers move.
+  `src/test/inCase.test.tsx` holds each of these to a pair: a case that really
+  runs out of its time with something out (`test.fails` on a budget it always
+  spends), and the case after it, which first holds it to having failed by that
+  timeout — `test.fails` passes on any failure at all — and then reads what the
+  late one came to.
 
   **And the harness's own waits end with it too.** The builder's testkit
   retires a lens when the case that mounted it finishes (`onTestFinished`):
