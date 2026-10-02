@@ -2215,6 +2215,14 @@ func tagsStep(tags []Tag) string {
 // FIRST-WRITER-WINS ON ITS OWN SUBJECT, and a claim that loses is not an error:
 // somebody already recorded this key's move, which is the fact the claim
 // exists to establish.
+//
+// A KEY ANOTHER TASK HOLDS IS NOTHING TO CLAIM, and the decide publishes
+// nothing. The directory names another task for a key only when the moving
+// task is a duplicate of it (`key_collision`): the key was never this task's
+// address — it opened the task that claimed it first — so there is nothing to
+// keep resolving, and the claimant goes on answering to it as it always did.
+// This refused instead, naming the claimant, which made a duplicate the one
+// task a move could never re-key: the gesture that gives it a key of its own.
 func (w *Writer) claimAlias(ctx context.Context, opID, key, taskID string,
 	at time.Time) (WriteResult, error) {
 
@@ -2229,8 +2237,7 @@ func (w *Writer) claimAlias(ctx context.Context, opID, key, taskID string,
 			if owner, claimed, err := readAlias(ctx, tx, key); err != nil {
 				return statelog.Decision{}, err
 			} else if claimed && owner != taskID {
-				return statelog.Decision{}, fmt.Errorf("tracker: key %s belongs "+
-					"to task %s, so it cannot be aliased to %s", key, owner, taskID)
+				return statelog.Decision{}, nil
 			}
 			return w.decide(ctx, tx, stamp, subject, OpCreate, "", scope, opID, KeyAlias{
 				Key: key, TaskID: taskID,

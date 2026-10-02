@@ -302,3 +302,45 @@ func TestAStoppedMoveNamesTheTaskItWaitsForByItsAddress(t *testing.T) {
 			stopped.Waiting)
 	}
 }
+
+// A DUPLICATE OF A KEY CAN BE MOVED TO ANOTHER PROJECT, which is how it gets a
+// key of its own.
+//
+// A cross-project move claims the key it leaves as an alias, so a key pasted
+// into chat keeps opening the task after the move. The claim refused when the
+// directory named another task for that key — and for a duplicate it always
+// does: the key was never the duplicate's address, it opened the claimant. So
+// the move refused every duplicate, the one task that most needs a new key,
+// with "key ENG-1 belongs to task m-root". There is nothing for such a move to
+// keep resolving: the key goes on opening the claimant, as it always did.
+//
+// Mutation: refuse the alias over a key another task holds and the move fails.
+func TestADuplicateOfAKeyCanBeMovedToAnotherProject(t *testing.T) {
+	t.Parallel()
+	r := moveFixture(t)
+	r.restoreCounter("ENG")
+	if _, err := r.writer.CreateTask(t.Context(), "op-dup", newTask("m-dup"), nil); err != nil {
+		t.Fatalf("file the duplicate: %v", err)
+	}
+	r.drain()
+	if !r.task(t, "m-dup").KeyCollision {
+		t.Fatal("m-dup is not a duplicate of ENG-1, so this case shows nothing")
+	}
+	moved, err := r.writer.MoveTaskToProject(t.Context(),
+		statelog.NewOpID(wednesday, "move"), "m-dup", "OPS", nil)
+	if err != nil {
+		t.Fatalf("moving the duplicate of ENG-1 to OPS: %v", err)
+	}
+	r.drain()
+	dup := r.task(t, "m-dup")
+	if dup.Task.Project != "OPS" || dup.Task.Key != moved.Key || dup.KeyCollision ||
+		moved.KeyCollision {
+		t.Errorf("the duplicate is %s in %s flagged=%v (receipt %s flagged=%v), "+
+			"want a key of its own in OPS", dup.Task.Key, dup.Task.Project,
+			dup.KeyCollision, moved.Key, moved.KeyCollision)
+	}
+	if got := r.task(t, "ENG-1"); got.Task.ID != "m-root" {
+		t.Errorf("ENG-1 opens %s after the duplicate moved, want m-root — the "+
+			"key it left was never the duplicate's", got.Task.ID)
+	}
+}

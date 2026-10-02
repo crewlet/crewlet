@@ -48,7 +48,9 @@ and a counter and a task are different records, so nothing can refuse the
 second task. The task that **claimed** the key first keeps it — every link,
 chat message and tool call naming the key opens that one, on every node — and
 every other holder is flagged `key_collision` (`flag=key_collision` lists them)
-and is reached by its **id**. Everything that names a task to somebody who
+and is reached by its **id**. Moving one to another project gives it a key of
+its own; the key it leaves goes on opening the claimant, since it never opened
+the duplicate. Everything that names a task to somebody who
 will act on the name follows one rule — its key, unless the flag is set, and
 then its id:
 
