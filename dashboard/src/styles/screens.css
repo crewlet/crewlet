@@ -3423,13 +3423,6 @@ textarea.kpage-editor-body {
   }
 }
 
-/* ---- Integrations ------------------------------------------------------- */
-
-/* One row per surface, laid out the way the console's own catalogue is: an
-   icon tile, the name and what it is for, and the state on the right. The
-   tile is NEUTRAL on purpose. A third-party app's brand mark would spend a
-   hue on "which integration", and colour here means state and nothing
-   else. */
 /* ---- The integrations catalogue: one tile per tool --------------------------
    A GRID OF TILES, the shape the rest of the product's catalogues take: mark,
    name and the engine's state word, one sentence, and a foot carrying a quiet

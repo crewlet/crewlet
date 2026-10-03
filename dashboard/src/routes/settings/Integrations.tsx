@@ -1,21 +1,24 @@
 /**
  * The third-party tools agents work on, and whether each one is working.
  *
- * Laid out the way the console's own Integrations page is: grouped by the
- * CAPABILITY a tool provides (messaging, tasks, code, observability), one
- * bordered list per group, one row per TOOL with its mark, its name and one
- * line on what it is for on the left and its state on the right. Every tool
- * this build serves is listed whether or not this company set it up, so the
- * reader sees the whole catalogue rather than only the part they configured.
+ * Laid out as a GRID OF TILES, the shape the rest of the product's catalogues
+ * take: one tile per TOOL with its mark, its name and the engine's word for
+ * its state, one sentence — what is owed when something is, what the tool is
+ * for otherwise — and a foot carrying a quiet count and ONE action
+ * ([IntegrationTile]). Connected tools come first. Every tool this build
+ * serves is listed whether or not this company set it up, so the reader sees
+ * the whole catalogue rather than only the part they configured, and a last
+ * tile points at everything else an agent can reach: an MCP server.
  *
- * A row is the tool, not the engine's plumbing for it. Atlassian is one row
+ * A tile is the tool, not the engine's plumbing for it. Atlassian is one tile
  * although the engine reaches it over three surfaces (Jira, Confluence and
- * the Forge relay), because that is how the company thinks of it; the row's
+ * the Forge relay), because that is how the company thinks of it; the tile's
  * state is the ENGINE's roll-up of its surfaces (`integration.Rollup`, sent as
- * the answer's `tools`), and its status line names the surface that is not
- * ready. The counts, the inbound paths and the reconcile
- * findings are still here, folded under a per-row disclosure, so an operator
- * who needs to know why can open it without the screen leading with it.
+ * the answer's `tools`), and its sentence names the surface that is not
+ * ready. The counts, the inbound paths, the reconcile findings and every
+ * agent's own step are on the tool's own page (`#/settings/integrations/{kind}`,
+ * [EntryRow]), so an operator who needs to know why can open it without the
+ * catalogue leading with it.
  *
  * Every count is THREE-VALUED (a number, zero, or `null` meaning "this
  * process cannot say"), and so is the reconcile block: `null` is a process
@@ -284,7 +287,7 @@ function actorLabel(actor: string | undefined): string {
   }
 }
 
-/** A tool's rolled-up state: the tag on the right and the one line under the name. */
+/** A tool's rolled-up state: the pill under its name, and what is owed when something is. */
 export interface EntryState {
   /**
    * The word in the badge: the engine's roll-up label — a phase's own label,
@@ -335,9 +338,9 @@ function presentSurfaces(entry: Entry, rows: Map<string, IntegrationRow>): Prese
  * ingress override, its own reading of the setup listing — and the copy had
  * drifted: a card being disconnected drew neutral while the surface it named
  * drew amber. What is left is presentation: which tone and outline a state
- * takes, and that a tool with no configured surface gets no badge at all (the
- * Connect button beside it is the whole message, and a chip saying "not in
- * use" on every unconfigured row reads as a fault list).
+ * takes, and that a tool with no configured surface takes the roll-up's word
+ * only when it is "Not in use" — in the neutral outline, see [EntryState.tag] —
+ * and never a state a surface the rows no longer carry would draw.
  */
 export function entryState(
   entry: Entry,
@@ -1023,7 +1026,7 @@ function credentialFindings(present: Present[]): ReconcileFinding[] {
 /**
  * A tile's one action, from what the engine says about the tool.
  *
- * ONE, because a tile in a grid of eight is read in one glance, and a card
+ * ONE, because a tile in a grid is read in one glance, and a card
  * that carried a state tag, a Connect, a Disconnect, a settings square and a
  * chevron asked that glance to parse five controls to learn that nothing was
  * owed. Everything else a tool offers — its settings, its agents' own apps,
@@ -1370,8 +1373,8 @@ export function ActionButton({
           variant={action.kind === "rotate" ? "primary" : "secondary"}
           disabledReason={blocked}
           // NAMED FOR THE TOOL, with the visible label at its start (the
-          // label is in the name, WCAG 2.5.3): a grid of eight tiles is eight
-          // "Connect" buttons to a screen reader's list of controls.
+          // label is in the name, WCAG 2.5.3): a grid of tiles is a column of
+          // "Connect" buttons in a screen reader's list of controls.
           aria-label={ACTION_NAMES[action.kind](entry.name)}
           onClick={() => {
             if (!blocked) onOpen();
@@ -1433,7 +1436,7 @@ export function asSentence(reason: string): string {
  * THE SENTENCE IS WHAT IS OWED WHEN SOMETHING IS, and what the tool does
  * otherwise. The engine's roll-up carries a reason exactly when a person or
  * the engine has something left to do, and that is the sentence a reader
- * scanning eight tiles came for; on a working tool the reason is empty and the
+ * scanning the tiles came for; on a working tool the reason is empty and the
  * tile says what the tool is for, which is what tells a reader the engine
  * serves it at all.
  */
@@ -3014,7 +3017,7 @@ export function Integrations({ kind }: { kind?: string }) {
     apps: { handle: string; name: string; url: string }[];
     appPath?: string;
   } | null>(null);
-  // WHICH HALF OF THE CATALOGUE IS SHOWN. Per visit: it narrows eight tiles,
+  // WHICH HALF OF THE CATALOGUE IS SHOWN. Per visit: it narrows the tiles,
   // and remembering it would open the screen on a filter the reader has
   // forgotten setting, hiding the tile they came for.
   const [show, setShow] = useState<Show>("all");
@@ -3246,7 +3249,7 @@ export function Integrations({ kind }: { kind?: string }) {
       )}
       <QueryState error={error} loading={loading} empty={undefined}>
         {/* NOTHING CONNECTED IS A FACT ABOUT THE LIST, SAID ABOVE IT. A page
-            holding eight tiles is not empty, and what the sentence adds —
+            holding a tile for every tool is not empty, and what the sentence adds —
             that only a schedule can wake a seat until then — is worth reading
             before the list, not after it. */}
         {data && !kind && configured.length === 0 && (

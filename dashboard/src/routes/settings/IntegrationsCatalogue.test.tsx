@@ -158,7 +158,7 @@ function controls(el: HTMLElement): HTMLElement[] {
   return [...el.querySelectorAll<HTMLElement>("button, a[href]")];
 }
 
-// ONE ACTION EACH. A tile in a grid of eight is read in one glance, and the
+// ONE ACTION EACH. A tile in a grid is read in one glance, and the
 // card it replaced carried a tag, a Connect, a Disconnect, a settings square
 // and a chevron — five controls to learn that nothing was owed.
 test("every tile carries exactly one action, and which one follows the engine", async () => {
