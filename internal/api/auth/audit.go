@@ -31,11 +31,11 @@ import (
 //     they are events, COALESCED to one per token per [TokenUseWindow] unless
 //     the token's own entry sets `audit_every_use`.
 //
-// ALL THREE ARE A REQUEST'S, and are recorded by the middleware alone.
-// [Guard.Resolve] also runs when an open socket re-checks the credential it was
-// opened with, once a minute, and a re-check is not somebody using a token: a
-// per-request audit that counted it would write a row a minute for every tab
-// left open.
+// ALL THREE ARE A REQUEST'S, and are recorded by the middleware alone. An open
+// socket decides the credential it was opened with again whenever the identity
+// estate moves it ([Guard.ResolveOpen]), and a re-decision is not somebody
+// using a token: a per-request audit that counted it would write a row for
+// every tab left open each time anybody's grants changed.
 //
 // # A refusal is an attempt only where the guard RELIED on the credential
 //

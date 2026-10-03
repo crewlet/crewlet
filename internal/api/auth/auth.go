@@ -657,7 +657,7 @@ func (g *Guard) Middleware(next http.Handler) http.Handler {
 		// A TIER A TOKEN IS RECORDED AT THE REQUEST, and only here: the
 		// use as it arrives, and an overreach once the route has said
 		// no. See audit.go for why the resolution itself — which an
-		// open socket re-runs once a minute — records neither.
+		// open socket runs again on an identity event — records neither.
 		g.used(r, entry)
 		recorded := &statusWriter{ResponseWriter: w}
 		next.ServeHTTP(recorded, r)

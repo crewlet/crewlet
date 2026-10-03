@@ -161,6 +161,8 @@ func (g *Guard) token(r *http.Request, presented credential.Token,
 			candidate)), nil
 	}
 
+	// A MACHINE TOKEN ENDS ON ITS OWN AT ITS EXPIRY — see [Lifetime].
+	ctx = withLifetime(ctx, row.ExpiresAt)
 	owner := row.Owner
 	id, err := uuid.Parse(owner.ID)
 	if err != nil {

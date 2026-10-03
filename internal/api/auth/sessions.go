@@ -454,6 +454,10 @@ type sessionAnswer struct {
 	// guard MARKS it and a guarded route's refusal counts it; see
 	// audit.go for why the count is not taken here.
 	malformed string
+
+	// lifetime is the served session's absolute deadline, which no
+	// re-issue moves — see [Lifetime].
+	lifetime time.Time
 }
 
 // resolve turns a cookie into an answer, or reports that this request carries
@@ -464,9 +468,12 @@ type sessionAnswer struct {
 //
 // tokens is the guard's Tier A entries by login, for a session exchanged from
 // one: see [tierASubjects].
+//
+// open is whether the cookie is the one an OPEN CONNECTION was opened with —
+// see [Guard.ResolveOpen] — which sets its idle deadline aside.
 func (s *Sessions) resolve(w http.ResponseWriter, r *http.Request,
 	ceiling []iam.Grant, proof proofWindows,
-	tokens func(login string) (config.APIToken, bool)) sessionAnswer {
+	tokens func(login string) (config.APIToken, bool), open bool) sessionAnswer {
 
 	cookie := s.cookieOf(r)
 	if cookie == "" {
@@ -475,6 +482,17 @@ func (s *Sessions) resolve(w http.ResponseWriter, r *http.Request,
 	subjects := tierASubjects{directory: s.directory, tokens: tokens}
 	need := needOf(r.Method)
 	v := s.signer.Validate(r.Context(), subjects, cookie)
+	if open && v.Row == session.RowEnded && v.Ending == session.EndingIdle {
+		// AN OPEN CONNECTION IS ACTIVITY, so the idle deadline is not
+		// what ends it: the bearer it holds was presented at its
+		// handshake and can never be re-issued over a socket, so its
+		// idle deadline is the handshake's plus [session.Idle] however
+		// busy the tab has been since. Decided on the rows instead
+		// ([session.Signer.Standing]) — everything a record can end —
+		// with the absolute deadline still the bearer's, which Validate
+		// checked first and found unexpired.
+		v = s.signer.Standing(r.Context(), subjects, v.Bearer)
+	}
 	if v.Row == session.RowBehind && v.Answer(need) == session.AnswerUnavailable {
 		v = s.awaitStart(r.Context(), subjects, cookie, v)
 	}
@@ -512,7 +530,8 @@ func (s *Sessions) resolve(w http.ResponseWriter, r *http.Request,
 			// the entry exactly as it composes the token's bearer.
 			s.reissue(w, v)
 			return sessionAnswer{how: iam.Resolved, presented: true, tierA: &entry,
-				via: iam.SessionName(v.Bearer.Lineage.String())}
+				via:      iam.SessionName(v.Bearer.Lineage.String()),
+				lifetime: v.Bearer.AbsoluteExpiresAt}
 		}
 	}
 
@@ -569,7 +588,7 @@ func (s *Sessions) resolve(w http.ResponseWriter, r *http.Request,
 	}
 	return sessionAnswer{
 		principal: s.principal(v, binding, ceiling, proof), how: iam.Resolved,
-		refusal: refusal, presented: true,
+		refusal: refusal, presented: true, lifetime: v.Bearer.AbsoluteExpiresAt,
 	}
 }
 
