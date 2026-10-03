@@ -90,7 +90,7 @@ func (r *exchangeRig) rebuild(b config.Bootstrap) {
 	audit := &recordingAudit{}
 	arm, err := auth.NewSessions(auth.SessionsDeps{
 		Signer: fixtureSigner(r.t), Directory: r.estate, Applier: r.estate,
-		Chart: r.chart, External: b.API.ExternalBase(), Audit: audit,
+		Chart: r.chart, External: b.API.ExternalBase(),
 		Now: func() time.Time { return clock },
 	})
 	if err != nil {

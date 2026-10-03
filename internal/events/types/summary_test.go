@@ -198,10 +198,10 @@ func TestSummaries(t *testing.T) {
 			SecondFactor: FactorTOTP},
 		want: "jane.doe signed in (password + totp)",
 	}, {
-		name:    "a session ended by a deadline names nobody as its author",
-		payload: IAMSessionEnded{Person: "p-1", Lineage: "0192aabbccddeeff", Reason: EndIdle},
+		name:    "a sign-out nobody could be named for names no author",
+		payload: IAMSessionEnded{Person: "p-1", Lineage: "0192aabbccddeeff", Reason: EndLogout},
 		source:  "node-a",
-		want:    "Session 0192aabb of p-1 ended (idle)",
+		want:    "Session 0192aabb of p-1 ended (logout)",
 	}, {
 		name:    "a sign-out everywhere says every session",
 		payload: IAMSessionEnded{Person: "p-1", Reason: EndLogoutAll, By: "jane.doe"},
@@ -218,10 +218,6 @@ func TestSummaries(t *testing.T) {
 		name:    "the overflow row says how many clients it folded",
 		payload: IAMLoginFailures{Client: "*", Clients: 300, Attempts: 900},
 		want:    "900 failed attempt(s) from 300 clients past the per-minute cap in one minute",
-	}, {
-		name:    "a token's first use names where it was used from",
-		payload: IAMTokenFirstUse{Token: "ops", Route: "/secrets", Remote: "198.51.100.4"},
-		want:    "Token ops used (first use this hour) on /secrets from 198.51.100.4",
 	}, {
 		name: "an unverifiable record names the key and what the node holds",
 		payload: RecordUnverifiable{Domain: "iam", KeyID: "k3",

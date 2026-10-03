@@ -64,8 +64,8 @@ func catalogue() []events.Payload {
 		// auth.go
 		IAMSessionStarted{}, IAMSessionEnded{},
 		IAMLoginFailures{}, IAMStepUpCompleted{}, IAMCredentialMinted{},
-		IAMCredentialRevoked{}, IAMGrantsChanged{}, IAMTokenFirstUse{},
-		IAMTokenOverreach{}, IAMRecoveryCodeUsed{}, IAMSecondFactorThrottled{},
+		IAMCredentialRevoked{}, IAMGrantsChanged{},
+		IAMRecoveryCodeUsed{}, IAMSecondFactorThrottled{},
 		IAMMFAReset{},
 		IAMSessionGenerationBumped{}, RecordUnverifiable{}, RecordTampered{},
 		// operator.go
@@ -115,8 +115,6 @@ var wireTypes = []string{
 	"iam_session_generation_bumped",
 	"iam_session_started",
 	"iam_stepup_completed",
-	"iam_token_first_use",
-	"iam_token_overreach",
 	"knowledge_read",
 	"llm_unavailable",
 	"notification_skipped",
@@ -375,8 +373,6 @@ var wireTags = map[string][]string{
 	"iam_credential_minted":           {"by", "credential", "expires_at", "grants", "kind", "operator_id", "owner", "reason"},
 	"iam_credential_revoked":          {"by", "credential", "kind", "operator_id", "owner", "reason"},
 	"iam_grants_changed":              {"added", "by", "operator_id", "person", "removed", "version"},
-	"iam_token_first_use":             {"every_use", "remote", "route", "token"},
-	"iam_token_overreach":             {"every_use", "remote", "route", "status", "token"},
 	"iam_recovery_code_used":          {"login", "person", "remaining", "remote"},
 	"iam_second_factor_throttled":     {"login", "person", "remote"},
 	"iam_mfa_reset":                   {"by", "operator_id", "person", "reason"},

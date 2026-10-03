@@ -58,8 +58,6 @@ func init() {
 	events.Register[IAMCredentialMinted]()
 	events.Register[IAMCredentialRevoked]()
 	events.Register[IAMGrantsChanged]()
-	events.Register[IAMTokenFirstUse]()
-	events.Register[IAMTokenOverreach]()
 	events.Register[IAMRecoveryCodeUsed]()
 	events.Register[IAMSecondFactorThrottled]()
 	events.Register[IAMMFAReset]()
@@ -128,15 +126,6 @@ const (
 	// epoch moved, which ends every session they hold at once.
 	EndLogoutAll SessionEndReason = "logout_all"
 
-	// EndIdle is a session nobody used for its idle window — noticed when
-	// its bearer was next presented, because an idle deadline lives in the
-	// bearer and nowhere else, so no other frame can see it pass.
-	EndIdle SessionEndReason = "idle"
-
-	// EndAbsolute is a session past the lifetime it was minted with, which
-	// no re-issue moves.
-	EndAbsolute SessionEndReason = "absolute"
-
 	// EndRevoked is somebody ELSE ending it: an administrator ending one
 	// session or every session a person holds.
 	EndRevoked SessionEndReason = "revoked"
@@ -149,8 +138,7 @@ const (
 // Valid reports whether r is a reason this build names.
 func (r SessionEndReason) Valid() bool {
 	switch r {
-	case EndLogout, EndLogoutAll, EndIdle, EndAbsolute, EndRevoked,
-		EndPersonRemoved:
+	case EndLogout, EndLogoutAll, EndRevoked, EndPersonRemoved:
 		return true
 	}
 	return false
@@ -283,8 +271,10 @@ type IAMSessionEnded struct {
 	Reason  SessionEndReason `json:"reason"`
 
 	// By is who ended it: the holder for a logout, an administrator for a
-	// revocation or a removal, and EMPTY for a deadline or a changed
-	// credential, which nobody this engine can name authored.
+	// revocation or a removal — EMPTY only for a sign-out this node could
+	// not say the caller of, which ends the session its cookie names all
+	// the same. A session past its own idle or absolute deadline is no row
+	// at all: an expiry nobody authored.
 	By string `json:"by"`
 
 	// OperatorID is the CREDENTIAL By acted through: a machine token's
@@ -300,8 +290,8 @@ type IAMSessionEnded struct {
 // EventType is the "iam_session_ended" wire type.
 func (IAMSessionEnded) EventType() string { return "iam_session_ended" }
 
-// Actor is whoever ended it, when somebody did. A deadline has no author, and
-// the chain then falls back to the node that noticed.
+// Actor is whoever ended it, when this node could say; the chain then falls
+// back to the node that recorded it.
 func (e IAMSessionEnded) Actor() string { return e.By }
 
 // Summary says whose, which one and why.
@@ -560,74 +550,6 @@ func (e IAMGrantsChanged) Summary() string {
 	return fmt.Sprintf("Grants of %s changed: %s", orSomebody(e.Person, ""), change)
 }
 
-// IAMTokenFirstUse is a Tier A token used — once per token per hour, unless its
-// entry sets `audit_every_use`, in which case once per request.
-//
-// COALESCED BY DEFAULT because a token driving the operator MCP makes a
-// request per tool call, and a row per request turns an assistant's ordinary
-// session into thousands an hour: the trail stops being more useful and the
-// one interesting row becomes unfindable.
-type IAMTokenFirstUse struct {
-	Token string `json:"token"`
-
-	// Route is the CLASS of what was reached — the first path segment —
-	// rather than the path, which carries ids a feed has no use for.
-	Route  string `json:"route"`
-	Remote string `json:"remote"`
-
-	// EveryUse says this row is one of a per-request series rather than
-	// the first use in an hour, so a reader counting rows knows which
-	// they are counting.
-	EveryUse bool `json:"every_use"`
-}
-
-// EventType is the "iam_token_first_use" wire type.
-func (IAMTokenFirstUse) EventType() string { return "iam_token_first_use" }
-
-// Actor is the token, under the login it acts as.
-func (e IAMTokenFirstUse) Actor() string { return tokenActor(e.Token) }
-
-// Summary says where it was used from.
-func (e IAMTokenFirstUse) Summary() string {
-	what := "used"
-	if !e.EveryUse {
-		what = "used (first use this hour)"
-	}
-	return fmt.Sprintf("Token %s %s on %s from %s", orSomebody(e.Token, ""),
-		what, orSomebody(e.Route, "/"), orSomebody(e.Remote, "an unknown address"))
-}
-
-// IAMTokenOverreach is a Tier A token refused by a route its grants do not
-// cover — coalesced per token per hour unless the entry sets
-// `audit_every_use`.
-//
-// It is authenticated: the token matched, so there is a credential to revoke
-// and a name on the row. What it says is that something holding the token is
-// trying to do more with it than it was pinned for, which is the question a
-// break-glass credential's owner most wants answered.
-type IAMTokenOverreach struct {
-	Token  string `json:"token"`
-	Route  string `json:"route"`
-	Remote string `json:"remote"`
-
-	// Status is the refusal the route answered with.
-	Status   int  `json:"status"`
-	EveryUse bool `json:"every_use"`
-}
-
-// EventType is the "iam_token_overreach" wire type.
-func (IAMTokenOverreach) EventType() string { return "iam_token_overreach" }
-
-// Actor is the token.
-func (e IAMTokenOverreach) Actor() string { return tokenActor(e.Token) }
-
-// Summary says what it reached for.
-func (e IAMTokenOverreach) Summary() string {
-	return fmt.Sprintf("Token %s was refused on %s (%d) from %s",
-		orSomebody(e.Token, ""), orSomebody(e.Route, "/"), e.Status,
-		orSomebody(e.Remote, "an unknown address"))
-}
-
 // IAMRecoveryCodeUsed is a recovery code spent to sign in or to confirm an
 // identity. Spent means gone: it will never work again, and Remaining is how
 // many the person has left.
@@ -830,15 +752,6 @@ func credentialWord(kind CredentialKind) string {
 		return "A"
 	}
 	return upperFirst(string(kind))
-}
-
-// tokenActor is the login a Tier A token acts under, which is what every other
-// row about it names — `token:ops`, never the bare `ops`.
-func tokenActor(id string) string {
-	if id == "" {
-		return ""
-	}
-	return "token:" + id
 }
 
 // heldKeys renders the key ids a node holds, sorted, or says it holds none.

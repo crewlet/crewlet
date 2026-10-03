@@ -2,10 +2,10 @@ package auth_test
 
 import (
 	"context"
-	"errors"
+	"io"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
-	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -18,11 +18,12 @@ import (
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/iam/authevents"
 	"github.com/crewlet/crewlet/internal/iam/session"
+	"github.com/crewlet/crewlet/internal/logging"
 	"github.com/crewlet/crewlet/internal/statelog/metrics"
 )
 
 // trail is the REAL audit trail over a publisher that keeps what it was
-// handed, so these cases exercise the coalescing a node actually runs rather
+// handed, so these cases exercise the counting a node actually runs rather
 // than a fake's idea of it.
 type trail struct {
 	*authevents.Trail
@@ -53,24 +54,6 @@ func (tr *trail) now() time.Time {
 	return tr.at
 }
 
-func (tr *trail) advance(d time.Duration) {
-	tr.mu.Lock()
-	defer tr.mu.Unlock()
-	tr.at = tr.at.Add(d)
-}
-
-func (tr *trail) published(eventType string) []*events.Event {
-	tr.mu.Lock()
-	defer tr.mu.Unlock()
-	var out []*events.Event
-	for _, ev := range tr.events {
-		if ev.Type == eventType {
-			out = append(out, ev)
-		}
-	}
-	return out
-}
-
 func (tr *trail) failed(method types.FailureMethod) int {
 	tr.mu.Lock()
 	defer tr.mu.Unlock()
@@ -92,13 +75,13 @@ func newAuditTrail(t *testing.T) *trail {
 }
 
 // tierA is a guard holding the break-glass token, reporting to tr.
-func tierA(t *testing.T, tr *trail, everyUse bool) *auth.Guard {
+func tierA(t *testing.T, tr *trail) *auth.Guard {
 	t.Helper()
 	b := config.DefaultBootstrap()
 	b.API.Auth.MaxGrants = iam.AllGrants
 	b.API.Auth.Tokens = []config.APIToken{{
 		ID: "break-glass", Token: "the-break-glass-token-value",
-		Grants: []iam.Grant{iam.GrantStateRead}, AuditEveryUse: everyUse,
+		Grants: []iam.Grant{iam.GrantStateRead},
 	}}
 	return auth.New(&b).WithAudit(tr)
 }
@@ -129,7 +112,7 @@ func call(g *auth.Guard, h http.Handler, path, bearer string) int {
 func TestARefusedBearerIsCountedAndNeverPublished(t *testing.T) {
 	t.Parallel()
 	tr := newAuditTrail(t)
-	g := tierA(t, tr, false)
+	g := tierA(t, tr)
 	for range 25 {
 		if got := call(g, answering(http.StatusOK), "/agents", "not-the-token"); got != http.StatusUnauthorized {
 			t.Fatalf("a wrong bearer answered %d", got)
@@ -165,7 +148,7 @@ func TestARefusedBearerIsCountedAndNeverPublished(t *testing.T) {
 func TestACredentialNoGuardReliedOnIsNotAFailedAttempt(t *testing.T) {
 	t.Parallel()
 	tr := newAuditTrail(t)
-	g := tierA(t, tr, false)
+	g := tierA(t, tr)
 	const forgeJWT = "eyJhbGciOiJSUzI1NiJ9.eyJpc3MiOiJmb3JnZSJ9.c2lnbmF0dXJl"
 	for range 3 {
 		if got := call(g, answering(http.StatusOK), auth.WebhookPrefix+"forge",
@@ -208,115 +191,113 @@ func TestACredentialNoGuardReliedOnIsNotAFailedAttempt(t *testing.T) {
 	}
 }
 
-// A TIER A TOKEN'S USE IS ONE ROW AN HOUR, unless its entry asks for every use.
+// A TIER A TOKEN'S USE IS NO ROW, AND NEITHER IS ITS OVERREACH.
 //
-// Mutation: record per request regardless of the entry and the hourly case
-// counts five; coalesce regardless and the every-use case counts one.
-func TestATierATokensUseIsOneRowAnHourUnlessItsEntrySaysOtherwise(t *testing.T) {
+// Everything a token writes already names it — the author and operator id on
+// every record — so a row for its first use in an hour said again what those
+// say, and took a remembered set to say it once. And a route refusing it is a
+// WARN log line ([TestATierATokenRefusedByARouteIsAWarnLine]), never a row.
+//
+// Mutation: publish anything for a token's use or its overreach and the trail
+// holds a row.
+func TestATierATokensUseIsNoRow(t *testing.T) {
 	t.Parallel()
-	for _, tc := range []struct {
-		name     string
-		everyUse bool
-		want     int
-	}{
-		{"coalesced by default", false, 1},
-		{"every use where the entry says audit_every_use", true, 5},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			t.Parallel()
-			tr := newAuditTrail(t)
-			g := tierA(t, tr, tc.everyUse)
-			for range 5 {
-				call(g, answering(http.StatusOK), "/secrets/github-token",
-					"the-break-glass-token-value")
-			}
-			uses := tr.published("iam_token_first_use")
-			if len(uses) != tc.want {
-				t.Fatalf("%d use rows for five requests, want %d", len(uses), tc.want)
-			}
-			row, _ := events.DataAs[*types.IAMTokenFirstUse](uses[0])
-			if row.Token != "break-glass" || row.Route != "/secrets" ||
-				row.EveryUse != tc.everyUse {
-				t.Errorf("use row = %+v: want the token's id, the route's CLASS "+
-					"(never the path, which names a secret) and every_use %v",
-					row, tc.everyUse)
-			}
-			if !tc.everyUse {
-				tr.advance(auth.TokenUseWindow)
-				call(g, answering(http.StatusOK), "/iam/people", "the-break-glass-token-value")
-				if got := len(tr.published("iam_token_first_use")); got != 2 {
-					t.Errorf("after the window, %d rows, want the next hour's first", got)
-				}
-			}
-		})
+	tr := newAuditTrail(t)
+	g := tierA(t, tr)
+	for range 5 {
+		if got := call(g, answering(http.StatusOK), "/secrets/github-token",
+			"the-break-glass-token-value"); got != http.StatusOK {
+			t.Fatalf("the token answered %d", got)
+		}
+	}
+	call(g, answering(http.StatusForbidden), "/iam/people", "the-break-glass-token-value")
+	tr.mu.Lock()
+	published := len(tr.events)
+	tr.mu.Unlock()
+	if published != 0 {
+		t.Errorf("a token's use and its overreach published %d rows, want none",
+			published)
 	}
 }
 
-// A TIER A TOKEN A ROUTE REFUSES IS AN OVERREACH, and a route that served it is
-// not.
+// A TIER A TOKEN A ROUTE REFUSES IS A WARN LINE, and a route that served it or
+// does not exist is not.
 //
-// Mutation: record the overreach before the handler has answered and the
-// served case records one too.
-func TestATierATokenRefusedByARouteIsAnOverreach(t *testing.T) {
-	t.Parallel()
+// Something holding the token reaching past what it was pinned for is the
+// question a break-glass credential's owner most wants answered, and a WARN
+// line is what their log alerting already reads. NOT PARALLEL: it installs
+// this process's log sink for its duration, which only a case running alone
+// may do.
+//
+// Mutation: log before the handler has answered and the served case logs one
+// too; log on any refusal status and the 404 does.
+func TestATierATokenRefusedByARouteIsAWarnLine(t *testing.T) {
+	var out syncBuffer
+	logging.Configure(slog.LevelInfo, logging.FormatText, &out)
+	t.Cleanup(func() { logging.Configure(slog.LevelError, logging.FormatText, io.Discard) })
+
 	tr := newAuditTrail(t)
-	g := tierA(t, tr, false)
+	g := tierA(t, tr)
+	overreaches := func() []string {
+		var lines []string
+		for line := range strings.Lines(out.String()) {
+			if strings.Contains(line, "api_auth_token_overreach") {
+				lines = append(lines, line)
+			}
+		}
+		return lines
+	}
 	call(g, answering(http.StatusOK), "/agents", "the-break-glass-token-value")
-	if got := len(tr.published("iam_token_overreach")); got != 0 {
-		t.Fatalf("a served request recorded %d overreach rows", got)
+	if got := overreaches(); len(got) != 0 {
+		t.Fatalf("a served request logged an overreach: %q", got)
 	}
-	for range 3 {
-		call(g, answering(http.StatusForbidden), "/secrets", "the-break-glass-token-value")
-	}
-	over := tr.published("iam_token_overreach")
-	if len(over) != 1 {
-		t.Fatalf("%d overreach rows for three refusals in one hour, want 1", len(over))
-	}
-	row, _ := events.DataAs[*types.IAMTokenOverreach](over[0])
-	if row.Status != http.StatusForbidden || row.Route != "/secrets" {
-		t.Errorf("overreach row = %+v", row)
+	call(g, answering(http.StatusForbidden), "/secrets", "the-break-glass-token-value")
+	got := overreaches()
+	if len(got) != 1 || !strings.Contains(got[0], "level=WARN") ||
+		!strings.Contains(got[0], "token=break-glass") ||
+		!strings.Contains(got[0], "status=403") ||
+		!strings.Contains(got[0], "route=/secrets") {
+		t.Fatalf("a refused token logged %q, want one WARN line naming the "+
+			"token, the route and the status", got)
 	}
 	// A 404 is a route that does not exist, which no grant would have
 	// opened: not an overreach.
-	tr.advance(auth.TokenUseWindow)
 	call(g, answering(http.StatusNotFound), "/nowhere", "the-break-glass-token-value")
-	if got := len(tr.published("iam_token_overreach")); got != 1 {
-		t.Errorf("a 404 was recorded as an overreach (%d rows)", got)
+	if got := overreaches(); len(got) != 1 {
+		t.Errorf("a 404 was logged as an overreach: %q", got)
 	}
 }
 
-// A SOCKET RE-CHECKING ITS CREDENTIAL IS NOT A USE.
-//
-// An open socket re-runs the guard's resolution once a minute; a per-request
-// audit that counted it would write a row a minute for every open tab.
-// Mutation: record the use inside Resolve and this case records one.
-func TestASocketRevalidationIsNotAUse(t *testing.T) {
-	t.Parallel()
-	tr := newAuditTrail(t)
-	g := tierA(t, tr, true)
-	req := httptest.NewRequest(http.MethodGet, auth.SocketPath, nil)
-	req.Header.Set("Authorization", "Bearer the-break-glass-token-value")
-	resolved, _ := g.Resolve(httptest.NewRecorder(), req)
-	if _, how := iam.From(resolved.Context()); how != iam.Resolved {
-		t.Fatalf("the token did not resolve (%v)", how)
-	}
-	if got := len(tr.published("iam_token_first_use")); got != 0 {
-		t.Errorf("a resolution outside the middleware recorded %d uses", got)
-	}
+// syncBuffer is a log sink a case reads while the guard writes to it.
+type syncBuffer struct {
+	mu  sync.Mutex
+	buf strings.Builder
 }
 
-// A FORGED COOKIE IS A BEARER FAILURE; A COOKIE WHOSE SESSION MERELY ENDED IS
-// NOT, AND ITS END IS SAID ONCE.
+func (b *syncBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *syncBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
+}
+
+// A FORGED COOKIE IS A BEARER FAILURE; AN EXPIRED ONE IS NEITHER A FAILURE NOR
+// A ROW.
 //
 // A tab left open over a weekend presents a cookie that verifies and whose
 // session is over: counting that as a failure would page somebody for every
-// such tab. What it IS, when a deadline ended it, is the one way a session
-// ends that no record states — so this is where the idle and absolute ends
-// are announced, once per lineage per node.
+// such tab. Nor is its expiry announced — nobody authored it, and every ending
+// somebody did author was announced by whoever wrote the record — so it is
+// refused, its cookie cleared, and nothing is published.
 //
-// Mutation: count every refused cookie as a failure and the ended case counts
-// one; drop the once-per-lineage key and the replay publishes three.
-func TestAForgedCookieIsCountedAndADeadlineEndIsSaidOnce(t *testing.T) {
+// Mutation: count every refused cookie as a failure and the expired case
+// counts three; announce an expiry and the trail holds a row.
+func TestAForgedCookieIsCountedAndAnExpiredOneIsNeither(t *testing.T) {
 	t.Parallel()
 	rig := newSignedIn(t)
 	tr := newAuditTrail(t)
@@ -335,88 +316,19 @@ func TestAForgedCookieIsCountedAndADeadlineEndIsSaidOnce(t *testing.T) {
 	rig2.signerAt(rig2.at)
 	g2 := rig2.withAudit(tr)
 	for range 3 {
-		rig2.call(g2, http.MethodGet, "/agents", rig2.withCookie)
+		if got := rig2.call(g2, http.MethodGet, "/agents", rig2.withCookie); got.status != http.StatusUnauthorized {
+			t.Fatalf("an expired cookie answered %d", got.status)
+		}
 	}
 	if got := tr.failed(types.FailBearer); got != 1 {
 		t.Errorf("an expired cookie was counted as a failure (%d in all)", got)
 	}
-	ended := tr.published("iam_session_ended")
-	if len(ended) != 1 {
-		t.Fatalf("%d session-ended rows for three presentations of one expired "+
-			"cookie, want 1", len(ended))
-	}
-	row, _ := events.DataAs[*types.IAMSessionEnded](ended[0])
-	if row.Reason != types.EndAbsolute || row.Person != sessionPerson || row.Lineage == "" {
-		t.Errorf("ended row = %+v, want the absolute deadline naming the person and session", row)
-	}
-}
-
-// AN ENDING IS ANNOUNCED ONCE, FROM THE FACT THAT ENDED IT.
-//
-// The deadlines are decided before any row is read, so a session a RECORD
-// ended is refused on its deadline too once its cookie outlives it: an
-// administrator revokes somebody, and their other browser presents the cookie
-// the next day. The record already announced that ending; a second row naming
-// `absolute` would name the wrong cause for a session over a day earlier.
-//
-// Mutation: announce the deadline without asking the rows and every record
-// case below publishes one; announce it when the rows cannot say and the
-// stalled case does.
-func TestADeadlineEndsOnlyASessionNoRecordEnded(t *testing.T) {
-	t.Parallel()
-	for _, tc := range []struct {
-		name  string
-		shape func(*session.Identity)
-	}{
-		{"the row says it ended", func(id *session.Identity) { id.Session.Ended = true }},
-		{"the person's epoch moved", func(id *session.Identity) { id.Person.Epoch = 4 }},
-		{"the company's generation moved", func(id *session.Identity) { id.Generation = 2 }},
-		{"the person was suspended", func(id *session.Identity) { id.Person.Stage = iam.StageSuspended }},
-		{"the sweep collected the row", func(id *session.Identity) { id.Session = session.LineageRow{} }},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			t.Parallel()
-			rig := newSignedIn(t)
-			tc.shape(&rig.dir.identity)
-			rig.at = rig.at.Add(9 * time.Hour)
-			rig.signerAt(rig.at)
-			tr := newAuditTrail(t)
-			g := rig.withAudit(tr)
-			for range 2 {
-				if got := rig.call(g, http.MethodGet, "/agents", rig.withCookie); got.status != http.StatusUnauthorized {
-					t.Fatalf("an expired cookie answered %d", got.status)
-				}
-			}
-			if ended := tr.published("iam_session_ended"); len(ended) != 0 {
-				row, _ := events.DataAs[*types.IAMSessionEnded](ended[0])
-				t.Errorf("a session a record had already ended was announced "+
-					"again as %q", row.Reason)
-			}
-		})
-	}
-
-	// A NODE THAT CANNOT SAY ANNOUNCES NOTHING, and asks again next time.
-	rig := newSignedIn(t)
-	rig.at = rig.at.Add(9 * time.Hour)
-	rig.signerAt(rig.at)
-	tr := newAuditTrail(t)
-	g := rig.withAudit(tr)
-	rig.dir.err = errors.New("the replicated estate is not open")
-	rig.call(g, http.MethodGet, "/agents", rig.withCookie)
-	if got := len(tr.published("iam_session_ended")); got != 0 {
-		t.Fatalf("a node that could not read the rows announced %d endings", got)
-	}
-	rig.dir.err = nil
-	rig.call(g, http.MethodGet, "/agents", rig.withCookie)
-	rig.call(g, http.MethodGet, "/agents", rig.withCookie)
-	ended := tr.published("iam_session_ended")
-	if len(ended) != 1 {
-		t.Fatalf("%d endings once the rows could be read, want the one the "+
-			"stalled read handed back", len(ended))
-	}
-	row, _ := events.DataAs[*types.IAMSessionEnded](ended[0])
-	if row.Reason != types.EndAbsolute {
-		t.Errorf("reason %q, want absolute", row.Reason)
+	tr.mu.Lock()
+	published := len(tr.events)
+	tr.mu.Unlock()
+	if published != 0 {
+		t.Errorf("an expired cookie published %d rows, want none: an expiry "+
+			"nobody authored is no row", published)
 	}
 }
 
@@ -446,39 +358,6 @@ func TestACookieFromAFastNodeAnnouncesNothing(t *testing.T) {
 	}
 }
 
-// THE SESSION ARM IS REFUSED WITHOUT A TRAIL, because a deadline ending is
-// announced once per lineage on the trail's own decision.
-func TestTheSessionArmNeedsATrail(t *testing.T) {
-	t.Parallel()
-	rig := newSignedIn(t)
-	_, err := auth.NewSessions(auth.SessionsDeps{
-		Signer: rig.signer, Directory: rig.dir, Applier: rig.dir, Chart: rig.chart,
-	})
-	if err == nil || !strings.Contains(err.Error(), "audit trail") {
-		t.Fatalf("a session arm with no audit trail answered %v, want a "+
-			"refusal naming the trail", err)
-	}
-}
-
-// A ROUTE CLASS IS THE SURFACE, NEVER THE PATH.
-func TestRouteClassIsTheFirstSegment(t *testing.T) {
-	t.Parallel()
-	for path, want := range map[string]string{
-		"/secrets/github-token": "/secrets",
-		"/iam/people/0192":      "/iam",
-		"/agents":               "/agents",
-		"/":                     "/",
-		"":                      "/",
-	} {
-		if got := auth.RouteClass(path); got != want {
-			t.Errorf("RouteClass(%q) = %q, want %q", path, got, want)
-		}
-	}
-	if slices.Contains([]string{auth.RouteClass("/work/items/ENG-12")}, "/work/items/ENG-12") {
-		t.Error("a route class carried an item key")
-	}
-}
-
 // withAudit is this rig's guard, its session arm reporting to tr.
 func (s *signedIn) withAudit(tr *trail) *auth.Guard {
 	s.t.Helper()
@@ -489,7 +368,6 @@ func (s *signedIn) withAudit(tr *trail) *auth.Guard {
 	arm, err := auth.NewSessions(auth.SessionsDeps{
 		Signer: s.signer, Directory: s.dir, Applier: s.dir, Chart: s.chart,
 		External: b.API.ExternalBase(),
-		Audit:    tr,
 		Now:      func() time.Time { return s.at },
 	})
 	if err != nil {

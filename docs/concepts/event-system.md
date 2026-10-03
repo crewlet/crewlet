@@ -386,10 +386,9 @@ prompt.size                # one phase's OPENING prompt, measured in BYTES
 #       written by the fleet at all. The LIVE half of the trail: each row is
 #       the publishing node's, and the fleet-wide record is iam_history
 iam_session_started        # method, second factor, lineage, client address
-iam_session_ended          # logout / logout_all / idle / absolute / revoked
-                           # / person_removed. An idle or absolute end is
-                           # noticed when the bearer is next presented, once
-                           # per session per node
+iam_session_ended          # logout / logout_all / revoked / person_removed.
+                           # A session past its own idle or absolute deadline
+                           # is no row: an expiry nobody authored
 iam_login_failures         # ONE per client per minute, from the engine's own
                            # flush loop: counts, the distinct-subject count,
                            # the methods (a rejected bearer is `bearer`), how
@@ -399,10 +398,6 @@ iam_stepup_completed       # a signed-in person confirming who they are
 iam_credential_minted, iam_credential_revoked, iam_mfa_reset
 iam_grants_changed         # one per person write, from the writer that
                            # decided it: added, removed, by, record version
-iam_token_first_use        # a Tier A token used, once per token per hour
-                           # (per request with audit_every_use: true)
-iam_token_overreach        # a Tier A token refused by a route, coalesced the
-                           # same way
 iam_recovery_code_used     # and how many the person has left
 iam_second_factor_throttled   # a person's second-factor curve reaching its
                               # ceiling: somebody holding their password is
@@ -496,7 +491,7 @@ reason is excluded with the cause `anonymous_rate`.
 
 Two facts are kept out by having **no type at all**: a per-request
 authorization decision (a fact about a poll rather than about the company; a
-Tier A token refused by a route is the coalesced `iam_token_overreach`
+Tier A token refused by a route is a WARN log line on the node it reached
 instead) and a session touch (a clock, not an event). The exclusion map is
 for types something publishes, and nothing publishes either. Nothing *refuses*
 them either, and that is stated rather than implied: both are caused by a

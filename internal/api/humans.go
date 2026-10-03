@@ -234,9 +234,6 @@ func signInSurface(boot *config.Bootstrap, e *engine.Engine) (
 		// seatless arm. See [engine.SeatViewOf].
 		Chart:    engine.SeatViewOf(e),
 		External: boot.API.ExternalBase(),
-		// The same trail, whose once-per-lineage claim is what keeps a
-		// cookie presented past its deadline announcing that ending once.
-		Audit: e.AuthEvents(),
 	})
 	if err != nil {
 		return nil, nil, fmt.Errorf("api: the session arm: %w", err)

@@ -11,9 +11,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/api/httpjson"
 	"github.com/crewlet/crewlet/internal/config"
-	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/iam"
-	"github.com/crewlet/crewlet/internal/iam/authevents"
 	"github.com/crewlet/crewlet/internal/iam/session"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
@@ -303,10 +301,6 @@ type Sessions struct {
 	// `__Host-` prefix on exactly the deployments that need it.
 	external string
 
-	// audit is where the one session fact only this arm can see is
-	// recorded: a deadline passing. See audit.go.
-	audit Audit
-
 	// now is the clock, injectable so a case can pin what a principal's
 	// freshness is measured against.
 	now func() time.Time
@@ -340,13 +334,6 @@ type SessionsDeps struct {
 	// External is `api.external_url`.
 	External string
 
-	// Audit records what this arm sees. REQUIRED, and not only for the
-	// rows: a deadline ending is announced on a once-per-lineage claim of
-	// the trail's, so an arm with no trail would have nothing to stop a
-	// cookie presented past its deadline announcing that ending again every
-	// time it was presented.
-	Audit Audit
-
 	// Now is the clock. Nil takes UTC wall time.
 	Now func() time.Time
 }
@@ -371,17 +358,12 @@ func NewSessions(deps SessionsDeps) (*Sessions, error) {
 		return nil, errors.New("auth: the session arm needs a chart seam; " +
 			"a nil one would resolve every bound person as seatless, which " +
 			"is the one fall-through internal/iam/session forbids")
-	case deps.Audit == nil:
-		return nil, errors.New("auth: the session arm needs an audit trail; " +
-			"a deadline ending is announced once per lineage on the trail's " +
-			"own decision, so without one every presentation of an expired " +
-			"cookie would announce it again")
 	}
 	s := &Sessions{
 		signer: deps.Signer, directory: deps.Directory, chart: deps.Chart,
 		applier:  deps.Applier,
-		external: deps.External, audit: deps.Audit,
-		now: deps.Now,
+		external: deps.External,
+		now:      deps.Now,
 	}
 	if s.now == nil {
 		s.now = func() time.Time { return time.Now().UTC() }
@@ -491,9 +473,15 @@ func (s *Sessions) resolve(w http.ResponseWriter, r *http.Request,
 		// gets one code for all of them, because telling somebody
 		// whether their session was revoked, expired, swept or never
 		// existed tells an attacker holding it the same.
+		//
+		// NOTHING IS ANNOUNCED. A session a record ended — a sign-out,
+		// a revocation, a removal, the company's generation — was
+		// announced by whoever wrote the record; one past its own idle
+		// or absolute deadline is an expiry nobody authored, and
+		// announcing it once per lineage took a remembered set the size
+		// of every session ever noticed.
 		log.InfoContext(r.Context(), "api_session_refused",
 			"row", string(v.Row), "detail", v.Detail)
-		s.ended(r, v, subjects)
 		for _, clear := range session.Clears(s.external) {
 			http.SetCookie(w, clear)
 		}
@@ -840,85 +828,6 @@ func personID(value string) uuid.UUID {
 		return uuid.UUID{}
 	}
 	return parsed
-}
-
-// ended records what a refusing row means for the audit trail — which, for
-// most rows, is nothing.
-//
-// A MALFORMED VALUE is a credential presented and refused, and it is not
-// recorded here: [Sessions.resolve] hands it back for the guard to mark,
-// because whether it was somebody's failed attempt depends on whether the
-// route needed it — see audit.go.
-//
-// ONE WAY A SESSION ENDS THAT NO RECORD STATES, and this is the only frame
-// that can ever say it happened: a DEADLINE — the idle one lives in the bearer
-// and nowhere else — see [Sessions.deadline]. Every OTHER ended row — the row
-// says so, the epoch or the generation moved, the person was suspended — was
-// ended by a record, and whoever wrote the record already said so; and a
-// token's exchanged session whose entry this node no longer holds was ended by
-// an operator editing the configuration, which is that operator's change.
-func (s *Sessions) ended(r *http.Request, v session.Validation,
-	directory session.Directory) {
-
-	if v.Row == session.RowEnded && v.Ending.Deadline() {
-		s.deadline(r, v, directory)
-	}
-}
-
-// deadline announces a session its own deadline ended — ONCE, and only when a
-// deadline is what ended it.
-//
-// # Once per lineage per node
-//
-// The cookie is cleared by the refusal this rides on, and a script that goes
-// on replaying it is not a second ending, so the lineage is CLAIMED before
-// anything is read: a replay costs a map lookup and never a read of the
-// estate.
-//
-// # And only when no record got there first
-//
-// The deadlines are decided before any row is read, so a session a RECORD
-// ended — revoked, signed out everywhere, its person removed or suspended, the
-// company's generation bumped — is refused on its deadline too once its cookie
-// outlives it: a person revoked on Monday whose other browser presents the
-// cookie on Tuesday. Whoever wrote that record already announced the ending,
-// and a second row naming `idle` or `absolute` would name the wrong cause for
-// a session that was over a day earlier. So the rows are asked
-// ([session.Signer.Standing]) — the same directory validation read through, a token's
-// exchanged session included — and the ending is announced only when they
-// say the session was live. A node that cannot say HANDS THE CLAIM BACK and
-// announces nothing: a fact nobody could confirm is not one to announce, and
-// the next presentation asks again.
-func (s *Sessions) deadline(r *http.Request, v session.Validation,
-	directory session.Directory) {
-
-	ctx := r.Context()
-	lineage := v.Bearer.Lineage.String()
-	release, claimed := s.audit.Claim(ctx, authevents.OnceSessionEnded, lineage, 0)
-	if !claimed {
-		return
-	}
-	standing := s.signer.Standing(ctx, directory, v.Bearer)
-	switch {
-	case standing.Row == session.RowValid:
-		// LIVE BY EVERY RECORD until its own deadline.
-		reason := types.EndIdle
-		if v.Ending == session.EndingAbsolute {
-			reason = types.EndAbsolute
-		}
-		s.audit.Emit(ctx, types.IAMSessionEnded{
-			Person: v.Bearer.Person, Lineage: lineage, Reason: reason,
-		})
-	case standing.Row == session.RowBehind, standing.Row == session.RowStalled:
-		log.DebugContext(ctx, "iam_session_deadline_unconfirmed",
-			"lineage", lineage, "row", string(standing.Row),
-			"detail", standing.Detail, "error", errText(standing.Err))
-		release()
-	default:
-		// ENDED BY A RECORD, or collected by the sweep — said already, by
-		// whatever did it. The claim stays: nothing a later presentation
-		// could read would make this ending the deadline's.
-	}
 }
 
 // errText is an error's message, or empty — so a log line carries the field

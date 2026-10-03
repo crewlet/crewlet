@@ -13,10 +13,10 @@ import (
 // loop that publishes each closed minute of failed attempts.
 //
 // ONE TRAIL PER PROCESS, built here rather than by each surface, because the
-// dedupe it keeps is the node's: a Tier A token's first use in an hour is one
-// row whether the request reached the guard through REST or the socket, and a
-// session noticed past its deadline is announced once however many surfaces
-// saw its cookie. Two trails would be two opinions about "once".
+// tally it keeps is the node's: a failed sign-in and a bearer the guard
+// refused, from one source in one minute, are one count only because both
+// reach the same trail. Two trails would publish two rows for one minute, and
+// neither would say how hard the node was being pushed.
 //
 // BEFORE THE NATIVE ESTATE, because both the identity writer and the state log's
 // appliers announce through it, and AFTER New's failure guard is armed, so a

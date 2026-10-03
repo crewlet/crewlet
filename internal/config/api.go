@@ -720,17 +720,6 @@ type APIToken struct {
 	// needed to file a work item held the credential that could read
 	// every key the company owns.
 	Grants []iam.Grant `yaml:"grants,omitempty" json:"grants,omitempty" desc:"What this credential may do. Required and non-empty."`
-
-	// AuditEveryUse writes a use row per REQUEST rather than one
-	// coalesced per token per hour.
-	//
-	// OFF BY DEFAULT AND IT HAS TO BE. A token driving the operator MCP
-	// makes a request per tool call, so a per-request row turns an
-	// assistant's ordinary session into thousands of audit rows an hour —
-	// which does not make the trail more useful, it makes the one
-	// interesting row unfindable. On is for the credential a company has
-	// decided is worth watching individually: break-glass.
-	AuditEveryUse bool `yaml:"audit_every_use,omitempty" json:"audit_every_use,omitempty" desc:"Write a use row per request rather than one per hour."`
 }
 
 func (a *APIAuth) validate(path Path, api API) error {

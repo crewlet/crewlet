@@ -1886,8 +1886,8 @@ Identity has **two trails**, and they answer different questions.
   carry the credential instead; and every row written before the field
   existed.
 - **The `auth` category** of the ordinary event feed is what *this node saw*:
-  who signed in here and how, what ended a session, which token was used, how
-  many attempts failed and from where. Each row is published through the
+  who signed in here and how, what ended a session, how many attempts failed
+  and from where. Each row is published through the
   node's event queue like every other event, so it lands in that node's event
   store, on every dashboard's activity feed under the **auth** chip, and at an
   OpenTelemetry collector. It is the live half, and it is per node — a fleet's
@@ -1897,7 +1897,7 @@ Identity has **two trails**, and they answer different questions.
 |---|---|---|
 | `iam_session_started` | The sign-in surface, on a password, app-code, invitation or token sign-in | Once per session |
 | `iam_stepup_completed` | The sign-in surface, when a signed-in person confirms who they are: the person, the new session and the one it replaced, the second factor presented and the client — and never which surface it was for, because a step-up proves the session for every surface until `reauth_at`, and the request that prompted it is refused before it and never reaches it, so the only source would be the client's word | Once per step-up |
-| `iam_session_ended` | A logout (`logout`, `logout_all`), an administrator (`revoked`, `person_removed`), or the request guard noticing a deadline (`idle`, `absolute`) | Once per ending, from the fact that ended it: a deadline once per session per node, when the cookie is next presented, and only for a session no record had already ended — a revoked person's other browser presenting its cookie the next day is not announced again as `absolute` |
+| `iam_session_ended` | A logout (`logout`, `logout_all`) or an administrator (`revoked`, `person_removed`) | Once per ending, by whoever wrote the record that ended it. A session past its own idle or absolute deadline is not announced at all — see below |
 | `iam_login_failures` | The engine's own flush loop | One row per client per minute; see below |
 | `iam_recovery_code_used` | The sign-in surface | Once per code, with how many are left |
 | `iam_second_factor_throttled` | The sign-in surface, when a person's second-factor curve reaches its ceiling — somebody holding their password is guessing at their code, so the password is what to rotate | On the wrong code that takes the curve to its ceiling, per node — a run held there announces nothing more, and one that has aged back down announces its next climb — naming the address that code came from |
@@ -1905,8 +1905,6 @@ Identity has **two trails**, and they answer different questions.
 | `iam_mfa_reset` | The directory, when an administrator clears somebody's second factor | Once per reset |
 | `iam_grants_changed` | The identity writer, from the snapshot it decided the write in | One per person write that moved a grant, with what it added and removed |
 | `iam_session_generation_bumped` | The identity writer | Once per company-wide invalidation, with the generation it moved to |
-| `iam_token_first_use` | The request guard, for a Tier A token | Once per token per hour per node — or every request, for a token whose entry sets `audit_every_use` |
-| `iam_token_overreach` | The request guard, for a Tier A token a route refused with 403 | Coalesced like its use |
 | `statelog_record_unverifiable`, `statelog_record_tampered` | Any domain's applier, for a record signed under a key this node lacks, or failing under one it holds | Once per domain and key id per node process, capped at sixteen ids |
 
 ### A failed attempt is a count, never a row
@@ -1956,35 +1954,36 @@ says how many there were, a distinct-name count saturates at 256, and a row
 names at most 16 people. A count at its cap reads "at least", never less than
 happened.
 
-### A token's use is one row an hour
+### A token's use is on its records, and its overreach is a log line
 
-A Tier A token driving the operator MCP surface makes a request per tool call,
-and a row per request turns one assistant session into thousands of rows that
-bury the one worth finding. So a token's use is `iam_token_first_use`, once per
-token per hour on each node, naming the route class and the client; and a
-request a route **refused** with 403 is `iam_token_overreach`, coalesced the
-same way — a credential being pointed at something it was not given is the
-signal an audit is for.
-
-A token whose entry in `api.auth.tokens` sets **`audit_every_use: true`** gets
-both rows on every request instead. It is off by default and meant for the
-credential a company has decided to watch individually: break-glass. See
-[Configuration § Auth](../getting-started/configuration.md).
-
-A dashboard socket re-checking the credential it was opened with is not a use;
-only a request is.
+A Tier A token's use is no row of its own. Everything it writes already names
+it — the author and `operator_id` columns every work item, page, chart and
+identity record carries, and a configuration revision's `created_by` — so a
+row for its first use in each hour said again, coarsely, what those records
+say exactly, and took a remembered set of its own to say it once. A request a
+route **refuses** with 403 — something holding the token reaching past what it
+was pinned for — is a **WARN log line**, `api_auth_token_overreach`, on the
+node it reached, naming the token, the route, the status and the client: the
+signal an operator's log alerting picks up, at whatever rate it arrives.
 
 ### What has no event at all
 
-Two facts happen on every request and are deliberately not events, rather than
-events filtered out of the store:
+Three facts are deliberately not events, rather than events filtered out of
+the store:
 
 - **the authorization decision** — the answer is the response the caller got,
   and the question is the route they asked; a refusal worth auditing is already
-  the overreach row, or the failure count;
+  the overreach log line, or the failure count;
 - **a session being used** — a re-issue moves a deadline inside the cookie's
   own signature, so an hour of use writes nothing, and a touch event would be
-  the one row per request the rest of this design exists to avoid.
+  the one row per request the rest of this design exists to avoid;
+- **a session reaching its own deadline** — the idle and absolute deadlines
+  live in the cookie, so an expiry is noticed only when the cookie is next
+  presented, on whichever node it reaches; it is refused like any ended
+  session, and nobody authored it. Announcing it once per session took a
+  remembered set the size of every session a node had ever noticed. Every
+  ending somebody *did* author — a sign-out, a revocation, a removal, a
+  company-wide invalidation — is announced by whoever wrote it.
 
 ---
 

@@ -5,37 +5,28 @@ import (
 	"context"
 	"net"
 	"net/http"
-	"strings"
-	"time"
 
 	"github.com/crewlet/crewlet/internal/config"
-	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/iam/authevents"
 )
 
 // WHAT THE GUARD TELLS THE AUDIT TRAIL, and which of it is allowed to be a row.
 //
-// The guard sees every request, which makes it the frame that knows three
-// things nothing else does: that a credential was presented and REFUSED, that a
-// Tier A token was USED, and that a Tier A token reached for something its
-// grants did not cover. They reach the trail by the two doors
-// internal/iam/authevents keeps apart:
+// The guard sees every request, which makes it the frame that knows that a
+// credential was presented and REFUSED. That is authored by whoever holds the
+// wrong value, which is anybody who can reach the listener, so it is never an
+// event: it is a failed attempt of method `bearer`, counted, and folded into
+// what the engine's own loop publishes once each minute has closed
+// (internal/iam/authevents).
 //
-//   - A REFUSED CREDENTIAL is authored by whoever holds the wrong value, which
-//     is anybody who can reach the listener. It is never an event: it is a
-//     failed attempt of method `bearer`, counted, and folded into the one row
-//     per client per minute the engine's own loop publishes.
-//   - A USE and an OVERREACH are authored by the token's holder — the token
-//     matched, so there is a credential to revoke and a name on the row — and
-//     they are events, COALESCED to one per token per [TokenUseWindow] unless
-//     the token's own entry sets `audit_every_use`.
-//
-// ALL THREE ARE A REQUEST'S, and are recorded by the middleware alone.
-// [Guard.Resolve] also runs when an open socket re-checks the credential it was
-// opened with, once a minute, and a re-check is not somebody using a token: a
-// per-request audit that counted it would write a row a minute for every tab
-// left open.
+// A TIER A TOKEN'S USE IS NOT A ROW. Every write a token makes already names
+// it — the author and `operator_id` columns every record carries — so a row
+// per first use in an hour said again, coarsely, what the records say exactly,
+// and took a bounded once-per-window set of its own to say it. A route
+// REFUSING a token — something holding it reaching past its grants — is a
+// WARN log line on this node ([Guard.overreached]), which an operator's log
+// alerting sees without a dedupe of its own.
 //
 // # A refusal is an attempt only where the guard RELIED on the credential
 //
@@ -44,40 +35,22 @@ import (
 // relay's own `Authorization: Bearer` JWT on /webhooks/forge, verified by that
 // route against the relay's keys; a sign-in page loaded by a browser that
 // still holds a cookie signed under a retired key. Counted at the resolution,
-// every legitimate Jira and Confluence delivery was a failed bearer sign-in —
-// a distinct value each time, so the relay's address climbed toward a spray's
-// distinct-name count every minute, and any alert on the counter fired on
-// ordinary traffic. So Resolve only MARKS what it refused ([refusedCredential])
-// and the middleware counts the mark in the one arm where the refusal decided
-// something: a guarded route answering 401. The credential exchange at
-// `POST /auth/token` is such a route, and so is the socket's handshake.
+// every legitimate Jira and Confluence delivery was a failed bearer sign-in,
+// and any alert on the counter fired on ordinary traffic. So Resolve only
+// MARKS what it refused ([refusedCredential]) and the middleware counts the
+// mark in the one arm where the refusal decided something: a guarded route
+// answering 401. The credential exchange at `POST /auth/token` is such a
+// route, and so is the socket's handshake. And an open socket re-checking the
+// credential it was opened with runs Resolve outside the middleware, so a
+// re-check is never counted either.
 
 // Audit is where the guard's authentication facts go.
 //
-// CONSUMER-DEFINED and four methods wide, which is all of the trail the guard
-// uses. internal/iam/authevents' Trail is what a running node hands in, and
-// the once-per-window classes are its own: each keeps a bounded set of its
-// own, so no class can evict another's keys. Claim is EmitOnce's decision
-// without the row, for the deadline arm, which has to read the estate before
-// it knows whether there is anything to say.
+// CONSUMER-DEFINED and one method wide, which is all of the trail the guard
+// uses. internal/iam/authevents' Trail is what a running node hands in.
 type Audit interface {
-	Emit(ctx context.Context, payload events.Payload)
-	EmitOnce(ctx context.Context, class authevents.OnceClass, key string,
-		window time.Duration, payload events.Payload) bool
-	Claim(ctx context.Context, class authevents.OnceClass, key string,
-		window time.Duration) (release func(), claimed bool)
 	Failed(ctx context.Context, f authevents.Failure)
 }
-
-// TokenUseWindow is how often a Tier A token's use, or its overreach, is a row.
-//
-// AN HOUR, the design's own figure and the notification digest's idiom: one
-// row stands for the window, so "was the break-glass token used today, and
-// from where" has an answer while an assistant driving the operator surface —
-// a request per tool call — adds a row an hour rather than thousands. A token
-// that needs every request recorded says so at its own entry with
-// `audit_every_use`, which is where a credential's blast radius is stated.
-const TokenUseWindow = time.Hour
 
 // WithAudit installs the trail the guard reports to, and returns the guard for
 // chaining.
@@ -167,54 +140,19 @@ func (g *Guard) refused(r *http.Request) {
 	})
 }
 
-// used records a Tier A token's use: the first in its window, or every one
-// where its entry asks for that.
-func (g *Guard) used(r *http.Request, entry config.APIToken) {
-	if g.audit == nil {
-		return
-	}
-	row := types.IAMTokenFirstUse{
-		Token: entry.ID, Route: RouteClass(r.URL.Path), Remote: g.Client(r),
-		EveryUse: entry.AuditEveryUse,
-	}
-	if entry.AuditEveryUse {
-		g.audit.Emit(r.Context(), row)
-		return
-	}
-	g.audit.EmitOnce(r.Context(), authevents.OnceTokenUse, entry.ID,
-		TokenUseWindow, row)
-}
-
-// overreached records a Tier A token a route refused.
-func (g *Guard) overreached(r *http.Request, entry config.APIToken, status int) {
-	if g.audit == nil {
-		return
-	}
-	row := types.IAMTokenOverreach{
-		Token: entry.ID, Route: RouteClass(r.URL.Path), Remote: g.Client(r),
-		Status: status, EveryUse: entry.AuditEveryUse,
-	}
-	if entry.AuditEveryUse {
-		g.audit.Emit(r.Context(), row)
-		return
-	}
-	g.audit.EmitOnce(r.Context(), authevents.OnceTokenOverreach, entry.ID,
-		TokenUseWindow, row)
-}
-
-// RouteClass is the part of a path an audit row names: its first segment.
+// overreached logs a Tier A token a route refused with 403: the token matched
+// and was not enough, so something holding it reached past what it was pinned
+// for — the question a break-glass credential's owner most wants answered.
 //
-// NOT THE PATH, which carries ids — a person, a task, a secret's name — that a
-// feed of token uses has no business collecting, and which would make every
-// row about the same surface unique. The first segment is the SURFACE
-// (`/secrets`, `/iam`, `/config`), which is the question "what was this token
-// used for" actually asks.
-func RouteClass(path string) string {
-	trimmed := strings.TrimPrefix(path, "/")
-	if i := strings.IndexByte(trimmed, '/'); i >= 0 {
-		trimmed = trimmed[:i]
-	}
-	return "/" + trimmed
+// A LOG LINE AND NOT AN EVENT: an event per refusal is a rate the token's
+// holder chooses, and one coalesced per token per hour took a bounded dedupe
+// set to keep — while a WARN line is what an operator's log alerting already
+// reads, at whatever rate it arrives.
+func (g *Guard) overreached(r *http.Request, entry config.APIToken, status int) {
+	log.WarnContext(r.Context(), "api_auth_token_overreach",
+		"token", entry.ID, "route", r.URL.Path, "status", status,
+		"remote", g.Client(r),
+		"detail", "a Tier A token reached for a route its grants do not cover")
 }
 
 // refusalStatus reports whether a status is a refusal of AUTHORITY, which is
@@ -227,7 +165,7 @@ func RouteClass(path string) string {
 func refusalStatus(status int) bool { return status == http.StatusForbidden }
 
 // statusWriter remembers the status a handler answered with, so the guard can
-// tell a Tier A token's overreach from its use after the route has decided.
+// tell a Tier A token's overreach after the route has decided.
 //
 // IT WRAPS ONLY A TIER A REQUEST. Every other request passes through the
 // writer it arrived with, so a WebSocket upgrade or a streaming response on a

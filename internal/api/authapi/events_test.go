@@ -35,24 +35,6 @@ func (a *recordingAudit) Emit(_ context.Context, payload events.Payload) {
 	a.emitted = append(a.emitted, payload)
 }
 
-// EmitOnce publishes every time: nothing here is about the coalescing, which
-// internal/iam/authevents certifies. The request guard's [auth.Audit] asks for
-// it; this surface's own does not.
-func (a *recordingAudit) EmitOnce(ctx context.Context, _ authevents.OnceClass, _ string,
-	_ time.Duration,
-	payload events.Payload) bool {
-
-	a.Emit(ctx, payload)
-	return true
-}
-
-// Claim takes every key: nothing here is about the coalescing either.
-func (a *recordingAudit) Claim(context.Context, authevents.OnceClass, string,
-	time.Duration) (func(), bool) {
-
-	return func() {}, true
-}
-
 func (a *recordingAudit) Failed(_ context.Context, f authevents.Failure) {
 	a.mu.Lock()
 	defer a.mu.Unlock()

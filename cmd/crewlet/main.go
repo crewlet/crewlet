@@ -1812,8 +1812,8 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 		// bridge would resolve every token to no session and answer 401
 		// to a box whose run is perfectly healthy.
 		Bridge: e.Bridge(),
-		// THE ENGINE'S TRAIL, which the guard reports a refused bearer
-		// and every Tier A token use through.
+		// THE ENGINE'S TRAIL, which the guard counts a refused bearer
+		// through.
 		AuthEvents:   e.AuthEvents(),
 		QueueBackend: e.Backends().Queue.Backend(),
 		// THIS NODE'S OWN event store, which the webhook edge writes the

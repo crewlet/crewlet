@@ -21,7 +21,6 @@ import (
 	"github.com/crewlet/crewlet/internal/config"
 	coordmemory "github.com/crewlet/crewlet/internal/coord/memory"
 	"github.com/crewlet/crewlet/internal/eventfan"
-	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/iam/authevents"
 	"github.com/crewlet/crewlet/internal/org"
@@ -252,15 +251,6 @@ func withRequired(t *testing.T, opts api.Options) api.Options {
 // internal/api/auth, over the real trail.
 type silentAudit struct{}
 
-func (silentAudit) Emit(context.Context, events.Payload) {}
-func (silentAudit) EmitOnce(context.Context, authevents.OnceClass, string, time.Duration,
-	events.Payload) bool {
-	return true
-}
-func (silentAudit) Claim(context.Context, authevents.OnceClass, string,
-	time.Duration) (func(), bool) {
-	return func() {}, true
-}
 func (silentAudit) Failed(context.Context, authevents.Failure) {}
 
 // EVERY DEPENDENCY THE ENGINE SUPPLIES IS REQUIRED, and a missing one is

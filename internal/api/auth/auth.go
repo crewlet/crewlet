@@ -341,8 +341,7 @@ type Guard struct {
 	// (a suite). See tokens.go.
 	machine *Tokens
 
-	// audit is where a refused credential is counted and a Tier A
-	// token's use and overreach are recorded. See audit.go.
+	// audit is where a refused credential is counted. See audit.go.
 	audit Audit
 }
 
@@ -652,11 +651,9 @@ func (g *Guard) Middleware(next http.Handler) http.Handler {
 			next.ServeHTTP(w, r)
 			return
 		}
-		// A TIER A TOKEN IS RECORDED AT THE REQUEST, and only here: the
-		// use as it arrives, and an overreach once the route has said
-		// no. See audit.go for why the resolution itself — which an
-		// open socket re-runs once a minute — records neither.
-		g.used(r, entry)
+		// A TIER A TOKEN'S OVERREACH IS LOGGED AT THE REQUEST, and only
+		// here, once the route has said no. See audit.go for why its use
+		// is no row at all.
 		recorded := &statusWriter{ResponseWriter: w}
 		next.ServeHTTP(recorded, r)
 		if refusalStatus(recorded.status) {

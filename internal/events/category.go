@@ -278,8 +278,6 @@ var categories = map[string]placement{
 	"iam_credential_minted":  {"auth", RateAuthenticated},
 	"iam_credential_revoked": {"auth", RateAuthenticated},
 	"iam_grants_changed":     {"auth", RateAuthenticated},
-	"iam_token_first_use":    {"auth", RateAuthenticated},
-	"iam_token_overreach":    {"auth", RateAuthenticated},
 	"iam_recovery_code_used": {"auth", RateAuthenticated},
 	// AUTHENTICATED because only a caller the password admitted can
 	// reach a second factor, and a row is written only by the wrong code
@@ -348,9 +346,9 @@ var categories = map[string]placement{
 // so a type for either would be filed [RateAuthenticated], and the walk
 // refuses only an anonymous or an unstated author. What keeps them out is
 // what each fact already is: a refused request is the 403 the authority
-// table wrote and a log line, a request a Tier A token overreached on is the
-// COALESCED `iam_token_overreach` (one per token per window, not one per
-// request), and a session's use moves nothing at all — its rotation is
+// table wrote and a log line, a request a Tier A token overreached on is a
+// WARN log line on the node it reached, and a session's use moves nothing at
+// all — its rotation is
 // derived, so an hour of use writes nothing anywhere. A change that wanted a
 // row per decision or per touch would add the type in a reviewed diff, and
 // the reasons above — volume and a poll rather than a fact for the decision,

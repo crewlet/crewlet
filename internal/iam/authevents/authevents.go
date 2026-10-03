@@ -41,30 +41,22 @@
 //
 // The number of clients one minute names ([MaxClientsPerMinute]), the distinct
 // subjects one tally can count ([MaxSubjectsCounted]), the people one row names
-// ([MaxPeopleNamed]), the clients the overflow row can count
-// ([MaxFoldedClients]) and the keys the once-per-window dedupe remembers of
-// each class ([OnceBound]) are all things an attacker would otherwise choose.
-// Each is a constant with its reason at its definition, and a count that
-// reaches its cap
-// SATURATES rather than being dropped, so a row reads "at least" rather than
-// understating what happened.
+// ([MaxPeopleNamed]) and the clients the overflow row can count
+// ([MaxFoldedClients]) are all things an attacker would otherwise choose. Each
+// is a constant with its reason at its definition, and a count that reaches
+// its cap SATURATES rather than being dropped, so a row reads "at least"
+// rather than understating what happened.
 //
-// # Coalescing that is not failure accounting
+// # No fact is coalesced per window
 //
-// [Trail.EmitOnce] is the other shape a rate needs: a fact that repeats and is
-// worth one row per window — a Tier A token's first use in an hour or its
-// overreach, a session noticed past its deadline. It is the notification
-// digest's idiom (one row stands for the window) applied to a single key, and
-// it reports whether it published so a caller that has to act exactly once
-// alongside the row can hang the action on the same decision. [Trail.Claim] is
-// the same decision for a caller that must READ before it knows what the fact
-// is, and hands the key back when it cannot say — a deadline ending is claimed
-// before the rows are asked whether a record ended the session first, and
-// handed back when this node cannot read them.
-//
-// EACH CLASS OF FACT KEEPS ITS OWN BOUNDED SET ([OnceClass]), so a class
-// remembered for the life of the process can never evict one that expires —
-// see once.go for what one shared set cost.
+// There was a second door, a once-per-window dedupe with a bounded set per
+// class of fact: a Tier A token's first use in an hour and its overreach, a
+// session noticed past its own deadline, a person's second factor at its
+// ceiling. Each went the way that needs no remembered set. A token's use is
+// on every record it writes, under its name; its overreach is a WARN log line;
+// a session past its deadline is an expiry nobody authored and publishes
+// nothing; and a second factor's ceiling is announced by the failure that
+// takes the curve there, which the curve itself reports once per climb.
 package authevents
 
 import (
@@ -225,7 +217,6 @@ type Trail struct {
 
 	mu      sync.Mutex
 	minutes map[time.Time]*minute
-	once    map[OnceClass]*onceSet
 }
 
 // minute is every failed attempt one minute held.
@@ -267,7 +258,6 @@ func New(opts Options) (*Trail, error) {
 		pub: opts.Publisher, counter: opts.Counter, node: opts.Node,
 		now: opts.Now, logger: opts.Logger, key: key,
 		minutes: map[time.Time]*minute{},
-		once:    newOnceSets(),
 	}
 	if t.now == nil {
 		t.now = func() time.Time { return time.Now().UTC() }

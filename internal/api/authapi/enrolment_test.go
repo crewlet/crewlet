@@ -91,7 +91,7 @@ func guarded(t *testing.T, r *signInRig) http.Handler {
 	b := bootstrapFor(t)
 	arm, err := auth.NewSessions(auth.SessionsDeps{
 		Signer: fixtureSigner(t), Directory: r.estate, Applier: r.estate,
-		Chart: seatless{}, External: b.API.ExternalBase(), Audit: r.audit,
+		Chart: seatless{}, External: b.API.ExternalBase(),
 		Now: func() time.Time { return clock },
 	})
 	if err != nil {

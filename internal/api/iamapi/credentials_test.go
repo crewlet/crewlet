@@ -18,10 +18,8 @@ import (
 	"github.com/crewlet/crewlet/internal/api/opkey"
 	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/config"
-	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/iam"
-	"github.com/crewlet/crewlet/internal/iam/authevents"
 	"github.com/crewlet/crewlet/internal/iam/credential"
 	"github.com/crewlet/crewlet/internal/iam/session"
 	"github.com/crewlet/crewlet/internal/iamdomain"
@@ -446,7 +444,7 @@ func TestAPersonMintsTheirOwnTokenFromTheirSession(t *testing.T) {
 	}}
 	arm, err := auth.NewSessions(auth.SessionsDeps{
 		Signer: signer, Chart: noSeats{}, External: b.API.ExternalBase(),
-		Audit: quietAudit{}, Now: func() time.Time { return at },
+		Now: func() time.Time { return at },
 		// PROVED A MOMENT AGO on the clock the route's step-up check
 		// reads, which is the wall clock: minting a credential is a
 		// step-up gesture, and this case is about WHO mints, not when.
@@ -488,25 +486,6 @@ func (d sessionRows) AwaitApplied(_ context.Context, position uint64) error {
 	}
 	return context.DeadlineExceeded
 }
-
-// quietAudit is a guard trail that keeps nothing.
-type quietAudit struct{}
-
-func (quietAudit) Emit(context.Context, events.Payload) {}
-
-func (quietAudit) EmitOnce(context.Context, authevents.OnceClass, string,
-	time.Duration, events.Payload) bool {
-
-	return true
-}
-
-func (quietAudit) Claim(context.Context, authevents.OnceClass, string,
-	time.Duration) (func(), bool) {
-
-	return func() {}, true
-}
-
-func (quietAudit) Failed(context.Context, authevents.Failure) {}
 
 const tokenID = "018f3a9c-0000-7000-8000-0000000000f1"
 

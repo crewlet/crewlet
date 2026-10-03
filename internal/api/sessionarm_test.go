@@ -59,8 +59,8 @@ func newCookieArm(t *testing.T, b *config.Bootstrap) *cookieArm {
 	rows := personRows{}
 	arm, err := auth.NewSessions(auth.SessionsDeps{
 		Signer: signer, Directory: rows, Applier: rows, Chart: postureNoSeats{},
-		External: b.API.ExternalBase(), Audit: silentAudit{},
-		Now: func() time.Time { return clock },
+		External: b.API.ExternalBase(),
+		Now:      func() time.Time { return clock },
 	})
 	if err != nil {
 		t.Fatalf("auth.NewSessions: %v", err)

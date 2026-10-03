@@ -714,24 +714,21 @@ func TestBothBehindArmsReissueTheCookie(t *testing.T) {
 	}
 }
 
-// A DEADLINE SAYS WHICH DEADLINE, AND NOTHING ELSE DOES.
+// A DEADLINE ENDS A SESSION BEFORE ANY ROW IS READ.
 //
-// The idle deadline lives in the bearer and nowhere else, so the validation
-// that notices it passed is the only frame that can ever report a session
-// ending that way — the audit trail's `idle` and `absolute` reasons are read
-// from here. An end a RECORD decided (the row says ended, the epoch moved)
-// must NOT carry one: that end was already announced by whoever wrote the
-// record, and a second announcement from every node a stale cookie reaches
-// would name the wrong cause.
+// Both deadlines live in the bearer, so a cookie past either is over whatever
+// this node's rows say — and deciding it needs nothing, which is why it is
+// decided first: a node that cannot read its identity estate still refuses an
+// expired cookie rather than answering 503 and keeping it in the browser.
 //
-// Mutation: drop the Ending from the idle arm and the first case fails; set
-// one on the row-ended arm and the last does.
-func TestADeadlineSaysWhichDeadlineEndedTheSession(t *testing.T) {
+// Mutation: read the rows before the deadlines and both cases land on
+// `stalled`; drop either deadline and its case is served.
+func TestADeadlineEndsASessionBeforeAnyRowIsRead(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
 		name  string
 		world func(*signedIn)
-		want  session.Ending
+		want  string
 	}{
 		{"idle past the idle window", func(s *signedIn) {
 			// A LIFETIME LONGER THAN THE IDLE WINDOW, which the rig's own
@@ -746,82 +743,23 @@ func TestADeadlineSaysWhichDeadlineEndedTheSession(t *testing.T) {
 			}
 			s.cookie = cookie
 			s.clock.advance(session.Idle + time.Minute)
-		}, session.EndingIdle},
+		}, "idle"},
 		{"past the absolute lifetime", func(s *signedIn) {
 			s.clock.advance(absolute + time.Minute)
-		}, session.EndingAbsolute},
-		{"ended by a record", func(s *signedIn) {
-			s.dir.identity.Session.Ended = true
-		}, ""},
+		}, "absolute"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			rig := newSignedIn(t)
 			tc.world(rig)
+			rig.dir.err = errors.New("the replicated estate is not open")
 			got := rig.validate()
 			if got.Row != session.RowEnded {
 				t.Fatalf("landed on %q, want ended: %s", got.Row, got.Detail)
 			}
-			if got.Ending != tc.want {
-				t.Errorf("ending = %q, want %q (%s)", got.Ending, tc.want, got.Detail)
-			}
-			if !got.Ending.Valid() {
-				t.Errorf("ending %q is not one this build names", got.Ending)
-			}
-		})
-	}
-}
-
-// A DEADLINE'S REFUSAL READS NOTHING, AND STANDING IS THE READ IT SKIPPED.
-//
-// The deadlines are decided before any row is looked up, so a cookie past its
-// deadline lands on `ended` whether it was live until then or a record ended it
-// a day earlier — and only the first is the deadline's to announce. Standing
-// answers that from the rows alone, through the same half of the table
-// Validate uses, so the two can never disagree about what a row means.
-//
-// Mutation: consult the bearer's deadlines inside Standing and the live case
-// lands on `ended`; skip the rows and every record case lands on `valid`.
-func TestStandingIsWhatTheRowsSayPastADeadline(t *testing.T) {
-	t.Parallel()
-	for _, tc := range []struct {
-		name  string
-		world func(*signedIn)
-		want  session.Row
-	}{
-		{"live until the deadline", func(*signedIn) {}, session.RowValid},
-		{"a record ended it", func(s *signedIn) { s.dir.identity.Session.Ended = true }, session.RowEnded},
-		{"the person's epoch moved", func(s *signedIn) { s.dir.identity.Person.Epoch = 4 }, session.RowEnded},
-		{"the generation moved", func(s *signedIn) { s.dir.identity.Generation = 2 }, session.RowEnded},
-		{"the sweep collected it", func(s *signedIn) {
-			s.dir.identity.Session.Found = false
-			s.dir.identity.Applied = startPos + 1
-		}, session.RowGone},
-		{"this node has not applied it", func(s *signedIn) {
-			s.dir.identity.Session.Found = false
-			s.dir.identity.Applied = startPos - 1
-		}, session.RowBehind},
-		{"this node cannot read", func(s *signedIn) {
-			s.dir.err = errors.New("the replicated estate is not open")
-		}, session.RowStalled},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			t.Parallel()
-			rig := newSignedIn(t)
-			tc.world(rig)
-			rig.clock.advance(absolute + time.Minute)
-			refused := rig.validate()
-			if refused.Row != session.RowEnded || refused.Ending != session.EndingAbsolute {
-				t.Fatalf("validation landed on %q (%q), want the absolute deadline",
-					refused.Row, refused.Ending)
-			}
-			got := rig.signer.Standing(t.Context(), rig.dir, refused.Bearer)
-			if got.Row != tc.want {
-				t.Errorf("standing is %q, want %q (%s)", got.Row, tc.want, got.Detail)
-			}
-			if got.Reissue != "" || got.Ending.Deadline() {
-				t.Errorf("standing re-issued %q or named deadline %q: it is "+
-					"about the rows alone", got.Reissue, got.Ending)
+			if !strings.Contains(got.Detail, tc.want) {
+				t.Errorf("it ended for the reason %q, want the %s deadline",
+					got.Detail, tc.want)
 			}
 		})
 	}

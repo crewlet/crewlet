@@ -271,8 +271,8 @@ type Options struct {
 	// which every node holds from boot.
 	Tokens *auth.Tokens
 
-	// AuthEvents is where the guard counts a refused credential and
-	// records a Tier A token's use and overreach. REQUIRED: the engine
+	// AuthEvents is where the guard counts a refused credential.
+	// REQUIRED: the engine
 	// running beside this API holds the node's audit trail, and a guard
 	// built without it would refuse a spray of wrong tokens and leave no
 	// count of it anywhere.

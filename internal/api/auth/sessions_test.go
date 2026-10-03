@@ -101,7 +101,6 @@ func (s *signedIn) guard(ceiling ...iam.Grant) *auth.Guard {
 	arm, err := auth.NewSessions(auth.SessionsDeps{
 		Signer: s.signer, Directory: s.dir, Applier: s.dir, Chart: s.chart,
 		External: b.API.ExternalBase(),
-		Audit:    newAuditTrail(s.t),
 		Now:      func() time.Time { return s.at },
 	})
 	if err != nil {
@@ -503,7 +502,6 @@ func TestTheSessionArmNeedsAnApplier(t *testing.T) {
 	rig := newSignedIn(t)
 	_, err := auth.NewSessions(auth.SessionsDeps{
 		Signer: rig.signer, Directory: rig.dir, Chart: rig.chart,
-		Audit: newAuditTrail(t),
 	})
 	if err == nil || !strings.Contains(err.Error(), "applier") {
 		t.Fatalf("a session arm with no applier answered %v, want a refusal "+
@@ -718,8 +716,8 @@ func TestOnHTTPSASessionAuthenticatesOnlyUnderItsPrefixedName(t *testing.T) {
 	b.API.ExternalURL = "https://crewlet.example.com"
 	arm, err := auth.NewSessions(auth.SessionsDeps{
 		Signer: rig.signer, Directory: rig.dir, Applier: rig.dir, Chart: rig.chart,
-		External: b.API.ExternalBase(), Audit: newAuditTrail(t),
-		Now: func() time.Time { return rig.at },
+		External: b.API.ExternalBase(),
+		Now:      func() time.Time { return rig.at },
 	})
 	if err != nil {
 		t.Fatalf("build the session arm: %v", err)

@@ -182,34 +182,6 @@ const (
 	RowMalformed Row = "malformed"
 )
 
-// Ending is what ended a session when no RECORD did.
-//
-// A VALUE BESIDE [RowEnded] RATHER THAN MORE ROWS, because the table's answer
-// is the same for all of them — refuse, and clear the cookie — and a row is a
-// decision about what a request may do. What differs is what the audit trail
-// says happened, and these are the ways a session ends that no record ever
-// states: the idle deadline lives in the bearer and nowhere else, and the
-// absolute one too — so the frame that validates a bearer is the only one that
-// can ever see either decide.
-type Ending string
-
-const (
-	// EndingIdle is a session unused for [Idle].
-	EndingIdle Ending = "idle"
-
-	// EndingAbsolute is a session past the lifetime it was minted with,
-	// which no re-issue moves.
-	EndingAbsolute Ending = "absolute"
-)
-
-// Valid reports whether e is none or an ending this build names.
-func (e Ending) Valid() bool {
-	return e == "" || e == EndingIdle || e == EndingAbsolute
-}
-
-// Deadline reports whether e is one of the bearer's own deadlines.
-func (e Ending) Deadline() bool { return e == EndingIdle || e == EndingAbsolute }
-
 // Rows are the six, in the order the design's table states them.
 //
 // THERE IS NO REUSE ROW. A bearer carries nothing that tells a replayed copy
@@ -319,12 +291,6 @@ type Validation struct {
 
 	// Err is the read failure behind [RowStalled], when there was one.
 	Err error
-
-	// Ending is what ended it when no record did — one of the bearer's own
-	// deadlines — set on a [RowEnded] one of those decided and empty
-	// everywhere else, including the ends a RECORD decided, which already
-	// said so when it landed.
-	Ending Ending
 }
 
 // EnrolmentOnly reports whether the session this bearer names may do nothing
@@ -396,10 +362,10 @@ func (s *Signer) Validate(ctx context.Context, directory Directory,
 	// recently it was used.
 	switch {
 	case !now.Before(b.AbsoluteExpiresAt):
-		return Validation{Row: RowEnded, Bearer: b, Ending: EndingAbsolute,
+		return Validation{Row: RowEnded, Bearer: b,
 			Detail: "the absolute deadline has passed"}
 	case !now.Before(b.IdleExpiresAt):
-		return Validation{Row: RowEnded, Bearer: b, Ending: EndingIdle,
+		return Validation{Row: RowEnded, Bearer: b,
 			Detail: "the idle deadline has passed"}
 	}
 
@@ -418,47 +384,11 @@ func (s *Signer) Validate(ctx context.Context, directory Directory,
 	return v
 }
 
-// Standing is the row a bearer's ROWS put it on, with its own deadlines set
-// aside: what this node's copy of the estate says about the session, and
-// nothing the bearer says about when it ends.
-//
-// # It exists for one question, and answers it three ways
-//
-// [Signer.Validate] decides the deadlines FIRST and reads nothing to do it, so
-// a session refused on a deadline has not been looked up at all — and a
-// deadline is the one ending no record states, so whoever notices it is the
-// only one who can say it happened. But a session a RECORD ended — revoked,
-// signed out everywhere, its person removed or suspended, the company's
-// generation bumped — is refused on its deadline too when its cookie is
-// presented after it, and whoever wrote that record already said how it
-// ended. So before a deadline ending is announced, this asks what the rows
-// say:
-//
-//   - [RowValid]: the session was live until its own deadline, which is the
-//     whole of what ended it.
-//   - [RowEnded] or [RowGone]: a record ended it, or the sweep has already
-//     collected it; either way the ending was not the deadline's to announce.
-//   - [RowBehind] or [RowStalled]: this node cannot say, and a fact nobody
-//     could confirm is not one to announce.
-//
-// NO RE-ISSUE: a bearer past its deadline is never served.
-func (s *Signer) Standing(ctx context.Context, directory Directory,
-	b Bearer) Validation {
-
-	identity, err := directory.Resolve(ctx, b.Lineage.String(), b.Person)
-	v := s.standing(b, identity, err)
-	if v.Row == RowValid || v.Row == RowBehind {
-		v.Person, v.Session = identity.Person, identity.Session
-	}
-	return v
-}
-
 // standing is the row one read of the estate puts a bearer on — the half of
-// the table that is about the ROWS, shared by [Signer.Validate] and
-// [Signer.Standing] so the two can never disagree about what a row means.
+// the table that is about the ROWS.
 //
-// A SERVING ROW comes back bare, for its caller to finish: Validate re-issues
-// through [Signer.served] and Standing only reports it.
+// A SERVING ROW comes back bare, for [Signer.Validate] to finish: it re-issues
+// through [Signer.served].
 func (s *Signer) standing(b Bearer, identity Identity, err error) Validation {
 	if err != nil {
 		return Validation{Row: RowStalled, Bearer: b, Err: err,

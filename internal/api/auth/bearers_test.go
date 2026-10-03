@@ -51,7 +51,7 @@ const (
 func TestAStrangerAtTheAddressCannotCloseTheWayBackIn(t *testing.T) {
 	t.Parallel()
 	tr := newAuditTrail(t)
-	g := tierA(t, tr, false)
+	g := tierA(t, tr)
 
 	routes := []struct{ method, path string }{
 		{http.MethodPost, "/auth/token"}, {http.MethodGet, "/agents"},
@@ -102,7 +102,7 @@ func TestValidBearersInFlightTogetherAreNeverHeld(t *testing.T) {
 	directory := &barrierBinding{
 		arrived: make(chan struct{}, inFlight), release: make(chan struct{}),
 	}
-	g := tierA(t, newAuditTrail(t), false).BindSeats(auth.SeatBindings{
+	g := tierA(t, newAuditTrail(t)).BindSeats(auth.SeatBindings{
 		Directory: directory,
 	})
 
@@ -167,7 +167,7 @@ func (b *barrierBinding) BoundSeat(context.Context, string) (session.PersonRow, 
 func TestAnUnguardedRouteNeverComparesABearer(t *testing.T) {
 	t.Parallel()
 	directory := &countingBinding{}
-	g := tierA(t, newAuditTrail(t), false).BindSeats(auth.SeatBindings{
+	g := tierA(t, newAuditTrail(t)).BindSeats(auth.SeatBindings{
 		Directory: directory,
 	})
 	seen := func(path string) iam.Resolution {
