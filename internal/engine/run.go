@@ -265,8 +265,10 @@ type Engine struct {
 	// reflector is the learning write side: one dispatcher for the life of
 	// the process, whose org and workers an apply swaps. On the ENGINE
 	// rather than on an epoch because its redelivery ring is process
-	// state — see learning.Reflector.
-	reflector *learning.Reflector
+	// state — see learning.Reflector. ATOMIC because every seat this node
+	// holds hands its reflection wakes to it from the queue's goroutines,
+	// while the first apply on a node that booted with none builds it.
+	reflector atomic.Pointer[learning.Reflector]
 
 	// native is this node's copy of the company's own tracker and
 	// knowledge base: the state log, its index, and the read and write

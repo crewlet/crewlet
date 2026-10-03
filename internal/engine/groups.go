@@ -4,7 +4,6 @@ import (
 	"context"
 	"slices"
 
-	"github.com/crewlet/crewlet/internal/learning"
 	"github.com/crewlet/crewlet/internal/notify"
 	"github.com/crewlet/crewlet/internal/observe"
 )
@@ -49,11 +48,6 @@ var fleetGroups = []fleetGroup{
 		Why: "routes an inbound delivery from its own envelope, the record's routing " +
 			"snapshot and the chart, and reads no row — so a node without data routes " +
 			"it exactly as a data node does",
-	},
-	{
-		Name: learning.ReflectGroup,
-		Why: "writes a seat's memory into this node's own store and the memory " +
-			"changelog, which a node without data carries exactly as a data node does",
 	},
 	{
 		Name: observe.CustodyGroup,

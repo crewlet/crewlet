@@ -31,8 +31,8 @@ Small components, each with a single responsibility, plus the orchestrator that 
 
 ```mermaid
 flowchart TD
-    TC["turn_completed event"] --> RE
-    RE["learning.Reflector<br/>(one dispatcher per process)"]
+    TC["reflection_due wake<br/>(on the seat's own subject)"] --> RE
+    RE["learning.Reflector<br/>(one dispatcher per process,<br/>fed by every seat it holds)"]
     RE --> PD["PersistDecider"]
     RE --> EPW["Episodist"]
     RE --> CP["Profiler"]
@@ -150,9 +150,10 @@ When a synthesized skill was central to a successful turn, append an *observed-i
 
 The deterministic harness. Owns when reflection runs and coordinates the workers above.
 
-- **Hooks:** subscribes to `turn_completed` on the EventQueue, under its **own consumer group**. Its own, shared with nothing: reflection is the one subsystem an operator turns off on its own, and a group shared with another consumer would take that consumer's traffic down with it.
-- **One consumer, not one per writer.** Everything a seat learns is learned from one event, and every writer is gated on the same questions about it. Three subscriptions would mean three redelivery windows over one turn, three places to discover a company that learns nothing, and three chances for one of them to be quietly unwired.
-- **One dispatcher per process, not per config revision.** A [config apply](configuration.md) swaps the org and the worker set behind it; the subscription and the redelivery guard stay put. Rebuilding it per revision would empty that guard, so a redelivery landing either side of an apply would be classified twice: two auxiliary calls, two differently-worded rows for one fact. A refused worker set leaves the previous one serving: reflecting against a stale org is a far smaller wrong than not reflecting at all. A node that boots with no company has no org to attach the dispatcher to, so its first apply attaches it, and an attach that fails refuses that apply rather than serving a company that learns nothing.
+- **Hooks:** reflection runs **on the node holding the seat**. When a turn closes, the node that ran it publishes `turn_completed` — the record — and a `reflection_due` wake carrying that same turn onto the **seat's own reflection subject** (`crewlet.agent.<handle>.reflect`, group `agent-<handle>-reflect`). The node that acquires a seat attaches that subject **after hydrating the seat's memory** and lets it go on release, **before** the release's last memory flush — the same way it treats the seat's sandbox control subject — so a wake published while the seat is moving waits on the subject for whoever holds it next. A seat's own subject rather than one fleet-wide group, because reflection writes the seat's memory into the store of the node that runs it, and only the node holding the seat [carries that memory](seat-ownership.md#a-seats-memory-follows-it) to the next holder and answers reads of it: on a fleet of N nodes a fleet-wide group put all but one in N of a seat's reflections where nothing of the seat was held, writing diary rows, episodes and skills that no holder ever read. A node without `seats` holds no seat and so reflects on nothing, and a [node without `data`](scaling.md#a-node-that-holds-no-data) reflects on the seats it holds exactly as a data node does — memory is node-local on both.
+- **What a move costs.** A release lets the subject go without waiting for a pass already running (the fenced release must not wait on an auxiliary model), so a pass that finishes after the flush writes rows this node no longer carries — the same bounded loss a crash costs between flushes. A wake still waiting when a seat is removed from the company is deleted with the seat's other subscriptions when [its mailbox retires](seat-ownership.md#the-removed-seat).
+- **One wake, not one per writer.** Everything a seat learns is learned from one turn, and every writer is gated on the same questions about it. Three subscriptions would mean three redelivery windows over one turn, three places to discover a company that learns nothing, and three chances for one of them to be quietly unwired.
+- **One dispatcher per process, not per config revision.** A [config apply](configuration.md) swaps the org and the worker set behind it; the seats' subscriptions and the redelivery guard stay put. Rebuilding it per revision would empty that guard, so a redelivery landing either side of an apply would be classified twice: two auxiliary calls, two differently-worded rows for one fact. A refused worker set leaves the previous one serving: reflecting against a stale org is a far smaller wrong than not reflecting at all. A node that boots with no company has no org to build the dispatcher over, so its first apply builds it; a wake that reaches a node before then is acknowledged and logged, and none can carry a turn, since no seat has run one.
 - **Gates, in order.** Each is reported by name, per worker, per turn, because "this company never learns anything" needs an answer that says *which* gate closed:
   1. **No workers** — nothing is wired, so there is no question to ask about this turn.
   2. **No role** — the turn came from a seat this revision no longer has. Learning about a renamed or removed role writes memory under an identity nothing can read back.
@@ -165,7 +166,7 @@ The deterministic harness. Owns when reflection runs and coordinates the workers
 
 #### What the turn event has to carry
 
-The dispatcher is a queue consumer, so it usually runs on a node that never saw the trigger. Everything the gates read therefore rides on the `turn_completed` payload itself — the tool sequences, the outcome and the opt-out decision, the skills the prompt offered, and the inbound interactions with their senders resolved. A field left off that payload is a fact no worker can consult, and the gates fail **open-looking**: an absent tool sequence reads as "the agent engaged with nothing", which silently skips every worker on exactly the successful turns worth learning from, while the dispatcher reports a clean pass.
+The dispatcher reads a wake, and the node that runs it is the seat's holder when the wake is taken — which, after a seat moved, is not the node that ran the turn and never saw its trigger. Everything the gates read therefore rides on the `turn_completed` payload itself — the tool sequences, the outcome and the opt-out decision, the skills the prompt offered, and the inbound interactions with their senders resolved. A field left off that payload is a fact no worker can consult, and the gates fail **open-looking**: an absent tool sequence reads as "the agent engaged with nothing", which silently skips every worker on exactly the successful turns worth learning from, while the dispatcher reports a clean pass.
 
 ---
 

@@ -745,14 +745,15 @@ func (m *Mailboxes) releaseSeat(ctx context.Context, lease coord.Lease) {
 }
 
 // deleteSubscriptions deletes every durable subscription a seat's mailbox
-// comprises: the inbox every node creates, and the sandbox control topic the
-// seat's owner subscribes. Both are attempted even when one fails, so a
-// retirement that is retried has less left to do.
+// comprises: the inbox every node creates, and the sandbox control and
+// reflection topics the seat's owner subscribes. Each is attempted even when
+// one fails, so a retirement that is retried has less left to do.
 func (m *Mailboxes) deleteSubscriptions(ctx context.Context, handle string) error {
 	var errs []error
 	for _, sub := range [][2]string{
 		{topics.AgentInbox(handle), topics.AgentInboxGroup(handle)},
 		{topics.AgentControl(handle), topics.AgentControlGroup(handle)},
+		{topics.AgentReflect(handle), topics.AgentReflectGroup(handle)},
 	} {
 		if _, err := m.queue.DeleteSubscription(ctx, sub[0], sub[1]); err != nil {
 			errs = append(errs, fmt.Errorf("delete subscription %s/%s of retired seat %q: %w",

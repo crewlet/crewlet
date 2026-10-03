@@ -36,6 +36,10 @@ crewlet.agent.{handle}.control       # Sandbox starts and completions. Separate,
                                      #   completion riding the inbox would be
                                      #   parked behind the very busy state it
                                      #   exists to clear
+crewlet.agent.{handle}.reflect       # A finished turn, put in front of post-turn
+                                     #   reflection on the node HOLDING the
+                                     #   seat, whose store is the one its
+                                     #   memory is written to and carried from
 
 # Fleet-wide work queues — ONE consumer group each, so whichever node wins a
 # delivery is the node that has to route it
@@ -48,9 +52,8 @@ crewlet.notifications.inbound        # Inbound webhooks from external systems.
                                      #   call on the node already running it
 crewlet.events.{type}                # What the engine records about itself:
                                      #   the event store's listener, the live
-                                     #   projection and reflection's
-                                     #   turn_completed group read it. Nothing
-                                     #   routes work from here (see Routing)
+                                     #   projection read it. Nothing routes
+                                     #   work from here (see Routing)
 
 # Control plane. Best-effort nudges: losing one costs a poll interval, never a
 # revision, because the authoritative path polls the activation pointer

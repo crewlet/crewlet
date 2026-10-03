@@ -1655,6 +1655,11 @@ func (e *Engine) prepareSeat(ctx context.Context, handle string, epoch int64, ow
 			return fmt.Errorf("carrying the seat's memory: %w", err)
 		}
 	}
+	// AND WHAT IT HAS STILL TO LEARN: reflection runs where the seat is held,
+	// on the memory just hydrated.
+	if err := e.attachSeatReflection(ctx, handle); err != nil {
+		return err
+	}
 
 	if rt := e.sandbox.Load(); rt != nil {
 		if err := e.prepareSeatSandbox(ctx, rt, handle, epoch, owner); err != nil {
@@ -1845,6 +1850,10 @@ func (e *Engine) releaseSeat(ctx context.Context, handle string) {
 	// driver sees to itself, detaching and bounding each request it makes
 	// (see [notify.StatusDriver.ClearFor]).
 	e.Status().ClearFor(ctx, handle)
+
+	// REFLECTION FIRST, so nothing new writes the seat's memory here after
+	// the flush below.
+	e.detachSeatReflection(ctx, handle)
 
 	// A LAST PUBLISH, then forget the seat. The publish is what makes a
 	// graceful handoff lossless: whatever this node learned since its last

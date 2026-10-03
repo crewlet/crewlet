@@ -28,6 +28,32 @@ func init() {
 	events.Register[CompactionRequested]()
 	events.Register[CompactionCompleted]()
 	events.Register[ReflectionCompleted]()
+	events.Register[ReflectionDue]()
+}
+
+// ReflectionDue is the wake that puts a finished turn in front of post-turn
+// reflection ON THE SEAT'S HOLDER — published by the node that ran the turn
+// onto the seat's own reflection subject ([topics.AgentReflect]), which only
+// the node holding the seat attaches.
+//
+// A WAKE, NOT A RECORD: the turn is already a row (turn_completed), so this
+// carries it whole and is kept out of the event store, as a2a_request is.
+//
+// Why a wake rather than reflecting off turn_completed itself: reflection
+// writes the seat's memory into the store of the node that runs it, and only
+// the holder carries a seat's memory to the next holder. Off one fleet-wide
+// group, most reflections ran on a node that held nothing of the seat, and
+// what they wrote was never read.
+type ReflectionDue struct {
+	Turn TurnCompleted `json:"turn"`
+}
+
+// EventType is the "reflection_due" wire type.
+func (ReflectionDue) EventType() string { return "reflection_due" }
+
+// Summary names the turn the reflection is for.
+func (e ReflectionDue) Summary() string {
+	return fmt.Sprintf("Reflection due on %s's turn %s", e.Turn.AgentHandle, e.Turn.TurnID)
 }
 
 // MemoryScope is whose memory a persisted reflection belongs to.

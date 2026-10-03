@@ -21,7 +21,7 @@ const modulePath = "github.com/crewlet/crewlet"
 
 // perSeatGroups are the `topics` functions that mint a seat's OWN group —
 // attached only by the seat's holder, so never fleet-wide.
-var perSeatGroups = []string{"AgentInboxGroup", "AgentControlGroup"}
+var perSeatGroups = []string{"AgentInboxGroup", "AgentControlGroup", "AgentReflectGroup"}
 
 // EVERY FLEET-WIDE GROUP THE TREE SUBSCRIBES IS DECLARED, AND EVERY DECLARED
 // GROUP IS SUBSCRIBED — the two directions of groups.go's table.

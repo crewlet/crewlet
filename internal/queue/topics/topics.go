@@ -29,6 +29,8 @@ const (
 	AgentInboxSuffix = ".inbox"
 	// AgentControlSuffix suffixes a seat's sandbox-control subject.
 	AgentControlSuffix = ".control"
+	// AgentReflectSuffix suffixes a seat's reflection subject.
+	AgentReflectSuffix = ".reflect"
 
 	// AgentGroupPrefix prefixes every per-seat durable consumer group.
 	//
@@ -48,6 +50,10 @@ const (
 	// PAIR by every backend, and the two pairs differ in their topic. See
 	// TestGroupNamesAreNotUniqueOnTheirOwn.
 	AgentControlGroupSuffix = "-control"
+	// AgentReflectGroupSuffix distinguishes a seat's reflection group from
+	// its inbox and control groups — unique only with its topic, for the
+	// reason AgentControlGroupSuffix states.
+	AgentReflectGroupSuffix = "-reflect"
 
 	// EventsPrefix prefixes the engine's fleet-wide routing subjects.
 	EventsPrefix = "crewlet.events."
@@ -219,6 +225,31 @@ func AgentControlGroup(handle string) string {
 	return AgentGroupPrefix + handle + AgentControlGroupSuffix
 }
 
+// AgentReflect returns the seat's reflection subject: where the turn it ran is
+// put for post-turn reflection, by the node that ran it.
+//
+// A SEAT'S OWN SUBJECT rather than one fleet-wide group, because reflection
+// writes the seat's memory into the store of the node that runs it, and only
+// the node HOLDING the seat carries that memory to the next holder
+// (internal/learning/memsync). A fleet-wide group handed most reflections to a
+// node that held nothing of the seat, whose rows nobody ever read. Attached
+// and detached with the seat, like its control subject.
+func AgentReflect(handle string) string {
+	if handle == "" {
+		return ""
+	}
+	return AgentInboxPrefix + handle + AgentReflectSuffix
+}
+
+// AgentReflectGroup returns the durable consumer group for a seat's reflection
+// subject.
+func AgentReflectGroup(handle string) string {
+	if handle == "" {
+		return ""
+	}
+	return AgentGroupPrefix + handle + AgentReflectGroupSuffix
+}
+
 // HandleFromInbox recovers the seat handle from an inbox subject, reporting
 // whether the subject was one. Used by diagnostics and by backends that log
 // per-seat activity without threading the handle through.
@@ -243,15 +274,15 @@ func HandleFromInbox(subject string) (string, bool) {
 }
 
 // MailboxHandle reports the seat whose mailbox a durable subscription is, for
-// the two subscriptions a seat's mailbox comprises: its inbox and its
-// sandbox-control subscription.
+// the three subscriptions a seat's mailbox comprises: its inbox, its
+// sandbox-control subscription and its reflection subscription.
 //
 // The PAIR decides, never the topic alone: a subscription on a seat's inbox
 // subject under any other group is not that seat's mailbox, and deleting it as
 // one would destroy somebody else's consumer. It is the exact inverse of
-// [AgentInbox] with [AgentInboxGroup] and of [AgentControl] with
-// [AgentControlGroup], so it reports true only for a pair those could have
-// produced.
+// [AgentInbox] with [AgentInboxGroup], of [AgentControl] with
+// [AgentControlGroup] and of [AgentReflect] with [AgentReflectGroup], so it
+// reports true only for a pair those could have produced.
 func MailboxHandle(topic, group string) (string, bool) {
 	if h, ok := HandleFromInbox(topic); ok {
 		return h, group == AgentInboxGroup(h)
@@ -260,11 +291,16 @@ func MailboxHandle(topic, group string) (string, bool) {
 	if !ok {
 		return "", false
 	}
-	h, ok := strings.CutSuffix(rest, AgentControlSuffix)
-	if !ok || h == "" || strings.Contains(h, ".") || group != AgentControlGroup(h) {
-		return "", false
+	for _, pair := range []struct {
+		suffix string
+		group  func(string) string
+	}{{AgentControlSuffix, AgentControlGroup}, {AgentReflectSuffix, AgentReflectGroup}} {
+		h, ok := strings.CutSuffix(rest, pair.suffix)
+		if ok && h != "" && !strings.Contains(h, ".") && group == pair.group(h) {
+			return h, true
+		}
 	}
-	return h, true
+	return "", false
 }
 
 // Event returns the fleet-wide routing subject for an event type. Each of

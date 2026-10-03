@@ -113,8 +113,8 @@ replicated estate and answers its seats' tools through a node that does; see
 ```mermaid
 flowchart TB
     ING["<b>ingress</b>: terminate inbound traffic<br/><i>webhooks · REST · /ws/stream · OTLP · probes</i>"]
-    ALWAYS["<b>Always on, whatever the roles</b><br/><i>notifications · reconciler · presence ·<br/>reflection · observability edge</i>"]
-    SEATS["<b>seats</b>: run agents<br/><i>mailbox → batching → turn engine · MCP bridge</i>"]
+    ALWAYS["<b>Always on, whatever the roles</b><br/><i>notifications · reconciler · presence ·<br/>observability edge</i>"]
+    SEATS["<b>seats</b>: run agents<br/><i>mailbox → batching → turn engine · MCP bridge ·<br/>post-turn reflection</i>"]
     WORK["<b>workers</b> — company-wide singletons<br/><i>each on a worker:DUTY lease</i>"]
     STREAM[("<b>Event stream</b><br/><i>embedded NATS JetStream, an embedded<br/>cluster, or an external one</i>")]
     KV[("<b>Coordination KV</b><br/><i>rides the stream's own connection</i>")]
@@ -188,7 +188,6 @@ back what it wrote.
 | Notification service | One fleet-wide group, `notify-inbound`: parse → resolve → valve → wake, publishing the wake to the seat's inbox on the stream. |
 | Config reconciler | Polls the activation pointer, applies an epoch, reports status — all in the KV. |
 | Node presence | The `node:ID` lease in the KV, plus the posture heartbeat. |
-| Reflection worker | Consumes `turn_completed`, one delivery at a time, and writes to the store. |
 | Observability edge | Two routes off one published event: a publish listener writes the store row, a projector pushes it live onto `/ws/stream`. |
 
 `seats` is the exception — the one group whose boxes hand work to each other.
@@ -198,7 +197,7 @@ This is what a wake becomes after the stream delivers it:
 flowchart TB
     subgraph seats["<b>seats</b> — run agents"]
         CLAIM["<b>Seat host</b><br/>claims seat leases, attaches the mailbox<br/><i>acquire → equip → THEN attach</i>"]
-        MBOX["<b>Per-seat mailbox</b><br/>durable consumer on<br/>crewlet.agent.HANDLE.inbox<br/>+ .control for sandbox resumes"]
+        MBOX["<b>Per-seat mailbox</b><br/>durable consumer on<br/>crewlet.agent.HANDLE.inbox<br/>+ .control for sandbox resumes<br/>+ .reflect for post-turn reflection"]
         BATCH["<b>Inbox batching</b><br/>drain · partition by conversation<br/>· one digest turn per partition"]
         TURN["<b>Turn engine</b><br/>executor → reviewer<br/><i>one per running turn, gated by<br/>node.max_concurrent</i>"]
         REG["<b>Per-seat tool registry + bridge</b><br/>the shared catalogue, CLONED,<br/>plus this role's own MCP children"]

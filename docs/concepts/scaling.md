@@ -81,8 +81,8 @@ from the node's own copy where it has one — carrying the node's own writes as 
 floor so whichever data node answers has applied them, and what it publishes about its turns is kept in
 exactly one data node's event log ([custody](../guides/deployment.md#custody-the-rows-of-a-node-without-data)).
 It joins no **fleet-wide consumer group** whose handler needs data — the
-custody group and each domain's wake feed — and takes its share of the ones
-that do not, inbound notifications and post-turn reflection: a group any node
+custody group and each domain's wake feed — and takes its share of the one
+that does not, inbound notifications: a group any node
 may attach hands a message to whichever member takes it first, so a stateless
 member of a group that reads the estate would answer its share of the messages
 from nothing. Every such group says which it is in one table the build holds

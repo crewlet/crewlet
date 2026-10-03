@@ -63,6 +63,7 @@ func catalogue() []events.Payload {
 		RawWebhook{},
 		// custody.go
 		CustodyBatch{},
+		ReflectionDue{},
 		// operator.go
 		OperatorActed{}, BackupRequested{},
 		// seat.go
@@ -92,6 +93,7 @@ var wireTypes = []string{
 	"budget_exhausted",
 	"budget_meters",
 	"custody_batch",
+	"reflection_due",
 	"compaction_completed",
 	"compaction_requested",
 	"config_revision_activated",
@@ -310,6 +312,7 @@ var wireTags = map[string][]string{
 	"budget_exhausted":                {"agent_id", "budget_type", "max_tokens", "period", "resets_at", "role", "turn_id", "used_tokens", "window", "work_key"},
 	"budget_meters":                   {"meter_id", "org", "seats", "seq", "timezone"},
 	"custody_batch":                   {"events"},
+	"reflection_due":                  {"turn"},
 	"llm_unavailable":                 {"agent_id", "attempt_count", "last_error", "last_error_kind", "provider_chain", "role", "turn_id", "work_key"},
 	"provider_fallback":               {"agent_id", "error_kind", "from_provider_key", "iteration", "phase", "role", "to_provider_key", "turn_id", "work_key"},
 	"agent_turn_started":              {"agent_handle", "agent_id", "conversation_key", "resumed", "role", "started_at", "trigger", "turn_id", "work_item", "work_item_basis", "work_key"},

@@ -446,7 +446,7 @@ func (e *Engine) publishTurnCompleted(ctx context.Context, t turnTelemetry,
 	e.publishEvent(ctx, events.New(summary, t.trace), t.role)
 	e.publishFailure(ctx, t, res, err)
 
-	e.publishEvent(ctx, events.New(types.TurnCompleted{
+	completed := types.TurnCompleted{
 		Agent:         t.agentID,
 		AgentHandle:   t.handle,
 		RoleName:      t.role,
@@ -467,9 +467,10 @@ func (e *Engine) publishTurnCompleted(ctx context.Context, t turnTelemetry,
 		ReviewOutcome: decision,
 		Iterations:    res.Rounds,
 		// EVERYTHING THE REFLECT DISPATCHER GATES ON. Its workers run on
-		// whichever node wins the delivery, which is rarely this one, so
-		// a fact left off this payload is a fact no worker can consult —
-		// and the gates fail OPEN-LOOKING: an absent tool sequence reads
+		// whichever node holds the seat when the wake is taken, which a
+		// seat that moved makes another one, so a fact left off this
+		// payload is a fact no worker can consult — and the gates fail
+		// OPEN-LOOKING: an absent tool sequence reads
 		// as "the agent engaged with nothing", which silently skips every
 		// worker on exactly the successful turns worth learning from.
 		ToolSequence: spend.ExecuteTools,
@@ -483,7 +484,29 @@ func (e *Engine) publishTurnCompleted(ctx context.Context, t turnTelemetry,
 		SkillsUsed:      t.skills,
 		Interactions:    t.interactions,
 		ConversationKey: t.convKey,
-	}, t.trace), t.role)
+	}
+	e.publishEvent(ctx, events.New(completed, t.trace), t.role)
+	e.publishReflectionDue(ctx, completed, t)
+}
+
+// publishReflectionDue puts a finished turn in front of reflection ON THE
+// SEAT'S HOLDER: a [types.ReflectionDue] on the seat's own reflection subject,
+// which only the node holding the seat attaches — this one, unless the seat
+// moves before the wake is taken, and then the node it moved to, which has
+// hydrated its memory. A WAKE rather than turn_completed a second time: every
+// event is published once, by one node, and the turn already was.
+func (e *Engine) publishReflectionDue(ctx context.Context, completed types.TurnCompleted, t turnTelemetry) {
+	subject := topics.AgentReflect(t.handle)
+	if subject == "" {
+		return
+	}
+	ev := events.New(types.ReflectionDue{Turn: completed}, t.trace)
+	ev.Source = t.role
+	if err := e.backends.Queue.Publish(ctx, subject, ev); err != nil {
+		log.WarnContext(ctx, "reflection_due_publish_failed", "seat", t.handle,
+			"turn_id", t.runID, "error", err,
+			"detail", "the turn ran and is recorded; nothing will reflect on it")
+	}
 }
 
 // publishFailure publishes the DEDICATED record of why a turn stopped.
