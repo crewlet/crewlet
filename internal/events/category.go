@@ -282,8 +282,10 @@ var categories = map[string]placement{
 	"iam_token_overreach":    {"auth", RateAuthenticated},
 	"iam_recovery_code_used": {"auth", RateAuthenticated},
 	// AUTHENTICATED because only a caller the password admitted can
-	// reach a second factor, and at most one row per person per window
-	// on each node: the rate is bounded by whose passwords are known to
+	// reach a second factor, and a row is written only by the wrong code
+	// that takes a person's curve back up to its ceiling — never while a
+	// run is held there — so at most CurveSteps a window per person on
+	// each node: the rate is bounded by whose passwords are known to
 	// somebody guessing, never by what a stranger can send.
 	"iam_second_factor_throttled":   {"auth", RateAuthenticated},
 	"iam_mfa_reset":                 {"auth", RateAuthenticated},

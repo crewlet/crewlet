@@ -8,7 +8,6 @@ import (
 	"net/http/httptest"
 	"strconv"
 	"strings"
-	"sync"
 	"testing"
 	"time"
 
@@ -110,52 +109,31 @@ func (armsDirectory) PersonByEmailBlind(context.Context, string) (iamdomain.Sigh
 	return iamdomain.Sighting{}, nil
 }
 
-// padRecorder is a throttle's sleep, recorded rather than slept.
-type padRecorder struct {
-	mu     sync.Mutex
-	sleeps []time.Duration
-}
-
-func (p *padRecorder) sleep(_ context.Context, d time.Duration) {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	p.sleeps = append(p.sleeps, d)
-}
-
-func (p *padRecorder) take() []time.Duration {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	out := p.sleeps
-	p.sleeps = nil
-	return out
-}
-
 // ONE GENERIC REFUSAL FOR EVERY LOGIN ARM.
 //
 // A sign-in surface must not be a roster: whatever went wrong — nobody by that
 // login, nobody at that address, a person suspended, a half-finished
 // enrolment, somebody who holds no password, a wrong password,
 // a directory this node could not read, or the right password with a wrong app
-// code or a recovery code already spent — the caller gets ONE status, ONE
-// body, byte for byte, padded to ONE deadline measured from admission, and one
-// failed attempt on the trail. The last two leave by a path of their own, the
-// second-factor check, so they are held here with the rest rather than
-// assumed to answer alike. Told apart by any of the three, the refusal
-// says which logins exist and which are worth guessing at. The credential
-// package certifies the pad's arithmetic and the decoy's cost; this is the
-// route-level half, where one arm answering differently used to be a matter of
-// nobody having written the line.
+// code or a recovery code already spent — the caller gets ONE status and ONE
+// body, byte for byte, and one failed attempt on the trail. The last two leave
+// by a path of their own, the second-factor check, so they are held here with
+// the rest rather than assumed to answer alike. Told apart by either, the
+// refusal says which logins exist and which are worth guessing at. That every
+// arm also spends one derivation under the verify cap is
+// [TestEverySignInArmWaitsForTheVerifyCap]'s; this is the shape half, where
+// one arm answering differently used to be a matter of nobody having written
+// the line.
 //
 // The control is the right password, which is NOT refused — or every arm
 // would pass on a surface that refused everything.
 //
-// Mutation: answer any one arm with another code, or skip the pad on any one
-// arm — the second-factor refusal given a code of its own included — and its
-// row goes red.
+// Mutation: answer any one arm with another code — the second-factor refusal
+// given a code of its own included — and its row goes red.
 func TestOneGenericRefusalForEveryLoginArm(t *testing.T) {
 	t.Parallel()
 	hasher := credential.NewHasher(cheap, 1)
-	verifier, err := hasher.Hash(t.Context(), "", rightPassword)
+	verifier, err := hasher.Hash(t.Context(), rightPassword)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -177,14 +155,14 @@ func TestOneGenericRefusalForEveryLoginArm(t *testing.T) {
 				Extra: map[string]json.RawMessage{"verifiers": remaining}},
 		}
 	}
-	pads := &padRecorder{}
 	audit := &recordingAudit{}
 	b := bootstrapFor(t)
 	b.API.Auth.Backend = config.AuthBackendLocal
 	mux := http.NewServeMux()
 	buildWith(t, b, func(o *authapi.Options) {
 		o.Throttle = credential.NewThrottle(credential.ThrottleDeps{
-			Now: func() time.Time { return clock }, Sleep: pads.sleep,
+			Now:   func() time.Time { return clock },
+			Sleep: func(context.Context, time.Duration) {},
 		})
 		o.Hasher = hasher
 		o.Directory = armsDirectory{verifier: verifier, factors: factors}
@@ -236,10 +214,6 @@ func TestOneGenericRefusalForEveryLoginArm(t *testing.T) {
 			t.Errorf("%s answered %d %s, and %s answered %d %s — two refusals "+
 				"a caller can tell apart", arm.name, rec.Code, rec.Body,
 				arms[0].name, first.Code, first.Body)
-		}
-		if got := pads.take(); len(got) != 1 || got[0] != credential.PadDeadline {
-			t.Errorf("%s was padded %v, want once to the %s deadline measured "+
-				"from admission", arm.name, got, credential.PadDeadline)
 		}
 	}
 	_, failures := audit.snapshot()

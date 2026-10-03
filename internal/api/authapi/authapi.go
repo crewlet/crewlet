@@ -9,25 +9,27 @@
 // identity and never authority.
 //
 // The machinery it drives belongs to other packages and none of it is
-// reimplemented here: internal/iam/credential hashes and verifies, throttles
-// and pads; internal/iam/session mints and validates the bearer;
+// reimplemented here: internal/iam/credential hashes, verifies and throttles;
+// internal/iam/session mints and validates the bearer;
 // internal/iamdomain writes the records and reads the estate. What this package owns is the HTTP
 // shape of the sequence and the refusals.
 //
 // # The rule that shapes every refusal on this surface
 //
 // A SIGN-IN SURFACE MUST NOT BE A ROSTER. Every failed sign-in answers one
-// code, at one wall-clock deadline measured from admission, whatever actually
-// went wrong — no such login, wrong password, wrong second factor, a person
-// suspended, a person removed. A caller that could tell those apart has a list
-// of who works here and a way to test it.
+// code, whatever actually went wrong — no such login, wrong password, wrong
+// second factor, a person suspended, a person removed — and every arm spends
+// the same argon2id derivation before it answers. A caller that could tell
+// those apart has a list of who works here and a way to test it.
 //
 // Both halves are needed and neither works alone: a distinguishing code makes
-// the timing pad pointless, and a distinguishing delay makes the single code
-// pointless. internal/iam/credential owns the timing half — a delay curve
-// decided BEFORE the subject resolves, on the subject as it was TYPED from the
-// source it came from, a fixed-cost decoy on the miss, both arms padded to one
-// deadline — and this package owns the shape half.
+// equal work pointless, and a missing derivation makes the single code
+// pointless. internal/iam/credential owns the cost half — a delay curve decided
+// BEFORE the subject resolves, on the subject as it was TYPED from the source
+// it came from, and a verification against a dummy verifier on every arm that
+// has no real one — and this package owns the shape half. What the two leave
+// unequal is stated there rather than padded: the directory read before the
+// derivation.
 //
 // The exceptions are named rather than assumed, and each discloses nothing a
 // stranger did not already have: a throttle refusal names only the caller's
@@ -90,10 +92,13 @@
 // # What it says about itself
 //
 // Every refusal reaches [Audit.Failed] and never [Audit.Emit]: a failed
-// attempt's rate is the caller's to choose, so it is a counter and one row per
-// client per minute from the engine's own loop (internal/iam/authevents). A
+// attempt's rate is the caller's to choose, so it is a counter and a share of
+// one row per minute from the engine's own loop (internal/iam/authevents). A
 // success is announced as the event it is — the session it opened, the step-up
-// it completed, the recovery code it spent — at the site that produced it.
+// it completed, the recovery code it spent — at the site that produced it, and
+// so is the one failure the engine itself decides is worth a row: a person's
+// second-factor curve reaching its ceiling, which the curve reports once per
+// climb.
 //
 // # A login cannot require a login
 //
@@ -394,19 +399,13 @@ type Blinds interface {
 // Audit is where this surface's authentication facts go.
 //
 // TWO METHODS AND TWO DOORS, and the split is the admission rule: a fact a
-// verified credential authored — somebody signed in, signed out, enrolled a
-// factor — is published as it happens, and a FAILED attempt is only ever
-// COUNTED, because whoever failed decides how many of those there are. See
+// verified credential or the engine authored — somebody signed in, signed out,
+// enrolled a factor; a person's second-factor curve reached its ceiling — is
+// published as it happens, and a FAILED attempt is only ever COUNTED, because
+// whoever failed decides how many of those there are. See
 // internal/iam/authevents, whose Trail is what a running node hands in.
-//
-// EmitOnce is the first door for a fact worth one row per window rather than
-// one per occurrence — a person's second factor at its ceiling, which every
-// further wrong code would otherwise announce again — decided by the node's
-// one dedupe rather than a second copy of it here.
 type Audit interface {
 	Emit(ctx context.Context, payload events.Payload)
-	EmitOnce(ctx context.Context, class authevents.OnceClass, key string,
-		window time.Duration, payload events.Payload) bool
 	Failed(ctx context.Context, f authevents.Failure)
 }
 
@@ -434,9 +433,8 @@ type Options struct {
 	// rather than a refusal at boot.
 	Hasher *credential.Hasher
 
-	// Throttle is the sign-in delay curve with the two timing defences
-	// around it. REQUIRED — without it every refusal on this surface is an
-	// oracle with a stopwatch, and a password is guessed at line rate.
+	// Throttle is the sign-in delay curve. REQUIRED — without it a password
+	// is guessed at line rate.
 	Throttle *credential.Throttle
 
 	// Blinder is where the address blinds come from. REQUIRED.
@@ -590,13 +588,13 @@ func joinNames(names []string) string {
 //
 // THE ATTEMPT IS COUNTED, NEVER PUBLISHED. A failed sign-in is authored by
 // whoever can reach this listener, so it goes to the throttle's curve, the
-// audit trail's counter and its per-client, per-minute tally — the engine's
+// audit trail's counter and its per-source, per-minute count — the engine's
 // own loop decides when a row is written, and the row carries counts rather
 // than what was typed.
 //
-// IT PADS BEFORE IT ANSWERS. The pad is measured from when the request was
-// ADMITTED rather than from here, so a slow arm and a fast one leave at the
-// same instant — which is the only shape in which a stopwatch learns nothing.
+// EVERY ARM HAS ALREADY SPENT ITS DERIVATION by the time it reaches here — a
+// verification, or the dummy one ([Service.decoy]) — so nothing is added to
+// the answer's timing here.
 func (s *Service) refuseSignIn(w http.ResponseWriter, r *http.Request,
 	in admission, attempt authevents.Failure, why string) {
 
@@ -609,16 +607,14 @@ func (s *Service) refuseSignIn(w http.ResponseWriter, r *http.Request,
 		// operator's screen renders.
 		"reason", why, "method", string(attempt.Method), "route", r.URL.Path,
 		"source", attempt.Client)
-	s.throttle.Pad(r.Context(), in.at)
 	httpjson.Fail(w, http.StatusUnauthorized, httpjson.CodeSignInRefused)
 }
 
-// admission is one attempt the throttle let through: its ticket, the instant a
-// refusal is padded from, and where it came from. An attempt on no curve —
-// [Service.uncounted] — holds a nil ticket, whose methods do nothing.
+// admission is one attempt the throttle let through: its ticket, and where it
+// came from. An attempt on no curve — [Service.uncounted] — holds a nil
+// ticket, whose methods do nothing.
 type admission struct {
 	ticket *credential.Ticket
-	at     time.Time
 	source string
 }
 
@@ -637,10 +633,6 @@ type admission struct {
 // the credential proved itself — and DEFERS [credential.Ticket.Release], so an
 // attempt that reached no verdict counts as nothing.
 //
-// THE PAD RUNS FROM ADMISSION, not from arrival: the curve's own wait is the
-// same for a name that exists and one that does not, and a deadline it had
-// already spent would leave the verification after it unpadded.
-//
 // A THROTTLED REQUEST IS A FAILED ATTEMPT TOO, counted apart as one the curve
 // turned away: a client that keeps going after it was stopped is the part of
 // a guessing run an operator most wants to see, and the method names which
@@ -650,8 +642,7 @@ func (s *Service) admit(w http.ResponseWriter, r *http.Request,
 
 	ticket, err := s.throttle.Admit(r.Context(), attempt)
 	if err == nil {
-		return admission{ticket: ticket, at: s.throttle.Now(),
-			source: attempt.Source}, true
+		return admission{ticket: ticket, source: attempt.Source}, true
 	}
 	if errors.Is(err, credential.ErrThrottled) {
 		s.audit.Failed(r.Context(), authevents.Failure{
@@ -665,8 +656,8 @@ func (s *Service) admit(w http.ResponseWriter, r *http.Request,
 }
 
 // abandoned answers an attempt whose wait ended with its request — for its
-// place on the curve, or for its source's turn at the verify cap: the caller
-// went away, or this node is stopping. Nothing was attempted and nothing was
+// place on the curve, or for a slot of the verify cap: the caller went away,
+// or this node is stopping. Nothing was attempted and nothing was
 // decided, so the answer is for a node that will take the attempt later, and a
 // caller that defers [credential.Ticket.Release] counts it as nothing.
 func abandoned(w http.ResponseWriter, r *http.Request, source string, err error) {
@@ -675,25 +666,25 @@ func abandoned(w http.ResponseWriter, r *http.Request, source string, err error)
 	httpjson.Unavailable(w, httpjson.CodeUnavailable, auth.RetryIdentity(err))
 }
 
-// decoy spends the turn a verification would have, for a subject with no
+// decoy spends the derivation a verification would have, for a subject with no
 // verifier to check, answering false once it has answered a request that went
-// away before its turn came — see [credential.Hasher.Decoy].
+// away before a slot of the cap freed — see [credential.Hasher.Decoy].
 func (s *Service) decoy(w http.ResponseWriter, r *http.Request, in admission,
 	presented string) bool {
 
-	if err := s.hasher.Decoy(r.Context(), in.source, presented); err != nil {
+	if err := s.hasher.Decoy(r.Context(), presented); err != nil {
 		abandoned(w, r, in.source, err)
 		return false
 	}
 	return true
 }
 
-// hash is a new password's verifier, derived in the turn of the source that
-// chose it, or false once it has answered.
+// hash is a new password's verifier, derived under the verify cap, or false
+// once it has answered.
 func (s *Service) hash(w http.ResponseWriter, r *http.Request, in admission,
 	password, route string) (string, bool) {
 
-	verifier, err := s.hasher.Hash(r.Context(), in.source, password)
+	verifier, err := s.hasher.Hash(r.Context(), password)
 	switch {
 	case err == nil:
 		return verifier, true
@@ -707,8 +698,7 @@ func (s *Service) hash(w http.ResponseWriter, r *http.Request, in admission,
 }
 
 // uncounted is the admission of an attempt whose credential names nobody — an
-// invitation link: the instant its refusal is padded from and where it came
-// from, and no ticket.
+// invitation link: where it came from, and no ticket.
 //
 // # No curve, and not for want of a key
 //
@@ -718,10 +708,10 @@ func (s *Service) hash(w http.ResponseWriter, r *http.Request, in admission,
 // deployment was not told to trust. These routes had one, so one stranger
 // could keep every invitation at that address answering 429. What bounds a
 // walk is the credential itself — a link's secret is 256 bits of crypto/rand
-// — and what shows one is the audit trail's failure tally, which every refusal
+// — and what shows one is the audit trail's failure count, which every refusal
 // still reaches.
 func (s *Service) uncounted(r *http.Request) admission {
-	return admission{at: s.throttle.Now(), source: s.sourceOf(r)}
+	return admission{source: s.sourceOf(r)}
 }
 
 // stageAdmits reports whether a person's enrolment stage lets them act.

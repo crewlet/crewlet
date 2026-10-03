@@ -330,8 +330,8 @@ func (s *Service) StepUp(w http.ResponseWriter, r *http.Request) {
 		}
 		return
 	}
-	proved, stale, err := s.hasher.Verify(r.Context(), adm.source,
-		verifier.Verifier, in.Password)
+	proved, stale, err := s.hasher.Verify(r.Context(), verifier.Verifier,
+		in.Password)
 	if err != nil {
 		abandoned(w, r, adm.source, err)
 		return

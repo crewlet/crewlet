@@ -574,8 +574,8 @@ type Sighting struct {
 // tell "no such login" from "wrong password" has a roster, and the two arms
 // have to be indistinguishable in what they return, how long they take and
 // what they log. internal/iam/credential is where the timing half lives; this
-// is the shape half, and the caller spends a decoy's turn against the zero
-// value rather than branching on it.
+// is the shape half, and the caller spends a decoy's derivation against the
+// zero value rather than branching on it.
 //
 // An error is still the unknown arm, as everywhere here.
 func (r *Reader) PersonByLogin(ctx context.Context, login string) (Sighting, error) {

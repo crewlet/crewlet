@@ -61,10 +61,9 @@ func buildWith(t *testing.T, b config.Bootstrap,
 	signer := fixtureSigner(t)
 	throttle := credential.NewThrottle(credential.ThrottleDeps{
 		Now: func() time.Time { return clock },
-		// NO PAD IN A TEST, because the pad is a wall-clock sleep: the
-		// timing defence has its own cases in internal/iam/credential,
-		// and paying it here would make every refusal case take its
-		// deadline.
+		// NO WAIT IN A TEST, because the curve's wait is a wall-clock
+		// sleep: the curve has its own cases in internal/iam/credential,
+		// and paying it here would make every repeated refusal take it.
 		Sleep: func(context.Context, time.Duration) {},
 	})
 	opts := authapi.Options{

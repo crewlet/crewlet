@@ -36,7 +36,8 @@ func (a *recordingAudit) Emit(_ context.Context, payload events.Payload) {
 }
 
 // EmitOnce publishes every time: nothing here is about the coalescing, which
-// internal/iam/authevents certifies.
+// internal/iam/authevents certifies. The request guard's [auth.Audit] asks for
+// it; this surface's own does not.
 func (a *recordingAudit) EmitOnce(ctx context.Context, _ authevents.OnceClass, _ string,
 	_ time.Duration,
 	payload events.Payload) bool {
@@ -273,7 +274,7 @@ func newSignInRig(t *testing.T) *signInRig {
 func newSignInRigWith(t *testing.T, replace func(*authapi.Options)) *signInRig {
 	t.Helper()
 	hasher := credential.NewHasher(cheap, 1)
-	verifier, err := hasher.Hash(t.Context(), "", password)
+	verifier, err := hasher.Hash(t.Context(), password)
 	if err != nil {
 		t.Fatal(err)
 	}

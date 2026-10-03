@@ -881,52 +881,41 @@ audit feed until its record is durable.
 
 The failure that shapes this whole surface is not a guessed password — it is an
 attacker learning **who works here**, in as many requests as they care to make,
-from nothing but which requests were throttled or how long each took. Three
-mechanisms close it and none is sufficient alone:
+from nothing but which requests were throttled or how long each took. Two
+mechanisms close it:
 
 1. **The throttle is keyed on what was typed, never on what it resolved to,**
    and decides before anything is looked up. A throttle keyed on the person a
    login turned out to be is one that only *real* people can trigger, so its
    delay becomes the oracle it was added to prevent. Keyed on the typed value,
    a name nobody holds climbs the curve exactly as a real one does.
-2. **A subject that does not exist is still verified against**, with a
-   decoy, so the two arms do the same shape of work rather than one of them
-   returning immediately. The decoy takes the same **turn** at the node's
-   verify cap a real verification does and holds its slot for as long as one
-   takes — a draw from the node's own recent verifications at its current
-   cost, since a verification's time is a spread rather than one number — and
-   derives nothing once it has something to draw from, so a name that does not
-   exist costs no memory and no CPU, and no more capacity than a real one. A
-   person whose password was set before the cost was last raised verifies at
-   the cheaper cost it was written at, and holds their slot out to the same
-   draw.
-3. **Both arms answer at one deadline measured from admission** — the instant
-   the throttle let the attempt through, which is the last instant both arms
-   share. That is the only one of the three that equalises the *timing*,
-   because argon2id's cost varies with load and a decoy's hold is a measure of
-   it rather than the thing itself.
+2. **A subject that does not exist is still verified against.** What was
+   presented is checked against one dummy verifier at this build's cost, drawn
+   once when the node starts, so a miss — nobody by that login or address, a
+   person suspended, a person who holds no password — is one argon2id
+   derivation exactly as a hit is. That derivation is what dominates how long
+   a sign-in takes, so the two arms take the same time to within one indexed
+   read.
 
-**The verify cap is shared out by address, one turn at a time.** A node runs
-as many argon2id derivations at once as it has cores, because each holds
-64 MiB. Every verification and every decoy a request causes waits for its
-address's turn — the client's address as the trusted proxies resolve it, an
-IPv6 client by its `/64` — and an address holds at most one turn, its other
-attempts waiting behind it in arrival order, while addresses are served in
-turn. So one address sending a flood cannot fill the cap, cannot make anybody
-elsewhere wait behind its queue, and cannot push anybody's verification past
-the deadline. Nor can it separate the arms by queueing its own real names
-behind each other, because its decoys queue in the same line for the same
-time. A request that goes away while it waits gives up its place: nothing is
-derived for it, it is answered `503`, and it counts as no attempt. One that
-goes away once its turn has begun holds that turn to its end, a decoy's as much
-as a real verification's, because when a turn ends is what the address's next
-attempt sees — a decoy that let go when its client hung up would free the line
-at once where a real name held it for a whole derivation. What still
-separates the arms is a load spike from at least as many addresses as the
-node has cores, and then both arms queue alike and differ only by how far a
-derivation now is from the recent ones a decoy draws from. The cost falls on
-the address that sent the flood — including anybody sharing it, which for a
-deployment behind a proxy it was not told to trust is everybody.
+**What is not equalised, stated rather than hidden.** No answer is padded to a
+common deadline. What still differs between the arms is the directory read
+before the derivation, which a name nobody holds answers a little sooner, and a
+verifier written at another cost than this build's — a person whose password
+predates a cost raise verifies at the cheaper cost it was written at until
+their next sign-in rewrites it, and a verifier a newer build wrote during a
+rolling upgrade at the higher one. Every refusal used to be padded to one
+deadline measured from admission, and keeping that deadline honest under load
+took a turn per address at the verify cap and a decoy whose hold was drawn
+from the node's recent verifications — a scheduler and a sampler to hide one
+indexed read.
+
+**The verify cap is one queue.** A node runs as many argon2id derivations at
+once as it has cores, because each holds 64 MiB; every verification, dummy
+verification and new password's hash waits for a slot, first come first
+served. Under a flood every arm queues behind the same line, so the queue
+says nothing about which names exist. A request that goes away while it waits
+gives up its place: nothing is derived for it, it is answered `503`, and it
+counts as no attempt.
 
 The refusal itself is **one generic error for every arm** — no such login,
 wrong password, wrong code, code already spent. The one exception is choosing a
@@ -983,12 +972,10 @@ name at all, kept every sign-in from that office, that VPN or that proxy at
 `429`, the right passwords included; and since an attempt still being checked
 counted against it, a dozen colleagues signing in at once met the same `429`
 with nobody failing. What that leaves unslowed by a curve is one password tried
-against many names from one address. What bounds that is the address's one
-turn at the verify cap — one name per derivation, however many it sends at once
-— the twelve-character floor and its blocklist, and the pad on every answer;
-what shows it is the
-audit trail's per-client, per-minute failure tally, which counts how many
-different names one client tried.
+against many names from one address. What bounds that is cost — every name
+tried, held or not, is an argon2id derivation waiting for a slot of the verify
+cap — and the twelve-character floor and its blocklist; what shows it is the
+audit trail's per-minute failure count, which names the source.
 
 A credential that **names nobody** — an invitation link — meets no curve at
 all: there is no subject to pair with its address, and its secret is 256 bits
@@ -1019,7 +1006,7 @@ for the reads a spray of fresh names drove, a pause for a store that stopped
 answering — behind a factor of N on a rate the curve has already cut sixty-fold
 at its first step. What still bounds a run at one account on N nodes is what
 bounds it on one, times N: at the ceiling, one guess per node every thirty
-seconds, each an argon2id verification in its source's turn, against a password
+seconds, each an argon2id verification under the verify cap, against a password
 of at least twelve characters that is not on the blocklist — and, for a person
 who holds one, a second factor whose own curve a guesser reaches only once they
 already hold the password. A node holds a pair under a keyed digest, the key
@@ -1913,7 +1900,7 @@ Identity has **two trails**, and they answer different questions.
 | `iam_session_ended` | A logout (`logout`, `logout_all`), an administrator (`revoked`, `person_removed`), or the request guard noticing a deadline (`idle`, `absolute`) | Once per ending, from the fact that ended it: a deadline once per session per node, when the cookie is next presented, and only for a session no record had already ended — a revoked person's other browser presenting its cookie the next day is not announced again as `absolute` |
 | `iam_login_failures` | The engine's own flush loop | One row per client per minute; see below |
 | `iam_recovery_code_used` | The sign-in surface | Once per code, with how many are left |
-| `iam_second_factor_throttled` | The sign-in surface, when a person's second-factor curve reaches its ceiling — somebody holding their password is guessing at their code, so the password is what to rotate | Once per person per fifteen-minute window per node, naming the address the failure that took it there came from |
+| `iam_second_factor_throttled` | The sign-in surface, when a person's second-factor curve reaches its ceiling — somebody holding their password is guessing at their code, so the password is what to rotate | On the wrong code that takes the curve to its ceiling, per node — a run held there announces nothing more, and one that has aged back down announces its next climb — naming the address that code came from |
 | `iam_credential_minted`, `iam_credential_revoked` | The directory (a machine token) and the sign-in surface (an app code or a new set of recovery codes) | Once per gesture |
 | `iam_mfa_reset` | The directory, when an administrator clears somebody's second factor | Once per reset |
 | `iam_grants_changed` | The identity writer, from the snapshot it decided the write in | One per person write that moved a grant, with what it added and removed |

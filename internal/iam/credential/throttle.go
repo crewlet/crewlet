@@ -18,7 +18,7 @@ import (
 	"github.com/crewlet/crewlet/internal/iam"
 )
 
-// THE ENUMERATION ORACLE, AND THE THREE THINGS THAT CLOSE IT.
+// THE ENUMERATION ORACLE, AND THE TWO THINGS THAT CLOSE IT.
 //
 // A sign-in endpoint is the one surface an unauthenticated stranger may
 // address, and EVERYTHING about how it answers is evidence. The failure this
@@ -41,38 +41,17 @@ import (
 //
 // # 2. A subject that does not exist is still verified against
 //
-// [Hasher.Decoy] spends the turn a verification would when there is no
-// verifier to check — in the same source's lane, holding a slot of the verify
-// cap to its end for as long as a derivation takes, drawn from the node's own
-// recent derivations at its current cost — so the two arms do the same shape
-// of work rather than one of them doing none and returning immediately, and
-// wait for the same things. It derives nothing once the hasher has measured a
-// derivation: holding the slot costs no memory and no CPU, and a stranger
-// with no real name to try costs no more than one who has one — one slot, in
-// their own turn (turns.go).
+// [Hasher.Decoy] verifies what was presented against one dummy verifier at the
+// hasher's own cost when there is no real verifier to check, so a miss is one
+// argon2id derivation under the same cap exactly as a hit is — and the
+// derivation is what dominates how long a sign-in takes.
 //
-// # 3. Both arms are padded to ONE deadline, measured from admission
-//
-// [Throttle.Pad] sleeps until a fixed interval after the instant the request
-// was ADMITTED — the last instant before anything about the subject is looked
-// up — not after the verification started, and not for a fixed duration. That
-// is the one of the three that actually equalises the timing: argon2id's own
-// cost varies with load, and a decoy's hold is a measure of it rather than the
-// thing itself, so without a common deadline the two arms are different shapes
-// however similar their means. Admission rather than arrival, because
-// admission can include the curve's own delay: that delay is the same for a
-// name that exists and one that does not, and a deadline it had already spent
-// would leave the verification after it unpadded.
-//
-// WHAT IT DOES NOT PROMISE: under enough load to push a real verification past
-// the deadline, the pad has nothing left to add. The turn a decoy takes keeps
-// the two arms queueing alike even then, so what separates them is only how
-// far a derivation now is from the recent ones a decoy draws its hold from —
-// and what generates that load is at least [VerifyCap] sources each holding
-// its one turn, because one address holds one slot however much it sends.
-// Nor does a decoy stand in for a verifier at a HIGHER cost than this build's
-// — one a newer build of a rolling upgrade wrote — which takes longer than
-// anything this node measures, and exists only until the rollout finishes.
+// WHAT IS NOT EQUALISED is said there and in the package doc: the directory
+// read before the derivation, and a real verifier written at another cost. No
+// answer is padded to a common deadline. One was, measured from admission, and
+// keeping it honest under load took a turn per address at the verify cap and a
+// decoy whose hold was drawn from the node's recent derivations — a scheduler
+// and a sampler to hide a difference of one indexed read.
 
 // THE CURVE, AND WHY IT IS NEVER A LOCKOUT.
 //
@@ -110,13 +89,11 @@ import (
 // already does.
 //
 // WHAT THAT LEAVES UNBOUNDED BY A CURVE is one password tried against many
-// names from one address — every pair is fresh. What bounds it is the turn:
-// every verification and every decoy a source causes waits for that source's
-// one turn at the verify cap (turns.go), so one address is served one name per
-// derivation, however many it sends at once, and never ahead of another
-// address's turn. Past that, the password floor and the blocklist. What makes
-// it seen is the audit trail's per-client, per-minute failure tally, which
-// counts the distinct names a client tried.
+// names from one address — every pair is fresh. What bounds it is COST: every
+// name tried, held or not, is an argon2id derivation waiting for a slot of the
+// verify cap, and past that the password floor and the blocklist. What makes
+// it seen is the failure count per source the audit trail publishes each
+// minute.
 //
 // # And a second factor on the person, whatever the address
 //
@@ -127,9 +104,10 @@ import (
 // an hour. Keying on the resolved person is what the first rule above forbids,
 // and it is safe here for the one reason it is safe anywhere: it is reached
 // only past the password, so only a caller who already knows who this is can
-// drive it. It lifts on the success that completes a sign-in, and reaching its
-// ceiling is announced, because it means somebody holding a person's password
-// is guessing at their second factor.
+// drive it. It lifts on the success that completes a sign-in, and the failure
+// that takes it to its ceiling says so ([Ticket.Fail]) — once per climb — so
+// the caller can announce that somebody holding a person's password is
+// guessing at their second factor.
 //
 // AN ATTEMPT THAT NAMES NOBODY IS NOT COUNTED — an invitation link. There is
 // no subject to key a pair on, and its secret is minted with 256 bits of
@@ -153,7 +131,7 @@ import (
 // single node most deployments are, it bought nothing at all. What bounds a
 // run at one account on N nodes is what bounds it on one, multiplied by N:
 // thirty seconds per attempt per node at the ceiling, each attempt an
-// argon2id verification in its source's turn, against a password at least
+// argon2id verification under the verify cap, against a password at least
 // twelve characters long that is not on the blocklist, and — for a person who
 // holds one — a second factor, whose own curve a guesser meets only once they
 // already hold the password.
@@ -173,26 +151,7 @@ import (
 // then served one after another along the curve rather than all at once. A
 // success refunds it; a request that verified nothing releases it.
 
-// PadDeadline is how long after admission BOTH arms of an authentication
-// answer.
-//
-// 400 ms, and it is derived from the one cost it has to cover: an argon2id
-// verification at [Memory] and [Time] measures in the low hundreds of
-// milliseconds on the hardware this engine runs on, so the deadline has to sit
-// above that or the pad is doing nothing on the arm that matters. It is also
-// the figure a person perceives as "it thought about it" rather than "it is
-// broken" — a sign-in is one request, once, and a fifth of a second either way
-// is invisible where it would be intolerable on a page load.
-//
-// CHANGING [Memory] OR [Time] MOVES THIS. They are a pair: raise the cost
-// without raising the deadline and the real arm overruns the pad on every
-// request, which is the leak the pad exists to close, silently, with every
-// test still passing.
-const PadDeadline = 400 * time.Millisecond
-
-// Window is how long a failure counts against its key, so a caller that has to
-// say "once per curve" — one row per person whose second factor reached its
-// ceiling — says it over the same span.
+// Window is how long a failure counts against its key.
 //
 // FIFTEEN MINUTES is the interval the curve actually has to reason over. From
 // below it is bounded by the curve itself: a run held at [DelayCeiling] makes
@@ -248,10 +207,10 @@ const (
 	//
 	// A PAIR FORGOTTEN EARLY STARTS ITS CURVE AGAIN, which is what the
 	// bound costs, and why it is set this high: to push one climbing pair
-	// out, a guesser has to fail 16384 others inside [Window] — each a
-	// verification or a decoy in its source's one turn at the verify cap,
-	// so from one address that takes longer than the window it was
-	// meant to reset.
+	// out, a guesser has to fail 16384 others inside [Window] — each an
+	// argon2id derivation under the verify cap, which at the shipped cost
+	// is minutes of a whole node's cap, every sign-in on it queueing
+	// behind them while they run.
 	MaxPairs = 16384
 )
 
@@ -308,15 +267,13 @@ type Attempt struct {
 	Subject string
 }
 
-// Throttle is the sign-in curve, and the pad that makes both arms of a sign-in
-// answer at one deadline.
+// Throttle is the sign-in curve.
 //
 // SAFE FOR CONCURRENT USE.
 type Throttle struct {
-	key      []byte
-	deadline time.Duration
-	now      func() time.Time
-	sleep    func(context.Context, time.Duration)
+	key   []byte
+	now   func() time.Time
+	sleep func(context.Context, time.Duration)
 
 	mu      sync.Mutex
 	pairs   *lru
@@ -325,9 +282,6 @@ type Throttle struct {
 
 // ThrottleDeps is what a throttle is built from. Every field is optional.
 type ThrottleDeps struct {
-	// Deadline is the pad. Zero takes [PadDeadline].
-	Deadline time.Duration
-
 	// Now is the clock. Nil takes [time.Now], whose monotonic reading is
 	// what keeps a wall-clock step out of every wait — see this file's
 	// head — so a production caller leaves it nil.
@@ -341,13 +295,8 @@ type ThrottleDeps struct {
 // NewThrottle builds one.
 func NewThrottle(deps ThrottleDeps) *Throttle {
 	t := &Throttle{
-		key:      randomKey(),
-		deadline: deps.Deadline,
-		now:      deps.Now, sleep: deps.Sleep,
+		key: randomKey(), now: deps.Now, sleep: deps.Sleep,
 		pairs: newLRU(MaxPairs),
-	}
-	if t.deadline <= 0 {
-		t.deadline = PadDeadline
 	}
 	if t.now == nil {
 		t.now = time.Now
@@ -475,10 +424,18 @@ type Ticket struct {
 // Fail resolves the attempt as a credential that did not prove itself, and
 // records the failure against its pair.
 //
-// It reports whether the key's curve is now AT ITS CEILING — [CurveSteps]
-// failures inside the window — which a caller whose key is a person reads as
-// somebody guessing at them ([Throttle.AdmitSecondFactor]).
-func (k *Ticket) Fail() (ceiling bool) {
+// It reports whether THIS failure took the key's curve to its ceiling —
+// [CurveSteps] failures inside the window, where there had been fewer — which a
+// caller whose key is a person reads as somebody guessing at them
+// ([Throttle.AdmitSecondFactor]).
+//
+// THE TRANSITION AND NOT THE STATE, so the curve itself is what says "once":
+// a run held at the ceiling keeps [CurveSteps] failures in the window, each
+// new one replacing the oldest, and reaches it again only after it has aged
+// back down. A caller announcing on the state would announce every failure of
+// a run, and one deduplicating that would keep a second memory of what the
+// curve already knows.
+func (k *Ticket) Fail() (reachedCeiling bool) {
 	if k == nil || !k.done.CompareAndSwap(false, true) {
 		return false
 	}
@@ -495,9 +452,10 @@ func (k *Ticket) Fail() (ceiling bool) {
 	}
 	p := t.pairs.take(k.pair)
 	p.unpend(k.at)
+	p.prune(now.Add(-Window))
+	before := len(p.fails)
 	p.fail(at)
-	count, _ := p.weight(now)
-	return count >= CurveSteps
+	return before < CurveSteps && len(p.fails) >= CurveSteps
 }
 
 // Succeed resolves the attempt as a credential that proved itself: its pair is
@@ -533,28 +491,6 @@ func (k *Ticket) Release() {
 		}
 	}
 }
-
-// Pad sleeps until deadline after the instant the request was admitted, so
-// both arms of an authentication answer at the same moment.
-//
-// MEASURED FROM ADMISSION, which is the whole of it — see this file's head. A
-// fixed sleep added AFTER the work leaks the work's duration unchanged; a
-// deadline measured from when verification started leaks how long the lookup
-// before it took. Admission is the last instant both arms share.
-//
-// IT DOES NOT EXTEND A REQUEST THAT ALREADY OVERRAN. Sleeping a negative
-// duration is a no-op, and the arms separate — see this file's head for why
-// that residue is stated rather than closed.
-func (t *Throttle) Pad(ctx context.Context, admitted time.Time) {
-	t.sleep(ctx, t.deadline-t.now().Sub(admitted))
-}
-
-// Deadline is the pad this throttle uses, for a caller that has to report it.
-func (t *Throttle) Deadline() time.Duration { return t.deadline }
-
-// Now is this throttle's clock, which is the instant a caller measures its pad
-// from once an attempt is admitted.
-func (t *Throttle) Now() time.Time { return t.now() }
 
 // waitLocked is how long an attempt on pair must wait at now. Held under the
 // lock.

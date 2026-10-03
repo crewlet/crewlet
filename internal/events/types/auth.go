@@ -657,8 +657,10 @@ func (e IAMRecoveryCodeUsed) Summary() string {
 // proved itself, so this is SOMEBODY HOLDING THAT PERSON'S PASSWORD GUESSING
 // AT THEIR SECOND FACTOR — the password is the thing to rotate.
 //
-// Once per person per window on the node that saw the failure take it there;
-// Remote is the address that failure came from, and one of possibly many.
+// Written by the wrong code that takes the curve TO its ceiling, on the node
+// that saw it — a run held at the ceiling writes no more, and one that has
+// aged back down writes its next climb; Remote is the address that code came
+// from, and one of possibly many.
 type IAMSecondFactorThrottled struct {
 	Person string `json:"person"`
 	Login  string `json:"login"`

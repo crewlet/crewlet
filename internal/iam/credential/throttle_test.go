@@ -31,9 +31,8 @@ func (c *clockOf) advance(d time.Duration) {
 	c.at = c.at.Add(d)
 }
 
-// counting records what each sleep was asked for — the pad's and the curve's
-// — so the timing properties are asserted on the DECISION rather than on the
-// wall clock, and a test that measured real sleeps would be the flakiest thing
+// counting records what each sleep was asked for — the curve's — so the
+// timing properties are asserted on the DECISION rather than on the wall clock, and a test that measured real sleeps would be the flakiest thing
 // in this tree. It does not move the clock: a case moves it itself where the
 // time a wait took is the point.
 type counting struct {
@@ -349,12 +348,15 @@ func TestHonestSignInsInFlightTogetherAreNeverHeld(t *testing.T) {
 // own curve too, which no address appears in: three wrong codes, and the
 // fourth waits the four seconds three failures earn. The person's curve is its
 // own key — the same person's password pair is untouched by it — and reports
-// its ceiling, and a success lifts it.
+// the failure that takes it to its ceiling ONCE: the failures of a run held
+// there do not report again, and a curve that has aged back down reports the
+// next climb. A success lifts it.
 //
 // Mutations: report the ceiling at any count and the first failure reports it;
-// leave the curve standing on a success and the next wrong code owes the
-// ceiling rather than the first step; share one key between the person's curve
-// and a pair and the password attempt afterwards waits.
+// report the state rather than the transition and every failure at the ceiling
+// reports it; leave the curve standing on a success and the next wrong code
+// owes the ceiling rather than the first step; share one key between the
+// person's curve and a pair and the password attempt afterwards waits.
 func TestASecondFactorClimbsThePersonsCurveWhereverItComesFrom(t *testing.T) {
 	t.Parallel()
 	clock := &clockOf{at: time.Date(2026, 3, 2, 9, 0, 0, 0, time.UTC)}
@@ -412,6 +414,34 @@ func TestASecondFactorClimbsThePersonsCurveWhereverItComesFrom(t *testing.T) {
 	if len(reported) != 1 || reported[0] != credential.CurveSteps {
 		t.Errorf("the ceiling was reported at failures %v, want only at the %dth",
 			reported, credential.CurveSteps)
+	}
+	// HELD AT THE CEILING, a run reports nothing more.
+	for i := credential.CurveSteps + 1; i <= credential.CurveSteps+3; i++ {
+		clock.advance(credential.DelayCeiling)
+		ticket, err := th.AdmitSecondFactor(t.Context(), person)
+		if err != nil {
+			t.Fatalf("wrong code %d at the ceiling was refused: %v", i, err)
+		}
+		if ticket.Fail() {
+			t.Errorf("wrong code %d, already at the ceiling, reported it again", i)
+		}
+	}
+	// AGED BACK DOWN, the next climb reports again.
+	clock.advance(credential.Window)
+	reported = nil
+	for i := 1; i <= credential.CurveSteps; i++ {
+		clock.advance(credential.DelayCeiling)
+		ticket, err := th.AdmitSecondFactor(t.Context(), person)
+		if err != nil {
+			t.Fatalf("wrong code %d of the second climb was refused: %v", i, err)
+		}
+		if ticket.Fail() {
+			reported = append(reported, i)
+		}
+	}
+	if len(reported) != 1 || reported[0] != credential.CurveSteps {
+		t.Errorf("the second climb reported the ceiling at failures %v, want "+
+			"only at the %dth", reported, credential.CurveSteps)
 	}
 
 	// A SUCCESS LIFTS IT: the next wrong code is the curve's first step
@@ -695,175 +725,5 @@ func TestAnUncountableAttemptIsAdmitted(t *testing.T) {
 	}
 	if got := sleeps.take(); len(got) != 0 {
 		t.Errorf("uncountable attempts were made to wait %v", got)
-	}
-}
-
-// --- the timing defences ----------------------------------------------------- //
-
-// BOTH ARMS LAND ON ONE DEADLINE, MEASURED FROM ADMISSION.
-//
-// The decoy makes the two arms do the same SHAPE of work; only the pad makes
-// them indistinguishable in TIME, because argon2id's own cost varies with load
-// and with how many verifications are queued behind the verify cap, and a
-// decoy's does not vary at all.
-//
-// THE ASSERTION IS ON THE DECISION rather than on the wall clock: what has to
-// be equal is the instant both arms are told to answer at, and a case that
-// measured real sleeps would be the flakiest thing in this tree.
-func TestTheDecoyAndTheRealPathLandInsideOneDeadline(t *testing.T) {
-	t.Parallel()
-	ctx := t.Context()
-
-	// THE REAL ARM: an expensive verification, then the pad.
-	heavy, heavyClock, heavyPad := newThrottle(t)
-	heavyArrived := heavyClock.now()
-	heavyClock.advance(180 * time.Millisecond)
-	heavy.Pad(ctx, heavyArrived)
-
-	// THE DECOY ARM: a subject that does not exist, whose decoy took a
-	// millisecond, then the pad, from its own arrival.
-	light, lightClock, lightPad := newThrottle(t)
-	lightArrived := lightClock.now()
-	lightClock.advance(time.Millisecond)
-	light.Pad(ctx, lightArrived)
-
-	real, decoy := heavyPad.all(), lightPad.all()
-	if len(real) != 1 || len(decoy) != 1 {
-		t.Fatalf("the two arms padded %d and %d times, want once each",
-			len(real), len(decoy))
-	}
-	// Each arm sleeps EXACTLY the remainder of the deadline, so both
-	// answer at arrival + deadline however long their own work took.
-	if want := credential.PadDeadline - 180*time.Millisecond; real[0] != want {
-		t.Errorf("the real arm slept %s, want %s — the pad must be the "+
-			"REMAINDER of the deadline, not a fixed addition that leaks the "+
-			"work's duration unchanged", real[0], want)
-	}
-	if want := credential.PadDeadline - time.Millisecond; decoy[0] != want {
-		t.Errorf("the decoy arm slept %s, want %s", decoy[0], want)
-	}
-}
-
-// THE PAD IS MEASURED FROM ADMISSION, THE LAST INSTANT BOTH ARMS SHARE.
-//
-// A fixed sleep added after the work leaks the work's duration unchanged. A
-// deadline measured from when verification STARTED leaks how long the lookup
-// before it took — which on the arm where the subject does not exist is a
-// different lookup entirely.
-func TestThePadIsMeasuredFromAdmissionAndNotFromTheWork(t *testing.T) {
-	t.Parallel()
-	th, clock, pad := newThrottle(t)
-	arrived := clock.now()
-	for _, spent := range []time.Duration{
-		10 * time.Millisecond, 100 * time.Millisecond, 390 * time.Millisecond,
-	} {
-		clock.advance(spent)
-		th.Pad(t.Context(), arrived)
-		arrived = clock.now()
-	}
-	slept := pad.all()
-	for i, want := range []time.Duration{
-		credential.PadDeadline - 10*time.Millisecond,
-		credential.PadDeadline - 100*time.Millisecond,
-		credential.PadDeadline - 390*time.Millisecond,
-	} {
-		if slept[i] != want {
-			t.Errorf("pad %d slept %s, want %s", i, slept[i], want)
-		}
-	}
-}
-
-// A REQUEST THAT ALREADY OVERRAN IS NOT EXTENDED.
-//
-// Sleeping a negative duration is a no-op and the arms separate — stated here
-// rather than hidden, because at that point every request is slow, the node is
-// at its verify cap, and the leak is one an attacker has to generate a load
-// spike to open.
-func TestAnOverrunRequestIsNotPaddedFurther(t *testing.T) {
-	t.Parallel()
-	th, clock, pad := newThrottle(t)
-	arrived := clock.now()
-	clock.advance(credential.PadDeadline + time.Second)
-	th.Pad(t.Context(), arrived)
-	if slept := pad.all(); len(slept) != 1 || slept[0] > 0 {
-		t.Errorf("an overrun request was asked to sleep %v", slept)
-	}
-}
-
-// AND THE SAME PROPERTY MEASURED, UNDER LOAD, ON THE WALL CLOCK.
-//
-// The case above asserts the DECISION — that each arm is told to sleep the
-// remainder of the deadline — which is precise and would go on passing if the
-// sleeping itself were broken. This one asserts the OBSERVABLE.
-//
-// WHAT IT MEASURES IS THE FAST TAIL, and that is the whole of the property
-// worth measuring. A timing attack reads how SOON an answer comes back: the
-// arm that skips work answers early, and an attacker takes the minimum over
-// many requests to find it. So what has to hold is that NO request on either
-// arm answers before the deadline — never that two goroutines on a shared CI
-// runner finish within microseconds of each other, which is a claim about the
-// scheduler and would be deleted as flaky within the month.
-//
-// THE SLOW TAIL IS DELIBERATELY UNASSERTED for the same reason: under enough
-// load a real verification overruns the deadline and the arms separate, which
-// this package's own head states rather than hides.
-func TestTheDecoyAndTheRealPathLandInsideOneDeadlineUnderLoad(t *testing.T) {
-	t.Parallel()
-	const (
-		deadline = 100 * time.Millisecond
-		runs     = 6
-	)
-	th := credential.NewThrottle(credential.ThrottleDeps{Deadline: deadline})
-	// A cap of TWO, and every request from a source of its own, so the
-	// verifications queue behind each other for the cap — which is the load
-	// the pad has to survive.
-	hasher := credential.NewHasher(credential.Params{
-		Memory: 8 * 1024, Time: 1, Threads: 1, KeyLen: 32,
-	}, 2)
-	verifier, err := hasher.Hash(t.Context(), "", "a-long-enough-password")
-	if err != nil {
-		t.Fatalf("hash: %v", err)
-	}
-
-	soonest := func(arm func(source string)) time.Duration {
-		var wg sync.WaitGroup
-		took := make([]time.Duration, runs)
-		for i := range runs {
-			wg.Add(1)
-			go func() {
-				defer wg.Done()
-				start := time.Now()
-				arm(fmt.Sprintf("198.51.100.%d", i))
-				th.Pad(t.Context(), start)
-				took[i] = time.Since(start)
-			}()
-		}
-		wg.Wait()
-		best := took[0]
-		for _, d := range took[1:] {
-			best = min(best, d)
-		}
-		return best
-	}
-
-	decoy := soonest(func(source string) {
-		_ = hasher.Decoy(t.Context(), source, "a-long-enough-password")
-	})
-	real := soonest(func(source string) {
-		_, _, _ = hasher.Verify(t.Context(), source, verifier, "a-long-enough-password")
-	})
-
-	// THE CONTROL IS THIS LINE. A decoy at this cost holds its turn for a
-	// few milliseconds, so without the pad it answers in a few
-	// milliseconds — and an attacker taking the minimum over a few hundred
-	// requests reads the roster straight off it.
-	if decoy < deadline {
-		t.Errorf("the fastest decoy request answered in %s, inside the %s "+
-			"deadline — a subject that does not exist answers sooner, which "+
-			"is the roster", decoy, deadline)
-	}
-	if real < deadline {
-		t.Errorf("the fastest real request answered in %s, inside the %s "+
-			"deadline", real, deadline)
 	}
 }

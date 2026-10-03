@@ -84,16 +84,16 @@ func testParams() credential.Params {
 func TestAPasswordVerifiesAndAWrongOneDoesNot(t *testing.T) {
 	t.Parallel()
 	h := credential.NewHasher(testParams(), 2)
-	verifier, err := h.Hash(t.Context(), "", "a-long-enough-password")
+	verifier, err := h.Hash(t.Context(), "a-long-enough-password")
 	if err != nil {
 		t.Fatalf("hash: %v", err)
 	}
-	if ok, rehash, err := h.Verify(t.Context(), "", verifier, "a-long-enough-password"); !ok ||
+	if ok, rehash, err := h.Verify(t.Context(), verifier, "a-long-enough-password"); !ok ||
 		rehash || err != nil {
 		t.Errorf("the password verified %v and asked for a rehash %v under the "+
 			"cost it was written at (%v)", ok, rehash, err)
 	}
-	if ok, _, _ := h.Verify(t.Context(), "", verifier, "a-long-enough-passwore"); ok {
+	if ok, _, _ := h.Verify(t.Context(), verifier, "a-long-enough-passwore"); ok {
 		t.Error("a password one character out verified")
 	}
 	// The verifier is a PHC string, which is what lets an operator take
@@ -114,7 +114,7 @@ func TestAPasswordVerifiesAndAWrongOneDoesNot(t *testing.T) {
 func TestRaisingTheCostAsksForARehashOnTheNextLogin(t *testing.T) {
 	t.Parallel()
 	weak := credential.NewHasher(testParams(), 2)
-	verifier, err := weak.Hash(t.Context(), "", "a-long-enough-password")
+	verifier, err := weak.Hash(t.Context(), "a-long-enough-password")
 	if err != nil {
 		t.Fatalf("hash: %v", err)
 	}
@@ -122,7 +122,7 @@ func TestRaisingTheCostAsksForARehashOnTheNextLogin(t *testing.T) {
 	raised.Time = 2
 	strong := credential.NewHasher(raised, 2)
 
-	ok, rehash, err := strong.Verify(t.Context(), "", verifier, "a-long-enough-password")
+	ok, rehash, err := strong.Verify(t.Context(), verifier, "a-long-enough-password")
 	if err != nil {
 		t.Fatalf("verify: %v", err)
 	}
@@ -137,11 +137,11 @@ func TestRaisingTheCostAsksForARehashOnTheNextLogin(t *testing.T) {
 	}
 	// And a verifier written at the CURRENT cost is not reported stale,
 	// or every login would rewrite a row for nothing.
-	fresh, err := strong.Hash(t.Context(), "", "a-long-enough-password")
+	fresh, err := strong.Hash(t.Context(), "a-long-enough-password")
 	if err != nil {
 		t.Fatalf("hash: %v", err)
 	}
-	if _, rehash, _ := strong.Verify(t.Context(), "", fresh, "a-long-enough-password"); rehash {
+	if _, rehash, _ := strong.Verify(t.Context(), fresh, "a-long-enough-password"); rehash {
 		t.Error("a verifier at the current cost was reported stale")
 	}
 }
@@ -205,11 +205,11 @@ func TestAVerifierIsRewrittenOnlyUpNeverDown(t *testing.T) {
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			t.Parallel()
-			verifier, err := credential.NewHasher(c.stored, 1).Hash(t.Context(), "", "a-long-enough-password")
+			verifier, err := credential.NewHasher(c.stored, 1).Hash(t.Context(), "a-long-enough-password")
 			if err != nil {
 				t.Fatalf("hash: %v", err)
 			}
-			ok, stale, err := credential.NewHasher(current, 1).Verify(t.Context(), "",
+			ok, stale, err := credential.NewHasher(current, 1).Verify(t.Context(),
 				verifier, "a-long-enough-password")
 			if err != nil {
 				t.Fatalf("verify: %v", err)
@@ -246,7 +246,7 @@ func TestAnUnreadableVerifierRefusesLikeAWrongPassword(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
-			if ok, rehash, err := h.Verify(t.Context(), "", verifier,
+			if ok, rehash, err := h.Verify(t.Context(), verifier,
 				"a-long-enough-password"); ok || rehash || err != nil {
 				t.Errorf("%q verified %v / rehash %v (%v)", verifier, ok, rehash, err)
 			}

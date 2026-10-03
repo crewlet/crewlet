@@ -175,11 +175,13 @@ func (c *movingClock) advance(d time.Duration) {
 // failures earn, counted as a turned-away second-factor attempt. On to the
 // ceiling, and the surface says so — somebody holding this person's password
 // is guessing at their code — naming the person and the address, once it is
-// reached and not before.
+// reached and not before, and not again while the run is held there.
 //
 // Mutations: decide a code on its pair alone and the fourth address's guess is
 // refused like the first, with no wait; announce on any failure and the first
-// wrong code is announced.
+// wrong code is announced; announce whenever the curve is AT its ceiling
+// rather than on the failure that takes it there, and the next wrong code
+// announces it again.
 func TestWrongCodesFromManyAddressesClimbThePersonsCurve(t *testing.T) {
 	t.Parallel()
 	moving := &movingClock{at: clock}
@@ -265,6 +267,15 @@ func TestWrongCodesFromManyAddressesClimbThePersonsCurve(t *testing.T) {
 		strings.Contains(got[0].Remote, "4711") {
 		t.Fatalf("the ceiling was announced as %+v, want once, naming the "+
 			"person, their login and the address", got)
+	}
+	// HELD THERE, the run announces nothing more.
+	moving.advance(credential.DelayCeiling)
+	if rec := signInFrom(t, mux, "2001:db8:fc::1", "jane.doe", password,
+		wrong); rec.Code != http.StatusUnauthorized {
+		t.Fatalf("a wrong code at the ceiling answered %d %s", rec.Code, rec.Body)
+	}
+	if got := announced(); len(got) != 1 {
+		t.Fatalf("a wrong code at the ceiling announced it again: %+v", got)
 	}
 
 	// THE RIGHT CODE, after the wait, signs in and lifts the curve: the

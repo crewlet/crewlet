@@ -107,18 +107,18 @@ const (
 // # UNGUARDED, and what stands in for the guard
 //
 // A login cannot require a login. What bounds it instead is the throttle's
-// curve — on the source and on the login as it was typed, run before anything
-// is looked up — and the pad that makes every refusal leave at one deadline.
+// curve — on the login as it was typed, from its source, run before anything
+// is looked up — and the argon2id derivation every arm spends.
 // It is origin-checked like every other state change — being exempt from the
 // credential guard is not being exempt from the cross-site rule.
 //
 // # One refusal, and why the shape is the whole of it
 //
-// Every way this can fail answers [httpjson.CodeSignInRefused] with a 401, at
-// the same instant: a login nobody holds, a wrong password, a person
-// suspended, a person removed, a second factor that does not check out. The
-// arms are distinguishable only in this node's log. See the package doc for
-// why both halves are needed.
+// Every way this can fail answers [httpjson.CodeSignInRefused] with a 401,
+// each after one derivation at this build's cost: a login nobody holds, a
+// wrong password, a person suspended, a person removed, a second factor that
+// does not check out. The arms are distinguishable only in this node's log.
+// See the package doc for why both halves are needed.
 func (s *Service) Login(w http.ResponseWriter, r *http.Request) {
 	source := s.sourceOf(r)
 	if s.backend() != config.AuthBackendLocal {
@@ -166,9 +166,9 @@ func (s *Service) Login(w http.ResponseWriter, r *http.Request) {
 	}
 	// THE DECOY RUNS ON THE MISS, and it is not optional. Without it the
 	// no-such-login arm returns in microseconds and the wrong-password arm
-	// pays an argon2 verify in its source's turn — a difference a stopwatch
-	// reads as a roster. internal/iam/credential owns the cost; this is the
-	// branch that spends it.
+	// pays an argon2 verify — a difference a stopwatch reads as a roster.
+	// internal/iam/credential owns the cost; this is the branch that spends
+	// it.
 	if held.ID == "" {
 		if s.decoy(w, r, adm, in.Password) {
 			s.refuseSignIn(w, r, adm, attempt, "no such "+method)
@@ -196,8 +196,8 @@ func (s *Service) Login(w http.ResponseWriter, r *http.Request) {
 		}
 		return
 	}
-	proved, stale, err := s.hasher.Verify(r.Context(), adm.source,
-		verifier.Verifier, in.Password)
+	proved, stale, err := s.hasher.Verify(r.Context(), verifier.Verifier,
+		in.Password)
 	if err != nil {
 		abandoned(w, r, adm.source, err)
 		return
@@ -218,7 +218,6 @@ func (s *Service) Login(w http.ResponseWriter, r *http.Request) {
 			// complete. Counted as a success it would clear the pair, and
 			// somebody holding the password would clear their curve
 			// between every guess at the code.
-			s.throttle.Pad(r.Context(), adm.at)
 			httpjson.Fail(w, http.StatusUnauthorized,
 				httpjson.CodeSecondFactorRequired)
 			return
@@ -268,12 +267,13 @@ func (s *Service) Login(w http.ResponseWriter, r *http.Request) {
 // The person is waiting for a session, not for a stronger digest, so nothing
 // they wait on includes it: callers DEFER this, so it starts once the handler
 // has answered, whatever it answered. It was inline once, given the time left
-// before the refusal pad's deadline — and a 64 MiB derivation after a 64 MiB
-// verification had all but used that up, so the write that followed ran on an
-// expired context, failed, and the verifier was never rewritten on any real
-// hardware while every such sign-in paid for a second derivation.
+// before a refusal deadline the sign-in used to be padded to — and a 64 MiB
+// derivation after a 64 MiB verification had all but used that up, so the
+// write that followed ran on an expired context, failed, and the verifier was
+// never rewritten on any real hardware while every such sign-in paid for a
+// second derivation.
 //
-// SO IT HAS BUDGETS OF ITS OWN, and neither is the pad: the derivation takes a
+// SO IT HAS BUDGETS OF ITS OWN, and neither is the request's: the derivation takes a
 // slot of the cap only if one is free at once ([credential.Hasher.Rehash]) —
 // a rewrite nobody waits on must not queue ahead of the sign-ins behind it —
 // and the write has [rehashBudget]. One rewrite per person runs at a time,
@@ -778,10 +778,11 @@ func withExtra(c iamdomain.Credential, key string, value any) iamdomain.Credenti
 // time left, a wrong code or a code already spent is a failure on it, and the
 // code that completes the sign-in lifts it. Keyed on the resolved person here
 // and nowhere else, because this is reached only past the password: it tells
-// nobody anything about who exists that the password did not. And a curve
-// that reaches its ceiling is announced ([types.IAMSecondFactorThrottled]),
-// because it means somebody holding this person's password is guessing at
-// their code.
+// nobody anything about who exists that the password did not. And the wrong
+// code that takes the curve to its ceiling is announced
+// ([types.IAMSecondFactorThrottled]) — the curve reports that transition once
+// per climb, so nothing here keeps a memory of having said it — because it
+// means somebody holding this person's password is guessing at their code.
 func (s *Service) proveSecondFactor(w http.ResponseWriter, r *http.Request,
 	adm admission, attempt authevents.Failure, held iamdomain.Sighting,
 	code string) (factorUse, bool) {
@@ -818,10 +819,9 @@ func (s *Service) proveSecondFactor(w http.ResponseWriter, r *http.Request,
 		// THE PERSON WAS REMOVED between the read this was decided on and
 		// the spend: nobody is left to sign in as, which is a failed
 		// sign-in like every other — THE ONE refusal, counted on the
-		// attempt's curve and in the trail's tally, at the deadline every
-		// refusal is padded to — and not the person's own curve, since no
-		// code was wrong. Rendered by hand it was the one arm a failure
-		// tally never saw.
+		// attempt's curve and in the trail's count — and not the person's
+		// own curve, since no code was wrong. Rendered by hand it was the
+		// one arm a failure count never saw.
 		s.refuseSignIn(w, r, adm, attempt, "person removed")
 		return factorUse{}, false
 	case err != nil:
@@ -851,18 +851,17 @@ func (s *Service) proveSecondFactor(w http.ResponseWriter, r *http.Request,
 }
 
 // refuseSecondFactor is a second factor that did not prove itself: a failure
-// on the person's curve — announced, once per person per window, when it takes
-// that curve to its ceiling — and then the same generic refusal every failed
-// sign-in answers.
+// on the person's curve — announced when it is the one that takes that curve
+// to its ceiling ([credential.Ticket.Fail]) — and then the same generic
+// refusal every failed sign-in answers.
 func (s *Service) refuseSecondFactor(w http.ResponseWriter, r *http.Request,
 	adm admission, attempt authevents.Failure, held iamdomain.Sighting,
 	curve *credential.Ticket, why string) {
 
 	if curve.Fail() {
-		s.audit.EmitOnce(r.Context(), authevents.OnceSecondFactorCeiling,
-			held.ID, credential.Window, types.IAMSecondFactorThrottled{
-				Person: held.ID, Login: held.Login, Remote: attempt.Client,
-			})
+		s.audit.Emit(r.Context(), types.IAMSecondFactorThrottled{
+			Person: held.ID, Login: held.Login, Remote: attempt.Client,
+		})
 	}
 	s.refuseSignIn(w, r, adm, attempt, why)
 }

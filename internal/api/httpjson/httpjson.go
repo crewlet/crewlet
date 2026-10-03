@@ -417,11 +417,11 @@ const (
 	// CodeSignInRefused is EVERY failed sign-in, whatever went wrong.
 	//
 	// ONE CODE FOR ALL OF THEM, deliberately. It is paired with the
-	// timing defence in internal/iam/credential — both arms padded to one
-	// wall-clock deadline measured from admission — because a code that
-	// distinguished them would make the pad pointless, and a pad with a
-	// distinguishing code would make the code pointless. Neither half
-	// works alone.
+	// cost defence in internal/iam/credential — every arm spends one
+	// argon2id derivation, a miss against a dummy verifier — because a
+	// code that distinguished them would make the equal work pointless,
+	// and equal work with a distinguishing code would make the work
+	// pointless. Neither half works alone.
 	CodeSignInRefused Code = "sign_in_refused"
 
 	// CodeThrottled is an attempt the throttle's curve says must wait

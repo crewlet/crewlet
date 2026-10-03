@@ -19,8 +19,7 @@
 // address, and everything about how it answers is evidence. If an unknown
 // login is refused faster than a known one, the endpoint is a ROSTER: an
 // attacker learns who works here in as many requests as they care to make, and
-// that list is worth more than any single password. Three separate mechanisms
-// close it and none of them is sufficient alone:
+// that list is worth more than any single password. Two mechanisms close it:
 //
 //   - THE THROTTLE IS KEYED ON WHAT WAS TYPED, NEVER ON WHAT IT RESOLVED TO,
 //     and decides before anything is looked up. A throttle keyed on who the
@@ -28,14 +27,20 @@
 //     delay itself becomes the oracle. [Throttle.Admit] takes the SOURCE and
 //     the subject as the caller typed it, and a name nobody holds climbs the
 //     curve exactly as a real one does.
-//   - A SUBJECT THAT DOES NOT EXIST IS STILL VERIFIED AGAINST, with a decoy
-//     that takes the same turn at the verify cap a verification does and holds
-//     it as long, so the two arms do the same work and wait for the same
-//     things rather than one of them doing none.
-//   - BOTH ARMS ARE PADDED TO ONE DEADLINE measured from the instant the
-//     attempt was ADMITTED. The first two make the two arms similar; only this
-//     makes them indistinguishable, because argon2id's own cost varies with
-//     load and a decoy's hold is a measure of it rather than the thing.
+//   - A SUBJECT THAT DOES NOT EXIST IS STILL VERIFIED AGAINST: what was
+//     presented is checked against one dummy verifier at this build's cost
+//     ([Hasher.Decoy]), so a miss is one argon2id derivation under the same
+//     cap exactly as a hit is — and that derivation is what dominates how
+//     long a sign-in takes.
+//
+// THE RESIDUAL IS STATED, NOT PADDED. What still differs between the arms is
+// the directory read before the derivation — a name nobody holds is answered
+// by an index a little sooner — and a real verifier written at another cost
+// than this build's, which takes that cost's time until the next sign-in
+// rewrites it. Every refusal used to be padded to one deadline measured from
+// admission, and holding that deadline under load took a turn per address at
+// the verify cap and a decoy whose hold was drawn from the node's recent
+// derivations: a scheduler and a sampler to hide one indexed read.
 //
 // # A failure costs delay, never a lockout
 //
@@ -54,11 +59,11 @@
 // A run across many names meets a fresh pair every time, so no curve slows it
 // — and a curve on the source alone was a refusal anybody sharing the address
 // held shut for everybody else. What bounds one address instead is COST: every
-// verification and decoy it causes waits for its one turn at the verify cap,
-// served in turn with every other address (turns.go). A second factor is the
-// one curve keyed on the PERSON ([Throttle.AdmitSecondFactor]), because only
-// somebody holding the password can reach it, and without it they divide the
-// pair's curve by every address they own.
+// name it tries is an argon2id derivation waiting for a slot of the verify cap
+// ([VerifyCap]). A second factor is the one curve keyed on the PERSON
+// ([Throttle.AdmitSecondFactor]), because only somebody holding the password
+// can reach it, and without it they divide the pair's curve by every address
+// they own.
 //
 // # Each node keeps its own curve
 //

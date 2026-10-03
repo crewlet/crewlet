@@ -43,21 +43,16 @@ A few things worth knowing when deploying Crewlet:
   one generic error for every arm — no such login, wrong password, wrong
   second-factor code, code already spent — because telling a caller which one
   applies tells an attacker the same, and the first of them is the company's
-  roster. Three mechanisms keep the timing from saying it instead: the
+  roster. Two mechanisms keep the timing from saying it instead: the
   throttle is keyed on the subject as TYPED from the request's source, and
   decides before anything is looked up (a throttle keyed on who the subject
   resolved to is one only real people can trigger, so its delay becomes the
-  oracle); a subject that does not exist is still verified against, with a
-  decoy that takes the same turn at the node's verify cap a verification does
-  and holds it as long — a draw from the node's recent verifications at its
-  current cost, held to the end whether or not the request is still there; and
-  both arms answer at one deadline measured from the instant the attempt was
-  admitted. The verify cap is shared out one turn per
-  source address at a time, so one address cannot fill it, cannot push
-  anybody else's verification past that deadline, and cannot separate its own
-  arms by queueing them behind each other. What remains is a load spike from at
-  least as many addresses as the node has cores, and then both arms queue
-  alike — stated rather than hidden.
+  oracle); and a subject that does not exist is still verified against — one
+  dummy verifier at this build's cost, so a miss is the same argon2id
+  derivation under the same verify cap as a hit. What still separates the
+  arms is stated rather than hidden, and not padded: the directory read before
+  the derivation, and a stored verifier written at another cost than this
+  build's, until the next sign-in rewrites it.
 - **A failed sign-in costs a wait, never a lockout.** Each failure doubles the
   wait before the next attempt on its key, one second to thirty, and a correct
   credential after the wait always succeeds — a lockout is something an
@@ -65,14 +60,15 @@ A few things worth knowing when deploying Crewlet:
   its own (subject, source) pair, so holding one account never wipes the
   record of guesses at another. A second-factor code is also decided on a
   curve keyed on the person, reached only past their password, so somebody
-  holding it cannot spread their guesses at the code across addresses; its
-  ceiling is announced as `iam_second_factor_throttled`, which means the
-  password is known and should be rotated. No address is ever refused on its own: a
+  holding it cannot spread their guesses at the code across addresses; the
+  wrong code that takes it to its ceiling is announced as
+  `iam_second_factor_throttled`, which means the password is known and should
+  be rotated. No address is ever refused on its own: a
   curve on the source alone let any stranger at an office's or a proxy's
   address hold every sign-in from it at `429`, so one password tried across
   many names from one address is bounded by the password floor, the argon2id
-  cost and the verify cap instead, and shown in the audit trail's per-client
-  failure tally; an invitation link meets no curve at all, its secret's 256
+  cost and the verify cap instead, and shown in the audit trail's per-minute
+  failure count by source; an invitation link meets no curve at all, its secret's 256
   bits being what bounds a walk. No curve
   stands in front of a bearer — a Tier A token, a machine token or a session
   cookie: a bearer names nobody until it is compared, so a curve there could

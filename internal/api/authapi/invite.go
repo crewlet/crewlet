@@ -42,8 +42,8 @@ import (
 // and access log and opens nothing; what the estate keeps of the secret is its
 // verifier ([iamdomain.InvitationRow.Admits]).
 //
-// A WRONG SECRET IS AN ABSENT INVITATION: one refusal, padded, for every way a
-// link fails to open ([Service.refuseInvitation]), and counted as a failed
+// A WRONG SECRET IS AN ABSENT INVITATION: one refusal, in the same bytes, for
+// every way a link fails to open ([Service.refuseInvitation]), and counted as a failed
 // attempt exactly as an id nobody issued is — answered differently, a guessed
 // secret against a real id would say the id exists, and the id is the half
 // that leaks.
@@ -373,8 +373,10 @@ func refuseEnrolment(w http.ResponseWriter, r *http.Request, event, opID string,
 // telling them apart would say "this was already used" to somebody whose link
 // merely aged out, sending them to find out who used it; and the fourth told
 // apart would say which ids exist to anybody guessing secrets against them.
-// Padded to one deadline, and counted only where the link did not prove
-// itself: see [Service.refuseInvitation].
+// Counted only where the link did not prove itself: see
+// [Service.refuseInvitation]. NOT PADDED: what separates an id nobody issued
+// from a real one with a wrong secret is one indexed read and a SHA-256, and
+// the secret behind a real id is 256 bits nobody walks.
 func (s *Service) presentedInvitation(w http.ResponseWriter, r *http.Request,
 	adm admission, id, secret string) (iamdomain.InvitationRow, bool) {
 
@@ -398,19 +400,19 @@ func (s *Service) presentedInvitation(w http.ResponseWriter, r *http.Request,
 // refuseInvitation is every 410 this surface answers: an invitation nobody
 // issued, one redeemed, one aged out, and one whose address somebody is
 // already enrolled under — and one presented with a secret that is not its
-// link's. ONE ANSWER for all of them, in the same bytes at the same deadline,
-// for [Service.presentedInvitation]'s reason.
+// link's. ONE ANSWER for all of them, in the same bytes, for
+// [Service.presentedInvitation]'s reason.
 //
 // # A failed attempt only where the link did not prove itself
 //
 // The link is the credential, and walking ids and secrets is how somebody
 // without one looks for one — so an id nobody issued and a secret that is not
-// its link's are FAILED ATTEMPTS, in the audit trail's failure tally. A link
+// its link's are FAILED ATTEMPTS, in the audit trail's failure count. A link
 // that DID prove itself and no longer works — redeemed, aged out, its address
 // enrolled — is not a guess: it is the link's holder, or a mail scanner that
 // fetched it for them, and those fetch the same link again and again. Counted,
 // a scanner re-reading one spent link put the address it scans from in the
-// tally as a guesser — and while a link was on its source's curve, it put that
+// count as a guesser — and while a link was on its source's curve, it put that
 // address on the curve, which on a deployment behind one proxy address was the
 // whole company. The difference is invisible to a caller who does not hold the
 // link — every one of them is refused the same way — so it tells a guesser
@@ -427,7 +429,6 @@ func (s *Service) refuseInvitation(w http.ResponseWriter, r *http.Request,
 			Subject: id,
 		})
 	}
-	s.throttle.Pad(r.Context(), adm.at)
 	httpjson.Fail(w, http.StatusGone, httpjson.CodeInviteSpent)
 }
 

@@ -228,7 +228,7 @@ node means nothing was done.
 | `GET` | `/containers` | Every knowledge container this node knows about, with how many pages each holds. The engine materialises one per `space:` the org chart names, plus the two reserved ones, whenever a node publishes a company — every settings apply, every chart write and every boot; each carries `chart_position`, the packed position on the [org chart's log](../concepts/chart-domain.md) its name and purpose were last derived from (absent on a container written before containers carried one), so a node whose chart is older never overwrites them |
 | `POST` | `/work/items` `/pages` | **File an item, write a page** — and the rest of the [write surface](#the-human-write-surface): the same tools a seat and your own assistant hold, as the person you signed in as. Guarded, and absent on a company whose tracker or knowledge base is not native |
 | `PATCH` | `/work/items/{key}` | Change an item — and its `/comments`, `/rank`, `/depend`, `/relate`, `/restore` and `/purge` beside it. See [below](#the-human-write-surface) for every route and the authority each takes |
-| `POST` | `/auth/login` | **Sign in.** Login or address, password, and a second factor where one is held. **Unguarded**, and throttled on the login **as typed** from the caller's source: a failure costs the next attempt a wait, never a lockout — see [below](#a-failure-costs-a-wait-never-a-lockout). Every failure answers one code at one deadline — see [below](#every-failed-sign-in-is-one-refusal). A node that cannot read the identity estate or record the session answers `503` — and **every `503` under `/auth` carries a `Retry-After`**, so a client can tell "ask again in a moment" from a node that is gone. A write whose outcome nobody can establish — the second factor's spend, the session's own start — is that `503` with the `op_id`, and **never a session**: a code whose spend may not have landed is a code that still works. A success answers `{person, login, seat?, expires_at, position, status}`, and `status` is `signed_in` — or, where `api.auth.local.totp` is `required` and the person holds no second factor, `second_factor_enrolment_required`: the session it opened may only enrol one (see [A required second factor is enrolled before anything else](../concepts/identity-and-access.md#a-required-second-factor-is-enrolled-before-anything-else)). `POST /auth/invite/{id}` and a password `POST /auth/step-up` answer the same shape, restricted on the same rule |
+| `POST` | `/auth/login` | **Sign in.** Login or address, password, and a second factor where one is held. **Unguarded**, and throttled on the login **as typed** from the caller's source: a failure costs the next attempt a wait, never a lockout — see [below](#a-failure-costs-a-wait-never-a-lockout). Every failure answers one code after the same argon2id derivation — see [below](#every-failed-sign-in-is-one-refusal). A node that cannot read the identity estate or record the session answers `503` — and **every `503` under `/auth` carries a `Retry-After`**, so a client can tell "ask again in a moment" from a node that is gone. A write whose outcome nobody can establish — the second factor's spend, the session's own start — is that `503` with the `op_id`, and **never a session**: a code whose spend may not have landed is a code that still works. A success answers `{person, login, seat?, expires_at, position, status}`, and `status` is `signed_in` — or, where `api.auth.local.totp` is `required` and the person holds no second factor, `second_factor_enrolment_required`: the session it opened may only enrol one (see [A required second factor is enrolled before anything else](../concepts/identity-and-access.md#a-required-second-factor-is-enrolled-before-anything-else)). `POST /auth/invite/{id}` and a password `POST /auth/step-up` answer the same shape, restricted on the same rule |
 | `GET` | `/auth/config` | What a sign-in page needs to know before anybody has signed in: which backend, and `min_password_length` — the deployment's own `api.auth.local.min_password_length`, never below the engine's twelve, which is exactly the floor every redemption enforces. **Unguarded**, and it carries **no user list and no count of people** |
 | `GET` | `/auth/invite/{id}` | **Renders an invitation and never spends it** — a link is followed by mail clients prefetching, scanners and preview cards, and one spent by a GET is an account created for somebody who never saw it. **Unguarded**: holding the link is the credential — the **secret** it carries after the id, presented in the `X-Crewlet-Invite-Secret` header and never in the URL. The link a person follows is the dashboard's screen, `<api.external_url>/dashboard#/invite/<id>.<secret>`, whose fragment no browser sends to a server; the screen calls this route with the two halves apart. Answers the address it is for, who sent it, the password floor, the `seat` it binds (`{handle, name}` as the chart calls it now — absent for an invitation that binds none), and a `login` **proposed** from the address in the person grammar (`jane.doe@example.com` → `jane.doe`, `jane@example.com` → `jane.example`) for the form to pre-fill. Absent, redeemed, expired and a missing or wrong secret are one `410` — the same bytes, so a guessed secret against a leaked id does not say the id exists — and an id nobody issued or a secret that is not the link's is a **failed attempt in the audit trail's tally**: walking ids or secrets is guessing at a link, which the tally shows. It meets no [curve](#a-failure-costs-a-wait-never-a-lockout) — the secret is 256 bits nobody walks, and a curve keyed on the address a link came from is one a stranger there holds shut for everybody else. A link that **proved itself** and is spent — redeemed, expired, its address enrolled — is the same `410` and is not counted: that is the link's holder, or a mail scanner re-reading it, and a guesser who does not hold the link can never reach the difference |
 | `POST` | `/auth/invite/{id}` | Redeems it, conferring exactly the grants and seat whoever issued it decided — the enrolment names the invitation as its authority and presents the link's secret, and the record refuses anything the invitation does not cover, so a link spent or aged out between the form and the post is `410 invite_spent`. **Unguarded**. `{secret, login, name, password}`: `secret` is the half of the link after the id, checked exactly as the view checks it; the login is **required** — every person enrols with one, the name their changes are recorded under while they hold no seat. An absent login, or one outside a person's grammar (dotted, `jane.doe`), is `400` naming the rule and a login or address somebody already holds is `409` — without saying who, because a link is evidence of who the caller is and of nothing about anybody else. An invitation that binds a seat claims it **first** and binds the person to it: a seat removed, made an agent's or bound to somebody else since the issue is `410` before anything is written, and one a colleague's bind races is `409` saying the seat is taken, naming nobody. Only a record that could not land is `503`. **Retry until it lands**: the person a redemption creates is derived from the invitation, so every attempt names one person and a redeemer told their login is taken posts another. A link whose address somebody is already enrolled under is `410`, like a redeemed one. The company's **first person** redeems exactly this way: a Tier A token issues their invitation — see [How the first person exists](../concepts/identity-and-access.md#how-the-first-person-exists) |
@@ -364,20 +364,19 @@ Plus the surfaces whose reads are as sensitive as their writes: [`/config/*`](#c
 
 `POST /auth/login` answers `401 sign_in_refused` for every way it can fail — a
 login nobody holds, a wrong password, a person suspended, a person removed, a
-second factor that does not check out — at the same wall-clock instant,
-measured from when the request was admitted.
+second factor that does not check out — and every one of them spends the same
+argon2id derivation first.
 
 **Both halves are needed.** A code that distinguished the arms would make the
-timing pad pointless, and a delay that distinguished them would make the single
-code pointless. A miss takes the same turn at the node's verify cap that a
-hit's argon2 verification does, through a decoy that holds it for as long as a
-verification takes, because otherwise the *absence* of that cost is the answer.
-Every verification and decoy waits for its own address's turn — one at a time
-per address, served in turn — so one address's flood queues behind itself
-rather than in front of everybody, and a request that goes away while it waits
-is answered `503` and counts as no attempt at all. A turn that has begun is
-held to its end whether or not its request is still there — a decoy's as much
-as a verification's — so hanging up says nothing about which one it was.
+equal work pointless, and a missing derivation would make the single code
+pointless: a miss is verified against a dummy verifier at the same cost a
+real one is, because otherwise the *absence* of that cost is the answer. Every
+derivation waits for a slot of the node's verify cap, first come first served,
+and a request that goes away while it waits is answered `503` and counts as no
+attempt at all. Nothing is padded: what still separates the arms is the
+directory read before the derivation, and a stored verifier written at another
+cost than this build's — see
+[Identity and Access](../concepts/identity-and-access.md#a-sign-in-endpoint-is-not-a-roster).
 
 What that buys is that this surface is not a roster: a caller cannot learn who
 works here, nor test a list of addresses against it.
@@ -423,22 +422,23 @@ resolved to, the same 1-to-30-second doubling: every
 address's wrong codes climb it together, and a wait past five seconds is
 `429 throttled`. Keyed on the resolved person here and nowhere else, because
 it is reached only past the password, so it tells nobody anything the password
-did not. The code that completes the sign-in lifts it, and a curve that reaches
-its ceiling is announced as `iam_second_factor_throttled` — somebody holding
-that person's password is guessing at their code, and the password is what to
-rotate.
+did not. The code that completes the sign-in lifts it, and the wrong code that
+takes the curve to its ceiling is announced as `iam_second_factor_throttled` —
+once per climb, so a run held there announces nothing more — because somebody
+holding that person's password is guessing at their code, and the password is
+what to rotate.
 
 **No address is ever refused on its own.** A curve on the source alone —
 which this surface had, ten failures free and then the same doubling wait — is
 one anybody sharing the address holds shut for everybody else: one stranger's
 failure every twenty-five seconds, at any name, kept every sign-in from that
 office or proxy at `429`, the right passwords included. So one password tried
-against many names from one address meets no curve; it is bounded by the
-address's one turn at the node's verify cap — one name per verification,
-however many it sends at once — by the password floor and blocklist, and by
-the pad, and it is shown by the audit trail's per-client failure tally. A
-credential that names nobody — an invitation link — meets no curve at all, and
-every refusal of one is still counted in the tally.
+against many names from one address meets no curve; it is bounded by cost —
+every name tried is an argon2id derivation under the node's verify cap — and
+by the password floor and blocklist, and it is shown by the audit trail's
+per-minute failure count, which names the source. A credential that names
+nobody — an invitation link — meets no curve at all, and every refusal of one
+is still counted.
 
 The window is fifteen minutes, and **each node keeps its own curve**: nothing
 about it is written to the coordination store, so a sign-in never waits on a
