@@ -574,14 +574,24 @@ func planStage1(ctx context.Context, tx *sql.Tx, q SemanticQuery) (stage1Plan, e
 	// THE PROBE, over the columns a caller names: the ranked form reads the
 	// code in its ORDER BY, and the union's branch hands it up to the one
 	// ORDER BY above both branches.
+	//
+	// ITS FILTERS ARE RESIDUAL, never a way in: each reads its column through
+	// a unary plus ([residual]), which leaves the value unchanged and makes
+	// it an expression no index can seek. Every column they name is in the
+	// covering index the probe seeks list by list, so applying them to those
+	// rows costs nothing — and left seekable, a search narrowed to one source
+	// was planned as a seek of the PRIMARY KEY on `source` instead: every
+	// row of that source, table and all, read once per probed list, which is
+	// the full scan's cost times the probe count.
+	probeFilters := residual(filters)
 	probe := func(columns string) string {
 		out := `
 			SELECT ` + columns + `
 			FROM ivf_probe p CROSS JOIN kb_vectors_bin b
 			  ON b.model = ? AND b.dim = ? AND b.ivf_gen = ? AND b.ivf_list = p.list`
-		if len(filters) > 0 {
+		if len(probeFilters) > 0 {
 			out += `
-			WHERE ` + strings.Join(filters, " AND ")
+			WHERE ` + strings.Join(probeFilters, " AND ")
 		}
 		return out
 	}
@@ -677,14 +687,15 @@ func countMatching(ctx context.Context, tx *sql.Tx, q SemanticQuery, head IndexH
 
 // matchingCountStatement counts the rows of each probed list that the
 // narrowing filters keep — a seek per list on the covering index, which holds
-// every column the filters read.
+// every column the filters read, with the filters RESIDUAL for the probe's
+// own reason ([residual]).
 func matchingCountStatement(narrowing []string) string {
 	return `
 		WITH ivf_probe(list) AS (SELECT value FROM json_each(?))
 		SELECT b.ivf_list, COUNT(*)
 		FROM ivf_probe p CROSS JOIN kb_vectors_bin b
 		  ON b.model = ? AND b.dim = ? AND b.ivf_gen = ? AND b.ivf_list = p.list
-		WHERE ` + strings.Join(narrowing, " AND ") + `
+		WHERE ` + strings.Join(residual(narrowing), " AND ") + `
 		GROUP BY b.ivf_list`
 }
 
@@ -725,6 +736,18 @@ func stage1Filters(q SemanticQuery) ([]string, []any) {
 		args = append(args, q.Shards.From, q.Shards.To)
 	}
 	return where, args
+}
+
+// residual is filters with every column of the narrow table read through a
+// unary plus — `+b.source` — so a planner applies each to the rows another
+// index already found rather than choosing it as the way in. The value is
+// unchanged: unary plus on a column is the column.
+func residual(filters []string) []string {
+	out := make([]string, len(filters))
+	for i, f := range filters {
+		out[i] = strings.ReplaceAll(f, "b.", "+b.")
+	}
+	return out
 }
 
 // placeholders builds `?, ?, …`.
