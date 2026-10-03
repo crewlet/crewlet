@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -89,6 +90,13 @@ func (l *liveRows) deferPerson(person string) {
 	identity := l.rows[person]
 	identity.Deferred = true
 	l.rows[person] = identity
+}
+
+// readsOf is how many times a person's rows have been read.
+func (l *liveRows) readsOf(person string) int {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.reads[person]
 }
 
 // readAtLeast waits until a person's rows have been read n times.
@@ -285,6 +293,72 @@ func TestARetainedRecordClosesTheTabsItLeavesUnknown(t *testing.T) {
 	if got := node.probe(t, jane.cookie); got != http.StatusServiceUnavailable {
 		t.Fatalf("the reconnect of the tab a retained record closed answered %d, "+
 			"want 503 — the handshake is where the client learns why", got)
+	}
+}
+
+// A TAB CLOSES AT ITS SESSION'S ABSOLUTE DEADLINE, with nothing else said.
+//
+// No record is written at a deadline, so no identity move will ever say it
+// passed: what ends the socket is the timer its HANDLER arms from the
+// handshake's own reading of when the credential ends (auth.Lifetime). The
+// stream's own suite hands that instant straight to the socket, so only a
+// case through the real app and guard holds the handler to passing it on.
+// The control is a second tab whose session lasts hours, still open after.
+//
+// Mutation: drop the handshake's end from the socket's credential, and the
+// first tab stays open past its deadline.
+func TestATabClosesAtItsSessionsAbsoluteDeadline(t *testing.T) {
+	t.Parallel()
+	node := newSocketNode(t, func() time.Time { return time.Now().UTC() })
+	ending := node.tab(t, "jane.doe", time.Now().Add(3*time.Second))
+	lasting := node.tab(t, "omar.haddad", time.Now().Add(8*time.Hour))
+
+	if got := closeOf(t, ending.conn); got != stream.CloseUnauthenticated {
+		t.Fatalf("the tab whose session reached its absolute deadline closed %d, "+
+			"want %d", got, stream.CloseUnauthenticated)
+	}
+	stillOpen(t, lasting.conn)
+}
+
+// AN OPEN TAB OUTLIVES ITS SESSION'S IDLE DEADLINE, and a request does not.
+//
+// A session's idle deadline is moved by a re-issue on a REST response, and a
+// socket can never receive one, so the bearer it holds carries the
+// handshake's deadline however busy the tab has been. Decided on that
+// deadline, every tab open past session.Idle would close on the first
+// identity move anywhere near it while its person was at the screen; so the
+// HANDLER decides an open socket through the guard's ResolveOpen, which sets
+// that deadline aside and asks the rows. A REST request presenting the same
+// cookie at the same instant is held to it, which is the control: the cookie
+// is past its idle deadline, and only the socket may outlive it.
+//
+// Two moves, and the socket's rows are read for each: the socket decides one
+// move at a time, so the second read is proof the first decision left it
+// open.
+//
+// Mutation: decide an open socket through the guard's ordinary Resolve, and
+// the first move closes the tab.
+func TestAnOpenTabOutlivesItsSessionsIdleDeadline(t *testing.T) {
+	t.Parallel()
+	var at atomic.Int64
+	at.Store(clock.UnixNano())
+	node := newSocketNode(t, func() time.Time { return time.Unix(0, at.Load()).UTC() })
+	jane := node.tab(t, "jane.doe", clock.Add(session.Idle+time.Hour))
+	if got := node.probe(t, jane.cookie); got != http.StatusUpgradeRequired {
+		t.Fatalf("the cookie at its handshake's instant answered %d, want 426", got)
+	}
+
+	at.Store(clock.Add(session.Idle + time.Minute).UnixNano())
+	before := node.rows.readsOf(jane.person)
+	node.feed.fire(t, iamdomain.Moved{People: []string{jane.person}})
+	node.rows.readAtLeast(t, jane.person, before+1)
+	node.feed.fire(t, iamdomain.Moved{People: []string{jane.person}})
+	node.rows.readAtLeast(t, jane.person, before+2)
+	stillOpen(t, jane.conn)
+
+	if got := node.probe(t, jane.cookie); got != http.StatusUnauthorized {
+		t.Fatalf("a request presenting the cookie past its idle deadline answered "+
+			"%d, want 401", got)
 	}
 }
 
