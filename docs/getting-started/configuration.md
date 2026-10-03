@@ -598,7 +598,14 @@ stream:
   # url: "nats://nats.internal:4222"  # required for `nats`, REFUSED for
                                     #   embedded — an embedded server has no
                                     #   address, so a url there is read by
-                                    #   nobody
+                                    #   nobody. The server it reaches must
+                                    #   accept messages of 8 MiB
+                                    #   (`max_payload: 8MB`, every server in
+                                    #   that cluster): an event may be that
+                                    #   large and every file chunk is a
+                                    #   mebibyte and its framing, so a server
+                                    #   at nats-server's 1 MiB default is
+                                    #   refused at connect, naming it
   # replicas: 3                     # 1 solo (the default); 3 across an EMBEDDED
                                     #   cluster, where it is what makes a publish
                                     #   quorum-durable before it returns. At most

@@ -54,7 +54,10 @@ two private brokers, sharing neither a stream nor a coordination bucket, and
 nothing says so out loud. Either cluster the embedded servers — give every
 node the same `stream.cluster.name`, a `stream.cluster.port` to route on,
 and the other members' route URLs in `stream.cluster.peers` — or point them
-all at an external cluster with `stream.type: nats` and `stream.url`. It is
+all at an external cluster with `stream.type: nats` and `stream.url` — one
+whose servers all set `max_payload: 8MB`, since an event may be that large and
+every chunk of a company's files is a mebibyte and its framing; a server at
+nats-server's 1 MiB default is refused at connect, by name. It is
 the same client code either way; embedded versus external is a connection
 choice, not a second backend — and it really is either/or: `stream.cluster`
 configures the embedded server's own membership, so writing one against

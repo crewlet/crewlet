@@ -845,7 +845,42 @@ func dial(cfg Config) (*nats.Conn, error) {
 	if err != nil {
 		return nil, fmt.Errorf("dial %s: %w", cfg.URL, err)
 	}
+	if err := carriesTheContract(cfg.URL, nc.MaxPayload()); err != nil {
+		nc.Close()
+		return nil, err
+	}
 	return nc, nil
+}
+
+// ErrPayloadCeiling is an external server that accepts smaller messages than
+// this engine sends.
+var ErrPayloadCeiling = errors.New("jetstream: the broker's max_payload is " +
+	"below what this engine sends")
+
+// carriesTheContract refuses a server whose max_payload is below
+// [queue.MaxPayloadBytes].
+//
+// THE EMBEDDED BROKER IS CONFIGURED TO THE CONTRACT NUMBER and an external one
+// is somebody else's, at nats-server's own 1 MiB default unless they changed
+// it. Below the contract nothing fails at connect: every event over the
+// server's ceiling is refused at its publish, and every chunk of a company's
+// files — a mebibyte of bytes and its framing, one message on the object
+// store's transfer subject — is refused on every upload and every repair, on
+// a node that started cleanly and reports nothing wrong with its broker. So
+// it is refused here, where the one setting that fixes it can be named.
+//
+// THE SERVER THIS CONNECTION REACHED, since a client learns the ceiling from
+// that server's INFO alone: a cluster configured unevenly passes here on one
+// member and fails on the next, which is why the remedy says every server.
+func carriesTheContract(url string, ceiling int64) error {
+	if ceiling >= int64(queue.MaxPayloadBytes) {
+		return nil
+	}
+	return fmt.Errorf("%w: the NATS server at %s accepts messages of at most %d "+
+		"bytes, and this engine sends up to %d — an event up to that size, and "+
+		"every chunk of a company's files with its framing. Set max_payload: "+
+		"8MB in the configuration of every server in that cluster",
+		ErrPayloadCeiling, url, ceiling, queue.MaxPayloadBytes)
 }
 
 // dialOptions is the option list, separated from the dial so a test can
