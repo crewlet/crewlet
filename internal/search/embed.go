@@ -304,8 +304,8 @@ type EmbedDeps struct {
 // duty's lease embeds nothing for anybody. A wedge is the ABSENCE of progress,
 // so that is what the bound measures, and every step of a tick shows it in the
 // way it can. A step with a natural end reports as it ends ([Budget.Advanced]):
-// a batch embedded (one provider call and its publishes), a vector withdrawn
-// (one publish) and a batch of the index's rollout published. The index's
+// a provider call answered, a vector published or withdrawn (one publish
+// each) and a batch of the index's rollout published. The index's
 // reading of every code and its exact pass stream rows, and say so every
 // [progressStride] of them. The arithmetic — the
 // k-means, filing every code, choosing the probe count — cannot wedge at all:
@@ -607,12 +607,10 @@ func (e *Embedder) Tick(ctx context.Context) (int, error) {
 			stale[i] = stale[i][len(batch):]
 			budget--
 			spent = true
+			// The batch reports its own progress, call and publishes
+			// apart ([Embedder.embed]).
 			n, err := e.embed(ctx, corpus.Source(), dim, batch)
 			published += n
-			// A BATCH ANSWERED, WHATEVER IT ANSWERED, is progress
-			// ([Budget]): a provider call bounded by its own timeout
-			// and the publishes after it.
-			e.deps.Budget.Advanced()
 			if err != nil {
 				// LOGGED AND CARRIED. The next batch and the next
 				// tick are the retry, and nothing here is lost:
@@ -638,6 +636,9 @@ func (e *Embedder) embed(ctx context.Context, source Source, dim int, batch []Do
 		texts[i] = doc.text()
 	}
 	vectors, err := e.deps.Embedder.EmbedBatch(ctx, texts)
+	// THE PROVIDER ANSWERED, WHATEVER IT ANSWERED, which is progress
+	// ([Budget]): one call, bounded by its own timeout.
+	e.deps.Budget.Advanced()
 	if err != nil {
 		return 0, err
 	}
@@ -657,7 +658,17 @@ func (e *Embedder) embed(ctx context.Context, source Source, dim int, batch []Do
 			// input is not sent.
 			continue
 		}
-		if err := e.publish(ctx, source, dim, batch[i], vector); err != nil {
+		err := e.publish(ctx, source, dim, batch[i], vector)
+		// EACH PUBLISH IS PROGRESS ([Budget]), as a withdrawal's is: one
+		// publish, bounded as every publish is. Counted as one stretch
+		// with the call before it, a batch's hundred and twenty-eight
+		// were the longest a live tick went silent, and a broker slow
+		// enough to take its bound's length over them cut off a tick
+		// that was publishing steadily — the slow-but-advancing tick the
+		// bound exists NOT to cut off. A refused vector published
+		// nothing, and its refusal is an answer all the same.
+		e.deps.Budget.Advanced()
+		if err != nil {
 			// A VECTOR THIS DUTY REFUSES COSTS ITS OWN DOCUMENT AND
 			// NOT THE BATCH, which is the same rule one level down
 			// from the tick's: the refusal is about one vector, and

@@ -90,9 +90,9 @@ const embedDutyTTL = 3 * search.EmbedInterval
 //
 // FIVE MINUTES, several times the longest stretch a LIVE tick goes without
 // showing any. A tick shows progress at every step that has a natural end: a
-// batch it embeds — one provider call, bounded by the provider's own timeout
-// (15 s by default, with no retries) and the publishes after it — a vector it
-// withdraws, which is one publish (up to 1 024 of them a corpus after a bulk
+// provider call answered — bounded by the provider's own timeout (15 s by
+// default, with no retries) — each vector it publishes or withdraws, which is
+// one publish (up to 128 a batch, and 1 024 withdrawals a corpus after a bulk
 // purge, so reported one by one rather than as a stretch), a batch of the
 // index's rollout published, every 1 024 rows the training's reading and
 // its exact pass stream, which on the slowest node measured, one core shared

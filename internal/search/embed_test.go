@@ -176,6 +176,51 @@ func TestEveryWithdrawalShowsTheTicksBoundItsProgress(t *testing.T) {
 	}
 }
 
+// EVERY VECTOR PUBLISHED SHOWS THE TICK'S BOUND ITS PROGRESS, and so does every
+// provider call answered — apart, never as one stretch.
+//
+// A batch is up to 128 publishes after its call, and counted as one stretch
+// with the call they were the longest a live tick went without showing
+// progress: a broker slow enough to take the bound's length over them cut off
+// a tick that was publishing steadily, which the engine's own test of the
+// bound met on a loaded machine as 108 published of 300 and the tick reported
+// wedged.
+func TestEveryEmbeddedVectorShowsTheTicksBoundItsProgress(t *testing.T) {
+	t.Parallel()
+	h := newEmbedHarness(t)
+	const extra = 5 // a second, short batch
+	seed := map[string]string{}
+	for i := range search.EmbedBatch + extra {
+		seed[fmt.Sprintf("t-%04d", i)] = fmt.Sprintf("document number %d", i)
+	}
+	h.seedTasks(seed)
+
+	budget := &countedBudget{}
+	duty, err := search.NewEmbedder(search.EmbedDeps{
+		Publisher: h.publisher, Estate: storetest.EstateOf(h.db).Reader(),
+		Log:      statelog.EstateStream(search.Domain{}).Name,
+		Standing: h.standing(map[string]int{"node-a": search.RecordVersion}),
+		Embedder: h.embedder, Model: embedModel,
+		Corpora: []search.Corpus{search.TaskCorpus{DB: storetest.EstateOf(h.db).Reader()}},
+		Now:     func() time.Time { return time.Unix(1_700_000_000, 0).UTC() },
+		Budget:  budget,
+	})
+	if err != nil {
+		t.Fatalf("build the duty: %v", err)
+	}
+	published, err := duty.Tick(t.Context())
+	if err != nil || published != search.EmbedBatch+extra {
+		t.Fatalf("the tick published %d record(s) (%v), want %d", published, err,
+			search.EmbedBatch+extra)
+	}
+	const calls = 2
+	if got := budget.advanced.Load(); got < int64(published+calls) {
+		t.Fatalf("a tick that made %d provider calls and published %d vectors "+
+			"reported progress %d time(s), want once a call and once a publish",
+			calls, published, got)
+	}
+}
+
 // countedBudget counts the reports of progress a tick makes, and grants every
 // exemption.
 type countedBudget struct{ advanced atomic.Int64 }
