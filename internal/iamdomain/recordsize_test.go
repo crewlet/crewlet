@@ -24,8 +24,8 @@ import (
 // sized by the declaration, so the declaration has to hold the widest
 // document a writer can form. It is built at every cap the writer holds a
 // person to: a name and an address at theirs, the most credentials one person
-// holds, every token carrying every grant, the widest reach and a label of
-// characters JSON escapes six-fold, and the envelope beside it — the actor,
+// holds, every token carrying every grant and a label of characters JSON
+// escapes six-fold, and the envelope beside it — the actor,
 // the credential they acted through and a reason — at theirs. A cap raised
 // without revisiting [iamdomain.IamMaxRecordBytes] fails here.
 //

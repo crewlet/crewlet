@@ -89,8 +89,8 @@ func TestACarriedFieldNeverOverwritesOneThisBuildSet(t *testing.T) {
 //
 // A zero value does not marshal an omitempty field, so a name set derived from
 // a marshalled zero value cannot see it — and every domain had to list those
-// names by hand beside the struct. Four had been missed (a person's and an
-// invitation's `colleague`, a unit's `origin_key`, a seat's `origin_handle`),
+// names by hand beside the struct. Four had been missed (a field on a person
+// and on an invitation, a unit's `origin_key`, a seat's `origin_handle`),
 // and each missed name was decoded into the struct AND carried as unknown, so
 // a caller clearing it re-encoded the carried copy straight back. Mutation:
 // derive the names from a marshalled zero value again and this reverts.

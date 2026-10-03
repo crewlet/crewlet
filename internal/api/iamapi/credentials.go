@@ -104,8 +104,7 @@ type mintBody struct {
 //
 // # What it may carry is the DOMAIN's decision
 //
-// A subset of the owner's CURRENT grants, a reach no wider than theirs, never
-// secrets:read or people:manage, and nothing the caller does not hold — read
+// A subset of the owner's CURRENT grants, never secrets:read or people:manage, and nothing the caller does not hold — read
 // in the snapshot the credential is formed in, so a demotion landing a moment
 // earlier cannot be minted past. This handler shapes the request and renders
 // the answer; internal/iamdomain is the last frame every path to a token goes

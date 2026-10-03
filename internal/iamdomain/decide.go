@@ -72,8 +72,8 @@ func (e *ErrClaimed) Error() string {
 // REDEMPTION ([Enrolment.Invitation]) confers what the INVITATION's author
 // conferred when they issued it, and was held to their grants then
 // ([Writer.Invite]). The person record's decide reads the invitation in its
-// own snapshot and refuses anything it does not cover — more grants, more
-// reach, a different address, a link already spent or aged out — so the node
+// own snapshot and refuses anything it does not cover — more grants, a
+// different address, a link already spent or aged out — so the node
 // that processes a redemption decides nothing a second time.
 //
 // The node's own writer holds fleet:operate and people:manage and nothing
@@ -559,7 +559,7 @@ func (in Enrolment) validate() error {
 // the person record's own snapshot.
 //
 // EVERY CLAUSE IS A WAY THE REDEMPTION COULD OTHERWISE ASK FOR MORE THAN WAS
-// OFFERED: a grant or a reach the invitation did not carry, an address it was
+// OFFERED: a grant the invitation did not carry, an address it was
 // not issued to (holding somebody's link is not holding their address), and a
 // link that is spent or aged out. A link redeemed by THIS person already is
 // not spent against them, so a retry of a redemption whose spend landed still
@@ -1993,8 +1993,7 @@ type CredentialSet struct {
 // # Why it is its own gesture rather than a CredentialSet
 //
 // What a token may carry is a fact about its owner NOW: a subset of the grants
-// they hold, a reach no wider than theirs, and the revocation epoch they are
-// at. A caller reading those first and handing in a finished credential would
+// they hold, and the revocation epoch they are at. A caller reading those first and handing in a finished credential would
 // be stating a read from another transaction — the pairing the write authority
 // forbids — so a demotion landing between the two would mint a token carrying
 // what its owner no longer holds. Minted on the owner's own subject, the mint
@@ -2002,8 +2001,8 @@ type CredentialSet struct {
 //
 // # What it refuses, and whose rule each is
 //
-//   - A grant the owner does not hold, or a reach wider than theirs: a token
-//     NARROWS its owner and never widens them.
+//   - A grant the owner does not hold: a token NARROWS its owner and never
+//     widens them.
 //   - secrets:read and people:manage, WHATEVER the owner holds: both are
 //     gestures that need a person present — revealing a credential and
 //     changing who may — and a token is what an attacker holding a pipeline's
@@ -2031,10 +2030,10 @@ type CredentialSet struct {
 // restore runbook's invalidate-all, the one gesture that ends a credential a
 // restore brought back unrevoked without knowing which one it was.
 //
-// NIL GRANTS AND AN EMPTY REACH MEAN "AS MUCH AS MAY BE CARRIED": every grant
-// the owner holds that a token may carry, and the owner's own reach — resolved
-// here, in the snapshot, and stated on the record, so what the token carries is
-// never re-derived by a node applying it.
+// NIL GRANTS MEAN "AS MUCH AS MAY BE CARRIED": every grant the owner holds
+// that a token may carry — resolved here, in the snapshot, and stated on the
+// record, so what the token carries is never re-derived by a node applying
+// it.
 func (w *Writer) MintToken(ctx context.Context, in TokenMint) (TokenMinted, error) {
 	switch {
 	case in.PersonID == "" || in.ID == "" || in.OpID == "":
@@ -2620,8 +2619,8 @@ var ErrOperationReused = errors.New("iamdomain: that operation key already " +
 // [ErrOperationReused] where the key already issued something this call is not.
 //
 // THE TERMS ARE COMPARED, not only the address: a retry is the same request, so
-// an invitation on the same address that confers other grants, another reach
-// or another seat was issued by a different request that reused the key — and
+// an invitation on the same address that confers other grants or another
+// seat was issued by a different request that reused the key — and
 // answering it as this one's would hand out a link to what somebody else
 // offered. The seat is compared by its IDENTITY, so a retry naming the seat by
 // a handle it was renamed to since is still the same request.
@@ -2754,8 +2753,8 @@ type InviteMint struct {
 	Reason string
 }
 
-// UpdatePerson rewrites one person's own document — their grants, their reach
-// into the work, their name — forming the new whole INSIDE the snapshot.
+// UpdatePerson rewrites one person's own document — their grants, their name
+// — forming the new whole INSIDE the snapshot.
 //
 // # The same shape as [Writer.SetCredentials], and for the same reason
 //

@@ -61,7 +61,7 @@ type inviteBody struct {
 //
 // # What it confers is decided HERE, by whoever issues it
 //
-// The grants and the reach travel on the invitation, so the redemption hands
+// The grants travel on the invitation, so the redemption hands
 // out exactly what was offered rather than deciding again — which is also what
 // stops a redemption being a way to ask for more.
 func (s *Service) PostInvite(w http.ResponseWriter, r *http.Request) {

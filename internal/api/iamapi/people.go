@@ -295,7 +295,7 @@ func (b patchBody) refusal() string {
 //
 // # Four different kinds of change, and they are four records
 //
-// A person's DOCUMENT (their name, their grants, their reach), their STAGE,
+// A person's DOCUMENT (their name, their grants), their STAGE,
 // their LOGIN and their SEAT arbitrate on different subjects — the person's
 // own for the first two, the login token and the seat id for the others,
 // because those are what two writers can race for. So one PATCH is a

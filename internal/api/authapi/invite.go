@@ -227,9 +227,9 @@ func (s *Service) RedeemInvite(w http.ResponseWriter, r *http.Request) {
 			V: iamdomain.DocumentVersion, ID: uuid.New().String(),
 			Method: iamdomain.MethodPassword, Verifier: verifier,
 		}},
-		// WHAT THE INVITATION SAID, and not a word more. The grants and
-		// the reach were decided once, by whoever issued it, rather
-		// than again by whoever happens to process the redemption —
+		// WHAT THE INVITATION SAID, and not a word more. The grants were
+		// decided once, by whoever issued it, rather than again by
+		// whoever happens to process the redemption —
 		// which is also what stops a redemption being a way to ask for
 		// more than was offered.
 		//

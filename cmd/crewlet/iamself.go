@@ -64,7 +64,7 @@ type selfMint struct {
 
 	login, password, code string
 
-	// body is the mint's own request: grants, reach, label, lifetime.
+	// body is the mint's own request: grants, label, lifetime.
 	body map[string]any
 
 	http *http.Client
