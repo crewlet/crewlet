@@ -1,6 +1,7 @@
 package builtin
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -10,6 +11,10 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/crewlet/crewlet/internal/coord"
+	"github.com/crewlet/crewlet/internal/queue"
+	"github.com/crewlet/crewlet/internal/statelog"
+	"github.com/crewlet/crewlet/internal/store"
 	"github.com/crewlet/crewlet/internal/tools"
 	"github.com/crewlet/crewlet/internal/tracker"
 )
@@ -187,37 +192,239 @@ func argStringMap(args map[string]any, key string) map[string]string {
 	return out
 }
 
-// failed is a tool result the model can act on.
+// refused is a tool result the model can act on, carrying the class a reader
+// that is not a model acts on instead.
 //
 // Failed rather than an error: the turn is fine, this call is not, and the
 // difference is what lets the model try again with a better argument instead
 // of the loop tearing down.
-func failed(msg string) tools.Result { return tools.Result{Output: msg, Failed: true} }
-
-// failedBy is [failed] for a refusal something underneath decided — a read
-// that found nothing, a write the log refused — carrying that error as the
-// result's [tools.Result.Cause].
 //
-// THE MESSAGE IS STILL THE WHOLE ANSWER to a model; see the field's own doc.
-// What the cause buys is that a caller answering in STATUS CODES can tell an
-// item that does not exist from a version somebody moved from a node that
-// could not decide, without parsing a sentence written for a model.
-func failedBy(cause error, msg string) tools.Result {
-	return tools.Result{Output: msg, Failed: true, Cause: cause}
+// THE CLASS IS AN ARGUMENT, never inferred from the sentence, because the
+// sentence is prompt text tuned against model behaviour and rewording it must
+// not move a person's surface to a different status. It is the result's
+// CAUSE ([tools.Refusal] is an error), which is the one place a reader asks
+// ([tools.RefusalOf]): a class beside the cause would be a second classifier
+// of one failure, free to tell the audit one story and the write surface
+// another.
+func refused(code tools.Refusal, msg string) tools.Result {
+	return tools.Result{Output: msg, Failed: true, Cause: code}
+}
+
+// failed is the argument refusal — [tools.RefusalInvalid] — which is what the
+// great majority of these are: a missing, malformed or unknown argument whose
+// sentence names the field to change. Anything else says its class with
+// [refused] or [refusedBy].
+func failed(msg string) tools.Result { return refused(tools.RefusalInvalid, msg) }
+
+// refusedBy is [refused] for a refusal something underneath decided — a read
+// that found nothing, a write the log refused — carrying that error BENEATH
+// the class ([tools.Classify]), so a caller branching on the domain's own
+// sentinel and a reader asking for the class read one value.
+//
+// THE MESSAGE IS STILL THE WHOLE ANSWER to a model. What the cause buys is
+// that a caller answering in STATUS CODES can tell an item that does not exist
+// from a version somebody moved from a node that could not decide, without
+// parsing a sentence written for a model — and the class is the tool's
+// statement about THIS call, which is why it is an argument: an item that does
+// not exist is not-found when the call is about it and an invalid argument
+// when the call merely named it.
+func refusedBy(class tools.Refusal, cause error, msg string) tools.Result {
+	return tools.Result{Output: msg, Failed: true, Cause: tools.Classify(class, cause)}
+}
+
+// Condition says whether a failure no sentinel of the caller's claimed is a
+// CONDITION of this node — one WAITING can clear — and the words a caller may
+// be told it in; ok is false for a FAULT of the node, which waiting does not
+// clear and whose words are the log's ([faulted]).
+//
+// # The conditions
+//
+// A refusal or an outcome the state log composed ([statelog.ErrUnavailable]:
+// a node behind its log, below its floor, holding a record it cannot decode, a
+// log that refused the append); a coordination store that did not answer
+// ([coord.ErrUnavailable]); a node that has not yet said what its build can do
+// ([coord.ErrFeatureUnknown] — it is draining, or has not beaten since it
+// started); an estate held closed while a peer's snapshot is adopted
+// ([store.ErrNoEstate]); a store whose write lock the writers ahead of this one
+// held for longer than the write would wait ([store.ErrBusy]); an event queue
+// that is not live while this node starts or stops ([queue.ErrNotLive]); an
+// event broker this node could not reach — its connection reconnecting, or the
+// broker not answering in time ([queue.ErrUnavailable]); a wait that ran out of
+// time or was abandoned. Everything else that reaches a tool unmarked — a read
+// of this node's own store that broke, a database that refused a statement, a
+// path in its own code that went wrong — is a fault.
+//
+// EACH IS A SENTINEL ITS OWN PACKAGE MARKS, never a reading of an error's
+// words: the store marks only the lock it never took, because a "database is
+// locked" a statement met for any other reason is not a wait, and the queue
+// marks only what its broker did not answer, because "connection closed" from a
+// client closed for good is ErrNotLive and a broker's own refusal is neither.
+// A classifier matching text here would call a disk error with "locked" in its
+// path a condition.
+//
+// # Why the line is drawn here
+//
+// Because the two send a caller opposite ways. [tools.RefusalUnavailable] is
+// answered `503` with a `Retry-After`, and a model is told to try again —
+// right for a node behind its log, which catches up, and a lie about a store
+// that cannot be read, which a client polled every two seconds until somebody
+// fixed the node. So every classifier that called each unmarked failure
+// "unavailable" asks this first, and classes the rest
+// [tools.RefusalInternalError].
+//
+// A STATE-LOG REFUSAL STAYS A CONDITION EVEN WHERE WAITING CANNOT CLEAR IT —
+// an evicted node, a record this node cannot decode — because the refusal says
+// so itself: [statelog.RetryAfter] answers zero for those, and a surface
+// answers them `503` with no `Retry-After`. A fault is what NOTHING classified.
+//
+// # Why the words are chosen rather than the error's own
+//
+// The state log composes every refusal's words for the caller who receives
+// them ([statelog.Unavailable]'s detail and [statelog.Refused]'s are never an
+// error's own text), so the REFUSAL's message is told — the refusal itself,
+// read out of the chain, and never the chain's whole message, because a
+// wrapper is free to join an error of its own beside it (`%w: %w`), and that
+// one may be a driver's. Everything else is told in fixed words: a
+// coordination backend wraps its transport's error, which names hosts and
+// ports, and a queue's names its broker.
+//
+// EXPORTED for the human write surface, whose tool-less writers class their
+// writers' errors by this same rule (internal/api/operator's ClassifyWrite).
+func Condition(err error) (words string, ok bool) {
+	switch {
+	case err == nil:
+		return "", false
+	case errors.Is(err, statelog.ErrUnavailable):
+		return stateLogWords(err), true
+	case errors.Is(err, coord.ErrUnavailable):
+		return "the coordination store did not answer", true
+	case errors.Is(err, coord.ErrFeatureUnknown):
+		return "the node that would carry it out has not said what its build " +
+			"can do yet — it is draining, or has only just started", true
+	case errors.Is(err, store.ErrNoEstate):
+		return "this node's store is closed while it adopts a peer's snapshot " +
+			"or shuts down", true
+	case errors.Is(err, store.ErrBusy):
+		return "this node's store was busy with other writes and could not take " +
+			"this one in time", true
+	case errors.Is(err, queue.ErrNotLive):
+		return "this node's event queue is not running — it is starting or " +
+			"shutting down", true
+	case errors.Is(err, queue.ErrUnavailable):
+		return "this node could not reach its event broker — the connection is " +
+			"reconnecting, or the broker did not answer in time", true
+	case errors.Is(err, context.DeadlineExceeded):
+		return "it ran out of time", true
+	case errors.Is(err, context.Canceled):
+		return "it was abandoned before it finished", true
+	}
+	return "", false
+}
+
+// stateLogWords is how a state-log refusal reads to a caller: the refusal's
+// own message, composed by internal/statelog for whoever receives it — a read
+// refused ([statelog.Refused]) or a write ([statelog.Unavailable]) — or, for
+// a bare sentinel somebody wrapped, fixed words, since nothing composed that
+// chain for a reader.
+func stateLogWords(err error) string {
+	var unavailable *statelog.Unavailable
+	if errors.As(err, &unavailable) {
+		return unavailable.Error()
+	}
+	var refused *statelog.Refused
+	if errors.As(err, &refused) {
+		return refused.Error()
+	}
+	return "the state log refused it on this node"
+}
+
+// faultSaid is the clause a FAULT is told in, wherever a sentence names one:
+// whose it is, that trying again does not clear it, and where its reason is.
+// One clause for every tool, because a model reading "try again" in one tool's
+// sentence and "do not" in another's about the same broken store learns
+// nothing it can use from either.
+const faultSaid = "a fault in this node itself — not anything about this call, " +
+	"and not something trying again clears; the node's log has the details"
+
+// faulted is the failed result of a call that met a FAULT of this node
+// ([Condition] answered no): [tools.RefusalInternalError] with the error
+// beneath it, under sentence — words that must NOT carry the error, and that
+// name the fault with [faultSaid].
+//
+// THE ERROR GOES TO THE LOG, here and only here, with the tool's name and the
+// trace the call's context carries: a store's error is a driver's message, a
+// SQL fragment or a database path, and the sentence reaches a model's prompt,
+// an operator's assistant and a person's screen. None of them can act on it,
+// and the one reader who can — whoever runs the node — reads the log. It rides
+// beneath the class for errors.Is, never for display: a surface answering the
+// class says only that the engine broke ([tools.RefusalInternalError]).
+func faulted(ctx context.Context, tool string, err error, sentence string) tools.Result {
+	log.ErrorContext(ctx, "builtin_tool_fault", "tool", tool, "error", err.Error())
+	return refusedBy(tools.RefusalInternalError, err, sentence)
+}
+
+// toldOf is how a failed result's reason reads inside a sentence that names
+// what it stopped: [faultSaid] for a fault, whose error is the log's; a
+// condition's words ([Condition]); and otherwise the error's own — a refusal
+// the domain composed for a caller.
+func toldOf(failure tools.Result, err error) string {
+	if tools.RefusalOf(failure) == tools.RefusalInternalError {
+		return faultSaid
+	}
+	if why, ok := Condition(err); ok {
+		return why
+	}
+	return err.Error()
+}
+
+// nodeFailure is the failed result of a call this node could not serve for a
+// reason of its OWN — a store, the coordination plane, the queue — that no
+// domain sentinel claimed: stopped is the clause naming what could not be done
+// ("Could not read your notes"), and fact what is true either way ("Nothing
+// was changed."), or empty.
+//
+// THE ONE RULE [readFailure] AND [writeFailure] FOLLOW, for the tools that
+// have no domain of their own to classify by: a CONDITION ([Condition]) is
+// [tools.RefusalUnavailable] in its own words and invites the retry that
+// clears it, and anything else is a FAULT ([faulted]) — its error in the log,
+// never in the sentence, and no retry invited. These tools used to answer
+// every failure `unavailable` carrying the error's own text, which put a
+// database path into a model's prompt and told a client to poll a store that
+// could not be read.
+func nodeFailure(ctx context.Context, tool string, err error, stopped, fact string) tools.Result {
+	if why, ok := Condition(err); ok {
+		return refusedBy(tools.RefusalUnavailable, err,
+			sentence(stopped+" ("+why+").", fact, "Try again shortly."))
+	}
+	return faulted(ctx, tool, err, sentence(stopped+": "+faultSaid+".", fact))
+}
+
+// sentence joins the clauses of a failure's sentence that are present, one
+// space apart.
+func sentence(clauses ...string) string {
+	kept := clauses[:0:0]
+	for _, c := range clauses {
+		if c != "" {
+			kept = append(kept, c)
+		}
+	}
+	return strings.Join(kept, " ")
 }
 
 // ErrOutcomeUnknown is the cause a write tool's failed result carries when
 // whether its write LANDED is unknown — see [unknownWrite] for why such a
 // write is a failed result at all rather than a receipt.
 //
-// A CAUSE OF ITS OWN, because a caller answering in status codes has a third
-// answer for it that is neither a refusal nor a success: the HTTP write
-// surface answers `unknown` with a 503 carrying the operation to retry under,
-// and without a cause to read that from it had only the sentence — and a
-// failed result it cannot place is rendered as a refusal, which tells a
-// client its change was NOT made when it may well have been. [UnknownOutcome]
-// is the value, and it matches this with [errors.Is].
-var ErrOutcomeUnknown = errors.New("builtin: whether the write landed is unknown")
+// THE TOOL CONTRACT'S OWN SENTINEL ([tools.ErrOutcomeUnknown]) rather than one
+// of this package's, because the readers that must tell an unknown from a
+// refusal — the audit, the loop's record, a person's write surface — sit
+// beside or below this package and ask [tools.UnknownOf], which is exactly
+// [errors.Is] against it. A sentinel of its own here was a third answer to "may
+// this have landed" that none of them could see. It is also
+// [tools.RefusalUnavailable] by [tools.RefusalOf]: the node cannot say what
+// became of the write, and nothing about the request was wrong.
+// [UnknownOutcome] is the value, and it matches this with [errors.Is].
+var ErrOutcomeUnknown = tools.ErrOutcomeUnknown
 
 // UnknownOutcome is [ErrOutcomeUnknown] with the facts a caller acts on.
 type UnknownOutcome struct {
@@ -254,8 +461,10 @@ func (e *UnknownOutcome) Error() string {
 	return msg
 }
 
-// Unwrap makes every [UnknownOutcome] an [ErrOutcomeUnknown], and keeps the
-// writer's own error reachable beside it.
+// Unwrap makes every [UnknownOutcome] an [ErrOutcomeUnknown] — and through it
+// [tools.RefusalUnavailable] — and keeps the writer's own error reachable
+// beside it. The sentinel comes FIRST, so the class [tools.RefusalOf] meets is
+// the unknown's rather than one the writer's error happens to carry.
 func (e *UnknownOutcome) Unwrap() []error {
 	if e.Err == nil {
 		return []error{ErrOutcomeUnknown}
@@ -263,25 +472,17 @@ func (e *UnknownOutcome) Unwrap() []error {
 	return []error{ErrOutcomeUnknown, e.Err}
 }
 
-// failedUnknown is [failed] for a write whose outcome is unknown, carrying
-// [UnknownOutcome] as the result's cause.
+// failedUnknown is the failed result of a write whose outcome is unknown,
+// carrying [UnknownOutcome] as its cause.
 func failedUnknown(opID string, unvouched bool, msg string) tools.Result {
-	return failedBy(&UnknownOutcome{OpID: opID, Unvouched: unvouched}, msg)
+	return tools.Result{Output: msg, Failed: true,
+		Cause: &UnknownOutcome{OpID: opID, Unvouched: unvouched}}
 }
 
-// readFailed, writeFailed and pageWriteFailed are the three failure
-// sentences, each carrying the error it explains.
-func readFailed(name string, err error) tools.Result {
-	return failedBy(err, readFailure(name, err))
-}
-
-func writeFailed(actor Actor, name string, err error) tools.Result {
-	return failedBy(writeCause(actor, err), writeFailure(actor, name, err))
-}
-
-// writeCause is the cause a write's failed result carries: the error itself,
-// or — for a walking gesture that stopped at a step whose outcome is unknown
-// ([tracker.ErrStepUnresolved]) — an [UnknownOutcome] wrapping it.
+// writeCause is the error a write's failed result carries beneath its class:
+// the error itself, or — for a walking gesture that stopped at a step whose
+// outcome is unknown ([tracker.ErrStepUnresolved]) — an [UnknownOutcome]
+// wrapping it.
 //
 // BECAUSE THAT STOP IS AN UNKNOWN, not a refusal: the steps before it landed
 // and the step itself may have, so a caller answering in status codes owes it
@@ -294,10 +495,6 @@ func writeCause(actor Actor, err error) error {
 	}
 	return &UnknownOutcome{OpID: actor.Operation,
 		Unvouched: errors.Is(err, tracker.ErrStepUnvouched), Err: err}
-}
-
-func pageWriteFailed(name string, err error) tools.Result {
-	return failedBy(err, pageWriteFailure(name, err))
 }
 
 // clip flattens a caller-supplied string echoed back into a tool result or a

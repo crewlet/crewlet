@@ -10,9 +10,11 @@ import (
 	"github.com/crewlet/crewlet/internal/chart"
 	"github.com/crewlet/crewlet/internal/iamdomain"
 	"github.com/crewlet/crewlet/internal/pages"
+	"github.com/crewlet/crewlet/internal/search"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/store"
 	"github.com/crewlet/crewlet/internal/tracker"
+	"github.com/crewlet/crewlet/internal/usage"
 )
 
 // EVERY DOMAIN'S SHIPPED DDL ACCEPTS THE STATEMENTS THE FRAMEWORK GENERATES.
@@ -25,20 +27,23 @@ import (
 //
 // # Why this lives in internal/store rather than beside each domain
 //
-// Two of the four domains reach it through [statelogtest.Run], which runs the
-// same check as one of its four suites. The CHART and the IAM domain cannot:
-// that suite also runs the apply cases, and a domain has no applier on the
-// change that declares it — the engine's boot check refuses a register entry
-// with a nil applier, so a registration cannot land before its applier. The
-// check itself needs only a migrated estate and a declaration, and the migrated
-// estate is this package's. Running all four here also makes the walk
-// two-sided: a domain whose tables stopped being created at all would fail here
-// rather than quietly stop being certified.
+// Four of the six registered domains reach it through [statelogtest.Run],
+// which runs the same check as one of its four suites. The CHART and the IAM
+// domain cannot: that suite also runs the apply cases, and a domain has no
+// applier on the change that declares it — the engine's boot check refuses a
+// register entry with a nil applier, so a registration cannot land before its
+// applier. The check itself needs only a migrated estate and a declaration,
+// and the migrated estate is this package's. Running all six here also makes
+// the walk two-sided: a domain whose tables stopped being created at all would
+// fail here rather than quietly stop being certified — the two COMPACTED
+// domains (the vectors and each node's usage) included, whose ledgerless
+// declarations are the ones a migration is likeliest to get wrong unnoticed.
 func TestTheShippedSchemaAcceptsTheFrameworksOwnStatements(t *testing.T) {
 	t.Parallel()
 
 	for _, domain := range []statelog.Domain{
 		tracker.Domain{}, pages.Domain{}, chart.Domain{}, iamdomain.Domain{},
+		search.Domain{}, usage.Domain{},
 	} {
 		t.Run(domain.Name(), func(t *testing.T) {
 			t.Parallel()
@@ -55,7 +60,7 @@ func TestTheShippedSchemaAcceptsTheFrameworksOwnStatements(t *testing.T) {
 //
 // `0001_the_state_log_lands.sql` documents the first four, `0021` added
 // `stored_at` (the applying record's broker instant) to every ledger the
-// framework carried then, and `0036` to this one and the identity estate's.
+// framework carried then, and `0044` to this one and the identity estate's.
 // The framework writes the statements, so a sixth column is not a compile
 // error and not a migration failure — it is a column nothing ever populates, and an index over it is an
 // index nothing ever uses. The one that would be tempting is `kind`, with an
@@ -216,8 +221,8 @@ func TestEachDomainDeclaresExactlyTheTablesItShips(t *testing.T) {
 // THE IAM OPS LEDGER TAKES THE FRAMEWORK'S FIVE COLUMNS TOO, and no `kind`.
 // This ledger DOES keep a second horizon — a session's operations go after an
 // hour, everything else after the framework's month — but it is keyed on the
-// SUBJECT the framework already stores (`0030`'s index over it), and the loss
-// each horizon leaves is recorded per kind by the framework (`0037`), so the
+// SUBJECT the framework already stores (`0038`'s index over it), and the loss
+// each horizon leaves is recorded per kind by the framework (`0045`), so the
 // shorter sweep never moves the table-wide watermark. A `kind` column would be
 // a second copy of what the subject already says, and one nothing populates.
 func TestTheIamOpsLedgerCarriesTheFrameworksFiveColumns(t *testing.T) {

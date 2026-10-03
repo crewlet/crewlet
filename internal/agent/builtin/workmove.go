@@ -13,7 +13,10 @@ import (
 	"github.com/crewlet/crewlet/internal/tracker"
 )
 
-// Moving a work item to another project.
+// Moving a work item to another project — `move_work_item`. Never a board
+// drag, which re-orders a card inside its own project and is
+// `place_work_item` (workplace.go): the two differ in every property a tool is
+// registered with, so they are two verbs.
 //
 // # Why this is a verb and not an argument
 //
@@ -110,9 +113,10 @@ func (t *moveWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	before, err := t.deps.Reader.Task(ctx, ref, tracker.DetailWants{}, seatRead)
 	switch {
 	case errors.Is(err, tracker.ErrNoTask):
-		return failedBy(err, fmt.Sprintf("There is no work item %q.", clip(ref))), nil
+		return refusedBy(tools.RefusalNotFound, err, fmt.Sprintf("There is no work item %q.",
+			clip(ref))), nil
 	case err != nil:
-		return readFailed(tracker.MoveWorkItemTool, err), nil
+		return readFailure(ctx, tracker.MoveWorkItemTool, err), nil
 	}
 	// THE GATE IS ON THE OPERATION, NOT ON THE STATE IT PRODUCED. An item
 	// already in the target is either this operation's own move answered
@@ -131,10 +135,10 @@ func (t *moveWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	from, named := before.Task.Key, before.Named()
 	if before.Task.Project == target {
 		from = replacedKey(before.Task)
-	} else if refused := t.deps.mayWrite(ctx, authz.Action(t.Name()), authz.Object{
+	} else if denied := t.deps.mayWrite(ctx, authz.Action(t.Name()), authz.Object{
 		Kind: authz.KindTask, Container: before.Task.Project,
-	}); refused != nil {
-		return *refused, nil
+	}); denied != nil {
+		return *denied, nil
 	}
 
 	// THE WAKE DESCRIBES WHERE THE ITEM IS GOING. Its new key is minted by
@@ -154,7 +158,7 @@ func (t *moveWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		// included, since the root's own move is not the step in doubt.
 		return t.deps.moveStopped(ctx, actor, from, named, got, stopped)
 	case err != nil:
-		return writeFailed(actor, tracker.MoveWorkItemTool, err), nil
+		return writeFailure(ctx, actor, tracker.MoveWorkItemTool, err), nil
 	}
 	if got.Outcome == statelog.OutcomeUnknown {
 		// NEVER A NEW KEY FOR A MOVE NOBODY CAN SAY LANDED: the one this
@@ -241,10 +245,10 @@ func (d WorkDeps) moveStopped(ctx context.Context, actor Actor, from, named stri
 		"version":          got.Version,
 		"subtree_followed": stopped.Followed, "subtree_total": stopped.Of,
 		"move_stopped": fmt.Sprintf("%s moved to %s%s, but only %d of the %d "+
-			"tasks under it followed before the walk stopped (%v); the rest are "+
+			"tasks under it followed before the walk stopped (%s); the rest are "+
 			"still in their old project. Do not report it as done, and do not "+
 			"move it again as a new call. %s", named, stopped.Target, as,
-			stopped.Followed, stopped.Of, stopped.Err, next),
+			stopped.Followed, stopped.Of, writeTold(ctx, actor, tool, stopped.Err), next),
 	}, stopped.Root, stopped.Key, stopped.KeyCollision)
 	if stopped.Waiting != "" {
 		answer["move_waits_for"] = stopped.Waiting

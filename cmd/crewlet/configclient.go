@@ -106,20 +106,22 @@ func (c *configClient) Import(ctx context.Context, doc []byte, summary string) (
 
 // maxConfigResponseBytes bounds one answer.
 //
-// SIZED FOR THE COMPANY, not for the two fields this client reads. A write's
-// answer carries the engine's derived hierarchy of the whole document it
-// stored, every seat with its managers and reports, and a refusal carries a
-// located problem per failure beside the same hierarchy, so an answer grows
-// with the company it describes. The 64 KiB this used to be is about two
-// hundred seats of hierarchy: past that, a write that had landed was reported
-// as an answer this build could not read, and a refusal lost its detail.
+// SIZED FOR THE DOCUMENT, not for the two fields this client reads. A write's
+// answer carries a located warning per thing the engine will run but a person
+// should know about, and a refusal a located problem per failure, so an
+// answer grows with the document it judged. The 64 KiB this used to be lost a
+// refusal's detail on a large document, and reported a write that had landed
+// as an answer this build could not read.
 //
 // Sixteen times the largest document the route accepts
-// ([configapi.MaxBodyBytes]), because the hierarchy restates each seat of the
-// document with its relations spelled out, and that restatement is several
-// times the size of a seat as it is usually written. It still bounds a node
-// that answers with far more than any company could produce, and the client's
-// own timeout bounds one that never stops.
+// ([configapi.MaxBodyBytes]), because each entry restates its path, its
+// segments and a sentence saying what to write instead, which is routinely
+// ten times the field it is about — a mistyped provider key is a few bytes and
+// its problem a few hundred. It still bounds a node that answers with far
+// more than any document could produce, and the client's own timeout bounds
+// one that never stops. The chart client reads its answers under the same
+// bound, which no chart answer — one record's outcome, or one refusal —
+// approaches.
 const maxConfigResponseBytes = 16 * configapi.MaxBodyBytes
 
 // refusal turns a status code into something an operator can act on.

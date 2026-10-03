@@ -6,11 +6,13 @@
 // # It is the SAME TOOLS a seat and the operator's assistant hold
 //
 // Every route that has a tool behind it is an ADAPTER over that tool — the one
-// internal/agent/builtin registers into a seat's turn and internal/api/opsmcp
-// serves to an operator's assistant — built from the same deps and the same
-// authority decision. What a route adds is only the HTTP shape: the path names
-// the object, the body is the tool's own arguments, and the answer is the
-// tool's own receipt under a status code.
+// internal/agent/builtin registers into a seat's turn — reached through the
+// operator surface's ONE DISPATCH (internal/api/operator), the same path the
+// dashboard's act route and an operator's assistant take: the same catalogue,
+// the same authority decision, the same refusal mapping and the same runtime
+// audit record. What a route adds is only the HTTP shape: the path names the
+// object, the body is the tool's own arguments, and the answer is the tool's
+// own receipt under a status code.
 //
 // The alternative this replaces was the obvious one: a handler per route
 // calling the tracker's writer directly. It would have been the THIRD
@@ -20,17 +22,20 @@
 // before this surface existed; the third would have been the one nobody's
 // tests reached, because the tools' suites exercise the tools.
 //
-// A FEW ROUTES HAVE NO TOOL, and are the ones a seat is never given: placing a
-// card between two neighbours on a board, rewriting one's own remark on a work
-// item, purging a work item, and the knowledge base's four destructive verbs
-// and its rename. Those call the domain's writer themselves, and decide first
-// through the SAME table — [authz.ActionWorkRank],
+// A FEW ROUTES HAVE NO TOOL, and are the ones a seat is never given: rewriting
+// one's own remark on a work item, purging a work item, and the knowledge
+// base's four destructive verbs and its rename. Those call the domain's writer
+// themselves, decide first through the SAME table —
 // [authz.ActionWorkCommentEdit], [authz.ActionWorkPurge],
 // [authz.ActionPageRename], [authz.ActionPageTrash], [authz.ActionPageRestore],
-// [authz.ActionPagePurge] and [authz.ActionPageCommentRemove]. The four page verbs had rules and no caller
-// at all until this surface; the work purge had a route of its own under
-// /work/{id}/purge with an operator check written beside it, which this
-// replaces.
+// [authz.ActionPagePurge] and [authz.ActionPageCommentRemove] — answer through
+// the same refusal mapping ([operator.Fail]), and publish the same
+// `operator_acted` record the dispatch publishes for a tool
+// ([operator.AuditGesture]), so a verb with no tool is no less recorded. The
+// four page verbs had rules and no caller at all until this surface; the work
+// purge had a route of its own under /work/{id}/purge with an operator check
+// written beside it, which this replaces. Placing a card on a board used to be
+// one of them; it is `place_work_item` now, and its route an adapter over it.
 //
 // # Authority is decided ONCE, and read identically everywhere
 //
@@ -46,15 +51,24 @@
 // A refusal is WORDED by [builtin.Refusal] from the error [builtin.DecisionError]
 // makes of the decision — the same two functions the tools' own gate uses — so
 // "you may not" reads identically on a seat's turn, in the operator's
-// assistant and here. A route that composed its own sentence would be where
-// the three first disagreed.
+// assistant and here, and it is ANSWERED in the engine's envelope with the
+// rule's reason and the grants that would have admitted the caller
+// ([operator.RefuseDecision]). A route that composed its own sentence would be
+// where the three first disagreed.
 //
 // # The status codes, and why each is its own
+//
+// They are the operator surface's one refusal mapping ([operator.Fail]), so a
+// refusal reads the same here as on the act route; the `error` of a refused
+// call is its refusal CLASS's own spelling.
 //
 //   - 400 — the request is the caller's to change: a body the verb does not
 //     take, or an `Idempotency-Key` that is not an operation id.
 //   - 401 — nobody presented a credential.
-//   - 403 — a credential this node knows, refused by the authority table.
+//   - 403 `unauthorized` — a credential this node knows, refused by the
+//     authority table, carrying the rule's `reason` and the `grants` that
+//     would have admitted it (`step_up_required` where only a fresher proof
+//     is missing); `forbidden` — a rule of the domain's own.
 //   - 503 with Retry-After — this node could not decide (the identity estate
 //     or the chart could not be read), or could not establish the outcome.
 //   - 503 `no_active_revision` — this node has not been handed a company yet,
@@ -64,10 +78,12 @@
 //   - 404 — the item, page or comment does not exist, or a purge destroyed it;
 //     and `no_route`, in the mux's own bytes, for a route of a half this
 //     company does not run — its tracker or its wiki is a vendor's.
-//   - 409 — somebody changed it since it was read: a stale version, a title
-//     taken, a race lost.
-//   - 422 — the domain refused the write on its own rules; the detail is its
-//     own sentence.
+//   - 409 — somebody changed it since it was read (`stale_version`), a race
+//     lost (`conflict`), a title taken (`exists`), or a state the request
+//     collided with (`reassignment_budget`, `inbox_full`, …).
+//   - 422 `invalid` — the domain refused an argument on its own rules, or a
+//     destructive verb's `?confirm=` does not name what it would destroy; the
+//     detail is its own sentence.
 //   - 200 / 202 / 503 — a write that was made answers the tool's own outcome:
 //     applied, pending with the position to read at, or unknown carrying the
 //     operation key a retry must reuse — and, where this node's operation
@@ -126,10 +142,11 @@ import (
 
 	"github.com/crewlet/crewlet/internal/agent/builtin"
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
-	"github.com/crewlet/crewlet/internal/api/auth"
 	"github.com/crewlet/crewlet/internal/api/httpjson"
+	"github.com/crewlet/crewlet/internal/api/operator"
 	"github.com/crewlet/crewlet/internal/api/opkey"
 	"github.com/crewlet/crewlet/internal/authz"
+	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/logging"
 	"github.com/crewlet/crewlet/internal/pages"
@@ -161,11 +178,11 @@ var decisionRead = statelog.Freshness{
 	Level: statelog.DefaultReadLevel(statelog.SurfaceSeat),
 }
 
-// TrackerWriter is the tracker's write side for the three gestures no tool
-// makes, bound to one actor.
+// TrackerWriter is the tracker's write side for the two gestures no tool
+// makes — rewriting one's own remark and a work item's purge — bound to one
+// actor. A rank move is NOT one of them: the board drag is the catalogue's
+// `place_work_item`, reached through the dispatch like every other tool.
 type TrackerWriter interface {
-	MoveTask(ctx context.Context, opID, project, taskID string,
-		after, before tracker.Rank) (tracker.WriteResult, error)
 	PurgeTask(ctx context.Context, opID, id, project, reason string) (
 		tracker.WriteResult, error)
 	EditComment(ctx context.Context, opID, taskID, project, commentID,
@@ -185,11 +202,10 @@ type PageStore interface {
 }
 
 // Halves are the two halves this surface serves, as one request finds them:
-// the deps the tools are built from — the SAME values the operator's
-// assistant is served from — and the two writers for the gestures no tool
-// makes. Their Actor and Authorize fields are this surface's to set and are
-// overwritten: the actor is the request's principal, and the decision is
-// [Options.Chart]'s.
+// the readers a route reads a row through before it decides on it — the SAME
+// deps the operator surface builds its catalogue from — and the two writers
+// for the gestures no tool makes. The tools themselves are reached through
+// [Options.Operator], which reads its own halves from the same constructor.
 type Halves struct {
 	Work  builtin.WorkDeps
 	Pages builtin.PageDeps
@@ -241,19 +257,40 @@ type Options struct {
 	// Chart is what every decision on this surface reads, routes and tools
 	// alike.
 	//
-	// ONE FIELD RATHER THAN A CHART AND AN AUTHORIZER, because the tools'
-	// decision is [builtin.Decide] over this same chart: two fields could
-	// be set to two charts, and a route and the tool behind it would then
-	// answer one question two ways. REQUIRED — [authz.NoChart] says "decide
-	// on grants alone" out loud where a nil would read as an omission.
+	// THE CHART THE OPERATOR'S DECISION IS BUILT OVER, and its builder
+	// hands both the same value: the tools' decision is [builtin.Decide]
+	// over it, so a route deciding on another chart and the tool behind it
+	// would answer one question two ways. REQUIRED — [authz.NoChart] says
+	// "decide on grants alone" out loud where a nil would read as an
+	// omission.
 	Chart authz.Chart
+
+	// Operator is the operator surface's ONE DISPATCH, which every
+	// tool-backed route calls — the same path the act route and an
+	// operator's assistant take, so the catalogue, the authority decision,
+	// the refusal and the audit record are one implementation whichever
+	// surface a person used. REQUIRED.
+	Operator Dispatcher
+
+	// Audit is where a verb with no tool publishes the `operator_acted`
+	// record the dispatch publishes for a tool ([operator.AuditGesture]):
+	// the node's own queue. REQUIRED, for [operator.Options.Audit]'s reason.
+	Audit operator.AuditPublisher
+}
+
+// Dispatcher is the operator surface's dispatch, as this surface calls it.
+type Dispatcher interface {
+	Dispatch(ctx context.Context, c operator.Call) (tools.Result, error)
+	DispatchRecord(ctx context.Context, c operator.Call, name string,
+		write operator.RecordWrite) (tools.Result, error)
 }
 
 // Service is the surface.
 type Service struct {
-	halves    func() (Halves, bool)
-	chart     authz.Chart
-	authorize builtin.Authorizer
+	halves   func() (Halves, bool)
+	chart    authz.Chart
+	operator Dispatcher
+	audit    operator.AuditPublisher
 }
 
 // New builds the surface.
@@ -270,9 +307,17 @@ func New(opts Options) (*Service, error) {
 		return nil, errors.New("workapi: no chart: every decision here reads " +
 			"one — pass authz.NoChart to decide on grants alone")
 	}
+	if opts.Operator == nil {
+		return nil, errors.New("workapi: no operator dispatch: every " +
+			"tool-backed route calls the one the act route and an operator's " +
+			"assistant call")
+	}
+	if opts.Audit == nil {
+		return nil, operator.ErrNoAudit
+	}
 	return &Service{
 		halves: opts.Halves, chart: opts.Chart,
-		authorize: builtin.Decide(opts.Chart),
+		operator: opts.Operator, audit: opts.Audit,
 	}, nil
 }
 
@@ -361,15 +406,33 @@ func (s *Service) guard(r *http.Request, p authz.Policy) authz.Decision {
 	return authz.ContextGuard(s.chart)(r, p)
 }
 
-// refuse renders what the router did not admit.
+// refuse renders what the router did not admit, in the operator surface's
+// envelope — the one a tool's own refusal is answered in.
+//
+// AND RECORDS IT, as [Service.decide] records a refusal it takes after a
+// read: a route that decides the verb on its path refuses BEFORE the tool or
+// the writer runs, so without this the same refusal was recorded when a
+// person met it through the act route or their assistant — where the tool's
+// own gate refuses it — and was not when they met it here. Nobody resolved
+// is not recorded: there is nobody to name, and the guard's own trail counts
+// a refused credential.
 func (s *Service) refuse(w http.ResponseWriter, r *http.Request, p authz.Policy,
 	d authz.Decision) {
 
-	s.refuseDecision(w, r, p.Action, d)
+	if _, how := iam.From(r.Context()); how == iam.Resolved {
+		operator.AuditRefusal(r.Context(), s.audit, types.TransportWork,
+			string(p.Action), "", d.Unknown())
+	}
+	operator.RefuseDecision(w, r, p.Action, d)
 }
 
 // decide takes one decision this surface makes after reading a row, and
 // renders the refusal when there is one. It reports whether to go on.
+//
+// A REFUSAL HERE IS A CALL REFUSED, and it is recorded as the dispatch records
+// a tool's gate refusing one ([operator.AuditRefusal]): the verb a person
+// asked for and was not allowed is exactly what an audit is opened to find,
+// whether the verb had a tool behind it or not.
 func (s *Service) decide(w http.ResponseWriter, r *http.Request,
 	action authz.Action, object authz.Object) (authz.Decision, bool) {
 
@@ -381,67 +444,30 @@ func (s *Service) decide(w http.ResponseWriter, r *http.Request,
 		d = authz.Decide(r.Context(), principal, action, object, s.chart, time.Now())
 	}
 	if d.Unknown() || !d.Allowed {
-		s.refuseDecision(w, r, action, d)
+		if how == iam.Resolved {
+			operator.AuditRefusal(r.Context(), s.audit, types.TransportWork,
+				string(action), "", d.Unknown())
+		}
+		operator.RefuseDecision(w, r, action, d)
 		return d, false
 	}
 	return d, true
 }
 
-// refuseDecision is THE refusal this surface writes for an authority answer.
+// unavailableFor is a 503 for a READ this surface took before a decision, whose
+// CAUSE says whether, and when, to come back — [statelog.RetryAfter]'s rule,
+// which is every surface's.
 //
-// WORDED BY THE TOOLS' OWN FUNCTIONS — [builtin.DecisionError] makes the error
-// the tool's gate would have returned and [builtin.Refusal] the sentence the
-// tool would have answered with — so a refusal here and a refusal in a turn
-// or the operator's assistant are the same bytes.
-func (s *Service) refuseDecision(w http.ResponseWriter, r *http.Request,
-	action authz.Action, d authz.Decision) {
-
-	switch _, how := iam.From(r.Context()); {
-	case how == iam.Anonymous:
-		httpjson.Fail(w, http.StatusUnauthorized, httpjson.CodeInvalidToken)
-	case how == iam.Unknown:
-		// THE IDENTITY ESTATE'S OWN HINT, declared once beside it — this
-		// surface carried a private copy of the number, which is how three
-		// spellings of one hint come to disagree.
-		httpjson.Unavailable(w, httpjson.CodeIdentityUnavailable,
-			auth.RetryIdentitySeconds)
-	case d.Unknown():
-		unavailable(w, builtin.Refusal(string(action),
-			builtin.DecisionError(action, d)), nil)
-	default:
-		httpjson.FailWith(w, http.StatusForbidden, httpjson.CodeForbidden,
-			map[string]string{"detail": builtin.Refusal(string(action),
-				builtin.DecisionError(action, d))})
-	}
-}
-
-// unavailable writes a 503 this caller should retry, with what to retry with.
-func unavailable(w http.ResponseWriter, detail string, extra map[string]any) {
-	unavailableFor(w, nil, detail, extra)
-}
-
-// unavailableFor is [unavailable] for a 503 whose CAUSE says whether, and
-// when, to come back — [statelog.RetryAfter]'s rule, which is every surface's.
-//
-// A REFUSAL WAITING CANNOT CLEAR CARRIES NO Retry-After: a write refused by an
-// evicted node or on a full log, a read refused by a node holding a record it
-// cannot decode, answer the same however often they are asked. Every one of
-// them went out as "come back in two seconds", and a client obeyed for as long
-// as nobody readmitted, upgraded or resized anything. A refusal that derived a
-// hint says that; anything else is [authz.RetryUndecidedSeconds], the scale of
-// this node applying one more batch or its chart view catching up — this
-// surface's own copy of that number is gone for the reason the identity
-// hint's is.
-func unavailableFor(w http.ResponseWriter, cause error, detail string,
-	extra map[string]any) {
-
-	body := httpjson.Detail{"detail": detail}
-	for k, v := range extra {
-		body[k] = v
-	}
+// A REFUSAL WAITING CANNOT CLEAR CARRIES NO Retry-After: a read refused by a
+// node holding a record it cannot decode answers the same however often it is
+// asked. A refusal that derived a hint says that; anything else is
+// [authz.RetryUndecidedSeconds], the scale of this node applying one more batch
+// or its chart view catching up.
+func unavailableFor(w http.ResponseWriter, cause error, detail string) {
 	httpjson.UnavailableWith(w, httpjson.CodeUnavailable,
 		httpjson.RetrySeconds(statelog.RetryAfter(cause,
-			authz.RetryUndecidedSeconds*time.Second)), body)
+			authz.RetryUndecidedSeconds*time.Second)),
+		httpjson.Detail{"detail": detail})
 }
 
 // ---- calling a tool ---------------------------------------------------- //
@@ -465,8 +491,8 @@ func operationKey(w http.ResponseWriter, r *http.Request) (string, bool) {
 	return opkey.Key(w, r, time.Now())
 }
 
-// keyedOp is the operation id of one write this surface makes ITSELF — a rank
-// move, a remark's edit, a purge — derived from the request's key, its verb,
+// keyedOp is the operation id of one write this surface makes ITSELF — a
+// remark's edit, a purge — derived from the request's key, its verb,
 // the object it is about and WHAT THE REQUEST ASKS of it.
 //
 // The verb and the object are in the identity, so the one key covers every
@@ -481,8 +507,8 @@ func operationKey(w http.ResponseWriter, r *http.Request) (string, bool) {
 //
 // Because the ledger answers an operation it already holds BEFORE the write is
 // decided ([statelog.Result.Collapsed]), an id named by the verb and the object
-// alone made the same key sent with another request — a card dropped
-// somewhere else, a remark rewritten again — the FIRST request's operation:
+// alone made the same key sent with another request — a remark rewritten
+// again, a purge for another reason — the FIRST request's operation:
 // answered `applied` from the ledger, with nothing of the second written. That
 // is a change reported as made and silently dropped, the one answer a retry
 // key must never produce. With the arguments in the identity the same request
@@ -506,67 +532,8 @@ func keyedOp(key, verb, object string, args map[string]any) string {
 // a retry that straddles the change a second write.
 const keyedOpNamespace = "crewlet.workapi"
 
-// deps are this surface's deps for ONE request: the actor is the request's
-// principal carrying the request's operation key, and the decision is the
-// chart's.
-//
-// PER REQUEST because the key is: an actor built once would stamp every
-// request with the first one's seed, and the ledger would collapse every
-// write after it as a redelivery — the defect callKey's own doc records the
-// operator surface having for a deployment's whole life.
-//
-// THE KEY'S INSTANT TRAVELS WITH IT as [builtin.Actor.WorkSince], which is the
-// instant every id the tools derive from the key carries
-// ([builtin.Actor.OperationSince]). Left zero, every write this surface made
-// was one the ledger read as minted at the epoch — see [operationKey].
-//
-// THE KEY AS SENT, to both: the tracker's tools bind every id they derive to
-// the call's own arguments, and the knowledge base binds every id to what each
-// write says ([pages.Store]), so neither needs it bound here.
-func (s *served) deps(key string) (builtin.WorkDeps, builtin.PageDeps) {
-
-	work, kb := s.Work, s.Pages
-	work.Actor = func(ctx context.Context, turn *turnctx.Turn) (builtin.Actor, error) {
-		actor, err := builtin.PrincipalActor(ctx, turn)
-		seed(&actor, key)
-		return actor, err
-	}
-	kb.Actor = func(ctx context.Context, turn *turnctx.Turn) (pages.Actor, error) {
-		actor, err := builtin.PrincipalPageActor(ctx, turn)
-		actor.OpKey = key
-		return actor, err
-	}
-	work.Authorize, kb.Authorize = s.authorize, s.authorize
-	return work, kb
-}
-
-// operationArg is the argument the operator's tools take an operation id in —
-// builtin's own spelling, which that package does not export.
-const operationArg = "op_id"
-
-// noOperationArg refuses a body carrying an `op_id`, reporting whether the
-// request may go on.
-//
-// THIS SURFACE'S OPERATION IS THE REQUEST'S KEY, and a tool served here derives
-// every write from it — so the tool refuses an `op_id` beside it, in a sentence
-// written for the operator's assistant, and as a failure with no cause of its
-// own that answered `422 refused`: "the domain would not take it", said of a
-// request shaped for another surface. It is the caller's to change, so it is
-// `400`, naming where the operation goes here.
-func noOperationArg(w http.ResponseWriter, args map[string]any) bool {
-	if _, sent := args[operationArg]; !sent {
-		return true
-	}
-	httpjson.FailWith(w, http.StatusBadRequest, httpjson.CodeInvalidBody,
-		map[string]string{"detail": "this surface takes the operation from the " +
-			opkey.Header + " header, which every write the request makes " +
-			"derives its id from; leave `" + operationArg + "` out of the body " +
-			"and send the op_id an earlier answer returned as the header"})
-	return false
-}
-
 // seed puts the request's operation key on a work actor, with the instant it
-// was minted at — see [Service.deps].
+// was minted at, for a gesture this surface makes without a tool.
 func seed(actor *builtin.Actor, key string) {
 	actor.WorkKey = key
 	actor.WorkSince, _ = statelog.OpMintedAt(key)
@@ -582,7 +549,7 @@ func (s *Service) actor(w http.ResponseWriter, r *http.Request, key string) (
 		// principal before a handler runs; refused rather than trusted
 		// if it somehow is not, because a write with no author is the
 		// one thing this surface must never record.
-		s.refuseDecision(w, r, "", authz.Decision{Err: err})
+		operator.RefuseDecision(w, r, "", authz.Decision{Err: err})
 		return builtin.Actor{}, false
 	}
 	seed(&actor, key)
@@ -596,56 +563,68 @@ func (s *Service) pageActor(w http.ResponseWriter, r *http.Request,
 
 	actor, err := builtin.PrincipalPageActor(r.Context(), nil)
 	if err != nil {
-		s.refuseDecision(w, r, "", authz.Decision{Err: err})
+		operator.RefuseDecision(w, r, "", authz.Decision{Err: err})
 		return pages.Actor{}, false
 	}
 	actor.OpKey = key
 	return actor, true
 }
 
-// call runs one tool as the request's principal and answers its receipt.
+// call runs one tool as the request's principal, through the operator
+// surface's dispatch, and answers its receipt.
 func (s *served) call(w http.ResponseWriter, r *http.Request, verb string,
 	args map[string]any) {
 
-	if !noOperationArg(w, args) {
+	if !operator.NoOperationArg(args) {
+		operator.RefuseOperationArg(w, verb)
 		return
 	}
 	key, ok := operationKey(w, r)
 	if !ok {
 		return
 	}
-	work, kb := s.deps(key)
-	for _, tool := range builtin.OperatorTools(builtin.OperatorDeps{
-		Work: work, Pages: kb, Authorize: s.authorize,
-	}) {
-		if tool.Name() != verb {
-			continue
-		}
-		result, err := tool.Call(r.Context(), args)
-		if err != nil {
-			// THE CALLER'S CONTEXT ENDED — internal/mcp's own meaning
-			// of a tool error — and a write may have landed before it
-			// did, so this is an UNKNOWN outcome rather than a refusal:
-			// whether it landed is exactly what a retry under the same
-			// key resolves, and a client reading a refusal here would
-			// make the change again under a fresh one.
-			unknownOutcome(w, key, false, "the request ended before "+verb+
-				" answered: "+err.Error(), nil)
-			return
-		}
-		answerTool(w, key, result)
-		return
-	}
-	// A VERB THIS NODE DOES NOT SERVE — its backend is absent — is a 404
-	// rather than a refusal: nothing here could ever make it succeed.
-	httpjson.FailWith(w, http.StatusNotFound, httpjson.CodeNotFound,
-		map[string]string{"detail": verb + " is not served by this node"})
+	result, err := s.operator.Dispatch(r.Context(), operator.Call{
+		Transport: types.TransportWork, Key: key, Tool: verb, Args: args,
+	})
+	s.answerDispatched(w, r, key, verb, operator.About(verb, args), result, err)
 }
 
-// answerTool renders one tool's receipt.
-func answerTool(w http.ResponseWriter, key string, result tools.Result) {
+// answerDispatched renders what the dispatch answered one call with.
+func (s *served) answerDispatched(w http.ResponseWriter, r *http.Request, key,
+	verb string, about httpjson.Detail, result tools.Result, err error) {
+
+	switch {
+	case errors.Is(err, operator.ErrNotUp):
+		// THE DISPATCH READS ITS HALVES PER CALL, as this surface does:
+		// a node that met its company between the two reads is up for
+		// the next request.
+		httpjson.NoActiveRevision(w, httpjson.Detail{
+			"detail": httpjson.NativeHalvesNotUp})
+	case errors.Is(err, operator.ErrNotServed):
+		// A VERB THIS NODE DOES NOT SERVE — its backend is absent — is a
+		// 404 rather than a refusal: nothing here could ever make it
+		// succeed.
+		httpjson.FailWith(w, http.StatusNotFound, httpjson.CodeNotFound,
+			map[string]string{"detail": verb + " is not served by this node"})
+	case err != nil:
+		// THE CALLER'S CONTEXT ENDED — internal/mcp's own meaning of a
+		// tool error — and a write may have landed before it did, so
+		// this is an UNKNOWN outcome rather than a refusal: whether it
+		// landed is exactly what a retry under the same key resolves,
+		// and a client reading a refusal here would make the change
+		// again under a fresh one.
+		operator.Interrupted(w, r, key, verb, err)
+	default:
+		answerTool(w, key, about, result)
+	}
+}
+
+// answerTool renders one tool's receipt, or its failure beside about.
+func answerTool(w http.ResponseWriter, key string, about httpjson.Detail,
+	result tools.Result) {
+
 	if result.Failed {
-		fail(w, result.Cause, result.Output, key)
+		operator.Fail(w, result.Cause, result.Output, key, about)
 		return
 	}
 	var receipt map[string]any
@@ -661,8 +640,8 @@ func answerTool(w http.ResponseWriter, key string, result tools.Result) {
 	moveStoppedHere(receipt)
 	// A RECEIPT CARRIES NO LEDGER FACTS: a tool reports an outcome nobody
 	// can establish as a FAILED result carrying [builtin.UnknownOutcome],
-	// which [fail] answers, so an `unknown` still found here is a nested
-	// half of a two-record tool, whose own detail says what landed.
+	// which [operator.Fail] answers, so an `unknown` still found here is a
+	// nested half of a two-record tool, whose own detail says what landed.
 	answer(w, key, outcomeOf(receipt), false, receipt)
 }
 
@@ -732,7 +711,7 @@ func subtreeStoppedHere(receipt map[string]any) {
 // so "the SAME key" told that client to repeat a header it never held — and a
 // resend without one is a new operation, which is exactly what is refused.
 // The answer carries the key as `op_id` whichever way it was made, and
-// [unknownOutcome] words its own retry the same way.
+// [operator.UnknownOutcome] words its own retry the same way.
 func moveStoppedHere(receipt map[string]any) {
 	said, stopped := receipt["move_stopped"]
 	if !stopped {
@@ -774,39 +753,27 @@ func moveStoppedHere(receipt map[string]any) {
 }
 
 // outcomeOf is a receipt's outcome: its own, or — for a tool that made two
-// records, as write_project's tag and policy halves are — the WEAKER of the
-// ones it nests, because the answer is about the whole request.
+// records, as write_project's tag and policy halves are — the LESS CERTAIN of
+// the ones it nests ([statelog.LessCertain]), because the answer is about the
+// whole request. A receipt that nests none appended nothing, and is applied.
 func outcomeOf(receipt map[string]any) statelog.Outcome {
 	if held, ok := receipt["outcome"].(string); ok && held != "" {
 		return statelog.Outcome(held)
 	}
-	weakest := statelog.OutcomeApplied
+	var least statelog.Outcome
 	for _, v := range receipt {
 		nested, ok := v.(map[string]any)
 		if !ok {
 			continue
 		}
 		if held, ok := nested["outcome"].(string); ok {
-			weakest = weaker(weakest, statelog.Outcome(held))
+			least = statelog.LessCertain(least, statelog.Outcome(held))
 		}
 	}
-	return weakest
-}
-
-// weaker is the lesser of two outcomes: unknown below pending below applied.
-func weaker(a, b statelog.Outcome) statelog.Outcome {
-	rank := map[statelog.Outcome]int{
-		statelog.OutcomeUnknown: 0, statelog.OutcomePending: 1,
+	if least == "" {
+		return statelog.OutcomeApplied
 	}
-	ra, oka := rank[a]
-	rb, okb := rank[b]
-	switch {
-	case !okb:
-		return a
-	case !oka || rb < ra:
-		return b
-	}
-	return a
+	return least
 }
 
 // answer writes a write that was MADE, under its outcome.
@@ -814,7 +781,8 @@ func weaker(a, b statelog.Outcome) statelog.Outcome {
 // THE THREE SUCCESSES ARE THREE ANSWERS, for chartapi's reason: only
 // `applied` means the next read on this node sees the write, so only it is a
 // 200. `pending` is durable and not yet here — 202 with the position to read
-// at. `unknown` is a write this node cannot account for — [unknownOutcome].
+// at. `unknown` is a write this node cannot account for —
+// [operator.UnknownOutcome].
 func answer(w http.ResponseWriter, key string, outcome statelog.Outcome,
 	unvouched bool, body map[string]any) {
 
@@ -828,155 +796,18 @@ func answer(w http.ResponseWriter, key string, outcome statelog.Outcome,
 			"it; this one has not yet. Read at the position above to see it."
 		httpjson.Write(w, http.StatusAccepted, body)
 	case statelog.OutcomeUnknown:
-		unknownOutcome(w, key, unvouched, "", body)
+		operator.UnknownOutcome(w, key, unvouched, "", body)
 	default:
 		httpjson.Write(w, http.StatusOK, body)
 	}
 }
 
-// unknownOutcome is the 503 of a write this node cannot account for, carrying
-// `outcome: "unknown"`, the request's operation key and whether ANOTHER node
-// could say more — through [httpjson.UnknownOutcome], so it is told from a
-// refusal that wrote nothing by a field rather than by a sentence.
-//
-// # Two unknowns, and they send a client opposite ways
-//
-// A LOST ACKNOWLEDGEMENT is settled by the same request again under the same
-// key, HERE: the ledger answers what landed, and it lands once if it did not —
-// so the answer carries the Retry-After this node's own undecided hint gives.
-// An UNVOUCHED one ([statelog.Result.Unvouched]) was not published at all:
-// this node's operation ledger may have lost the row the operation needs, so
-// the same request asked here answers the same way until the write reaches
-// this node, whenever that is — and the answer says so by carrying NO
-// Retry-After and `unvouched`, and by sending the client to another node, or
-// to read whether it landed. Either way the key is the one to keep: a fresh
-// one is a second operation, and if the first landed it is a second write.
-//
-// what is the tool's own sentence about THIS write — what may have landed, and
-// what shows whether it did — carried as `tool_detail` beside this surface's
-// own, or empty where there is none. about is the write's own receipt — the
-// item, the comment or the page it was about, and for a tool that writes two
-// records the half that did land — carried beneath this answer's own fields,
-// because a 503 that dropped it left a client holding a key and nothing saying
-// which object to read to see whether it landed.
-func unknownOutcome(w http.ResponseWriter, key string, unvouched bool, what string,
-	about map[string]any) {
-
-	body := httpjson.Detail{}
-	for k, v := range about {
-		body[k] = v
-	}
-	body["detail"] = opkey.UnknownDetail(unvouched)
-	if what != "" {
-		body["tool_detail"] = what
-	}
-	// THE WRITER OWNS `outcome`, `op_id` and `unvouched`, over whatever the
-	// receipt carried — a two-record tool's receipt has no `outcome` of its
-	// own, only its halves' — and drops the Retry-After of an unvouched one.
-	httpjson.UnknownOutcome(w, authz.RetryUndecidedSeconds, key, unvouched, body)
-}
-
-// fail renders a write that was NOT made.
-//
-// FROM THE CAUSE, never from the sentence: a tool's refusal carries the error
-// underneath it as [tools.Result.Cause], and reading a status back out of a
-// sentence written for a model would make the wording of every refusal an API.
-// The sentence is still the detail, because it is the only thing that says
-// what to do.
-func fail(w http.ResponseWriter, cause error, text, key string) {
-	detail := map[string]string{"detail": text}
-	var unknown *builtin.UnknownOutcome
-	switch {
-	case errors.As(cause, &unknown):
-		// NOT A REFUSAL AND NOT A FAILURE: a tool reports a write whose
-		// outcome nobody can establish as a failed result carrying
-		// [builtin.UnknownOutcome], and read by the cases below it fell to
-		// `422 refused` — "nothing was written" said of a change that may
-		// well have landed, so the client made it a second time. FIRST,
-		// because the cause it wraps may be anything the step answered.
-		//
-		// THE KEY IS THE REQUEST'S: every id the tool derived is a
-		// function of it, so sending it back is the same operation. The
-		// tool's own id is the step it was on, which no header can name.
-		unknownOutcome(w, key, unknown.Unvouched, text, nil)
-	case errors.Is(cause, builtin.ErrOutcomeUnknown):
-		// The sentinel without its facts: nothing says another node could
-		// do better, so it is the ordinary unknown.
-		unknownOutcome(w, key, false, text, nil)
-	case deleted(cause):
-		// A PERMANENT DELETION MARKER on what the write is about: it was
-		// purged, and nothing will ever write it again — a 404 for what no
-		// longer exists, rather than a 503 telling a client to find a node
-		// that will.
-		httpjson.FailWith(w, http.StatusNotFound, httpjson.CodeNotFound, detail)
-	case refusedFor(cause, statelog.ReasonOpReused):
-		// AN OPERATION THIS REQUEST DERIVES ALREADY NAMES A WRITE TO
-		// ANOTHER OBJECT — what the request names moved since the key was
-		// first sent (a move's item moved again, so the key it aliases is
-		// another) — and nothing was written. A conflict the caller
-		// resolves with a new key, never by waiting, which is what the 503
-		// every other refusal is would have told it to do.
-		refuseReusedKey(w, text, key)
-	case errors.Is(cause, builtin.ErrUnauthenticated):
-		httpjson.FailWith(w, http.StatusUnauthorized, httpjson.CodeInvalidToken, detail)
-	case errors.Is(cause, builtin.ErrUndeclaredArgument):
-		// THE REQUEST IS THE CALLER'S TO CHANGE: an argument the tool
-		// does not read, refused by name at the tools' own gate rather
-		// than dropped — see [builtin.ErrUndeclaredArgument].
-		httpjson.FailWith(w, http.StatusBadRequest, httpjson.CodeInvalidBody, detail)
-	case errors.Is(cause, builtin.ErrRefused), errors.Is(cause, tracker.ErrNotAuthor):
-		httpjson.FailWith(w, http.StatusForbidden, httpjson.CodeForbidden, detail)
-	case errors.Is(cause, builtin.ErrUndecidable):
-		unavailable(w, text, map[string]any{"op_id": key})
-	case errors.Is(cause, builtin.ErrNoAuthorizer):
-		// A WIRING THAT DECIDED NOTHING, which no retry clears.
-		httpjson.FailWith(w, http.StatusInternalServerError,
-			httpjson.CodeInternalError, detail)
-	case errors.Is(cause, tracker.ErrNoTask), errors.Is(cause, tracker.ErrNoComment),
-		errors.Is(cause, tracker.ErrNoProject), errors.Is(cause, pages.ErrNotFound),
-		// A LOGIN NOBODY HOLDS, and a holder whose seat the chart no
-		// longer has, name no record — which the caller only learns
-		// once the table admitted them on the name as typed, so this is
-		// never a roster (see builtin's person verbs).
-		errors.Is(cause, iam.ErrNoHolder), errors.Is(cause, iam.ErrHolderUnseated):
-		httpjson.FailWith(w, http.StatusNotFound, httpjson.CodeNotFound, detail)
-	case errors.Is(cause, tracker.ErrStaleVersion), errors.Is(cause, pages.ErrStaleVersion),
-		errors.Is(cause, pages.ErrConflict), errors.Is(cause, pages.ErrTitleTaken),
-		errors.Is(cause, statelog.ErrConflict), errors.Is(cause, statelog.ErrExists):
-		httpjson.FailWith(w, http.StatusConflict, httpjson.CodeStale, detail)
-	case errors.Is(cause, statelog.ErrUnavailable):
-		unavailableFor(w, cause, text, map[string]any{"op_id": key})
-	default:
-		httpjson.FailWith(w, http.StatusUnprocessableEntity, httpjson.CodeRefused, detail)
-	}
-}
-
-// deleted reports a write refused because what it is about carries a
-// permanent deletion marker ([statelog.ReasonDeleted]).
-func deleted(err error) bool { return refusedFor(err, statelog.ReasonDeleted) }
-
-// refusedFor reports a write the state log refused for one reason.
-func refusedFor(err error, reason statelog.Reason) bool {
-	var refused *statelog.Unavailable
-	return errors.As(err, &refused) && refused.Reason == reason
-}
-
-// refuseReusedKey answers a key whose operation already names a write to
-// another object ([statelog.ReasonOpReused]): `409`, naming the header,
-// carrying the key.
-func refuseReusedKey(w http.ResponseWriter, detail, key string) {
-	httpjson.FailWithFields(w, http.StatusConflict, httpjson.CodeInvalidInput,
-		httpjson.Detail{"field": opkey.Header, "op_id": key,
-			"detail": detail + " — under this " + opkey.Header + " the " +
-				"write already landed on something else, since what this " +
-				"request names has changed; read it again and send this one " +
-				"under a new key"})
-}
-
-// failErr is [fail] for a writer this surface called itself, whose error is
-// both the cause and the sentence.
-func failErr(w http.ResponseWriter, err error, key string) {
-	fail(w, err, err.Error(), key)
+// failErr answers the error a writer this surface called itself returned
+// through the operator surface's one refusal mapping, the writer's own refusal
+// classified as a tool's would be and worded for whoever reads it
+// ([operator.FailWrite]) — a fault in fixed words, its error in the log.
+func failErr(w http.ResponseWriter, r *http.Request, err error, key string) {
+	operator.FailWrite(r.Context(), w, err, key, nil)
 }
 
 // readFailed answers a read taken before a decision that could not be served.
@@ -985,24 +816,28 @@ func failErr(w http.ResponseWriter, err error, key string) {
 // and a row this node could not read are opposite answers, and a read failure
 // rendered as "no such item" is how a caller comes to file a duplicate.
 //
-// AND "THIS NODE" IS TWO THINGS. A read the state log REFUSED is `503` with the
-// refusal's own words and hint — composed for a caller, and saying whether
-// waiting helps. Anything else is a FAULT: `500 internal_error`, its words to
-// the log. Both were one 503 carrying the error's text, so a store this node
-// could not read told a client to come back in two seconds, and handed it a
-// database path to read while it waited.
-func readFailed(w http.ResponseWriter, err error) {
-	switch {
-	case errors.Is(err, tracker.ErrNoTask) || errors.Is(err, pages.ErrNotFound):
+// AND "THIS NODE" IS TWO THINGS, told apart by the rule every tool classes a
+// failure of its own by ([builtin.Condition]). A CONDITION waiting clears — a
+// read the state log refused, a store closed while it adopts a peer's
+// snapshot — is `503` in the condition's own words, with the refusal's hint:
+// composed for a caller, and saying whether waiting helps. Anything else is a
+// FAULT: `500 internal_error`, its words to the log at error, because nobody
+// but whoever runs the node can act on it. Both were one 503 carrying the
+// error's text, so a store this node could not read told a client to come
+// back in two seconds, and handed it a database path to read while it waited.
+func readFailed(w http.ResponseWriter, r *http.Request, err error) {
+	if errors.Is(err, tracker.ErrNoTask) || errors.Is(err, pages.ErrNotFound) {
 		httpjson.FailWith(w, http.StatusNotFound, httpjson.CodeNotFound,
 			map[string]string{"detail": err.Error()})
-	case errors.Is(err, statelog.ErrUnavailable):
-		unavailableFor(w, err, "this node could not read what the decision is "+
-			"about: "+err.Error(), nil)
-	default:
-		log.Warn("api_work_read_failed", "error", err)
-		httpjson.Fail(w, http.StatusInternalServerError, httpjson.CodeInternalError)
+		return
 	}
+	if why, ok := builtin.Condition(err); ok {
+		unavailableFor(w, err, "this node could not read what the decision is "+
+			"about: "+why)
+		return
+	}
+	log.ErrorContext(r.Context(), "api_work_read_failed", "error", err.Error())
+	httpjson.Fail(w, http.StatusInternalServerError, httpjson.CodeInternalError)
 }
 
 // positionOf is a log position as a receipt states it: absent for a write that

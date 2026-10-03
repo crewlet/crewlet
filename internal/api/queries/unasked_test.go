@@ -5,23 +5,24 @@ package queries_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"slices"
+	"strings"
 	"testing"
-	"time"
 
-	"github.com/crewlet/crewlet/internal/agent/ledger"
-	"github.com/crewlet/crewlet/internal/agent/ledger/ledgerstore"
 	"github.com/crewlet/crewlet/internal/api/queries"
 	"github.com/crewlet/crewlet/internal/authz"
+	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/iam"
-	"github.com/crewlet/crewlet/internal/learning"
+	"github.com/crewlet/crewlet/internal/knowledge"
+	"github.com/crewlet/crewlet/internal/learning/memread"
 	"github.com/crewlet/crewlet/internal/tracker"
 )
 
-// answeredMap and answeredAsOperator run one question and insist it succeeded,
-// so a case about a VALUE never quietly becomes a case about a refusal. Two
-// functions rather than a flag, for [askAsOperator]'s own reason: no case here
-// can hand itself a credential by accident.
+// answeredMap runs one question and insists it succeeded, so a case about a
+// VALUE never quietly becomes a case about a refusal. It takes no credential,
+// for [askAsOperator]'s own reason: no case here can hand itself one by
+// accident.
 func answeredMap(t *testing.T, s queries.Sources, what string,
 	params map[string]any) map[string]any {
 
@@ -37,16 +38,6 @@ func answeredTranscripts(t *testing.T, s queries.Sources, what string,
 
 	t.Helper()
 	got, err := askTranscripts(t, s, what, params)
-	return answerMap(t, got, err)
-}
-
-// answeredAsAna is [answeredMap] for a caller bound to a SEAT, which is what
-// every per-seat question is scoped by.
-func answeredAsAna(t *testing.T, s queries.Sources, what string,
-	params map[string]any) map[string]any {
-
-	t.Helper()
-	got, err := askAsSeat(t, s, "ana", what, params)
 	return answerMap(t, got, err)
 }
 
@@ -136,6 +127,64 @@ func TestASearchWithNoPhraseIsRefusedNamingTheParameter(t *testing.T) {
 	}
 }
 
+// WORK_SEARCH HONOURS THE MODE IT IS ASKED FOR and says what it served.
+//
+// The three modes are the knowledge search's own vocabulary, and the four
+// outcome fields are what one screen control reads from both answers — a
+// served mode that differs from the asked one is the only way a reader learns
+// they are looking at the words alone.
+func TestWorkSearchHonoursTheModeAndSaysWhatItServed(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		asked string
+		want  knowledge.Mode
+	}{
+		{"", knowledge.ModeHybrid},
+		{"hybrid", knowledge.ModeHybrid},
+		{"keyword", knowledge.ModeKeyword},
+		{"semantic", knowledge.ModeSemantic},
+	} {
+		w := &stubWork{searchOutcome: knowledge.Outcome{
+			ServedMode: knowledge.ModeKeyword,
+			Modes:      []knowledge.Mode{knowledge.ModeKeyword},
+			Degraded:   knowledge.DegradedNoEmbeddings,
+			Coverage: knowledge.Coverage{
+				Nodes: []knowledge.NodeCoverage{
+					{ID: "n1", Answered: true},
+					{ID: "n2", Error: "no answer arrived inside the search budget"},
+				},
+				BucketsMissing: 32,
+			},
+		}}
+		params := map[string]any{"q": "billing"}
+		if tc.asked != "" {
+			params["mode"] = tc.asked
+		}
+		got := answeredMap(t, queries.Sources{Work: &stubWork{}, WorkSearch: w},
+			"work_search", params)
+		if w.searchMode != tc.want {
+			t.Errorf("mode %q reached the searcher as %q, want %q",
+				tc.asked, w.searchMode, tc.want)
+		}
+		if got["served_mode"] != "keyword" || got["degraded"] != "no_embeddings" {
+			t.Errorf("served_mode=%v degraded=%v, want the searcher's own",
+				got["served_mode"], got["degraded"])
+		}
+		cov, ok := got["coverage"].(knowledge.Coverage)
+		if !ok || cov.Complete || cov.BucketsMissing != 32 || len(cov.Nodes) != 2 {
+			t.Errorf("coverage = %#v, want the partial answer the searcher reported", got["coverage"])
+		}
+		if modes, _ := got["modes"].([]string); len(modes) != 1 || modes[0] != "keyword" {
+			t.Errorf("modes = %#v", got["modes"])
+		}
+	}
+	_, err := askNative(t, queries.Sources{Work: &stubWork{}, WorkSearch: &stubWork{}},
+		"work_search", map[string]any{"q": "billing", "mode": "meaning"})
+	if !errors.Is(err, queries.ErrBadParams) || !strings.Contains(err.Error(), "semantic") {
+		t.Errorf("an unknown mode answered %v, want a refusal naming the modes", err)
+	}
+}
+
 // ---- work_routing -------------------------------------------------------- //
 
 // THE HORIZON REACHES THE READER, and it is the company's own rather than a
@@ -186,30 +235,63 @@ func TestARoutingReadWithNoRecordIsRefusedNamingTheParameter(t *testing.T) {
 	}
 }
 
-// ---- conversations ------------------------------------------------------- //
+// ---- a seat's memory and its conversation ledger ------------------------ //
 
-// stubConversations records what it was asked and answers fixtures.
-type stubConversations struct {
-	threads []ledgerstore.Thread
-	entries []ledger.Session
-	handle  string
-	key     string
-	limit   int
+// stubMemory records what it was asked and answers fixtures: the holder's
+// routing and the pages are memread's, and what is asserted here is only what
+// this surface hands it and hands back.
+type stubMemory struct {
+	memory  memread.Memory
+	threads memread.Threads
 	err     error
+
+	seat         memread.Seat
+	conversation string
+	limit        int
+	seats        []memread.Seat
 }
 
-func (s *stubConversations) Threads(_ context.Context, handle string, limit int) (
-	[]ledgerstore.Thread, error) {
+func (s *stubMemory) Memory(_ context.Context, seat memread.Seat, limit int) (memread.Memory, error) {
+	s.seat, s.limit = seat, limit
+	return s.memory, s.err
+}
 
-	s.handle, s.limit = handle, limit
+func (s *stubMemory) Threads(_ context.Context, seat memread.Seat, conversation string, limit int) (
+	memread.Threads, error) {
+
+	s.seat, s.conversation, s.limit = seat, conversation, limit
 	return s.threads, s.err
 }
 
-func (s *stubConversations) History(_ context.Context, handle, key string, _ int) (
-	[]ledger.Session, error) {
+func (s *stubMemory) Overview(_ context.Context, seats []memread.Seat) (memread.Overview, error) {
+	s.seats = seats
+	return memread.Overview{}, s.err
+}
 
-	s.handle, s.key = handle, key
-	return s.entries, s.err
+// trailCompany holds two AGENT seats, since a seat's trail is an agent's —
+// a person keeps no memory and says nothing on a surface through the engine.
+const trailCompany = `
+name: Acme
+providers:
+  llm:
+    p: {type: anthropic, model: m, api_keys: ["${K}"]}
+roles:
+  - name: Ana Diaz
+    handle: ana
+    llm: p
+  - name: Bo Lang
+    handle: bo
+    llm: p
+`
+
+// trailSources is [viewerSources] over [trailCompany].
+func trailSources(t *testing.T, memory *stubMemory) queries.Sources {
+	t.Helper()
+	cfg, err := config.ParseCompany([]byte(trailCompany))
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	return queries.Sources{Company: companySource(t, cfg), Memory: memory, Chart: flatChart{}}
 }
 
 // A SEAT'S THREADS ARE ITS TRAIL, AND THE AUDIT READ OPENS EVERY SEAT'S.
@@ -229,27 +311,23 @@ func (s *stubConversations) History(_ context.Context, handle, key string, _ int
 //   - and neither does a lead, for the same reason.
 func TestASeatsThreadsAreReadOnTheAuditGrant(t *testing.T) {
 	t.Parallel()
-	threads := []ledgerstore.Thread{{Key: "slack:C1", Entries: 3, LastAt: time.Now().UTC()}}
-
-	own := &stubConversations{threads: threads}
-	s := viewerSources(t, &stubWork{})
-	s.Conversations = own
-	got := answeredAsAna(t, s, "conversations", nil)
-	if got["handle"] != "ana" || own.handle != "ana" {
-		t.Errorf("no handle read %v (ledger asked %q), want the caller's own seat",
-			got["handle"], own.handle)
+	own := &stubMemory{}
+	if _, err := askAsSeat(t, trailSources(t, own), "ana", "conversations", nil); err != nil {
+		t.Fatalf("a seat's own threads: %v", err)
+	}
+	if own.seat.Handle != "ana" {
+		t.Errorf("no handle asked the holder about %q, want the caller's own seat",
+			own.seat.Handle)
 	}
 
-	auditor := &stubConversations{threads: threads}
-	s = viewerSources(t, &stubWork{})
-	s.Conversations = auditor
-	if _, err := askHolding(t, s, "ana", "conversations",
+	auditor := &stubMemory{}
+	if _, err := askHolding(t, trailSources(t, auditor), "ana", "conversations",
 		map[string]any{"handle": "bo"}, iam.GrantAuditRead); err != nil {
 		t.Fatalf("an auditor with no relation to bo was refused bo's threads: %v", err)
 	}
-	if auditor.handle != "bo" {
-		t.Errorf("the ledger was asked about %q, want the seat the auditor named",
-			auditor.handle)
+	if auditor.seat.Handle != "bo" {
+		t.Errorf("the holder was asked about %q, want the seat the auditor named",
+			auditor.seat.Handle)
 	}
 
 	for _, c := range []struct {
@@ -262,9 +340,8 @@ func TestASeatsThreadsAreReadOnTheAuditGrant(t *testing.T) {
 		{"a lead without the audit read", leadsChart{lead: "ana", report: "bo"},
 			[]iam.Grant{iam.GrantStateRead}},
 	} {
-		refusedStub := &stubConversations{threads: threads}
-		s := viewerSources(t, &stubWork{})
-		s.Conversations = refusedStub
+		refusedStub := &stubMemory{}
+		s := trailSources(t, refusedStub)
 		s.Chart = c.chart
 		_, err := askHolding(t, s, "ana", "conversations",
 			map[string]any{"handle": "bo"}, c.grants...)
@@ -277,9 +354,9 @@ func TestASeatsThreadsAreReadOnTheAuditGrant(t *testing.T) {
 			t.Errorf("%s was refused naming %v, want the audit read that "+
 				"would have admitted them", c.name, refusal.Grants)
 		}
-		if refusedStub.handle != "" {
-			t.Errorf("%s: the ledger was asked about %q anyway", c.name,
-				refusedStub.handle)
+		if refusedStub.seat.Handle != "" {
+			t.Errorf("%s: the holder was asked about %q anyway", c.name,
+				refusedStub.seat.Handle)
 		}
 	}
 }
@@ -292,8 +369,7 @@ func TestASeatsThreadsAreReadOnTheAuditGrant(t *testing.T) {
 // asking one verb from both questions is for.
 func TestASeatsMemoryIsReadOnTheSameVerbAsItsThreads(t *testing.T) {
 	t.Parallel()
-	s := viewerSources(t, &stubWork{})
-	s.Counterparties = &stubCounterparties{}
+	s := trailSources(t, &stubMemory{})
 	if _, err := askHolding(t, s, "ana", "agent_memory",
 		map[string]any{"id": "bo"}, iam.GrantAuditRead); err != nil {
 		t.Fatalf("an auditor with no relation to bo was refused bo's memory: %v", err)
@@ -311,158 +387,35 @@ func TestASeatsMemoryIsReadOnTheSameVerbAsItsThreads(t *testing.T) {
 	}
 }
 
-// TWO SHAPES IN ONE ANSWER, because the screen asks two questions with one
-// navigation: which threads this seat is in, and — when one is named — what it
-// said in that one. Split into two questions the second would need the first's
-// answer to know what to ask for.
-func TestNamingAThreadAddsItsTurnsToTheSameAnswer(t *testing.T) {
+// THE NAMED THREAD AND THE PAGE REACH THE HOLDER AS ASKED. The clamp is the
+// reader's (memread.ThreadPage), applied where the answer is built — on the
+// node that holds the seat — so this surface passes the page through rather
+// than clamping it twice.
+func TestTheNamedThreadAndThePageReachTheHolder(t *testing.T) {
 	t.Parallel()
-	ledgerStub := &stubConversations{
-		threads: []ledgerstore.Thread{{Key: "slack:C1", Entries: 2}},
-		entries: []ledger.Session{{TurnID: "t-1", Reply: "done"}},
+	memory := &stubMemory{}
+	s := trailSources(t, memory)
+	if _, err := askAsSeat(t, s, "ana", "conversations",
+		map[string]any{"conversation": " slack:C1 ", "limit": 7}); err != nil {
+		t.Fatalf("conversations: %v", err)
 	}
-	s := viewerSources(t, &stubWork{})
-	s.Conversations = ledgerStub
-
-	// WITHOUT a thread named: the list, and an EMPTY entries list rather
-	// than an absent key.
-	got := answeredAsAna(t, s, "conversations", nil)
-	entries, ok := got["entries"].([]ledger.Session)
-	if !ok || len(entries) != 0 {
-		t.Fatalf("entries = %#v, want an empty slice", got["entries"])
-	}
-	if ledgerStub.key != "" {
-		t.Errorf("the ledger was asked for the history of %q", ledgerStub.key)
-	}
-
-	// WITH one: the same list, plus its turns.
-	got = answeredAsAna(t, s, "conversations",
-		map[string]any{"conversation": "slack:C1"})
-	entries, _ = got["entries"].([]ledger.Session)
-	if len(entries) != 1 || entries[0].TurnID != "t-1" {
-		t.Fatalf("entries = %#v, want the named thread's turns", got["entries"])
-	}
-	if ledgerStub.key != "slack:C1" {
-		t.Errorf("the ledger was asked about %q", ledgerStub.key)
-	}
-	rows, _ := got["conversations"].([]map[string]any)
-	if len(rows) != 1 || rows[0]["key"] != "slack:C1" {
-		t.Errorf("the thread list went missing when one was opened: %#v", got["conversations"])
+	if memory.conversation != "slack:C1" || memory.limit != 7 {
+		t.Errorf("asked for %q at %d, want slack:C1 at 7", memory.conversation, memory.limit)
 	}
 }
 
-// ---- counterparties ------------------------------------------------------ //
-
-type stubCounterparties struct {
-	profiles []learning.Profile
-	observer string
-	err      error
-}
-
-func (s *stubCounterparties) List(_ context.Context, observer string) ([]learning.Profile, error) {
-	s.observer = observer
-	return s.profiles, s.err
-}
-
-// THE THIRD MEMORY, and the key that was always an empty list. The store has
-// been written since the learning loop landed and the answer carried the key
-// from the day it existed, so a seat's profiles were written, replicated and
-// invisible.
-func TestASeatsCounterpartyProfilesReachTheMemoryAnswer(t *testing.T) {
+// A HOLDER THAT COULD NOT ANSWER IS UNAVAILABLE, which a client retries —
+// never an empty memory and never a failure it reports as a bug. Its lease
+// unreadable, its node silent, or the seat still arriving on it: each clears
+// by waiting.
+func TestAMemoryReadTheHolderCouldNotAnswerIsUnavailable(t *testing.T) {
 	t.Parallel()
-	seen := time.Date(2026, 3, 1, 9, 0, 0, 0, time.UTC)
-	store := &stubCounterparties{profiles: []learning.Profile{{
-		Observer:           "ana",
-		Subject:            learning.Subject{Handle: "bo", Name: "Bo Lang"},
-		Traits:             map[string]any{"prefers": "async"},
-		InteractionCount:   7,
-		FirstSeenAt:        seen,
-		LastUpdatedAt:      seen,
-		LastCorroboratedAt: seen,
-	}}}
-	s := viewerSources(t, &stubWork{})
-	s.Counterparties = store
-
-	raw, err := askTranscripts(t, s, "agent_memory", map[string]any{"id": "ana"})
-	got := answerMap(t, raw, err)
-	if store.observer != "ana" {
-		t.Errorf("the store was asked about %q", store.observer)
-	}
-	rows, ok := got["counterparties"].([]map[string]any)
-	if !ok || len(rows) != 1 {
-		t.Fatalf("counterparties = %#v, want one row", got["counterparties"])
-	}
-	row := rows[0]
-	if row["interactions"] != 7 {
-		t.Errorf("interactions = %v, want 7", row["interactions"])
-	}
-	if row["resolved"] != true {
-		t.Error("a profile whose subject is a seat in this company reads as unresolved")
-	}
-	// BOTH INSTANTS, because they measure different cadences and the gap
-	// between them is what says this seat has stopped learning about
-	// somebody it still works with.
-	for _, key := range []string{"last_updated_at", "last_corroborated_at", "first_seen_at"} {
-		if row[key] == nil {
-			t.Errorf("the row carries no %s", key)
+	s := trailSources(t, &stubMemory{err: fmt.Errorf("%w: node-b holds ana and did not answer",
+		memread.ErrUnavailable)})
+	for _, what := range []string{"agent_memory", "conversations"} {
+		_, err := askAsSeat(t, s, "ana", what, map[string]any{"id": "ana"})
+		if !errors.Is(err, queries.ErrUnavailable) {
+			t.Errorf("%s answered %v, want ErrUnavailable", what, err)
 		}
-	}
-	subject, _ := row["subject"].(map[string]any)
-	if subject["handle"] != "bo" || subject["name"] != "Bo Lang" {
-		t.Errorf("subject = %#v", row["subject"])
-	}
-}
-
-// AN ERROR IS NOT AN EMPTY LIST. Everything in `learning` is best effort by
-// design and a failed read answers empty — but that rule is about the TURN,
-// which must not die because a diary was slow. A screen reporting "this seat
-// has worked with nobody" when the truth is "the store could not be reached"
-// is the collapse the three-valued answers exist to prevent.
-func TestAFailedCounterpartyReadIsNotAnEmptyList(t *testing.T) {
-	t.Parallel()
-	sentinel := errors.New("the store could not be reached")
-	s := viewerSources(t, &stubWork{})
-	s.Counterparties = &stubCounterparties{err: sentinel}
-	if _, err := askTranscripts(t, s, "agent_memory", map[string]any{"id": "ana"}); !errors.Is(
-		err, sentinel) {
-
-		t.Errorf("a failed profile read answered %v, want the failure", err)
-	}
-}
-
-// THE PAGE IS BOUNDED IN BOTH DIRECTIONS, and the ledger is why: its `Threads`
-// and `History` apply a `LIMIT` only when one is positive, so an absent or
-// negative one reads a seat's whole ledger through this process. A busy chat
-// workspace gives a seat a thread per channel and a trim limit's worth of
-// turns in each.
-func TestTheConversationPageIsBoundedInBothDirections(t *testing.T) {
-	t.Parallel()
-	for _, c := range []struct {
-		name  string
-		asked any
-		want  int
-	}{
-		{"absent", nil, queries.DefaultConversationPage},
-		{"zero", 0, queries.DefaultConversationPage},
-		{"negative", -1, queries.DefaultConversationPage},
-		{"past the ceiling", queries.MaxConversationPage + 1, queries.MaxConversationPage},
-		{"inside", 7, 7},
-	} {
-		t.Run(c.name, func(t *testing.T) {
-			t.Parallel()
-			ledgerStub := &stubConversations{}
-			s := viewerSources(t, &stubWork{})
-			s.Conversations = ledgerStub
-			params := map[string]any{}
-			if c.asked != nil {
-				params["limit"] = c.asked
-			}
-			if _, err := askAsSeat(t, s, "ana", "conversations", params); err != nil {
-				t.Fatalf("conversations: %v", err)
-			}
-			if ledgerStub.limit != c.want {
-				t.Errorf("the ledger was asked for %d, want %d", ledgerStub.limit, c.want)
-			}
-		})
 	}
 }

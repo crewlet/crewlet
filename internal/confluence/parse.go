@@ -164,7 +164,7 @@ type ParserOptions struct {
 // nothing.
 //
 // A SEAT IS NAMED BY ITS IDENTITY — the handle it was CREATED under
-// ([notify.Party.Identity], ADR-0019) — and never by the one it answers to
+// ([notify.Party.Identity], ADR-0026) — and never by the one it answers to
 // now. A subscription is the seat's own memory of the pages it touched, and
 // keyed on its address a rename made it deaf to every one of them: the page it
 // edited as `swe` went on being tested for `platform-swe`, found nobody, and

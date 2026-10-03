@@ -145,8 +145,12 @@ func StartServer(ctx context.Context, cfg Config) (*Server, error) {
 
 // Client connects a new queue to this server. The client does NOT own the
 // server: stopping it leaves the broker and every peer running.
-func (s *Server) Client(ctx context.Context) (*Queue, error) {
-	return newQueueOn(ctx, s.cfg, s.embedded, false)
+//
+// opts are the contract-level settings — [queue.WithNode] names the node the
+// client publishes for — and belong to the CLIENT rather than to the server,
+// because several nodes can be clients of one broker.
+func (s *Server) Client(ctx context.Context, opts ...queue.Option) (*Queue, error) {
+	return newQueueOn(ctx, s.cfg, s.embedded, false, queue.Resolve(opts...))
 }
 
 // RoutePeers names the cluster members this server currently holds a route
@@ -895,13 +899,19 @@ func (q *Queue) SubscribeStream(ctx context.Context, pattern string, h queue.Str
 		return nil, err
 	}
 	if err = q.ensureStream(ctx, spec); err != nil {
-		return nil, err
+		return nil, q.brokerFailed(ctx, err)
 	}
 	stream := spec.name
 	consCtx, cancel := context.WithCancel(context.WithoutCancel(ctx))
 
 	q.noteConsumerProposal()
-	cons, err := q.js.CreateOrUpdateConsumer(consCtx, stream, jetstream.ConsumerConfig{
+	// THE CALLER'S CONTEXT BOUNDS THE CREATE, and consCtx only the
+	// subscription's life. The create ran on consCtx, which is detached
+	// from ctx precisely so the feed outlives the call that opened it — so
+	// a caller's deadline and cancellation bounded nothing here, and a
+	// SubscribeStream against a broker that was not answering waited out
+	// the client's own default however little time it had been given.
+	cons, err := q.js.CreateOrUpdateConsumer(ctx, stream, jetstream.ConsumerConfig{
 		FilterSubject: pattern,
 		// From here on, not from the beginning: a live feed that
 		// replayed a month of history on every browser refresh would be
@@ -916,7 +926,7 @@ func (q *Queue) SubscribeStream(ctx context.Context, pattern string, h queue.Str
 	})
 	if err != nil {
 		cancel()
-		return nil, fmt.Errorf("create stream consumer on %s: %w", pattern, err)
+		return nil, fmt.Errorf("create stream consumer on %s: %w", pattern, q.brokerFailed(ctx, err))
 	}
 
 	// stopped gates dispatch rather than relying on the consume context
@@ -937,7 +947,7 @@ func (q *Queue) SubscribeStream(ctx context.Context, pattern string, h queue.Str
 	})
 	if err != nil {
 		cancel()
-		return nil, fmt.Errorf("consume stream %s: %w", pattern, err)
+		return nil, fmt.Errorf("consume stream %s: %w", pattern, q.brokerFailed(ctx, err))
 	}
 
 	var once sync.Once

@@ -22,10 +22,11 @@ import (
 // EventBucket is a bar's width on that axis.
 //
 // THREE, and a closed set rather than a duration, for the reason
-// [tokens.Interval] is two: a chart with an arbitrary bucket width has an x
-// axis nobody can label. A log needs the minute the spend series does not —
-// "what just happened" is the commonest question asked of an event log, and an
-// hour is the whole of the answer's window.
+// [tokens.Interval] is one too: a chart with an arbitrary bucket width has an x
+// axis nobody can label. A log needs the minute and the hour the spend series
+// does not — "what just happened" is the commonest question asked of an event
+// log, and an hour is the whole of the answer's window — while the spend
+// series is read from company days, which hold nothing finer.
 type EventBucket string
 
 // The buckets, finest first.
@@ -105,6 +106,24 @@ type HistogramQuery struct {
 	// accepted, never defaulted — an axis labelled by one width over
 	// another's bars is worse than an error.
 	Bucket EventBucket
+
+	// At is the instant the window is cut against — what an unbounded top
+	// edge means, and where the history floor sits. Zero is now.
+	//
+	// A FIELD rather than every log reading its own clock, because a fleet
+	// asks several logs for ONE axis (internal/eventfan) and sums their
+	// bars index by index: two nodes whose clocks straddle a minute would
+	// otherwise snap to windows one bar apart, and every bar of the sum
+	// would add one node's minute to the other's next one.
+	At time.Time
+}
+
+// at is the instant the window is cut against.
+func (q HistogramQuery) at() time.Time {
+	if q.At.IsZero() {
+		return now()
+	}
+	return q.At
 }
 
 // EventBar is one bucket of the axis.
@@ -118,6 +137,17 @@ type EventBar struct {
 	// bucket is present: a quiet hour is a gap of full height rather than
 	// a bar the chart squeezed out.
 	Count int `json:"count"`
+
+	// Failed is how many of Count reported a failure — by the one rule the
+	// turn list and every read of a row apply ([types.Failed]: the payload's
+	// own flag, or a type that IS a failure). A SPLIT of Count, never an
+	// addition to it, so a bar draws its failed share inside its height.
+	//
+	// COUNTED HERE rather than folded by a client, for the reason the axis
+	// itself is: a browser holds a page of rows and the window it never
+	// holds, so a failed share folded there is right for one page and
+	// absent for every other.
+	Failed int `json:"failed"`
 }
 
 // EventHistogram is the whole axis.
@@ -142,6 +172,10 @@ type EventHistogram struct {
 	// unfiltered one wants the number rather than a mental sum of forty
 	// bars, and the alternative is every caller writing that sum.
 	Total int `json:"total"`
+
+	// Failed is the window's failed count — the sum of the bars' Failed,
+	// stated for Total's reason.
+	Failed int `json:"failed"`
 
 	// ByCategory is how many rows each category would give, counted over the
 	// window THAT WAS ASKED FOR — not the snapped one Since and Until report
@@ -212,7 +246,7 @@ func (l *EventLog) Histogram(ctx context.Context, q HistogramQuery) (EventHistog
 		return EventHistogram{}, ErrHistogramRelated
 	}
 	step := q.Bucket.Step()
-	since, until := q.Window(now())
+	since, until := q.Window(q.at())
 	bars := int(until.Sub(since) / step)
 	if bars > MaxHistogramBuckets {
 		return EventHistogram{}, fmt.Errorf("%w: %s over %s is %d buckets, and the "+
@@ -235,25 +269,36 @@ func (l *EventLog) Histogram(ctx context.Context, q HistogramQuery) (EventHistog
 	// the planner cannot reuse a plan for.
 	micros := strconv.FormatInt(step.Microseconds(), 10)
 	bucketExpr := "(" + col("event_time") + " / " + micros + ") * " + micros
-	query := "SELECT " + bucketExpr + " AS bucket, COUNT(*) FROM " + from +
+	// THE FAILED SPLIT IS [failedRow], the turn list's own predicate, so a
+	// bar's failed share and a turn's failed mark are one rule rather than
+	// two that agree — and the `failed` FILTER is the same rule again
+	// ([ListQuery.Failed]), so an axis narrowed to failures has a failed
+	// share equal to its height. Qualified through `col` like every other
+	// column here, although this read never joins (a related-agent axis is
+	// refused above).
+	failedExpr, failedArgs := failedRow(col)
+	query := "SELECT " + bucketExpr + " AS bucket, COUNT(*), " +
+		"SUM(CASE WHEN " + failedExpr + " THEN 1 ELSE 0 END) FROM " + from +
 		" WHERE " + strings.Join(where, " AND ") + " GROUP BY bucket ORDER BY bucket"
 
-	rows, err := l.db.sql.QueryContext(ctx, query, args...)
+	rows, err := l.db.sql.QueryContext(ctx, query, append(failedArgs, args...)...)
 	if err != nil {
 		return EventHistogram{}, fmt.Errorf("store: event histogram: %w", err)
 	}
 	defer func() { _ = rows.Close() }()
 
-	counts := make(map[int64]int, bars)
-	total := 0
+	type cell struct{ count, failed int }
+	counts := make(map[int64]cell, bars)
+	total, failedTotal := 0, 0
 	for rows.Next() {
 		var at int64
-		var count int
-		if err = rows.Scan(&at, &count); err != nil {
+		var c cell
+		if err = rows.Scan(&at, &c.count, &c.failed); err != nil {
 			return EventHistogram{}, fmt.Errorf("store: event histogram: %w", err)
 		}
-		counts[at] = count
-		total += count
+		counts[at] = c
+		total += c.count
+		failedTotal += c.failed
 	}
 	if err = rows.Err(); err != nil {
 		return EventHistogram{}, fmt.Errorf("store: event histogram: %w", err)
@@ -280,6 +325,7 @@ func (l *EventLog) Histogram(ctx context.Context, q HistogramQuery) (EventHistog
 		// the same reason — `Object.keys(null)` throws.
 		Bars:       make([]EventBar, 0, bars),
 		Total:      total,
+		Failed:     failedTotal,
 		ByCategory: byCategory,
 	}
 	// EVERY BUCKET, including the ones the GROUP BY had no row for. The
@@ -287,9 +333,11 @@ func (l *EventLog) Histogram(ctx context.Context, q HistogramQuery) (EventHistog
 	// width rather than a bar the chart squeezed out, and filling it here
 	// is what stops every caller writing the same loop.
 	for at := since; at.Before(until); at = at.Add(step) {
+		c := counts[EncodeTime(at)]
 		out.Bars = append(out.Bars, EventBar{
-			At:    at.Format(time.RFC3339),
-			Count: counts[EncodeTime(at)],
+			At:     at.Format(time.RFC3339),
+			Count:  c.count,
+			Failed: c.failed,
 		})
 	}
 	return out, nil

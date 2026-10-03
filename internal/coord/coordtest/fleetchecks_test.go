@@ -129,9 +129,11 @@ func containing(errs []error, want string) bool {
 // markerLoser is the KV backend as it WAS on a replicated stream: every writer
 // after the first to reach a record just removed is told the store is down,
 // because the broker's refusal of a create over the removal's marker matched
-// neither sentinel the create looked for. Only the delivery claims and the
-// token counters are made to lie — two verbs are enough to show the check
-// reads what each verb answered rather than trusting any of them.
+// neither sentinel the create looked for — and so is every charger after the
+// first to a counter nothing had written, the same refusal over no marker.
+// Only the delivery claims and the token counters are made to lie — two verbs
+// are enough to show the check reads what each verb answered rather than
+// trusting any of them.
 type markerLoser struct {
 	wholeFleet
 
@@ -139,6 +141,8 @@ type markerLoser struct {
 	// raced are the records removed since they were last written, each
 	// true once the first writer after the removal has landed.
 	raced map[string]bool
+	// charged are the counters a charge has landed on.
+	charged map[string]bool
 }
 
 func (m *markerLoser) removed(key string) {
@@ -171,19 +175,24 @@ func (m *markerLoser) Claim(ctx context.Context, key string, now time.Time) (boo
 	return m.wholeFleet.Claim(ctx, key, now)
 }
 
-func (m *markerLoser) Reset(ctx context.Context, scope string) (int, error) {
-	m.removed("budget|" + scope)
-	return m.wholeFleet.Reset(ctx, scope)
+// lostFirst reports a charge that reached a counter after its first charger.
+func (m *markerLoser) lostFirst(scope string) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.charged == nil {
+		m.charged = map[string]bool{}
+	}
+	lost := m.charged[scope]
+	m.charged[scope] = true
+	return lost
 }
 
-func (m *markerLoser) Charge(ctx context.Context, agentScope string,
-	tokens, orgLimit, agentLimit int) (coord.Spend, error) {
-
-	if m.lost("budget|") {
+func (m *markerLoser) Charge(ctx context.Context, req coord.ChargeRequest) (coord.Spend, error) {
+	if m.lostFirst(req.Seat) {
 		return coord.Spend{}, fmt.Errorf("%w: charge the counter: wrong last sequence",
 			coord.ErrUnavailable)
 	}
-	return m.wholeFleet.Charge(ctx, agentScope, tokens, orgLimit, agentLimit)
+	return m.wholeFleet.Charge(ctx, req)
 }
 
 func TestTheSuiteCatchesARaceOverARemovedRecordAnsweredAsAnOutage(t *testing.T) {

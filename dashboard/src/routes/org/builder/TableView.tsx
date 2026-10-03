@@ -38,7 +38,9 @@
  */
 
 import { useCallback, useMemo, useRef } from "react";
+import { usePanelAlign } from "~/lib/media.ts";
 import { plural } from "~/lib/format.ts";
+import { handleLabel } from "~/lib/seats.ts";
 import { useBuilder, useBuilderView, type BuilderApi } from "./BuilderContext.tsx";
 import type { NodeView } from "./chartModel.ts";
 import type { NodeKey } from "./model/keys.ts";
@@ -48,15 +50,14 @@ import {
   NodeGlyph,
   SeatMarks,
   UnitMarks,
-  handleLabel,
   managerLabel,
   nodeGlyphKind,
   seatKindLabel,
   unitTypeLabel,
 } from "./nodeMarks.tsx";
-import { nodeTone } from "./nodeTone.ts";
+import { addLabel } from "./AddNodeDialog.tsx";
 import { useOpenScreen, useStructure } from "./useCharts.ts";
-import { DeleteGlyph, EditGlyph, MoreVertGlyph } from "@crewlethq/icons/glyphs";
+import { TrashGlyph, PencilGlyph, EllipsisVerticalGlyph } from "@crewlethq/icons/glyphs";
 import {
   EmptyValue,
   IconButton,
@@ -71,6 +72,7 @@ import {
   type TreeItemAction,
   type TreeViewHandle,
 } from "@crewlethq/ui";
+import { seatBadge } from "~/ui/SeatAvatar.tsx";
 
 /**
  * What a row says, beside its name.
@@ -89,7 +91,12 @@ const COLUMNS: readonly TreeGridColumn[] = [
   // share as well: what a row IS is the word under its name, which is where
   // the console writes it and where the chart's own cards write it, and a
   // column repeating that word cost 145px of a 1269px table to say it twice.
-  { key: "name", header: "Name", width: "minmax(0, 5.25fr)" },
+  //
+  // ON A PHONE IT IS THE SCROLLER'S OWN WIDTH (`--btable-name-track`, set by
+  // screens.css below the phone breakpoint): the grid keeps its columns and
+  // scrolls sideways there, and five and a quarter shares of it was 417px on a
+  // 356px screen, so every seat's state pill sat cut in half at the edge.
+  { key: "name", header: "Name", width: "var(--btable-name-track, minmax(0, 5.25fr))" },
   { key: "address", header: "Address", width: "minmax(0, 1.75fr)" },
   { key: "lead", header: "Lead or reports to", width: "minmax(0, 1.75fr)" },
   { key: "problems", header: "Problems", width: "minmax(0, 1fr)" },
@@ -126,7 +133,7 @@ const NAME = 1;
 const ADDRESS = 2;
 const LEAD = 3;
 const PROBLEMS = 4;
-const ACTIONS = 5;
+const ACTIONS_COLUMN = 5;
 
 /**
  * "Company", the unit's own type, or which kind of seat: the word a row writes
@@ -175,8 +182,13 @@ export function TableView() {
                cell happens to mention a name. */
             <OrgTableName
               className="btable-name"
-              icon={NodeGlyph({ kind: nodeGlyphKind(view) })}
-              iconRing={view.type === "seat" && view.kind === "human" ? "dashed" : "none"}
+              // A SEAT IS ITS BADGE, as it is on the chart: the outline says
+              // who holds it. A container keeps its glyph.
+              {...(view.type === "seat"
+                ? {
+                    avatar: seatBadge(view.name, view.kind),
+                  }
+                : { icon: NodeGlyph({ kind: nodeGlyphKind(view) }) })}
               name={<span className="btable-label">{view.name || "Unnamed company"}</span>}
               caption={kindLabel(view)}
               // THE SAME GLYPHS THE CHART DRAWS, for the same reason: a row is
@@ -195,7 +207,6 @@ export function TableView() {
               // its room: a push twice a tool-loop round changes a word here
               // and never the row.
               trailing={view.type === "seat" ? <LiveState api={api} view={view} /> : undefined}
-              tone={nodeTone(view)}
             />
           );
         /*
@@ -262,7 +273,7 @@ export function TableView() {
       /*
        * THE PAIR LIVES IN THE PAGE TOOLBAR, on both views. The design system
        * draws its own Expand all and Collapse all over this table, and the
-       * lens draws the same two in its toolbar: one action pair, two
+       * builder draws the same two in its toolbar: one action pair, two
        * implementations, each hidden on the view where the other was drawn,
        * so the control moved 800px when a reader changed view.
        */
@@ -270,9 +281,8 @@ export function TableView() {
       columns={COLUMNS}
       rows={structure.tree}
       ref={grid}
-      tone={(id) => nodeTone(structure.nodes.get(id as NodeKey))}
       renderCell={cell}
-      cellHasControl={(_id, column) => column === ACTIONS}
+      cellHasControl={(_id, column) => column === ACTIONS_COLUMN}
       onRowKey={onRowKey}
       // A REAL PREDICATE, because the row draws the actions the console draws
       // and the menu carries the rest: the company's would be empty, and an
@@ -319,6 +329,9 @@ function RowControls({
   open: OpenScreen;
   view: NodeView;
 }) {
+  // See [usePanelAlign]: a row's menu hangs from its right edge, and starts
+  // at its trigger on a phone.
+  const menuAlign = usePanelAlign("end");
   const name = view.name || "the company";
   const menu = rowMenu(api, view, open);
   return (
@@ -328,8 +341,8 @@ function RowControls({
           only the pencil and the trash behind the reveal. */}
       {view.type !== "seat" && (
         <OrgTableAdd
-          label={`Add to ${name}`}
-          onOpen={() => grid.opened(view.key, ACTIONS)}
+          label={addLabel(view.name)}
+          onOpen={() => grid.opened(view.key, ACTIONS_COLUMN)}
           sections={addSections(api, view)}
         />
       )}
@@ -337,7 +350,7 @@ function RowControls({
         <IconButton
           size="sm"
           label={`Edit ${name}`}
-          icon={<EditGlyph />}
+          icon={<PencilGlyph />}
           onClick={() => api.openEditor(view.key)}
         />
         {isDeletable(view) && (
@@ -345,7 +358,7 @@ function RowControls({
             size="sm"
             variant="ghost-danger"
             label={`Delete ${view.name}`}
-            icon={<DeleteGlyph />}
+            icon={<TrashGlyph />}
             {...(api.readOnly ? { disabledReason: REFUSED } : {})}
             onClick={() => api.openDelete(view.key)}
           />
@@ -357,8 +370,8 @@ function RowControls({
                named controls, and none of them says which row it would act
                on. */
             label={`Actions for ${name}`}
-            icon={<MoreVertGlyph />}
-            align="end"
+            icon={<EllipsisVerticalGlyph />}
+            align={menuAlign}
             open={grid.menuOpen(view.key)}
             onOpenChange={(up) => grid.setMenuOpen(view.key, up)}
             items={menu}

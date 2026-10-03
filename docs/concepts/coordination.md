@@ -103,9 +103,8 @@ measured on a three-member cluster under load:
 | A listing | An ordered pass over a consumer the server places on a random member of the stream | The bucket without its newest write, up to 3 passes in 100 hosted on a follower; never on the leader |
 | A create over a removed key | Reads the removal's marker with the same direct get before stepping over it | "Already exists", from a replica that had not yet seen the key removed, for a key nobody had created |
 
-None of those was an error. A charge was counted short, a sandbox run just
-written read back as absent, a budget reset missed the counter it was clearing
-— and the trim floor, a *minimum* over the position rows, would rise over a row
+None of those was an error. A charge was counted short and a sandbox run just
+written read back as absent — and the trim floor, a *minimum* over the position rows, would rise over a row
 it could not see and delete records a node still needed. So:
 
 - **A key is read with `STREAM.MSG.GET`**, which only the stream leader answers.
@@ -204,14 +203,14 @@ flowchart LR
         SU[("setup states<br/>spent setup callbacks")]
         R[("rate<br/>notification valve")]
         CD[("cooldowns<br/>credential 429s")]
-        B[("budgets<br/>org · per-seat spend")]
+        B[("budgets<br/>org · per-seat spend per window")]
         CH[("channels<br/>agent-to-agent asks")]
         F[("fires<br/>scheduled dispatch claims")]
         SR[("sandbox runs<br/>detached coding jobs")]
         SEC[("secrets<br/>the company's sealed credentials")]
         INT[("integrations<br/>reconcile status per surface")]
         MB[("mailboxes<br/>seat mailboxes that may exist")]
-        POS[("positions<br/>what the state log may delete")]
+        POS[("positions<br/>what the state log may delete · seat pauses")]
     end
     subgraph NODE["node — its own database"]
         DB[("events · episodes · diary<br/>conversations<br/>company payload · secrets")]
@@ -233,15 +232,15 @@ flowchart LR
 | `setup states` | Has this setup callback's state already been spent. The same first-claim-wins record as `claims` in a bucket of its own, because its horizon is three times as long — and a claim cannot outlive the bucket it is written to, so asking for longer than `claims` holds bought nothing and said nothing | [GitHub](../integrations/github.md#one-github-app-per-agent) |
 | `rate` | The notification valve. Four nodes ran four of them, so a seat capped at five a second emitted twenty | [Event System](event-system.md) |
 | `cooldowns` | Which provider credential is cooling after a 429. Per-process monotonic values are not even *comparable* across nodes | [Deployment](../guides/deployment.md) |
-| `budgets` | Org and per-seat token spend, and when each scope last refused a charge (cleared by the next charge it admits). Caps stay config-derived in memory; only *usage* is shared, because a counter per node makes an org cap of 500 000 into N × 500 000. The refusal is kept beside the counter because it is the gate's own decision and every node reports it: a refusal one node remembered would flicker on a dashboard as different nodes reported | [Deployment § Token budgets](../guides/deployment.md#token-budgets) |
+| `budgets` | Org and per-seat token spend **per calendar window** — one record per scope with a slot for the day, the ISO week and the month on the company's clock, each carrying the window's label, its spend and when it last refused a charge (cleared by the next charge the scope admits, and by the window turning over). Caps stay config-derived in memory; only *usage* is shared, because a counter per node makes an org cap of 500 000 into N × 500 000. The refusal is kept beside the counter because it is the gate's own decision and every node reports it: a refusal one node remembered would flicker on a dashboard as different nodes reported. See [Token budgets are windows](#token-budgets-are-windows) | [Deployment § Token budgets](../guides/deployment.md#token-budgets) |
 | `channels` | Who is asking whom, and whether the ask is still open. The record authorizing an answer is read by the node that owns the *answering* seat — never the one that opened it | [Event System § Agent-to-agent](event-system.md) |
 | `fires` | Has this scheduled dispatch already been claimed. The scheduler is a singleton *duty*, so it moves — and a successor reading its own database found an empty ledger and gave every company two standups | [Scheduling § At-most-once](scheduling.md#at-most-once) |
 | `sandbox runs` | Every detached coding run: its box, its suspended conversation, its owner and fencing epoch, and whether its tokens are already charged. A run outlives its turn, its process and sometimes its node, and is recovered by whichever node owns the seat *next* | [Code Sandbox](code-sandbox.md) |
 | `secrets` | The company's credentials, one sealed envelope per `${VAR}` name. Coordination holds bytes it has no key for; the Tier A keyring opens them at the edge. It was the last kind of company-wide state living in a node's own database, so `crewlet secrets set` reached one node and a rotation half-landed | [Secret Store](secret-store.md) |
 | `integrations` | Where each external surface's reconcile pass got to: its phase, its findings, the address it was set up against, and whether a disconnect has been asked for. It is company-wide because the loop is a fleet singleton and moves — a status in a node's own database would be a screen that changed answer depending on which node served the page | [Integration Reconcile](integration-reconcile.md) |
 | `mailboxes` | Which seat mailboxes may exist, and since when a seat has been missing from the active revision. Every node records a handle before it creates the seat's durable subscription, because a removed seat's handle is gone from the org every node derives names from and the retirement's absence stamp and mark have nowhere else to live. A mailbox that escaped the record is found by listing the broker's subscriptions. Every change is a compare-and-set, since a returning seat's registration and the sweep that retires a mailbox write the same record | [Seat Ownership § Singleton duties](seat-ownership.md#singleton-duties) |
-| `follows` | Which chat threads each seat is following, one record per (backend, seat, channel, thread) — the seat named by the handle it was **created** under ([ADR-0019](https://github.com/crewlet/crewlet/blob/main/adr/0019-a-seats-identity-is-derived-from-the-handle-it-was-created-under.md)), never the one it answers to now, because keyed on its address a rename left the seat deaf to every thread it had been following until somebody named it again. It is company-wide because an inbound chat message is claimed and parsed by ONE node — `notify-inbound` is a competing consumer group — and the next reply in the same thread by whichever node wins that time: a follow only one node could see made a non-mention reply reach its seat by chance, less often the more nodes ran. It was the last table in a node's own database answering a question the company has to agree on. Rows written before the move are carried here at the next start rather than dropped — the local table survives, permanently empty, as that handoff's source, because a migration runs before any Go code and cannot reach this store | [Slack](../integrations/slack.md#thread-routing) |
-| `positions` | **What the state log may delete**, in four key classes: where every node stands per domain, the live pins a backup or a joining node holds, what each owner's newest backup covers, and the floor the trim itself published with the term that is holding it. Four classes in one bucket because all four answer one question and all four need the same retention, which is none. Three more share it for that retention alone — a log's capacity operation, each node's admission to publish, and each node's acknowledgement that it restarted for the operation — because each must outlive any clock: an expiring operation admits publishers, an expiring admission hides one, and an expiring acknowledgement un-seals a barrier that has already run | [Retention](../guides/retention.md), [Changing a log's ceiling](../guides/retention.md#changing-a-logs-ceiling) |
+| `follows` | Which chat threads each seat is following, one record per (backend, seat, channel, thread) — the seat named by the handle it was **created** under ([ADR-0026](https://github.com/crewlet/crewlet/blob/main/adr/0026-a-seats-identity-is-derived-from-the-handle-it-was-created-under.md)), never the one it answers to now, because keyed on its address a rename left the seat deaf to every thread it had been following until somebody named it again. It is company-wide because an inbound chat message is claimed and parsed by ONE node — `notify-inbound` is a competing consumer group — and the next reply in the same thread by whichever node wins that time: a follow only one node could see made a non-mention reply reach its seat by chance, less often the more nodes ran. It was the last table in a node's own database answering a question the company has to agree on. Rows written before the move are carried here at the next start rather than dropped — the local table survives, permanently empty, as that handoff's source, because a migration runs before any Go code and cannot reach this store | [Slack](../integrations/slack.md#thread-routing) |
+| `positions` | **What the state log may delete**, in four key classes: where every node stands per domain, the live pins a backup or a joining node holds, what each owner's newest backup covers, and the floor the trim itself published with the term that is holding it. Four classes in one bucket because all four answer one question and all four need the same retention, which is none. Four more share it for that retention alone — a log's capacity operation, each node's admission to publish, each node's acknowledgement that it restarted for the operation, and the **seat pauses** (`seat_pause`): which seats a person has paused — keyed by the seat's id, never its handle, so a rename keeps the pause and a hire under a freed handle never inherits a leaver's — by whom and through which credential, why, and whether they also stopped the running turn — because each must outlive any clock: an expiring operation admits publishers, an expiring admission hides one, an expiring acknowledgement un-seals a barrier that has already run, and an expiring pause is a resume nobody chose. Every listing filters by class | [Retention](../guides/retention.md), [Changing a log's ceiling](../guides/retention.md#changing-a-logs-ceiling), [Agent Runtime § Pausing a seat](agent-runtime.md#pausing-a-seat) |
 
 **The page and work-item embeddings are not here.** They were a slot of their
 own once, on the argument that a derived thing wants a lifecycle of its own.
@@ -280,7 +279,7 @@ A single node shares nothing, because there is no peer to tell. Cooldowns stay i
 
 ## Retention is a bucket's age
 
-Every slot above except `epochs`, `config`, `budgets`, `channels`, `sandbox runs`, `secrets`, `integrations`, `mailboxes` and `positions` forgets on a horizon, and the horizon is a property of the **bucket**, not of the write. `leases` is in that group and is the load-bearing case: a lease does not expire because something deletes it, it expires because the bucket's age *is* the lease TTL, which is exactly what makes a dead node's seat reclaimable with nobody around to release it. `duties` is in it too, with one difference that matters: its age only reaps a record, and a duty ends at the deadline its own record carries, judged by every reader against the broker's clock (see [Duties have a bucket of their own](#duties-have-a-bucket-of-their-own)). That deadline is data in the record rather than a per-key TTL, so the create-only rule below does not reach it.
+Every slot above except `epochs`, `config`, `channels`, `sandbox runs`, `secrets`, `integrations`, `mailboxes` and `positions` forgets on a horizon, and the horizon is a property of the **bucket**, not of the write. `leases` is in that group and is the load-bearing case: a lease does not expire because something deletes it, it expires because the bucket's age *is* the lease TTL, which is exactly what makes a dead node's seat reclaimable with nobody around to release it. `duties` is in it too, with one difference that matters: its age only reaps a record, and a duty ends at the deadline its own record carries, judged by every reader against the broker's clock (see [Duties have a bucket of their own](#duties-have-a-bucket-of-their-own)). That deadline is data in the record rather than a per-key TTL, so the create-only rule below does not reach it.
 
 That is a constraint rather than a preference. On the default embedded backend a per-key TTL is *create-only*: an update clears it, leaving the key immortal. A rate window that is incremented four times would therefore never expire — the one key in the system guaranteed to be written more than once. So each retention is fixed when its bucket is created, which is why they are **separate buckets** rather than prefixes in one:
 
@@ -304,7 +303,7 @@ That is a constraint rather than a preference. On the default embedded backend a
 | `cooldowns` | 24 hours | The longest cooldown anything sets. A cooldown stores its own end instant, so the bucket only has to outlive the longest one |
 | `status` | 4 reconcile intervals (~60 s) | A node that stops reporting must **vanish** from the fleet view rather than linger as a healthy row nobody is writing |
 | `config` | none | The pointer is the fencing sequence, and a fence that restarts is not a fence |
-| `budgets` | none | A cap is a ceiling for the life of a deployment. A counter that rolled itself over would silently re-arm a company somebody had stopped on purpose, on a horizon nobody chose — so clearing one is an operator action (`crewlet budgets reset`) |
+| `budgets` | 32 days | The longest calendar window a counter has a slot for is a month — 31 days, and at most an hour of clock change — and every charge rewrites the record, so a record older than that counts nothing a current window can be refused against. The age is **not** the reset: a window's allowance comes back when the window turns over, rolled inside the charge that crosses the boundary (see [Token budgets are windows](#token-budgets-are-windows)) |
 | `fires` | 7 days | Must outlast the scheduler's catchup ceiling, for a sharper reason than the ledger's: a completion that expired early makes a turn re-run, while a claim that expired early makes the catchup pass dispatch a fire the fleet already ran |
 | `sandbox runs` | none | The sharpest version of the channel case: a run parked on a person's answer waits **days**, and its record is the only thing that knows a billed box exists. Its own pause reaper and its terminal delete are what end it: a run's record is deleted the moment the run settles, done or failed, once its box is reclaimed, and a removed seat's runs are ended when its mailbox is retired. No settled run is left for the completion poll and every seat recovery to read again |
 | `channels` | none | A bucket's age cannot tell an **open** channel from a closed one, so a TTL would reap the authorization record of an ask still waiting for its answer. Closing an idle channel and deleting a closed one are decisions instead, taken by the [maintenance duty](seat-ownership.md#singleton-duties) |
@@ -344,6 +343,45 @@ A KV cannot put "no older record exists" inside a compare-and-set, so the check 
 
 ---
 
+## Token budgets are windows
+
+A token budget is a set of ceilings per **calendar window** — the day, the ISO week from Monday and the calendar month, cut on the [company's clock](../getting-started/configuration.md#the-companys-clock) — and the `budgets` slot counts spend per window ([ADR-0019](https://github.com/crewlet/crewlet/blob/main/adr/0019-a-token-budget-is-a-periodic-window.md)). Each scope — the company, and each agent seat — has **one record** with a slot per period: the label of the window the slot counts (`2026-09-23`, `2026-W39`, `2026-09`), what has been spent in it, and when it last refused a charge.
+
+- **A charge is admitted only while every capped window of both scopes has room**, and it is still one compare-and-swap per scope — the company first, compensated if the seat then refuses. Every window of a charge is counted, capped or not, so a month ceiling added to a budget that capped only the day finds the month's spend already there.
+- **The roll is the reset.** A slot still labelled with an earlier window is moved onto the current one — spend and refusal cleared — inside the same write that counts the charge. Nothing is scheduled and nothing runs at midnight: the allowance comes back on whichever node charges the scope next, and two nodes racing to roll one slot write the same label. There is no reset command and no reset route; room before a window turns over is made by raising its ceiling.
+- **A slot never rolls back.** A node whose clock trails a peer's across a boundary finds the slot already on the next window and counts there, rather than handing the new window its allowance back. A **read** behind such a slot answers the same way: it states the later window, its spend and its refusal, never the earlier window unspent — every read of the counter (a turn's headroom, the learning gate, `GET /budgets`, the live meter) sees exactly what the next charge would be judged against. That lasts a few seconds behind a peer's clock, and up to a day after the company's `timezone` moves west.
+- **The calendar is the caller's.** Every charge and every read carries the windows it is about; the store holds labels and never reads a clock. A turn charges each round in the windows current when the round is charged, on the clock of the epoch the turn is pinned to; a detached coding run is counted in the windows it is collected in.
+- **A contended counter waits before it retries.** The company's record is written by every round of every seat, so a charge that loses the compare-and-swap waits a jittered 1 ms, doubling to 32 ms, before trying again — about a third of a second across its sixteen attempts before the round fails closed. Retried at once, 32 concurrent charges on one record ran out of attempts in four runs of ten.
+
+## What a node says about itself
+
+Every node's presence lease is renewed on its heartbeat, and each renewal carries the node's **status** beside its roles and labels: turns in flight, whether it is draining, its config posture, when it started, how far its replicated state has come up — and two things a peer acts on rather than just displays:
+
+- **`features`** — the gestures this node's *build* can carry out on a peer's behalf. It is fixed at compile time, and a name joins it only in the build that implements it. This build advertises:
+  - `mcp_status` — the `mcp` rows below are complete, so an empty list means "started none".
+  - `answer_run_by_turn` — it takes an [answer by turn](code-sandbox.md#answering-a-parked-run) off a seat's inbox and hands it to the parked run it names; an older build would run it as a turn about nothing.
+  - `seat_pause` — it [honours a pause](agent-runtime.md#pausing-a-seat): it holds a paused seat's mail, takes that hold again before attaching a paused seat it acquires, skips its schedules and stops a turn a pause asked to stop. An older build would do none of it, so a pause is refused until every live node carries it.
+  - `steer` — it answers a [note to a turn it runs](turn-engine.md#steering-a-running-turn) and hands it to that turn's next round. An older build serves no such subject, so a note to its turns would be answered by nobody; a note is refused until every live node carries it, because which node runs the turn is not known until one answers.
+  - `held_read` — it answers a read of a [seat's memory and conversation ledger](seat-ownership.md) for the seats it holds. The read is asked of the HOLDER alone, since it is addressed to the incarnation the seat's lease names, so a seat held by an older build is answered `unavailable` at once, naming that node's build, rather than after a two-second wait for a reply that cannot come.
+  - `sandbox_tail` — it answers a request for the [live output of a coding run it owns](code-sandbox.md#watching-a-run-live). The request is asked of the run's OWNER alone, so a run owned by an older build is answered `owner_upgrading` at once rather than `owner_silent` after the whole budget.
+- **`mcp`** — one row per configured [MCP server](../guides/tools-and-mcp.md): whether it is shared, how many of its instances started and how many did not, how many tools one serves, and one failure's reason (clipped to 240 bytes, with the seat it belonged to). One row per *server*, not per child, because a per-role template has a child for every seat the node holds and the status is re-sent on every beat. A child that dies after starting is not observed here; its next call fails and says so.
+
+Freshness is the heartbeat interval, the same as every other column of the fleet view. A node whose status hook overruns its share of the beat publishes no status for that beat, and a reader treats it as "did not say", never as zero.
+
+### Why a gesture asks the fleet first
+
+Some gestures are accepted by one node and carried out by another: a person pauses a seat through whichever node serves their dashboard, and the node *holding* the seat is the one that has to stop taking its mail. Mid-upgrade that node may run a build that has never heard of the gesture — it would not refuse it, it would simply never do it. So before such a gesture is written it is checked against the heartbeats, and the answer is three-valued:
+
+| The fleet says | The gesture |
+|---|---|
+| every node that could carry it out advertises the feature | goes ahead |
+| one of them runs a build without it (a status with no such feature) | refused **`peer_upgrading`** — nothing to retry until the upgrade reaches that node |
+| the store could not be read, a node published no status, the seat's holder has no presence (it is draining), or no node is live | refused **`unavailable`** — a retry may well clear it |
+
+A gesture only the seat's holder carries out asks about the node whose process holds the seat lease — matched by process incarnation, so a node that restarted since does not answer for its predecessor — and one every future holder must respect asks about every live node. A seat nobody holds is answered for every live node, since any of them may claim it next.
+
+---
+
 ## What stays node-local
 
 The node's own database holds everything a *single* node is the only reader of. The test is not "is it durable" — all of it is — but "would a peer reading this change any answer?"
@@ -359,7 +397,7 @@ The node's own database holds everything a *single* node is the only reader of. 
 And two things stay **per-process** deliberately:
 
 - **`max_concurrent`.** Tier A's `node.max_concurrent` (default 32) is the gate every agent turn passes through, and it is per node — so an org's ceiling is N × the configured value. Size it per node, not per company. This is the one knob a fleet genuinely changes the meaning of.
-- **A seat's MCP subprocesses.** They are children of the node that claimed the seat, and they die with the release.
+- **A seat's MCP subprocesses.** They are children of the node that claimed the seat, and they die with the release. Only their *status* is shared, on the heartbeat ([above](#what-a-node-says-about-itself)).
 
 ---
 
@@ -381,13 +419,13 @@ The twin is not a lesser implementation: it is held to the **same certified suit
 
 Everything else above is a **record**, and a record has to outlive the *process*, on one node as much as on four. So the shared slots always live in the KV, whatever the coordination slot says, and what persistence they get is the same choice as the event log's: `stream.store_dir`.
 
-That distinction was not always drawn, and each consequence was silent. The token counter — whose bucket has *no* retention, because "a cap is a ceiling for the life of a deployment" — went back to zero on every restart of a default single-node engine. A turn completion no longer suppressed the redelivery it exists to suppress. A detached sandbox run, which is a **billed box**, was forgotten by the engine that launched it. Leaving `stream.store_dir` empty still selects an in-memory server and has all of those effects, but it says so on the tin: it is the same switch that makes the event log itself disposable.
+That distinction was not always drawn, and each consequence was silent. The token counter — which then had no retention at all, because a cap was a ceiling for the life of a deployment — went back to zero on every restart of a default single-node engine. A turn completion no longer suppressed the redelivery it exists to suppress. A detached sandbox run, which is a **billed box**, was forgotten by the engine that launched it. An embedded stream with no `stream.store_dir` would keep all of it in memory and have every one of those effects, and now the state logs' too — every node keeps the org chart and the identity estate on the stream from boot — so configuration refuses one by name rather than running a node whose first restart empties every log it holds.
 
 > **On the embedded backend the coordination store lives inside the running engine.** It exists while the engine runs. That is the correct trade for a single node — nothing else to install — but it has two visible consequences.
 >
 > An *offline* `crewlet config import` — one run while the engine is stopped — cannot move the activation pointer, because there is nothing running to move it in. It marks the revision active in this node's own database and says so; a node that starts holding an active revision the fleet has no pointer for publishes it at boot, so a restart converges without any operator action. Against a **running** node the same command takes the other route entirely: it detects the held store and goes through that node's `PUT /config`, which moves the pointer immediately.
 >
-> And the operator commands that act on this state talk to a **running node** rather than to a file: `crewlet budgets show` and `crewlet budgets reset` are clients of that node's API. Opening the store from outside would either find nothing (the engine is down, and an embedded broker exists only while it runs) or corrupt it (the engine is up, and a second broker on the same store directory is *accepted* rather than refused).
+> And the operator commands that read or act on this state talk to a **running node** rather than to a file: `crewlet budgets show`, `crewlet backup` and `crewlet secrets` are clients of that node's API. Opening the store from outside would either find nothing (the engine is down, and an embedded broker exists only while it runs) or corrupt it (the engine is up, and a second broker on the same store directory is *accepted* rather than refused).
 
 ---
 

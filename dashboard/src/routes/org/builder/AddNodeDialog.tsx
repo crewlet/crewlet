@@ -31,7 +31,7 @@
 import { useState } from "react";
 import type { HumanContactKey } from "~/protocol/index.ts";
 import { ConfigField } from "~/components/ConfigField.tsx";
-import { useBuilder, type AddKind } from "./BuilderContext.tsx";
+import { useBuilder, type AddKind, type BuilderApi } from "./BuilderContext.tsx";
 import {
   ADDRESS_HELP,
   ContactField,
@@ -57,7 +57,7 @@ import { handleProblem, unitKeyProblem } from "./model/problems.ts";
 import { COMPANY_KEY, handleOfKey, mintKey, unitKeyOf, type NodeKey } from "./model/keys.ts";
 import type { Intent } from "./model/operations.ts";
 import { recordIntent } from "./model/reducer.ts";
-import { AddGlyph } from "@crewlethq/icons/glyphs";
+import { PlusGlyph } from "@crewlethq/icons/glyphs";
 import { Button, Modal, SegmentedControl } from "@crewlethq/ui";
 
 const KINDS: { value: AddKind; label: string }[] = [
@@ -92,6 +92,34 @@ const DEFAULT_NAMES: Record<AddKind, string> = {
  * see. Where the chart is the shell, the design system's canvas puts focus on
  * the first control once the card is placed, which is the same one.
  */
+
+/**
+ * What an add under a parent is called: "Add to Engineering" under a unit,
+ * and the company's own name at the root — "the company" only while it has
+ * none.
+ *
+ * ONE WORDING FOR BOTH SHELLS AND EVERY CONTROL THAT OPENS ONE. The dialog
+ * said "Add to the company" over the root while the chart's pill, the ghost
+ * that pill opened and the table's row all said "Add to Acme" for the same
+ * parent.
+ */
+export function addLabel(parentName: string): string {
+  return `Add to ${parentName || "the company"}`;
+}
+
+/** The name of the parent an add hangs from, as [addLabel] says it. */
+function parentName(draft: BuilderApi["state"]["draft"], parent: NodeKey | null): string {
+  const key = parent ?? COMPANY_KEY;
+  if (key === COMPANY_KEY) {
+    const name = draft.company.name;
+    return typeof name === "string" ? name.trim() : "";
+  }
+  const found = locate(draft, key);
+  // A UNIT NO LONGER IN THE DRAFT is named as one rather than as the company,
+  // which is what the root's fallback would otherwise have called it; the
+  // form's refusal says what became of it.
+  return found?.kind === "unit" ? found.node.data.name : "a removed unit";
+}
 
 /** What either shell is given. */
 export interface AddProps {
@@ -331,19 +359,23 @@ function AddNodeFields({ form }: { form: AddForm }) {
  * The add as the structure chart draws it: the form inside the ghost card of
  * the node about to exist.
  *
- * IT SAYS NOTHING ABOUT WHERE THE NODE GOES, because the chart says it. The
- * dialog below has to carry "Add to Engineering" as a title; here the form
- * hangs off Engineering's own branch, in the rank the new node will land in,
- * with every sibling drawn beside it. The sentence is not lost to a reader who
- * cannot see that: the ghost is a named region (`TreeComposing.label`), so a
- * screen reader is told what it has entered on the way in, and it is said once
- * rather than twice.
+ * IT SAYS WHERE THE NODE GOES, as the dialog below does, although the chart
+ * draws it too. The form hangs off its parent's own branch, in the rank the
+ * new node will land in — but the canvas eases onto the ghost, and at the
+ * company's root the ghost is a card wide of the parent at the far end of a
+ * long branch: arriving from Agents › Add seat, the root and the siblings the
+ * node joins were off the canvas and nothing on screen said where it would go.
+ *
+ * SAID ONCE TO A SCREEN READER. The ghost is a named region with this same
+ * sentence (`TreeComposing.label`), announced on the way in, so the line is
+ * hidden from assistive technology rather than read a second time.
  *
  * NO CLOSE CONTROL BESIDE A CANCEL. One way out per job, which is the rule the
- * dialogs of this lens keep; Escape is the other spelling of the same one, and
+ * dialogs of this builder keep; Escape is the other spelling of the same one, and
  * the chart's own canvas performs it.
  */
 export function AddNodeGhostForm({ parent, kind, onClose }: AddProps) {
+  const api = useBuilder();
   const form = useAddNode({ parent, kind, onClose });
   return (
     <form
@@ -353,16 +385,19 @@ export function AddNodeGhostForm({ parent, kind, onClose }: AddProps) {
         form.add();
       }}
     >
+      <p className="builder-section-title" aria-hidden="true">
+        {addLabel(parentName(api.state.draft, parent))}
+      </p>
       <AddNodeFields form={form} />
       {/* FULL-SIZED CONTROLS, unlike the chart this is drawn from, which
           shrinks its inline form to the chart's own 9px type because the form
           is drawn at whatever zoom the reader left the chart at. Here the
           canvas EASES onto the ghost and gives it two thirds of the pane, so
           the form is drawn at about its own size and every pointer target is
-          the one the rest of the lens uses. */}
+          the one the rest of the builder uses. */}
       <div className="row">
         <span className="spacer" />
-        <Button variant="tertiary" onClick={onClose}>
+        <Button variant="ghost" onClick={onClose}>
           Cancel
         </Button>
         <Button variant="primary" type="submit" disabled={form.blocked}>
@@ -381,15 +416,12 @@ export function AddNodeGhostForm({ parent, kind, onClose }: AddProps) {
 export function AddNodeDialog({ parent, kind, onClose }: AddProps) {
   const api = useBuilder();
   const form = useAddNode({ parent, kind, onClose });
-  const parentKey = parent ?? COMPANY_KEY;
-  const parentNode = parentKey === COMPANY_KEY ? undefined : locate(api.state.draft, parentKey);
-  const where = parentNode?.kind === "unit" ? parentNode.node.data.name : "the company";
   return (
     <Modal
       open
       stackBody
-      title={`Add to ${where}`}
-      icon={<AddGlyph />}
+      title={addLabel(parentName(api.state.draft, parent))}
+      icon={<PlusGlyph />}
       // ONE WAY OUT PER JOB. Cancel is in the foot; a close control beside the
       // title would be a second, unnamed spelling of it, which is what the
       // console's own dialogs do not have.
@@ -398,7 +430,7 @@ export function AddNodeDialog({ parent, kind, onClose }: AddProps) {
       onSubmit={form.add}
       footer={
         <>
-          <Button variant="tertiary" onClick={onClose}>
+          <Button variant="ghost" onClick={onClose}>
             Cancel
           </Button>
           <Button variant="primary" type="submit" disabled={form.blocked}>

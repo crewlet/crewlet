@@ -6,7 +6,7 @@ import (
 	"github.com/crewlet/crewlet/internal/api/auth"
 	"github.com/crewlet/crewlet/internal/api/httpjson"
 	"github.com/crewlet/crewlet/internal/api/mcpbridge"
-	"github.com/crewlet/crewlet/internal/api/opsmcp"
+	"github.com/crewlet/crewlet/internal/api/operator"
 	"github.com/crewlet/crewlet/internal/api/pagepolicy"
 	"github.com/crewlet/crewlet/internal/config"
 )
@@ -82,40 +82,38 @@ func BridgeOnly(bootstrap *config.Bootstrap, bridge *mcpbridge.Bridge) http.Hand
 		servedOverHTTPS(bootstrap))
 }
 
-// mountOperator registers the operator MCP surface over its source.
+// mountOperator registers the operator surface's two transports — MCP for an
+// operator's own assistant and the act route for a person at the dashboard —
+// over the one dispatch.
 //
-// A nil source is a surface this API serves none of — a suite about something
-// else — and the route is then ABSENT. Otherwise the route is mounted ONCE and
-// every request reads the source ([Options.Operator]): a node that has not met
-// its company answers `503 no_active_revision`, one whose company keeps
-// nothing this surface could manage answers as the route's absence would —
-// an endpoint that exists and lists no tools reads to an operator as broken —
-// and anything else is served by the server over the catalogue the request
-// found.
-func (a *App) mountOperator(mux *http.ServeMux, source OperatorSource) {
-	if source == nil {
+// A nil server is a surface this API serves none of — a suite about something
+// else — and both routes are then ABSENT. Otherwise each is mounted ONCE and
+// every request reads the catalogue this node serves at that moment: a node
+// that has not met its company answers `503 no_active_revision`, and one whose
+// catalogue is empty answers as the route's absence would — an endpoint that
+// exists and lists no tools reads to an operator as broken.
+func (a *App) mountOperator(mux *http.ServeMux, server *operator.Server) {
+	if server == nil {
 		return
 	}
 	// EVERY METHOD, so the transport's own verbs reach the SDK: this surface
 	// is served statelessly and the SDK answers a GET for a stream and a
 	// DELETE for a session with its own `405 Allow: POST`, which a client
 	// reads as "no stream offered" — a mux 405 would read as a route
-	// registered wrong. See opsmcp's Handler.
-	mux.Handle(opsmcp.Path, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		server, up := source()
-		switch {
-		case !up:
-			httpjson.NoActiveRevision(w, httpjson.Detail{
-				"detail": httpjson.NativeHalvesNotUp})
-		case server == nil:
-			httpjson.NoRoute(w, r)
-		default:
-			server.Handler().ServeHTTP(w, r)
-		}
-	}))
-	log.Info("operator_mcp_mounted", "path", opsmcp.Path,
+	// registered wrong.
+	mux.Handle(operator.MCPPath, server.MCPHandler())
+	log.Info("operator_mcp_mounted", "path", operator.MCPPath,
 		"detail", "an operator's own AI assistant can read and write the "+
 			"company's tracker and knowledge base here, authenticated with "+
 			"an api.auth.tokens entry or a person's own credential; the tools "+
 			"it lists are the ones this node serves when it asks")
+	// AND THE PERSON'S OWN TRANSPORT over the same catalogue: POST only, one
+	// tool per request, as the principal the request resolved to
+	// (ADR-0024). Guarded like every route the exemption list does not
+	// name, and refused by the drain gate like every other write.
+	mux.Handle(operator.ActPattern, server.ActHandler())
+	log.Info("operator_act_mounted", "path", operator.ActPathPrefix+"{tool}",
+		"detail", "the dashboard writes here as the principal its session "+
+			"or token resolves to, one catalogue tool per request, under the "+
+			"Idempotency-Key it names")
 }

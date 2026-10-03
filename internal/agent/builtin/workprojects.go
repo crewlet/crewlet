@@ -2,6 +2,7 @@ package builtin
 
 import (
 	"context"
+	"errors"
 	"strings"
 
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
@@ -46,8 +47,9 @@ var _ tools.SeatCallable = (*listProjects)(nil)
 func (t *listProjects) Name() string { return tracker.ListProjectsTool }
 
 func (t *listProjects) Description() string {
-	return "The projects this company files work into, with how much open " +
-		"work each holds and who leads it. " +
+	return "The projects this company files work into, with how much work " +
+		"each holds — waiting (todo), started (active), done and closed — " +
+		"who leads it and when it is meant to be finished. " +
 		"create_work_item refuses a project that is not here."
 }
 
@@ -81,8 +83,9 @@ func (t *listProjects) Parameters() map[string]any {
 				// leading `-` doubles the set and a fourteen-entry
 				// enumeration teaches a model less than the sentence.
 				"description": "Orders the whole company's projects before " +
-					"the page is taken, so `-open` is the most open work " +
-					"anywhere rather than the most open of one page. One of " +
+					"the page is taken, so `-active` is the most started work " +
+					"anywhere rather than the most of one page, and `target` " +
+					"the soonest target date (projects with none last). One of " +
 					strings.Join(tracker.ProjectSortNames(), ", ") +
 					", each optionally with a leading `-` for descending. " +
 					"Default " + string(tracker.ProjectSortKey) + ".",
@@ -142,7 +145,7 @@ func (t *listProjects) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	q.Level = seatReadLevel
 	listing, err := reader.Projects(ctx, q)
 	if err != nil {
-		return readFailed(tracker.ListProjectsTool, err), nil
+		return readFailure(ctx, tracker.ListProjectsTool, err), nil
 	}
 	return jsonResult(listing)
 }
@@ -214,8 +217,20 @@ func (t *describeProject) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		Units:   t.deps.Units,
 		Level:   seatReadLevel,
 	})
-	if err != nil {
-		return readFailed(tracker.DescribeProjectTool, err), nil
+	switch {
+	case errors.Is(err, tracker.ErrNoProject):
+		// THE READER'S OWN SENTENCE, which names the nearest keys. This
+		// used to go through [readFailure], which told a model that
+		// typed a key wrong that the tracker could not be read and that
+		// it must not conclude the project does not exist — the one
+		// conclusion it needed to draw.
+		return refusedBy(tools.RefusalNotFound, err, clip(err.Error())), nil
+	case errors.Is(err, tracker.ErrNoType):
+		// A `for_type` THE PROJECT DOES NOT FILE is the argument to
+		// change, and the reader's sentence names the types it does.
+		return refusedBy(tools.RefusalInvalid, err, clip(err.Error())), nil
+	case err != nil:
+		return readFailure(ctx, tracker.DescribeProjectTool, err), nil
 	}
 	return jsonResult(detail)
 }

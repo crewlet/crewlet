@@ -107,16 +107,17 @@ func (t *removeWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	before, err := t.deps.Reader.Task(ctx, ref, tracker.DetailWants{}, seatRead)
 	switch {
 	case errors.Is(err, tracker.ErrNoTask):
-		return failedBy(err, fmt.Sprintf("There is no work item %q.", clip(ref))), nil
+		return refusedBy(tools.RefusalNotFound, err, fmt.Sprintf("There is no work item %q.",
+			clip(ref))), nil
 	case err != nil:
-		return readFailed(tracker.RemoveWorkItemTool, err), nil
+		return readFailure(ctx, tracker.RemoveWorkItemTool, err), nil
 	}
 	// THE PROJECT IT IS FILED UNDER DECIDES, read off the row — see the
 	// `inTool` entries in authority.go for why the gate could not ask.
-	if refused := t.deps.mayWrite(ctx, authz.ActionWorkRemove, authz.Object{
+	if denied := t.deps.mayWrite(ctx, authz.ActionWorkRemove, authz.Object{
 		Kind: authz.KindTask, Container: before.Task.Project,
-	}); refused != nil {
-		return *refused, nil
+	}); denied != nil {
+		return *denied, nil
 	}
 
 	after := before.Task
@@ -138,7 +139,7 @@ func (t *removeWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		return t.deps.subtreeStopped(ctx, actor, tracker.RemoveWorkItemTool,
 			before, "removed", got, stopped)
 	case err != nil:
-		return writeFailed(actor, tracker.RemoveWorkItemTool, err), nil
+		return writeFailure(ctx, actor, tracker.RemoveWorkItemTool, err), nil
 	case got.Outcome == statelog.OutcomeUnknown:
 		// See [mergeWorkItem]: the seam's contract, held here.
 		return unknownWrite(actor, tracker.RemoveWorkItemTool,
@@ -215,14 +216,15 @@ func (t *restoreWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	before, err := t.deps.Reader.Task(ctx, ref, tracker.DetailWants{}, seatRead)
 	switch {
 	case errors.Is(err, tracker.ErrNoTask):
-		return failedBy(err, fmt.Sprintf("There is no work item %q.", clip(ref))), nil
+		return refusedBy(tools.RefusalNotFound, err, fmt.Sprintf("There is no work item %q.",
+			clip(ref))), nil
 	case err != nil:
-		return readFailed(tracker.RestoreWorkItemTool, err), nil
+		return readFailure(ctx, tracker.RestoreWorkItemTool, err), nil
 	}
-	if refused := t.deps.mayWrite(ctx, authz.ActionWorkRestore, authz.Object{
+	if denied := t.deps.mayWrite(ctx, authz.ActionWorkRestore, authz.Object{
 		Kind: authz.KindTask, Container: before.Task.Project,
-	}); refused != nil {
-		return *refused, nil
+	}); denied != nil {
+		return *denied, nil
 	}
 	// A LIVE ITEM IS NOT REFUSED HERE, because it is exactly what a restore
 	// that stopped part of the way through leaves: the root is back and
@@ -240,14 +242,17 @@ func (t *restoreWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	var stopped *tracker.SubtreeStopped
 	switch {
 	case errors.Is(err, tracker.ErrNothingToRestore):
-		return failedBy(err, fmt.Sprintf("%s is not in the trash, and nothing is in "+
-			"the trash with it, so there is nothing to restore.",
-			before.Named())), nil
+		// CONFLICT: the item's state, not the argument, is what refuses
+		// this — somebody restored it, and what went with it, between the
+		// caller's read and now.
+		return refusedBy(tools.RefusalConflict, err, fmt.Sprintf("%s is not in "+
+			"the trash, and nothing is in the trash with it, so there is "+
+			"nothing to restore.", before.Named())), nil
 	case errors.As(err, &stopped):
 		return t.deps.subtreeStopped(ctx, actor, tracker.RestoreWorkItemTool,
 			before, "restored", got, stopped)
 	case err != nil:
-		return writeFailed(actor, tracker.RestoreWorkItemTool, err), nil
+		return writeFailure(ctx, actor, tracker.RestoreWorkItemTool, err), nil
 	case got.Outcome == statelog.OutcomeUnknown:
 		return unknownWrite(actor, tracker.RestoreWorkItemTool,
 			fmt.Sprintf("%s came out of the trash", before.Named()), opID,
@@ -302,8 +307,8 @@ func (d WorkDeps) subtreeStopped(ctx context.Context, actor Actor, tool string,
 		"version":          got.Version,
 		"subtree_followed": stopped.Followed, "subtree_total": stopped.Of,
 		"subtree_stopped": fmt.Sprintf("%s is %s, but only %d of the %d tasks "+
-			"that go with it followed before the walk stopped (%v). Do not "+
+			"that go with it followed before the walk stopped (%s). Do not "+
 			"report it as done. %s", item.Named(), done, stopped.Followed,
-			stopped.Of, stopped.Err, next),
+			stopped.Of, writeTold(ctx, actor, tool, stopped.Err), next),
 	}, item), actor))
 }

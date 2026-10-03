@@ -76,24 +76,37 @@ const writeTimeout = 30 * time.Second
 // doing nothing.
 const QueueDepth = 512
 
-// The push kinds. Frozen against RENAMING — the dashboard is the
-// compatibility reference, so a renamed kind is a broken client, not a
-// refactor. A NEW kind is additive: the client's dispatch ignores a kind it
-// does not know, which is what lets the engine add one before the screen
-// that renders it. Every one of them has an entry on [routes]; see
-// TestEveryPushKindHasARoute.
+// Kind is what a frame from the socket is: a push, one of the two answers to a
+// query, the pong, or a socket's own identity frame.
+//
+// A NAMED TYPE, so the one place a kind is spelled is a constant below and
+// every frame is built from one — and the route, grant and posture tables are
+// keyed by it, so a kind spelled as a bare string somewhere else does not
+// compile. The dashboard's `PushKind` union is its copy of exactly these
+// constants — `contract/wire.ts`, held both ways by
+// `TestTheDashboardKnowsExactlyThePushKindsTheEngineSends`, which reads every
+// constant of this type from this package's source — and the socket's dispatch
+// falls silently through a kind that union does not name. So a kind is frozen
+// against RENAMING once a dashboard renders it: a renamed kind is a broken
+// client, not a refactor. A NEW kind is additive — the client's dispatch
+// ignores a kind it does not know, which is what lets the engine add one
+// before the screen that renders it. Every one of them has an entry on
+// [routes]; see TestEveryPushKindHasARoute.
+type Kind string
+
+// The push kinds.
 const (
-	KindSnapshot  = "snapshot"
-	KindEvent     = "event"
-	KindAgents    = "agents"
-	KindSeats     = "seats"
-	KindSandboxes = "sandboxes"
-	KindTokens    = "tokens"
-	KindBudget    = "budget"
-	KindSchedules = "schedules"
-	KindOrg       = "org"
-	KindTools     = "tools"
-	KindHealth    = "health"
+	KindSnapshot  Kind = "snapshot"
+	KindEvent     Kind = "event"
+	KindAgents    Kind = "agents"
+	KindSeats     Kind = "seats"
+	KindSandboxes Kind = "sandboxes"
+	KindTokens    Kind = "tokens"
+	KindBudget    Kind = "budget"
+	KindSchedules Kind = "schedules"
+	KindOrg       Kind = "org"
+	KindTools     Kind = "tools"
+	KindHealth    Kind = "health"
 
 	// KindInboxChanged says one seat's inbox moved, and it is the first
 	// kind routed to an AUDIENCE rather than to everyone: it carries the
@@ -106,7 +119,7 @@ const (
 	// node pushes that to its OWN sockets through [Service.InboxChanged] —
 	// every node applies every record, so no node forwards to another. The
 	// payload is an [InboxChange]: identifiers and a count, never content.
-	KindInboxChanged = "inbox_changed"
+	KindInboxChanged Kind = "inbox_changed"
 
 	// KindIdentity tells ONE client whether this node could verify the
 	// credential its socket was opened with, at the last revalidation
@@ -116,14 +129,14 @@ const (
 	// identity applier is behind, and the node-wide health frame would
 	// report that node as fine. Direct is also what lets it reach a client
 	// whose posture the hold itself has degraded.
-	KindIdentity = "identity"
+	KindIdentity Kind = "identity"
 
 	// KindResult and KindError answer one query, correlated by the
 	// client-minted id it was asked under.
-	KindResult = "result"
-	KindError  = "error"
+	KindResult Kind = "result"
+	KindError  Kind = "error"
 
-	KindPong = "pong"
+	KindPong Kind = "pong"
 )
 
 // routes is how each kind reaches the clients it is for. See [Route].
@@ -131,7 +144,7 @@ const (
 // BESIDE THE KINDS, and total over them: a kind declared above with no entry
 // here has no route at all, which [RouteOf] answers as the invalid zero Route
 // and TestEveryPushKindHasARoute fails the build over.
-var routes = map[string]Route{
+var routes = map[Kind]Route{
 	// The company's own state. What one tab sees, every tab sees.
 	KindSnapshot:  RouteDirect,
 	KindEvent:     RouteBroadcast,
@@ -172,7 +185,7 @@ var routes = map[string]Route{
 // choosing a channel: an event is the `events` query's row, so `audit:read`;
 // everything else here is what the dashboard's `state:read` questions answer.
 // A kind in neither table is received by NOBODY — see [Audience.Receives].
-var needs = map[string]iam.Grant{
+var needs = map[Kind]iam.Grant{
 	KindSnapshot:     iam.GrantStateRead,
 	KindEvent:        iam.GrantAuditRead,
 	KindAgents:       iam.GrantStateRead,
@@ -193,7 +206,7 @@ var needs = map[string]iam.Grant{
 // registered under, and deciding it again here would be a second opinion that
 // could only ever disagree; the identity frame and a pong carry nothing but
 // the socket's own state.
-var answers = map[string]bool{
+var answers = map[Kind]bool{
 	KindIdentity: true,
 	KindResult:   true,
 	KindError:    true,
@@ -216,7 +229,7 @@ func AudienceOf(grants []iam.Grant) Audience {
 }
 
 // Receives reports whether this audience may read a frame of kind.
-func (a Audience) Receives(kind string) bool {
+func (a Audience) Receives(kind Kind) bool {
 	if answers[kind] {
 		return true
 	}
@@ -227,9 +240,45 @@ func (a Audience) Receives(kind string) bool {
 	return iam.Principal{Grants: a.grants}.Can(grant)
 }
 
+// Holds reports whether this audience carries grant — the question a [Shaped]
+// payload asks to decide what of itself a reader receives.
+func (a Audience) Holds(grant iam.Grant) bool {
+	return iam.Principal{Grants: a.grants}.Can(grant)
+}
+
+// Shaped is a push payload whose CONTENT depends on what its reader may read,
+// beyond whether they may read its kind at all.
+//
+// The grant table ([needs]) decides WHETHER an audience receives a kind; a
+// shaped payload decides WHAT of it. The org tree is a `state:read` push, and a
+// seat's resolved model chain and tool sources inside it are derived from the
+// chart's runtime half, which only a `config:read` holder reads — so one kind
+// carries two shapes, and a reader is handed the one its grants describe.
+//
+// The decision travels WITH THE PAYLOAD rather than being a second table here,
+// because the payload's type is the one place that knows which of its fields
+// is which: a table of kinds could only say "shaped", and would have to trust
+// every producer of the kind to have built the narrow shape.
+type Shaped interface {
+	// For is the payload as an audience may receive it, and the name of
+	// that variant. Two audiences given one variant name receive
+	// byte-identical payloads, which is what lets a broadcast encode once
+	// per variant and posture rather than once per client.
+	For(Audience) (variant string, data any)
+}
+
+// shapeFor is data as audience may receive it, and its variant's name — the
+// payload itself, unnamed, when it is not [Shaped].
+func shapeFor(data any, audience Audience) (string, any) {
+	if shaped, ok := data.(Shaped); ok {
+		return shaped.For(audience)
+	}
+	return "", data
+}
+
 // GrantFor is the grant a reader needs to receive kind, and whether kind is a
 // company fact at all rather than an answer to a socket's own exchange.
-func GrantFor(kind string) (iam.Grant, bool) {
+func GrantFor(kind Kind) (iam.Grant, bool) {
 	grant, gated := needs[kind]
 	return grant, gated
 }
@@ -254,7 +303,7 @@ func (a Audience) same(b Audience) bool {
 // from the engine's one refusal vocabulary. The query-answer subset is named
 // in socket.go.
 type Envelope struct {
-	Kind  string        `json:"kind"`
+	Kind  Kind          `json:"kind"`
 	Data  any           `json:"data,omitempty"`
 	TS    string        `json:"ts,omitempty"`
 	ID    int64         `json:"id,omitempty"`
@@ -283,14 +332,35 @@ type Envelope struct {
 	// relation. Nil on every other frame, which omits both keys.
 	*Refused
 
-	// *Unavailable is an `unavailable` query error frame's refusal and
-	// hint — the state log's code, its words, and how long to wait before
-	// asking this node again, zero when waiting changes nothing —
-	// FLATTENED beside `error` exactly as a REST 503 carries them. Without
-	// it a client had one code for a node catching up and a node that will
-	// refuse the same read until an operator acts, and could only poll
-	// both. Nil on every other frame, which omits all three keys.
+	// Detail is the refusal's own sentence, written FOR the caller: a
+	// `bad_params` refusal's (see [BadParamsError]) — which names the
+	// parameter to change and the values it accepts — or an `unavailable`
+	// one's state-log refusal words ([Unavailable.Detail]). ONE KEY for
+	// both, as the REST envelope carries both under `detail`; set through
+	// [Envelope.unavailable] on the second, so the two halves of an
+	// `unavailable` frame cannot be built apart. Omitted on every other
+	// frame — a query failure's own text can carry a database path, and
+	// none of the rest has a reader.
+	Detail string `json:"detail,omitempty"`
+
+	// *Unavailable is an `unavailable` query error frame's refusal code
+	// and hint — the state log's code, and how long to wait before asking
+	// this node again, zero when waiting changes nothing — FLATTENED beside
+	// `error` exactly as a REST 503 carries them, with its words on
+	// [Envelope.Detail]. Without it a client had one code for a node
+	// catching up and a node that will refuse the same read until an
+	// operator acts, and could only poll both. Nil on every other frame,
+	// which omits both keys.
 	*Unavailable
+}
+
+// unavailable sets an `unavailable` frame's refusal, its hint and its words
+// together: the words travel on [Envelope.Detail], which the refusal's struct
+// does not carry onto the wire itself, so setting the struct alone would send
+// a refusal code with none of the words that explain it.
+func (e *Envelope) unavailable(u Unavailable) {
+	e.Unavailable = &u
+	e.Detail = u.Detail
 }
 
 // Refused is the reason and the grants an `unauthorized` frame carries.
@@ -314,7 +384,7 @@ func NewRefused(reason authz.Reason, grants []iam.Grant) *Refused {
 }
 
 // Push builds a broadcast envelope stamped now.
-func Push(kind string, data any, now time.Time) Envelope {
+func Push(kind Kind, data any, now time.Time) Envelope {
 	return Envelope{Kind: kind, Data: data, TS: now.UTC().Format(time.RFC3339Nano)}
 }
 
@@ -325,7 +395,7 @@ func Push(kind string, data any, now time.Time) Envelope {
 // kind that reached [Hub.Broadcast] without one would be dropped, and a
 // constructor that cannot produce one is how that stops being a runtime
 // discovery.
-func PushSeat(kind, seat string, data any, now time.Time) Envelope {
+func PushSeat(kind Kind, seat string, data any, now time.Time) Envelope {
 	env := Push(kind, data, now)
 	env.Seat = seat
 	return env
@@ -400,7 +470,7 @@ func NewClient(audience Audience) *Client {
 }
 
 // Receives reports whether this client may read a frame of kind.
-func (c *Client) Receives(kind string) bool {
+func (c *Client) Receives(kind Kind) bool {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return c.audience.Receives(kind)
@@ -515,6 +585,8 @@ func (c *Client) Reply(env Envelope) {
 	if !c.Posture().Delivers(env.Kind) {
 		return
 	}
+	// SHAPED FOR THIS CLIENT, as a broadcast of the same payload would be.
+	_, env.Data = shapeFor(env.Data, c.Audience())
 	frame, err := EncodeFrame(env)
 	if err != nil {
 		// A frame that cannot be encoded is this server's bug, not the
@@ -832,8 +904,13 @@ func (h *Hub) Broadcast(env Envelope) {
 	}
 	h.mu.RUnlock()
 
-	var cache [framePostures]*Frame
-	var encoded [framePostures]bool
+	// ONE ENCODE PER POSTURE AND PAYLOAD VARIANT: a plain payload has one
+	// variant, and a [Shaped] one as many as the audiences it tells apart.
+	type encoding struct {
+		slot    int
+		variant string
+	}
+	cache := map[encoding]*Frame{}
 	for _, c := range targets {
 		// WHO MAY READ IT before how it is encoded: a client that does
 		// not carry the kind's grant is not in its audience whatever the
@@ -846,20 +923,25 @@ func (h *Hub) Broadcast(env Envelope) {
 		if slot < 0 || !posture.Delivers(env.Kind) {
 			continue
 		}
-		if !encoded[slot] {
-			// MARKED BEFORE THE RESULT IS STORED, so an envelope that
-			// cannot be encoded costs one failed marshal for the whole
-			// posture rather than one per client. A nil frame is then
-			// the posture's answer and [Client.send] ignores it.
-			encoded[slot] = true
-			frame, err := EncodeFrame(env)
+		variant, data := shapeFor(env.Data, c.Audience())
+		key := encoding{slot: slot, variant: variant}
+		frame, encoded := cache[key]
+		if !encoded {
+			// STORED BEFORE IT IS CHECKED, so an envelope that cannot be
+			// encoded costs one failed marshal for the whole posture and
+			// variant rather than one per client. A nil frame is then
+			// that encoding's answer and [Client.send] ignores it.
+			shaped := env
+			shaped.Data = data
+			var err error
+			frame, err = EncodeFrame(shaped)
 			if err != nil {
 				log.Error("stream_encode_failed", "kind", env.Kind, "error", err)
-			} else {
-				cache[slot] = frame
+				frame = nil
 			}
+			cache[key] = frame
 		}
-		c.send(cache[slot])
+		c.send(frame)
 	}
 }
 

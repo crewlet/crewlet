@@ -18,6 +18,7 @@
  */
 
 import { createContext, useCallback, useContext, useMemo, useSyncExternalStore } from "react";
+import type { EngineHealth } from "~/contract/health.ts";
 import type {
   Slice,
   StoreState,
@@ -126,15 +127,16 @@ export function useTokens() {
  * round trip for rows this client already held, kept fresh on every apply.
  *
  * These are the RESOLVED rows, which is the distinction that matters against
- * the other way to get a seat's schedules: `lib/seats.ts`'s `schedulesOf`
- * reads the `schedules:` a seat AUTHORED out of the company document, so it
- * is operator-gated and carries name, cron and task. A row here carries the
- * effective timezone, the engine's own `next_run`, the `runners` a fire
- * actually reaches, and `problem` when a cron or a zone cannot be read — and
- * it is pushed to every reader, token or not.
+ * the other way to get a seat's schedules: the org builder's `schedulesOf`
+ * (`routes/org/builder/editorForm.ts`) reads the `schedules:` a seat AUTHORED
+ * in its runtime half on the org chart, which only a `config:read` reader is
+ * served, and carries name, cron and task. A row here carries the effective
+ * timezone, the engine's own `next_run`, the `runners` a fire actually
+ * reaches, and `problem` when a cron or a zone cannot be read — and it is
+ * pushed to every reader holding `state:read`.
  *
  * WHAT IT DOES NOT CARRY is the run ledger. `recent_runs` arrives only on the
- * `schedules` QUESTION, so `routes/activity/Schedules.tsx` polls that
+ * `schedules` QUESTION, so `routes/agents/Schedules.tsx` polls that
  * deliberately and must not be moved onto this hook: it would silently lose
  * the fires. This is for a reader that wants the schedules and nothing else.
  */
@@ -163,6 +165,20 @@ export function useConnection() {
     identityUnverifiable: s.identityUnverifiable,
     health: s.health,
   }));
+}
+
+/**
+ * The engine's own health: the `health` push, `api.Health` WHOLE — or null
+ * while it is not known (the socket is down, or no frame has arrived yet).
+ *
+ * READ FROM THE SLICE, never asked for. The push used to carry three fields
+ * while a `stream` query answered the rest, and five places polled that query
+ * at 5 s and 15 s of their own — so the sidebar could say a revision had applied
+ * while the panel in front of it said it had not. The snapshot and every
+ * five-second tick carry the whole body now, and there is no query to ask.
+ */
+export function useEngineHealth(): EngineHealth | null {
+  return useSlice(["health"], (s) => (s.health.status === "unknown" ? null : s.health));
 }
 
 export type { QueryMap, QueryName };

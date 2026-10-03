@@ -1,6 +1,7 @@
 package tracker_test
 
 import (
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -179,5 +180,93 @@ func TestTheStragglerRepairLeavesARootWhoseMoveHoldsItsClaim(t *testing.T) {
 		t.Errorf("once the claim lapsed the duty carried %d root(s)' stragglers "+
 			"and m-late is in %q, want 1 and OPS", got,
 			oneTask(t, r, "m-late").Project)
+	}
+}
+
+// ONE TICK CARRIES A STRAGGLER AND CLEARS A DUPLICATE RANK, AND THE STRAGGLER
+// LANDS ON A KEY ITS NEW PROJECT MINTED.
+//
+// The two jobs both put cards on a board, by two different mints. The carry
+// re-homes a task under a key and a rank its TARGET's counter mints
+// ([tracker.KeyMint]); the duplicate repair re-mints the losers of one shared
+// rank with [tracker.MoveKeys], between that rank and the next. A task write
+// otherwise KEEPS ITS PLACE ([tracker.MutationRecord.KeepsPlace]) — the rank
+// its row holds — so a carry that did not state the target's mint would bring
+// the straggler's ENG rank onto the OPS board, a key OPS's own lattice may
+// already hold, and hand the duplicate repair a collision of the carry's own
+// making. Run in one tick, neither job may undo the other.
+//
+// Mutation: drop the mint from the carry's patch and the straggler keeps its
+// ENG rank; drop either job from Jobs and its half reports nothing.
+func TestOneTickCarriesAStragglerAndClearsADuplicateRank(t *testing.T) {
+	t.Parallel()
+	r := lateTagFixture(t)
+	// ONE MORE ENG TASK FIRST, so ENG's counter is ahead of the one the move
+	// gives OPS: the straggler's ENG rank and the rank OPS mints for it are
+	// then two different keys, and a carry that kept the first is seen.
+	if _, err := r.writer.CreateTask(t.Context(), "op-ahead", newTask("e-ahead"), nil); err != nil {
+		t.Fatalf("file e-ahead: %v", err)
+	}
+	r.drain()
+	strandBehindAMove(t, r, "m-late")
+	if stranded := oneTask(t, r, "m-late"); stranded.Key != "ENG-5" {
+		t.Fatalf("the premise: m-late is %s, want ENG-5 — a key OPS's counter "+
+			"does not reach in this case", stranded.Key)
+	}
+	// TWO OPS CARDS ON ONE KEY, which is what two concurrent drags into
+	// one gap leave behind on two nodes.
+	root := oneTask(t, r, "m-root")
+	if _, err := r.writer.MoveTasks(t.Context(), "op-collide", "OPS",
+		[]tracker.Placement{{Task: "m-kid-a", Rank: root.Rank}}); err != nil {
+		t.Fatalf("put m-kid-a on m-root's key: %v", err)
+	}
+	r.drain()
+	if got := r.strings(`SELECT rank_duplicate_pending FROM tracker_projects
+		WHERE key = 'OPS'`); len(got) != 1 || got[0] != "1" {
+		t.Fatalf("the premise: OPS's duplicate probe reads %v, want it set", got)
+	}
+
+	holdTheAppliersPin(t, r)
+	swept, err := trackerWorker(t, r).Tick(t.Context())
+	if err != nil {
+		t.Fatalf("Tick: %v", err)
+	}
+	r.drain()
+	if swept["tracker_move_stragglers"] != 1 || swept["tracker_duplicate_ranks"] == 0 {
+		t.Fatalf("one tick swept %v, want the straggler carried and the "+
+			"duplicate cleared", swept)
+	}
+
+	late := oneTask(t, r, "m-late")
+	n, found := strings.CutPrefix(late.Key, "OPS-")
+	if late.Project != "OPS" || !found {
+		t.Fatalf("m-late is %s in %q after the tick, want an OPS key in OPS",
+			late.Key, late.Project)
+	}
+	number, err := strconv.ParseUint(n, 10, 64)
+	if err != nil {
+		t.Fatalf("m-late's key %s carries no number: %v", late.Key, err)
+	}
+	minted, err := tracker.IntegerAt(number)
+	if err != nil {
+		t.Fatalf("the rank of %s: %v", late.Key, err)
+	}
+	if late.Rank != minted {
+		t.Errorf("m-late was carried at rank %q, want %q — the rank OPS's "+
+			"counter minted with its key, not the place it held in ENG",
+			late.Rank, minted)
+	}
+	ranks := r.strings(`SELECT rank FROM tracker_tasks
+		WHERE project_key = 'OPS' AND removed_at IS NULL ORDER BY rank`)
+	for i := 1; i < len(ranks); i++ {
+		if ranks[i] == ranks[i-1] {
+			t.Errorf("OPS still holds two cards at %q after the tick: %v",
+				ranks[i], ranks)
+		}
+	}
+	if trackerGate(t, r, "tracker_move_stragglers") ||
+		trackerGate(t, r, "tracker_duplicate_ranks") {
+		t.Error("a gate still reports work after the tick, so its job runs " +
+			"on every tick for ever")
 	}
 }

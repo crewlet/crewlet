@@ -14,7 +14,7 @@ import (
 //
 // # Why not by the handle
 //
-// A seat's identity is the handle it was CREATED under (ADR-0019): a rename
+// A seat's identity is the handle it was CREATED under (ADR-0026): a rename
 // moves the address people type and keeps the seat — its id, its mailbox, its
 // lease, its memory. This domain stored the handle a person answered to AT THE
 // WRITE, in every column that names somebody: the assignee, the reporter, the

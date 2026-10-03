@@ -87,8 +87,9 @@ flowchart LR
 
 **The config API no longer writes it, and says so.** A `PUT` or a `PATCH
 /config` carrying a top-level `roles:` or `units:` is refused in full with
-`400 chart_not_writable_here`, and so is a write to `/config/roles/{handle}` or
-`/config/units/{key}`; both stay readable. It is a refusal rather than a quiet
+`400 chart_not_writable_here`, and there is no `/config/roles/{handle}` or
+`/config/units/{key}` — a seat and a unit are not collections of the
+settings, so both paths are `404 no_route`. It is a refusal rather than a quiet
 drop because the quiet drop is what actually hurts: a founder sends a whole
 document with a new seat in it, the write succeeds, the revision activates —
 and the seat is nowhere, with their own document saying it exists.
@@ -106,8 +107,15 @@ authority is derived from** — a seat's `project`, `space` and `email`, a unit'
 because a lead who could write them could take over another team's project or
 have somebody else's vendor actions attributed to them. The **runtime** half
 — a seat's model chain, its credentials, its sandbox cell, its `mcp_env`, its
-`contact` and `availability` — takes `config:write` too, because a stdio MCP
-server is `exec.Command` with the config's command. And **structure** is the
+token ceilings, its `contact` and `availability` — takes `config:write` too,
+because a stdio MCP server is `exec.Command` with the config's command. A
+runtime half is held to the organization model's own rules **before** anything
+in it is sealed or published: a token ceiling below one, a ceiling keyed by
+something that is not a calendar window, a malformed schedule (one with no
+cron, two sharing a name) and a field the seat's kind may not carry — a human
+seat's `token_budget`, an agent's `contact` — are each refused naming the field,
+exactly as a company file is, rather than published for every node to apply and
+none to obey. And **structure** is the
 batch's, below, at `config:write` — a seat's `manages:` list among it, a
 `set_manages`, because a lead who could write it could make themselves the
 founder's manager — with `fleet:operate` beside it for a
@@ -136,6 +144,19 @@ applied. The report takes `audit:read`, as the company-wide
 `GET /chart/history` does — it names every human seat nobody in the directory
 holds — while `/health` carries its counts for every reader. See
 [the continuous report](configuration.md#the-continuous-report-what-nothing-can-refuse-at-a-write).
+
+**A seat's ceiling and the company's are the clearest case.** A seat's token
+ceilings are its runtime, raised through `PATCH /chart/seats/{handle}`; the
+company's are its settings, raised through `/config` — two people, two times,
+two writes, and neither can see the other half. Everything a seat spends is the
+company's spend too, so a company ceiling at or below a seat's, on a window that
+holds the seat's whole (a day inside a week, a week inside a month), is always
+reached first and the seat's own ceiling can never refuse it a turn. The report
+names each such window as `budget_idle`, a **warning** — the company runs
+exactly as written and nothing a working ceiling would refuse is admitted; what
+it does is mislead a founder into reading a headroom the seat does not have —
+judged by the same rule, in the same sentence, as `crewlet validate` uses for a
+company file that carries both.
 
 **One of its findings reads the identity directory**, and what it says depends
 on whether this node could read it. `seat_unheld` is a human seat nobody in the
@@ -188,13 +209,6 @@ file is the chart again".
 **Your `company.yaml` still holds both halves**, and always will. You author one
 document describing a company, `crewlet validate` reads it whole, and `crewlet
 config import` divides it: the settings to a revision, the chart to this log.
-
-**A revision written before the split is refused at apply, and served on every
-read.** It still carries the chart inside it, so a node applying one would have
-to pick between running a chart no other node reads and dropping it to serve a
-company with no seats. It refuses instead and names the repair — one `crewlet
-config import`. Every read still answers, because that revision is exactly the
-one you have to look at in order to repair it.
 
 **Nothing to configure, and one thing you may want to.** The chart's log has a
 byte ceiling, `stream.chart_log_max_bytes`, and it is one of two state logs
@@ -474,7 +488,7 @@ each object's content follows on its own subject.
 
 **Half of a seat is opaque here, and that is deliberate.** This domain owns who exists, where they sit and who reports to whom — and it can say what every one of those means, validate it, arbitrate it and render it. It cannot say what an `mcp_env` key is for, what a model chain falls back to, or which sandbox cell a seat runs in. A chart that grew a column per runtime setting would be the company document again with a log underneath it.
 
-So a seat's model chain, tool credentials, sandbox cell, worker grants and schedules travel as **one document the chart carries and does not read**, and a unit's inherited credentials and scheduled work do the same.
+So a seat's model chain, tool credentials, sandbox cell, worker grants, schedules and token ceilings travel as **one document the chart carries and does not read**, and a unit's inherited credentials and scheduled work do the same. A seat's ceilings take the same form as the company's `token_budget` — `{"day": …, "week": …, "month": …}`, each window optional and each at least one token, counted on the [company's clock](../getting-started/configuration.md#token-budgets) — and a bare number is refused, because one figure says nothing about which window it caps.
 
 **Opaque is not unread for a credential.** The writer is handed the one thing
 it needs from the organization model — where in the half its credentials sit,

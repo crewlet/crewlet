@@ -673,3 +673,25 @@ func TestTheGuardsRefusalIsTheSharedEnvelope(t *testing.T) {
 			"person is shown when their token stops working", body["message"])
 	}
 }
+
+// THE LABELS THE GUARD ACCEPTS, in order and never their values — what
+// `GET /iam/node-tokens` lists for this node — and none for a Tier A that
+// declares no token, so a listing read off the guard never names a credential
+// that authenticates nobody here.
+func TestTokenIDsAreTheLabelsTheGuardAccepts(t *testing.T) {
+	t.Parallel()
+	g := guard(t, withTokens(config.APIToken{ID: "ops", Token: "t-ops"},
+		config.APIToken{ID: "ci", Token: "t-ci"}))
+	got := g.TokenIDs()
+	if strings.Join(got, ",") != "ci,ops" {
+		t.Errorf("TokenIDs = %v, want the labels in order", got)
+	}
+	for _, id := range got {
+		if strings.HasPrefix(id, "t-") {
+			t.Errorf("TokenIDs carries a token VALUE %q", id)
+		}
+	}
+	if got := guard(t, withTokens()).TokenIDs(); len(got) != 0 {
+		t.Errorf("a guard with no Tier A token lists %v, want none", got)
+	}
+}

@@ -317,7 +317,7 @@ func (s *Store) savePage(ctx context.Context, actor Actor, pageID string,
 			}
 			scope := ScopeSet{Subject: true, Container: head.Container}
 			notify := s.notifyOf(save.Quiet, kind, head,
-				excerptOfSave(save, head), nil)
+				excerptOfSave(save), nil)
 			return s.decide(stamp, actor, subject, OpPatch, scope, opID, patch, notify, at)
 		},
 	})
@@ -667,6 +667,13 @@ func (s *Store) status(ctx context.Context, actor Actor, pageID string,
 // ([ErrNoChartPosition]): there is no honest default, and a caller that has
 // applied no chart has none to derive from.
 //
+// A LATER POSITION OVER UNCHANGED SETTINGS IS WRITTEN TOO — a re-stamp —
+// because a row left at the older position is open to any chart between the
+// two. It carries the stamp, so it goes out at the version that reads it like
+// every container record ([versionedFields] says why a re-stamp is not
+// exempt): a node that cannot read the stamp holds the record back, with the
+// page writes in that space, rather than applying the settings without it.
+//
 // A FRESH OPERATION PER CALL, on the reasoning [tracker.Writer.ApplyChart]
 // gives for its own: this is a reconcile decided from the row, so a second
 // call — on another node, at the next boot, after a lost acknowledgement —
@@ -687,8 +694,8 @@ func (s *Store) EnsureContainer(ctx context.Context, chartAt int64,
 	opID := s.newSeqID()
 	subject := ContainerSubject(key)
 	var (
-		changed, restamp bool
-		out              Container
+		changed bool
+		out     Container
 	)
 
 	result, err := s.publish(ctx, statelog.Request{
@@ -701,7 +708,7 @@ func (s *Store) EnsureContainer(ctx context.Context, chartAt int64,
 			// lost the broker's arbitration is followed by one that
 			// finds the winner's value already there, and only the last
 			// round says what this call did.
-			changed, restamp = false, false
+			changed = false
 			out = Container{V: DocumentVersion, Key: key, Name: name,
 				Purpose: purpose, ChartPosition: chartAt, CreatedAt: at}
 			var document []byte
@@ -737,25 +744,19 @@ func (s *Store) EnsureContainer(ctx context.Context, chartAt int64,
 					return statelog.Decision{}, nil
 				}
 				out.CreatedAt = held.CreatedAt
-				restamp = held.Name == name && held.Purpose == purpose
 			}
 			changed = true
-			payload := ContainerPayload{
-				V: DocumentVersion, Key: key, Name: name, Purpose: purpose,
-				ChartPosition: chartAt,
-			}
-			// A LATER POSITION OVER THE SAME SETTINGS IS A RE-STAMP, and
-			// it goes out at the version an older build applies whole —
-			// see [recordVersionOf]. The stamp still lands on every node
-			// that can read it, so the guard above holds against the
-			// older chart that would otherwise follow.
-			var record any = payload
-			if restamp {
-				record = restampPayload{payload}
-			}
+			// A LATER POSITION OVER THE SAME SETTINGS IS STILL WRITTEN,
+			// stamp and all — a re-stamp — and it goes out at the version
+			// that carries the stamp like every other container record
+			// ([versionedFields]): a node that applied it without the
+			// stamp would keep a row this guard cannot defend.
 			return s.decide(stamp, Actor{Handle: "system", Kind: AuthorOperator},
 				subject, OpPatch, ScopeSet{Subject: true}, opID,
-				record, nil, at)
+				ContainerPayload{
+					V: DocumentVersion, Key: key, Name: name, Purpose: purpose,
+					ChartPosition: chartAt,
+				}, nil, at)
 		},
 	})
 	if err != nil {
@@ -965,15 +966,18 @@ func dominantKind(kinds map[ChangeKind]bool) ChangeKind {
 	return ChangeSaved
 }
 
-// excerptOfSave is what a card shows for one edit.
-func excerptOfSave(save Save, page Page) string {
-	if save.Message != "" {
-		return excerpt(save.Message)
-	}
-	if save.Body != nil {
-		return excerpt(firstLine(*save.Body, page.Title))
-	}
-	return excerpt(page.Title)
+// excerptOfSave is what a card shows for one edit: what the writer SAID the
+// change was, and nothing when they said nothing.
+//
+// NEVER A LINE OF THE PAGE. This used to fall back to the body's first line
+// (or the title), and every save without a message then showed the page's
+// opening heading — "Paging rules" — under the saver's name, on the page's
+// activity and in every watcher's wake, reading as a change note somebody
+// wrote. It is not a summary of the change either: the first line is the
+// same before and after an edit anywhere else. The kind, the actor and the
+// title already say a page was saved; the revision says what changed.
+func excerptOfSave(save Save) string {
+	return excerpt(save.Message)
 }
 
 // firstLine is a body's first non-empty line, or a fallback.

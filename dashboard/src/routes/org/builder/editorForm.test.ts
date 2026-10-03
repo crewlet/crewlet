@@ -11,6 +11,7 @@
  * the parts record as one edit that applies what the form says.
  */
 
+import { tokenBudgetError } from "~/lib/budget.ts";
 import { describe, expect, test } from "vitest";
 import { REDACTED } from "~/lib/format.ts";
 import { COMPANY_KEY } from "./model/keys.ts";
@@ -25,7 +26,7 @@ import {
   renames,
   seatForm,
   seatParts,
-  tokenBudgetError,
+  tokenBudgetErrors,
   unitForm,
   unitParts,
 } from "./editorForm.ts";
@@ -143,7 +144,7 @@ describe("a seat", () => {
       goal: "",
       backstory: "Came from ops",
       project: "ENG",
-      tokenBudget: "5000",
+      tokenBudget: { ...initial.tokenBudget, day: "5000" },
     };
     expect(seatParts("seat:dev", initial, form)).toEqual([
       {
@@ -153,7 +154,7 @@ describe("a seat", () => {
           { path: ["goal"] },
           { path: ["backstory"], value: "Came from ops" },
           { path: ["project"], value: "ENG" },
-          { path: ["runtime", "token_budget"], value: 5000 },
+          { path: ["runtime", "token_budget", "day"], value: 5000 },
         ],
       },
     ]);
@@ -190,21 +191,61 @@ describe("a seat", () => {
     ]);
   });
 
-  test("a token budget of 0 is unlimited, the same as none, and a malformed one is refused before Apply", () => {
-    const initial = seatForm(dev(), "");
-    expect(seatParts("seat:dev", initial, { ...initial, tokenBudget: "0" })).toEqual([]);
-    expect(seatForm({ handle: "x", name: "X", runtime: { token_budget: 0 } }, "").tokenBudget).toBe(
-      "",
+  // ONE PART PER WINDOW of the runtime half, never the whole mapping, so a
+  // colleague's ceiling on another window survives an update onto their
+  // write; and a window emptied is that key removed, which is how the engine
+  // spells "no ceiling".
+  test("a token budget writes each window it changed, and an emptied window is removed", () => {
+    const data: SeatData = {
+      handle: "dev",
+      name: "Dev",
+      runtime: { token_budget: { day: 100, week: 700 } },
+    };
+    const initial = seatForm(data, "");
+    expect(initial.tokenBudget).toEqual({ day: "100", week: "700", month: "" });
+    expect(
+      seatParts("seat:dev", initial, {
+        ...initial,
+        tokenBudget: { day: "", week: "700", month: "40000" },
+      }),
+    ).toEqual([
+      {
+        type: "updateSeat",
+        target: "seat:dev",
+        set: [
+          { path: ["runtime", "token_budget", "day"] },
+          { path: ["runtime", "token_budget", "month"], value: 40000 },
+        ],
+      },
+    ]);
+  });
+
+  test("a ceiling of 0 or a malformed one is refused before Apply, naming the window", () => {
+    // A stored 0 is SHOWN, not hidden as an empty box: it is the one value
+    // the engine refuses, and a form that hid it could never correct it.
+    expect(
+      seatForm({ handle: "x", name: "X", runtime: { token_budget: { day: 0 } } }, "").tokenBudget
+        .day,
+    ).toBe("0");
+    expect(tokenBudgetError("day", "0")).toBe(
+      "A ceiling of 0 is refused: leave it empty for no daily ceiling.",
     );
-    expect(tokenBudgetError("12.5")).toBe(
-      "Give a whole number of tokens, or leave it empty for unlimited.",
+    expect(tokenBudgetError("week", "12.5")).toBe(
+      "Give a whole number of tokens (40000000, or 40M), or leave it empty for no weekly ceiling.",
     );
-    expect(tokenBudgetError("-1")).not.toBeUndefined();
-    expect(tokenBudgetError("99999999999999999999")).toBe(
-      "Give a budget of at most 9007199254740991, or leave it empty for unlimited.",
+    expect(tokenBudgetError("month", "-1")).not.toBeUndefined();
+    // The ceiling is what a JSON number carries without rounding, and the
+    // message names it rather than blaming the engine, which holds an int64.
+    expect(tokenBudgetError("month", "99999999999999999999")).toBe(
+      "Give a ceiling of at most 9007199254740991, or leave it empty for no monthly ceiling.",
     );
-    expect(tokenBudgetError(" 42 ")).toBeUndefined();
-    expect(tokenBudgetError("")).toBeUndefined();
+    expect(tokenBudgetError("day", " 42 ")).toBeUndefined();
+    expect(tokenBudgetError("day", "")).toBeUndefined();
+    expect(tokenBudgetErrors({ day: "0", week: "", month: "x" })).toEqual({
+      day: "A ceiling of 0 is refused: leave it empty for no daily ceiling.",
+      month:
+        "Give a whole number of tokens (40000000, or 40M), or leave it empty for no monthly ceiling.",
+    });
   });
 
   // THE CHART WRITES ONE PROVIDER KEY AS A BARE STRING and several as a list

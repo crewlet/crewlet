@@ -47,13 +47,21 @@ import (
 //
 // # A PATCH is judged on what the CALLER sent
 //
-// Never on the merged document. A patch is applied over the stored revision,
-// and a revision written before the split still carries a chart inside it — so
-// judging the merge would refuse an operator patching a mission for a chart
-// they did not send and cannot see.
+// Never on the merged document, because a merge patch can name a chart key
+// and leave no trace of it in the merge: `{"units": null}` asks to remove the
+// chart, merges onto a settings revision as nothing at all, and judged on the
+// merge would answer 201 for a write that did nothing — the silently-dropped
+// half this door exists to refuse. The caller's own keys are what it asked
+// for, so they are what is judged.
+//
+// # And a seat or a unit is not addressed here at all
+//
+// There is no `/config/roles/{handle}` or `/config/units/{key}`: those
+// collections are the chart's, so the entity table (entities.go) carries
+// neither, and a path naming one is a route this surface does not serve.
 
-// ChartRoutes are the chart-surface routes this package's refusals point at,
-// and the ONE place they are written down.
+// ChartRoutes are the chart-surface routes this package's refusals and hints
+// point at, and the ONE place they are written down.
 //
 // EXPORTED FOR A WALK, because nothing inside this package can tell whether
 // `POST /chart/batch` exists: the chart surface is a sibling, mounted by the
@@ -69,21 +77,18 @@ import (
 var ChartRoutes = struct {
 	UnitContent, SeatContent string
 	Batch, Import            string
-	RenameUnit, RenameSeat   string
 }{
 	UnitContent: "PATCH /chart/units/{key}",
 	SeatContent: "PATCH /chart/seats/{handle}",
 	Batch:       "POST /chart/batch",
 	Import:      "POST /chart/import",
-	RenameUnit:  "POST /chart/units/{key}/rename",
-	RenameSeat:  "POST /chart/seats/{handle}/rename",
 }
 
 // ChartRoutePatterns is [ChartRoutes] as a list, for the walk.
 func ChartRoutePatterns() []string {
 	return []string{
 		ChartRoutes.UnitContent, ChartRoutes.SeatContent, ChartRoutes.Batch,
-		ChartRoutes.Import, ChartRoutes.RenameUnit, ChartRoutes.RenameSeat,
+		ChartRoutes.Import,
 	}
 }
 
@@ -188,61 +193,4 @@ func refuseChartIn(w http.ResponseWriter, sent submitted, method string) bool {
 		return refuseChart(w, sent.doc, method)
 	}
 	return refuseChartFromText(w, sent.text, method)
-}
-
-// refuseChartEntity answers a per-entity write to a collection the chart owns,
-// reporting whether the request was answered.
-//
-// # Why the entity routes are refused too, and not just PUT /config
-//
-// `PUT /config/roles/{handle}` never sent a chart key at all — it sends one
-// seat, and the route splices it into the stored revision. That splice is
-// exactly what the door above exists to stop: it writes a document carrying
-// `roles:`, and the next node to read that revision refuses it as a settings
-// document. The failure would move from the write, where the caller is
-// standing, to every node's next restart.
-//
-// So the two doors are one rule stated at both of its entrances, and this one
-// is the entrance where the chart arrives WITHOUT naming itself.
-//
-// # Why it is said at the HTTP door
-//
-// The route table mounts no write for a chart collection, so this is where a
-// request for one is answered, and what it adds over the entity draft's own
-// read-only refusal is the message a PERSON gets: `no roles called ceo in the
-// active revision`, answered to a founder whose company plainly has a CEO,
-// reads as the engine having lost their org chart, and this names the route
-// that does write one.
-func refuseChartEntity(w http.ResponseWriter, kind, id string) bool {
-	// THE TABLE DECIDES, not a second list of kinds. entities.go states
-	// which collections this surface still writes, and a copy of that
-	// judgement here is the one that eventually stops matching it.
-	if writableEntity(kind) {
-		return false
-	}
-	// A SEAT AND A UNIT ARE SAID SEPARATELY, because the two arrive in
-	// different gestures: a seat is hired and moved, a unit is opened and
-	// reparented, and one sentence covering both tells somebody holding
-	// either of them nothing they can act on.
-	noun, gesture := "seat", "hire, move or edit a seat"
-	route := ChartRoutes.SeatContent + " for its content, " + ChartRoutes.Batch +
-		" to hire or move one, " + ChartRoutes.RenameSeat + " for its handle"
-	if kind == EntityUnits {
-		noun, gesture = "unit", "open, move or edit a unit"
-		route = ChartRoutes.UnitContent + " for its content, " + ChartRoutes.Batch +
-			" to open or move one, " + ChartRoutes.RenameUnit + " for its key"
-	}
-	httpjson.FailWithFields(w, http.StatusBadRequest, httpjson.CodeChartNotWritableHere, httpjson.Detail{
-		"fields": []string{kind},
-		"detail": fmt.Sprintf(
-			"a %s is not part of the company's settings any more, so this "+
-				"route cannot write %s/%s. Writing it here would store a "+
-				"revision carrying a chart, which every node refuses to read "+
-				"as settings — so the failure would arrive at the next "+
-				"restart rather than here.", noun, kind, id),
-		"hint": "to " + gesture + ", use the org chart's own routes: " + route +
-			". This route writes the company's settings, and reading " +
-			kind + "/" + id + " here still works",
-	})
-	return true
 }

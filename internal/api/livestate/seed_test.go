@@ -7,6 +7,9 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/api/livestate"
+	"github.com/crewlet/crewlet/internal/eventfan"
+	"github.com/crewlet/crewlet/internal/events/types"
+	"github.com/crewlet/crewlet/internal/store"
 	"github.com/crewlet/crewlet/internal/tokens"
 )
 
@@ -269,5 +272,100 @@ func TestSeedingNothingMovesNothing(t *testing.T) {
 	s := seededState(t)
 	if change := s.Seed(livestate.History{}); change.Moved() {
 		t.Errorf("change = %+v, want nothing moved", change)
+	}
+}
+
+func TestSeedReportsWhichNodesItCovered(t *testing.T) {
+	t.Parallel()
+	// The seed reads every live node's store. Which ones answered is what
+	// says whether the history a restarted node shows is the fleet's or is
+	// missing a node, and a projection that kept it to itself would make a
+	// short feed indistinguishable from a quiet company.
+	s := seededState(t)
+	if _, seeded := s.SeededFrom(); seeded {
+		t.Fatal("a projection nothing seeded reported a seed")
+	}
+	coverage := eventfan.Coverage{Nodes: []eventfan.NodeCoverage{
+		{ID: "core-1", Answered: true},
+		{ID: "core-2", Error: "no answer within the 2s fleet read budget"},
+	}}
+	s.Seed(livestate.History{Coverage: coverage})
+
+	got, seeded := s.SeededFrom()
+	if !seeded {
+		t.Fatal("a seed that ran did not say so")
+	}
+	if got.Complete || !slices.Equal(got.Missing(), []string{"core-2"}) {
+		t.Errorf("seeded from %+v, want core-2 named as missing", got)
+	}
+	got.Nodes[0].ID = "mutated"
+	if again, _ := s.SeededFrom(); again.Nodes[0].ID != "core-1" {
+		t.Error("the coverage handed out aliases the projection's own")
+	}
+}
+
+func TestSeedSetsEachSeatsLastTurnAndAParkedOne(t *testing.T) {
+	t.Parallel()
+	// "Idle · last turn 24m ago" has to survive a restart, and so does a
+	// turn parked on a coding run: the run is a durable record and a box,
+	// not a goroutine, and the turn is still the seat's. Both seats carry
+	// one role name, so a seed grouped by name would file one seat's turns
+	// as the other's.
+	s := seededState(t)
+	base := time.Date(2026, 6, 14, 10, 0, 0, 0, time.UTC)
+	item := &types.WorkItem{Backend: "native", ID: "t-1", Key: "ENG-1"}
+	change := s.Seed(livestate.History{Turns: []store.Turn{
+		{TurnID: "old", AgentID: "Lead", AgentRole: "Engineer", StartedAt: base, EndedAt: base.Add(time.Minute), Complete: true},
+		{TurnID: "newer", AgentID: "Lead", AgentRole: "Engineer", StartedAt: base.Add(time.Hour),
+			EndedAt: base.Add(time.Hour + time.Minute), Complete: true, Failed: true},
+		// Running or died: nobody can say which from the store.
+		{TurnID: "unfinished", AgentID: "Lead", AgentRole: "Engineer", StartedAt: base.Add(2 * time.Hour),
+			EndedAt: base.Add(2 * time.Hour)},
+		{TurnID: "waiting", AgentID: "Coder", AgentRole: "Engineer", StartedAt: base, EndedAt: base.Add(time.Minute),
+			Parked: true, WorkItem: item},
+	}})
+	if _, ok := change.Agents["Lead"]; !ok {
+		t.Error("seeding a last turn did not report the seat as moved")
+	}
+
+	lead := overlayOf(t, s, "Lead")
+	if lead.LastTurn == nil || lead.LastTurn.TurnID != "newer" ||
+		lead.LastTurn.Outcome != livestate.OutcomeFailed ||
+		lead.LastTurn.EndedAt != base.Add(time.Hour+time.Minute).Format(time.RFC3339Nano) {
+		t.Errorf("last turn = %+v, want the newest ENDED turn, failed", lead.LastTurn)
+	}
+	if lead.Turn != nil {
+		t.Errorf("turn = %+v, want none claimed for a turn nobody can say is running", lead.Turn)
+	}
+	coder := overlayOf(t, s, "Coder")
+	if coder.Turn == nil || coder.Turn.TurnID != "waiting" || coder.Turn.Stage != livestate.StageParked ||
+		coder.Turn.WorkItem == nil || coder.Turn.WorkItem.Key != "ENG-1" {
+		t.Errorf("turn = %+v, want the parked turn on its item", coder.Turn)
+	}
+	// A PARKED TURN IS NOT WORK OF ITS OWN: what its run is doing is the
+	// run record's to say, and the record is read separately. The seed
+	// claims nothing for the seat.
+	if coder.Activity != livestate.ActivityIdle {
+		t.Errorf("activity = %q, want idle until the run record says what the run is doing",
+			coder.Activity)
+	}
+	if lead.Activity != livestate.ActivityIdle {
+		t.Errorf("activity = %q, want idle with only ended turns seeded", lead.Activity)
+	}
+}
+
+func TestSeedDoesNotOverwriteWhatTheStreamAlreadySaid(t *testing.T) {
+	t.Parallel()
+	// The caller subscribes first and reads second, so the stream can land
+	// a newer turn before the seed does.
+	s := seededState(t)
+	s.Apply(env("agent_turn_completed", map[string]any{"agent_id": "Lead", "turn_id": "live"},
+		at("2026-06-14T11:59:00Z")))
+	base := time.Date(2026, 6, 14, 10, 0, 0, 0, time.UTC)
+	s.Seed(livestate.History{Turns: []store.Turn{
+		{TurnID: "stored", AgentID: "Lead", AgentRole: "Engineer", StartedAt: base, EndedAt: base, Complete: true},
+	}})
+	if last := overlayOf(t, s, "Lead").LastTurn; last == nil || last.TurnID != "live" {
+		t.Errorf("last turn = %+v, want the stream's newer one kept", last)
 	}
 }

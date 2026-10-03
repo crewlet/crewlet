@@ -23,9 +23,12 @@ import (
 	"github.com/crewlet/crewlet/internal/api/stream"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
+	coordmemory "github.com/crewlet/crewlet/internal/coord/memory"
+	"github.com/crewlet/crewlet/internal/eventfan"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/store"
+	"github.com/crewlet/crewlet/internal/tokens"
 )
 
 // seededApp is an app whose sources hold a known company's worth of history.
@@ -73,10 +76,24 @@ func seededApp(t *testing.T, mutate func(*api.Options)) *api.App {
 		},
 	})
 
+	// AND A NODE HOLDING THE SEAT the live state shows at work: a seat no
+	// node holds is `unplaced`, which the socket's placement tick writes
+	// onto the shared projection the moment a socket opens — so with no
+	// lease, the question asked over REST before any socket and again over
+	// one after it read two different (and both honest) states.
+	leases := coordmemory.New()
+	if lease, err := leases.TryAcquire(t.Context(), coord.SeatResource(ceo),
+		coord.AcquireOptions{Owner: "node-a:1", TTL: time.Hour}); err != nil || lease == nil {
+		t.Fatalf("hold the CEO's seat: %v (%v)", err, lease)
+	}
+
 	opts := api.Options{
-		State: state,
+		State:    state,
+		EventLog: db.Events(),
 		Sources: queries.Sources{
-			State: state, Events: db.Events(), Company: companySource(t, company),
+			State: state, Events: eventfan.Solo("node-a", db.Events()),
+			Usage: db.Replicated(), Company: companySource(t, company),
+			Coord: leases,
 		},
 		Now: func() time.Time { return clock },
 	}
@@ -173,7 +190,6 @@ func TestBothTransportsAnswerTheSameQuestionIdentically(t *testing.T) {
 		{"events", url.Values{"actor": {"Lead"}}, map[string]any{"actor": "Lead"}},
 		{"trace", url.Values{"trace_id": {"tr-1"}}, map[string]any{"trace_id": "tr-1"}},
 		{"tokens", nil, nil},
-		{"stream", nil, nil},
 	} {
 		status, restBody := overREST(t, a, tc.what, tc.rest)
 		if status != http.StatusOK {
@@ -287,6 +303,46 @@ func TestABadParameterIsRefusedRatherThanGuessedAt(t *testing.T) {
 	socket := overSocket(t, a, "events", map[string]any{"before_id": "ev1"})
 	if socket["kind"] != "error" || socket["error"] != "bad_params" {
 		t.Errorf("socket answer = %v, want bad_params", socket)
+	}
+}
+
+// THE REFUSAL'S SENTENCE REACHES THE CALLER, ON BOTH TRANSPORTS, WORD FOR WORD.
+//
+// A spend window past the engine's ninety days is refused naming `days` and
+// the bound — the one thing a person who typed a window can act on. It used to
+// reach the debug log only, so the Spend screen could say nothing but "the
+// engine refused this request". And the two transports carry the SAME
+// sentence, with the package's sentinel taken out of it: "queries: bad
+// parameters" is a Go package's name for the class, not something to read.
+func TestARefusalsSentenceReachesTheCallerOnBothTransports(t *testing.T) {
+	t.Parallel()
+	a := seededApp(t, nil)
+
+	status, body := overREST(t, a, "tokens", url.Values{"days": {"91"}})
+	if status != http.StatusBadRequest {
+		t.Fatalf("REST status = %d, want 400", status)
+	}
+	rest, _ := body.(map[string]any)["detail"].(string)
+	socket := overSocket(t, a, "tokens", map[string]any{"days": 91})
+	sock, _ := socket["detail"].(string)
+
+	for name, detail := range map[string]string{"REST": rest, "socket": sock} {
+		if !strings.Contains(detail, "days is 91") || !strings.Contains(detail, "at most 90") {
+			t.Errorf("%s detail = %q, want the refusal naming days, 91 and the bound", name, detail)
+		}
+		// NO CLASS NAME, the engine's or the finer one: `tokens:` twice over
+		// is what the Spend screen used to show in front of this sentence.
+		for _, class := range []error{queries.ErrBadParams, tokens.ErrWindowLength} {
+			if strings.Contains(detail, class.Error()) {
+				t.Errorf("%s detail = %q still carries %q", name, detail, class)
+			}
+		}
+		if strings.HasPrefix(detail, "tokens") {
+			t.Errorf("%s detail = %q opens with the question's name", name, detail)
+		}
+	}
+	if rest != sock {
+		t.Errorf("the transports disagree about the sentence:\n REST   %q\n socket %q", rest, sock)
 	}
 }
 

@@ -268,13 +268,17 @@ func personVerbs() []personVerb {
 			func(n string) map[string]any {
 				return map[string]any{"handle": n, "items": []any{"ENG-1"}}
 			})},
+		// ONE GESTURE EACH, the smallest that is a change: a mark naming
+		// nothing is refused before anybody's record is written.
 		{name: "MarkInboxFor", write: true, ownerOnly: true,
 			call: func(ctx context.Context, deps builtin.WorkDeps, n string) tools.Result {
-				return builtin.MarkInboxFor(ctx, deps, n, map[string]any{})
+				return builtin.MarkInboxFor(ctx, deps, n,
+					map[string]any{"read": []any{"r-1"}})
 			}},
 		{name: "SetPinsFor", write: true, ownerOnly: true,
 			call: func(ctx context.Context, deps builtin.WorkDeps, n string) tools.Result {
-				return builtin.SetPinsFor(ctx, deps, n, map[string]any{})
+				return builtin.SetPinsFor(ctx, deps, n,
+					map[string]any{"views": map[string]any{"add": []any{"v-1"}}})
 			}},
 	}
 }

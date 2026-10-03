@@ -146,6 +146,28 @@ type Call struct {
 	Args   map[string]any
 	Output string
 	Failed bool
+
+	// Cause is WHY a failed call failed, as the returned
+	// [toolloop.ToolResult] carries it: the tool's own [Result.Cause] for a
+	// call a tool answered, the surface's class for a call it refused before
+	// any tool ran, and nil for a success or a third-party MCP server's
+	// failure.
+	//
+	// THE ONE VALUE, and [Call.Refusal] and [Call.Unknown] read it: a class
+	// recorded beside the cause would be a second classifier of one failure,
+	// and the two drift — see [mcp.Result.Cause].
+	Cause error
+}
+
+// Refusal is the call's class, read out of its cause by [RefusalOf]: "" for a
+// success and for a failure nothing in this engine classified.
+func (c Call) Refusal() Refusal {
+	return RefusalOf(Result{Output: c.Output, Failed: c.Failed, Cause: c.Cause})
+}
+
+// Unknown reports whether the call's write may have landed, by [UnknownOf].
+func (c Call) Unknown() bool {
+	return UnknownOf(Result{Output: c.Output, Failed: c.Failed, Cause: c.Cause})
 }
 
 // NewSurface builds a phase surface over a snapshot.
@@ -316,15 +338,21 @@ func (s *Surface) Execute(ctx context.Context, call llm.ToolCall) (toolloop.Tool
 		// difference: a name that exists but was not offered is something
 		// to activate, a name that does not exist is something to stop
 		// trying.
-		msg := fmt.Sprintf("Unknown tool: %s", call.Name)
+		//
+		// THE CLASS FOLLOWS THE SAME SPLIT: a name nothing registered is
+		// not_found, and one that exists but was not offered to THIS
+		// surface is forbidden — the call is refused for where it was
+		// made rather than for what it named.
+		msg, class := fmt.Sprintf("Unknown tool: %s", call.Name), RefusalNotFound
 		if known {
 			msg = fmt.Sprintf("Tool %s is not active on this surface — activate it first.", call.Name)
+			class = RefusalForbidden
 		}
-		s.record(Call{Name: call.Name, Args: args, Output: msg, Failed: true})
+		s.record(Call{Name: call.Name, Args: args, Output: msg, Failed: true, Cause: class})
 		span.SetAttributes(
 			attribute.Bool("crewlet.tool_failed", true),
 			attribute.String("crewlet.tool_outcome", outcomeFor(known)))
-		return toolloop.ToolResult{Output: msg, Failed: true}, nil
+		return toolloop.ToolResult{Output: msg, Failed: true, Cause: class}, nil
 	}
 
 	if s.guard != nil {
@@ -334,11 +362,16 @@ func (s *Surface) Execute(ctx context.Context, call llm.ToolCall) (toolloop.Tool
 			// reason and can act on it, and the ledger shows an operator
 			// that the turn spent a round here rather than that the tool
 			// silently did nothing.
-			s.record(Call{Name: call.Name, Args: args, Output: reason, Failed: true})
+			// FORBIDDEN, because the guard refuses the call as made
+			// here and now (a skill not yet loaded), never its
+			// arguments.
+			s.record(Call{Name: call.Name, Args: args, Output: reason, Failed: true,
+				Cause: RefusalForbidden})
 			span.SetAttributes(
 				attribute.Bool("crewlet.tool_failed", true),
 				attribute.String("crewlet.tool_outcome", "refused_by_guard"))
-			return toolloop.ToolResult{Output: reason, Failed: true}, nil
+			return toolloop.ToolResult{Output: reason, Failed: true,
+				Cause: RefusalForbidden}, nil
 		}
 	}
 
@@ -363,7 +396,8 @@ func (s *Surface) Execute(ctx context.Context, call llm.ToolCall) (toolloop.Tool
 		// call did not happen as far as the ledger is concerned.
 		return toolloop.ToolResult{}, err
 	}
-	s.record(Call{Name: call.Name, Args: args, Output: res.Output, Failed: res.Failed})
+	s.record(Call{Name: call.Name, Args: args, Output: res.Output, Failed: res.Failed,
+		Cause: res.Cause})
 	// INTO THE RUN'S LOG TOO, failed or not: a call that reports a failure
 	// may still have written part of what it asked for (a gesture stopped
 	// at a step whose outcome is unknown), and a call the log never heard
@@ -380,9 +414,15 @@ func (s *Surface) Execute(ctx context.Context, call llm.ToolCall) (toolloop.Tool
 	span.SetAttributes(
 		attribute.Bool("crewlet.tool_failed", res.Failed),
 		attribute.String("crewlet.tool_outcome", invokedOutcome(res.Failed, res.Suspend)))
+	// WHO ANSWERED, stamped here because this is the one frame that
+	// resolved the name to a registered entry — the registry records the
+	// origin at registration and the loop sees only a name. Only on this
+	// path: the refusals above never reached a tool, so they name none.
+	server, _ := e.FromMCP()
 	return toolloop.ToolResult{
-		Output: res.Output, Failed: res.Failed,
+		Output: res.Output, Failed: res.Failed, Cause: res.Cause,
 		Suspend: res.Suspend, SuspendPayload: res.Payload,
+		Origin: e.Origin, Server: server,
 	}, nil
 }
 

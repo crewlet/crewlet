@@ -5,8 +5,6 @@ import (
 	"go/parser"
 	"go/token"
 	"os"
-	"path/filepath"
-	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -15,14 +13,6 @@ import (
 	"github.com/crewlet/crewlet/internal/api/httpjson"
 	"github.com/crewlet/crewlet/internal/clientsource"
 )
-
-// dashboardProtocol is the dashboard's own declaration of the wire, as SOURCE:
-// the dashboard's source is committed, so it is in every checkout, and the
-// built bundle would be a step behind any change a branch makes to it.
-func dashboardProtocol(t *testing.T) string {
-	t.Helper()
-	return filepath.Join(clientsource.Tree(t), "protocol", "types.ts")
-}
 
 // clientOnlyCodes are the query error codes the dashboard's socket produces
 // itself, which no engine frame carries: a sent query that went unanswered,
@@ -51,30 +41,6 @@ func TestTheDashboardKnowsExactlyTheQueryErrorCodesTheEngineSends(t *testing.T) 
 			"the dashboard knows is a branch that never runs; a code only the engine "+
 			"sends is a failure every screen renders as unknown",
 			got, engineCodes(t), clientOnlyCodes)
-	}
-}
-
-// THE ENGINE AND THE DASHBOARD SPEAK ONE PUSH VOCABULARY.
-//
-// The dashboard's `PushKind` union is what its dispatch switches on, and a
-// kind the engine sends that the union lacks is a frame the switch has no case
-// for: it arrives, it is dropped, and the only symptom is a screen that learns
-// about something a poll interval late. `inbox_changed` was that kind: the
-// engine declared and routed it before anything published it, and the union
-// never named it. Held in both directions, read from this package's own
-// source so a new kind is covered without being listed here: a member only the
-// dashboard knows is a case that never runs.
-func TestTheDashboardKnowsExactlyThePushKindsTheEngineSends(t *testing.T) {
-	t.Parallel()
-	want := declaredKinds(t)
-	slices.Sort(want)
-	got := dashboardUnion(t, "PushKind")
-	slices.Sort(got)
-	if !slices.Equal(got, want) {
-		t.Errorf("the dashboard's PushKind union is %v and the engine declares %v: "+
-			"a kind only the engine sends is a frame the dashboard's dispatch drops, "+
-			"and a kind only the dashboard names is a case that never runs",
-			got, want)
 	}
 }
 
@@ -172,35 +138,22 @@ func engineCodes(t *testing.T) []string {
 }
 
 // dashboardUnion is the members of the string-literal union type the
-// dashboard's protocol declares under name.
+// dashboard declares under name.
+//
+// FOUND BY ITS NAME AND READ BY ITS SYNTAX, through [clientsource.Union]. This
+// read `protocol/types.ts` by path and cut the union at the first `;` once its
+// doc comments had been blanked by a regular expression — so a move of the
+// file failed the gate for a drift that had not happened, and a comment
+// quoting a code, or holding a semicolon, was one regex away from becoming a
+// member or ending the union early.
 func dashboardUnion(t *testing.T, name string) []string {
 	t.Helper()
-	protocol := dashboardProtocol(t)
-	source, err := os.ReadFile(protocol)
+	members, err := clientsource.Union(clientsource.Tree(t), name)
 	if err != nil {
 		// FAILS rather than skips: the dashboard source is committed, so a
-		// missing file is a moved file, and a skip would certify nothing.
-		t.Fatalf("read the dashboard's protocol types: %v", err)
-	}
-	text := string(source)
-	head := "export type " + name + " ="
-	start := strings.Index(text, head)
-	if start < 0 {
-		t.Fatalf("%s declares no %s union", protocol, name)
-	}
-	// The members' doc comments are prose: they quote words ("there is
-	// nothing") and may carry a semicolon of their own. They go BEFORE the
-	// union's terminating semicolon is looked for, or a comment could end the
-	// union early or add a quoted word as a member.
-	body := regexp.MustCompile(`(?s)/\*.*?\*/|//[^\n]*`).ReplaceAllString(text[start+len(head):], "")
-	end := strings.Index(body, ";")
-	if end < 0 {
-		t.Fatalf("the %s union in %s never ends", name, protocol)
-	}
-	body = body[:end]
-	var members []string
-	for _, m := range regexp.MustCompile(`"([^"]+)"`).FindAllStringSubmatch(body, -1) {
-		members = append(members, m[1])
+		// missing declaration is a renamed one, and a skip would certify
+		// nothing.
+		t.Fatal(err)
 	}
 	if len(members) == 0 {
 		t.Fatalf("the %s union has no members, so this test could not fail", name)

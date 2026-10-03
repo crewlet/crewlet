@@ -69,6 +69,15 @@ type leaseValue struct {
 	// was already lapsed — a seat nobody can hold.
 	TTLNanos int64 `json:"ttl_ns"`
 
+	// AcquiredAt is the store's timestamp of the write that WON this
+	// tenure — the claiming record's own revision — and is carried
+	// unchanged by every renewal; see coord.Lease.AcquiredAt. Absent on a
+	// record from a build that predates it, which decodes as the zero
+	// time and reads as unknown. omitzero keeps it that way on the wire
+	// rather than writing Go's zero instant, which an older reader would
+	// ignore and a newer one would have to special-case.
+	AcquiredAt time.Time `json:"acquired_at,omitzero"`
+
 	Preferred string         `json:"preferred,omitempty"`
 	Protocol  int            `json:"protocol"`
 	Meta      map[string]any `json:"meta,omitempty"`
@@ -115,13 +124,14 @@ type entry struct {
 // lease renders the record as the contract's Lease.
 func (e entry) lease() *coord.Lease {
 	return &coord.Lease{
-		Resource:  e.resource,
-		Owner:     e.value.Owner,
-		Epoch:     e.value.Epoch,
-		ExpiresAt: e.created.Add(e.value.ttl()).UTC(),
-		Preferred: e.value.Preferred,
-		Protocol:  coord.StoredProtocol(e.value.Protocol),
-		Meta:      e.value.Meta,
+		Resource:   e.resource,
+		Owner:      e.value.Owner,
+		Epoch:      e.value.Epoch,
+		ExpiresAt:  e.created.Add(e.value.ttl()).UTC(),
+		AcquiredAt: e.value.AcquiredAt,
+		Preferred:  e.value.Preferred,
+		Protocol:   coord.StoredProtocol(e.value.Protocol),
+		Meta:       e.value.Meta,
 	}
 }
 

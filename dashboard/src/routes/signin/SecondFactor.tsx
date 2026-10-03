@@ -31,7 +31,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Button, Callout, FormField, Input, Modal, Skeleton, Text } from "@crewlethq/ui";
-import { KeyGlyph, ShieldPersonGlyph } from "@crewlethq/icons/glyphs";
+import { KeyGlyph, ShieldUserGlyph } from "@crewlethq/icons/glyphs";
 import { CopyButton, DownloadButton } from "~/ui/primitives.tsx";
 import { refusalText } from "~/lib/refusal.ts";
 import { goSignIn } from "~/lib/session.ts";
@@ -245,7 +245,7 @@ export function FirstRecoveryCodes({ onDone }: { onDone: () => void }) {
         <Button variant="primary" onClick={() => void issue()}>
           Try again
         </Button>
-        <Button variant="tertiary" onClick={onDone}>
+        <Button variant="ghost" onClick={onDone}>
           Continue without recovery codes
         </Button>
       </div>
@@ -282,12 +282,12 @@ export function AuthenticatorDialog({ onClose }: { onClose: () => void }) {
     <Modal
       open
       title="Two-step verification"
-      icon={<ShieldPersonGlyph size="md" />}
+      icon={<ShieldUserGlyph size="md" />}
       onClose={onClose}
       size="md"
       stackBody
       footer={
-        <Button variant={enrolled ? "primary" : "tertiary"} onClick={onClose}>
+        <Button variant={enrolled ? "primary" : "ghost"} onClick={onClose}>
           {enrolled ? "Done" : "Cancel"}
         </Button>
       }
@@ -364,7 +364,7 @@ export function RecoveryCodesDialog({ onClose }: { onClose: () => void }) {
           </Button>
         ) : (
           <>
-            <Button variant="tertiary" onClick={onClose} disabled={busy}>
+            <Button variant="ghost" onClick={onClose} disabled={busy}>
               Cancel
             </Button>
             <Button variant="primary" onClick={() => void issue()} disabled={busy}>

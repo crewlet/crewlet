@@ -8,8 +8,8 @@ import (
 
 // NO /config RESPONSE MAY BE STORED, whatever it answered.
 //
-// A /config body is the company document: the org chart, contact identities
-// and the ${VAR} name behind every credential. With an ETag and no
+// A /config body is the company's settings: which integrations are wired and
+// where, and the ${VAR} name behind every credential. With an ETag and no
 // Cache-Control a browser writes it to its disk cache, where it outlives the
 // session and the token that read it. So every answer carries no-store: a
 // read, a 304, a write, every kind of refusal, and the 404 and 405 the surface
@@ -39,8 +39,6 @@ func TestNoConfigResponseIsCacheable(t *testing.T) {
 		{"a diff", http.MethodGet, "/config/revisions/" + revision + "/diff?against=active", "", nil, http.StatusOK},
 		{"an unknown revision", http.MethodGet, "/config/revisions/00000000-0000-0000-0000-000000000000", "", nil, http.StatusNotFound},
 		{"one entity", http.MethodGet, "/config/llm-providers/zulu", "", nil, http.StatusOK},
-		{"a chart entity this door does not write", http.MethodPut, "/config/roles/ceo",
-			`{"name":"CEO","handle":"ceo"}`, map[string]string{"X-Summary": "x"}, http.StatusBadRequest},
 		{"the accepted patch formats", http.MethodOptions, "/config", "", nil, http.StatusNoContent},
 		{"a write refused for its summary", http.MethodPut, "/config", companyDoc, nil, http.StatusBadRequest},
 		{"a write refused for its document", http.MethodPut, "/config", "name: [", map[string]string{"X-Summary": "broken"}, http.StatusBadRequest},

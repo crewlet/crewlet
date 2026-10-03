@@ -12,6 +12,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/config"
 	coordmemory "github.com/crewlet/crewlet/internal/coord/memory"
+	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/secrets"
 	"github.com/crewlet/crewlet/internal/store"
 )
@@ -48,8 +49,8 @@ func activateStored(t *testing.T, cfg, payload string) string {
 		t.Fatalf("seal the revision: %v", err)
 	}
 	id, err := cs.configs.InsertActive(t.Context(), store.Revision{
-		Source: "fleet", CreatedBy: "peer", Summary: "from a peer",
-		Payload: sealed, CreatedAt: time.Now().UTC(),
+		Source: "fleet", CreatedBy: "peer", CreatedByKind: iam.ActorOperator,
+		Summary: "from a peer", Payload: sealed, CreatedAt: time.Now().UTC(),
 	})
 	if err != nil {
 		t.Fatalf("store the revision: %v", err)
@@ -169,18 +170,18 @@ units:
         roles: [{name: Engineer, handle: product-engineer, llm: main}]
 `
 
-// A REVISION STILL CARRYING AN ORG CHART IS SHOWN AND EXPORTED, REFUSED AT
-// BOOT, AND A FILE WITH A DUPLICATE UNIT KEY IS NEITHER IMPORTED NOR
-// VALIDATED.
+// A REVISION CARRYING AN ORG CHART IS SHOWN AND EXPORTED, REFUSED AT BOOT,
+// AND A FILE WITH A DUPLICATE UNIT KEY IS NEITHER IMPORTED NOR VALIDATED.
 //
 // # Why the boot refuses it rather than running it
 //
 // The chart is a state-log domain of its own, and a node derives its seats
-// from that log. A revision written before the split still holds the chart
-// INSIDE it, so applying one would mean choosing between two wrong answers:
-// run the chart from a document no other node reads, or drop it and serve a
-// company with no seats at all from bytes that decoded cleanly. It is refused
-// instead, naming the one-line repair.
+// from that log. A stored revision holding the chart INSIDE it is a shape no
+// door writes, and applying one would mean choosing between two wrong
+// answers: run the chart from a document no other node reads, or drop it and
+// serve a company with no seats at all from bytes that decoded cleanly. It is
+// refused instead, naming where the chart lives and the import that divides a
+// company file between the two.
 //
 // # And why every READ still answers
 //
@@ -191,14 +192,14 @@ units:
 // The two doors then meet a FILE differently again, which is the rest of this
 // case: the store holds what an older build admitted, and a file is somebody's
 // new submission, held to every admission rule.
-func TestAnOldChartIsShownExportedAndRefusedAtBoot(t *testing.T) {
+func TestARevisionCarryingAChartIsShownExportedAndRefusedAtBoot(t *testing.T) {
 	dir := t.TempDir()
 	cfg := bootstrapForStore(t, dir)
 	id := activateStored(t, cfg, duplicateKeysRevision)
 
 	company, err := companyFromStore(t.Context(), cfg)
 	if err == nil {
-		t.Fatalf("a node booted onto a revision that still carries a chart: %+v", company)
+		t.Fatalf("a node booted onto a revision that carries a chart: %+v", company)
 	}
 	for _, want := range []string{"org chart", "crewlet config import"} {
 		if !strings.Contains(err.Error(), want) {
@@ -286,7 +287,7 @@ func TestACompanyFileWithADuplicateUnitKeyRunsAndIsRefusedOnlyOnImport(t *testin
 	t.Run("an empty store refuses to import it", func(t *testing.T) {
 		db := seedStore(t)
 		fleet := coordmemory.NewFleet()
-		err := seedCompany(t.Context(), db, fleet, nil, seed, fixtureCipher, quiet())
+		err := seedCompany(t.Context(), db, fleet, nil, seed, fixtureCipher, testNode, quiet())
 		if err == nil || !strings.Contains(err.Error(), "duplicate unit key") ||
 			!strings.Contains(err.Error(), file) {
 			t.Fatalf("seed into an empty store = %v, want a refusal naming the file and the rule", err)
@@ -306,12 +307,12 @@ func TestACompanyFileWithADuplicateUnitKeyRunsAndIsRefusedOnlyOnImport(t *testin
 			t.Fatal(err)
 		}
 		if _, err := db.Configs().InsertActive(t.Context(), store.Revision{
-			Source: "file", CreatedBy: "node", Summary: "seeded before the rule",
-			Payload: sealed, CreatedAt: time.Now().UTC(),
+			Source: "file", CreatedBy: testNode, CreatedByKind: iam.ActorSystem,
+			Summary: "seeded before the rule", Payload: sealed, CreatedAt: time.Now().UTC(),
 		}); err != nil {
 			t.Fatal(err)
 		}
-		if err := seedCompany(t.Context(), db, coordmemory.NewFleet(), nil, seed, fixtureCipher, quiet()); err != nil {
+		if err := seedCompany(t.Context(), db, coordmemory.NewFleet(), nil, seed, fixtureCipher, testNode, quiet()); err != nil {
 			t.Fatalf("a node whose store holds this very file refused to boot: %v", err)
 		}
 	})
@@ -319,15 +320,15 @@ func TestACompanyFileWithADuplicateUnitKeyRunsAndIsRefusedOnlyOnImport(t *testin
 	t.Run("a store holding another company ignores it as a bootstrap and refuses it as an import", func(t *testing.T) {
 		db := seedStore(t)
 		if err := seedCompany(t.Context(), db, coordmemory.NewFleet(), nil,
-			seedOf(parse(t, companyYAML)), fixtureCipher, quiet()); err != nil {
+			seedOf(parse(t, companyYAML)), fixtureCipher, testNode, quiet()); err != nil {
 			t.Fatal(err)
 		}
-		if err := seedCompany(t.Context(), db, coordmemory.NewFleet(), nil, seed, fixtureCipher, quiet()); err != nil {
+		if err := seedCompany(t.Context(), db, coordmemory.NewFleet(), nil, seed, fixtureCipher, testNode, quiet()); err != nil {
 			t.Errorf("a bootstrap seed the store outranks refused to boot: %v", err)
 		}
 		override := seed
 		override.Override = true
-		err := seedCompany(t.Context(), db, coordmemory.NewFleet(), nil, override, fixtureCipher, quiet())
+		err := seedCompany(t.Context(), db, coordmemory.NewFleet(), nil, override, fixtureCipher, testNode, quiet())
 		if err == nil || !strings.Contains(err.Error(), "duplicate unit key") {
 			t.Errorf("-import-company of a file with a duplicate unit key = %v, want a refusal", err)
 		}

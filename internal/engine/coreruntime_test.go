@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/chart"
+	"github.com/crewlet/crewlet/internal/engine"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
@@ -62,7 +63,15 @@ func TestANodeWithNoCompanyRunsTheCoreRuntime(t *testing.T) {
 		domains = append(domains, row.Name)
 	}
 	slices.Sort(domains)
-	if want := []string{"chart", "iam", "pages", "tracker", "vectors"}; !slices.Equal(domains, want) {
+	// THE REGISTER'S OWN LIST, never a literal: a literal of five outlived
+	// the usage log joining the register, and asserted the node was missing
+	// a domain it runs.
+	var want []string
+	for _, d := range engine.Domains() {
+		want = append(want, d.Name())
+	}
+	slices.Sort(want)
+	if !slices.Equal(domains, want) {
 		t.Errorf("a node with no company applies the logs %v, want every "+
 			"registered domain %v", domains, want)
 	}

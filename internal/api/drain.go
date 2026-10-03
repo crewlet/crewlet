@@ -62,12 +62,13 @@ const DrainRetryAfter = 30 * time.Second
 //     the drain.
 //   - Every other write is REFUSED. A config write activates a revision, a
 //     setup write runs a vendor's pass, a backup copies the estates the
-//     teardown is about to close, and the operator MCP files and moves work.
-//     Refusing by default is what keeps a write route added later from being
-//     admitted through a drain because nobody listed it.
+//     teardown is about to close, and the operator surface — MCP and the act
+//     transport alike — files and moves work. Refusing by default is what
+//     keeps a write route added later from being admitted through a drain
+//     because nobody listed it.
 //
 // /operator/mcp needs NO rule of its own, because it is served STATELESS (see
-// internal/api/opsmcp): every call is a POST carrying its own credential, and
+// internal/api/operator): every call is a POST carrying its own credential, and
 // there is no server-to-client stream to hold open and no session to end — the
 // SDK answers a GET or a DELETE there with its own 405. So its POST, every
 // JSON-RPC call it serves reads included, is refused like any other write, and

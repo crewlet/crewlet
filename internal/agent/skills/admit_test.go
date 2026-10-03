@@ -27,7 +27,7 @@ func TestAnOrdinaryPageIsCountedNotFailed(t *testing.T) {
 	loaded, report := skills.Admit([]skills.Page{
 		{ID: "1", Title: "Reviewing", Text: admissibleSkill},
 		{ID: "2", Title: "Project home", Text: "Welcome to the project."},
-	})
+	}, skills.Origin{})
 	if len(loaded) != 1 || loaded[0].Key != "review" {
 		t.Fatalf("loaded %+v", loaded)
 	}
@@ -51,7 +51,7 @@ func TestABrokenSkillCostsOnlyItself(t *testing.T) {
 		{ID: "1", Title: "Reviewing", Text: admissibleSkill},
 		{ID: "2", Title: "Broken", Text: strings.Replace(admissibleSkill,
 			"phases: [execute]", "phases: [executed]", 1)},
-	})
+	}, skills.Origin{})
 	if len(loaded) != 1 {
 		t.Fatalf("loaded %+v", loaded)
 	}
@@ -61,16 +61,24 @@ func TestABrokenSkillCostsOnlyItself(t *testing.T) {
 }
 
 // PROVENANCE TRAVELS WITH THE SKILL, so a loaded skill can be traced back
-// to the page an operator edits.
+// to the page an operator edits — and named in terms a reader can resolve:
+// the backend the id is an address in, the container the sync walked, and
+// the page's own title.
 func TestTheSourcePageIsCarriedOntoTheSkill(t *testing.T) {
 	t.Parallel()
 	loaded, _ := skills.Admit([]skills.Page{
 		{ID: "page-7", Title: "Reviewing", Version: 3, Text: admissibleSkill},
-	})
+	}, skills.Origin{Backend: "native", Container: "SKILLS"})
 	if len(loaded) != 1 {
 		t.Fatalf("loaded %+v", loaded)
 	}
-	if loaded[0].SourcePageID != "page-7" || loaded[0].SourcePageVersion != 3 {
-		t.Errorf("provenance = %q/%d", loaded[0].SourcePageID, loaded[0].SourcePageVersion)
+	got := loaded[0]
+	if got.SourcePageID != "page-7" || got.SourcePageVersion != 3 {
+		t.Errorf("provenance = %q/%d", got.SourcePageID, got.SourcePageVersion)
+	}
+	if got.SourceBackend != "native" || got.SourceContainer != "SKILLS" ||
+		got.SourceTitle != "Reviewing" {
+		t.Errorf("source = %q/%q/%q; want native/SKILLS/Reviewing",
+			got.SourceBackend, got.SourceContainer, got.SourceTitle)
 	}
 }

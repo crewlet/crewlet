@@ -1,33 +1,31 @@
 /**
- * What the landing screen says on the day nothing is wrong.
+ * The Inbox: what a person decides and what reached them, and the gestures
+ * they make on it as themselves.
  *
- * This is the first screen anybody sees, and its failure mode is not a crash:
- * it is a queue-shaped home rendering a healthy company as a blank page, which
- * a reader cannot tell from a dashboard that is broken. Three claims below are
- * about exactly that, and each one was a real defect:
- *
- *  1. The first fold is the COMPANY. A quiet queue leaves the pulse strip and
- *     two named bands, not an empty box.
- *  2. Both bands are drawn at once. They were a segmented toggle, so the
- *     engine's own conditions sat behind a control the founder had to press to
- *     discover they existed.
- *  3. The controls do not move under the pointer. The reason chips were
- *     ordered by count — so a poll reordered them — and picking one narrowed
- *     the answer the chips were derived FROM, which unmounted the whole rail:
- *     the chip a reader had just pressed vanished and there was no way back to
- *     the others without hunting for a clear button somewhere else.
+ * Its failure modes are quiet ones. A Done that sent the whole inbox back
+ * erased a snooze made in another tab; a row drawn as somebody other than
+ * whoever the record names; a Snoozed tab that listed everything; an option
+ * button that sent something other than the choice; a snooze preset the
+ * engine refuses every time it is pressed; "posts it to #leadership" promised
+ * on an ask that promised nothing; a notice about a duplicate that opened its
+ * claimant; an unbound reader shown no inbox at all; and a screen drawn whole
+ * once a second.
  */
 
 import { Profiler } from "react";
-import { act, cleanup, fireEvent, render, screen } from "~/test/inCase.ts";
-import { afterEach, beforeEach, expect, test, vi } from "vitest";
-import { EMPTY_VALUE } from "@crewlethq/ui";
+import { act, cleanup, fireEvent, render, screen, within } from "~/test/inCase.ts";
+import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
+import { LayerHost, ToastProvider } from "@crewlethq/ui";
 
 import { Inbox } from "./Inbox.tsx";
-import { SUBJECTS } from "~/lib/attention.ts";
+import { PAGE_LOCAL_CHIPS } from "./NoticeList.tsx";
 import { Router } from "~/app/router.tsx";
 import { ClientContext } from "~/lib/store-hooks.ts";
+import { WRITE_REASONS } from "~/lib/useWriteAccess.ts";
+import { reloadForTest } from "~/lib/prefs.ts";
+import { INBOX_SETTLE_MS } from "~/lib/useQuery.ts";
 import { LiveSocket, Store } from "~/protocol/index.ts";
+import { FrameReadings } from "~/app/Shell.tsx";
 import {
   CLAIMANT,
   CLAIMANT_HREF,
@@ -45,438 +43,656 @@ class InertWebSocket {
   close(): void {}
 }
 
+const EVERY_TOOL = [
+  "comment_on_work_item",
+  "answer_run",
+  "update_work_item",
+  "mark_inbox",
+  "write_page",
+];
+
+const JANE = {
+  login: "jane.founder",
+  grants: ["state:read", "work:write", "knowledge:write"],
+  handle: "jane",
+  owner: "jane",
+  name: "Jane Founder",
+  kind: "human",
+  acts: EVERY_TOOL,
+};
+
+const ORG = {
+  name: "Nimbus",
+  timezone: "UTC",
+  roles: [
+    { name: "Jane Founder", handle: "jane", kind: "human" },
+    { name: "Maya Ops", handle: "maya", kind: "human" },
+    { name: "CTO", handle: "cto", kind: "agent" },
+  ],
+  units: [],
+};
+
+const DECISION = {
+  question: "Hold the 2.4 release until the scheduler migration lands?",
+  options: [
+    { id: "hold", label: "Hold release" },
+    { id: "ship", label: "Ship anyway", detail: "Migration ships as a manual step" },
+  ],
+  recommended: "hold",
+  rationale: "The only cost is the webinar slot.",
+  role: "approver" as const,
+};
+
+function askItem(decision: Record<string, unknown> = DECISION) {
+  return {
+    kind: "ask",
+    at: new Date(Date.now() - 12 * 60_000).toISOString(),
+    ask: {
+      id: "t-12",
+      key: "LEAD-12",
+      project: "LEAD",
+      title: "Q4 release plan",
+      type: "task",
+      status: "todo",
+      comment: "c-12",
+      asked_by: "cto",
+      asked_at: new Date(Date.now() - 12 * 60_000).toISOString(),
+      body: "2.4 is scheduled for Thursday.",
+      decision,
+      answer_with: "",
+    },
+  };
+}
+
+function notice(id: string, extra: Record<string, unknown> = {}) {
+  return {
+    record_id: id,
+    log_seq: Number(id.replace(/\D/g, "")) || 1,
+    log_stream: "CREWLET_TRACKER_LOG",
+    log_generation: 1,
+    at: new Date(Date.now() - 60_000).toISOString(),
+    reason: "watcher",
+    primary: false,
+    addressed: false,
+    kind: "comment_added",
+    subject_id: "t-91",
+    subject_key: "PROD-91",
+    // A TASK COMMIT'S NOTICE NAMES ITS OWN SUBJECT as its task, as the
+    // engine sends it.
+    task: "t-91",
+    excerpt: `something about ${id}`,
+    actor: "cto",
+    actor_kind: "agent",
+    read: false,
+    ...extra,
+  };
+}
+
+function inboxOf(notices: unknown[], extra: Record<string, unknown> = {}) {
+  return { handle: "jane", notices, primary_reasons: [], unread: 0, primary: 0, ...extra };
+}
+
+type Answer = unknown | ((params: Record<string, unknown>) => Promise<unknown>);
+
+const QUIET: Record<string, Answer> = {
+  decisions: { handle: "jane", items: [], total: 0, capped: false },
+  work_inbox: inboxOf([]),
+  work_person: {
+    handle: "jane",
+    version: 1,
+    held: true,
+    complete: true,
+    max_snooze_ahead: 30 * 86_400,
+  },
+  work_comments: { item: "t", key: "LEAD-12", title: "Q4 release plan", comments: [] },
+  sandbox_runs: { runs: [] },
+};
+
+let asked: { kind: string; params: Record<string, unknown> }[];
+let posted: { tool: string; args: Record<string, unknown> }[];
+
+/**
+ * Midday on the company's clock (the fixture org keeps UTC).
+ *
+ * THE DAY GROUPS CUT AT THE COMPANY'S MIDNIGHT, and every fixture notice is
+ * stamped a minute (an ask twelve) before `Date.now()`: on the real clock a run
+ * that reached the "Today" case in the first minute after midnight filed its
+ * notice under Yesterday and failed. Only `Date` is faked — the suite's own
+ * waits keep real timers.
+ */
+const PINNED_NOW = "2026-09-30T12:00:00Z";
+
 beforeEach(() => {
+  vi.useFakeTimers({ toFake: ["Date"] });
+  vi.setSystemTime(new Date(PINNED_NOW));
   Object.defineProperty(globalThis, "WebSocket", { writable: true, value: InertWebSocket });
   location.hash = "#/inbox";
+  asked = [];
+  posted = [];
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (url: string, init: RequestInit) => {
+      const tool = decodeURIComponent(String(url).split("/operator/act/")[1] ?? "");
+      const body = JSON.parse(init.body as string) as { args: Record<string, unknown> };
+      posted.push({ tool, args: body.args });
+      return new Response(
+        JSON.stringify({
+          tool,
+          outcome: "applied",
+          position: "CREWLET_TRACKER_LOG@1:99",
+          receipt: {},
+        }),
+        { status: 200, headers: { "Content-Type": "application/json" } },
+      );
+    }),
+  );
 });
 
 afterEach(() => {
   cleanup();
   vi.useRealTimers();
   vi.unstubAllGlobals();
+  localStorage.clear();
+  reloadForTest();
   location.hash = "";
 });
 
-function notice(reason: string, n: number) {
-  return {
-    record_id: `r-${reason}-${n}`,
-    log_seq: n,
-    log_stream: "CREWLET_WORK_LOG",
-    log_generation: 1,
-    at: new Date(Date.now() - n * 60_000).toISOString(),
-    reason,
-    primary: reason === "assignee",
-    addressed: false,
-    kind: "task_updated",
-    subject_id: `s-${n}`,
-    subject_key: `ENG-${n}`,
-    // A TASK COMMIT'S NOTICE NAMES ITS OWN SUBJECT as its task, as the
-    // engine sends it.
-    task: `s-${n}`,
-    excerpt: `something happened, ${reason} ${n}`,
-    read: false,
-  };
-}
-
-/**
- * Mount the Inbox over a socket answering a BOUND viewer and a quiet company.
- *
- * `answers` overrides one question; everything else comes back as the smallest
- * well-formed answer, because a screen that has to be fed eleven fixtures to
- * render at all is a screen no case will keep up to date.
- */
-function mount(answers: Record<string, unknown> = {}, onCommit: () => void = () => {}) {
+function mount({
+  answers = {},
+  viewer = JANE,
+  agents = [],
+  onCommit = () => {},
+}: {
+  answers?: Record<string, Answer>;
+  viewer?: Record<string, unknown>;
+  agents?: Record<string, unknown>[];
+  onCommit?: () => void;
+} = {}) {
   const store = new Store();
-  // CONNECTED, because an inert socket is a condition in its own right: the
-  // attention queue raises "the dashboard is not connected" and band 1 is then
-  // legitimately non-empty. These cases are about a company that is FINE.
-  store.applyHealth({ status: "healthy" });
+  store.applyHealth({ status: "healthy", nodes: 1 } as never);
+  store.applyOrg(ORG as never);
+  store.applySeats(agents as never);
   const socket = new LiveSocket(store);
-  (
-    socket as unknown as {
-      query: (what: string, params?: Record<string, unknown>) => Promise<unknown>;
-    }
-  ).query = (what: string) => {
-    if (what in answers) {
-      const answer = answers[what];
-      // A THUNK, so a case can answer with silence or a rejection. Building the
-      // promise in the fixture object would create one nothing has adopted yet,
-      // and an unhandled rejection fails the run somewhere else entirely.
+  socket.query = ((what: string, params?: Record<string, unknown>) => {
+    asked.push({ kind: what, params: params ?? {} });
+    const all: Record<string, Answer> = { ...QUIET, viewer, ...answers };
+    if (what in all) {
+      const answer = all[what];
       return typeof answer === "function"
-        ? (answer as () => Promise<unknown>)()
+        ? (answer as (p: Record<string, unknown>) => Promise<unknown>)(params ?? {})
         : Promise.resolve(answer);
     }
-    if (what === "viewer") {
-      return Promise.resolve({
-        login: "U0FOUNDER",
-        grants: ["state:read", "work:write", "knowledge:write", "people:manage"],
-        handle: "ada",
-        owner: "ada",
-        name: "Ada",
-        kind: "human",
-      });
-    }
-    if (what === "work_inbox") {
-      return Promise.resolve({
-        handle: "ada",
-        notices: [],
-        primary_reasons: [],
-        unread: 0,
-        primary: 0,
-      });
-    }
-    if (what === "sandbox_runs") return Promise.resolve({ runs: [] });
-    if (what === "work_projects")
-      return Promise.resolve({ projects: [], total: 0, complete: true });
-    if (what === "work_workload") return Promise.resolve({ rows: [] });
     return Promise.resolve({});
-  };
+  }) as typeof socket.query;
   render(
-    <ClientContext.Provider value={{ store, socket }}>
-      <Router>
-        <Profiler id="inbox" onRender={onCommit}>
-          <Inbox />
-        </Profiler>
-      </Router>
-    </ClientContext.Provider>,
+    <ToastProvider>
+      <LayerHost>
+        <ClientContext.Provider value={{ store, socket }}>
+          <FrameReadings>
+            <Router>
+              <Profiler id="inbox" onRender={onCommit}>
+                <Inbox />
+              </Profiler>
+            </Router>
+          </FrameReadings>
+        </ClientContext.Provider>
+      </LayerHost>
+    </ToastProvider>,
   );
   return { store, socket };
 }
 
 async function settle() {
   await act(async () => {
-    await Promise.resolve();
-    await Promise.resolve();
-    await Promise.resolve();
+    for (let i = 0; i < 8; i++) await Promise.resolve();
   });
 }
 
-// A HEALTHY COMPANY IS NOT A BLANK PAGE.
-//
-// Nothing is waiting, nothing is alarming, and the screen still has to say what
-// the company IS — otherwise the reader's first contact with the product is an
-// empty box, and an empty box is what a broken dashboard looks like too.
-test("a company with nothing waiting still renders its own state", async () => {
-  mount();
-  await settle();
+/** The reason a write control is disabled with, off the kit's described-by. */
+function reasonOf(button: HTMLElement): string {
+  return (button.getAttribute("aria-describedby") ?? "")
+    .split(/\s+/)
+    .map((id) => document.getElementById(id)?.textContent ?? "")
+    .join(" ");
+}
 
-  // The pulse strip, with its figures — the fold that is true whatever the
-  // queue holds.
-  expect(screen.getByRole("group", { name: "The company right now" })).toBeTruthy();
-  expect(screen.getByText("open")).toBeTruthy();
-  expect(screen.getByText("tokens")).toBeTruthy();
-  expect(screen.getByText("alarms")).toBeTruthy();
+describe("the list", () => {
+  test("a decision leads the list, and its notice is not listed a second time", async () => {
+    mount({
+      answers: {
+        decisions: { handle: "jane", items: [askItem()], total: 1, capped: false },
+        work_inbox: inboxOf([
+          notice("r-1", {
+            reason: "asked",
+            addressed: true,
+            ask: { comment: "c-12", asked_of: "jane", open: true },
+          }),
+          notice("r-2"),
+        ]),
+      },
+    });
+    await settle();
+    const groups = screen.getAllByRole("region").map((r) => r.getAttribute("aria-label"));
+    expect(groups.slice(0, 2)).toEqual(["Needs a decision", "Today"]);
+    const today = within(screen.getByRole("region", { name: "Today" }));
+    // THE ASK'S NOTICE rides on the decision row; only the other notice is a notice row.
+    expect(today.getAllByRole("button")).toHaveLength(1);
+    expect(today.getByText("something about r-2")).toBeTruthy();
+  });
 
-  // And both bands say what they are rather than disappearing with their rows.
-  expect(screen.getByText("Needs a decision")).toBeTruthy();
-  expect(screen.getByText("Notices")).toBeTruthy();
-  expect(screen.getByText("Nothing needs a decision")).toBeTruthy();
+  // WHOEVER THE RECORD NAMES (`iam.ActorFor`): a person the directory binds to
+  // a seat writes AS the seat, so the row is that seat by its name; anybody
+  // bound to none writes under their login, a name drawn as one; and what the
+  // engine did itself names nobody.
+  test("a row is drawn as whoever the record names", async () => {
+    mount({
+      answers: {
+        work_inbox: inboxOf([
+          notice("r-1", { actor: "maya", actor_kind: "human" }),
+          notice("r-2", { actor: "ci.release", actor_kind: "operator" }),
+          notice("r-3", { actor: "", actor_kind: "system" }),
+        ]),
+      },
+    });
+    await settle();
+    const who = [...document.querySelectorAll(".inbox-row-who")].map((n) => n.textContent);
+    expect(who).toEqual(["Maya Ops", "ci.release", "The engine"]);
+  });
+
+  // AND THE SENTENCE NAMES THEM AS THE ROW DOES. The engine writes a lead's
+  // reorder with the person's HANDLE, for the seat it wakes; the row's head said
+  // "Maya Ops" over "maya put PROD-91 at position 1 of your priorities".
+  test("a sentence the engine wrote names its author as the row does", async () => {
+    mount({
+      answers: {
+        work_inbox: inboxOf([
+          notice("r-1", {
+            kind: "prioritised",
+            reason: "prioritised",
+            subject_kind: "person",
+            subject_id: "jane",
+            actor: "maya",
+            actor_kind: "human",
+            excerpt: "maya put PROD-91 at position 1 of your priorities",
+          }),
+          // A COMMENT IS SOMEBODY'S OWN WORDS, and a handle in it stays.
+          notice("r-2", { excerpt: "maya will pick this up" }),
+        ]),
+      },
+    });
+    await settle();
+    // THE ROW AND THE PANE IT OPENS, both.
+    const said = "Maya Ops put PROD-91 at position 1 of your priorities";
+    expect(document.querySelector(".inbox-row-line")?.textContent).toBe(said);
+    expect(screen.getAllByText(said).length).toBeGreaterThan(0);
+    expect(screen.queryByText(/^maya put/)).toBeNull();
+    expect(screen.getAllByText("maya will pick this up").length).toBeGreaterThan(0);
+  });
+
+  test("the Snoozed scope asks for only what was put off, and lists no decisions", async () => {
+    mount({
+      answers: {
+        decisions: { handle: "jane", items: [askItem()], total: 1, capped: false },
+        work_inbox: (p: Record<string, unknown>) =>
+          Promise.resolve(
+            inboxOf(
+              p.snoozed === "only"
+                ? [notice("r-9", { snoozed: true, snoozed_until: "2030-01-01T09:00:00Z" })]
+                : [notice("r-1")],
+            ),
+          ),
+      },
+    });
+    await settle();
+    // THE SCREEN'S OWN READ, not the frame's badge count beside it.
+    const own = () => asked.filter((a) => a.kind === "work_inbox" && !a.params.primary_only);
+    const first = own().at(-1)!;
+    expect(first.params.snoozed).toBe("exclude");
+    fireEvent.click(screen.getByRole("radio", { name: /Snoozed/ }));
+    await settle();
+    const last = own().at(-1)!;
+    expect(last.params.snoozed).toBe("only");
+    expect(last.params.unread).toBe(false);
+    expect(screen.queryByRole("region", { name: "Needs a decision" })).toBeNull();
+    expect(screen.getByText(/Snoozed until/)).toBeTruthy();
+    expect(screen.queryByText("something about r-1")).toBeNull();
+  });
+
+  test("the chips narrow the rows loaded, and a whole page draws no page note", async () => {
+    mount({
+      answers: {
+        decisions: {
+          handle: "jane",
+          items: [
+            askItem(),
+            {
+              ...askItem(),
+              ask: {
+                ...askItem().ask,
+                comment: "c-13",
+                decision: { ...DECISION, role: "contributor" },
+              },
+            },
+          ],
+          total: 2,
+          capped: false,
+        },
+        work_inbox: inboxOf([
+          notice("r-1", { reason: "mention" }),
+          notice("r-2", { reason: "assignee" }),
+        ]),
+      },
+    });
+    await settle();
+    const chip = (name: RegExp) => screen.getByRole("radio", { name });
+    // THE PAGE IS THE WHOLE (no cursor behind it), so the counts are totals
+    // and nothing says otherwise — neither the stray muted line the row once
+    // carried under it, nor a description on any chip.
+    expect(screen.queryByText(/on this page/)).toBeNull();
+    expect(chip(/Mentions/).getAttribute("aria-describedby")).toBeNull();
+    expect(chip(/Mentions/).getAttribute("title")).toBeNull();
+    expect(chip(/Decisions/).textContent).toContain("2");
+    expect(chip(/Reviews/).textContent).toContain("1");
+    expect(chip(/Mentions/).textContent).toContain("1");
+    fireEvent.click(chip(/Mentions/));
+    fireEvent.keyDown(chip(/Mentions/), { key: "Enter" });
+    await settle();
+    expect(location.hash).toContain("reason=mentions");
+    expect(screen.queryByRole("region", { name: "Needs a decision" })).toBeNull();
+    const today = within(screen.getByRole("region", { name: "Today" }));
+    expect(today.getByText("something about r-1")).toBeTruthy();
+    expect(screen.queryByText("something about r-2")).toBeNull();
+  });
 });
 
-// BOTH BANDS AT ONCE, WITHOUT PRESSING ANYTHING.
-//
-// They were a segmented toggle, which put the engine's own conditions behind a
-// control: a founder glancing at the landing screen saw one band and had no
-// reason to think the other existed.
-test("the engine's conditions and the person's notices are both on screen at once", async () => {
+// WHERE THE PAGE STOPPED WITH MORE BEHIND IT the chip counts are the page's,
+// and each chip SAYS so — in its accessible description, which is read with it,
+// and in its title — rather than in a line of muted text under the row, which
+// read like debug output and was read by nobody with the chip.
+test("a page with more behind it says so on each chip, not under the row", async () => {
   mount({
-    work_inbox: {
-      handle: "ada",
-      notices: [notice("assignee", 1), notice("watcher", 2)],
-      primary_reasons: ["assignee"],
-      unread: 2,
-      primary: 1,
+    answers: {
+      work_inbox: inboxOf([notice("r-1", { reason: "mention" })], { next_cursor: "c-50" }),
     },
   });
   await settle();
-
-  expect(screen.getByText("Needs a decision")).toBeTruthy();
-  expect(screen.getByText("something happened, assignee 1")).toBeTruthy();
-  // The non-primary one is in the SAME list, not behind a second tab.
-  expect(screen.getByText("something happened, watcher 2")).toBeTruthy();
+  const mentions = screen.getByRole("radio", { name: /Mentions/ });
+  expect(mentions.getAttribute("title")).toBe(PAGE_LOCAL_CHIPS);
+  const described = mentions.getAttribute("aria-describedby");
+  expect(described).toBeTruthy();
+  expect(document.getElementById(described!)?.textContent).toBe(PAGE_LOCAL_CHIPS);
+  // NOT ONE LINE BESIDE THE ROW: the sentence is only the chips' own.
+  expect(screen.queryByText(PAGE_LOCAL_CHIPS, { selector: ":not(.sr-only)" })).toBeNull();
 });
 
-// THE CHIPS DO NOT MOVE, AND THEY DO NOT VANISH.
-//
-// Two defects in one control. Ordered by count, a poll that changed one
-// reordered the row, so the chip a reader was reaching for moved between the
-// decision to press and the press. And the filter was sent to the ENGINE, so
-// the answer the chips were derived from became the one reason that had been
-// picked: every other count went to zero, the rail's `length > 1` guard failed,
-// and the whole row unmounted under the pointer.
-test("picking a reason keeps every other reason on screen, in the same order", async () => {
+// AND A DECISIONS PAGE THAT IS NOT THE WHOLE is the other read the chips count
+// over: its Decisions and Reviews counts are the page's too.
+test("a decisions page short of its total says so on the chips", async () => {
   mount({
-    work_inbox: {
-      handle: "ada",
-      // Deliberately lopsided: `watcher` has three and would sort FIRST by
-      // count while sorting LAST by name, so the two orderings disagree here.
-      notices: [
-        notice("assignee", 1),
-        notice("watcher", 2),
-        notice("watcher", 3),
-        notice("watcher", 4),
-      ],
-      primary_reasons: ["assignee"],
-      unread: 4,
-      primary: 1,
-    },
+    answers: { decisions: { handle: "jane", items: [askItem()], total: 30, capped: false } },
   });
   await settle();
+  const decisions = screen.getByRole("radio", { name: /Decisions/ });
+  expect(decisions.getAttribute("title")).toBe(PAGE_LOCAL_CHIPS);
+});
 
-  const chips = () =>
-    [...screen.getByRole("group", { name: "Reason" }).querySelectorAll("button")].map((b) =>
-      (b.textContent ?? "").trim(),
+// THE UNREAD COUNT IS INSIDE THE UNREAD OPTION, as the approved Inbox draws it
+// ("Unread 5") — beside the group it read as a fact about all three — and where
+// the page stopped with more behind it the option draws a floor, never an
+// exact figure.
+describe("the unread count", () => {
+  test("is drawn inside the Unread option", async () => {
+    mount({ answers: { work_inbox: inboxOf([notice("r-1"), notice("r-2"), notice("r-3")]) } });
+    await settle();
+    const unread = screen.getByRole("radio", { name: /Unread/ });
+    expect(unread.querySelector(".count-chip")?.textContent).toBe("3");
+    expect(screen.queryByText(/unread$/)).toBeNull();
+  });
+
+  test("is a floor inside the option where the page has more behind it", async () => {
+    mount({
+      answers: { work_inbox: inboxOf([notice("r-1"), notice("r-2")], { next_cursor: "c-50" }) },
+    });
+    await settle();
+    const unread = screen.getByRole("radio", { name: /Unread/ });
+    expect(unread.querySelector(".count-chip")?.textContent).toBe("2+");
+    expect(unread.getAttribute("title")).toContain("more lie past this page");
+    // AND NOTHING BESIDE THE GROUP: the old "2+ unread" caption is gone.
+    expect(screen.queryByText("2+ unread")).toBeNull();
+  });
+});
+
+describe("the pane", () => {
+  test("an option answers the ask's own comment with that choice, and nothing else", async () => {
+    location.hash = "#/inbox?row=ask%3Ac-12";
+    mount({
+      answers: { decisions: { handle: "jane", items: [askItem()], total: 1, capped: false } },
+    });
+    await settle();
+    expect(screen.getByRole("heading", { name: DECISION.question })).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: /Ship anyway/ }));
+    await settle();
+    expect(posted).toEqual([
+      { tool: "comment_on_work_item", args: { item: "LEAD-12", answers: "c-12", choice: "ship" } },
+    ]);
+  });
+
+  // THE E-W9 LINE: only an ask that promised a channel says it posts to one.
+  test("the posts-to line is drawn only for an ask that promised a channel", async () => {
+    location.hash = "#/inbox?row=ask%3Ac-12";
+    mount({
+      answers: { decisions: { handle: "jane", items: [askItem()], total: 1, capped: false } },
+    });
+    await settle();
+    expect(screen.queryByText(/posts it to #/)).toBeNull();
+    cleanup();
+    location.hash = "#/inbox?row=ask%3Ac-12";
+    mount({
+      answers: {
+        decisions: {
+          handle: "jane",
+          items: [askItem({ ...DECISION, inform: { surface: "slack", channel: "leadership" } })],
+          total: 1,
+          capped: false,
+        },
+      },
+    });
+    await settle();
+    expect(
+      screen.getByText("CTO is woken with your answer and posts it to #leadership."),
+    ).toBeTruthy();
+    // AND THE COMPOSER SAYS IT TOO, once it is the answer.
+    fireEvent.click(screen.getByRole("button", { name: /Reply with instructions/ }));
+    await settle();
+    expect(screen.getByText("Also posts to Slack #leadership")).toBeTruthy();
+  });
+
+  test("Done marks the one notice read and never sends the whole inbox", async () => {
+    location.hash = "#/inbox?row=r-2";
+    mount({ answers: { work_inbox: inboxOf([notice("r-1"), notice("r-2")]) } });
+    await settle();
+    fireEvent.click(screen.getByRole("button", { name: "Done" }));
+    await settle();
+    expect(posted).toEqual([{ tool: "mark_inbox", args: { read: ["r-2"] } }]);
+  });
+
+  test("Mark all read reads through the newest notice loaded, not past it", async () => {
+    mount({
+      answers: {
+        work_inbox: inboxOf([
+          notice("r-7", { log_seq: 7 }),
+          notice("r-12", { log_seq: 12 }),
+          notice("r-3", { log_seq: 3, read: true }),
+        ]),
+      },
+    });
+    await settle();
+    fireEvent.click(screen.getByRole("button", { name: "Mark all read" }));
+    await settle();
+    expect(posted).toEqual([
+      { tool: "mark_inbox", args: { read_through: "CREWLET_TRACKER_LOG@1:12" } },
+    ]);
+  });
+
+  test("a decision that is not a notice cannot be snoozed, and says why", async () => {
+    location.hash = "#/inbox?row=ask%3Ac-12";
+    mount({
+      answers: { decisions: { handle: "jane", items: [askItem()], total: 1, capped: false } },
+    });
+    await settle();
+    const snooze = screen.getByRole("button", { name: "Snooze" });
+    expect(snooze.getAttribute("aria-disabled")).toBe("true");
+    expect(reasonOf(snooze)).toContain("This is not a notice");
+  });
+
+  test("the thread is read a page at a time and names whoever wrote each reply", async () => {
+    location.hash = "#/inbox?row=ask%3Ac-12";
+    mount({
+      answers: {
+        decisions: { handle: "jane", items: [askItem()], total: 1, capped: false },
+        work_comments: {
+          item: "t-12",
+          key: "LEAD-12",
+          title: "Q4 release plan",
+          comments: [
+            {
+              id: "c-20",
+              task: "t-12",
+              author: "maya",
+              author_kind: "human",
+              body: "I can move the webinar.",
+              reply_to: "c-12",
+              created_at: new Date().toISOString(),
+            },
+          ],
+          next_cursor: "1:c-19",
+        },
+      },
+    });
+    await settle();
+    const read = asked.find((a) => a.kind === "work_comments")!;
+    expect(read.params).toMatchObject({ item: "LEAD-12", limit: 50 });
+    expect(read.params.cursor).toBeUndefined();
+    const thread = within(screen.getByRole("region", { name: "Thread" }));
+    expect(thread.getByText("Maya Ops")).toBeTruthy();
+    expect(thread.queryByText("maya")).toBeNull();
+    expect(thread.getByText("Thread · 1 reply loaded")).toBeTruthy();
+    fireEvent.click(thread.getByRole("button", { name: "Earlier comments" }));
+    await settle();
+    expect(asked.some((a) => a.kind === "work_comments" && a.params.cursor === "1:c-19")).toBe(
+      true,
     );
-  const before = chips();
-  // Stable by NAME: "assigned to you" before "watching it", whatever the counts.
-  expect(before.length).toBeGreaterThan(2);
-  const named = before.filter((c) => c !== "All");
-  expect([...named].sort((a, b) => a.localeCompare(b))).toEqual(named);
-
-  const watcher = screen.getAllByRole("button").find((b) => /watch/i.test(b.textContent ?? ""));
-  expect(watcher).toBeTruthy();
-  fireEvent.click(watcher!);
-  await settle();
-
-  // Every chip is still there, in the same order — only the rows narrowed.
-  expect(chips()).toEqual(before);
-  expect(screen.queryByText("something happened, assignee 1")).toBeNull();
-  expect(screen.getByText("something happened, watcher 2")).toBeTruthy();
+  });
 });
 
-// THE DETAIL PANE IS PRESENT BEFORE ANYTHING IS SELECTED.
-//
-// A pane that appears on the first click reflows the list under the pointer:
-// the row a reader clicked is no longer the row they are looking at, which is
-// the same defect as a chip that moves, one component up.
-test("the detail pane holds its column before a row is picked", async () => {
-  mount();
-  await settle();
-
-  const pane = screen.getByRole("complementary", { name: "The selected row" });
-  expect(pane).toBeTruthy();
-  expect(pane.textContent).toContain("Pick a row");
-});
-
-// A FIGURE NOBODY HAS ANSWERED IS NOT A ZERO.
-//
-// The strip renders before its two slow polls land. A `0` there tells a founder
-// their company has no open work, which is a false statement that corrects
-// itself a second later — and on a slow link, not for several.
-test("a figure whose query has not answered draws a dash, never a zero", async () => {
-  const store = new Store();
-  const socket = new LiveSocket(store);
-  (
-    socket as unknown as {
-      query: (what: string, params?: Record<string, unknown>) => Promise<unknown>;
-    }
-  ).query = (what: string) => {
-    if (what === "viewer") {
-      return Promise.resolve({
-        login: "U0FOUNDER",
-        grants: ["state:read", "work:write", "knowledge:write", "people:manage"],
-        handle: "",
-        owner: "U0FOUNDER",
-        name: "",
-      });
-    }
-    // The two the strip reads never answer.
-    if (what === "work_projects" || what === "work_workload") return new Promise(() => {});
-    if (what === "sandbox_runs") return Promise.resolve({ runs: [] });
-    return Promise.resolve({});
+// THREE VIEWER STATES, three sentences, and every control drawn for each —
+// enabled only where the engine makes the change for this person.
+describe("who is looking", () => {
+  const NOBODY = {
+    login: "",
+    grants: [],
+    handle: "",
+    owner: "",
+    name: "",
+    kind: "",
+    acts: [],
   };
-  render(
-    <ClientContext.Provider value={{ store, socket }}>
-      <Router>
-        <Inbox />
-      </Router>
-    </ClientContext.Provider>,
-  );
-  await settle();
+  const UNBOUND = {
+    login: "ci.release",
+    grants: ["state:read", "work:write"],
+    handle: "",
+    owner: "ci.release",
+    name: "",
+    kind: "",
+    acts: ["mark_inbox"],
+  };
 
-  const strip = screen.getByRole("group", { name: "The company right now" });
-  const openFact = [...strip.querySelectorAll("a")].find((a) => a.textContent?.includes("open"));
-  expect(openFact?.textContent).toContain(EMPTY_VALUE);
-  expect(openFact?.textContent).not.toContain("0");
+  test("an anonymous reader is told to sign in, and nothing is asked on nobody's behalf", async () => {
+    const viewer = { ...NOBODY, anonymous: true };
+    mount({ viewer, answers: { viewer } });
+    await settle();
+    expect(screen.getByText(/Nobody is signed in/)).toBeTruthy();
+    // NO PERSON'S READS: nothing to ask for on nobody's behalf.
+    expect(asked.some((a) => a.kind === "work_inbox" || a.kind === "decisions")).toBe(false);
+    const markAll = screen.getByRole("button", { name: "Mark all read" });
+    expect(markAll.getAttribute("aria-disabled")).toBe("true");
+    expect(reasonOf(markAll)).toContain(WRITE_REASONS.anonymous);
+  });
+
+  // AN UNBOUND READER HAS AN INBOX: the record kept under their login, which
+  // is what their own assistant's notices and the work that names them reach.
+  // Asked by the seat they do not hold, the screen was empty for them.
+  test("an unbound reader reads the inbox kept under their login", async () => {
+    mount({
+      viewer: UNBOUND,
+      answers: {
+        viewer: UNBOUND,
+        work_inbox: inboxOf([notice("r-1", { excerpt: "the release moved" })], {
+          handle: "ci.release",
+        }),
+      },
+    });
+    await settle();
+    expect(screen.getByText(/binds you to no seat/)).toBeTruthy();
+    const own = asked.filter((a) => a.kind === "work_inbox" && !a.params.primary_only);
+    expect(own.length).toBeGreaterThan(0);
+    expect(own.every((a) => a.params.handle === "ci.release")).toBe(true);
+    expect(asked.some((a) => a.kind === "decisions")).toBe(true);
+    // NO QUESTION NAMES WHOSE RECORD IT IS by a `viewer=`.
+    expect(asked.some((a) => "viewer" in a.params)).toBe(false);
+    expect(screen.getAllByText("the release moved").length).toBeGreaterThan(0);
+    // AND THEY MARK IT AS THEMSELVES.
+    const markAll = screen.getByRole("button", { name: "Mark all read" });
+    expect(markAll.getAttribute("aria-disabled")).toBeNull();
+  });
+
+  test("a bound person the engine does not serve sees every control, disabled with the reason", async () => {
+    location.hash = "#/inbox?row=ask%3Ac-12";
+    mount({
+      viewer: { ...JANE, acts: [] },
+      answers: {
+        viewer: { ...JANE, acts: [] },
+        decisions: { handle: "jane", items: [askItem()], total: 1, capped: false },
+        work_inbox: inboxOf([notice("r-1")]),
+      },
+    });
+    await settle();
+    for (const name of ["Mark all read", /Hold release/, "Done"]) {
+      const button = screen.getByRole("button", { name });
+      expect(button.getAttribute("aria-disabled")).toBe("true");
+      expect(reasonOf(button)).toContain(WRITE_REASONS.not_served);
+    }
+  });
 });
 
-// AN INBOX NOBODY HAS EVER WRITTEN CLAIMS NO READ HISTORY.
-//
-// Zero rows is six facts, and the band branched on the FACET: a person the
-// applier has never written a `tracker_notifications` row for was told
-// "Everything the company told you about has been marked read. Switch to All to
-// read back through it." — a history that does not exist, and a pointer at a
-// facet that is just as empty. `seen_through` is the evidence that separates
-// the two and nothing in this bundle read it.
-test("an inbox nobody has ever written claims no read history", async () => {
-  mount();
+// A NOTICE IS ASKED AGAIN THE MOMENT THE READER'S RECORD MOVES. The frame
+// watches it and the engine sends `inbox_changed`; a list that waited out its
+// poll left a new notice unseen for up to half a minute.
+test("a move of the reader's own record asks the list again", async () => {
+  const { store } = mount();
   await settle();
-
-  expect(screen.getByText("Nothing has reached you yet")).toBeTruthy();
-  const notices = screen.getByText("Notices").closest("section");
-  expect(notices?.textContent).not.toContain(
-    "Everything the company told you about has been marked read",
-  );
-  expect(notices?.textContent).not.toContain("Switch to All");
-});
-
-// AND THE OTHER SIDE OF THE ONE BIT, so a fix cannot collapse both branches
-// into the never-reached sentence: a person who HAS marked a page read is
-// pointed back through it.
-test("a person who has marked a page read is pointed back through it", async () => {
-  mount({
-    work_inbox: {
-      handle: "ada",
-      notices: [],
-      primary_reasons: [],
-      unread: 0,
-      primary: 0,
-      seen_through: { stream: "CREWLET_WORK_LOG", generation: 1, seq: 42 },
-    },
+  const own = () =>
+    asked.filter((a) => a.kind === "work_inbox" && !a.params.primary_only && a.params.handle);
+  const before = own().length;
+  act(() => {
+    store.applyInboxChanged({ handle: "jane" });
+  });
+  await act(async () => {
+    await new Promise((resolve) => setTimeout(resolve, INBOX_SETTLE_MS + 100));
   });
   await settle();
-
-  expect(screen.getByText("You are caught up")).toBeTruthy();
-  expect(screen.getByText("Notices").closest("section")?.textContent).toContain("Switch to All");
+  expect(own().length).toBeGreaterThan(before);
+  expect(own().at(-1)?.params.handle).toBe("jane");
 });
 
-// A REASON THAT MATCHES NOTHING KEEPS THE CHIP THAT WOULD LIFT IT.
-//
-// `reasons` deliberately keeps a sticky zero-count entry for the selected value
-// — "a filter you cannot see is a filter you cannot lift" — and the band hid
-// the whole rail exactly when that entry was the only way back, because the
-// rail was a CHILD and children are not drawn on the empty path.
-test("a reason that matches nothing keeps the chip that would lift it", async () => {
-  location.hash = "#/inbox?reason=mention";
-  mount({
-    work_inbox: {
-      handle: "ada",
-      notices: [notice("assignee", 1), notice("watcher", 2)],
-      primary_reasons: ["assignee"],
-      unread: 2,
-      primary: 1,
-    },
-  });
-  await settle();
-
-  // The chip's own text carries its count beside the label, so this matches the
-  // label rather than the whole node.
-  const rail = screen.getByRole("group", { name: "Reason" });
-  expect(rail.textContent).toContain("mentioned you");
-  expect(screen.getByText("Nothing on this page carries that reason")).toBeTruthy();
-  expect(screen.getByText("Notices").closest("section")?.textContent).not.toContain(
-    "has been marked read",
-  );
-});
-
-// A BAND WHOSE READ HAS NOT ANSWERED COUNTS NOTHING AND CLAIMS NOTHING.
-//
-// `count={notices.length}` showed a literal `0` in the head before anything had
-// answered — the exact claim the pulse strip's own figures are forbidden from
-// making one component up — and the empty state asserted a read history over an
-// answer nobody had.
-test("a band whose read has not answered counts nothing and claims nothing", async () => {
-  mount({ work_inbox: () => new Promise(() => {}) });
-  await settle();
-
-  // Scoped to the quiet block rather than to the section: the band's own NOTE
-  // legitimately says "what reached you", and it draws whatever the read does.
-  const notices = screen.getByText("Notices").closest("section");
-  expect(notices?.querySelector(".inbox-band-count")?.textContent).toBe(
-    `${EMPTY_VALUE}Not counted: this read did not answer`,
-  );
-  expect(notices?.querySelector(".inbox-quiet")).toBeNull();
-});
-
-// A REFUSED INBOX READ IS NOT A CAUGHT-UP INBOX.
-//
-// `QueryState` was a CHILD of the band, and children are not rendered on the
-// empty path — so an `unauthorized` on `work_inbox` drew "everything has been
-// marked read" and never drew the refusal.
-test("a refused inbox read is not a caught-up inbox", async () => {
-  mount({ work_inbox: () => Promise.reject(new Error("unauthorized")) });
-  await settle();
-
-  const notices = screen.getByText("Notices").closest("section");
-  expect(notices?.textContent).toContain("does not carry the grant");
-  expect(notices?.textContent).not.toContain("marked read");
-  expect(notices?.textContent).not.toContain("Nothing has reached you");
-});
-
-// THE NOTICES SCOPE IS A SCOPE, NOT A FACET RAIL.
-//
-// "All" and "Snoozed" name rows the loaded page does not hold — they are
-// `work_inbox` parameters — so no count over the loaded rows could ever
-// describe them, and the rail still printed the caption that qualifies counts.
-// Its all-chip, the chip that means "no filter", had to be labelled `Unread`,
-// the NARROWEST of the three.
-test("the notices scope offers three states with one chosen, and claims no counts", async () => {
-  mount({
-    work_inbox: {
-      handle: "ada",
-      // ONE reason deliberately: the Reason rail's own `length > 1` guard keeps
-      // the one rail that legitimately counts off screen, so the caption has no
-      // other source.
-      notices: [notice("assignee", 1), notice("assignee", 2)],
-      primary_reasons: ["assignee"],
-      unread: 2,
-      primary: 1,
-    },
-  });
-  await settle();
-
-  const group = screen.getByRole("radiogroup", { name: "Which notices" });
-  const options = [...group.querySelectorAll('[role="radio"]')];
-  expect(options.map((o) => (o.textContent ?? "").trim())).toEqual(["Unread", "All", "Snoozed"]);
-  const checked = options.filter((o) => o.getAttribute("aria-checked") === "true");
-  expect(checked).toHaveLength(1);
-  expect((checked[0]?.textContent ?? "").trim()).toBe("Unread");
-  expect(screen.queryByText("counts over the rows loaded")).toBeNull();
-});
-
-// AND CHOOSING ONE IS ONE PRESS. A facet rail's all-chip clears on a SECOND
-// press, which here silently returned the reader to Unread — a gesture with no
-// affordance and a destination nobody named.
-test("choosing All is one press, and pressing it again does not go back", async () => {
-  mount();
-  await settle();
-
-  const all = () =>
-    [
-      ...screen
-        .getByRole("radiogroup", { name: "Which notices" })
-        .querySelectorAll('[role="radio"]'),
-    ].find((o) => (o.textContent ?? "").trim() === "All")!;
-  fireEvent.click(all());
-  await settle();
-  const param = () => new URLSearchParams(location.hash.split("?")[1] ?? "").get("state");
-  expect(param()).toBe("all");
-  expect(all().getAttribute("aria-checked")).toBe("true");
-
-  fireEvent.click(all());
-  await settle();
-  expect(param()).toBe("all");
-  expect(all().getAttribute("aria-checked")).toBe("true");
-});
-
-// THE QUIET BAND NAMES WHAT WAS CHECKED, AND `lib/attention.ts` OWNS THE LIST.
-//
-// It read "No seat is stopped, no run is parked on a question, and no budget is
-// refusing" — three of the twelve conditions that queue raises, written as a
-// closed sentence on the one screen an operator opens to find out whether
-// anything is wrong. An engine with no active configuration, a node shedding
-// its seats, a draining node, a refused token and a round stalled for eleven
-// minutes were all inside the silence that sentence claimed to have measured.
-test("the quiet band names every subject the engine's queue watches", async () => {
-  mount();
-  await settle();
-
-  const quiet = screen.getByText("Nothing needs a decision").closest(".inbox-quiet");
-  expect(quiet).toBeTruthy();
-  for (const phrase of Object.values(SUBJECTS)) {
-    expect(quiet?.textContent, phrase).toContain(phrase);
+/** Seconds of the shared clock, one tick at a time, as the browser runs it. */
+function tick(times: number) {
+  for (let i = 0; i < times; i++) {
+    act(() => {
+      vi.advanceTimersByTime(1_000);
+    });
   }
-});
+}
 
 /** A seat on one round, last heard from `updated`. */
 function onOneRound(updated: string) {
@@ -486,6 +702,7 @@ function onOneRound(updated: string) {
     role: "Dev A",
     handle: "dev-a",
     kind: "agent",
+    activity: "working",
     live_call: {
       turn_id: "t1",
       phase: "execute",
@@ -507,78 +724,44 @@ function onOneRound(updated: string) {
   };
 }
 
-/** Seconds of the shared clock, one tick at a time, as the browser runs it. */
-function tick(times: number) {
-  for (let i = 0; i < times; i++) {
-    act(() => {
-      vi.advanceTimersByTime(1_000);
-    });
-  }
-}
-
-// THE LANDING SCREEN IS NOT DRAWN ONCE A SECOND.
+// THE SCREEN IS NOT DRAWN ONCE A SECOND.
 //
-// It held the one-second clock for the attention queue, and handed it to every
-// notice row for its "5m ago": a tick drew the pulse strip, both bands and
-// every row again, on the screen every person opens first and leaves open.
-// The queue is read as a value now and each row reads its own words, so ten
-// seconds in which nothing crosses a threshold commit nothing at all.
+// It held the one-second clock for the attention queue and handed it to every
+// row for its "12m": a tick drew both groups, every row and the pane again, on
+// a screen a person opens and leaves open. The queue is read as a value now,
+// the day groups read only the company's midnight, and each cell reads its own
+// words — so ten seconds in which nothing crosses a threshold commit nothing.
 test("a tick of the clock draws nothing on the inbox", async () => {
   vi.useFakeTimers({ toFake: ["setInterval", "clearInterval", "Date"] });
   const now = Date.parse("2031-04-16T12:00:00Z");
   vi.setSystemTime(now);
   let commits = 0;
-  const { store } = mount(
-    {
-      work_inbox: {
-        handle: "ada",
-        // FIVE MINUTES AGO AND MORE, so ten seconds cannot change a row's
-        // words: a row whose "4m ago" turned over would commit honestly, and
-        // this case is about the ones that did not.
-        notices: [notice("assignee", 5), notice("watcher", 6)],
-        primary_reasons: ["assignee"],
-        unread: 2,
-        primary: 1,
-      },
+  const { store } = mount({
+    answers: {
+      // FIVE MINUTES AGO AND MORE, so ten seconds cannot change a row's words:
+      // a row whose "4m" turned over would commit honestly, and this case is
+      // about the ones that did not.
+      work_inbox: inboxOf([
+        notice("r-5", { at: new Date(now - 5 * 60_000).toISOString() }),
+        notice("r-6", { at: new Date(now - 6 * 60_000).toISOString() }),
+      ]),
     },
-    () => {
+    onCommit: () => {
       commits += 1;
     },
-  );
+  });
   // A LIVE ROUND HEARD FROM JUST NOW, so the queue has a condition that reads
   // the clock on every tick and finds nothing to raise.
   act(() => {
-    store.applySeats([onOneRound(new Date(now - 1_000).toISOString())]);
+    store.applySeats([onOneRound(new Date(now - 1_000).toISOString())] as never);
   });
   await settle();
-  expect(screen.getByText("something happened, assignee 5")).toBeTruthy();
-  expect(screen.getByText("5m ago")).toBeTruthy();
+  expect(screen.getAllByText("something about r-5").length).toBeGreaterThan(0);
+  expect(screen.getByText("5m")).toBeTruthy();
 
   const settled = commits;
   tick(10);
   expect(commits).toBe(settled);
-});
-
-// AND THE QUEUE STILL MOVES WITH THE CLOCK. A round goes stale at two minutes
-// whether or not anything else on the screen changed, so the tick that crosses
-// the threshold is the one that raises the row — not the next poll, and not
-// never, which is what a queue computed once from its inputs would do.
-test("a round that stops moving is raised on the tick that crosses two minutes", async () => {
-  vi.useFakeTimers({ toFake: ["setInterval", "clearInterval", "Date"] });
-  const now = Date.parse("2031-04-16T12:00:00Z");
-  vi.setSystemTime(now);
-  const { store } = mount();
-  act(() => {
-    store.applySeats([onOneRound(new Date(now - 115_000).toISOString())]);
-  });
-  await settle();
-  expect(screen.queryByText(/has been on one round/)).toBeNull();
-
-  tick(4);
-  expect(screen.queryByText(/has been on one round/)).toBeNull();
-
-  tick(1);
-  expect(screen.getByText("Dev A has been on one round for over 2 minutes")).toBeTruthy();
 });
 
 // A NOTICE LEADS TO THE TASK IT IS ABOUT, even under a key another task holds.
@@ -586,89 +769,104 @@ test("a round that stops moving is raised on the tick that crosses two minutes",
 // A notice keeps the key its task held when it was written, and a key two
 // tasks hold opens the one that claimed it first — so a notice about the
 // duplicate sent its reader to the claimant. The engine says beside the stored
-// key when it opens another task, and that notice's link goes by the task's id.
-test("two notices under one key lead to their own two tasks", async () => {
-  mount({
-    work_inbox: {
-      handle: "ada",
-      notices: [
-        {
-          ...notice("assignee", 1),
-          subject_id: DUPLICATE,
-          subject_key: SHARED_KEY,
-          task: DUPLICATE,
-          subject_key_collision: true,
-          excerpt: "about the duplicate",
+// key when it opens another task, and that notice's link, its thread and its
+// reply go by the task's id.
+describe("a notice under a key two tasks hold", () => {
+  const paneLink = () => document.querySelector<HTMLAnchorElement>("a.inbox-pane-key");
+
+  test("each of two notices under one key leads to its own task", async () => {
+    mount({
+      answers: {
+        work_inbox: inboxOf([
+          notice("r-1", {
+            subject_id: DUPLICATE,
+            subject_key: SHARED_KEY,
+            task: DUPLICATE,
+            subject_key_collision: true,
+            excerpt: "about the duplicate",
+          }),
+          notice("r-2", {
+            subject_id: CLAIMANT,
+            subject_key: SHARED_KEY,
+            task: CLAIMANT,
+            excerpt: "about the claimant",
+          }),
+        ]),
+      },
+    });
+    await settle();
+    fireEvent.click(screen.getAllByText("about the duplicate")[0]!.closest("button")!);
+    await settle();
+    expect(paneLink()?.textContent).toBe(SHARED_KEY);
+    expect(paneLink()?.getAttribute("href")).toBe(DUPLICATE_HREF);
+    // ITS THREAD IS THE DUPLICATE'S, read by the address and never the key.
+    expect(asked.filter((a) => a.kind === "work_comments").at(-1)?.params.item).toBe(DUPLICATE);
+
+    fireEvent.click(screen.getAllByText("about the claimant")[0]!.closest("button")!);
+    await settle();
+    expect(paneLink()?.getAttribute("href")).toBe(CLAIMANT_HREF);
+    expect(asked.filter((a) => a.kind === "work_comments").at(-1)?.params.item).toBe(SHARED_KEY);
+  });
+
+  // A PRIORITISED NOTICE LEADS TO THE TASK, NOT TO THE PERSON WHOSE LIST IT IS:
+  // its subject is that PERSON and the key beside it is the task's, so read off
+  // the subject a duplicate at the top of somebody's list sent its reader to
+  // `#/work/<their handle>`.
+  test("a prioritised notice leads to the task it put first", async () => {
+    const prioritised = (id: string, task: string, excerpt: string, collision?: boolean) =>
+      notice(id, {
+        kind: "prioritised",
+        reason: "prioritised",
+        primary: true,
+        subject_id: "jane",
+        subject_key: SHARED_KEY,
+        task,
+        subject_key_collision: collision,
+        excerpt,
+      });
+    mount({
+      answers: {
+        work_inbox: inboxOf([
+          prioritised("r-1", DUPLICATE, "the duplicate is first", true),
+          prioritised("r-2", CLAIMANT, "the claimant is first"),
+        ]),
+      },
+    });
+    await settle();
+    fireEvent.click(screen.getAllByText("the duplicate is first")[0]!.closest("button")!);
+    await settle();
+    expect(paneLink()?.getAttribute("href")).toBe(DUPLICATE_HREF);
+    fireEvent.click(screen.getAllByText("the claimant is first")[0]!.closest("button")!);
+    await settle();
+    expect(paneLink()?.getAttribute("href")).toBe(CLAIMANT_HREF);
+  });
+
+  // AN ANSWER NAMES THE ASK'S TASK BY ITS ADDRESS: by the key, a choice made on
+  // a duplicate's ask was a comment on the claimant.
+  test("an option on a duplicate's ask answers on the duplicate", async () => {
+    location.hash = "#/inbox?row=ask%3Ac-12";
+    const ask = askItem();
+    mount({
+      answers: {
+        decisions: {
+          handle: "jane",
+          items: [
+            {
+              ...ask,
+              ask: { ...ask.ask, id: DUPLICATE, key: SHARED_KEY, key_collision: true },
+            },
+          ],
+          total: 1,
+          capped: false,
         },
-        {
-          ...notice("assignee", 2),
-          subject_id: CLAIMANT,
-          subject_key: SHARED_KEY,
-          task: CLAIMANT,
-          excerpt: "about the claimant",
-        },
-      ],
-      primary_reasons: ["assignee"],
-      unread: 2,
-      primary: 2,
-    },
+      },
+    });
+    await settle();
+    expect(paneLink()?.getAttribute("href")).toBe(DUPLICATE_HREF);
+    fireEvent.click(screen.getByRole("button", { name: /Ship anyway/ }));
+    await settle();
+    expect(posted).toEqual([
+      { tool: "comment_on_work_item", args: { item: DUPLICATE, answers: "c-12", choice: "ship" } },
+    ]);
   });
-  await settle();
-  const subjectLink = () =>
-    [...document.querySelectorAll<HTMLAnchorElement>("a.t-link.mono")].find((a) =>
-      a.textContent?.startsWith(SHARED_KEY),
-    );
-
-  fireEvent.click(screen.getByText("about the duplicate").closest("button")!);
-  await settle();
-  expect(subjectLink()?.getAttribute("href")).toBe(DUPLICATE_HREF);
-
-  fireEvent.click(screen.getByText("about the claimant").closest("button")!);
-  await settle();
-  expect(subjectLink()?.getAttribute("href")).toBe(CLAIMANT_HREF);
-});
-
-// A PRIORITISED NOTICE LEADS TO THE TASK, NOT TO THE PERSON WHOSE LIST IT IS.
-//
-// It is the one notice whose subject is not the task it is about: a lead
-// reordered somebody's priorities, so the subject is that PERSON and the key
-// beside it is the task's. The notice names the task as `task`, and its link
-// goes by that — read off the subject, a duplicate at the top of somebody's
-// list sent its reader to `#/work/<their handle>`.
-test("a prioritised notice leads to the task it put first, under a shared key too", async () => {
-  const prioritised = (n: number, task: string, excerpt: string, collision?: boolean) => ({
-    ...notice("prioritised", n),
-    kind: "prioritised",
-    primary: true,
-    subject_id: "ada",
-    subject_key: SHARED_KEY,
-    task,
-    subject_key_collision: collision,
-    excerpt,
-  });
-  mount({
-    work_inbox: {
-      handle: "ada",
-      notices: [
-        prioritised(1, DUPLICATE, "the duplicate is first", true),
-        prioritised(2, CLAIMANT, "the claimant is first"),
-      ],
-      primary_reasons: ["prioritised"],
-      unread: 2,
-      primary: 2,
-    },
-  });
-  await settle();
-  const subjectLink = () =>
-    [...document.querySelectorAll<HTMLAnchorElement>("a.t-link.mono")].find((a) =>
-      a.textContent?.startsWith(SHARED_KEY),
-    );
-
-  fireEvent.click(screen.getByText("the duplicate is first").closest("button")!);
-  await settle();
-  expect(subjectLink()?.getAttribute("href")).toBe(DUPLICATE_HREF);
-
-  fireEvent.click(screen.getByText("the claimant is first").closest("button")!);
-  await settle();
-  expect(subjectLink()?.getAttribute("href")).toBe(CLAIMANT_HREF);
 });

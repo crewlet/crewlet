@@ -761,7 +761,7 @@ var ErrNotFindable = errors.New("iamdomain: nothing could find this identity")
 //
 // A SEAT IS NAMED BY ANY ADDRESS IT ANSWERS TO — its handle, one it used to
 // answer to, the one it was created under — and CLAIMED BY ITS IDENTITY, the
-// last of those (ADR-0020): see [Writer.seatIdentity].
+// last of those (ADR-0027): see [Writer.seatIdentity].
 func (w *Writer) Claim(ctx context.Context, kind ObjectKind, token, personID,
 	opID string) (statelog.Result, error) {
 
@@ -1511,12 +1511,6 @@ func (w *Writer) OpenSession(ctx context.Context, in SessionStart) (
 	if err != nil {
 		return SessionOpened{}, err
 	}
-	if in.EnrolmentOnly {
-		// A RESTRICTED SESSION AT THE VERSION THAT STATES THE
-		// RESTRICTION, so a node that cannot read it defers it rather
-		// than serving it whole — see [ConditionRecordVersion].
-		conditioned(&rec)
-	}
 	// THE LAST RUN'S COUNTERS, which is what the landed record carries: a
 	// decide may run again against a fresh snapshot.
 	var opened SessionOpened
@@ -1530,6 +1524,11 @@ func (w *Writer) OpenSession(ctx context.Context, in SessionStart) (
 			return err
 		}
 		opened = SessionOpened{Epoch: epoch, Generation: generation}
+		// A RESTRICTED SESSION TRAVELS AT THE VERSION THAT STATES THE
+		// RESTRICTION — its `enrolment_only` row in [versionedFields] —
+		// so a node that cannot read it defers it rather than serving it
+		// whole; an ordinary one carries no such key and stays at the
+		// base. See [ConditionRecordVersion].
 		rec.Mutation, err = EncodeSession(Session{
 			V: DocumentVersion, Person: in.Person, Epoch: epoch,
 			AbsoluteExpiresAt: in.AbsoluteExpiresAt,
@@ -1791,7 +1790,7 @@ func enrolledKindOf(ctx context.Context, tx *sql.Tx, personID string) (iam.Kind,
 // # Why the claim is on the identity and not on the address
 //
 // A binding that named the handle typed at the time followed an ADDRESS, and
-// an address is what a rename moves (ADR-0020): after one, the same seat could
+// an address is what a rename moves (ADR-0027): after one, the same seat could
 // be claimed a second time under its new handle, since the two subjects never
 // contend, and a removal's tombstone stopped naming the seat anybody could bind
 // again. The identity is the one name the chart never moves and never issues
@@ -2496,6 +2495,11 @@ func (w *Writer) Invite(ctx context.Context, in InviteMint) (
 		return InviteIssued{}, fmt.Errorf("iamdomain: seal an "+
 			"invitation's address: %w", err)
 	}
+	// EVERY INVITATION STATES A CONDITION an older build would drop — the
+	// secret its redemption must present, and the seat it binds — and its
+	// `verifier` row in [versionedFields] makes it travel at the version
+	// that says so: an older node defers it and answers the link 410,
+	// rather than redeeming it on its id.
 	mutation, err := EncodeInvitation(Invitation{
 		V: DocumentVersion, ID: id, Sealed: sealed,
 		InvitedBy: w.Actor, Grants: in.Grants, Colleague: in.Colleague,
@@ -2514,11 +2518,6 @@ func (w *Writer) Invite(ctx context.Context, in InviteMint) (
 	if err != nil {
 		return InviteIssued{}, err
 	}
-	// EVERY INVITATION NOW STATES A CONDITION an older build would drop —
-	// the secret its redemption must present, and the seat it binds — so
-	// it travels at the version that says so: an older node defers it and
-	// answers the link 410, rather than redeeming it on its id.
-	conditioned(&rec)
 	// THE ROW READ IS WHAT REFUSES THE SEQUENTIAL CASE, and the broker's
 	// create-at-zero is what settles the concurrent one. Both are needed
 	// and neither substitutes for the other: two administrators inviting

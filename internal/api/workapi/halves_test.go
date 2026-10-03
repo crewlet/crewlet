@@ -47,17 +47,18 @@ func TestARouteIsServedByTheHalvesItsRequestFinds(t *testing.T) {
 	)
 	var phase atomic.Int32
 	full := r.halves()
+	halves := func() (workapi.Halves, bool) {
+		switch phase.Load() {
+		case noCompany:
+			return workapi.Halves{}, false
+		case pagesOnly:
+			return workapi.Halves{Pages: full.Pages, PageStore: full.PageStore}, true
+		}
+		return full, true
+	}
 	svc, err := workapi.New(workapi.Options{
-		Chart: chart{},
-		Halves: func() (workapi.Halves, bool) {
-			switch phase.Load() {
-			case noCompany:
-				return workapi.Halves{}, false
-			case pagesOnly:
-				return workapi.Halves{Pages: full.Pages, PageStore: full.PageStore}, true
-			}
-			return full, true
-		},
+		Chart: chart{}, Halves: halves,
+		Operator: r.operator(chart{}, halves), Audit: r.audit,
 	})
 	if err != nil {
 		t.Fatalf("New: %v", err)

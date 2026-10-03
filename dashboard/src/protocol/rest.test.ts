@@ -4,7 +4,15 @@
 
 import { afterEach, describe, expect, test, vi } from "vitest";
 
-import { GATE_REQUEST_TIMEOUT_MS, isAbort, REQUEST_TIMEOUT_MS, rest, RestError } from "./index.ts";
+import { GATE_REQUEST_TIMEOUT_MS } from "../contract/gate.ts";
+import {
+  isAbort,
+  REQUEST_TIMEOUT_MS,
+  rest,
+  RestError,
+  restRetryMs,
+  retryAfterSeconds,
+} from "./index.ts";
 
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -63,6 +71,40 @@ test("a request that never answers is abandoned rather than awaited", async () =
   expect((err as RestError).status).toBe(0);
   expect(isAbort(err)).toBe(false);
   vi.useRealTimers();
+});
+
+// A LONGER PATH SAYS SO, AND STILL HAS A DEADLINE. `POST /backup` copies the
+// whole store before it answers, so the ordinary thirty seconds would call a
+// backup that is still copying a failure — while the engine goes on to write a
+// perfectly good one.
+test("a caller with a longer path keeps the request past the ordinary deadline", async () => {
+  vi.useFakeTimers();
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(
+      (_url: string, init?: RequestInit) =>
+        new Promise<Response>((_resolve, reject) => {
+          init?.signal?.addEventListener("abort", () =>
+            reject(new DOMException("aborted", "AbortError")),
+          );
+        }),
+    ),
+  );
+
+  let done = false;
+  const settled = rest
+    .request("POST", "/backup", { timeoutMs: 30 * 60_000 })
+    .catch((err: unknown) => err)
+    .finally(() => {
+      done = true;
+    });
+  await vi.advanceTimersByTimeAsync(REQUEST_TIMEOUT_MS + 1);
+  expect(done).toBe(false);
+
+  await vi.advanceTimersByTimeAsync(30 * 60_000);
+  const err = await settled;
+  expect((err as RestError).status).toBe(0);
+  expect((err as RestError).message).toContain("30 minutes");
 });
 
 // A CALL WITH A LONGER PATH SAYS SO, AND ITS REFUSAL NAMES ITS OWN DEADLINE.
@@ -402,5 +444,54 @@ describe("the refusal behind an answer", () => {
   test("a 401, and an answer the engine did not write, name no rule", () => {
     expect(new RestError(401, { error: "invalid_token" }).refusal).toBeNull();
     expect(new RestError(503, { message: "upstream closed" }).refusal).toBeNull();
+  });
+});
+
+// THE REFUSAL CARRIES THE WAIT IT WAS GIVEN.
+//
+// A 503 is two different answers — a node catching up or draining, which a
+// wait clears and which says how long, and a node with no keyring, which no
+// wait clears and which says nothing — and the header is the only thing that
+// tells a reader which of the two it holds. Both forms the RFC allows are
+// read, because a proxy answering for the engine may write a date.
+describe("Retry-After", () => {
+  test("a 503 with Retry-After carries the wait", async () => {
+    stub(() => json({ error: "unavailable" }, 503, { "Retry-After": "7" }));
+    const err = await rest.get("/secrets").catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(RestError);
+    expect((err as RestError).retryAfter).toBe(7);
+    expect((err as RestError).retryHint).toBe(7);
+  });
+
+  test("a 503 without one carries none, which the engine means as final", async () => {
+    stub(() => json({ error: "no_keyring" }, 503));
+    const err = await rest.get("/secrets").catch((e: unknown) => e);
+    expect((err as RestError).retryAfter).toBeNull();
+    expect((err as RestError).retryHint).toBe(0);
+  });
+
+  // A PROXY'S PAGE IS NOT THE ENGINE'S ANSWER: its header travels on the
+  // error as what was said, and is no engine hint — the read backs off as
+  // every read nobody answered does.
+  test("a proxy's HTML 503 keeps its header, which is not the engine's hint", async () => {
+    stub(() => new Response("<html>down</html>", { status: 503, headers: { "Retry-After": "3" } }));
+    const err = await rest.get("/secrets").catch((e: unknown) => e);
+    expect((err as RestError).code).toBe("unreadable_body");
+    expect((err as RestError).retryAfter).toBe(3);
+    expect((err as RestError).retryHint).toBeNull();
+    expect(restRetryMs(err, { cadence: null, unanswered: 1 })).toBe(1_000);
+  });
+
+  test.each([
+    ["12", 12],
+    [" 0 ", 0],
+    ["", null],
+    [null, null],
+    ["soon", null],
+    ["-4", null],
+    ["Thu, 01 Jan 2026 00:00:30 GMT", 30],
+    ["Wed, 31 Dec 2025 23:59:00 GMT", 0],
+  ] as const)("the header %j reads as %j seconds", (header, want) => {
+    expect(retryAfterSeconds(header, Date.parse("2026-01-01T00:00:00Z"))).toBe(want);
   });
 });

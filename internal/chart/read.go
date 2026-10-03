@@ -300,7 +300,7 @@ func (r *Reader) Seat(ctx context.Context, handle string, fresh statelog.Freshne
 // request resolves the seat its person is bound to, and the dangling-binding
 // alarm classifies every binding in the company the same way. A binding names
 // its seat by the identity rather than by the handle typed when it was made —
-// ADR-0020 — because a handle is an address a rename moves, and a binding that
+// ADR-0027 — because a handle is an address a rename moves, and a binding that
 // followed an address came to name a stranger's seat, or two people's one. The
 // identity is what no rename moves and no creation re-issues: see
 // [refuseCreate], and the tombstone a removal leaves on it.
@@ -342,7 +342,7 @@ func (r *Reader) SeatByIdentity(ctx context.Context, identity string,
 // # Exported for one reader, and the transaction is the point
 //
 // The identity domain binds a person to a seat an administrator TYPED, and the
-// binding names the seat's identity (ADR-0020): so the bind's decide has to
+// binding names the seat's identity (ADR-0027): so the bind's decide has to
 // turn the typed address into that identity inside the very snapshot it
 // decides in. A read of its own would see another instant — the "take ONE
 // snapshot" rule's failure — and a second implementation of the resolution
@@ -378,8 +378,8 @@ var ErrNotFound = errors.New("chart: no such object")
 //
 // AND THE ORIGIN NEVER STOPS. The key an object was created under is its
 // IDENTITY ([Unit.OriginKey], [Seat.OriginHandle]) — everything durable a seat
-// owns is keyed on it (ADR-0019), and so is every binding the identity
-// directory holds (ADR-0020) — while the alias list is capped at
+// owns is keyed on it (ADR-0026), and so is every binding the identity
+// directory holds (ADR-0027) — while the alias list is capped at
 // [MaxFormerKeys]. An object renamed once too often used to stop answering to
 // the address it was created under, which is the one address nothing else may
 // ever take; resolving it for ever is what lets [refuseCreate] refuse a

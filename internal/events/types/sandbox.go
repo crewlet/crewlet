@@ -1,6 +1,10 @@
 package types
 
-import "github.com/crewlet/crewlet/internal/events"
+import (
+	"time"
+
+	"github.com/crewlet/crewlet/internal/events"
+)
 
 // Detached sandbox coding runs. The kick-off turn ends as soon as the job is
 // launched and the agent stays busy until the completion signal arrives, so
@@ -12,6 +16,8 @@ func init() {
 	events.Register[SandboxRunCompleted]()
 	events.Register[SandboxClarificationRequested]()
 	events.Register[SandboxRunFailed]()
+	events.Register[SandboxAnswerGiven]()
+	events.Register[SandboxRunAnswered]()
 }
 
 // SandboxRunStarted marks a detached coding job being kicked off, after the
@@ -29,10 +35,23 @@ type SandboxRunStarted struct {
 	SandboxID       string `json:"sandbox_id"`
 	CodingAgent     string `json:"coding_agent"`
 	ConversationKey string `json:"conversation_key"`
-	TaskID          string `json:"task_id"`
+	// WorkItem is the item the launching turn is charged to, absent when
+	// it is on nothing. The run is part of that turn, so a running-runs
+	// panel can say which item a box is working on without joining back to
+	// a turn that may have parked days ago.
+	WorkItem *WorkItem `json:"work_item,omitempty"`
 	// Task is a short human-readable summary for the running-sandboxes panel;
 	// the full brief lives on the pending run, not on the wire.
 	Task string `json:"task"`
+	// LaunchID names THIS JOB — the sandbox.PendingRun row's launch id,
+	// minted by the store — and StartedAt is when the store recorded the
+	// launch. A turn can launch more than one job, and these are what pair
+	// a start with the job's own `agent_phase_completed{phase: sandbox}`
+	// record (which carries the same id) and what a live-output request
+	// (`sandbox_tail`) names. Absent on an announcement whose row could not
+	// be read back.
+	LaunchID  string    `json:"launch_id,omitempty"`
+	StartedAt time.Time `json:"started_at,omitzero"`
 }
 
 // EventType is the "sandbox_run_started" wire type.
@@ -123,6 +142,10 @@ type SandboxClarificationRequested struct {
 	Question        string `json:"question"`
 	Audience        string `json:"audience"`
 	ConversationKey string `json:"conversation_key"`
+	// WorkItem is the item the parked turn is charged to — the one its row
+	// recorded at launch — so a question can be shown against the work it
+	// is about. Absent when the turn is on nothing.
+	WorkItem *WorkItem `json:"work_item,omitempty"`
 }
 
 // EventType is the "sandbox_clarification_requested" wire type.
@@ -246,4 +269,185 @@ func (e SandboxRunFailed) SummaryFor(actor string) string {
 		reason = "an unrecorded reason"
 	}
 	return lead(actor, "lost a sandbox run to "+reason)
+}
+
+// SandboxAnswerGiven is the wake an answer BY TURN puts on the seat's own
+// inbox: a person answering a parked coding run's question by naming the run,
+// rather than by replying on the conversation it was asked in.
+//
+// # Why a second way in
+//
+// The chat route matches a reply to a run by conversation, and a run launched
+// by anything that is not a conversation — a schedule, a task assignment, a
+// colleague's ask — stored none. Such a run parked on a question nobody could
+// answer: there was no thread to reply in, and the question waited out its
+// pause TTL while the person who knew the answer had nowhere to put it. An
+// answer by turn names the run instead, and it can be given from any node.
+//
+// # Why on the seat's INBOX
+//
+// Because only the node holding the seat can resume the turn, and the seat's
+// inbox is how anything reaches that node — a durable subscription that the
+// holder, and only the holder, consumes. So an answer accepted on one node is
+// carried out on another, it survives a restart in between, and it WAITS
+// BEHIND A PAUSE exactly as a person's chat reply would: a paused seat takes
+// nothing off its inbox, this included.
+//
+// NEVER A TURN. The dispatcher routes it to the coding run it names before
+// the inbox screening runs, and whatever that answers — resumed, not
+// awaiting, gone — the delivery is spent there: an answer that fell through
+// to the ordinary route would wake the seat on a message addressed to a run.
+//
+// KEPT OUT OF THE EVENT STORE, like the other inbox wakes: what happened to
+// the answer is [SandboxRunAnswered], and that the person gave it is their
+// `operator_acted` row. See internal/events/category.go.
+type SandboxAnswerGiven struct {
+	// TurnID is the run the answer is for — the parked run's own key.
+	TurnID string `json:"turn_id"`
+
+	// Agent is the seat that run belongs to, by its derived id, and its
+	// inbox is the one this travels on (topics.AgentInbox) — carried in
+	// the payload as well so the dispatcher that routes it can refuse one
+	// that reached the wrong seat. The ID and never the handle, because a
+	// handle is an address a rename moves (ADR-0026): addressed by it, an
+	// answer given while its seat was renamed reached nobody, and one
+	// given after a hire took the freed handle reached a stranger.
+	Agent string `json:"agent_id"`
+
+	// AgentHandle is the seat's handle when the answer was given, for a
+	// person reading the log line. Never compared: [Agent] is the routing
+	// identity.
+	AgentHandle string `json:"agent_handle"`
+
+	// Answer is the person's reply, verbatim. Redacted where it is spliced
+	// into the suspended conversation, like a chat reply.
+	Answer string `json:"answer"`
+
+	// AnsweredBy, AnsweredByKind and OperatorID are who answered, in the
+	// three halves iam.ActorFor makes of a principal: the author (the seat
+	// for a person the identity directory binds to one, the login for
+	// anybody else), what sort of author that is (iam.ActorKind's
+	// vocabulary), and the credential the answer came through. Three facts
+	// for the reason `operator_acted` records three: a person reads who
+	// answered, an audit asks what a credential did.
+	AnsweredBy     string `json:"answered_by"`
+	AnsweredByKind string `json:"answered_by_kind"`
+	OperatorID     string `json:"operator_id,omitempty"`
+}
+
+// EventType is the "sandbox_answer_given" wire type.
+func (SandboxAnswerGiven) EventType() string { return "sandbox_answer_given" }
+
+// AgentID is the seat whose run the answer is for.
+func (e SandboxAnswerGiven) AgentID() string { return e.Agent }
+
+// SummaryFor names who answered, for a log line: the event itself is never on
+// a feed.
+func (e SandboxAnswerGiven) SummaryFor(actor string) string {
+	who := e.AnsweredBy
+	if who == "" {
+		who = actor
+	}
+	return lead(who, "answered a parked coding run")
+}
+
+// AnswerVia is the route an answer reached a parked coding run by.
+type AnswerVia string
+
+const (
+	// AnswerViaChat — a reply on the conversation the question was asked
+	// in, matched to the run by that conversation.
+	AnswerViaChat AnswerVia = "chat"
+
+	// AnswerViaOperator — an answer that named the run by its turn, through
+	// the operator surface ([SandboxAnswerGiven]).
+	AnswerViaOperator AnswerVia = "operator"
+)
+
+// Valid reports whether v is one of the two routes.
+func (v AnswerVia) Valid() bool { return v == AnswerViaChat || v == AnswerViaOperator }
+
+// AnswerOutcome is what an answer that reached a parked coding run became.
+type AnswerOutcome string
+
+const (
+	// AnswerResumed — the answer resumed the suspended turn.
+	AnswerResumed AnswerOutcome = "resumed"
+
+	// AnswerNotAwaiting — the run exists and was not waiting for an answer
+	// any more: another answer claimed it first, or it is running a job.
+	AnswerNotAwaiting AnswerOutcome = "not_awaiting"
+
+	// AnswerGone — the run is over: its record is gone, or it could not be
+	// resumed at all and was ended.
+	AnswerGone AnswerOutcome = "gone"
+)
+
+// Valid reports whether o is one of the three outcomes.
+func (o AnswerOutcome) Valid() bool {
+	switch o {
+	case AnswerResumed, AnswerNotAwaiting, AnswerGone:
+		return true
+	}
+	return false
+}
+
+// SandboxRunAnswered records what an answer to a parked coding run's question
+// became, on either route.
+//
+// THE CHAT ROUTE LEFT NO RECORD. A person's reply that resumed a run was an
+// ordinary chat message the dispatcher handed to the coordinator, and nothing
+// said afterwards that it had been taken as an answer — nor, when the run had
+// already been answered or had ended, that the reply had reached nothing. Now
+// both routes publish this, once per answer that REACHED a run, with the route
+// it came by and who gave it. An answer that is still owed a retry has not
+// become anything yet and publishes nothing; a chat message that matched no
+// run was never an answer at all.
+type SandboxRunAnswered struct {
+	Agent       string `json:"agent_id"`
+	AgentHandle string `json:"agent_handle"`
+	RoleName    string `json:"role"`
+	TurnID      string `json:"turn_id"`
+	// WorkKey is the unit of work the run was dispatched for — see
+	// [AgentPhaseCompleted.WorkKey] and ADR-0017.
+	WorkKey string `json:"work_key,omitempty"`
+	// WorkItem is the item the parked turn is charged to, absent when it is
+	// on nothing, so an answer is shown against the work it moved.
+	WorkItem *WorkItem `json:"work_item,omitempty"`
+
+	Via     AnswerVia     `json:"via"`
+	Outcome AnswerOutcome `json:"outcome"`
+
+	// AnsweredBy, AnsweredByKind and OperatorID are who gave the answer.
+	// By the operator route they are [SandboxAnswerGiven.AnsweredBy]'s three
+	// halves. By chat, AnsweredBy is the sender as that transport names
+	// them and AnsweredByKind is `human`, with no OperatorID: the chat
+	// surface vouched for the sender, and no credential of this engine's
+	// was presented.
+	AnsweredBy     string `json:"answered_by,omitempty"`
+	AnsweredByKind string `json:"answered_by_kind,omitempty"`
+	OperatorID     string `json:"operator_id,omitempty"`
+}
+
+// EventType is the "sandbox_run_answered" wire type.
+func (SandboxRunAnswered) EventType() string { return "sandbox_run_answered" }
+
+// Role is the seat whose run was answered.
+func (e SandboxRunAnswered) Role() string { return e.RoleName }
+
+// AgentID is the instance whose run was answered.
+func (e SandboxRunAnswered) AgentID() string { return e.Agent }
+
+// SummaryFor says what the answer became, which is the one thing a reader of
+// the feed wants from it.
+func (e SandboxRunAnswered) SummaryFor(actor string) string {
+	switch e.Outcome {
+	case AnswerResumed:
+		return lead(actor, "resumed a sandbox run with an answer")
+	case AnswerNotAwaiting:
+		return lead(actor, "was answered, but its sandbox run was not waiting")
+	case AnswerGone:
+		return lead(actor, "was answered after its sandbox run had ended")
+	}
+	return lead(actor, "was answered")
 }

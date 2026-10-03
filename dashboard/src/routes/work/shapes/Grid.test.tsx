@@ -20,6 +20,7 @@ import { afterEach, expect, test, vi } from "vitest";
 import { WorkGrid } from "./Grid.tsx";
 import { Router } from "~/app/router.tsx";
 import type { RowChrome } from "~/components/work.tsx";
+import type { ViewerState } from "~/lib/viewer.ts";
 import type { WorkActivityRecord, WorkSummary } from "~/protocol/index.ts";
 import {
   CLAIMANT,
@@ -29,6 +30,32 @@ import {
   SHARED_KEY,
   collidingRows,
 } from "~/test/keyCollision.ts";
+
+// THE TRASH COLUMN'S RESTORE IS A WRITE CONTROL, and asks who is reading and
+// whether the socket is up before it says whether it can act. These cases are
+// about the column's other cells, so it reads as an anonymous, connected tab.
+vi.mock("~/lib/viewer.ts", () => ({
+  useViewer: (): ViewerState => ({
+    login: "",
+    grants: [],
+    operatesFleet: false,
+    handle: "",
+    owner: "",
+    name: "",
+    acts: [],
+    kind: "",
+    project: "",
+    unbound: false,
+    anonymous: true,
+    loading: false,
+    asking: false,
+  }),
+}));
+vi.mock("~/lib/store-hooks.ts", async () => {
+  const actual =
+    await vi.importActual<typeof import("~/lib/store-hooks.ts")>("~/lib/store-hooks.ts");
+  return { ...actual, useConnection: () => ({ connected: true }) };
+});
 
 afterEach(() => {
   cleanup();
@@ -65,6 +92,16 @@ function badge(container: HTMLElement): HTMLElement {
   const marks = container.querySelectorAll(".crewlet-avatar");
   if (marks.length !== 1) throw new Error(`expected one identity badge, drew ${marks.length}`);
   return marks[0] as HTMLElement;
+}
+
+/** Which outline the kit drew the badge in: a person's circle or an agent's squircle. */
+function outline(container: HTMLElement): "human" | "agent" {
+  const mark = badge(container);
+  const human = mark.classList.contains("crewlet-avatar--human");
+  const agent = mark.classList.contains("crewlet-avatar--agent");
+  if (human === agent)
+    throw new Error(`the badge is drawn as both kinds or neither: ${mark.className}`);
+  return human ? "human" : "agent";
 }
 
 const removal = (over: Partial<WorkActivityRecord> = {}): WorkActivityRecord => ({
@@ -135,7 +172,7 @@ test("the table's assignee is the resolved name, linking to the seat", () => {
   mount("table", [row({ assignee: "ada" })]);
   const link = screen.getByText("Ada Okonkwo").closest("a") as HTMLAnchorElement;
   expect(link).toBeTruthy();
-  expect(link.getAttribute("href")).toBe("#/company/people/ada");
+  expect(link.getAttribute("href")).toBe("#/agents/seats/ada");
   // THE HANDLE IS STILL REACHABLE, on the hover title — it is what an operator
   // types into a filter, so resolving the name must not destroy it.
   expect(link.getAttribute("title")).toBe("@ada");
@@ -198,36 +235,45 @@ test("an operator's removal is marked as one, beside the name", () => {
   expect(screen.getByText("operator")).toBeTruthy();
 });
 
-// ONE SEAT LOOKS LIKE ONE SEAT ON BOTH COLUMN SETS. The dashed ring is the
-// only variant an identity badge has and it is STRUCTURAL — a human seat, the
-// engine does not run it — so it cannot depend on which set is drawing. It
-// did: `SeatCell` took a kind and the compact `Assignee` had no way to be
-// handed one, so the same person was drawn two ways on one grid.
-test("a human seat wears the dashed ring on both column sets", () => {
+// AND A PERSON THE DIRECTORY BINDS TO A SEAT IS THAT SEAT, as the change log
+// names the same removal: they write AS the seat (`iam.ActorFor`, kind
+// `human`), so the trash names them by the chart's name and marks no operator.
+test("a removal by a person bound to a seat names them by the seat", () => {
+  const removals = new Map([["t-1", removal({ actor: "ada", actor_kind: "human" })]]);
+  mount("table", [row({})], removals);
+  expect(screen.getByText("Ada Okonkwo")).toBeTruthy();
+  expect(screen.queryByText("operator")).toBeNull();
+});
+
+// ONE SEAT LOOKS LIKE ONE SEAT ON BOTH COLUMN SETS. The outline is the only
+// variant an identity badge has and it is STRUCTURAL — who holds the seat — so
+// it cannot depend on which set is drawing. It did: `SeatCell` took a kind and
+// the compact `Assignee` had no way to be handed one, so the same person was
+// drawn two ways on one grid.
+test("a human seat is drawn as a person on both column sets", () => {
   for (const shape of ["list", "table"] as const) {
     const { container } = mount(shape, [row({ assignee: "iris" })]);
-    expect(badge(container).className).toContain("dashed");
+    expect(outline(container)).toBe("human");
     cleanup();
   }
 });
 
-// AND AN AGENT DOES NOT, which is what makes the ring worth drawing: a mark
-// every row wears separates nothing, the same rule `normal` priority keeps.
-test("an agent seat wears no ring on either column set", () => {
+// AND AN AGENT AS AN AGENT, on both.
+test("an agent seat is drawn as an agent on either column set", () => {
   for (const shape of ["list", "table"] as const) {
     const { container } = mount(shape, [row({ assignee: "ada" })]);
-    expect(badge(container).className).not.toContain("dashed");
+    expect(outline(container)).toBe("agent");
     cleanup();
   }
 });
 
-// A HANDLE THE CHART DOES NOT HOLD IS NOT AN AGENT. It is a seat that was
-// renamed or removed, and the honest badge is the neutral disc rather than a
-// ring claiming the chart said something it did not.
-test("a handle the chart does not hold falls back to the neutral disc", () => {
+// A HANDLE THE CHART DOES NOT HOLD is a seat that was renamed or removed. It
+// takes the kit's default outline, never a person's circle: a person is always
+// declared, and a circle would claim the chart said something it did not.
+test("a handle the chart does not hold is never drawn as a person", () => {
   for (const shape of ["list", "table"] as const) {
     const { container } = mount(shape, [row({ assignee: "departed" })]);
-    expect(badge(container).className).not.toContain("dashed");
+    expect(outline(container)).toBe("agent");
     cleanup();
   }
 });
@@ -267,10 +313,44 @@ test("a plain click on a row peeks and a modified click follows the link", () =>
 // THE TRASH'S `removed_by` IS THE THIRD CELL ON THIS GRID THAT DRAWS A PERSON,
 // and it reads the same resolver: somebody who emptied a subtree is drawn the
 // way they are drawn on the row above.
-test("a human removal wears the ring in the trash column", () => {
+test("a human removal is drawn as a person in the trash column", () => {
   const removals = new Map([["t-1", removal({ actor: "iris", actor_kind: "human" })]]);
   const { container } = mount("table", [row({})], removals);
-  expect(badge(container).className).toContain("dashed");
+  expect(outline(container)).toBe("human");
+});
+
+// BESIDE A PEEK AT 1280 THE LIST IS ABOUT 450PX, and with every column kept
+// the title was 70px of "Which regi…". The title takes a floor in both sets;
+// what gives way instead is the grid's to decide (`DataGrid.test.tsx`).
+test("the title keeps a floor and the status is drawn whole, in both sets", () => {
+  for (const shape of ["list", "table"] as const) {
+    const { container } = mount(shape, [row()]);
+    const template =
+      container.querySelector<HTMLElement>(".grid-wrap")?.style.gridTemplateColumns ?? "";
+    expect(template, shape).toMatch(/minmax\(16rem, 1fr\)/);
+    // And the status word is never cut to fit.
+    expect(template, shape).toContain("max-content");
+    cleanup();
+  }
+});
+
+// ON A PHONE THE LIST IS TWO LINES A TASK — the key and the title, then the
+// marks — and the table keeps the labelled card, whose question is a field at a
+// time. The lead is exactly what the task IS; a status or an assignee leading
+// would push the title onto the second line.
+test("the list is compact on a phone with its key and title leading, the table is labelled", () => {
+  const list = mount("list", [row({ assignee: "iris" })]);
+  const wrap = list.container.querySelector(".grid-wrap")!;
+  expect(wrap.getAttribute("data-phone-rows")).toBe("compact");
+  const leads = [...wrap.querySelectorAll(".grid-row > .grid-cell[data-lead]")];
+  expect(leads.map((c) => c.getAttribute("data-label"))).toEqual(["Key", "Title"]);
+  // AND ITS LINE OF FACTS LEAVES OUT WHEN IT LAST MOVED — the one fact that
+  // wrapped a third line — and nothing else.
+  const omitted = [...wrap.querySelectorAll(".grid-row > .grid-cell[data-phone-omit]")];
+  expect(omitted.map((c) => c.getAttribute("data-label"))).toEqual(["Updated"]);
+  cleanup();
+  const table = mount("table", [row()]);
+  expect(table.container.querySelector(".grid-wrap")!.hasAttribute("data-phone-rows")).toBe(false);
 });
 
 /** The grid's rows, in the order they are drawn. */
@@ -308,23 +388,23 @@ test("two tasks holding one key are two rows, each keeping its own state", () =>
   }
 });
 
-// AND IN THE TRASH, THE CALL THAT BRINGS ONE BACK NAMES THAT ONE. The copy
-// button carried `restore_work_item` on the row's key, and a key two tasks
-// hold opens the one that claimed it first — so the call copied off the
-// duplicate's row would restore the claimant, which is not in the trash, and
-// leave the task a reader meant where it was.
-test("the restore call for a removed duplicate names it by its id", () => {
+// AND IN THE TRASH, THE RESTORE NAMES THE ONE IT BRINGS BACK. It sent
+// `restore_work_item` on the row's key, and a key two tasks hold opens the one
+// that claimed it first — so a Restore pressed on the duplicate's row would
+// restore the claimant, which is not in the trash, and leave the task a reader
+// meant where it was.
+test("the restore for a removed duplicate names it by its id", () => {
   const [claimant, duplicate] = collidingRows();
   const removals = new Map([
     [CLAIMANT, removal({ subject_id: CLAIMANT, subject_key: SHARED_KEY })],
     [DUPLICATE, removal({ subject_id: DUPLICATE, subject_key: SHARED_KEY })],
   ]);
   const { container } = mount("table", [claimant, duplicate], removals);
-  const call = (title: string) =>
+  const restore = (title: string) =>
     drawnRows(container)
       .find((el) => el.textContent?.includes(title))
       ?.querySelector("button")
-      ?.getAttribute("title");
-  expect(call(DUPLICATE_TITLE)).toBe(`restore_work_item {"item":"${DUPLICATE}"}`);
-  expect(call(CLAIMANT_TITLE)).toBe(`restore_work_item {"item":"${SHARED_KEY}"}`);
+      ?.getAttribute("aria-label");
+  expect(restore(DUPLICATE_TITLE)).toBe(`Restore ${DUPLICATE}`);
+  expect(restore(CLAIMANT_TITLE)).toBe(`Restore ${SHARED_KEY}`);
 });

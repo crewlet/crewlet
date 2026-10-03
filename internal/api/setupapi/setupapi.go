@@ -363,8 +363,8 @@ type configWriter struct {
 //
 // CONSUMER-DEFINED AND TWO METHODS, over the org chart rather than over the
 // stored revision: a seat left the configuration document, so the surface
-// that used to serve this — `/config/roles/{handle}` — refuses the write by
-// name and has no splice to make. What satisfies it is the engine.
+// that used to serve this — `/config/roles/{handle}` — is gone, and no
+// revision holds a seat to splice into. What satisfies it is the engine.
 //
 // It carries BYTES rather than a typed seat, which is the same trade the
 // chart's own runtime blob makes: a vendor pass edits one nested block and

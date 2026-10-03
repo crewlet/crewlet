@@ -18,11 +18,8 @@
 
 import { describe, expect, test } from "vitest";
 import type { ChartRead } from "~/protocol/index.ts";
-import {
-  RETRY_AFTER_MAX_MS,
-  UNANSWERED_RETRY_BASE_MS,
-  UNANSWERED_RETRY_MAX_MS,
-} from "~/protocol/retry.ts";
+import { RETRY_AFTER_MAX_MS } from "~/contract/retry.ts";
+import { UNANSWERED_RETRY_BASE_MS, UNANSWERED_RETRY_MAX_MS } from "~/protocol/retry.ts";
 import { chartPrint, fingerprint, fromChart } from "./document.ts";
 import { EMPTY_DRAFT } from "./draft.ts";
 import {

@@ -9,7 +9,9 @@
  */
 
 import { describe, expect, test, vi } from "vitest";
-import { MAX_EVENTS, MAX_PHASES, Store } from "./store.ts";
+import { MAX_EVENTS } from "../contract/wire.ts";
+import { LiveSocket, queryFailure, QueryRefusedError } from "./socket.ts";
+import { MAX_PHASES, Store } from "./store.ts";
 import type { AgentRow, EventEnvelope, FeedRow } from "./types.ts";
 
 function feedRow(id: string, over: Partial<FeedRow> = {}): FeedRow {
@@ -37,13 +39,13 @@ describe("agent overlays", () => {
     // the roster several times a second with half its fields blank.
     const store = new Store();
     store.applySnapshot({
-      agents: [{ id: "pm", agent_id: "id-pm", role: "PM", handle: "pm", state: "idle" }],
+      agents: [{ id: "pm", agent_id: "id-pm", role: "PM", handle: "pm", activity: "idle" }],
     });
-    store.applyAgents([{ agent_id: "id-pm", state: "working", current_phase: "execute" }]);
+    store.applyAgents([{ agent_id: "id-pm", activity: "working", current_phase: "execute" }]);
 
     const [row] = store.state.agents;
     expect(row?.handle).toBe("pm");
-    expect(row?.state).toBe("working");
+    expect(row?.activity).toBe("working");
     expect(row?.current_phase).toBe("execute");
   });
 
@@ -54,16 +56,16 @@ describe("agent overlays", () => {
     const store = new Store();
     store.applySnapshot({
       agents: [
-        { id: "eng-a", agent_id: "id-a", role: "Engineer", handle: "eng-a", state: "idle" },
-        { id: "eng-b", agent_id: "id-b", role: "Engineer", handle: "eng-b", state: "idle" },
+        { id: "eng-a", agent_id: "id-a", role: "Engineer", handle: "eng-a", activity: "idle" },
+        { id: "eng-b", agent_id: "id-b", role: "Engineer", handle: "eng-b", activity: "idle" },
       ],
     });
-    store.applyAgents([{ agent_id: "id-b", state: "working", current_phase: "execute" }]);
+    store.applyAgents([{ agent_id: "id-b", activity: "working", current_phase: "execute" }]);
 
     const [a, b] = store.state.agents;
-    expect(a?.state).toBe("idle");
+    expect(a?.activity).toBe("idle");
     expect(a?.current_phase).toBeUndefined();
-    expect(b?.state).toBe("working");
+    expect(b?.activity).toBe("working");
     expect(b?.current_phase).toBe("execute");
   });
 
@@ -74,9 +76,11 @@ describe("agent overlays", () => {
     // The guard is what makes that loud rather than silent — and the e2e
     // replay is what makes it impossible to ship again.
     const store = new Store();
-    store.applySnapshot({ agents: [{ id: "pm", agent_id: "id-pm", role: "PM", state: "idle" }] });
-    store.applyAgents({ "id-pm": { state: "working" } } as never);
-    expect(store.state.agents[0]?.state).toBe("idle");
+    store.applySnapshot({
+      agents: [{ id: "pm", agent_id: "id-pm", role: "PM", activity: "idle" }],
+    });
+    store.applyAgents({ "id-pm": { activity: "working" } } as never);
+    expect(store.state.agents[0]?.activity).toBe("idle");
   });
 
   test("an overlay for a seat the roster does not carry is dropped, and nothing redraws", () => {
@@ -86,7 +90,7 @@ describe("agent overlays", () => {
     const store = new Store();
     const seen = vi.fn();
     store.subscribe(["agents"], seen);
-    store.applyAgents([{ agent_id: "id-new", state: "working" }]);
+    store.applyAgents([{ agent_id: "id-new", activity: "working" }]);
     expect(store.state.agents).toHaveLength(0);
     expect(seen).not.toHaveBeenCalled();
   });
@@ -108,9 +112,9 @@ describe("agent overlays", () => {
     // the same agent id, and the seat is still mid-turn.
     const store = new Store();
     store.applySnapshot({ agents: [{ id: "pm", agent_id: "id-pm", role: "PM", handle: "pm" }] });
-    store.applyAgents([{ agent_id: "id-pm", state: "working" }]);
+    store.applyAgents([{ agent_id: "id-pm", activity: "working" }]);
     store.applySeats([{ id: "lead", agent_id: "id-pm", role: "Product Lead", handle: "lead" }]);
-    expect(store.state.agents[0]?.state).toBe("working");
+    expect(store.state.agents[0]?.activity).toBe("working");
     expect(store.state.agents[0]?.handle).toBe("lead");
   });
 });
@@ -296,7 +300,7 @@ describe("subscriptions", () => {
     store.subscribe(["tokens"], tokens);
     store.subscribe(["agents"], agents);
 
-    store.applyAgents([{ agent_id: PM.agent_id, state: "working" }]);
+    store.applyAgents([{ agent_id: PM.agent_id, activity: "working" }]);
     expect(agents).toHaveBeenCalledTimes(1);
     expect(tokens).not.toHaveBeenCalled();
   });
@@ -320,7 +324,7 @@ describe("subscriptions", () => {
     const fn = vi.fn();
     const off = store.subscribe(["agents"], fn);
     off();
-    store.applyAgents([{ agent_id: PM.agent_id, state: "working" }]);
+    store.applyAgents([{ agent_id: PM.agent_id, activity: "working" }]);
     expect(fn).not.toHaveBeenCalled();
   });
 
@@ -331,7 +335,7 @@ describe("subscriptions", () => {
     const store = new Store();
     store.applySeats([PM]);
     const before = store.version("agents");
-    store.applyAgents([{ agent_id: PM.agent_id, state: "working" }]);
+    store.applyAgents([{ agent_id: PM.agent_id, activity: "working" }]);
     expect(store.version("agents")).toBeGreaterThan(before);
     expect(store.version("tokens")).toBe(0);
   });
@@ -381,19 +385,19 @@ describe("a push shares what it did not change", () => {
     store.applyTokens(rollup(["t-0", "t-1", "t-2"]));
     const after = store.state.tokens!;
     expect(after).not.toBe(before);
-    expect(after.by_turn.map((t) => t.turn_id)).toEqual(["t-0", "t-1", "t-2"]);
-    expect(after.by_turn[1]).toBe(before.by_turn[0]);
-    expect(after.by_turn[2]).toBe(before.by_turn[1]);
+    expect(after.by_turn!.map((t) => t.turn_id)).toEqual(["t-0", "t-1", "t-2"]);
+    expect(after.by_turn![1]).toBe(before.by_turn![0]);
+    expect(after.by_turn![2]).toBe(before.by_turn![1]);
     expect(after.by_agent).toBe(before.by_agent);
   });
 
   test("an overlay restating a seat's state moves nothing", () => {
     const store = new Store();
-    store.applySeats([{ id: "pm", agent_id: "id-pm", role: "PM", handle: "pm", state: "idle" }]);
+    store.applySeats([{ id: "pm", agent_id: "id-pm", role: "PM", handle: "pm", activity: "idle" }]);
     const held = store.state.agents;
     const woke = vi.fn();
     store.subscribe(["agents"], woke);
-    store.applyAgents([{ agent_id: "id-pm", state: "idle" }]);
+    store.applyAgents([{ agent_id: "id-pm", activity: "idle" }]);
     expect(store.state.agents).toBe(held);
     expect(woke).not.toHaveBeenCalled();
   });
@@ -459,5 +463,159 @@ describe("partial pushes", () => {
     const store = new Store();
     store.applySnapshot({ tokens: { by_phase: [] } as never });
     expect(store.state.tokens).toBeNull();
+  });
+});
+
+// NOTHING SAID IS NOT AN EMPTY COMPANY. `{}` is the projection of a node
+// running none, which is an answer; before the handshake there is no answer,
+// and a screen has to be able to tell — the charter printed "No mission is
+// set" on every cold tab.
+describe("the org chart", () => {
+  test("is null until the engine sends one, and an empty one once it has", () => {
+    const store = new Store();
+    expect(store.state.org).toBeNull();
+    store.applyOrg(null);
+    expect(store.state.org).toEqual({});
+    const fresh = new Store();
+    fresh.applySnapshot({ agents: [] });
+    expect(fresh.state.org).toEqual({});
+  });
+});
+
+describe("the engine's health", () => {
+  // THE PUSH IS THE WHOLE ENVELOPE, and the slice keeps all of it: every
+  // screen reads the applied epoch, the posture and the fleet's size off this
+  // slice rather than asking a query for them.
+  test("a health frame is kept whole", () => {
+    const store = new Store();
+    const frame = {
+      status: "ok",
+      node: "node-a",
+      applied_epoch: 41,
+      posture: "serve",
+      nodes: 3,
+      alarms: { count: 1, worst: "trim_blocked", worst_domain: "tracker" },
+      identity: "ready",
+    };
+    store.applyHealth(frame);
+    expect(store.state.health).toEqual(frame);
+  });
+
+  // A FRAME WHOSE PRESENCE READ FAILED carries no `nodes` at all. The count is
+  // then unknown — never 0, which the node answering could not be.
+  test("a frame without a node count keeps the count absent", () => {
+    const store = new Store();
+    store.applyHealth({ status: "ok", applied_epoch: 7, posture: "serve" });
+    expect(store.state.health.nodes).toBeUndefined();
+  });
+});
+
+// NOT REPORTED IS NOT UNCAPPED. The budget slice is `null` until a report has
+// carried it, from the store's birth, through a snapshot taken before any node
+// reported (`budget: null`) and after a push of `null`; a report that caps
+// nothing is held as the report it is. An empty object used to stand for both,
+// and the Spend and Home tiles offered an operator of a capped company "Set
+// one" for the first seconds after every engine start.
+describe("the budget", () => {
+  test("is null until a report carries it, and an uncapped report is kept", () => {
+    const store = new Store();
+    expect(store.state.budget).toBeNull();
+    store.applySnapshot({ budget: null, health: { status: "ok" } });
+    expect(store.state.budget).toBeNull();
+    const uncapped = { meter_id: "n:1", seq: 1, timezone: "UTC", org: { windows: [] } };
+    store.applyBudget(uncapped as never);
+    expect(store.state.budget).toEqual(uncapped);
+    store.applyBudget(null);
+    expect(store.state.budget).toBeNull();
+  });
+});
+
+describe("a kind this build does not dispatch", () => {
+  // A NODE ON ANOTHER BUILD may push what this bundle was built before. Its
+  // unknown kind must neither throw nor land in a slice by a guess — and it
+  // must not vanish either, because the same fall-through is what this
+  // build's own engine sending a kind its own client forgot looks like. The
+  // e2e replay asserts the count is zero for exactly that reason.
+  test("is ignored and counted", () => {
+    const store = new Store();
+    const socket = new LiveSocket(store);
+    const before = JSON.stringify(store.state);
+    const woken = vi.fn();
+    store.subscribe(["agents", "events", "health", "budget"], woken);
+
+    socket.onMessage(JSON.stringify({ kind: "hologram", data: { agents: [] } }));
+    socket.onMessage(JSON.stringify({ kind: "hologram", data: {} }));
+    socket.onMessage(JSON.stringify({ data: {} }));
+
+    expect(JSON.stringify(store.state)).toBe(before);
+    expect(woken).not.toHaveBeenCalled();
+    expect(Object.fromEntries(store.unknownPushes)).toEqual({ hologram: 2, null: 1 });
+  });
+
+  test("every kind this build dispatches is not counted", () => {
+    const store = new Store();
+    const socket = new LiveSocket(store);
+    for (const kind of ["snapshot", "event", "agents", "seats", "sandboxes", "tokens"]) {
+      socket.onMessage(JSON.stringify({ kind, data: kind === "snapshot" ? {} : [] }));
+    }
+    for (const kind of ["budget", "schedules", "org", "tools", "health", "pong"]) {
+      socket.onMessage(JSON.stringify({ kind, data: {} }));
+    }
+    socket.onMessage(JSON.stringify({ kind: "inbox_changed", data: { handle: "ada" } }));
+    socket.onMessage(JSON.stringify({ kind: "identity", data: { state: "verified" } }));
+    socket.onMessage(JSON.stringify({ kind: "result", id: 99, data: {} }));
+    socket.onMessage(JSON.stringify({ kind: "error", id: 99, error: "not_found" }));
+    expect(store.unknownPushes.size).toBe(0);
+  });
+});
+
+describe("a refused query", () => {
+  // THE REFUSAL'S SENTENCE TRAVELS WITH IT. A `bad_params` refusal is the one
+  // the engine writes for the caller — which parameter, and what it accepts —
+  // and a rejection carrying only the code left a screen to say "something
+  // was missing" about a window the reader chose.
+  test("a bad_params frame's sentence reaches the rejection", async () => {
+    const store = new Store();
+    const socket = new LiveSocket(store);
+    const asked = socket.query("tokens", { days: 91 });
+    socket.onMessage(
+      JSON.stringify({
+        kind: "error",
+        id: 1,
+        error: "bad_params",
+        detail: "days=91, and a spend window is 1 to 90 company days — ask for at most 90",
+      }),
+    );
+    const err = await asked.catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(QueryRefusedError);
+    expect(queryFailure(err)).toEqual({
+      error: "bad_params",
+      refusal: null,
+      detail: "days=91, and a spend window is 1 to 90 company days — ask for at most 90",
+    });
+  });
+
+  // AN `unavailable` FRAME'S WORDS ARE ITS REFUSAL'S, beside the wait the
+  // engine named — never the bad_params sentence, which no wait changes.
+  test("an unavailable frame's words and wait ride its refusal", async () => {
+    const store = new Store();
+    const socket = new LiveSocket(store);
+    const asked = socket.query("fleet");
+    socket.onMessage(
+      JSON.stringify({
+        kind: "error",
+        id: 1,
+        error: "unavailable",
+        refusal: "behind",
+        detail: "catching up",
+        retry_after: 4,
+      }),
+    );
+    const failure = queryFailure(await asked.catch((e: unknown) => e));
+    expect(failure).toEqual({
+      error: "unavailable",
+      refusal: { code: "behind", detail: "catching up", retryAfter: 4 },
+      detail: null,
+    });
   });
 });

@@ -3,7 +3,6 @@ package engine
 import (
 	"context"
 	"fmt"
-	"strings"
 
 	"github.com/crewlet/crewlet/internal/providers/embeddings"
 )
@@ -46,9 +45,10 @@ func (e *Engine) buildEmbedder(c *Company) (embeddings.Embedder, error) {
 	provider, err := embeddings.New(embeddings.Config{
 		Model:      env.Value(cfg.Model),
 		Dimensions: cfg.Width(),
-		APIKey:     strings.TrimSpace(env.Value(cfg.APIKey)),
-		BaseURL:    env.Value(cfg.BaseURL),
-		LookupEnv:  env.Lookup,
+		// THE CONFIGURATION'S RULE for which key, the conventional
+		// OPENAI_API_KEY included, resolved through the store-aware chain.
+		APIKey:  cfg.ResolvedKey(env),
+		BaseURL: env.Value(cfg.BaseURL),
 	})
 	if err != nil {
 		return nil, err

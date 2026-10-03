@@ -114,6 +114,53 @@ type State struct {
 	RoundsUsed     int                    `json:"rounds_used,omitempty"`
 	RoundNarration []types.RoundNarration `json:"round_narration,omitempty"`
 
+	// Rounds is the pre-suspend provider calls, timed — and CacheRead and
+	// CacheWrite the prompt cache's share of InputTokens across them — for
+	// the reason RoundsUsed is here: the resumed phase's record is the only
+	// durable account of this phase, and a record whose timeline began at
+	// the resume would report the rounds before it as having taken no time
+	// and the cache as having served nothing.
+	//
+	// Additive within v2: a row written before these existed decodes to
+	// none, and the resumed record states only what it measured.
+	Rounds           []types.PhaseRound `json:"rounds,omitempty"`
+	CacheReadTokens  int                `json:"cache_read_tokens,omitempty"`
+	CacheWriteTokens int                `json:"cache_write_tokens,omitempty"`
+
+	// Written is the work items the turn's writes had committed to when it
+	// suspended, in first-write order, and WrittenMany whether there were
+	// more than it lists: the turn's own write set (turnctx.Written), carried.
+	//
+	// HERE because a turn nothing at dispatch named an item for is charged
+	// at its END to the one item it wrote, and a suspended turn ends in
+	// another segment, often in another process. Without this the resumed
+	// segment would judge "exactly one" over only what it wrote itself: a
+	// turn that filed its task before launching a coding run would end
+	// having written nothing, and be charged to nothing.
+	//
+	// Additive within v2: a row written before these existed decodes to
+	// none, and resumes judging only what its second half writes.
+	Written     []types.WorkItem `json:"written,omitempty"`
+	WrittenMany bool             `json:"written_many,omitempty"`
+
+	// Uncharged is what the turn's segments cost that no work item has been
+	// charged for yet — the half before a park, when nothing at dispatch
+	// named an item and the segment that parked could not conclude one.
+	//
+	// HERE for the reason Written is: a turn charged at its END by a sole
+	// write is charged by a segment that is not the one that spent most of
+	// it. Without this the resumed segment would pay only its own share,
+	// and a turn that filed its task, launched a coding run and resumed
+	// would be charged for the collection and not for the work — and never
+	// counted as a turn at all, since only the first segment counts one.
+	// When the finishing segment is charged, it pays this as well; when it
+	// is not, nothing ever is, which is what an unattributed turn is.
+	//
+	// Additive within v2: a row written before this existed decodes to nil,
+	// and resumes charging only what its second half spent — which is what
+	// that build's first half was charged, too.
+	Uncharged *Uncharged `json:"uncharged,omitempty"`
+
 	// ElapsedMS is how long this phase had already been running when it
 	// suspended, so the resumed half reports the WHOLE phase rather than the
 	// re-entry.
@@ -161,6 +208,38 @@ type State struct {
 	// A false value is what every earlier row decodes to and is exactly
 	// right for them: they are all native suspensions.
 	AgentRun bool `json:"agent_run,omitempty"`
+
+	// Steered is every person's note the turn had read when it suspended,
+	// rendered exactly as the model read it, in order; Steers the rounds of
+	// THIS phase that read them.
+	//
+	// HERE because a note binds the rest of the turn, and the rest of the
+	// turn is often in another process. The suspended conversation carries
+	// the notes this phase read — the resumed executor re-enters it — but
+	// the reviewer and any later executor iteration open fresh
+	// conversations, and without this they would be handed the task the
+	// person had corrected. See internal/agent/steer.
+	//
+	// Additive within v2: a row written before these existed decodes to
+	// none, which is what that build's turn carried.
+	Steered []string           `json:"steered,omitempty"`
+	Steers  []types.PhaseSteer `json:"steers,omitempty"`
+}
+
+// Uncharged is spend carried across a park, in the counters a work item's
+// charge is made of (see tracker.TurnSpend, which it mirrors field for field:
+// this package is the conversation's wire format and does not import a
+// domain).
+type Uncharged struct {
+	Turns      int `json:"turns,omitempty"`
+	Rounds     int `json:"rounds,omitempty"`
+	Input      int `json:"input,omitempty"`
+	Output     int `json:"output,omitempty"`
+	CacheRead  int `json:"cache_read,omitempty"`
+	CacheWrite int `json:"cache_write,omitempty"`
+	WallMs     int `json:"wall_ms,omitempty"`
+	Workers    int `json:"workers,omitempty"`
+	SentBack   int `json:"sent_back,omitempty"`
 }
 
 // ErrUnknownVersion reports a state this build cannot read.

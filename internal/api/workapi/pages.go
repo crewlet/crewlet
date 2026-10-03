@@ -8,7 +8,9 @@ import (
 
 	"github.com/crewlet/crewlet/internal/agent/builtin"
 	"github.com/crewlet/crewlet/internal/api/httpjson"
+	"github.com/crewlet/crewlet/internal/api/operator"
 	"github.com/crewlet/crewlet/internal/authz"
+	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/pages"
 )
 
@@ -162,7 +164,7 @@ func (s *served) postPagePurge(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if pages.NormalizeTitle(confirm) != pages.NormalizeTitle(detail.Page.Title) {
-		httpjson.FailWith(w, http.StatusUnprocessableEntity, httpjson.CodeRefused,
+		httpjson.FailWith(w, http.StatusUnprocessableEntity, httpjson.CodeInvalid,
 			map[string]string{"detail": fmt.Sprintf("?confirm= says %q and the "+
 				"page is %q — nothing was destroyed", confirm, detail.Page.Title)})
 		return
@@ -179,8 +181,11 @@ func (s *served) postPagePurge(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	written, err := s.PageStore.Purge(r.Context(), actor, detail.Page.ID, reason)
+	operator.AuditGesture(r.Context(), s.audit, types.TransportWork,
+		string(authz.ActionPagePurge), key, written.Outcome.Outcome,
+		written.Outcome.Position, err)
 	if err != nil {
-		failErr(w, err, key)
+		failErr(w, r, err, key)
 		return
 	}
 	log.Info("page_purged", "page", detail.Page.ID, "title", detail.Page.Title,
@@ -221,8 +226,11 @@ func (s *served) deletePageComment(w http.ResponseWriter, r *http.Request) {
 	}
 	written, err := s.PageStore.RemoveComment(r.Context(), actor, detail.Page.ID,
 		comment.ID, pages.CommentAuthority{Moderate: d.Reason != authz.ReasonAuthor})
+	operator.AuditGesture(r.Context(), s.audit, types.TransportWork,
+		string(authz.ActionPageCommentRemove), key, written.Outcome.Outcome,
+		written.Outcome.Position, err)
 	if err != nil {
-		failErr(w, err, key)
+		failErr(w, r, err, key)
 		return
 	}
 	body := pageReceipt(detail.Page, written)
@@ -258,8 +266,10 @@ func (s *served) pageGesture(w http.ResponseWriter, r *http.Request,
 		return
 	}
 	written, err := act(r.Context(), actor, detail.Page.ID)
+	operator.AuditGesture(r.Context(), s.audit, types.TransportWork, string(action),
+		key, written.Outcome.Outcome, written.Outcome.Position, err)
 	if err != nil {
-		failErr(w, err, key)
+		failErr(w, r, err, key)
 		return
 	}
 	page := written.Page
@@ -321,7 +331,7 @@ func (s *served) readPage(w http.ResponseWriter, r *http.Request, ref string) (
 	detail, err := s.Pages.Reader.Get(r.Context(), strings.TrimSpace(ref),
 		decisionRead)
 	if err != nil {
-		readFailed(w, err)
+		readFailed(w, r, err)
 		return pages.Detail{}, false
 	}
 	return detail, true

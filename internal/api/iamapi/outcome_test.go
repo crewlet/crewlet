@@ -145,9 +145,12 @@ func TestACreateRetriedUnderItsKeyNamesWhatItsFirstAttemptCreated(t *testing.T) 
 						"%q and %q", tc.created(r, retry), tc.created(r, again))
 				}
 			}
-			if r.writer.invited.OpID != "" && r.writer.invited.OpID != key {
-				t.Errorf("the retry was published under %q, want its key %q",
-					r.writer.invited.OpID, key)
+			// AN ISSUE IS PUBLISHED UNDER ITS KEY'S SEED, the uuid the
+			// scoped key the answer handed back begins with.
+			seed, _, _ := strings.Cut(key, ".")
+			if r.writer.invited.OpID != "" && r.writer.invited.OpID != seed {
+				t.Errorf("the retry was published under %q, want its key's seed %q",
+					r.writer.invited.OpID, seed)
 			}
 		})
 	}

@@ -1,6 +1,7 @@
 package builtin_test
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -9,6 +10,9 @@ import (
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/agent/builtin"
+	"github.com/crewlet/crewlet/internal/agent/turnctx"
+	coordmem "github.com/crewlet/crewlet/internal/coord/memory"
+	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/sourcetree"
 	"github.com/crewlet/crewlet/internal/tools"
 	"github.com/crewlet/crewlet/internal/tracker"
@@ -63,6 +67,7 @@ func operatorOnlyTools(t *testing.T) []string {
 	work.CatalogueWriter = func(builtin.Actor) builtin.CatalogueWriter { return nil }
 	work.PersonWriter = func(builtin.Actor) builtin.PersonWriter { return nil }
 	work.TrashWriter = func(builtin.Actor) builtin.TrashWriter { return nil }
+	work.Placer = func(builtin.Actor) builtin.WorkPlacer { return nil }
 	work.Inbox = newFakeTracker()
 	seat, err := builtin.Register(tools.NewRegistry(), builtin.Deps{Work: work,
 		Pages: full.Pages})
@@ -81,6 +86,56 @@ func operatorOnlyTools(t *testing.T) []string {
 			"tracker declares %v operator-only — the fixture wires a different "+
 			"surface than the one these pages describe", only,
 			tracker.OperatorOnlyTools())
+	}
+	return only
+}
+
+// everyOperatorOnlyTool is [operatorOnlyTools] and the operator-only tools
+// that are not the tracker's: answering a parked coding run, pausing and
+// resuming a seat, steering a running turn and answering a question from the
+// company's knowledge — each a person's decision about the company, served on
+// the operator surface alone. Counted from the catalogue with every seam
+// wired, for the page that lists them all.
+func everyOperatorOnlyTool(t *testing.T) []string {
+	t.Helper()
+	full := fullDeps(t)
+	work := full.Work
+	work.ViewWriter = func(builtin.Actor) builtin.ViewWriter { return nil }
+	work.CatalogueWriter = func(builtin.Actor) builtin.CatalogueWriter { return nil }
+	work.PersonWriter = func(builtin.Actor) builtin.PersonWriter { return nil }
+	work.TrashWriter = func(builtin.Actor) builtin.TrashWriter { return nil }
+	work.Placer = func(builtin.Actor) builtin.WorkPlacer { return nil }
+	work.Inbox = newFakeTracker()
+	seat, err := builtin.Register(tools.NewRegistry(), builtin.Deps{Work: work,
+		Pages: full.Pages, Knowledge: full.Knowledge})
+	if err != nil {
+		t.Fatalf("register: %v", err)
+	}
+	actor := func(context.Context, *turnctx.Turn) (builtin.Actor, error) {
+		return builtin.Actor{Handle: "founder", Kind: tracker.AuthorOperator}, nil
+	}
+	company := &org.Organization{Name: "Acme"}
+	answers := newAnswerRig()
+	var only []string
+	for _, tool := range builtin.OperatorTools(builtin.OperatorDeps{
+		Work: work, Pages: full.Pages, Knowledge: full.Knowledge,
+		Org:  func() *org.Organization { return company },
+		Runs: builtin.RunDeps{Desk: &deskFake{}, Actor: actor},
+		Pauses: builtin.SeatPauseDeps{Pauses: coordmem.NewFleet(), Announce: &announced{},
+			Org: func() *org.Organization { return company }, Actor: actor},
+		Steer:  builtin.SteerDeps{Asker: &fleetAsker{}, Actor: actor},
+		Answer: builtin.AnswerDeps{Models: answers.model, Budget: answers.budget, Actor: actor},
+	}) {
+		if !slices.Contains(seat, tool.Name()) {
+			only = append(only, tool.Name())
+		}
+	}
+	for _, name := range []string{builtin.AnswerRunTool, builtin.PauseSeatTool,
+		builtin.ResumeSeatTool, builtin.SteerTurnTool, builtin.AnswerKnowledgeTool} {
+		if !slices.Contains(only, name) {
+			t.Fatalf("the operator surface with every seam wired does not serve %s "+
+				"(it adds %v), so this count is not the one the page lists", name, only)
+		}
 	}
 	return only
 }
@@ -150,9 +205,10 @@ func TestThePagesCountTheNativeToolsTheRegistryHolds(t *testing.T) {
 				spelled(t, len(operatorOnly)) + " more that no seat is given"},
 		{"docs/guides/tools-and-mcp.md", guide, "and " + spelled(t, len(operatorOnly)) +
 			" more beside them that no seat is given"},
+		// THE REFERENCE LISTS EVERY ONE, the tracker's and the rest.
 		{"docs/reference/api-endpoints.md",
 			readPage(t, "docs/reference/api-endpoints.md"),
-			"Plus **" + spelled(t, len(operatorOnly)) + " no seat is given**"},
+			"Plus **" + spelled(t, len(everyOperatorOnlyTool(t))) + " no seat is given**"},
 	} {
 		if !strings.Contains(c.text, c.want) {
 			t.Errorf("%s does not say %q — the registry adds %d tracker and %d "+

@@ -3,25 +3,28 @@ package config_test
 import (
 	"encoding/json"
 	"errors"
+	"maps"
 	"reflect"
 	"slices"
 	"strings"
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/org"
+	"github.com/crewlet/crewlet/internal/period"
 )
 
 // THE SETTINGS DOCUMENT, and the one refusal it exists to make.
 //
-// A stored revision written before the org chart moved onto its own log still
-// carries `roles:` and `units:` inside it. This build reads the two separately,
-// and what it must NEVER do is decode such a revision by dropping them: the
-// node would boot, serve, and run a company with no seats in it — every
-// mailbox gone, every routing decision answering nobody — and nothing would
-// say why, because from the engine's point of view the configuration decoded
-// cleanly.
+// A settings revision carries no org chart: the chart is a log of its own, and
+// every door that writes a revision keeps `roles:` and `units:` out of it. A
+// stored revision that carries them anyway is the wrong shape, and what the
+// apply path must NEVER do is decode one by dropping them: the node would
+// boot, serve, and run a company with no seats in it — every mailbox gone,
+// every routing decision answering nobody — and nothing would say why, because
+// from the engine's point of view the configuration decoded cleanly.
 
-// A REVISION THAT STILL CARRIES A CHART IS REFUSED, NAMING THE PROCEDURE.
+// A REVISION THAT CARRIES A CHART IS REFUSED, NAMING WHERE THE CHART LIVES.
 //
 // Every document here is in the STORED form — JSON, as marshalling a
 // [config.Company] writes it — because that is the only form this reader ever
@@ -60,11 +63,15 @@ func TestDecodeSettingsRefusesARevisionCarryingAChart(t *testing.T) {
 					"serving a company with no seats in it, and nothing "+
 					"would say so", err)
 			}
-			// THE PROCEDURE, not the field. An operator reading this has
-			// to know what to run, and "unknown key: roles" sends them
-			// looking for a typo they did not make.
-			if !strings.Contains(err.Error(), "crewlet config import") {
-				t.Errorf("the refusal does not name what to run: %v", err)
+			// WHERE THE CHART LIVES, not the field. An operator reading
+			// this has to know that a chart is written through /chart and
+			// that the import divides a company file between the two —
+			// "unknown key: roles" sends them looking for a typo they did
+			// not make.
+			for _, names := range []string{"/chart", "crewlet config import"} {
+				if !strings.Contains(err.Error(), names) {
+					t.Errorf("the refusal does not name %s: %v", names, err)
+				}
 			}
 		})
 	}
@@ -79,13 +86,16 @@ func TestDecodeSettingsRefusesARevisionCarryingAChart(t *testing.T) {
 func TestDecodeSettingsReadsARevisionWithNoChart(t *testing.T) {
 	t.Parallel()
 
-	got, err := config.DecodeSettings([]byte(
-		`{"name":"Acme","mission":"ship it","token_budget":1000}`))
+	got, err := config.DecodeSettings([]byte(`{"name":"Acme","mission":"ship it",` +
+		`"timezone":"Europe/Berlin","token_budget":{"day":1000}}`))
 	if err != nil {
 		t.Fatalf("decode: %v", err)
 	}
-	if got.Name != "Acme" || got.Mission != "ship it" || got.TokenBudget != 1000 {
+	if got.Name != "Acme" || got.Mission != "ship it" || got.Timezone != "Europe/Berlin" {
 		t.Errorf("decoded %+v", got)
+	}
+	if want := (org.TokenCeilings{period.Day: 1000}); !maps.Equal(got.TokenBudget.Ceilings(), want) {
+		t.Errorf("token_budget = %v, want %v", got.TokenBudget.Ceilings(), want)
 	}
 	defaults := config.DefaultCompany()
 	if got.TurnEngine.MaxToolRounds != defaults.TurnEngine.MaxToolRounds ||
@@ -115,6 +125,53 @@ func TestDecodeSettingsKeepsRunningOnAFieldANewerBuildWrote(t *testing.T) {
 	}
 	if got.Name != "Acme" {
 		t.Errorf("decoded %+v", got)
+	}
+}
+
+// A TOKEN BUDGET OF ONE NUMBER IS REFUSED BY WHAT TO WRITE INSTEAD, through
+// the JSON door as through the YAML one.
+//
+// One number was a ceiling for the life of the deployment, and there is no
+// reading of it this build could honour: as a day, a week or a month it would
+// be a different company from the one its author meant. encoding/json's own
+// refusal names a Go type, which is no help to the person holding the
+// document, so the refusal names the window form with their own number in it.
+//
+// A WINDOW THIS BUILD DOES NOT KNOW decodes rather than failing the revision,
+// for the reason every stored field does: a newer peer may have written it.
+func TestATokenBudgetOfOneNumberIsRefusedInTheStoredForm(t *testing.T) {
+	t.Parallel()
+
+	for name, tc := range map[string]struct {
+		doc  string
+		says string
+	}{
+		"a number":        {`{"name":"Acme","token_budget":5000000}`, "token_budget: {month: 5000000}"},
+		"a zero":          {`{"name":"Acme","token_budget":0}`, "not one number"},
+		"a quoted number": {`{"name":"Acme","token_budget":"5000000"}`, "not one number"},
+		"a list":          {`{"name":"Acme","token_budget":[1,2]}`, "must be a mapping"},
+		"a seat's number": {`{"name":"Acme","roles":[{"name":"CEO","token_budget":10}]}`, "not one number"},
+		"a window's word": {`{"name":"Acme","token_budget":{"day":"many"}}`, "token_budget.day must be a whole number"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			_, err := config.DecodeCompany([]byte(tc.doc))
+			if err == nil {
+				t.Fatalf("%s decoded", tc.doc)
+			}
+			if !strings.Contains(err.Error(), tc.says) {
+				t.Errorf("refusal = %q, want it to say %q", err, tc.says)
+			}
+		})
+	}
+
+	got, err := config.DecodeSettings([]byte(
+		`{"name":"Acme","token_budget":{"month":40000000,"fortnight":3}}`))
+	if err != nil {
+		t.Fatalf("a window a newer build wrote failed the revision: %v", err)
+	}
+	if want := (org.TokenCeilings{period.Month: 40000000}); !maps.Equal(got.TokenBudget.Ceilings(), want) {
+		t.Errorf("token_budget = %v, want %v", got.TokenBudget.Ceilings(), want)
 	}
 }
 
@@ -270,9 +327,27 @@ func TestEverySettingOfAnAuthoredFileReachesTheSettings(t *testing.T) {
 		t.Errorf("%d llm providers, want %d",
 			len(settings.Providers.LLM), len(company.Providers.LLM))
 	}
-	if settings.TokenBudget != company.TokenBudget {
-		t.Errorf("token budget = %d, want %d",
-			settings.TokenBudget, company.TokenBudget)
+	if settings.Timezone != company.Timezone || settings.Timezone == "" {
+		t.Errorf("timezone = %q, want %q — the company's one clock, which "+
+			"every day boundary the engine cuts is on",
+			settings.Timezone, company.Timezone)
+	}
+	if got, want := settings.TokenBudget.Ceilings(), company.TokenBudget.Ceilings(); len(want) == 0 ||
+		!maps.Equal(got, want) {
+		t.Errorf("token budget = %v, want %v", got, want)
+	}
+	// A COPY, NOT A VIEW: the ceilings are pointers, and an edit of the
+	// settings an import stores must not move the file it was divided from.
+	for _, ceiling := range []**int{
+		&settings.TokenBudget.Day, &settings.TokenBudget.Week, &settings.TokenBudget.Month,
+	} {
+		if *ceiling != nil {
+			**ceiling++
+		}
+	}
+	if maps.Equal(settings.TokenBudget.Ceilings(), company.TokenBudget.Ceilings()) {
+		t.Error("the settings share their token budget's ceilings with the file " +
+			"they were divided from")
 	}
 
 	// NIL IN, NIL OUT, because a caller that held no company must not be

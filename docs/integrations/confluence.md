@@ -19,11 +19,12 @@ Crewlet integrates with Confluence bidirectionally: agents read and write Conflu
 
 ## Setting it up from the dashboard
 
-The Integrations screen collects the site address, the account email and the
-API token, generates whichever webhook credential your deployment needs (a
-signing secret for Data Center, a shared token for Cloud), and then **Run
-setup** registers the hooks: the same pass `crewlet confluence provision`
-runs. It appears under Atlassian, beside Jira.
+**Connect** on the Atlassian tile in Settings › Integrations collects the
+site address, the account email and the API token and generates whichever
+webhook credential your deployment needs (a signing secret for Data Center, a
+shared token for Cloud); the reconcile loop then registers the hooks on its
+next tick, running the same pass `crewlet confluence provision` runs. It
+appears under Atlassian, beside Jira.
 
 See [Running the provisioning pass](../reference/api-endpoints.md#running-the-provisioning-pass).
 
@@ -365,7 +366,7 @@ as a single question per event ("which of my seats is subscribed to this
 page?"), so the cost does not grow with a page's history.
 
 A seat is on the list by the handle it was **created** under (see
-[ADR-0019](https://github.com/crewlet/crewlet/blob/main/adr/0019-a-seats-identity-is-derived-from-the-handle-it-was-created-under.md)),
+[ADR-0026](https://github.com/crewlet/crewlet/blob/main/adr/0026-a-seats-identity-is-derived-from-the-handle-it-was-created-under.md)),
 never the one it answers to now, and it is woken under its current handle. A
 subscription is the seat's own memory of a page, so renaming `swe` to
 `platform-swe` keeps every page it touched: keyed on the address, the rename

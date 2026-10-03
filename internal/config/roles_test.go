@@ -1,10 +1,12 @@
 package config
 
 import (
+	"maps"
 	"slices"
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/org"
+	"github.com/crewlet/crewlet/internal/period"
 )
 
 // A field that takes a scalar OR a list gets a named type with its own
@@ -114,7 +116,7 @@ roles:
     email: swe@example.com
     goal: ship
     manages: [junior]
-    token_budget: 1000
+    token_budget: {day: 1000, month: 20000}
     mcp_env:
       gitlab:
         GITLAB_TOKEN: "${GL_SWE}"
@@ -160,6 +162,11 @@ roles:
 	}
 	if seat.MCPEnv["gitlab"]["GITLAB_TOKEN"] != "${GL_SWE}" {
 		t.Fatalf("mcp_env = %v", seat.MCPEnv)
+	}
+	// The windows the seat names and ONLY those: an absent week is no
+	// weekly ceiling, never a ceiling of 0.
+	if want := (org.TokenCeilings{period.Day: 1000, period.Month: 20000}); !maps.Equal(seat.TokenBudget, want) {
+		t.Fatalf("token_budget = %v, want %v", seat.TokenBudget, want)
 	}
 }
 
@@ -450,5 +457,35 @@ integrations:
 		if ref.Setting == RouteToSetting {
 			t.Errorf("route_to: none was resolved as a seat reference: %+v", ref)
 		}
+	}
+}
+
+// READING THE ORG DOES NOT REWRITE THE DOCUMENT IT WAS READ FROM.
+//
+// Organization builds a seat from the authored role and normalises it in
+// place. The contact rode along as the SAME pointer, so every read rewrote the
+// document's contact — padded and mixed-case ids trimmed and lowercased under
+// the reader — and two reads at once raced on it. The chart view holds the
+// same rule over its rows ([org.FromRows]).
+func TestReadingTheOrgLeavesTheAuthoredContactAlone(t *testing.T) {
+	t.Parallel()
+	c, err := ParseCompany([]byte("name: Acme\nroles:\n  - name: Sarah\n    kind: human\n" +
+		"    contact: {github_login: \" SarahDev \"}\n"))
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	o, err := c.Organization()
+	if err != nil {
+		t.Fatalf("organization: %v", err)
+	}
+	var got string
+	for role := range o.AllRoles() {
+		got = role.Contact.GitHubLogin
+	}
+	if got != "sarahdev" {
+		t.Errorf("the seat's login = %q, want it normalised", got)
+	}
+	if authored := c.Roles[0].Contact.GitHubLogin; authored != " SarahDev " {
+		t.Errorf("the authored login = %q: reading the org rewrote the document", authored)
 	}
 }

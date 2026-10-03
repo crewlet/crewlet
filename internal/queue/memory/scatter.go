@@ -36,6 +36,10 @@ func (q *Queue) Serve(_ context.Context, subject string, h queue.AnswerFunc) (qu
 		q.broker.mu.Unlock()
 		return nil, ErrNotStarted
 	}
+	if q.broker.down {
+		q.broker.mu.Unlock()
+		return nil, ErrBrokerDown
+	}
 	q.broker.servers = append(q.broker.servers, sub)
 	q.broker.mu.Unlock()
 	log.Debug("scatter_server_added", "subject", subject)
@@ -77,6 +81,12 @@ func (q *Queue) Ask(ctx context.Context, subject string, request []byte, want in
 	if q.notStartedLocked() {
 		q.broker.mu.Unlock()
 		return nil, ErrNotStarted
+	}
+	if q.broker.down {
+		// REFUSED, as the real backend refuses a request it cannot send
+		// rather than buffering it — see [queue.EventQueue.Ask].
+		q.broker.mu.Unlock()
+		return nil, ErrBrokerDown
 	}
 	servers := make([]*serveSub, 0, len(q.broker.servers))
 	for _, s := range q.broker.servers {
@@ -156,5 +166,16 @@ func (s *serveSub) call(ctx context.Context, request []byte) (reply []byte, err 
 			err = fmt.Errorf("memory: scatter answerer on %s panicked: %v", s.subject, r)
 		}
 	}()
-	return s.answer(ctx, request)
+	reply, err = s.answer(ctx, request)
+	if err == nil && len(reply) > queue.MaxPayloadBytes {
+		// A REPLY OVER THE CEILING NEVER ARRIVES, which is what the real
+		// broker does with one: the client refuses to publish it and the
+		// asker sees an answerer that did not answer. Delivering it here
+		// would certify an answerer whose every large reply is lost in
+		// production — the ceiling is a CONTRACT number precisely so a
+		// payload this twin accepts is one the broker accepts.
+		return nil, fmt.Errorf("memory: reply on %s is %d bytes, over the %d-byte limit: %w",
+			s.subject, len(reply), queue.MaxPayloadBytes, queue.ErrTooLarge)
+	}
+	return reply, err
 }

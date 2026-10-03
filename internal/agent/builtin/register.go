@@ -166,13 +166,14 @@ func Register(reg *tools.Registry, deps Deps) ([]string, error) {
 		{&markOnboarded{onboarding: deps.Onboarding}, deps.Onboarding != nil},
 		{&runSandbox{launcher: deps.Sandbox}, deps.Sandbox != nil},
 		{&loadToolSkill{skills: deps.ToolSkills, events: deps.Events}, deps.ToolSkills != nil},
-		{&searchKnowledge{search: deps.Knowledge}, deps.Knowledge != nil},
+		{&searchKnowledge{search: deps.Knowledge, events: deps.Events}, deps.Knowledge != nil},
 		{&listWorkItems{deps: deps.Work}, deps.Work.Reader != nil},
 		{&getWorkItem{deps: deps.Work}, deps.Work.Reader != nil},
-		{&createWorkItem{deps: deps.Work}, deps.Work.Writer != nil},
+		{&createWorkItem{deps: deps.Work, pages: deps.Pages.Reader}, deps.Work.Writer != nil},
 		{&updateWorkItem{deps: deps.Work},
 			deps.Work.Writer != nil && deps.Work.Reader != nil},
-		{&commentOnWorkItem{deps: deps.Work}, deps.Work.Writer != nil && deps.Work.Reader != nil},
+		{&commentOnWorkItem{deps: deps.Work, pages: deps.Pages.Reader},
+			deps.Work.Writer != nil && deps.Work.Reader != nil},
 		// AND THE FOLD, which is a seat's for the reason the trash is
 		// not: it leaves the item where it was, cancelled and linked, so
 		// there is no absence for anybody to miss — and a seat can
@@ -208,7 +209,7 @@ func Register(reg *tools.Registry, deps Deps) ([]string, error) {
 		{&taskActivity{deps: deps.Work}, feedReads(deps.Work)},
 		{&myWork{deps: deps.Work}, feedReads(deps.Work)},
 		{&listPages{deps: deps.Pages}, deps.Pages.Reader != nil},
-		{&getPage{deps: deps.Pages}, deps.Pages.Reader != nil},
+		{&getPage{deps: deps.Pages, events: deps.Events}, deps.Pages.Reader != nil},
 		{&writePage{deps: deps.Pages}, deps.Pages.Writer != nil},
 		{&savePage{deps: deps.Pages}, deps.Pages.Writer != nil && deps.Pages.Reader != nil},
 		{&commentOnPage{deps: deps.Pages}, deps.Pages.Writer != nil && deps.Pages.Reader != nil},
@@ -446,6 +447,18 @@ func annotationsFor(name string) tools.Annotations {
 			ReadOnly: mcp.No, Destructive: mcp.No,
 			Idempotent: mcp.Yes, OpenWorld: mcp.Yes,
 		}
+	case tracker.PlaceWorkItemTool:
+		// A WRITE EVERYBODY SEES — the board is shared, and a lane change
+		// is a status change the item's people are woken about — so
+		// OpenWorld is Yes and [mcp.WritesToSharedSurface] reads true.
+		// Not destructive: nothing is lost that dragging the card back
+		// does not restore. And IDEMPOTENT: the same drop again finds the
+		// card already between its neighbours and in its lane, and writes
+		// nothing.
+		return tools.Annotations{
+			ReadOnly: mcp.No, Destructive: mcp.No,
+			Idempotent: mcp.Yes, OpenWorld: mcp.Yes,
+		}
 	case CreateWorkItemTool:
 		// A write everybody in the company sees, so OpenWorld is Yes and
 		// [mcp.WritesToSharedSurface] reads true — which keeps it away
@@ -481,6 +494,46 @@ func annotationsFor(name string) tools.Annotations {
 		// exactly the distinction Destructive draws — reversible, not
 		// harmless.
 		return tools.Annotations{ReadOnly: mcp.No, Destructive: mcp.Yes, OpenWorld: mcp.Yes}
+	case AnswerKnowledgeTool:
+		// A READ THAT SPENDS, declared a write for that reason: every call
+		// that misses the cache is a model call charged to the company, so
+		// it is NOT read-only (which is also what keeps the dashboard from
+		// refetching it on focus) and NOT idempotent (a second call after
+		// the corpus moved spends again). It writes nothing anybody reads,
+		// so OpenWorld is explicitly No, and it destroys nothing.
+		return tools.Annotations{
+			ReadOnly: mcp.No, Destructive: mcp.No, Idempotent: mcp.No, OpenWorld: mcp.No,
+		}
+	case AnswerRunTool:
+		// A WRITE SOMEBODY ELSE ACTS ON: the answer resumes a seat's
+		// coding run, whose next moves reach the company, so OpenWorld
+		// is Yes. Not destructive — it supplies what a run asked for and
+		// replaces nothing — and NOT idempotent: a second call with other
+		// words is a second answer, which the run declines once the first
+		// has resumed it, and the annotation describes the tool rather
+		// than the engine's protection.
+		return tools.Annotations{ReadOnly: mcp.No, Destructive: mcp.No, OpenWorld: mcp.Yes}
+	case PauseSeatTool:
+		// DESTRUCTIVE, because `stop_running` ends a turn mid-flight and the
+		// turn is not run again — what it had not yet done is lost. Otherwise
+		// reversible, and IDEMPOTENT: a second pause of a paused seat changes
+		// nothing. Closed-world: it changes whether one of the company's own
+		// seats works, and reaches nothing outside the engine.
+		return tools.Annotations{ReadOnly: mcp.No, Destructive: mcp.Yes,
+			Idempotent: mcp.Yes, OpenWorld: mcp.No}
+	case SteerTurnTool:
+		// A WRITE SOMEBODY ELSE ACTS ON, like answer_run: the note changes
+		// what a running turn does next, and its next moves reach the
+		// company, so OpenWorld is Yes. Not destructive — it replaces
+		// nothing — and NOT idempotent as a tool: a second call with other
+		// words is a second note. A retry of ONE request is collapsed by
+		// the box, which is the engine's protection, not the tool's shape.
+		return tools.Annotations{ReadOnly: mcp.No, Destructive: mcp.No, OpenWorld: mcp.Yes}
+	case ResumeSeatTool:
+		// Not destructive: the held mail is delivered, nothing is lost.
+		// Idempotent: resuming a seat that is not paused changes nothing.
+		return tools.Annotations{ReadOnly: mcp.No, Destructive: mcp.No,
+			Idempotent: mcp.Yes, OpenWorld: mcp.No}
 	case RefineSkillTool:
 		// It replaces a body. The prior version is archived, so this is
 		// reversible — which is exactly what Destructive asks about. The
@@ -554,7 +607,7 @@ func feedReads(deps WorkDeps) bool {
 // both — so it belongs in one switch rather than on a method every tool would
 // have to remember to write. What made it worth exporting is that both surfaces
 // the engine serves published every tool with a name, a description and a
-// schema and nothing else: [internal/api/opsmcp] hands a company's whole
+// schema and nothing else: [internal/api/operator] hands a company's whole
 // tracker to an operator's own assistant, and [internal/api/mcpbridge] hands a
 // seat's tools to a sandboxed coding agent, and neither client could tell a
 // read from an irreversible write. The registry has carried these hints the

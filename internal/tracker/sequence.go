@@ -16,13 +16,15 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/crewlet/crewlet/internal/coord"
+	"github.com/crewlet/crewlet/internal/seatnames"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/statelog/metrics"
 )
 
-// The FIVE sequences that stay genuinely cross-object — a create (1), a
-// cross-project move (7), a merge (13) and a bulk edit (26) here, and a
-// dependency in depend.go — and the one property that makes them tolerable.
+// The SIX sequences that stay genuinely cross-object — a create (1), a
+// cross-project move (7), a merge (13) and a bulk edit (26) here, a dependency
+// in depend.go and a board drag across lanes in place.go — and the one
+// property that makes them tolerable.
 //
 // # Why a multi-append sequence is not a transaction, and must not pretend
 //
@@ -42,7 +44,9 @@ import (
 // second, so a crash leaves a numbering GAP rather than two tasks sharing a
 // key, because a key is what people paste into chat. A cross-project move
 // writes the alias for a key BEFORE it re-keys the task, so a key somebody
-// pasted keeps resolving from the moment it stops being current.
+// pasted keeps resolving from the moment it stops being current. A board drag
+// across lanes (place.go) writes the task's status FIRST, because that is the
+// half the caller's if_match guards.
 //
 // # Every step is a step ON THE LOG
 //
@@ -225,6 +229,15 @@ type WriteResult struct {
 	// a caller handed the key alone acts on the claimant with its next call.
 	KeyCollision bool
 
+	// Assignee is who a create filed the task to: the assignee it named,
+	// else the project's default ([Writer.landsOn]), else empty for
+	// triage. Reported because only the create's own snapshot decides the
+	// second, so a caller answering from the task it SENT would tell
+	// somebody their work went to triage while it sat on a colleague's
+	// queue. Empty on every other path. Shown by the handle the seat
+	// answers to now, like every person a write reports — see people.go.
+	Assignee string `person:"seat"`
+
 	// Applied and Failed are a bulk gesture's per-task outcome. A bulk
 	// write is NOT atomic and never was: Applied is every task whose change
 	// is durable — applied here, or pending — and Failed says, per task,
@@ -284,14 +297,45 @@ type WriteResult struct {
 func (w *Writer) CreateTask(ctx context.Context, opID string, task Task,
 	notify *Notify) (WriteResult, error) {
 
+	return w.createTask(ctx, opID, task, nil, notify)
+}
+
+// CreateTaskAsking is [Writer.CreateTask] for an item filed AS A QUESTION: the
+// task and the ask on it — a [Comment] with `ask` set, and a [Decision] when
+// the question needs somebody to choose — land in ONE record.
+//
+// # Why one record and not a create followed by a comment
+//
+// Because the second append is the one that matters and it is the one a crash
+// loses. Filed as two, a question put through "Ask" or "Message" is a task
+// with nobody asked on it whenever the comment did not land: it wakes its
+// assignee as work rather than as a question, `asked_of_me` never lists it,
+// and the answer — which is what the person was waiting for — has no ask to
+// close. One record is either the whole question or nothing, and it is
+// arbitrated once, on the task's own subject, exactly like the create it is.
+//
+// THE ASK IS THE QUESTION ITSELF, so it answers nothing, replies to nothing
+// and chooses nothing: a task that does not exist yet holds no comment to
+// answer or reply to. The person asked starts following the item, as they do
+// when a comment asks them — see [followAuto].
+func (w *Writer) CreateTaskAsking(ctx context.Context, opID string, task Task,
+	ask Comment, notify *Notify) (WriteResult, error) {
+
+	return w.createTask(ctx, opID, task, &ask, notify)
+}
+
+// createTask is sequence 1, with or without the ask a create may carry.
+func (w *Writer) createTask(ctx context.Context, opID string, task Task,
+	ask *Comment, notify *Notify) (WriteResult, error) {
+
 	// ONE READING OF THE CHART for every name this write resolves and
 	// every name it is worded with — see [Writer.pinned].
 	w = w.pinned()
 	switch {
 	case task.ID == "":
-		return WriteResult{}, fmt.Errorf("tracker: a create names no task id")
+		return WriteResult{}, invalid("a create names no task id")
 	case task.Project == "":
-		return WriteResult{}, fmt.Errorf("tracker: task %s names no project "+
+		return WriteResult{}, invalid("task %s names no project "+
 			"— a task's scope path sits under its project's, so one without a "+
 			"project files its deferral where no project-scoped probe looks",
 			task.ID)
@@ -300,12 +344,26 @@ func (w *Writer) CreateTask(ctx context.Context, opID string, task Task,
 	// assignee, whoever watches it — so the rows are keyed where a rename
 	// cannot move them. See people.go.
 	task = identified(w.chart(), task)
+	if ask != nil {
+		// AND THE QUESTION'S, the person asked included: the ask is
+		// compared with the rows and routed exactly as a comment is.
+		identifiedAsk := identified(w.chart(), *ask)
+		ask = &identifiedAsk
+	}
 	// BEFORE ANY READ, because a cap is a property of the value rather
 	// than of the database: a title past its cap is refused identically
 	// whichever node is asked and whatever the project holds, so paying
 	// for a transaction to say so would buy nothing.
-	if err := checkTextCaps(task.ID, &task.Title, &task.Body, nil); err != nil {
+	if err := checkTextCaps(&task.Title, &task.Body, nil); err != nil {
 		return WriteResult{}, err
+	}
+	if ask != nil {
+		// A VALUE CHECK TOO, and before the mint for the reason the caps
+		// are: a malformed question refused after the counter moved is a
+		// numbering gap nobody asked for.
+		if err := checkCreateAsk(&task, ask); err != nil {
+			return WriteResult{}, err
+		}
 	}
 	// BEFORE THE MINT, because the catalogue check runs inside it. The
 	// other two defaults below cannot: they are applied after the key is
@@ -332,13 +390,13 @@ func (w *Writer) CreateTask(ctx context.Context, opID string, task Task,
 		w.settleCreate(ctx, task, &settled))
 	switch {
 	case errors.Is(err, errMintLanded):
-		return w.resumeCreate(ctx, opID, task, notify)
+		return w.resumeCreate(ctx, opID, task, ask, notify)
 	case minted.Outcome == statelog.OutcomeUnknown && minted.Unvouched:
 		return w.unvouchedCreate(ctx, opID, task, minted)
 	case err != nil:
 		return WriteResult{Result: minted}, err
 	}
-	return w.fileTask(ctx, opID, task, n, settled, notify)
+	return w.fileTask(ctx, opID, task, ask, n, settled, notify)
 }
 
 // unvouchedCreate answers a create whose counter step this node's operation
@@ -397,15 +455,27 @@ func (w *Writer) settleCreate(ctx context.Context, task Task,
 	}
 }
 
-// fileTask is a create's second append, on the key number n its mint took.
-func (w *Writer) fileTask(ctx context.Context, opID string, task Task, n uint64,
-	settled settledCreate, notify *Notify) (WriteResult, error) {
+// fileTask is a create's second append, on the key number n its mint took —
+// carrying ask, the question the task is filed as, where it is one.
+func (w *Writer) fileTask(ctx context.Context, opID string, task Task,
+	ask *Comment, n uint64, settled settledCreate, notify *Notify) (WriteResult, error) {
 
 	if settled.fields != nil {
 		task.Fields = settled.fields
 	}
 	task.FiledUnit, task.RoutingUnit = filedUnit(
 		task.FiledUnit, task.RoutingUnit, settled.unit)
+	if filed := w.landsOn(task, settled.assignee); filed.assignee != task.Assignee {
+		was := task
+		task.Assignee = filed.assignee
+		// THE ASSIGNEE WATCHES WHAT THEY HOLD, whoever named them: the
+		// caller put a named assignee on the watchers, and a default one is
+		// the same person holding the same task.
+		task.Watchers, _ = followAuto(task.Watchers, task.Muted, task.Assignee)
+		notify.filedTo(was, task)
+	} else if filed.warning != "" {
+		settled.warnings = append(settled.warnings, filed.warning)
+	}
 	rank, err := IntegerAt(n)
 	if err != nil {
 		return WriteResult{}, fmt.Errorf("tracker: derive %s-%d's rank from the "+
@@ -423,7 +493,12 @@ func (w *Writer) fileTask(ctx context.Context, opID string, task Task, n uint64,
 		task.Priority = PriorityNone
 	}
 
-	result, err := w.writeTask(ctx, stepID(opID, "task"), task, notify, at)
+	if ask != nil {
+		// THE TASK'S OWN INSTANT, so the question is not older than the
+		// item it was filed on.
+		ask.CreatedAt = at
+	}
+	result, err := w.writeTask(ctx, stepID(opID, "task"), task, ask, notify, at)
 	if err == nil && result.Collapsed {
 		// THE TASK STEP LANDED UNDER AN EARLIER COPY of this operation —
 		// found once a fresh mint's append met it on the task's subject
@@ -432,6 +507,7 @@ func (w *Writer) fileTask(ctx context.Context, opID string, task Task, n uint64,
 		return w.landedTask(ctx, result.Result, task.ID)
 	}
 	result.Key, result.Rank = task.Key, task.Rank
+	result.Assignee = seatnames.CurrentOf(w.chart(), task.Assignee)
 	result.Warnings = append(result.Warnings, settled.warnings...)
 	return result, err
 }
@@ -456,7 +532,7 @@ func (w *Writer) fileTask(ctx context.Context, opID string, task Task, n uint64,
 // task's own subject, is refused its expectation of zero, and is answered
 // from the ledger once this node catches up ([Writer.fileTask]).
 func (w *Writer) resumeCreate(ctx context.Context, opID string, task Task,
-	notify *Notify) (WriteResult, error) {
+	ask *Comment, notify *Notify) (WriteResult, error) {
 
 	subject := TaskSubject(task.ID)
 	scope := ScopeSet{Subject: true, Container: task.Project}
@@ -487,7 +563,7 @@ func (w *Writer) resumeCreate(ctx context.Context, opID string, task Task,
 	if err != nil {
 		return WriteResult{Result: minted}, err
 	}
-	return w.fileTask(ctx, opID, task, n, settled, notify)
+	return w.fileTask(ctx, opID, task, ask, n, settled, notify)
 }
 
 // errTaskNotApplied is a resumed create's task step finding no ledger row to
@@ -529,7 +605,12 @@ func (w *Writer) landedTask(ctx context.Context, result statelog.Result,
 			"earlier copy of this operation and is no longer on this node", id))
 		return out, nil
 	}
+	// AND WHO HOLDS IT, as a create's own answer does ([WriteResult.Assignee]):
+	// the retry is told where the work sits, never the assignee it SENT —
+	// by the handle the seat answers to now, since the row holds its
+	// identity.
 	out.Key, out.Rank, out.KeyCollision = task.Key, task.Rank, collision
+	out.Assignee = seatnames.CurrentOf(w.chart(), task.Assignee)
 	return out, nil
 }
 
@@ -576,16 +657,131 @@ func filedUnit(stated, routed, project string) (filed, routing string) {
 	return filed, routing
 }
 
+// landing is who a new task is filed to, and what the caller is told about it.
+type landing struct {
+	assignee string
+	warning  string
+}
+
+// landsOn is who a new task is assigned to.
+//
+// THE PROJECT'S DEFAULT ASSIGNEE WHEN THE WRITER NAMED NOBODY, because that is
+// what the setting is: `write_project` has taken a `default_assignee` — "who
+// unassigned work lands on" — and resolved it against the chart since the
+// lead's policy verb shipped, the project read has served it, and the
+// dashboard's New task sheet says under an empty Assignee field that the task
+// goes to them. Nothing ever applied it. Every task filed without an assignee
+// landed in triage whatever the lead had set, which is a rule a lead set that
+// nothing applied and nothing said was not applying.
+//
+// HERE, IN THE CREATE'S OWN SNAPSHOT, beside [filedUnit] and for its reason:
+// the project row is what this decide already reads (it refuses an archived
+// project and checks the types, the tags and the required fields on it), so
+// the default is the one the create was DECIDED against rather than one a
+// caller read in another transaction — and every surface that files work gets
+// the same answer without knowing the rule.
+//
+// A NAMED ASSIGNEE IS LEFT ALONE, and so is an empty default, which is the
+// project's own setting for triage.
+//
+// A DEFAULT THAT NO LONGER NAMES A SEAT IS NOT APPLIED. It was resolved when
+// the lead set it, and a chart apply that removes the seat does not rewrite
+// the project: a task filed to that handle would wake nobody and sit on
+// nobody's queue, which is triage with the lead left out. So the task lands
+// in triage — where the lead IS told — and the writer is warned, naming the
+// setting to change. The chart is asked through [Writer.World], the seam the
+// people fields already resolve through, and it must answer with the SAME
+// handle: its resolver is the colleague match, whose later tiers would
+// happily turn a departed `ana` into a present `anabel`. With no chart seam
+// the stored handle is trusted as set — it was checked at the write that
+// stored it.
+func (w *Writer) landsOn(task Task, projectDefault string) landing {
+	if task.Assignee != "" || projectDefault == "" {
+		return landing{assignee: task.Assignee}
+	}
+	// ASKED BY IDENTITY: the stored default is the seat's identity (see
+	// people.go), and [Writer.fieldWorld] answers one, so a renamed seat
+	// still matches itself. The bare world answers the CURRENT handle, and
+	// compared with the identity it read every renamed default as gone.
+	if world := w.fieldWorld(); world != nil {
+		if seat, found := world.ResolveSeat(projectDefault); !found || seat != projectDefault {
+			return landing{warning: fmt.Sprintf("%s's default assignee %q is not a seat on "+
+				"the org chart any more, so this task was filed to nobody and "+
+				"lands in triage. The project lead sets another with "+
+				"write_project `default_assignee`.", task.Project,
+				seatnames.CurrentOf(w.chart(), projectDefault))}
+		}
+	}
+	return landing{assignee: projectDefault}
+}
+
+// checkCreateAsk is what the ask a create carries must be, on its own: a
+// question, put to somebody, on this task, answering and replying to nothing.
+// It also puts the person asked on the new task's watchers, which is what an
+// ask does wherever it is written — see [followAuto].
+func checkCreateAsk(task *Task, ask *Comment) error {
+	switch {
+	case ask.ID == "":
+		return invalid("the ask filed with task %s names no comment "+
+			"id — the id is the row's key on every node, so it is derived by "+
+			"the writer rather than minted at apply", task.ID)
+	case ask.Ask == "":
+		return invalid("the comment filed with task %s asks nobody — "+
+			"a create carries a comment only as the question it was filed as",
+			task.ID)
+	case ask.Answers != nil, ask.Choice != "", ask.ReplyTo != nil:
+		return invalid("the ask filed with task %s answers or replies "+
+			"to a comment, and a task that does not exist yet has none", task.ID)
+	case ask.Task != "" && ask.Task != task.ID:
+		return invalid("the ask filed with task %s names task %s",
+			task.ID, ask.Task)
+	}
+	ask.Task = task.ID
+	if err := checkTextCaps(nil, nil, &ask.Body); err != nil {
+		return err
+	}
+	if err := checkCommentShape(task.ID, ask); err != nil {
+		return err
+	}
+	if watchers, ok := followAuto(task.Watchers, task.Muted, ask.Ask); ok {
+		task.Watchers = watchers
+	}
+	return nil
+}
+
+// TaskCreate is a create record's payload: the whole task, and the question it
+// was filed as when it was filed as one.
+//
+// THE TASK IS EMBEDDED, so a create without an ask encodes to exactly the
+// bytes it always did and every reader that decodes the payload as a [Task]
+// still reads the task. The comment is a row of its own on apply — never part
+// of the task document — which is why it rides beside the task rather than on
+// it.
+type TaskCreate struct {
+	Task
+	Comment *Comment `json:"comment,omitempty"`
+
+	// Origin is the chat surface and conversation the filing turn was woken
+	// on — see [Origin]. Stated by the writer from its provenance
+	// ([Writer.Origin]); absent for a create nothing on a chat surface
+	// caused.
+	Origin *Origin `json:"origin,omitempty"`
+}
+
 // writeTask is sequence 1's second append: a whole task at expectation zero,
-// guarded by its own row.
+// guarded by its own row — carrying the ask the task was filed as, where it is
+// one.
 func (w *Writer) writeTask(ctx context.Context, opID string, task Task,
-	notify *Notify, at time.Time) (WriteResult, error) {
+	ask *Comment, notify *Notify, at time.Time) (WriteResult, error) {
 
 	subject := TaskSubject(task.ID)
 	scope := ScopeSet{Subject: true, Container: task.Project}
 	// WHETHER THE KEY THIS CREATE TOOK IS ANOTHER TASK'S, from the snapshot
 	// the last round decided in — the round whose record was published.
 	var collision bool
+	// THE KEY THIS WRITE MINTED goes on the wake it publishes: the caller
+	// built the wake from a task that had none yet (see [Notify.keyed]).
+	notify.keyed(task.Key)
 	result, err := w.publish(ctx, statelog.Request{
 		Subject: wire(subject),
 		Scope:   scope.Resolve(subject),
@@ -612,7 +808,7 @@ func (w *Writer) writeTask(ctx context.Context, opID string, task Task,
 			}
 			collision = held
 			return w.decide(ctx, tx, stamp, subject, OpCreate, ChangeCreated, scope, opID,
-				task, notify, at)
+				TaskCreate{Task: task, Comment: ask, Origin: w.origin()}, notify, at)
 		},
 	})
 	return WriteResult{
@@ -638,7 +834,7 @@ func (w *Writer) mintKey(ctx context.Context, opID, project string, k int,
 	guard func(*sql.Tx) error) (uint64, statelog.Result, error) {
 
 	if k < 1 {
-		return 0, statelog.Result{}, fmt.Errorf("tracker: a key mint takes %d "+
+		return 0, statelog.Result{}, invalid("a key mint takes %d "+
 			"numbers, and a mint of none moves the counter for nothing", k)
 	}
 	subject := CounterSubject(project)
@@ -783,6 +979,11 @@ type settledCreate struct {
 	// which is honest rather than a default, and is what a company with a
 	// root-level project has.
 	unit string
+
+	// assignee is the project's DEFAULT ASSIGNEE, which a task that names
+	// nobody is filed to — see [landsOn]. Empty is the project's own
+	// setting for triage.
+	assignee string
 }
 
 // refuseCreate is what sequence 1 reads the project and its catalogues for.
@@ -795,7 +996,8 @@ type settledCreate struct {
 //
 // The project's own UNIT rides back out for the same reason and on the same
 // row it already reads: see [filedUnit] for why the derivation belongs at the
-// write rather than at whichever caller happened to know its filer's team.
+// write rather than at whichever caller happened to know its filer's team. So
+// does its DEFAULT ASSIGNEE, for [landsOn]'s.
 func (w *Writer) refuseCreate(ctx context.Context, tx *sql.Tx, task Task) (
 	settledCreate, error) {
 
@@ -807,7 +1009,7 @@ func (w *Writer) refuseCreate(ctx context.Context, tx *sql.Tx, task Task) (
 		return settledCreate{}, fmt.Errorf("tracker: project %s is not on this "+
 			"node: %w", task.Project, statelog.ErrUnavailable)
 	case project.Archived:
-		return settledCreate{}, fmt.Errorf("tracker: project %s is archived, so "+
+		return settledCreate{}, invalid("project %s is archived, so "+
 			"it takes no new work; unarchive it first", task.Project)
 	}
 	if task.Parent != nil && *task.Parent != "" {
@@ -825,11 +1027,12 @@ func (w *Writer) refuseCreate(ctx context.Context, tx *sql.Tx, task Task) (
 		return settledCreate{}, err
 	}
 	fields, warnings, err := settleFields(ctx, tx, task.Project, task.Type,
-		task.Fields, w.fieldWorld())
+		task.Fields, w.fieldWorld(), w.zone())
 	if err != nil {
 		return settledCreate{}, err
 	}
-	return settledCreate{fields: fields, warnings: warnings, unit: project.Unit}, nil
+	return settledCreate{fields: fields, warnings: warnings, unit: project.Unit,
+		assignee: project.DefaultAssignee}, nil
 }
 
 // refuseParent refuses a parent a task cannot be filed under.
@@ -897,7 +1100,7 @@ func refuseParent(ctx context.Context, tx *sql.Tx, task Task, parentID string) e
 	case !held:
 		return absentTask(ctx, tx, parentID, "parent task")
 	case parent.Removed != nil:
-		return fmt.Errorf("tracker: parent task %s (%s) was removed by %s at "+
+		return invalid("parent task %s (%s) was removed by %s at "+
 			"%s; restore it before filing anything under it", parent.Key,
 			parent.ID, parent.Removed.By, parent.Removed.At.Format(time.RFC3339))
 	}
@@ -906,7 +1109,7 @@ func refuseParent(ctx context.Context, tx *sql.Tx, task Task, parentID string) e
 		return err
 	}
 	if parent.Project != task.Project {
-		return fmt.Errorf("tracker: task %s is filed under %s and its parent "+
+		return invalid("task %s is filed under %s and its parent "+
 			"%s under %s — a subtask lives in its parent's project, which is "+
 			"%s", task.ID, task.Project, parent.Key, parent.Project,
 			parent.Project)
@@ -916,7 +1119,7 @@ func refuseParent(ctx context.Context, tx *sql.Tx, task Task, parentID string) e
 	case err != nil:
 		return err
 	case under:
-		return fmt.Errorf("tracker: task %s cannot be filed under %s (%s), "+
+		return invalid("task %s cannot be filed under %s (%s), "+
 			"which is itself or one of its own subtasks — the parent chain "+
 			"would be a cycle with no root for a board to draw it from",
 			task.ID, parent.Key, parentID)
@@ -1073,8 +1276,10 @@ func absentTask(ctx context.Context, tx *sql.Tx, id, role string) error {
 		return fmt.Errorf("tracker: %s %s is not on this node: %w", role, id,
 			statelog.ErrUnavailable)
 	}
-	return fmt.Errorf("tracker: %s %s (%s) was purged, and a purge is "+
-		"permanent — name another task", role, key, id)
+	// A REFUSAL ON WHAT WAS ASKED, and marked as one ([ErrInvalid]): left
+	// unmarked it read as the node's own failure, which a caller retries.
+	return invalid("%s %s (%s) was purged, and a purge is permanent — name "+
+		"another task", role, key, id)
 }
 
 // purgedTask reads a task's deletion marker: the key it held, and whether a
@@ -1113,7 +1318,7 @@ func declaredType(ctx context.Context, tx *sql.Tx, task Task) error {
 	for _, t := range EffectiveTypes(catalogue.Types) {
 		if t.Archived {
 			if t.Slug == task.Type {
-				return fmt.Errorf("tracker: task type %q is archived, so no new "+
+				return invalid("task type %q is archived, so no new "+
 					"work is filed under it — the tasks already under it keep "+
 					"it", task.Type)
 			}
@@ -1125,7 +1330,7 @@ func declaredType(ctx context.Context, tx *sql.Tx, task Task) error {
 		live = append(live, t.Slug)
 	}
 	sort.Strings(live)
-	return fmt.Errorf("tracker: %q is not a task type this company declares — "+
+	return invalid("%q is not a task type this company declares — "+
 		"the types are %v, and a new one is declared in the workspace "+
 		"catalogue rather than invented at the create", task.Type, live)
 }
@@ -1177,7 +1382,7 @@ func requiredFields(ctx context.Context, tx *sql.Tx, project Project, task Task)
 		return nil
 	}
 	sort.Strings(missing)
-	return fmt.Errorf("tracker: a %s in project %s requires %v, which this task "+
+	return invalid("a %s in project %s requires %v, which this task "+
 		"does not set", task.Type, project.Key, missing)
 }
 
@@ -1497,9 +1702,9 @@ func (w *Writer) MoveTaskToProject(ctx context.Context, opID, taskID, target str
 
 	switch {
 	case taskID == "":
-		return WriteResult{}, fmt.Errorf("tracker: a cross-project move names no task")
+		return WriteResult{}, invalid("a cross-project move names no task")
 	case target == "":
-		return WriteResult{}, fmt.Errorf("tracker: a cross-project move names no project")
+		return WriteResult{}, invalid("a cross-project move names no project")
 	}
 	claim, err := w.hold(ctx, moveClaim(taskID))
 	if err != nil {
@@ -1533,12 +1738,13 @@ func (w *Writer) MoveTaskToProject(ctx context.Context, opID, taskID, target str
 			return fmt.Errorf("tracker: task %s is not on this node: %w",
 				taskID, statelog.ErrUnavailable)
 		case current.Parent != nil && *current.Parent != "":
-			return fmt.Errorf("tracker: task %s has a parent, and only a ROOT "+
+			return invalid("task %s has a parent, and only a ROOT "+
 				"task moves between projects — moving a subtask alone would "+
 				"leave it in a project its parent is not in", taskID)
 		case current.Removed != nil:
-			return fmt.Errorf("tracker: task %s was removed by %s at %s; "+
-				"restore it before moving it", taskID, current.Removed.By,
+			return invalid("task %s was removed by %s at %s; "+
+				"restore it before moving it", taskID,
+				seatnames.CurrentOf(w.chart(), current.Removed.By),
 				current.Removed.At.Format(time.RFC3339))
 		}
 		root = current
@@ -1561,7 +1767,7 @@ func (w *Writer) MoveTaskToProject(ctx context.Context, opID, taskID, target str
 			return fmt.Errorf("tracker: project %s is not on this node: %w",
 				target, statelog.ErrUnavailable)
 		case project.Archived:
-			return fmt.Errorf("tracker: project %s is archived, so nothing "+
+			return invalid("project %s is archived, so nothing "+
 				"moves into it", target)
 		}
 		//nolint:govet // shadow: scoped to this block; see .golangci.yml
@@ -1573,7 +1779,7 @@ func (w *Writer) MoveTaskToProject(ctx context.Context, opID, taskID, target str
 		}
 		for _, descendant := range subtree {
 			if descendant.Removed != nil {
-				return fmt.Errorf("tracker: task %s under %s is in the trash, "+
+				return invalid("task %s under %s is in the trash, "+
 					"and a removed task is frozen, so the move could not carry "+
 					"it and would leave it in %s under a root in %s — restore "+
 					"it or purge it, then move again", descendant.ID, taskID,
@@ -1590,7 +1796,7 @@ func (w *Writer) MoveTaskToProject(ctx context.Context, opID, taskID, target str
 		return w.finishMove(ctx, opID, root, rootCollision, target, subtree)
 	}
 	if len(subtree) > MaxDescendants {
-		return WriteResult{}, fmt.Errorf("tracker: task %s has %d descendants "+
+		return WriteResult{}, invalid("task %s has %d descendants "+
 			"and a move carries at most %d", taskID, len(subtree), MaxDescendants)
 	}
 
@@ -1663,7 +1869,7 @@ func (w *Writer) MoveTaskToProject(ctx context.Context, opID, taskID, target str
 			// descendants are on subjects of their own — so the last of
 			// them, and never only the root's position, is what this
 			// append has to see. See [Writer.After].
-			err = w.After(laterOf(result.Position, last)).endMove(ctx, opID,
+			err = w.After(statelog.Later(result.Position, last)).endMove(ctx, opID,
 				taskID, target)
 			if errors.Is(err, errUncarried) {
 				// A TASK FILED BEHIND THE WALK, which this node has
@@ -1716,7 +1922,7 @@ func (w *Writer) finishMove(ctx context.Context, opID string, root Task,
 		OpID:    stepID(opID, "root"),
 		Pattern: statelog.PatternArbitrated,
 		Decide: func(*sql.Tx, statelog.Stamp) (statelog.Decision, error) {
-			return statelog.Decision{}, fmt.Errorf("tracker: task %s is already "+
+			return statelog.Decision{}, invalid("task %s is already "+
 				"in %s, and this node's operation ledger holds no record of "+
 				"this move putting it there", root.ID, target)
 		},
@@ -1905,9 +2111,9 @@ func (w *Writer) followRoot(ctx context.Context, opID string, root Task,
 			Err: err}
 	}
 	if len(left) > MaxDescendants {
-		return stop(carried, "", fmt.Errorf("tracker: task %s has %d "+
-			"descendants still to move and a move carries at most %d", root.ID,
-			len(left), MaxDescendants))
+		return stop(carried, "", invalid("task %s has %d descendants still "+
+			"to move and a move carries at most %d", root.ID, len(left),
+			MaxDescendants))
 	}
 	var last statelog.Position
 	if len(left) > 0 {
@@ -1938,11 +2144,11 @@ func (w *Writer) followRoot(ctx context.Context, opID string, root Task,
 	}
 	if len(frozen) > 0 {
 		return stop(carried+len(left), w.addressOf(ctx, frozen[0]),
-			fmt.Errorf("tracker: task %s (%s) under %s is in the trash and "+
-				"still in project %s, and a removed task is frozen — the move "+
-				"waits for it: restore it and the next pass carries it into %s, "+
-				"or purge it", frozen[0].Key, frozen[0].ID, root.ID,
-				frozen[0].Project, root.Project))
+			invalid("task %s (%s) under %s is in the trash and still in "+
+				"project %s, and a removed task is frozen — the move waits for "+
+				"it: restore it and the next pass carries it into %s, or purge "+
+				"it", frozen[0].Key, frozen[0].ID, root.ID, frozen[0].Project,
+				root.Project))
 	}
 	// AFTER WHAT THIS PASS MOVED, for the reason the sequence's own last
 	// append waits: [carriedAll] asks this node's rows whether anything
@@ -2018,7 +2224,7 @@ func (w *Writer) moveDescendants(ctx context.Context, opID, target string,
 			descendant.ID, target), moved, err); err != nil {
 			return i, last, err
 		}
-		last = laterOf(last, moved.Position)
+		last = statelog.Later(last, moved.Position)
 	}
 	return len(descendants), last, nil
 }
@@ -2048,22 +2254,6 @@ func (w *Writer) moveStopped(ctx context.Context, result WriteResult, opID strin
 	}
 	return &MoveStopped{Root: root.ID, Key: key, KeyCollision: collision,
 		Target: target, Followed: followed, Of: of, OpID: opID, Err: err}
-}
-
-// laterOf is the later of two positions on one log, the zero position being
-// earlier than every other — what a step waits for when two of a gesture's
-// appends went to different subjects and either may be the newer.
-func laterOf(a, b statelog.Position) statelog.Position {
-	switch {
-	case a.IsZero():
-		return b
-	case b.IsZero():
-		return a
-	}
-	if before, err := a.Before(b); err == nil && before {
-		return b
-	}
-	return a
 }
 
 // moveOne re-homes one task of a moving subtree, and marks it mid-move when it
@@ -2283,11 +2473,11 @@ func (w *Writer) MergeDuplicates(ctx context.Context, opID, duplicate, into stri
 
 	switch {
 	case duplicate == "":
-		return WriteResult{}, fmt.Errorf("tracker: a merge names no duplicate")
+		return WriteResult{}, invalid("a merge names no duplicate")
 	case into == "":
-		return WriteResult{}, fmt.Errorf("tracker: a merge names no canonical task")
+		return WriteResult{}, invalid("a merge names no canonical task")
 	case duplicate == into:
-		return WriteResult{}, fmt.Errorf("tracker: task %s cannot be a "+
+		return WriteResult{}, invalid("task %s cannot be a "+
 			"duplicate of itself", duplicate)
 	}
 	claim, err := w.hold(ctx, mergeClaim(duplicate))
@@ -2310,9 +2500,10 @@ func (w *Writer) MergeDuplicates(ctx context.Context, opID, duplicate, into stri
 		case !held:
 			return absentTask(ctx, tx, duplicate, "task")
 		case current.Removed != nil:
-			return fmt.Errorf("tracker: task %s was removed by %s at %s; "+
+			return invalid("task %s was removed by %s at %s; "+
 				"restore it before merging it", duplicate,
-				current.Removed.By, current.Removed.At.Format(time.RFC3339))
+				seatnames.CurrentOf(w.chart(), current.Removed.By),
+				current.Removed.At.Format(time.RFC3339))
 		}
 		task = current
 		survivor, held, err := readTask(ctx, tx, into)
@@ -2330,9 +2521,9 @@ func (w *Writer) MergeDuplicates(ctx context.Context, opID, duplicate, into stri
 			// cancelled INTO an item nobody can see, so the one live
 			// copy of the work is closed in favour of one in the trash.
 			// Either way the survivor has to be live first.
-			return fmt.Errorf("tracker: %s (%s) is in the trash — removed "+
-				"by %s at %s; restore it before merging anything into it",
-				survivor.Key, into, survivor.Removed.By,
+			return invalid("%s (%s) is in the trash — removed by %s at "+
+				"%s; restore it before merging anything into it",
+				survivor.Key, into, seatnames.CurrentOf(w.chart(), survivor.Removed.By),
 				survivor.Removed.At.Format(time.RFC3339))
 		case !reparent:
 			return nil
@@ -2346,7 +2537,7 @@ func (w *Writer) MergeDuplicates(ctx context.Context, opID, duplicate, into stri
 		case err != nil:
 			return err
 		case under:
-			return fmt.Errorf("tracker: %s is one of %s's own subtasks, so "+
+			return invalid("%s is one of %s's own subtasks, so "+
 				"the duplicate's subtasks cannot move onto it — one of them "+
 				"would end up under itself. Merge without moving the "+
 				"subtasks to leave them where they are",
@@ -2382,7 +2573,7 @@ func (w *Writer) MergeDuplicates(ctx context.Context, opID, duplicate, into stri
 			// its root clears, and a merge is not a move. Refused
 			// before the first append, naming both ways out, rather
 			// than left for somebody to find.
-			return fmt.Errorf("tracker: task %s's subtasks are in %s and %s is "+
+			return invalid("task %s's subtasks are in %s and %s is "+
 				"in %s, so re-parenting them onto it would file subtasks under "+
 				"an item in another project: move %s into %s first — its "+
 				"subtasks go with it — or merge without re-parenting them: %w",
@@ -2564,13 +2755,13 @@ func (w *Writer) UpdateTasks(ctx context.Context, opID string, ids []string,
 
 	switch {
 	case len(ids) == 0:
-		return WriteResult{}, fmt.Errorf("tracker: a bulk edit names no task")
+		return WriteResult{}, invalid("a bulk edit names no task")
 	case len(ids) > MaxBulkTasks:
-		return WriteResult{}, fmt.Errorf("tracker: a bulk edit names %d tasks "+
+		return WriteResult{}, invalid("a bulk edit names %d tasks "+
 			"and one call carries at most %d — split it, and the second call "+
 			"waits for the first to apply", len(ids), MaxBulkTasks)
 	case project == "":
-		return WriteResult{}, fmt.Errorf("tracker: a bulk edit names no project")
+		return WriteResult{}, invalid("a bulk edit names no project")
 	}
 
 	// DISTINCT SUBJECTS, in the caller's own order. One id named twice is
@@ -2594,7 +2785,7 @@ func (w *Writer) UpdateTasks(ctx context.Context, opID string, ids []string,
 		return WriteResult{}, fmt.Errorf("tracker: encode the bulk patch: %w", err)
 	}
 	if total := len(body) * len(subjects); total > MaxBulkBytes {
-		return WriteResult{}, fmt.Errorf("tracker: this patch over %d tasks "+
+		return WriteResult{}, invalid("this patch over %d tasks "+
 			"writes %d bytes of commits and a bulk edit carries at most %d — "+
 			"the ceiling is on what the batch APPLIES, so a large patch takes "+
 			"fewer tasks per call", len(subjects), total, MaxBulkBytes)

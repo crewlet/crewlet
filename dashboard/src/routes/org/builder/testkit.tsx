@@ -6,8 +6,8 @@
  * asserts is the request that left the page and what the page did with the
  * answer.
  *
- * AND THE LENS'S TIME IS THE SUITE'S ([SuiteClock]). A suite waits for the
- * lens with the `settle` [mountBuilder] hands it — every answer it has out,
+ * AND THE BUILDER'S TIME IS THE SUITE'S ([SuiteClock]). A suite waits for the
+ * builder with the `settle` [mountBuilder] hands it — every answer it has out,
  * every timer due within the check's debounce — rather than polling the page
  * for a sentence with a deadline: the first check after a mount is a read, a
  * render and a second read, and on a loaded runner that took longer than the
@@ -37,6 +37,7 @@ import { Router } from "~/app/router.tsx";
 import { REDACTED } from "~/lib/format.ts";
 import { noteReader } from "~/lib/reader.ts";
 import { ClientContext } from "~/lib/store-hooks.ts";
+import { ViewerProvider } from "~/lib/viewer.ts";
 import {
   LiveSocket,
   Store,
@@ -46,6 +47,7 @@ import {
   type CompanyDocument,
   type ConfigProblem,
   type OrgProjection,
+  type Viewer,
 } from "~/protocol/index.ts";
 import { Builder, type BuilderSurfaces } from "./Builder.tsx";
 import { useBuilder, type ChartKind } from "./BuilderContext.tsx";
@@ -81,13 +83,22 @@ export class InertWebSocket {
 export function asReader(who: () => string): (what: string) => unknown {
   return (what) =>
     what === "viewer"
-      ? { login: who(), grants: [], handle: "", name: "", kind: "", owner: who() }
+      ? ({
+          login: who(),
+          grants: [],
+          handle: "",
+          name: "",
+          kind: "",
+          owner: who(),
+          acts: [],
+          project: "",
+        } satisfies Viewer)
       : null;
 }
 
 /**
- * Has the lens ask who it writes as again, as a reconnect does: the viewer is
- * re-read on every change of connection, which is how a sign-in in another
+ * Has the builder ask who it writes as again, as a reconnect does: the viewer
+ * is re-read on every change of connection, which is how a sign-in in another
  * tab reaches a tab that stayed open.
  */
 export function rereadViewer(store: Store): void {
@@ -281,7 +292,7 @@ export class Engine {
     resolve: () => void;
     reject: (cause: Error) => void;
   }[] = [];
-  /** Whether the case that mounted a lens on this engine has ended ([retire]). */
+  /** Whether the case that mounted a builder on this engine has ended ([retire]). */
   private retired = false;
 
   constructor(company: Company | null, revision = "r1") {
@@ -296,8 +307,8 @@ export class Engine {
    * Resolves once `holds` is true of what has reached the engine — at once if
    * it already is, and otherwise as the request that makes it true arrives.
    *
-   * FOR AN ANSWER THE SUITE IS HOLDING, where [MountedLens.settle] cannot be
-   * used: settle waits for every request the lens has out, and one a script
+   * FOR AN ANSWER THE SUITE IS HOLDING, where [MountedBuilder.settle] cannot be
+   * used: settle waits for every request the builder has out, and one a script
    * holds is out until the suite releases it. This waits for the REQUEST instead, which is
    * an event rather than a deadline.
    *
@@ -306,7 +317,7 @@ export class Engine {
    * `act` holds every render back until its callback resolves, so a case that
    * waited for the request inside `act` waited for itself.
    *
-   * REFUSED ONCE THE CASE HAS ENDED ([Lens.retire]), and a wait already out is
+   * REFUSED ONCE THE CASE HAS ENDED ([Mount.retire]), and a wait already out is
    * ended with it: the request it waits for is now never coming, and the
    * library's wrapper puts back React's act environment only when its wait
    * ends, so one left waiting kept that switch off for the cases after it.
@@ -636,6 +647,7 @@ export class Engine {
             summary: revision.summary,
             source: "api",
             created_by: "operator",
+            created_by_kind: "operator",
             created_at: "2026-09-13T12:00:00Z",
             payload: {},
           })
@@ -700,7 +712,7 @@ export class Engine {
         if (!signal) return answer;
         // ABORTABLE WHILE IT IS OUT, as a browser's fetch is. An answer a
         // script holds would otherwise outlive the request the page gave up
-        // on, and the lens's transport would count it as out for ever.
+        // on, and the builder's transport would count it as out for ever.
         return new Promise<Response>((resolve, reject) => {
           const abort = () => reject(new DOMException("aborted", "AbortError"));
           signal.addEventListener("abort", abort, { once: true });
@@ -880,7 +892,7 @@ export function pressInView(name: string): void {
 
 /** Presses one of the Builder toolbar's own controls, found inside the toolbar. */
 export function pressInToolbar(name: string): void {
-  fireEvent.click(within(lensToolbar()).getByRole("button", { name }));
+  fireEvent.click(within(builderToolbar()).getByRole("button", { name }));
 }
 
 /**
@@ -889,7 +901,7 @@ export function pressInToolbar(name: string): void {
  * Asked for by role INSIDE the banner, which is found by its sentence — a text
  * query, and cheap — and is the nearest element around that sentence holding
  * a button: a banner draws its words and its actions side by side. The whole
- * lens by role was the costliest lookup of the cases that answer a banner.
+ * builder by role was the costliest lookup of the cases that answer a banner.
  */
 export function pressOnBanner(sentence: string | RegExp, name: string): void {
   let banner: HTMLElement | null = screen.getByText(sentence);
@@ -915,7 +927,7 @@ export function FakeCanvas({
   chart: ChartKind;
   chrome?: { controls?: ReactNode; switcher?: ReactNode };
   about?: string | null;
-  /** An add the lens handed the chart to draw itself, rather than opening a dialog. */
+  /** An add the builder handed the chart to draw itself, rather than opening a dialog. */
   adding?: { parent: string | null; kind?: string; opening: number; onClose: () => void } | null;
 }) {
   return (
@@ -933,7 +945,7 @@ export function FakeCanvas({
 }
 
 /**
- * The lens's own surfaces with the two views stood in: the suites exercise
+ * The builder's own surfaces with the two views stood in: the suites exercise
  * the Builder rather than a view, and the dialogs they open are the real ones.
  */
 export const fakeSurfaces: BuilderSurfaces = {
@@ -943,9 +955,9 @@ export const fakeSurfaces: BuilderSurfaces = {
 };
 
 /**
- * THE LENS'S TIME IN A SUITE: it moves when the suite moves it, and never
+ * THE BUILDER'S TIME IN A SUITE: it moves when the suite moves it, and never
  * otherwise. The check's debounce and backoff and the live region's pause all
- * run on the clock the lens is handed (`model/transport.ts`'s [Clock]), so a
+ * run on the clock the builder is handed (`model/transport.ts`'s [Clock]), so a
  * suite that holds this one decides exactly when each falls due — and a case
  * cannot pass or fail on how busy the machine running it is.
  */
@@ -994,7 +1006,7 @@ export class SuiteClock implements Clock {
   }
 }
 
-/** The lens's real transport, counting what it has out so a suite can wait for the answers. */
+/** The builder's real transport, counting what it has out so a suite can wait for the answers. */
 class CountingTransport implements EngineTransport {
   readonly out = new Set<Promise<HttpAnswer>>();
 
@@ -1025,27 +1037,27 @@ class CountingTransport implements EngineTransport {
 }
 
 /**
- * How many rounds [MountedLens.settle] takes before it calls the lens
+ * How many rounds [MountedBuilder.settle] takes before it calls the builder
  * restless. A round is one batch of answers or one timer, and the longest
  * sequence any case drives
  * — a save's read, its writes, the read-back and the check after it — is a
- * dozen; a lens still busy after a hundred is re-arming something for ever,
+ * dozen; a builder still busy after a hundred is re-arming something for ever,
  * which is a defect to report rather than to wait out.
  */
 const SETTLE_ROUNDS = 100;
 
 /**
- * Why a harness wait refused: the case that mounted the lens has ended, and
+ * Why a harness wait refused: the case that mounted the builder has ended, and
  * the code asking is that case still running after it was failed.
  */
 function caseEnded(what: string): Error {
   return new Error(
-    `${what}: the case that mounted this lens has ended — this is that case, still running after its time ran out`,
+    `${what}: the case that mounted this builder has ended — this is that case, still running after its time ran out`,
   );
 }
 
 /**
- * One mounted lens, and the case that mounted it.
+ * One mounted builder, and the case that mounted it.
  *
  * A CASE THAT TIMES OUT IS NOT STOPPED. Vitest fails it and starts the next,
  * but its function is a promise nothing can cancel, and it goes on running
@@ -1057,25 +1069,25 @@ function caseEnded(what: string): Error {
  * One timed-out case turned the rest of its file into "the Builder draws no
  * toolbar".
  *
- * So the lens ENDS WITH ITS CASE ([retire], registered by [mountBuilder]),
+ * So the builder ENDS WITH ITS CASE ([retire], registered by [mountBuilder]),
  * before the next case begins: every wait through it — a settle, a move, a
  * wait for a request — is woken and refuses with [caseEnded], the act scope a
  * settle round holds is closed, and every wait asked of it after that is
  * refused at once.
  *
- * AND A CASE WAITS ONLY ON THE LENS IT MOUNTED, which [mountBuilder] hands it
- * ([MountedLens]). The waits used to find their lens in a variable the last
- * mount wrote, which is the one thing the retirement above cannot reach: a
+ * AND A CASE WAITS ONLY ON THE BUILDER IT MOUNTED, which [mountBuilder] hands
+ * it ([MountedBuilder]). The waits used to find their builder in a variable the
+ * last mount wrote, which is the one thing the retirement above cannot reach: a
  * case that timed out inside a wait of its OWN — a promise the harness never
  * sees — resumes whenever that wait ends, which may be after the next case has
  * mounted, and its next `settle()` read the variable and settled the NEXT
- * case's lens, acting beside that case. Held by the case, the lens it waits on
- * is the one it mounted, retired or not.
+ * case's builder, acting beside that case. Held by the case, the builder it
+ * waits on is the one it mounted, retired or not.
  */
-class Lens {
+class Mount {
   retired = false;
   private finish!: () => void;
-  /** Resolves when the case that mounted the lens has ended. */
+  /** Resolves when the case that mounted the builder has ended. */
   readonly ended = new Promise<void>((resolve) => {
     this.finish = resolve;
   });
@@ -1112,7 +1124,7 @@ class Lens {
   }
 
   /**
-   * Ends the lens with its case: wakes every wait through it and its engine,
+   * Ends the builder with its case: wakes every wait through it and its engine,
    * and returns once the act scope a settle round held is closed.
    */
   async retire(): Promise<void> {
@@ -1124,17 +1136,17 @@ class Lens {
 }
 
 /**
- * Waits until the lens has nothing left in motion, and the page shows it.
+ * Waits until the builder has nothing left in motion, and the page shows it.
  *
  * EVERY ANSWER IT HAS OUT, AND EVERY TIMER DUE WITHIN THE CHECK'S DEBOUNCE.
- * Each round either waits for the requests the lens's transport has out — the
- * company's read, a check, a save's writes — or moves the lens's clock to the
- * next timer that falls due within [CHECK_DEBOUNCE_MS] (the debounce itself,
- * and the live region's pause), and every round runs inside `act`, so what an
- * answer set in motion is rendered before the next round looks. It stops when
- * a round finds neither.
+ * Each round either waits for the requests the builder's transport has out —
+ * the company's read, a check, a save's writes — or moves the builder's clock
+ * to the next timer that falls due within [CHECK_DEBOUNCE_MS] (the debounce
+ * itself, and the live region's pause), and every round runs inside `act`, so
+ * what an answer set in motion is rendered before the next round looks. It
+ * stops when a round finds neither.
  *
- * NO DEADLINE, which is the point. What it waits for is the lens's own work,
+ * NO DEADLINE, which is the point. What it waits for is the builder's own work,
  * so a slow machine makes it slower and never makes it wrong; a case that
  * polled for the toolbar's "No problems" had a second to see it, and on a
  * loaded runner the first check took longer than that.
@@ -1144,47 +1156,47 @@ class Lens {
  * moves the clock there itself ([SuiteClock.advance]) — settling past it
  * would re-ask an engine that keeps failing for ever.
  *
- * NEVER WHILE THE SUITE HOLDS AN ANSWER the lens is waiting for: that request
- * is out until the suite releases it. Wait for the request with
+ * NEVER WHILE THE SUITE HOLDS AN ANSWER the builder is waiting for: that
+ * request is out until the suite releases it. Wait for the request with
  * [Engine.reached] instead.
  *
- * AND NOT ONCE ITS CASE HAS ENDED: see [Lens].
+ * AND NOT ONCE ITS CASE HAS ENDED: see [Mount].
  */
-async function settleLens(lens: Lens): Promise<void> {
+async function settleBuilder(mount: Mount): Promise<void> {
   for (let round = 0; round < SETTLE_ROUNDS; round++) {
-    lens.refuseIfEnded("settle");
-    if (lens.transport.out.size > 0) {
-      const out = [...lens.transport.out];
+    mount.refuseIfEnded("settle");
+    if (mount.transport.out.size > 0) {
+      const out = [...mount.transport.out];
       // OR UNTIL THE CASE ENDS: an answer the case held back is never given
       // once it has, and this scope would stay open beside the next case.
-      await lens.inAct(async () => {
-        await Promise.race([Promise.allSettled(out), lens.ended]);
+      await mount.inAct(async () => {
+        await Promise.race([Promise.allSettled(out), mount.ended]);
       });
       continue;
     }
-    const due = lens.clock.nextDue();
-    if (due !== null && due - lens.clock.now() <= CHECK_DEBOUNCE_MS) {
-      lens.clock.advance(due - lens.clock.now());
+    const due = mount.clock.nextDue();
+    if (due !== null && due - mount.clock.now() <= CHECK_DEBOUNCE_MS) {
+      mount.clock.advance(due - mount.clock.now());
       continue;
     }
     // Nothing out and nothing due: one more turn for what the last answer
     // set in motion without a request — a socket query, an effect — and done
     // only if that turn started nothing either.
-    await lens.inAct(async () => {});
-    const next = lens.clock.nextDue();
+    await mount.inAct(async () => {});
+    const next = mount.clock.nextDue();
     const quiet =
-      lens.transport.out.size === 0 &&
-      (next === null || next - lens.clock.now() > CHECK_DEBOUNCE_MS);
+      mount.transport.out.size === 0 &&
+      (next === null || next - mount.clock.now() > CHECK_DEBOUNCE_MS);
     if (quiet) return;
   }
   throw new Error(
-    `settle: the lens was still busy after ${SETTLE_ROUNDS} rounds — ${lens.transport.out.size} requests out, the next timer at ${lens.clock.nextDue()} with the clock at ${lens.clock.now()}`,
+    `settle: the builder was still busy after ${SETTLE_ROUNDS} rounds — ${mount.transport.out.size} requests out, the next timer at ${mount.clock.nextDue()} with the clock at ${mount.clock.now()}`,
   );
 }
 
 /**
  * Makes a move with `go` — a hash written, Back pressed — and waits until the
- * browser has landed on `landsOn`, then settles the lens.
+ * browser has landed on `landsOn`, then settles the builder.
  *
  * ON THE BROWSER'S OWN EVENTS. jsdom dispatches `hashchange` and `popstate`
  * as tasks of their own, and a move the router holds is undone with a second
@@ -1193,12 +1205,12 @@ async function settleLens(lens: Lens): Promise<void> {
  * waited for, because the hash a move is undone to is often the hash it
  * started on, and read at once it would say the move had already landed.
  *
- * FOR THIS CASE'S LENS ONLY: a wait still out when the case ends is woken and
- * refused, since the next case's mount writes a hash of its own and could
+ * FOR THIS CASE'S BUILDER ONLY: a wait still out when the case ends is woken
+ * and refused, since the next case's mount writes a hash of its own and could
  * otherwise be the landing this one was waiting for.
  */
-async function navigateLens(lens: Lens, go: () => void, landsOn: string): Promise<void> {
-  lens.refuseIfEnded("navigate");
+async function navigateBuilder(mount: Mount, go: () => void, landsOn: string): Promise<void> {
+  mount.refuseIfEnded("navigate");
   let stop = () => {};
   const landed = new Promise<void>((resolve) => {
     const moved = () => {
@@ -1214,14 +1226,14 @@ async function navigateLens(lens: Lens, go: () => void, landsOn: string): Promis
     window.addEventListener("popstate", moved);
   });
   act(go);
-  await getConfig().asyncWrapper(() => Promise.race([landed, lens.ended]));
+  await getConfig().asyncWrapper(() => Promise.race([landed, mount.ended]));
   stop();
-  lens.refuseIfEnded("navigate");
-  await settleLens(lens);
+  mount.refuseIfEnded("navigate");
+  await settleBuilder(mount);
 }
 
 /** The Builder's toolbar, where its check status and its own controls are drawn. */
-export function lensToolbar(): HTMLElement {
+export function builderToolbar(): HTMLElement {
   const toolbar = document.querySelector<HTMLElement>(
     '[role="toolbar"][aria-label="Organization builder"]',
   );
@@ -1230,46 +1242,46 @@ export function lensToolbar(): HTMLElement {
 }
 
 /**
- * Settles the lens and holds it to a clean check: the toolbar says No
+ * Settles the builder and holds it to a clean check: the toolbar says No
  * problems. Read in the toolbar alone, because a query of the whole document
  * walks every card and row the views draw.
  */
-async function checkedLens(lens: Lens): Promise<void> {
-  await settleLens(lens);
-  within(lensToolbar()).getByText("No problems");
+async function checkedBuilder(mount: Mount): Promise<void> {
+  await settleBuilder(mount);
+  within(builderToolbar()).getByText("No problems");
 }
 
 /**
- * What a case holds once it has mounted the lens: the page's parts, and the
- * waits ON THIS LENS — see [Lens] for why a wait is never asked of anything
- * but the lens its own case mounted. Closures rather than methods, so a case
+ * What a case holds once it has mounted the builder: the page's parts, and the
+ * waits ON THIS BUILDER — see [Mount] for why a wait is never asked of anything
+ * but the builder its own case mounted. Closures rather than methods, so a case
  * destructures the waits it uses (`const { checked } = mountBuilder(...)`).
  */
-export interface MountedLens {
+export interface MountedBuilder {
   store: Store;
   socket: LiveSocket;
   view: ReturnType<typeof render>;
   clock: SuiteClock;
-  /** [settleLens], on this lens. */
+  /** [settleBuilder], on this builder. */
   settle: () => Promise<void>;
-  /** [checkedLens], on this lens. */
+  /** [checkedBuilder], on this builder. */
   checked: () => Promise<void>;
-  /** [navigateLens], on this lens. */
+  /** [navigateBuilder], on this builder. */
   navigate: (go: () => void, landsOn: string) => Promise<void>;
 }
 
 /**
  * One case's settle, as a suite's own helper takes it: handed down from the
- * case that mounted the lens, for the reason [Lens] gives.
+ * case that mounted the builder, for the reason [Mount] gives.
  */
-export type Settle = MountedLens["settle"];
+export type Settle = MountedBuilder["settle"];
 
-/** Mounts the Builder lens against the scripted engine, and hands the case its waits. */
+/** Mounts the builder against the scripted engine, and hands the case its waits. */
 export function mountBuilder({
   engine,
   org = null,
   connected = true,
-  hash = "#/company?lens=builder&view=visualization",
+  hash = "#/agents/edit?view=visualization",
   surfaces = fakeSurfaces,
   storage,
   keys,
@@ -1283,20 +1295,20 @@ export function mountBuilder({
   hash?: string;
   surfaces?: BuilderSurfaces;
   storage?: DraftStorage | null;
-  /** Where the lens mints keys and write ids; the browser's random source otherwise. */
+  /** Where the builder mints keys and write ids; the browser's random source otherwise. */
   keys?: KeySource;
   /** What the socket's query channel answers, by name. */
   query?: (what: string) => unknown;
-  /** A provider the lens reads from, which the application frame supplies. */
+  /** A provider the builder reads from, which the application frame supplies. */
   wrap?: (tree: ReactNode) => ReactNode;
   /**
    * Who the tab is read by (`lib/reader.ts`), whom a kept draft is kept for;
    * `null` for a tab that has not learned it. The frame records it in a real
-   * tab — a sign-in, or the identity menu's session read — and the lens alone
-   * has neither, so it is recorded here as they would.
+   * tab — a sign-in, or the identity menu's session read — and the builder
+   * alone has neither, so it is recorded here as they would.
    */
   reader?: string | null;
-}): MountedLens {
+}): MountedBuilder {
   Object.defineProperty(globalThis, "WebSocket", { writable: true, value: InertWebSocket });
   location.hash = hash;
   if (reader !== null) noteReader(reader);
@@ -1309,24 +1321,28 @@ export function mountBuilder({
     Promise.resolve(query(what));
   const clock = new SuiteClock();
   const transport = new CountingTransport(restTransport);
-  const lens = new Lens(clock, transport, engine);
-  onTestFinished(() => lens.retire());
+  const mount = new Mount(clock, transport, engine);
+  onTestFinished(() => mount.retire());
   const view = render(
     <ClientContext.Provider value={{ store, socket }}>
-      <Router>
-        {/* The application's live region, which it mounts beside every
-            screen: the node editor's lists speak into it. */}
-        <AppAnnouncer />
-        {wrap(
-          <Builder
-            surfaces={surfaces}
-            storage={storage}
-            transport={transport}
-            clock={clock}
-            {...(keys ? { keys } : {})}
-          />,
-        )}
-      </Router>
+      {/* The frame's one reading of who this browser is (`lib/viewer.ts`),
+          which the Builder writes as and keeps a draft for. */}
+      <ViewerProvider>
+        <Router>
+          {/* The application's live region, which it mounts beside every
+              screen: the node editor's lists speak into it. */}
+          <AppAnnouncer />
+          {wrap(
+            <Builder
+              surfaces={surfaces}
+              storage={storage}
+              transport={transport}
+              clock={clock}
+              {...(keys ? { keys } : {})}
+            />,
+          )}
+        </Router>
+      </ViewerProvider>
     </ClientContext.Provider>,
   );
   return {
@@ -1334,8 +1350,8 @@ export function mountBuilder({
     socket,
     view,
     clock,
-    settle: () => settleLens(lens),
-    checked: () => checkedLens(lens),
-    navigate: (go, landsOn) => navigateLens(lens, go, landsOn),
+    settle: () => settleBuilder(mount),
+    checked: () => checkedBuilder(mount),
+    navigate: (go, landsOn) => navigateBuilder(mount, go, landsOn),
   };
 }

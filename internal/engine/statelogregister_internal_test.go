@@ -18,6 +18,7 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/store"
 	"github.com/crewlet/crewlet/internal/tracker"
+	"github.com/crewlet/crewlet/internal/usage"
 )
 
 // The register is the one place a domain is declared, so these are the tests
@@ -112,13 +113,14 @@ func TestABarrierDecisionIsExplicit(t *testing.T) {
 	// has stopped being available — for EVERY registered domain, since a
 	// table naming three of five pinned nothing about the org chart's or
 	// the identity estate's, and docs/guides/consistency.md publishes all
-	// five.
+	// of them.
 	shipped := map[string]bool{
 		tracker.Domain{}.Name():   true,
 		pages.Domain{}.Name():     true,
 		chart.Domain{}.Name():     true,
 		iamdomain.Domain{}.Name(): true,
 		search.Domain{}.Name():    false,
+		usage.Domain{}.Name():     false,
 	}
 	for name, want := range shipped {
 		if got, held := stated[name]; !held || got != want {
@@ -288,7 +290,11 @@ func TestAnIdentityDomainThatCannotSayWhoIsEvictedFailsTheBootCheck(t *testing.T
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			entries := register()
+			// THE FAKE KEEPS NO LEDGER, so the entry states no horizon for
+			// one: the refusal under test is the identity one, not the
+			// ledger's.
 			entries[0].Domain = c.domain
+			entries[0].OpsRetention, entries[0].OpsKindRetention = 0, nil
 			err := checkRegister(entries)
 			if err == nil || !strings.Contains(err.Error(), c.names) {
 				t.Fatalf("an identity domain with %s answered %v, want a refusal "+
@@ -361,6 +367,7 @@ func TestTheRegisteredOrderIsTheDeclaredOrder(t *testing.T) {
 		pages.Domain{}.Name(),
 		chart.Domain{}.Name(),
 		iamdomain.Domain{}.Name(),
+		usage.Domain{}.Name(),
 	}
 	got := []string{}
 	for _, domain := range registeredDomains() {
@@ -664,6 +671,70 @@ func TestTheIdentityLedgersSessionRowsGoInAnHour(t *testing.T) {
 		if err := checkRegister(entries); err == nil {
 			t.Errorf("a %s session horizon beside the domain's %s passed the "+
 				"boot check", horizon, statelog.OpsRetention)
+		}
+	}
+}
+
+// A LEDGER HORIZON IS DECLARED EXACTLY WHERE A LEDGER IS KEPT.
+//
+// The shipped register first: every domain that keeps an operation ledger
+// states a horizon for it, and every domain that keeps none — the two
+// compacted logs — states none. Then both controls: a ledger with no horizon
+// is a table that grows for ever, and a horizon on a domain with no ledger is
+// the sweep every node ran against a `vectors_ops` table that does not exist.
+func TestALedgerHorizonIsDeclaredExactlyWhereALedgerIsKept(t *testing.T) {
+	for _, entry := range register() {
+		name, ledger := entry.Domain.Name(), entry.Domain.OpsTable()
+		if ledger == "" && entry.OpsRetention != 0 {
+			t.Errorf("%s keeps no ledger and declares a %s horizon for one",
+				name, entry.OpsRetention)
+		}
+		if ledger != "" && entry.OpsRetention <= 0 {
+			t.Errorf("%s keeps ledger %s and declares no horizon for it", name, ledger)
+		}
+	}
+
+	ledgerless := func(entries []registration) int {
+		for i := range entries {
+			if entries[i].Domain.OpsTable() == "" {
+				return i
+			}
+		}
+		t.Fatal("the register holds no domain without a ledger to make the control with")
+		return -1
+	}
+	entries := register()
+	entries[ledgerless(entries)].OpsRetention = statelog.OpsRetention
+	if err := checkRegister(entries); err == nil {
+		t.Error("a horizon on a domain that keeps no ledger passed the boot check")
+	}
+	entries = register()
+	entries[ledgerless(entries)].OpsKindRetention = map[string]time.Duration{"x": time.Hour}
+	if err := checkRegister(entries); err == nil {
+		t.Error("a kind horizon on a domain that keeps no ledger passed the boot check")
+	}
+	entries = register()
+	entries[0].OpsRetention = 0
+	if entries[0].Domain.OpsTable() == "" {
+		t.Fatalf("%s was expected to keep a ledger", entries[0].Domain.Name())
+	}
+	if err := checkRegister(entries); err == nil {
+		t.Error("a ledger with no horizon passed the boot check")
+	}
+}
+
+// THE SWEEP IS HANDED A LEDGER ONLY WHERE ONE IS KEPT: the opsLedgers map and
+// the register agree, so no node sweeps a table its domain never created.
+func TestOnlyALedgeredDomainIsSwept(t *testing.T) {
+	s := &stateLog{domains: map[string]*runningDomain{}}
+	for _, entry := range register() {
+		s.domains[entry.Domain.Name()] = &runningDomain{runner: &statelog.Runner{}}
+	}
+	swept := s.opsLedgers()
+	for _, entry := range register() {
+		_, found := swept[entry.Domain.Name()]
+		if keeps := entry.Domain.OpsTable() != ""; found != keeps {
+			t.Errorf("%s: swept %v, keeps a ledger %v", entry.Domain.Name(), found, keeps)
 		}
 	}
 }

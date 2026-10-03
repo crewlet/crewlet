@@ -390,6 +390,13 @@ var allowedReplicatedWriter = []allowance{
 			"page half.",
 	},
 	{
+		Prefix: "internal/usage/apply", Kind: mechanism,
+		Why: "The usage domain's applier: it replaces a node-day's rows and " +
+			"applies the history horizon from the record's own day, so every " +
+			"delete here is a pure function of a committed record rather than " +
+			"a sweep.",
+	},
+	{
 		Prefix: "internal/search/apply", Kind: mechanism,
 		Why: "The embedding domain's applier. The vectors are compacted and " +
 			"claim no identity, but they are still written only from a " +

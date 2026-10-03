@@ -1,13 +1,19 @@
 package api_test
 
 import (
+	"context"
 	"encoding/json"
 	"testing"
+	"time"
+
+	"github.com/google/uuid"
 
 	"github.com/crewlet/crewlet/internal/api"
 	"github.com/crewlet/crewlet/internal/api/queries"
 	"github.com/crewlet/crewlet/internal/api/stream"
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/coord"
+	coordmemory "github.com/crewlet/crewlet/internal/coord/memory"
 	"github.com/crewlet/crewlet/internal/iam"
 )
 
@@ -50,14 +56,39 @@ units:
 
 func rosterApp(t *testing.T, runtime api.NodeRuntime) *api.App {
 	t.Helper()
+	return rosterAppWith(t, runtime, nil)
+}
+
+// rosterAppWith is rosterApp over a lease table the case controls.
+func rosterAppWith(t *testing.T, runtime api.NodeRuntime, leases coord.Backend) *api.App {
+	t.Helper()
 	c, err := config.ParseCompany([]byte(rosterCompany))
 	if err != nil {
 		t.Fatalf("parse: %v", err)
 	}
 	return newApp(t, api.Options{
 		Runtime: runtime,
-		Sources: queries.Sources{Company: companySource(t, c)},
+		Sources: queries.Sources{Company: companySource(t, c), Coord: leases},
 	})
+}
+
+// rosterSeatID is the agent id the roster company derives for the seat with
+// this handle — the name a seat's lease is held under.
+func rosterSeatID(t *testing.T, handle string) uuid.UUID {
+	t.Helper()
+	c, err := config.ParseCompany([]byte(rosterCompany))
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	o, err := c.Organization()
+	if err != nil {
+		t.Fatalf("org: %v", err)
+	}
+	id, ok := o.AgentIDFor(o.Role(handle))
+	if !ok {
+		t.Fatalf("no agent id for %q", handle)
+	}
+	return id
 }
 
 // object re-decodes a snapshot value through JSON into an object, which is how
@@ -108,13 +139,17 @@ func TestTheSnapshotCarriesTheCompanysSeats(t *testing.T) {
 		if !ok {
 			t.Fatalf("seat %q is missing from the roster: %v", handle, got)
 		}
-		// The client keys every merge on `role` and links on `id`. A row
-		// without them is a card that never receives its live overlay.
+		// The client merges every overlay on `agent_id`, links on `id` and
+		// prints `role`. A row without the first is a card that never
+		// receives its live overlay.
+		if id, _ := row["agent_id"].(string); id == "" {
+			t.Errorf("seat %q has no agent id: %v", handle, row)
+		}
 		if row["role"] == "" || row["role"] == nil {
 			t.Errorf("seat %q has no role: %v", handle, row)
 		}
 		if id, _ := row["id"].(string); id == "" {
-			t.Errorf("seat %q has no agent id: %v", handle, row)
+			t.Errorf("seat %q has no id to link on: %v", handle, row)
 		}
 	}
 	// A seat nested in a unit is still a seat. The org tree is walked, so a
@@ -131,29 +166,141 @@ func TestTheSnapshotCarriesTheCompanysSeats(t *testing.T) {
 	}
 }
 
-// A SEAT THIS NODE HOLDS READS AS IDLE, and one it does not says nothing.
+// EVERY SEAT HELD ANYWHERE IN THE FLEET CARRIES A STATE — and one held nowhere
+// says so.
 //
-// The client defaults a missing state to offline, so silence is the honest
-// answer for a seat this process has never seen — while claiming offline for
-// one it is actively serving would report a healthy company as entirely down.
-func TestOnlyHeldSeatsCarryAState(t *testing.T) {
+// The roster used to mark only the seats THIS node held as idle and leave every
+// other seat without a state, which the client drew as offline: on a fleet,
+// every seat a peer ran read as down on this node's dashboard. Placement is the
+// lease table's answer, which every node reads alike, and a seat no node holds
+// is `stopped`/`unplaced` rather than silent.
+func TestEverySeatHeldAnywhereCarriesAState(t *testing.T) {
 	t.Parallel()
-	a := rosterApp(t, &fakeRuntime{state: api.RuntimeState{Seats: []string{"ceo"}}})
+	for _, tc := range []struct {
+		name    string
+		local   []string
+		peer    []string
+		wantCTO map[string]any
+	}{
+		{
+			name: "a peer holds the other seat", local: []string{"ceo"}, peer: []string{"cto"},
+			wantCTO: map[string]any{"activity": "idle", "stopped_reason": nil},
+		},
+		{
+			name: "no node holds the other seat", local: []string{"ceo"},
+			wantCTO: map[string]any{"activity": "stopped", "stopped_reason": "unplaced"},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			leases := coordmemory.New()
+			for _, handle := range tc.peer {
+				lease, err := leases.TryAcquire(t.Context(), coord.SeatResource(rosterSeatID(t, handle)),
+					coord.AcquireOptions{Owner: "node-b:1", TTL: time.Minute})
+				if err != nil || lease == nil {
+					t.Fatalf("a peer could not claim %s: %v", handle, err)
+				}
+			}
+			a := rosterAppWith(t, &fakeRuntime{state: api.RuntimeState{Seats: tc.local}}, leases)
 
+			byHandle := map[string]map[string]any{}
+			for _, row := range rows(t, a.Stream().Snapshot(everyRead)["agents"]) {
+				handle, _ := row["handle"].(string)
+				byHandle[handle] = row
+			}
+			if got := byHandle["ceo"]; got["activity"] != "idle" || got["stopped_reason"] != nil {
+				t.Errorf("the seat this node holds reads %v (%v), want idle",
+					got["activity"], got["stopped_reason"])
+			}
+			cto := byHandle["cto"]
+			for key, want := range tc.wantCTO {
+				value, present := cto[key]
+				if !present || value != want {
+					t.Errorf("cto %s = %#v, want %#v", key, value, want)
+				}
+			}
+			// THE ROSTER STATES NO STATE OF ITS OWN: the one word on the
+			// row is the projection's.
+			if _, present := cto["state"]; present {
+				t.Errorf("the row still carries the retired `state` word: %v", cto)
+			}
+		})
+	}
+}
+
+// A SEAT IS PLACED BY ITS OWN LEASE, named by its agent id. Two seats may share
+// a name — a name is prose — and keyed by it, the lease one Engineer's node
+// holds placed both, so the Engineer no node runs read as idle on every
+// screen.
+//
+// Mutation: key the placement by role name, and bob reads idle.
+func TestASeatIsPlacedByItsOwnLease(t *testing.T) {
+	t.Parallel()
+	c, err := config.ParseCompany([]byte(`
+name: Acme
+providers:
+  llm:
+    zulu:
+      type: anthropic
+      model: claude-sonnet-5
+      api_keys: ["${K}"]
+roles:
+  - name: Engineer
+    handle: ada
+    llm: zulu
+  - name: Engineer
+    handle: bob
+    llm: zulu
+`))
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	o, err := c.Organization()
+	if err != nil {
+		t.Fatalf("org: %v", err)
+	}
+	ada, _ := o.AgentIDFor(o.Role("ada"))
+	leases := coordmemory.New()
+	if lease, err := leases.TryAcquire(t.Context(), coord.SeatResource(ada),
+		coord.AcquireOptions{Owner: "node-b:1", TTL: time.Minute}); err != nil || lease == nil {
+		t.Fatalf("a peer could not claim ada: %v", err)
+	}
+	a := newApp(t, api.Options{
+		Runtime: &fakeRuntime{},
+		Sources: queries.Sources{Company: companySource(t, c), Coord: leases},
+	})
+	byHandle := map[string]map[string]any{}
 	for _, row := range rows(t, a.Stream().Snapshot(everyRead)["agents"]) {
 		handle, _ := row["handle"].(string)
-		state, present := row["state"]
-		switch handle {
-		case "ceo":
-			if state != "idle" {
-				t.Errorf("a held seat reads %v, want idle", state)
-			}
-		default:
-			if present {
-				t.Errorf("seat %q is not held here yet claims state %v", handle, state)
-			}
+		byHandle[handle] = row
+	}
+	if got := byHandle["ada"]["activity"]; got != "idle" {
+		t.Errorf("ada, whose lease a peer holds, reads %v, want idle", got)
+	}
+	if got := byHandle["bob"]; got["activity"] != "stopped" || got["stopped_reason"] != "unplaced" {
+		t.Errorf("bob, whom no node holds, reads %v (%v), want stopped/unplaced",
+			got["activity"], got["stopped_reason"])
+	}
+}
+
+// AN UNREADABLE LEASE TABLE STOPS NOBODY. "No node holds any seat" is a claim
+// about the lease table, and a read that failed has not made it.
+func TestAnUnreadableLeaseTableClaimsNoSeatIsUnplaced(t *testing.T) {
+	t.Parallel()
+	a := rosterAppWith(t, &fakeRuntime{}, unreadableLeases{coordmemory.New()})
+	for _, row := range rows(t, a.Stream().Snapshot(everyRead)["agents"]) {
+		if row["activity"] != "idle" {
+			t.Errorf("seat %v reads %v over a lease table nobody could read, want idle",
+				row["handle"], row["activity"])
 		}
 	}
+}
+
+// unreadableLeases is a lease table whose listing fails.
+type unreadableLeases struct{ coord.Backend }
+
+func (unreadableLeases) ListLive(context.Context, coord.Class) ([]coord.Lease, error) {
+	return nil, coord.ErrUnavailable
 }
 
 // THE ORG TREE IS ON THE SNAPSHOT, nested the way the company is.

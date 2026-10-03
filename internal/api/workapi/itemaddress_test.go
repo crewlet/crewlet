@@ -37,7 +37,7 @@ func TestAGestureNoToolMakesNamesADuplicateByItsID(t *testing.T) {
 		body         map[string]any
 	}{
 		"a rank move": {http.MethodPost, "/work/items/t-3/rank",
-			map[string]any{"after": "ENG-2"}},
+			map[string]any{"after": "ENG-2", "if_match": 3}},
 		"a comment edit": {http.MethodPatch, "/work/items/t-3/comments/c-1",
 			map[string]any{"body": "second"}},
 	} {
@@ -53,7 +53,7 @@ func TestAGestureNoToolMakesNamesADuplicateByItsID(t *testing.T) {
 		}
 	}
 	if got := r.do(as(colleague("ana")), http.MethodPost, "/work/items/ENG-1/rank",
-		map[string]any{"after": "ENG-2"}); got.body["item"] != "ENG-1" ||
+		map[string]any{"after": "ENG-2", "if_match": 3}); got.body["item"] != "ENG-1" ||
 		got.body["key_collision"] != nil {
 		t.Errorf("the claimant's rank move answered item %v, key_collision %v — "+
 			"an item that answers to its key is named by it", got.body["item"],

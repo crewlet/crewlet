@@ -411,8 +411,8 @@ func (s *surface) seedDocument(t *testing.T, document string) {
 		t.Fatal(err)
 	}
 	if _, err := s.configs.InsertActive(t.Context(), store.Revision{
-		Source: "test", CreatedBy: "operator", Summary: "first import",
-		Payload: payload, CreatedAt: time.Now().UTC(),
+		Source: "test", CreatedBy: "operator", CreatedByKind: iam.ActorOperator,
+		Summary: "first import", Payload: payload, CreatedAt: time.Now().UTC(),
 	}); err != nil {
 		t.Fatalf("seed: %v", err)
 	}
@@ -1563,7 +1563,7 @@ func TestASetupWriteThroughATokenIsItsOwners(t *testing.T) {
 		t.Fatalf("Active: %v (found=%v)", err, found)
 	}
 	if got := (iam.Actor{Name: active.CreatedBy,
-		Kind:       iam.ActorKind(active.CreatedByKind),
+		Kind:       active.CreatedByKind,
 		OperatorID: active.OperatorID}); got != want {
 		t.Errorf("the revision records %+v, want %+v", got, want)
 	}

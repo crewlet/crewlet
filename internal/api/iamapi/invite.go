@@ -104,7 +104,7 @@ func (s *Service) PostInvite(w http.ResponseWriter, r *http.Request) {
 	// under the company's own, so a retry under the key an unknown answer
 	// handed back hands back the link to the invitation its first attempt
 	// issued — see [Service.createKey].
-	opID, ok := s.createKey(w, r)
+	opID, seed, ok := s.createKey(w, r)
 	if !ok {
 		return
 	}
@@ -112,8 +112,11 @@ func (s *Service) PostInvite(w http.ResponseWriter, r *http.Request) {
 		Email: address, Grants: in.Grants, Colleague: in.Colleague,
 		Seat:      strings.TrimSpace(in.Seat),
 		ExpiresAt: s.now().Add(InviteWindow),
-		OpID:      opID,
-		Reason:    reasonOr(in.Reason, "invited through /iam"),
+		// THE SEED, which the domain derives the invitation's id from and
+		// publishes the issue under; the answer hands back the scoped key,
+		// whose seed a retry reproduces — see [Service.createKey].
+		OpID:   seed,
+		Reason: reasonOr(in.Reason, "invited through /iam"),
 	})
 	invited, id := issued.Result, issued.ID
 	if err != nil || !landed(invited) {

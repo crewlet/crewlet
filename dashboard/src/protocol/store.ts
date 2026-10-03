@@ -20,7 +20,6 @@ import type {
   AgentRow,
   FeedRow,
   EventEnvelope,
-  HealthPush,
   InboxChange,
   OrgBudget,
   OrgProjection,
@@ -33,17 +32,11 @@ import type {
 } from "./types.ts";
 import { share } from "./share.ts";
 
-/**
- * Longest activity feed a tab keeps.
- *
- * Matches the server's own retention (`livestate.EventFeedLimit`) so a
- * reconnect's snapshot neither truncates the feed nor leaves rows the server
- * cannot resend. Exported because it is also the limit of what anything derived
- * from the feed can HONESTLY claim to know: a busy company fills 400 events in
- * minutes, and a panel covering an hour has to say where the record actually
- * starts rather than drawing the gap as quiet.
- */
-export const MAX_EVENTS = 400;
+// RELATIVE, like every contract import in this directory: it is also built
+// alone as `protocol.js`, where the `~` alias does not exist. `MAX_EVENTS` is
+// the server's own feed length, held there by a Go gate.
+import { MAX_EVENTS } from "../contract/wire.ts";
+import type { EngineHealth } from "../contract/health.ts";
 
 /**
  * How many completed-phase envelopes a tab keeps, PAYLOAD AND ALL.
@@ -87,18 +80,40 @@ export interface StoreState {
    */
   phases: EventEnvelope[];
   sandboxes: SandboxEntry[];
-  org: OrgProjection;
+  /**
+   * The org chart the engine pushed, or NULL until the first one arrives.
+   *
+   * Null rather than `{}`, because `{}` is an ANSWER — the projection of a
+   * node running no company — and a screen has to tell that from "nothing has
+   * been said yet": the charter drew "No mission is set" and a policy count
+   * of 0 on every cold tab, before the handshake had said anything at all.
+   */
+  org: OrgProjection | null;
   tools: ToolRow[];
-  health: HealthPush;
+  /**
+   * The engine's own health: the `health` push, `api.Health` WHOLE, replaced
+   * by the snapshot and by every five-second tick. `{status: "unknown"}` while
+   * the socket is down — the one value here that is not a push, and asserts
+   * nothing beyond that it is not known.
+   */
+  health: EngineHealth;
   tokens: Rollup | null;
-  budget: OrgBudget;
+  /**
+   * The company's live token meter as the last `budget` push stated it, and
+   * `null` UNTIL ONE HAS. Three facts, not two: nobody has read the counter
+   * yet, nothing is capped (`org.windows` empty), or a reading. An empty
+   * object used to stand for both of the first two, so for the first seconds
+   * after every engine start a capped company was drawn as having no budget
+   * and its operator was offered "Set one".
+   */
+  budget: OrgBudget | null;
   schedules: ScheduleRow[] | null;
   connected: boolean;
   /**
    * Whether the engine REFUSED this browser, as opposed to being unreachable.
    * Distinct from `connected` because the repair differs and the reader cannot
-   * tell them apart: a stopped engine comes back on its own, a rejected token
-   * never does.
+   * tell them apart: a stopped engine comes back on its own, a session the
+   * engine refused never does — a sign-in is the repair.
    */
   authRejected: boolean;
   /**
@@ -154,11 +169,11 @@ function emptyState(): StoreState {
     events: [],
     phases: [],
     sandboxes: [],
-    org: {},
+    org: null,
     tools: [],
     health: { status: "unknown" },
     tokens: null,
-    budget: {},
+    budget: null,
     schedules: null,
     connected: false,
     authRejected: false,
@@ -171,6 +186,20 @@ function emptyState(): StoreState {
 
 export class Store {
   state: StoreState = emptyState();
+
+  /**
+   * The push kinds this build does not know, each with how many arrived.
+   *
+   * IGNORED AND COUNTED. A node on another build may push a kind this bundle
+   * was built before, and throwing on it — or applying it to a slice by a
+   * guess — would break a screen over a frame it has no use for. But the same
+   * fall-through is exactly what this build's own engine sending a kind its
+   * own client forgot looks like, which is the silent failure the e2e replay
+   * exists to catch: so it is kept here, and the replay asserts it is empty.
+   * Not a slice, because nothing renders it and a listener woken by a frame
+   * nobody can read would be woken for nothing.
+   */
+  readonly unknownPushes = new Map<string, number>();
 
   private subs = new Map<Slice, Set<() => void>>();
 
@@ -252,7 +281,7 @@ export class Store {
     put("org", snap.org ?? {});
     put("tools", snap.tools ?? []);
     if (snap.tokens && snap.tokens.totals) put("tokens", snap.tokens);
-    put("budget", snap.budget ?? {});
+    put("budget", snap.budget ?? null);
     // A bare list here, unlike the push's `{schedules: […]}` object.
     if (snap.schedules) put("schedules", snap.schedules);
     // NOT `connected`. That belongs to the transport, which knows whether the
@@ -335,7 +364,7 @@ export class Store {
   }
 
   applyBudget(budget: OrgBudget | null | undefined): void {
-    if (this.replace("budget", budget ?? {})) this.emit("budget");
+    if (this.replace("budget", budget ?? null)) this.emit("budget");
   }
 
   applySchedules(payload: { schedules?: ScheduleRow[] } | null): void {
@@ -359,7 +388,7 @@ export class Store {
     if (this.replace("tools", tools ?? [])) this.emit("tools");
   }
 
-  applyHealth(health: HealthPush | null | undefined): void {
+  applyHealth(health: EngineHealth | null | undefined): void {
     const connected = !!health && health.status !== "unknown";
     const moved = this.replace("health", health ?? { status: "unknown" });
     if (!moved && connected === this.state.connected) return;
@@ -405,6 +434,12 @@ export class Store {
     if (this.state.accessRefused === next) return;
     this.state.accessRefused = next;
     this.emit("health");
+  }
+
+  /** Count one frame whose `kind` this build does not dispatch. */
+  noteUnknownPush(kind: unknown): void {
+    const name = typeof kind === "string" ? kind : JSON.stringify(kind ?? null);
+    this.unknownPushes.set(name, (this.unknownPushes.get(name) ?? 0) + 1);
   }
 
   setAuthRejected(value: boolean): void {

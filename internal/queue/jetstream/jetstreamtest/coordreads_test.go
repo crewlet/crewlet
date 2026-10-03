@@ -14,6 +14,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/coord"
 	coordkv "github.com/crewlet/crewlet/internal/coord/kv"
+	"github.com/crewlet/crewlet/internal/period"
 	js "github.com/crewlet/crewlet/internal/queue/jetstream"
 )
 
@@ -69,7 +70,7 @@ func TestACoordinationReadIsNeverAnsweredByAMemberThatIsBehind(t *testing.T) {
 		RateWindow: time.Minute, ClaimTTL: 10 * time.Minute, SetupOnceRetention: 10 * time.Minute,
 		LedgerRetention: 10 * time.Minute, FireRetention: 10 * time.Minute,
 		FollowRetention: 10 * time.Minute, CooldownMax: time.Hour,
-		StatusFreshness: 10 * time.Minute,
+		BudgetRetention: coord.BudgetRetention, StatusFreshness: 10 * time.Minute,
 	}
 	conns := make([]*nats.Conn, len(c.Servers))
 	stores := make([]*coordkv.FleetStore, len(c.Servers))
@@ -82,12 +83,17 @@ func TestACoordinationReadIsNeverAnsweredByAMemberThatIsBehind(t *testing.T) {
 		stores[i] = store
 	}
 	// The two buckets read below, by the stream behind each.
-	streams := []string{"KV_behind_budgets", "KV_behind_sandbox_runs"}
+	streams := []string{"KV_behind_token_windows", "KV_behind_sandbox_runs"}
 
 	ctx := t.Context()
 	scope := coord.AgentScope("behind")
+	// ONE FIXED DAY, because the store reads no clock: every charge and read
+	// below names the same window, so a case running across midnight still
+	// counts both charges in one slot.
+	windows := coord.WindowsAt(time.Date(2026, time.September, 23, 12, 0, 0, 0, time.UTC), time.UTC)
+	charge := coord.ChargeRequest{Seat: scope, Tokens: 1, Windows: windows}
 	const turn = "turn-behind"
-	if _, err := stores[0].Charge(ctx, scope, 1, 0, 0); err != nil {
+	if _, err := stores[0].Charge(ctx, charge); err != nil {
 		t.Fatalf("charge before the cut: %v", err)
 	}
 	if _, err := stores[0].CreateSandboxRun(ctx, turn, []byte(`{"n":1}`)); err != nil {
@@ -108,8 +114,8 @@ func TestACoordinationReadIsNeverAnsweredByAMemberThatIsBehind(t *testing.T) {
 	// BOTH RECORDS READ THROUGH THE MEMBER ABOUT TO BE CUT, so what is
 	// asserted below is about the cut and not about a read that never
 	// worked from there.
-	if used, err := far.Used(ctx, scope); err != nil || used != 1 {
-		t.Fatalf("Used through member %d before the cut = (%d, %v), want 1", cut, used, err)
+	if used, err := far.Used(ctx, scope, windows); err != nil || used.In(period.Day).Used != 1 {
+		t.Fatalf("Used through member %d before the cut = (%+v, %v), want 1 today", cut, used, err)
 	}
 	if _, found, err := far.SandboxRun(ctx, turn); err != nil || !found {
 		t.Fatalf("SandboxRun through member %d before the cut = (found=%t, %v), want it found",
@@ -119,7 +125,7 @@ func TestACoordinationReadIsNeverAnsweredByAMemberThatIsBehind(t *testing.T) {
 	// member while it can still reach a leader: binding reads the stream's
 	// configuration, and the handle keeps the allow_direct it read — which
 	// is what makes its Get the direct get the control below asks.
-	budgets, runs := clientBucket(ctx, t, conns[cut], "behind_budgets"),
+	budgets, runs := clientBucket(ctx, t, conns[cut], "behind_token_windows"),
 		clientBucket(ctx, t, conns[cut], "behind_sandbox_runs")
 
 	c.Partition(t, cut)
@@ -129,7 +135,7 @@ func TestACoordinationReadIsNeverAnsweredByAMemberThatIsBehind(t *testing.T) {
 	// only once each bucket has a leader it can reach — see
 	// TestAMajoritySurvivesAPartition.
 	retry(t, "charge again on the majority", func() error {
-		_, err := near.Charge(ctx, scope, 1, 0, 0)
+		_, err := near.Charge(ctx, charge)
 		return err
 	})
 	retry(t, "remove the run on the majority", func() error {
@@ -155,10 +161,14 @@ func TestACoordinationReadIsNeverAnsweredByAMemberThatIsBehind(t *testing.T) {
 	// refuses EVERY read with "no responders", the client's own included,
 	// and a store reading through the client would pass here too.
 	var counter struct {
-		Used int `json:"used"`
+		Slots struct {
+			Day struct {
+				Used int `json:"used"`
+			} `json:"day"`
+		} `json:"slots"`
 	}
 	if v := staleThrough(t, budgets, coord.DocumentKey(scope)); json.Unmarshal(v, &counter) != nil ||
-		counter.Used != 1 {
+		counter.Slots.Day.Used != 1 {
 		t.Fatalf("the client's own read of the counter through the cut member answered %s, "+
 			"want the count of 1 it held before the majority's charge", v)
 	}
@@ -168,7 +178,7 @@ func TestACoordinationReadIsNeverAnsweredByAMemberThatIsBehind(t *testing.T) {
 	member := c.Servers[cut]
 	name := c.Configs[cut].ServerName
 	refused(t, member, name, streams[0], "Used", func(ctx context.Context) (any, error) {
-		return far.Used(ctx, scope)
+		return far.Used(ctx, scope, windows)
 	})
 	refused(t, member, name, streams[1], "SandboxRun", func(ctx context.Context) (any, error) {
 		_, found, err := far.SandboxRun(ctx, turn)

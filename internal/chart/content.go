@@ -263,6 +263,12 @@ func (w *Writer) WriteUnit(ctx context.Context, opID string, content UnitContent
 			if err = payload.unit().Validate(); err != nil {
 				return statelog.Decision{}, fmt.Errorf("%w: %w", ErrRefused, err)
 			}
+			// THE RUNTIME HALF IS HELD TO internal/org's RULES, before
+			// anything is sealed: see [Writer.checkRuntime].
+			if err = w.checkRuntime(runtimeChanges, RuntimeOwner{Kind: KindUnit,
+				Name: content.Name}, runtime); err != nil {
+				return statelog.Decision{}, err
+			}
 			// ONLY A HALF THAT CHANGES IS SEALED: one carried from the
 			// row is the row's own bytes, sealed by the write that put
 			// it there, and re-sealing it would be a write to the store
@@ -390,6 +396,12 @@ func (w *Writer) WriteSeat(ctx context.Context, opID string, content SeatContent
 			if err = candidate.Validate(); err != nil {
 				return statelog.Decision{}, fmt.Errorf("%w: %w", ErrRefused, err)
 			}
+			// AND ITS RUNTIME HALF AS THE SEAT IT WILL BE, before anything
+			// is sealed: see [Writer.checkRuntime].
+			if err = w.checkRuntime(runtimeChanges, RuntimeOwner{Kind: KindSeat,
+				Name: content.Name, Seat: prior.Kind}, runtime); err != nil {
+				return statelog.Decision{}, err
+			}
 			// UNDER THE SEAT'S IDENTITY, the handle it was created
 			// under, which no rename moves and no later hire is given,
 			// and this write's OPERATION, so nothing the row names now is
@@ -413,6 +425,33 @@ func (w *Writer) WriteSeat(ctx context.Context, opID string, content SeatContent
 		},
 	})
 	return WriteResult{Result: result, Objects: []ObjectRef{object}}, err
+}
+
+// checkRuntime refuses a runtime half its object may not run with, by the
+// rules internal/org holds the same fields to in a company file ([Runtime]).
+//
+// THE CHART WAS THE ONE DOOR WITH NO SUCH CHECK. A company file is validated
+// whole before it is applied, but a seat written here carries its half as
+// bytes this domain cannot read — so a `token_budget` of `{"day": 0}`, a
+// window that is no window or a schedule with no cron landed on every node,
+// where the budget's counters read a ceiling nobody may spend under. Asked IN
+// THE DECIDE, against the row's kind it read, and BEFORE THE SEAL like every
+// refusal this decide makes on its own, so a refused write wrote nothing to
+// the secret store on its way to the refusal.
+//
+// ONLY A HALF THAT CHANGES: one carried from the row is what a write that
+// passed this check put there, and refusing a lead's goal edit over a half
+// they did not touch — a half the seat's kind has since been changed under —
+// would refuse the lead for a change somebody else made to the structure.
+func (w *Writer) checkRuntime(changes bool, owner RuntimeOwner, runtime json.RawMessage) error {
+	if !changes || len(runtime) == 0 {
+		return nil
+	}
+	if err := w.runtime.Check(owner, runtime); err != nil {
+		return fmt.Errorf("%w: the runtime half of %s %q: %w", ErrRefused, owner.Kind,
+			owner.Name, err)
+	}
+	return nil
 }
 
 // notPlacedError is a content write whose object this node's rows do not hold

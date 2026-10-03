@@ -1187,7 +1187,7 @@ func insertEpisodeTx(ctx context.Context, tx *sql.Tx, db *store.DB, ep Episode) 
 		}
 	}
 	_, err := tx.ExecContext(ctx, episodeInsertSQL,
-		ep.ID, ep.Handle, ep.Role, ep.TaskID, ep.TurnID,
+		ep.ID, ep.Handle, ep.Role, ep.WorkItem, ep.TurnID,
 		store.EncodeTime(ep.StartedAt), store.EncodeTime(ep.EndedAt),
 		ep.PlanSummary, ep.TaskSummary, jsonList(ep.ToolSequence), jsonList(ep.SkillsUsed),
 		ep.ReviewOutcome, ep.Duration.Milliseconds(), blob,

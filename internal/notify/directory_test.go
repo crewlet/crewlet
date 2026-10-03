@@ -202,7 +202,7 @@ func TestReadingTheDirectoryIsThreeValued(t *testing.T) {
 
 // A SUSPENSION FINDS A SEAT THE CHART HAS RENAMED SINCE THE BIND.
 //
-// A binding names its seat by the handle the seat was CREATED under (ADR-0020),
+// A binding names its seat by the handle the seat was CREATED under (ADR-0027),
 // which a rename never moves. The control is the reading applied to that name
 // as a live handle — what the registry did before the binding was an identity —
 // which names a handle no seat answers to, so the suspended founder's Slack

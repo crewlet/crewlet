@@ -526,7 +526,7 @@ type Record struct {
 
 	// Payload is the record's BODY: what the domain published, with the
 	// framework's signature frame already opened and checked. An applier
-	// decodes this and never sees the frame, which is ADR-0018's rule
+	// decodes this and never sees the frame, which is ADR-0025's rule
 	// stated at the one field every applier reads — the alternative is
 	// every domain unwrapping for itself, and the one that forgot would
 	// fail on every record in the company while its neighbour worked.

@@ -13,7 +13,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/agent/builtin"
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
-	"github.com/crewlet/crewlet/internal/api/opsmcp"
+	"github.com/crewlet/crewlet/internal/api/operator"
 	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/httpx/httpxtest"
 	"github.com/crewlet/crewlet/internal/iam"
@@ -72,10 +72,7 @@ func TestOneRefusalWordingOnAllThreeSurfaces(t *testing.T) {
 
 	// THE OPERATOR'S ASSISTANT, over MCP as its client reaches it.
 	caller := person("ana", grants...)
-	operator := opsmcp.New(opsmcp.Options{
-		Work: deps, Authorize: builtin.Decide(chart{}),
-	})
-	handler := operator.Handler()
+	handler := r.operator(chart{}, serving(r.halves())).MCPHandler()
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter,
 		req *http.Request) {
 		handler.ServeHTTP(w,
@@ -86,7 +83,7 @@ func TestOneRefusalWordingOnAllThreeSurfaces(t *testing.T) {
 	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
 	defer cancel()
 	session, err := client.Connect(ctx, &mcp.StreamableClientTransport{
-		Endpoint: server.URL, HTTPClient: httpxtest.Pool(t),
+		Endpoint: server.URL + operator.MCPPath, HTTPClient: httpxtest.Pool(t),
 	}, nil)
 	if err != nil {
 		t.Fatalf("connect: %v", err)

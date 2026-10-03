@@ -397,7 +397,20 @@ func (h *applyHarness) upgrade(domain statelog.Domain) {
 // its checkpoint was committed under.
 func (h *applyHarness) rebuild(domain statelog.Domain, created time.Time) {
 	h.t.Helper()
-	h.applier = newProbeApplier()
+	probe := newProbeApplier()
+	h.rebuildWith(domain, created, probe, probe)
+}
+
+// rebuildWith is [applyHarness.rebuild] on a build whose applier is applier —
+// a probe applier, or one wrapping probe with rules of its own ([Deriver]) —
+// and it is the ONE place a restarting node's runner is built, so a case that
+// varies the applier inherits everything a restart is held to (the keyring
+// included) rather than a second copy of the deps that drifts from it.
+func (h *applyHarness) rebuildWith(domain statelog.Domain, created time.Time,
+	applier statelog.Applier, probe *probeApplier) {
+
+	h.t.Helper()
+	h.applier = probe
 	h.fetch = newProbeFetch()
 	recorder, err := metrics.New()
 	if err != nil {
@@ -417,7 +430,7 @@ func (h *applyHarness) rebuild(domain statelog.Domain, created time.Time) {
 	runner, err := statelog.NewRunner(statelog.RunnerDeps{
 		Domain:             domain,
 		Verifier:           testVerifier(h.t, domain),
-		Applier:            h.applier,
+		Applier:            applier,
 		Fetch:              h.fetch,
 		Log:                h.fetch,
 		Node:               h.db,

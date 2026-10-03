@@ -76,8 +76,8 @@ func redeemAs(t *testing.T, rig *writeRig, issued iamdomain.InviteIssued,
 //
 // Mutation: store the secret itself as the verifier and the document case
 // fails; compare without the hash, or admit an empty verifier, and Admits
-// answers the wrong way; drop `conditioned(&rec)` from Invite and the version
-// case fails.
+// answers the wrong way; drop the verifier's row from the field table
+// (`versionedFields`) and the version case fails.
 func TestAnInvitationKeepsItsLinksSecretOnlyAsAVerifier(t *testing.T) {
 	t.Parallel()
 	rig := newWriteRig(t)

@@ -1,0 +1,256 @@
+/**
+ * Every change the dashboard makes, as the tool the engine runs for it.
+ *
+ * The dashboard writes through ONE route — `POST /operator/act/{tool}`, as the
+ * principal the request resolves to (ADR-0024): a person the identity
+ * directory binds to a seat writes as that seat, a credential nobody is bound
+ * through under its own login, and nobody is refused for being unbound — what
+ * each may do is the authority table's, as on every surface. The tools behind
+ * it are the operator catalogue's, the same implementations a person's own
+ * assistant calls. This table is what the dashboard is allowed to send there:
+ * `protocol/act.ts` takes only a key of it, and only the arguments its row
+ * names, as the body's `args`; the operation is the request's
+ * `Idempotency-Key`, minted once per gesture and sent again on its retry,
+ * never an `op_id` argument, which the route refuses.
+ *
+ * ONE ROW PER TOOL A CONTROL PRESSES, and no other: `app/source.test.ts` holds
+ * the keys to the `useAct("…")` literals outside the suites, both ways, so a
+ * row lands with the control that sends it rather than ahead of it.
+ *
+ * Each row is:
+ *
+ *  - `args` — the arguments a screen may pass. Every one is a property of the
+ *    tool's own schema, and every property the schema REQUIRES is here;
+ *  - `domain` — the log the write lands in, whose position raises this tab's
+ *    read floor for that domain (`protocol/floors.ts`), or `null` for a
+ *    write that lands in no log a question reads;
+ *  - `refreshes` — questions OUTSIDE that domain's session set
+ *    (`contract/domains.ts`) that the write also moves, asked again without a
+ *    floor because they cannot take one;
+ *  - `scope` — `person` for a change somebody makes to the company's work in
+ *    their own name, `company` for one that rewrites what every seat's tracker
+ *    means (a project's settings, the catalogue), which a screen offers only
+ *    where it says so. It is the authority table's: a write decided by a
+ *    container's lead or by a deployment grant is `company`.
+ *
+ * HELD AGAINST THE REAL CATALOGUE by `internal/api/operator`'s
+ * `TestEveryActionTheDashboardTakesIsOneTheActTransportServes`: every tool is
+ * served by the act transport and is not a read, every argument is one its
+ * schema takes, every required one is present, and every scope is the one its
+ * authority class gives it. A renamed argument in Go is a red build here
+ * rather than a button the tools' own gate refuses `invalid_body` — an
+ * argument the tool does not declare — the first time somebody presses it.
+ */
+export const ACTIONS = {
+  create_work_item: {
+    // THE PALETTE'S TWO CREATES: "Create task" (a title, filed where the
+    // person's own create lands, or on the project they are looking at) and
+    // "Ask" (the question as the title, `ask` naming the agent who owes the
+    // answer, which lands in the asker's inbox).
+    //
+    // AND THE TASK PAGE'S "+ SUB-TASK": a title filed under the task it is
+    // on (`parent`), in that task's project.
+    //
+    // AND THE NEW TASK SHEET (`routes/work/NewTask.tsx`), which files the
+    // whole of a task in one record: its type, the status it starts in (a
+    // board lane's "+" names its own), its priority, due date and labels.
+    args: [
+      "title",
+      "body",
+      "project",
+      "assignee",
+      "ask",
+      "parent",
+      "type",
+      "status",
+      "priority",
+      "due",
+      "labels",
+    ],
+    domain: "tracker",
+    refreshes: ["work_search"],
+    scope: "person",
+  },
+  answer_knowledge: {
+    // A WRITE THAT CHANGES NOTHING, because it SPENDS: one model call per
+    // question, and a read would be asked again on every refocus and
+    // reconnect. It lands in no log, so it raises no floor.
+    args: ["q"],
+    domain: null,
+    refreshes: [],
+    scope: "person",
+  },
+  update_work_item: {
+    // `linked` AND `linked_pages` ARE THE INBOX COMPOSER'S "Link a task" and
+    // "Attach a page": each is a delta (`{add: [...]}`) on the item the
+    // conversation is about, never the whole relation set.
+    //
+    // THE TASK PAGE EDITS THE REST: the title and description, the labels
+    // (which REPLACE the set), the schedule, a custom field by slug, one
+    // checklist gesture at a time, and whether the person follows it.
+    args: [
+      "item",
+      "assignee",
+      "reason",
+      "status",
+      "priority",
+      "if_match",
+      "linked",
+      "linked_pages",
+      "title",
+      "body",
+      "labels",
+      "due",
+      "start",
+      "estimate_minutes",
+      "points",
+      "fields",
+      "checklist",
+      "watch",
+    ],
+    domain: "tracker",
+    refreshes: ["work_search"],
+    scope: "person",
+  },
+  restore_work_item: {
+    args: ["item"],
+    domain: "tracker",
+    refreshes: ["work_search"],
+    scope: "person",
+  },
+  write_project: {
+    // "EDIT PROJECT" on a project's page: the lead's target date. A project's
+    // settings are what every seat's tracker reads, so this is a COMPANY
+    // write, offered only on the project's own page — and the engine decides
+    // who may make it: the project's lead, or the deployment's grant.
+    args: ["project", "target_date"],
+    domain: "tracker",
+    refreshes: [],
+    scope: "company",
+  },
+  set_pins: {
+    args: ["views", "favorites"],
+    domain: "tracker",
+    refreshes: [],
+    scope: "person",
+  },
+  set_priorities: {
+    // MY WORK'S REORDER: a row of somebody's priorities dragged, or moved
+    // with Alt and an arrow, to a new place. The WHOLE list is sent, made
+    // from the person's own stored one (`routes/me/reorder.ts`), and it is
+    // conditional on the record's `version` — a reorder from a screen that
+    // read an older order is refused rather than putting that order back.
+    // `handle` is whose queue: the reader's own, or a report's for a lead.
+    args: ["handle", "items", "if_match"],
+    domain: "tracker",
+    refreshes: [],
+    scope: "person",
+  },
+  comment_on_work_item: {
+    // A DECISION ANSWERED IN PLACE: the option button sends the choice as an
+    // answer to the ask it belongs to, which closes the ask and wakes the
+    // asker with what was chosen.
+    //
+    // AND A REPLY IN THE ASK'S OWN THREAD (`reply_to`), which answers
+    // nothing: a person asking the asker a question back leaves the ask open.
+    //
+    // AND AN ASK FROM THE TASK PAGE: a question put to one seat (`ask`),
+    // optionally with the options it is to choose between (`decision`).
+    args: ["item", "answers", "choice", "body", "reply_to", "ask", "decision"],
+    domain: "tracker",
+    refreshes: [],
+    scope: "person",
+  },
+  answer_run: {
+    // A PARKED CODING RUN ANSWERED BY ITS TURN. It lands on the seat's
+    // inbox rather than in a log a question reads, so it raises no floor;
+    // the run's record moves when the node holding the seat resumes it.
+    args: ["turn_id", "answer"],
+    domain: null,
+    refreshes: ["sandbox_runs", "decisions"],
+    scope: "person",
+  },
+  pause_seat: {
+    // A SEAT'S PROFILE PAUSES IT: its mail waits, its schedules are skipped,
+    // and the turn it is on finishes first unless `stop_running` asks for it
+    // to end at its next round. The pause is a coordination record rather
+    // than a log a question reads, so it raises no floor; the seat's state
+    // moves on the agents push, which every node sends when its watch lands.
+    args: ["handle", "reason", "stop_running"],
+    domain: null,
+    refreshes: [],
+    scope: "person",
+  },
+  resume_seat: {
+    // AND RESUMES IT: the mail that waited is delivered first, in order.
+    args: ["handle"],
+    domain: null,
+    refreshes: [],
+    scope: "person",
+  },
+  steer_turn: {
+    // STEER ON THE TURN TRACE: a note to a turn running now, read at its
+    // next round. It crosses to the node running the turn on an ephemeral
+    // ask rather than into a log, so it raises no floor; what became of it
+    // is the turn's own `agent_turn_steered`, which the trace re-reads.
+    args: ["turn_id", "note"],
+    domain: null,
+    refreshes: ["turn"],
+    scope: "person",
+  },
+  write_page: {
+    // "SAVE AS A PAGE" in the Inbox's composer: what the person wrote becomes
+    // a new page in the knowledge base, which is then attached to the item
+    // (`update_work_item{linked_pages}`) — the long form a comment's size
+    // limit sends a writer to.
+    //
+    // AND "NEW PAGE" in the knowledge base: a space's own page files one at
+    // its top, a page's "New sub-page" under it (`parent`).
+    args: ["title", "body", "container", "parent"],
+    domain: "pages",
+    refreshes: ["knowledge"],
+    scope: "person",
+  },
+  save_page: {
+    // "EDIT" ON A PAGE: the body the person rewrote, saved against the
+    // version they opened (`base_version`), so a save that raced somebody
+    // else's is refused `stale_version` rather than overwriting it. A
+    // one-line `message` says what changed, as a seat's save does.
+    args: ["page", "base_version", "body", "message"],
+    domain: "pages",
+    refreshes: ["knowledge"],
+    scope: "person",
+  },
+  comment_on_page: {
+    // A PAGE'S THREAD: a remark, or a reply to one (`reply_to`).
+    args: ["page", "body", "reply_to"],
+    domain: "pages",
+    refreshes: [],
+    scope: "person",
+  },
+  place_work_item: {
+    // A BOARD DRAG: the card dropped `before` a neighbour, or `after` the last
+    // card of a lane, and into another lane with `status`. The engine mints
+    // the place between the neighbours as the board stands when it lands.
+    args: ["item", "before", "after", "status", "if_match"],
+    domain: "tracker",
+    refreshes: ["work_search"],
+    scope: "person",
+  },
+  save_work_view: {
+    // "+ VIEW": the query on screen, saved under a name on this container,
+    // shared, or kept to the person who saved it with `personal` — whose
+    // record it is the engine decides from the caller, never from a name a
+    // screen sends.
+    args: ["container", "name", "type", "params", "personal"],
+    domain: "tracker",
+    refreshes: [],
+    scope: "person",
+  },
+  mark_inbox: {
+    args: ["read", "unread", "snooze", "unsnooze", "read_through"],
+    domain: "tracker",
+    refreshes: [],
+    scope: "person",
+  },
+} as const;

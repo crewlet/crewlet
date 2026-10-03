@@ -18,7 +18,7 @@ import (
 	"github.com/crewlet/crewlet/internal/mcp"
 )
 
-// Callable, Result and Annotations are the MCP package's, reused rather than
+// Callable, Result, Annotations and Refusal are the MCP package's, reused rather than
 // re-declared.
 //
 // Not because MCP is special, but because a second structurally-identical
@@ -32,6 +32,54 @@ type (
 	Result = mcp.Result
 	// Annotations are a tool's behavioural hints, tri-state.
 	Annotations = mcp.Annotations
+	// Refusal is a first-party failure's machine-readable class.
+	Refusal = mcp.Refusal
+)
+
+// The refusal classes, re-exported for the same reason as the types above: a
+// builtin names its class without knowing MCP exists, and one definition is
+// the only way the two spellings cannot drift. See [mcp.Refusal].
+const (
+	RefusalInvalid            = mcp.RefusalInvalid
+	RefusalNotFound           = mcp.RefusalNotFound
+	RefusalForbidden          = mcp.RefusalForbidden
+	RefusalStaleVersion       = mcp.RefusalStaleVersion
+	RefusalConflict           = mcp.RefusalConflict
+	RefusalExists             = mcp.RefusalExists
+	RefusalAlreadyAnswered    = mcp.RefusalAlreadyAnswered
+	RefusalReassignmentBudget = mcp.RefusalReassignmentBudget
+	RefusalInboxFull          = mcp.RefusalInboxFull
+	RefusalNotRunning         = mcp.RefusalNotRunning
+	RefusalSteerUnsupported   = mcp.RefusalSteerUnsupported
+	RefusalBudgetExhausted    = mcp.RefusalBudgetExhausted
+	RefusalUnavailable        = mcp.RefusalUnavailable
+	RefusalPeerUpgrading      = mcp.RefusalPeerUpgrading
+	RefusalInternalError      = mcp.RefusalInternalError
+)
+
+// The class is READ, never stored: a failed [Result] carries one value, its
+// [Result.Cause], and these are the only way anything above this package
+// learns its class or whether its write may have landed. Re-exported for the
+// reason the classes are — a builtin, the delegate tool and a reader of a
+// recorded [Call] name them without knowing MCP exists — and as the very
+// functions, so there is one definition to drift from rather than two.
+var (
+	// Classify states a refusal's class beneath the error that decided it.
+	// See [mcp.Classify].
+	Classify = mcp.Classify
+
+	// RefusalOf is a failed result's class, read out of its cause. See
+	// [mcp.RefusalOf].
+	RefusalOf = mcp.RefusalOf
+
+	// UnknownOf reports whether a failed result's write may have landed.
+	// See [mcp.UnknownOf].
+	UnknownOf = mcp.UnknownOf
+
+	// ErrOutcomeUnknown is the cause of a write nobody can vouch for, and
+	// a tool's own unknown-outcome error wraps it. See
+	// [mcp.ErrOutcomeUnknown].
+	ErrOutcomeUnknown = mcp.ErrOutcomeUnknown
 )
 
 // The tool-origin grammar: who put a tool in front of the agents.
@@ -107,10 +155,22 @@ type Entry struct {
 // Name is the tool's catalogue name.
 func (e Entry) Name() string { return e.Tool.Name() }
 
-// FromMCP is the server name for an MCP-served tool, and false otherwise.
+// FromMCP is the server name for an MCP-served tool, and "" with false
+// otherwise.
+//
+// THE EMPTY NAME ON A MISS IS THE CONTRACT, not a courtesy: [strings.CutPrefix]
+// hands back its whole input when the prefix is absent, and returning that
+// unchecked gave every builtin the "server" `builtin` wherever the name was read
+// without the flag — the skill guard's check among them, whose server triggers
+// are documented as covering no builtin because a builtin's server is "", and
+// which a required skill naming a server called `builtin` would therefore have
+// matched against every engine tool.
 func (e Entry) FromMCP() (string, bool) {
 	server, ok := strings.CutPrefix(e.Origin, OriginMCPPrefix)
-	return server, ok
+	if !ok {
+		return "", false
+	}
+	return server, true
 }
 
 // Registry holds every tool the engine can offer.

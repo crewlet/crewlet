@@ -242,7 +242,7 @@ func TestAnEmbeddedBrokerWithoutTheCeilingFailsTheBootAndBlamesTheBuild(t *testi
 		open func() (func(), error)
 	}{
 		{"the queue's own connection", func() (func(), error) {
-			q, err := newQueueOn(t.Context(), Config{}, broken, false)
+			q, err := newQueueOn(t.Context(), Config{}, broken, false, queue.Options{})
 			if err != nil {
 				return nil, err
 			}

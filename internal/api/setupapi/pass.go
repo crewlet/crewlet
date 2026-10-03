@@ -29,7 +29,7 @@ import (
 // # The result goes where the loop's does
 //
 // Both write their outcome to the same fleet status the reconcile loop
-// writes, through the same fold, so the Integrations screen updates with no
+// writes, through the same fold, so Settings › Integrations updates with no
 // extra plumbing and a pass run by hand can never disagree with a tick that
 // runs a minute later.
 //

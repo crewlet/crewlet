@@ -59,13 +59,15 @@ func startReconciler(ctx context.Context, e *engine.Engine, boot *config.Bootstr
 ) (*engine.Reconciler, error) {
 	db := e.Backends().Store
 	plane := e.Backends().Fleet
-	if err := seedCompany(ctx, db, plane, e.Backends().Queue, seed, cipher, log); err != nil {
-		return nil, err
-	}
-
+	// THE NODE'S IDENTITY FIRST, because a seed is this node's own write and
+	// the revision records which node made it.
 	nodeID, err := config.ResolveNodeID(boot, nil)
 	if err != nil {
 		return nil, fmt.Errorf("node identity: %w", err)
+	}
+	if err = seedCompany(ctx, db, plane, e.Backends().Queue, seed, cipher,
+		nodeID, log); err != nil {
+		return nil, err
 	}
 	reconciler, err := e.NewReconciler(engine.ReconcilerOptions{
 		Store: db, Fleet: plane, Queue: e.Backends().Queue,
@@ -96,8 +98,12 @@ func startReconciler(ctx context.Context, e *engine.Engine, boot *config.Bootstr
 // however many times the node boots. What happens to a CHANGED one is the
 // seed's mode — see the package note above. A bootstrap seed reports the
 // difference and leaves the store alone; an override imports it.
+//
+// A revision the seed writes is the NODE's, recorded under the node's own id:
+// nobody ran a command, the node read its -company file at boot, and which
+// node did it is the fact somebody reading the history later needs.
 func seedCompany(ctx context.Context, db *store.DB, plane coord.Plane, pub queue.Publisher,
-	seed tierBSeed, cipher secrets.Cipher, log *slog.Logger,
+	seed tierBSeed, cipher secrets.Cipher, nodeID string, log *slog.Logger,
 ) error {
 	configs := db.Configs()
 	active, found, err := configs.Active(ctx)
@@ -189,11 +195,14 @@ func seedCompany(ctx context.Context, db *store.DB, plane coord.Plane, pub queue
 	// STORED FIRST, then pointed at: a crash between the two leaves a
 	// revision nothing points at, which the next boot re-seeds over. The
 	// other order would point the fleet at a payload no node can read.
-	// THE ENGINE IS THE AUTHOR: a boot imported this file, and no
-	// credential made the write.
+	// THE NODE IS THE AUTHOR: a boot imported this file, and no credential
+	// made the write. Named by the node's own id, because which node read
+	// its -company file is the fact somebody reading the history later
+	// needs, and of the system kind, since nobody ran a command.
+	by := iam.Actor{Name: nodeID, Kind: iam.ActorSystem}
 	seeded := store.Revision{
-		ParentID: parent, Source: "file", CreatedBy: seedAuthor,
-		CreatedByKind: string(iam.ActorSystem), Summary: summary, Payload: payload,
+		ParentID: parent, Source: "file", CreatedBy: by.Name,
+		CreatedByKind: by.Kind, Summary: summary, Payload: payload,
 		CreatedAt: at,
 	}
 	id, err := configs.InsertActive(ctx, seeded)
@@ -208,7 +217,11 @@ func seedCompany(ctx context.Context, db *store.DB, plane coord.Plane, pub queue
 	// fail against a fleet that had moved on for perfectly good reasons.
 	published, err := plane.Activate(ctx, coord.ActivationRequest{
 		RevisionID: id, Summary: summary, Payload: payload, At: at,
-		CreatedBy: seeded.CreatedBy, CreatedByKind: seeded.CreatedByKind,
+		// THE ORIGIN RIDES THE POINTER, so every peer that adopts this
+		// revision records the node that seeded it, from `file`, at the
+		// instant it was written — rather than itself, at the instant it
+		// happened to apply it.
+		Origin: originOf(seeded),
 	})
 	if err != nil {
 		return fmt.Errorf("activate the seeded company config: %w", err)
@@ -287,14 +300,16 @@ func publishLocalActive(ctx context.Context, plane coord.Plane, pub queue.Publis
 	// legitimate, and every node converges on whichever landed. A
 	// compare-and-set would turn that into a boot-time failure to retry
 	// for nothing. It is the EDIT path that must not lose a write.
-	// THE REVISION'S OWN AUTHOR travels with it — the operator who ran the
-	// offline import, most often — so every peer that adopts it records who
-	// wrote it rather than the node that happened to publish it.
+	//
+	// THE REVISION'S OWN ORIGIN goes up with it, never this node's: an
+	// offline `crewlet config import` is an operator's write that only
+	// reaches the fleet here, so every peer that adopts it records who
+	// wrote it, through which credential, from where and when — rather
+	// than the node that happened to publish it.
 	published, err := plane.Activate(ctx, coord.ActivationRequest{
 		RevisionID: active.ID, Summary: active.Summary,
 		Payload: active.Payload, At: active.ActivatedAt,
-		CreatedBy: active.CreatedBy, CreatedByKind: active.CreatedByKind,
-		OperatorID: active.OperatorID,
+		Origin: originOf(active),
 	})
 	if err != nil {
 		return fmt.Errorf("publish the active revision: %w", err)
@@ -303,6 +318,16 @@ func publishLocalActive(ctx context.Context, plane coord.Plane, pub queue.Publis
 	nudge(ctx, pub, active, log)
 	log.InfoContext(ctx, "local_revision_published", "revision", active.ID, "epoch", published.Epoch)
 	return nil
+}
+
+// originOf is a stored revision's own record, as the pointer carries it: the
+// author, its kind and the credential beside it, where the revision came from
+// and when it was written.
+func originOf(r store.Revision) coord.RevisionOrigin {
+	return coord.RevisionOrigin{
+		Author: r.CreatedBy, AuthorKind: r.CreatedByKind, OperatorID: r.OperatorID,
+		Source: r.Source, CreatedAt: r.CreatedAt,
+	}
 }
 
 // keepPointersInstant makes this node's local copy of a revision it just
@@ -359,7 +384,7 @@ func nudge(ctx context.Context, pub queue.Publisher, revision store.Revision,
 	}
 	ev := events.New(types.ConfigRevisionActivated{
 		RevisionID: revision.ID, RevisionSummary: revision.Summary,
-		CreatedBy: revision.CreatedBy, CreatedByKind: revision.CreatedByKind,
+		CreatedBy: revision.CreatedBy, CreatedByKind: string(revision.CreatedByKind),
 		OperatorID: revision.OperatorID,
 	}, tracing.TraceOf(ctx))
 	if err := pub.Publish(ctx, topics.ConfigRevisionActivated, ev); err != nil {
@@ -367,11 +392,6 @@ func nudge(ctx context.Context, pub queue.Publisher, revision store.Revision,
 			"error", err, "detail", "peers converge on their reconcile interval instead")
 	}
 }
-
-// seedAuthor is who a revision this node imported from its own command line
-// at boot records as its author: the engine, of the system kind, with no
-// credential beside it — none made the write.
-const seedAuthor = "node"
 
 // bootOptions is what `crewlet run` builds its engine from: the Tier A it
 // loaded and the company this node starts on.
@@ -438,9 +458,9 @@ func companyFromStore(ctx context.Context, bootstrapPath string) (*config.Compan
 		return nil, err
 	}
 	// AS SETTINGS: a stored revision is the company's settings and the org
-	// chart is the state log's own domain. A revision written before the
-	// split is refused rather than applied with its chart dropped — see
-	// [config.DecodeSettings], whose refusal names the repair.
+	// chart is the state log's own domain. A revision carrying a chart is
+	// refused rather than applied with its chart dropped — see
+	// [config.DecodeSettings], whose refusal names where the chart lives.
 	company, err := config.DecodeSettingsAsCompany(document)
 	if err != nil {
 		return nil, fmt.Errorf("parse the active revision %s: %w", active.ID, err)

@@ -25,9 +25,16 @@ type Result struct {
 
 	// Cause is WHY a failed call failed, as a value a caller can branch on:
 	// an authority refusal, a stale version, a node that could not decide.
-	// Nil on a success, and nil on a refusal the tool worded itself with
-	// nothing underneath it — a missing argument, an item that does not
-	// exist.
+	// Nil on a success, and nil on a failure nothing in this engine
+	// classified — an MCP server's, which reports prose and no class.
+	//
+	// IT IS ALSO WHERE A FIRST-PARTY REFUSAL'S CLASS RIDES. A [Refusal] is
+	// an error, so a tool states its class as the cause itself — or beneath
+	// the error that caused it, through [Classify] — and [RefusalOf] and
+	// [UnknownOf] read it back out. ONE VALUE, never a class field beside
+	// it: two classifiers of one failure drift apart, and a stored "not
+	// unknown" beside a cause that says the write may have landed would
+	// have a person's screen report that nothing happened.
 	//
 	// NEVER RENDERED, and that is the one rule this field carries. Output is
 	// still the whole of what anybody reads — the incident this struct's doc

@@ -11,7 +11,6 @@ import (
 
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/knowledge"
-	"github.com/crewlet/crewlet/internal/learning"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/store"
 )
@@ -45,60 +44,29 @@ func (s Sources) turn(ctx context.Context, p Params) (any, error) {
 	if id == "" {
 		return nil, fmt.Errorf("%w: turn needs a turn_id", ErrBadParams)
 	}
-	records, err := s.Events.Turn(ctx, id)
+	detail, coverage, err := s.Events.Turn(ctx, id)
 	if err != nil {
 		return nil, err
 	}
-	// THE READ STOPPED AT THE CAP, not at the end of the turn. EventLog.Turn
-	// is ordered oldest first, because a turn is read forwards — so the rows
-	// a long turn loses are its ENDING, which is where `agent_turn_completed`
-	// and `turn_completed` are: the two records a reader takes the outcome,
-	// the wall clock and the plan summary from. A turn cut at the cap was
-	// therefore indistinguishable from one that died before finishing, and
-	// the screen said so out loud, printing "no turn record" directly above
-	// the rows it did get.
+	records := detail.Rows
+	// THE READ STOPS AT THE CAP, not at the end of the turn. A turn is read
+	// forwards, so the rows a long turn loses are its ENDING, which is where
+	// `agent_turn_completed` and `turn_completed` are: the two records a
+	// reader takes the outcome, the wall clock and the plan summary from. A
+	// turn cut at the cap was indistinguishable from one that died before
+	// finishing, and the screen said so out loud, printing "no turn record"
+	// directly above the rows it did get.
 	//
 	// So a cut view gets its ENDING BACK and reports the gap in the MIDDLE,
-	// which is the part nothing can stand in for. Two cheap seeks on the same
-	// (turn_id, event_time, event_id) index rather than one, and only on the
-	// turns that need it.
+	// which is the part nothing can stand in for — assembled by
+	// internal/eventfan from every node that ran part of the turn, since a
+	// turn resumed on another node after a restart has an opening on one and
+	// an ending on the other.
 	//
-	// ASKED, NOT INFERRED. `len(records) == cap` is not "the read stopped
-	// early": a turn of exactly the cap holds every row it has, and the
-	// recovery below widens that misreading rather than narrowing it — a turn
-	// a little past the cap ends up whole on the page, under a banner saying
-	// part of it is missing. The count runs only on a read that filled, which
-	// is the only case where a cut is possible at all.
-	//
-	// THE SECOND READ DEGRADES, it does not fail the first. The rows are
-	// already in hand and they are what the reader came for; discarding a
-	// successful 500-row read because a follow-up count could not be taken
-	// turns the largest turns — the only ones that reach this branch at all,
-	// and the ones most worth opening — into `query_failed`. So a failure
-	// here leaves `truncated` false and logs: the page renders, and the worst
-	// case is a missing caution badge rather than a missing screen.
-	truncated := false
-	if len(records) >= store.MaxTurnEvents {
-		//nolint:govet // shadow: scoped to this block; see .golangci.yml
-		total, err := s.Events.TurnEventCount(ctx, id)
-		switch {
-		case err != nil:
-			log.WarnContext(ctx, "turn_extent_unavailable", "turn", id, "error", err)
-		case total > len(records):
-			//nolint:govet // shadow: scoped to this block; see .golangci.yml
-			closing, err := s.Events.TurnClosing(ctx, id, TurnClosingEvents)
-			if err != nil {
-				log.WarnContext(ctx, "turn_ending_unavailable", "turn", id, "error", err)
-			} else {
-				records = mergeByID(records, closing)
-			}
-			// AFTER the merge, because the merge is what decides it: the
-			// recovered ending closes the gap outright on a turn only a
-			// little past the cap, and leaves one on a turn that is
-			// genuinely long.
-			truncated = total > len(records)
-		}
-	}
+	// ASKED, NOT INFERRED: each node counts what it holds when its read
+	// filled, because `len(records) == cap` is not "the read stopped early"
+	// — a turn of exactly the cap holds every row it has.
+	truncated := detail.Total > len(records)
 	// EVERY TRACE THIS TURN TOUCHED, asked rather than derived.
 	//
 	// A turn RESUMED on another node after a restart spans more than one
@@ -108,15 +76,7 @@ func (s Sources) turn(ctx context.Context, p Params) (any, error) {
 	// dropped — so one button labelled "trace" led to half the story with
 	// nothing saying a second half existed, on precisely the turns where it
 	// did.
-	//
-	// DEGRADES LIKE THE RECOVERY ABOVE, for the same reason: the rows are
-	// what the reader came for, and discarding a good read because a cheap
-	// follow-up seek failed turns the largest turns into `query_failed`.
-	traces, err := s.Events.TurnTraces(ctx, id)
-	if err != nil {
-		log.WarnContext(ctx, "turn_traces_unavailable", "turn", id, "error", err)
-		traces = []string{}
-	}
+	traces := detail.Traces
 	// WHICH ATTEMPT THIS IS, and where the others are.
 	//
 	// A turn id names one RUN (ADR-0017), so a trigger that failed without
@@ -126,13 +86,14 @@ func (s Sources) turn(ctx context.Context, p Params) (any, error) {
 	// company did the work twice, or that it failed when in fact the next
 	// attempt succeeded.
 	//
-	// DEGRADES like the two reads above, and for the same reason: the rows
-	// are what the caller came for.
+	// DEGRADES rather than failing the answer: the rows are what the caller
+	// came for, and a follow-up that could not be read costs the attempt
+	// count rather than the screen.
 	key, siblings := s.attemptsOf(ctx, id, records)
 	return map[string]any{
 		"turn_id": id,
 		// The unit of work this run was an attempt at, and every run of it
-		// this store holds, oldest first. One element — this turn — is the
+		// the fleet holds, oldest first. One element — this turn — is the
 		// ordinary case; empty means the turn carries no work key at all,
 		// which is a trigger with nothing to collapse on.
 		"work_key": key,
@@ -144,11 +105,20 @@ func (s Sources) turn(ctx context.Context, p Params) (any, error) {
 		// cannot answer its own headline question.
 		"truncated": truncated,
 		"trace_ids": traces,
+		// WHICH NODES THE TURN WAS ASSEMBLED FROM. A node that did not
+		// answer may hold the part of the turn this page is missing.
+		"coverage": coverage,
+		// AND WHICH OF THEM RAN IT: the nodes whose own store held any of
+		// its events, since each node's store holds only what it
+		// published. Never null, so "ran nowhere this read could see" is
+		// an empty list rather than a missing key.
+		"nodes": nonNilStrings(detail.Nodes),
 	}, nil
 }
 
 // attemptsOf reports the unit of work a run was an attempt at, and every run
-// of it this store still holds, oldest first.
+// of it the fleet still holds, oldest first — an attempt that ran on another
+// node is an attempt all the same.
 //
 // THE KEY COMES OFF THE ROWS THIS READ ALREADY HAS rather than from a second
 // seek: every event of the turn carries it, and a turn with none is answered
@@ -191,86 +161,21 @@ func (s Sources) attemptsOf(ctx context.Context, id string,
 	// DefaultTurnPage would have tied "attempt 3 of 4" to a knob sized for
 	// a scannable list, so shrinking that list would silently start
 	// miscounting attempts.
-	rows, err := s.Events.Turns(ctx, store.TurnQuery{
+	page, _, err := s.Events.Turns(ctx, store.TurnQuery{
 		WorkKey:   key,
 		SinceDays: store.MaxTurnDays,
 		Limit:     store.MaxTurnPage,
-	})
+	}, s.clock())
 	if err != nil {
 		log.WarnContext(ctx, "turn_attempts_unavailable", "turn", id,
 			"work_key", key, "error", err)
 		return key, []store.Turn{}
 	}
+	rows := page.Turns
 	// OLDEST FIRST, which the listing is not: "attempt 2 of 3" has to count
 	// from the one that ran first, whatever order the list was built in.
 	slices.Reverse(rows)
 	return key, rows
-}
-
-// TurnClosingEvents is how many of a long turn's last rows are recovered
-// beside its opening.
-//
-// Twenty rather than two, because the two records a reader came for are not
-// reliably the last two. A turn ends with its final review phase, then
-// `agent_turn_completed` and `turn_completed` — and then the REFLECTION PASS,
-// which publishes after them: an episode, a persist decision, a counterparty
-// profile, a synthesized, refined or promoted skill, and its own sentinel,
-// each of them a model call that also files its own auxiliary
-// `agent_phase_completed`. Two would be swallowed by that tail on any turn
-// with learning enabled, and the review phase — the one a reader who came for
-// "how did it end" wants beside the words — would go with them.
-//
-// Twenty clears that with headroom while staying small enough that the second
-// read is a seek rather than a scan. The recovered rows replace nothing: they
-// are appended to the head, so a cut view holds MaxTurnEvents opening rows
-// plus at most this many closing ones, which is the same payload budget the
-// cap exists for with a bounded addition.
-const TurnClosingEvents = 20
-
-// mergeByID appends the rows of `tail` that `head` does not already hold.
-//
-// The two reads come from opposite ends of one index, so on a turn that only
-// just reached the cap they OVERLAP — the same rows, read the other way round
-// — and concatenating would render a phase card twice. Order is preserved:
-// head is oldest first and so is tail, so the result stays the sequence a turn
-// is read in, with whatever gap the cap left between them.
-func mergeByID(head, tail []store.EventRecord) []store.EventRecord {
-	if len(tail) == 0 {
-		return head
-	}
-	// KEYED ON THE STORE'S OWN IDENTITY, (event_time, event_id), which is the
-	// events table's PRIMARY KEY — the id alone is indexed but NOT unique, and
-	// the schema says so in as many words. [store.EventLog.ByID] already reads
-	// it as "take the newest match", which is only a meaningful thing to say
-	// because more than one row can carry one id.
-	//
-	// A key narrower than the table's drops a row the two reads legitimately
-	// both carry, and the drop is not where it would be noticed: `truncated`
-	// below is `total > len(records)`, so a wrongly dropped row leaves the
-	// page one short of the count and reports a gap in the middle of a turn
-	// that is whole on the screen.
-	//
-	// Microseconds rather than the time.Time, because a time.Time carries a
-	// monotonic reading and a location and is not a safe map key; micros is
-	// exactly what the column holds.
-	type identity struct {
-		At int64
-		ID string
-	}
-	keyOf := func(r store.EventRecord) identity {
-		return identity{At: store.EncodeTime(r.Time), ID: r.ID}
-	}
-	seen := make(map[identity]struct{}, len(head))
-	for _, r := range head {
-		seen[keyOf(r)] = struct{}{}
-	}
-	for _, r := range tail {
-		if _, dup := seen[keyOf(r)]; dup {
-			continue
-		}
-		head = append(head, r)
-	}
-	return head
 }
 
 // phases answers what the models have been doing, company-wide.
@@ -294,17 +199,29 @@ func (s Sources) phases(ctx context.Context, p Params) (any, error) {
 		before = &store.Cursor{Time: at, ID: id}
 	}
 	limit := Clamp(p.Int("limit", 0), DefaultPhasePage, store.MaxPhasePage)
-	records, err := s.Events.Phases(ctx, strings.TrimSpace(p.String("agent_id")), limit, before)
+	// ONE SEAT'S PHASES, by its HANDLE — see [Sources.seatAgentID]. It
+	// took a role name, which two unit seats stamped from one template
+	// share, so Live's `seat=` narrowed "this seat's rounds" to every such
+	// seat's.
+	agentID, err := s.seatParam(p)
 	if err != nil {
 		return nil, err
 	}
+	listing, coverage, err := s.Events.Phases(ctx, agentID, limit, before)
+	if err != nil {
+		return nil, err
+	}
+	records := listing.Rows
 	// The cursor is the LAST row's key, echoed rather than left for a client
 	// to assemble: (time, id) is the table's key, and a client rebuilding it
 	// from a rendered timestamp would lose the sub-second precision the
-	// tiebreak depends on. It is offered only on a FULL page — a short one is
-	// the end of the record, and a cursor there would page forever.
+	// tiebreak depends on. It is offered only when the fleet holds MORE — a
+	// node whose read found a row past its page, or a page the merge cut at
+	// the newest point such a node stopped at — since a cursor past the end
+	// would page forever, and one on a page that merely filled pages onto
+	// nothing.
 	next := map[string]string{}
-	if len(records) == limit {
+	if listing.More && len(records) > 0 {
 		last := records[len(records)-1]
 		next = map[string]string{
 			"before_time": last.Time.UTC().Format(time.RFC3339Nano),
@@ -315,6 +232,7 @@ func (s Sources) phases(ctx context.Context, p Params) (any, error) {
 		"phases":    records,
 		"next":      next,
 		"exhausted": len(next) == 0,
+		"coverage":  coverage,
 	}, nil
 }
 
@@ -438,20 +356,32 @@ func (s Sources) a2aChannels(ctx context.Context, p Params) (any, error) {
 // would let a dashboard reader read, through that seat's account, material
 // their own account may not have — which is the exact confusion the seam's
 // "unscoped is not unbounded" rule exists to prevent.
+//
+// THE MODE IS THE ASKER'S, and the answer says what was served: `served_mode`,
+// the `modes` this backend can serve as asked, `degraded` when those differ,
+// and the `coverage` of the fleet the search was divided across — see
+// [knowledge.Outcome]. A mode this build does not know is refused rather than
+// run as the default, because that would answer a different question.
 func (s Sources) knowledgeSearch(ctx context.Context, p Params) (any, error) {
 	text := p.String("q")
 	if text == "" {
 		text = p.String("text")
 	}
+	mode, err := knowledge.ParseMode(p.String("mode"))
+	if err != nil {
+		return nil, badParams("mode", p.String("mode"), modeNames())
+	}
 	organization := s.organization()
 	out := map[string]any{
 		"backend":   "",
 		"query":     text,
+		"mode":      string(mode),
 		"hits":      []any{},
 		"available": true,
 		"reason":    string(KnowledgeRan),
 		"note":      "",
 	}
+	outcome(out, knowledge.Outcome{})
 	unavailable := func(reason KnowledgeReason, note string) (any, error) {
 		out["available"] = false
 		out["reason"] = string(reason)
@@ -494,16 +424,24 @@ func (s Sources) knowledgeSearch(ctx context.Context, p Params) (any, error) {
 			"this node is still indexing what it has projected, so a search "+
 				"here would answer empty for pages that exist")
 	}
-	if text == "" {
-		return out, nil
-	}
-	hits := searcher.Search(ctx, knowledge.Query{
+	// AN EMPTY PHRASE IS THE SEAM'S PROBE rather than an early return:
+	// nothing runs, but the answer carries the modes this backend serves as
+	// asked and why the asked one would degrade, so a screen offers the
+	// modes honestly before its reader types — see [knowledge.Searcher].
+	result := searcher.Search(ctx, knowledge.Query{
 		Text:  text,
 		Org:   organization,
 		Limit: KnowledgeHitLimit,
+		Mode:  mode,
 	})
-	rows := make([]map[string]any, 0, len(hits))
-	for _, hit := range hits {
+	outcome(out, result.Outcome)
+	if text == "" {
+		// A PROBE HAS NO HITS, whatever a backend put in its result: a list
+		// under a phrase nobody typed would be an answer to no question.
+		return out, nil
+	}
+	rows := make([]map[string]any, 0, len(result.Hits))
+	for _, hit := range result.Hits {
 		rows = append(rows, map[string]any{
 			"id":        hit.PageID,
 			"title":     hit.Title,
@@ -518,6 +456,37 @@ func (s Sources) knowledgeSearch(ctx context.Context, p Params) (any, error) {
 	}
 	out["hits"] = rows
 	return out, nil
+}
+
+// outcome writes what a ranked search did onto its answer: the four fields
+// `knowledge` and `work_search` share, so one screen control reads both.
+//
+// NEVER NULL: an absent outcome — a search that did not run — is an empty
+// mode list, no served mode and a coverage of no nodes, not complete. A
+// screen that has to guard each field is a screen that renders `null` the
+// first time it forgets one.
+func outcome(out map[string]any, o knowledge.Outcome) {
+	modes := make([]string, 0, len(o.Modes))
+	for _, m := range o.Modes {
+		modes = append(modes, string(m))
+	}
+	coverage := o.Coverage
+	if coverage.Nodes == nil {
+		coverage.Nodes = []knowledge.NodeCoverage{}
+	}
+	out["served_mode"] = string(o.ServedMode)
+	out["modes"] = modes
+	out["coverage"] = coverage
+	out["degraded"] = string(o.Degraded)
+}
+
+// modeNames is the search modes as a refusal names them.
+func modeNames() []string {
+	out := make([]string, 0, len(knowledge.Modes))
+	for _, m := range knowledge.Modes {
+		out = append(out, string(m))
+	}
+	return out
 }
 
 // KnowledgeReason says WHY a knowledge search did not run, as a stable value
@@ -591,70 +560,6 @@ func (s Sources) organization() *org.Organization {
 		return nil
 	}
 	return roster
-}
-
-// --- memory projections -------------------------------------------------- //
-//
-// The learning types are DOMAIN types and carry no json tags, deliberately:
-// tagging them would put a wire contract on a struct whose fields exist for the
-// recall path, and would ship every row's embedding vector — up to a hundred
-// float32 arrays per request — to a screen that has no use for one.
-//
-// So the wire shape is built here, at the boundary, which is where a wire shape
-// belongs. It was NOT built here before, and the result was a memory tab whose
-// every block read "None yet" and whose every episode row showed `NaN s`: Go
-// marshalled the field names, the client read the documented ones, and nothing
-// failed.
-
-func diaryRow(e learning.DiaryEntry) map[string]any {
-	return map[string]any{
-		"id":         e.ID,
-		"content":    e.Content,
-		"retention":  string(e.Kind),
-		"source":     e.Source,
-		"turn_id":    e.TurnID,
-		"created_at": isoOrEmpty(e.CreatedAt),
-		"ttl_until":  isoOrEmpty(e.TTLUntil),
-		// How often a memory has actually been recalled — the difference
-		// between one that keeps proving useful and one written once and
-		// never read.
-		"retrievals": e.RetrievalCount,
-	}
-}
-
-func episodeRow(e learning.Episode) map[string]any {
-	return map[string]any{
-		"id":               e.ID,
-		"turn_id":          e.TurnID,
-		"agent_handle":     e.Handle,
-		"task_summary":     e.TaskSummary,
-		"plan_summary":     e.PlanSummary,
-		"review_outcome":   e.ReviewOutcome,
-		"tool_sequence":    e.ToolSequence,
-		"skills_used":      e.SkillsUsed,
-		"conversation_key": e.ConversationKey,
-		"work_key":         e.WorkKey,
-		"created_at":       isoOrEmpty(e.StartedAt),
-		"ended_at":         isoOrEmpty(e.EndedAt),
-		// Milliseconds, because that is what the client formats. A
-		// time.Duration marshals as an integer count of NANOSECONDS, which
-		// renders as a plausible and wildly wrong number.
-		"duration_ms": e.Duration.Milliseconds(),
-		"compacted":   e.Kind != learning.KindRaw,
-		"count":       e.Count,
-	}
-}
-
-func skillRow(sk learning.Skill) map[string]any {
-	return map[string]any{
-		"id":         sk.ID,
-		"key":        sk.Name,
-		"title":      sk.Name,
-		"summary":    sk.Description,
-		"version":    sk.Version,
-		"updated_at": isoOrEmpty(sk.UpdatedAt),
-		"uses":       sk.UseCount,
-	}
 }
 
 // searcher resolves the knowledge backend for this call.

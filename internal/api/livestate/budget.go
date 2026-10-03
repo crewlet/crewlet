@@ -1,5 +1,11 @@
 package livestate
 
+import (
+	"encoding/json"
+
+	"github.com/crewlet/crewlet/internal/events/types"
+)
+
 // applyBudget folds one meter report into the projection.
 //
 // Every node publishes a report of the SAME shared counter, each under its own
@@ -8,8 +14,8 @@ package livestate
 // each is load-bearing.
 //
 // A report REPLACES what is held rather than merging with it. Merging, or
-// taking a maximum, would pin a figure no later report could lower: an operator
-// who resets a counter would watch the old number stay on screen.
+// taking a maximum, would pin a figure no later report could lower: a window
+// that turns over would leave its old figure on screen as a high-water mark.
 //
 // A report from the SAME meter with a seq at or below the one held is dropped.
 // Broker ordering holds only within a topic and the API reads a broadcast
@@ -25,20 +31,32 @@ package livestate
 // Their reads are of one counter, so the later READ is the truer one, and the
 // envelope timestamp is when it was read. Clock skew between nodes bounds how
 // wrong that can be: a node ahead by a second holds the meter for a second.
-func (s *LiveState) applyBudget(env Envelope, payload map[string]any) Change {
-	var change Change
+func (s *LiveState) applyBudget(env Envelope, payload map[string]any) (change Change) {
 	meterID := str(payload, "meter_id")
 	seq := num(payload, "seq")
 	at := newStamp(env.Timestamp)
 
 	switch {
-	case meterID != "" && meterID == s.budget.MeterID:
+	case meterID != "" && s.budget != nil && meterID == s.budget.MeterID:
 		if seq <= s.budget.Seq {
 			return change
 		}
 	case !at.empty() && !s.budgetAt.empty() && at.before(s.budgetAt):
 		return change
 	}
+	// DECODED INTO THE WIRE TYPE, not read field by field: the projection
+	// holds the windows exactly as the frame carried them, because a fold
+	// that picked named fields out of the payload is what dropped the
+	// refusal stamp on its way to the push. A frame that does not decode
+	// is not a reading, so it is dropped whole rather than half-applied.
+	var report types.BudgetMeters
+	if !decodePayload(payload, &report) {
+		return change
+	}
+	// THE COMPANY'S WINDOWS STOP EVERY SEAT, so a report that turns the
+	// org meter to refusing — or back — moves seats it never names.
+	before := s.states()
+	defer s.noteMoved(before, &change)
 	// Nothing is cleared here for a new meter, and that is deliberate
 	// rather than an omission: every seat this report does not mention
 	// loses its bar in the sweep at the end, which covers a node on another
@@ -46,13 +64,11 @@ func (s *LiveState) applyBudget(env Envelope, payload map[string]any) Change {
 	// here would be a second implementation of the same decision, agreeing
 	// with the first only for as long as nobody edits either.
 
-	s.budget = OrgBudget{
-		MeterID: meterID,
-		Seq:     seq,
-		Org: Meter{
-			Used: num(payload, "org_used_tokens"),
-			Max:  num(payload, "org_max_tokens"),
-		},
+	s.budget = &OrgBudget{
+		MeterID:  meterID,
+		Seq:      seq,
+		Timezone: report.Timezone,
+		Org:      BudgetMeter{Windows: report.Org.Windows},
 	}
 	// Only an ADVANCE moves the guard. A report with no usable timestamp is
 	// still applied, for the reason every other guard here lets one
@@ -64,28 +80,22 @@ func (s *LiveState) applyBudget(env Envelope, payload map[string]any) Change {
 	change.Budget = true
 
 	// Only metered seats are reported. A seat that LOST its meter — a cap
-	// edited down to zero, a role decommissioned — must lose its bar
-	// rather than keep the last figure it had.
+	// removed, a seat taken out of the chart — must lose its bar rather than keep
+	// the last figure it had.
 	reported := map[string]struct{}{}
-	for _, row := range list(payload, "agents") {
-		fields, ok := row.(map[string]any)
-		if !ok {
-			continue
-		}
+	for _, seat := range report.Seats {
 		// BY AGENT ID, the key every other event moves a seat under: a
 		// meter keyed by the role name beside it drew one seat's bar on
-		// every seat sharing its name.
-		id := str(fields, "agent_id")
-		if id == "" {
+		// every seat sharing its name. The role and handle the frame
+		// carries are what the seat was called when it was read, and the
+		// roster row this is merged onto names it as it is NOW.
+		if seat.AgentID == "" {
 			continue
 		}
-		reported[id] = struct{}{}
-		agent := s.ensureAgent(id)
-		agent.budget = &Meter{
-			Used: num(fields, "used_tokens"),
-			Max:  num(fields, "max_tokens"),
-		}
-		change.agentMoved(id)
+		reported[seat.AgentID] = struct{}{}
+		agent := s.ensureAgent(seat.AgentID)
+		agent.budget = &BudgetMeter{Windows: seat.Windows}
+		change.agentMoved(seat.AgentID)
 	}
 	for _, agent := range s.agents {
 		if agent.budget != nil {
@@ -96,4 +106,14 @@ func (s *LiveState) applyBudget(env Envelope, payload map[string]any) Change {
 		}
 	}
 	return change
+}
+
+// decodePayload reads a generic payload into its wire type, reporting whether
+// it decoded.
+func decodePayload(payload map[string]any, into any) bool {
+	raw, err := json.Marshal(payload)
+	if err != nil {
+		return false
+	}
+	return json.Unmarshal(raw, into) == nil
 }

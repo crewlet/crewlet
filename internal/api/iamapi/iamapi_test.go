@@ -74,6 +74,7 @@ func newRig(t *testing.T, options ...func(*iamapi.Options)) *rig {
 		Opener:       fakeOpener{},
 		ExternalBase: "https://crewlet.example.com",
 		Ceiling:      iam.AllGrants,
+		TokenIDs:     func() []string { return nil },
 		// EVERY BINDING HOLDS unless a case says otherwise: the rig's
 		// administrator is bound to "founder", and a report that found
 		// her dangling would be a finding no case asked for.
@@ -187,6 +188,11 @@ type fakeDirectory struct {
 	creds  map[string][]iamdomain.CredentialRow
 	err    error
 
+	// reserved is the logins an enrolment claimed and stopped at: the
+	// directory holds a RESERVATION under each, which [iamdomain.Sighting]
+	// reports as Reserved with nobody behind it.
+	reserved map[string]bool
+
 	// claims is what the claim report reads, and claimsErr a report this
 	// node could not read.
 	claims    iamdomain.ClaimReport
@@ -264,10 +270,13 @@ func (d *fakeDirectory) PersonByLogin(_ context.Context, login string) (
 	if d.err != nil {
 		return iamdomain.Sighting{}, d.err
 	}
+	if d.reserved[login] {
+		return iamdomain.Sighting{Login: login, Reserved: true}, nil
+	}
 	for _, row := range d.people {
 		if row.Login == login {
 			return iamdomain.Sighting{ID: row.ID, Kind: row.Kind,
-				Stage: row.Stage, Login: row.Login}, nil
+				Stage: row.Stage, Login: row.Login, Seat: row.Seat}, nil
 		}
 	}
 	return iamdomain.Sighting{}, nil
@@ -1062,6 +1071,7 @@ func TestEveryRouteMountsWithAVerbTheTableKnows(t *testing.T) {
 		Audit:        &recordingAudit{},
 		Opener:       fakeOpener{},
 		ExternalBase: "https://crewlet.example.com",
+		TokenIDs:     func() []string { return nil },
 	})
 	if err != nil {
 		t.Fatalf("build: %v", err)
@@ -1351,7 +1361,9 @@ func TestACreateWhoseBindIsRefusedSaysThePersonExists(t *testing.T) {
 func TestTwoEditsAreTwoOperationsAndARetryIsOne(t *testing.T) {
 	t.Parallel()
 	r := newRig(t)
-	patch := func(key string, grants []iam.Grant) string {
+	// patch answers the op id the edit was PUBLISHED under and the one its
+	// answer handed back — the key a retry sends.
+	patch := func(key string, grants []iam.Grant) (published, answered string) {
 		t.Helper()
 		body, _ := json.Marshal(map[string]any{"grants": grants})
 		req := httptest.NewRequest(http.MethodPatch, "/iam/people/"+bob.String(),
@@ -1365,25 +1377,37 @@ func TestTwoEditsAreTwoOperationsAndARetryIsOne(t *testing.T) {
 		if rec.Code != http.StatusOK {
 			t.Fatalf("status %d (body %s)", rec.Code, rec.Body.String())
 		}
-		return r.writer.updated.OpID
+		var answer struct {
+			OpID string `json:"op_id"`
+		}
+		_ = json.Unmarshal(rec.Body.Bytes(), &answer)
+		return r.writer.updated.OpID, answer.OpID
 	}
-	first := patch("", []iam.Grant{iam.GrantStateRead})
-	second := patch("", []iam.Grant{iam.GrantPeopleManage})
+	first, _ := patch("", []iam.Grant{iam.GrantStateRead})
+	second, _ := patch("", []iam.Grant{iam.GrantPeopleManage})
 	if first == second {
 		t.Errorf("two different edits of one person were published under one "+
 			"op id %q, so the broker acknowledges the second as the first", first)
 	}
+	// THE KEY IS SCOPED BY THE CALLER ([opkey.Key]), so what a keyed
+	// request publishes under is a step of the scoped key its answer hands
+	// back — the one a retry sends unchanged.
 	key := statelog.NewOpID(time.Now(), "people-update")
-	keyed := patch(key, []iam.Grant{iam.GrantStateRead})
-	if !strings.HasPrefix(keyed, key+".") {
-		t.Errorf("a request carrying the Idempotency-Key %q was published as "+
-			"%q, which is not a step of it", key, keyed)
+	keyed, scoped := patch(key, []iam.Grant{iam.GrantStateRead})
+	if scoped == "" || !strings.HasPrefix(keyed, scoped+".") {
+		t.Errorf("a request carrying the Idempotency-Key %q answered %q and "+
+			"was published as %q, which is not a step of it", key, scoped, keyed)
 	}
-	if again := patch(key, []iam.Grant{iam.GrantStateRead}); again != keyed {
+	if again, _ := patch(key, []iam.Grant{iam.GrantStateRead}); again != keyed {
 		t.Errorf("the same request under the same key was published as %q "+
 			"and then %q: a retry would land twice", keyed, again)
 	}
-	if other := patch(key, []iam.Grant{iam.GrantPeopleManage}); other == keyed {
+	if retried, _ := patch(scoped, []iam.Grant{iam.GrantStateRead}); retried != keyed {
+		t.Errorf("the same request under the key its answer handed back was "+
+			"published as %q, not %q: the retry an unknown asks for would land "+
+			"twice", retried, keyed)
+	}
+	if other, _ := patch(key, []iam.Grant{iam.GrantPeopleManage}); other == keyed {
 		t.Errorf("another edit under the same key was the first one's "+
 			"operation %q: the ledger answers it as landed and writes "+
 			"nothing of it", keyed)

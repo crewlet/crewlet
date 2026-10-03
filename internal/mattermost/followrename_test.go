@@ -16,7 +16,7 @@ import (
 // chart renaming `swe` to `platform-swe` made it deaf to every thread it had
 // been following — a reply that did not name it again was dropped, and the
 // seat never learned the conversation had moved on. A follow is keyed on the
-// handle the seat was CREATED under now (ADR-0019), whatever it answers to.
+// handle the seat was CREATED under now (ADR-0026), whatever it answers to.
 //
 // Mutation: key the parser's follows on the delivery's handle again and the
 // reply after the rename is dropped.

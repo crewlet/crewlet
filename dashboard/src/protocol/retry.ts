@@ -14,50 +14,22 @@
  * long as the tab stayed open.
  *
  * PURE ARITHMETIC OVER A NUMBER, imported by the org builder's core as well as
- * by the socket, so it imports nothing: the builder's model takes nothing from
- * this directory at runtime but this file, because the rest of it is the socket
- * and `fetch` (see `routes/org/builder/model/boundary.test.ts`).
+ * by the socket, so it imports nothing but the contract module that declares
+ * the engine's two waits — itself data and nothing else, which the contract's
+ * own suite holds: the builder's model takes nothing from this directory at
+ * runtime but this file, because the rest of it is the socket and `fetch`
+ * (see `routes/org/builder/model/boundary.test.ts`).
+ *
+ * What it waits is bounded by the engine's own two values — the fallback
+ * `UNAVAILABLE_RETRY_MS` and the ceiling {@link RETRY_AFTER_MAX_MS} —
+ * declared in `contract/retry.ts`.
  */
 
-/**
- * How soon an `unavailable` answer that carries NO hint is asked again, in
- * milliseconds.
- *
- * ONLY THE FALLBACK. Every `unavailable` frame the engine sends carries
- * `retry_after`, so an answer without one is one nobody decided a hint for —
- * during a rolling upgrade the node behind this page's address may be on a
- * build older than the field. FIVE SECONDS because that is what the engine
- * itself says when it has nothing better: its shared health tick
- * (`stream.HealthInterval`), the soonest a node's posture can change and the
- * hint every `unavailable` it cannot say more about carries. Waiting it out
- * is asking as the engine would have asked; sooner asks before anything could
- * have changed, and later leaves a recovered node looking broken.
- * `internal/api`'s `TestTheDashboardRetriesOnTheEnginesOwnHints` holds it to
- * the engine's value.
- */
-export const UNAVAILABLE_RETRY_MS = 5_000;
-
-/**
- * The longest a hint is waited out before asking again anyway, in
- * milliseconds.
- *
- * A BOUND ON THE ONE HINT THAT HAS NONE. Every hint the engine fixes — the
- * health tick (5 s), a quorum election (4 s), the identity estate's and an
- * undecidable authority's two seconds, a surface another writer holds (3 s),
- * the reconcile poll that brings a company and the floor's heartbeat (15 s), a
- * drain (30 s) — is at or under thirty seconds and is waited out exactly. The
- * one this cuts is DERIVED: a node's backlog divided by the rate it has been
- * draining at, which is minutes on a node that has just joined or restarted
- * behind a busy log, and an estimate made from a rate that only rises as the
- * node warms up. Past thirty seconds a screen waiting on it says "this fills
- * in on its own" for longer than a person believes it, and the cost of asking
- * sooner is one read the node refuses again. THIRTY because it is already this
- * dashboard's ceiling on waiting for an engine to come back — the socket's
- * reconnect backoff and the builder's check backoff stop there for the same
- * reason — and `internal/api`'s `TestTheDashboardRetriesOnTheEnginesOwnHints`
- * fails the day a hint the engine fixes grows past it.
- */
-export const RETRY_AFTER_MAX_MS = 30_000;
+// THE ENGINE'S TWO WAITS ARE DECLARED IN THE CONTRACT, the one home of every
+// value an engine gate holds (`internal/api`'s retry gate reads them there).
+// RELATIVE, because this directory is also built alone as `protocol.js`,
+// where the `~` alias does not exist.
+import { RETRY_AFTER_MAX_MS } from "../contract/retry.ts";
 
 /**
  * The wait a hint of `seconds` asks for, in milliseconds, or `null` for "do not
@@ -68,8 +40,8 @@ export const RETRY_AFTER_MAX_MS = 30_000;
  * names, and it is asked again only when something a person does could have
  * changed it (a reconnect, a write, a reload). A caller whose answer carried no
  * hint at all does not come here: what an absent hint means is the caller's —
- * the socket's is {@link UNAVAILABLE_RETRY_MS}, a request that never reached
- * the engine backs off ({@link unansweredRetryMs}).
+ * the socket's is `UNAVAILABLE_RETRY_MS` (`contract/retry.ts`), and a request
+ * that never reached the engine backs off ({@link unansweredRetryMs}).
  *
  * The hint is whole seconds and never negative — both parsers that read one
  * admit nothing else — so anything at or under zero is the zero.
@@ -99,7 +71,7 @@ export const UNANSWERED_RETRY_BASE_MS = 1_000;
  * milliseconds: `REQUEST_TIMEOUT_MS` in `rest.ts`, the longest one attempt may
  * itself take, so an engine that recovers is never noticed later than one more
  * attempt would have taken to fail. `retry.test.ts` holds the two equal; this
- * file imports nothing, so it cannot name the other.
+ * file imports nothing from this directory, so it cannot name the other.
  */
 export const UNANSWERED_RETRY_MAX_MS = 30_000;
 

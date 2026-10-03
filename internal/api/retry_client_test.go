@@ -2,7 +2,6 @@ package api_test
 
 import (
 	"strconv"
-	"strings"
 	"testing"
 	"time"
 
@@ -23,7 +22,7 @@ import (
 //
 // Every `unavailable` answer the engine sends says when to ask again, and the
 // dashboard waits that out (dashboard/src/protocol/retry.ts). Two values are
-// its own. UNAVAILABLE_RETRY_MS is what it waits on an answer that carried no
+// its own, declared in dashboard/src/contract/retry.ts. UNAVAILABLE_RETRY_MS is what it waits on an answer that carried no
 // hint, and it claims to be what the engine says when it has nothing better —
 // the health tick — which is only true while the two agree. RETRY_AFTER_MAX_MS
 // bounds how long a hint is waited out, and it claims to cut only the DERIVED
@@ -64,18 +63,19 @@ func TestTheDashboardRetriesOnTheEnginesOwnHints(t *testing.T) {
 	}
 }
 
-// dashboardMillis is a millisecond constant the dashboard declares, as a
-// duration.
+// dashboardMillis is a millisecond constant the dashboard declares in its
+// contract (`contract/retry.ts`), as a duration.
 func dashboardMillis(t *testing.T, name string) time.Duration {
 	t.Helper()
-	body, err := clientsource.Declaration(clientsource.Tree(t),
-		`export const `+name+` = ([0-9_]+);`)
+	raw, err := clientsource.Scalar(clientsource.Tree(t), name)
 	if err != nil {
 		t.Fatal(err)
 	}
-	ms, err := strconv.ParseInt(strings.ReplaceAll(body, "_", ""), 10, 64)
+	// Base 0 reads the literal as TypeScript spells it: `5_000` is five
+	// thousand, never a parse failure.
+	ms, err := strconv.ParseInt(raw, 0, 64)
 	if err != nil {
-		t.Fatalf("%s = %q is not a number: %v", name, body, err)
+		t.Fatalf("%s = %q is not a number: %v", name, raw, err)
 	}
 	return time.Duration(ms) * time.Millisecond
 }

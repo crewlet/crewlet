@@ -110,7 +110,7 @@ func (t *listWorkViews) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		Level: seatReadLevel,
 	})
 	if err != nil {
-		return readFailed(tracker.ListWorkViewsTool, err), nil
+		return readFailure(ctx, tracker.ListWorkViewsTool, err), nil
 	}
 	return jsonResult(map[string]any{
 		"count": len(listing.Views), "views": listing.Views,
@@ -256,6 +256,11 @@ func (t *saveWorkView) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	// is the subject the write arbitrates on, so it has to be a function of
 	// the operation, exactly as a created task's is ([createdTaskID]).
 	id := strings.TrimSpace(argString(args, "id"))
+	// THE OPERATION IS THE CALL'S, not the view's. It was `view-<id>` — one
+	// fixed id for every save of one view, so inside the broker's duplicate
+	// window a second edit of the same view was collapsed into the first and
+	// answered `applied` without landing. Derived from the call ([opIDFor]),
+	// a retry is one write and a second edit is a second one.
 	opID := opIDFor(actor, t.Name(), "view", viewObjectKey(id), args)
 	var prior tracker.ViewPrior
 	if id == "" {
@@ -272,13 +277,13 @@ func (t *saveWorkView) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		// `work.route` is asked on a task's stored project; the write
 		// then refuses if the view changes under this decision.
 		if prior, err = writer.ViewPrior(ctx, id); err != nil {
-			return readFailed(tracker.SaveWorkViewTool, err), nil
+			return readFailure(ctx, tracker.SaveWorkViewTool, err), nil
 		}
 		if prior.Held {
-			if refused := t.deps.mayWrite(ctx, authz.ActionViewSave,
-				viewObject(prior.Owner, prior.Container)); refused != nil {
+			if denied := t.deps.mayWrite(ctx, authz.ActionViewSave,
+				viewObject(prior.Owner, prior.Container)); denied != nil {
 
-				return *refused, nil
+				return *denied, nil
 			}
 		}
 	}
@@ -295,7 +300,7 @@ func (t *saveWorkView) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	}
 	result, err := writer.WriteView(ctx, opID, view, prior)
 	if err != nil {
-		return writeFailed(actor, tracker.SaveWorkViewTool, err), nil
+		return writeFailure(ctx, actor, tracker.SaveWorkViewTool, err), nil
 	}
 	if result.Outcome == statelog.OutcomeUnknown {
 		// NEVER THE ID OF A VIEW NOBODY CAN SAY WAS SAVED: handed back to

@@ -25,7 +25,7 @@ import (
 // guards its listing.
 const Prefix = "/iam/"
 
-// Routes registers the fifteen on a mux.
+// Routes registers the sixteen on a mux.
 //
 // EVERY ROUTE CARRIES ITS OWN POLICY, stated where it is mounted, through
 // [authz.Router] — which is the only reader of the matched pattern, because a
@@ -114,6 +114,10 @@ func (s *Service) Routes(mux authz.Mux) error {
 	mount("POST /iam/invalidate-all",
 		at(authz.ActionSessionInvalidate), s.PostInvalidateAll)
 	mount("GET /iam/check", at(authz.ActionDirectoryRead), s.GetCheck)
+	// THIS NODE'S Tier A labels, joined to the rows their logins name: the
+	// one binding question no directory read can reach, since the labels
+	// are a node's configuration. See nodetokens.go.
+	mount("GET /iam/node-tokens", at(authz.ActionDirectoryRead), s.GetNodeTokens)
 	// THE AUDIT VERB IT ALREADY HAS. `/iam/audit` and `/events` are the
 	// same question read from two tables — what did this company do, and
 	// who asked it to — so a grant of its own here would be a second
@@ -248,42 +252,51 @@ func (s *Service) opIDFor(w http.ResponseWriter, r *http.Request, name string,
 	return operation{key: key, id: statelog.StepOpID(key, name, digest)}, true
 }
 
-// createKey is the operation key a CREATE is published under — the caller's
-// own where they sent one, and a fresh uuid7 minted here where they did not —
-// answering false once it has written the refusal.
+// createKey is the operation key a CREATE answers with, and the SEED it is
+// published under and the id it creates is derived from — the caller's key
+// where they sent one, and a fresh one minted where they did not, either way
+// scoped by the caller ([opkey.Key]) — answering false once it has written the
+// refusal.
 //
 // # The id of what a create creates is derived from it
 //
 // A create is retried under the key its unknown answer handed back, and the
-// person or the invitation it names is derived from that key
+// person or the invitation it names is derived from the seed
 // ([iamdomain.CreatedPersonID], [iamdomain.Blinder.InvitationID]) so the retry
 // names the same one. Each used to be minted per request, so the retry named a
 // second object, which the address its first attempt claimed refused as
 // somebody else's: the documented retry of an unknown answered 409 against its
 // own first attempt, and what that attempt created could not be recovered.
 //
-// A BARE UUID7 AND NOTHING ELSE, because every id this estate creates is one
-// and its instant is the creation — so a create's key is an operation id in the
-// engine's grammar ([statelog.CheckCallerOpID], which every other route here
-// holds its key to) that carries no NAME after the uuid: the id it seeds is
-// derived from the uuid alone ([iamdomain.CreatedPersonID]), and a name there
-// would be a second key naming the same person. The fresh one is minted
-// through [statelog.NewOpID] with no name, for the same reason.
-func (s *Service) createKey(w http.ResponseWriter, r *http.Request) (string, bool) {
-	key, ok := opkey.Key(w, r, s.now())
+// # Two values, because the key is scoped and the seed is a uuid7
+//
+// The key is SCOPED BY THE CALLER — a uuid7 derived from the principal and the
+// key they sent, named by the principal's tag — so a key somebody copied names
+// an operation of the copier's, never the owner's create answered from the
+// ledger. The seed is that key's uuid: every id this estate creates is a bare
+// uuid7 whose instant is its creation, and a name after it would be a second
+// key naming the same object. Derived from the WHOLE key the caller sent, so
+// two keys that share a uuid and differ after it are two seeds — which is the
+// hazard a bare-uuid rule here once stood guard against, closed by the scope
+// itself. The answer hands back the KEY, which a retry sends unchanged: scoped
+// again it is taken as it is, so its uuid is the same seed and the retry the
+// same create.
+func (s *Service) createKey(w http.ResponseWriter, r *http.Request) (key, seed string, ok bool) {
+	key, ok = opkey.Key(w, r, s.now())
 	if !ok {
-		return "", false
+		return "", "", false
 	}
-	// A FRESH KEY IS ONE ALREADY: [statelog.NewOpID] with no name is a bare
-	// uuid7, so only a caller's can fail this.
-	if id, err := uuid.Parse(key); err != nil || id.Version() != 7 {
+	// A KEY [opkey.Key] ANSWERED IS IN THE GRAMMAR, so its head is the
+	// uuid7 it was minted or derived as; only a caller's key bearing their
+	// own tag reaches here unchanged, and the grammar held it too.
+	seed, _, _ = strings.Cut(key, ".")
+	if id, err := uuid.Parse(seed); err != nil || id.Version() != 7 {
 		opkey.Refuse(w, fmt.Errorf("the %s on a create is the seed of the id it "+
-			"creates, so it is a bare uuid7 with nothing after it — send back "+
-			"the op_id the first attempt answered with, or omit it for a new "+
-			"create", opkey.Header))
-		return "", false
+			"creates, so it begins with a uuid7 — send back the op_id the first "+
+			"attempt answered with, or omit it for a new create", opkey.Header))
+		return "", "", false
 	}
-	return key, true
+	return key, seed, true
 }
 
 // unavailable answers a read this node could not perform.

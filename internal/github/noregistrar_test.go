@@ -258,7 +258,7 @@ func TestManyAgentsWithNoAppAreOneReadableFinding(t *testing.T) {
 			"beside it")
 	}
 	// AND IT DOES NOT SEND A READER TO THE SCREEN THEY ARE ON.
-	if strings.Contains(f.Remedy, "Integrations screen") {
+	if strings.Contains(f.Remedy, "Integrations") {
 		t.Errorf("the remedy names the screen it is rendered on: %q", f.Remedy)
 	}
 }

@@ -1,0 +1,27 @@
+-- `tracker_history.actor_seat` goes: a history row names its author once.
+--
+-- 0026 added the column for the OPERATOR-ID BINDING: a person wrote through a
+-- Tier A token named after them, the record's author was that token's name
+-- with author kind `operator`, and `actor_seat` carried the seat the token was
+-- bound to with `contact.crewlet_operator_id`, so a card could show the person
+-- and the wake could leave them out of their own change.
+--
+-- That binding does not exist in this build. A principal's author is
+-- `iam.ActorFor`'s answer, and for a person bound to a seat — through the
+-- identity directory, whichever credential they presented — the author IS the
+-- seat: `actor` is the seat, `actor_kind` is `human`, and `operator_id` is the
+-- credential the write went through. The seat the column held is the actor
+-- itself, so nothing writes the column and nothing reads it, and a second copy
+-- of the author beside the first is a value two readers could each take as the
+-- one that counts.
+--
+-- NO INDEX NAMES IT and no view selects it — 0026 declined one, because it was
+-- rendered and never filtered on — so the column goes on its own.
+--
+-- DROPPED IN THE COMMIT THAT STOPS THE APPLIER NAMING IT, and not before, for
+-- 0033's reason: an insert naming a column that is gone fails the apply on
+-- every node at once, which in a derived estate is a stalled log rather than
+-- one bad row. There is no data to carry anywhere: this build's applier never
+-- fills it, so it holds the empty string on every row, and the author every
+-- row records is in `actor`, `actor_kind` and `operator_id` beside it.
+ALTER TABLE tracker_history DROP COLUMN actor_seat;

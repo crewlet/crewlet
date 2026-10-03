@@ -454,7 +454,7 @@ const segment = (value: string) => encodeURIComponent(value);
 /** The chart write request: a batch, or one object's content. */
 function chartRequest(
   method: "POST" | "PATCH",
-  path: string,
+  path: `/chart/${string}`,
   id: string,
   body: Record<string, unknown>,
 ): EngineRequest {

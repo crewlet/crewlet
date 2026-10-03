@@ -32,39 +32,39 @@ afterEach(() => {
 
 describe("which tab is real", () => {
   test("a tab the object has is the tab that renders", () => {
-    const { result } = at("#/company/people/ada?tab=memory", AGENT);
+    const { result } = at("#/agents/seats/ada?tab=memory", AGENT);
     expect(result.current[0]).toBe("memory");
   });
 
   test("a tab the object does not have resolves to the first one", () => {
     // THE REPORTED SHAPE: a bookmark, a hand-typed URL, or a link made before
     // the seat's kind changed. It must land on a tab, never between them.
-    const { result } = at("#/company/people/ada?tab=zzz", AGENT);
+    const { result } = at("#/agents/seats/ada?tab=zzz", AGENT);
     expect(result.current[0]).toBe("overview");
   });
 
   test("the other kind's tab resolves rather than rendering nothing", () => {
-    // A human seat has no Memory tab, and `#/company/people/ada?tab=memory`
+    // A human seat has no Memory tab, and `#/agents/seats/ada?tab=memory`
     // is exactly what a link between two seats produces.
-    const { result } = at("#/company/people/ada?tab=memory", HUMAN);
+    const { result } = at("#/agents/seats/ada?tab=memory", HUMAN);
     expect(result.current[0]).toBe("overview");
   });
 
   test("an empty tab list resolves to nothing rather than throwing", () => {
-    const { result } = at("#/company/people/ada?tab=memory", []);
+    const { result } = at("#/agents/seats/ada?tab=memory", []);
     expect(result.current[0]).toBe(undefined);
   });
 });
 
 describe("the URL it writes", () => {
   test("the first tab is the fallback, so landing writes no parameter", () => {
-    const { result } = at("#/company/people/ada?tab=memory", AGENT);
+    const { result } = at("#/agents/seats/ada?tab=memory", AGENT);
     act(() => result.current[1]("overview"));
     expect(location.hash).not.toContain("tab=");
   });
 
   test("moving to another tab names it", () => {
-    const { result } = at("#/company/people/ada", AGENT);
+    const { result } = at("#/agents/seats/ada", AGENT);
     act(() => result.current[1]("model"));
     expect(location.hash).toContain("tab=model");
   });
@@ -78,7 +78,7 @@ describe("the digits", () => {
   }
 
   test("a digit selects the tab at that position", () => {
-    const { result } = at("#/company/people/ada", AGENT);
+    const { result } = at("#/agents/seats/ada", AGENT);
     press("2");
     expect(result.current[0]).toBe("model");
   });
@@ -86,7 +86,7 @@ describe("the digits", () => {
   test("a digit past the end of this object's tabs is left alone", () => {
     // NOT SWALLOWED: the binding list is the shortcut table, so a strip that
     // could not have used the key never claims it.
-    const { result } = at("#/company/people/ada", HUMAN);
+    const { result } = at("#/agents/seats/ada", HUMAN);
     press("3");
     expect(result.current[0]).toBe("overview");
     expect(location.hash).not.toContain("tab=");

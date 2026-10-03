@@ -328,7 +328,7 @@ func importConfig(ctx context.Context, cs *configStore, path string,
 	}
 	id, err := cs.configs.InsertActive(ctx, store.Revision{
 		ParentID: parent, Source: "file", CreatedBy: hostActor().Name,
-		CreatedByKind: string(hostActor().Kind), Summary: summary,
+		CreatedByKind: hostActor().Kind, Summary: summary,
 		Payload: payload,
 	})
 	if err != nil {

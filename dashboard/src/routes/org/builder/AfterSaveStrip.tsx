@@ -7,15 +7,15 @@
  * tick, and a node can refuse it (a provider it cannot build, an MCP server it
  * cannot start) and go on serving the previous epoch. The chart answers once
  * its records are durable, and each node applies them from the log in its own
- * time. Until then the seats, the routing and every read lens still run the
+ * time. Until then the seats, the routing and every read screen still run the
  * company before this save, and a strip that said "Saved" and stopped would be
  * the dashboard claiming an outcome nobody has had yet.
  *
  * So the strip follows each half on the answers that say where it stands. The
- * SETTINGS on the `stream` query's `applied_epoch` for this node and the
- * `fleet` query's `config_epoch` and `config_status` for every node, resolving
- * to Applied, to Applied on N of M nodes, or to the refusal with a link to the
- * Fleet screen. The CHART on the `retention` report's per-node applied
+ * SETTINGS on the health push's `applied_epoch` for this node and the `fleet`
+ * query's `config_epoch` and `config_status` for every node, resolving to
+ * Applied, to Applied on N of M nodes, or to the refusal with a link to
+ * Settings › Nodes. The CHART on the `retention` report's per-node applied
  * position for the chart's log, which only a reader who may operate the fleet
  * is shown — for anybody else it says what this node's own answer said.
  *
@@ -30,16 +30,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { href } from "~/app/router.tsx";
 import { plural } from "~/lib/format.ts";
-import { useEngineHealth } from "~/lib/engineHealth.ts";
+import { useEngineHealth } from "~/lib/store-hooks.ts";
 import { useQuery } from "~/lib/useQuery.ts";
-import {
-  rest,
-  RestError,
-  type EngineHealth,
-  type FleetAnswer,
-  type RetentionReport,
-} from "~/protocol/index.ts";
-import { useRecheck } from "~/routes/admin/recheck.ts";
+import { rest, RestError, type FleetAnswer, type RetentionReport } from "~/protocol/index.ts";
+import type { EngineHealth } from "~/contract/health.ts";
+import { useRecheck } from "~/routes/settings/recheck.ts";
 import { parsePosition } from "./model/save.ts";
 import { revisionOfEtag } from "./model/transport.ts";
 import {
@@ -51,10 +46,10 @@ import {
 import { screenPath } from "./dialogParts.tsx";
 import {
   CheckGlyph,
-  CloseGlyph,
-  DescriptionGlyph,
-  ErrorGlyph,
-  RefreshGlyph,
+  XGlyph,
+  FileTextGlyph,
+  CircleAlertGlyph,
+  RotateCwGlyph,
 } from "@crewlethq/icons/glyphs";
 import {
   Button,
@@ -71,9 +66,9 @@ import { RECORD_MAX_HEIGHT } from "~/components/common.tsx";
 
 /**
  * How often the fleet and retention answers are read while the apply is still
- * moving — the engine's own health is the shared read, at its own five
- * seconds (`lib/engineHealth.ts`). The Integrations screen settles on the
- * same cadence after its own writes: fast
+ * moving. This node's own epoch is not read at all: it arrives on the health
+ * push every five seconds. The Integrations screen settles on the same
+ * cadence after its own writes: fast
  * enough that a node applying in a second or two is seen at once, slow enough
  * not to poll an engine that is busy applying.
  */
@@ -91,7 +86,7 @@ export interface ApplyState {
   readonly message: string;
   /** True once nothing more is expected to change. */
   readonly resolved: boolean;
-  /** The Fleet screen answers what a refusal was about. */
+  /** Settings › Nodes answers what a refusal was about. */
   readonly showFleet: boolean;
 }
 
@@ -114,7 +109,7 @@ function refusedBy(fleet: FleetAnswer, epoch: number) {
 /** What the strip says about a saved settings revision, from the two live answers. */
 export function applyState(
   saved: SavedSettings,
-  stream: EngineHealth | null,
+  health: EngineHealth | null,
   fleet: FleetAnswer | null,
 ): ApplyState {
   // A save whose answer was lost carries no epoch; the fleet's target is the
@@ -165,7 +160,7 @@ export function applyState(
       showFleet: false,
     };
   }
-  if (stream && (stream.applied_epoch ?? 0) >= epoch) {
+  if (health && (health.applied_epoch ?? 0) >= epoch) {
     return { tone: "positive", message: "Applied.", resolved: true, showFleet: false };
   }
   return { tone: "info", message: "The engine is applying it.", resolved: false, showFleet: false };
@@ -212,7 +207,7 @@ export function chartApplyState(saved: SavedChart, retention: RetentionReport | 
     : { tone: "info", message: "This node is applying it.", resolved: false, showFleet: false };
 }
 
-/** The first characters of a revision id, as the Configuration screen shows one. */
+/** The first characters of a revision id, as Settings › Configuration shows one. */
 export const shortRevision = (id: string) => id.slice(0, 10);
 
 /** The tone of the strip: the worst of its halves. */
@@ -234,16 +229,16 @@ export function AfterSaveStrip({
   const [pollMs, setPollMs] = useState<number | undefined>(APPLYING_POLL_MS);
   const settings = saved.settings;
   const chart = saved.chart;
-  // THE SHARED HEALTH READ (`lib/engineHealth.ts`), already at five seconds —
-  // the rail reads it too, and a second poller of the same answer on this
-  // strip's cadence made the two disagree about the applied epoch for the
-  // length of the difference. Its `refetch` brings the shared poll forward.
-  const stream = useEngineHealth();
+  // THE HEALTH PUSH, which carries this node's applied epoch every five
+  // seconds to every tab: there is nothing to poll for it, and a poller of
+  // its own on this strip's cadence made the strip and the rail disagree
+  // about the applied epoch for the length of the difference.
+  const health = useEngineHealth();
   const fleet = useQuery("fleet", undefined, { pollMs, enabled: settings !== null });
   const retention = useQuery("retention", undefined, { pollMs, enabled: chart !== null });
   const settingsState = useMemo(
-    () => (settings ? applyState(settings, stream.data, fleet.data) : null),
-    [settings, stream.data, fleet.data],
+    () => (settings ? applyState(settings, health, fleet.data) : null),
+    [settings, health, fleet.data],
   );
   const chartState = useMemo(
     () => (chart ? chartApplyState(chart, retention.data) : null),
@@ -252,13 +247,11 @@ export function AfterSaveStrip({
   const resolved = (settingsState?.resolved ?? true) && (chartState?.resolved ?? true);
 
   // Every answer, read through a ref so the recheck window is armed once per
-  // save rather than on every render.
+  // save rather than on every render. This node's epoch needs no re-read: the
+  // health push brings it.
   const all = useRef<() => void>(() => {});
   all.current = () => {
-    if (settings) {
-      stream.refetch();
-      fleet.refetch();
-    }
+    if (settings) fleet.refetch();
     if (chart) retention.refetch();
   };
   const read = useCallback(() => all.current(), []);
@@ -279,9 +272,9 @@ export function AfterSaveStrip({
           tone === "positive" ? (
             <CheckGlyph />
           ) : tone === "critical" ? (
-            <ErrorGlyph />
+            <CircleAlertGlyph />
           ) : (
-            <RefreshGlyph />
+            <RotateCwGlyph />
           )
         }
         action={
@@ -290,7 +283,7 @@ export function AfterSaveStrip({
               (settings.parentRevisionId ? (
                 <ButtonLink
                   size="small"
-                  variant="tertiary"
+                  variant="ghost"
                   href={href(screenPath("config"), {
                     lens: "diff",
                     revision: settings.revisionId,
@@ -302,26 +295,26 @@ export function AfterSaveStrip({
               ) : (
                 // The company's first revision has no parent to differ from:
                 // all of it is what the save wrote.
-                <ButtonLink size="small" variant="tertiary" href={href(screenPath("config"))}>
+                <ButtonLink size="small" variant="ghost" href={href(screenPath("config"))}>
                   View the configuration
                 </ButtonLink>
               ))}
             {settings && (
-              <Button size="small" variant="tertiary" onClick={() => setYaml(true)}>
+              <Button size="small" variant="ghost" onClick={() => setYaml(true)}>
                 Copy settings as YAML
               </Button>
             )}
             {chart && (
-              <Button size="small" variant="tertiary" onClick={() => setExporting(true)}>
+              <Button size="small" variant="ghost" onClick={() => setExporting(true)}>
                 Copy the chart
               </Button>
             )}
             {showFleet && (
-              <ButtonLink size="small" variant="tertiary" href={href(screenPath("fleet"))}>
+              <ButtonLink size="small" variant="ghost" href={href(screenPath("nodes"))}>
                 Open the fleet
               </ButtonLink>
             )}
-            <IconButton label="Dismiss" icon={<CloseGlyph />} size="sm" onClick={onDismiss} />
+            <IconButton label="Dismiss" icon={<XGlyph />} size="sm" onClick={onDismiss} />
           </span>
         }
       >
@@ -348,10 +341,10 @@ export function AfterSaveStrip({
 }
 
 /**
- * What a read lens says while this node has not applied what this tab saved:
- * the org projection it draws from is the company before the save.
+ * What a read section says while this node has not applied what this tab
+ * saved: the org projection it draws from is the company before the save.
  *
- * On the Org screen's read lenses rather than in the Builder, because that is
+ * On Agents' org chart and teams rather than in the Builder, because that is
  * where an operator goes to look at what they just changed, and the chart
  * that has not moved yet is exactly what would otherwise read as a save that
  * did nothing.
@@ -359,19 +352,18 @@ export function AfterSaveStrip({
 export function PreviousRevisionNote() {
   const saved = useSavedChanges();
   const settings = saved?.settings ?? null;
-  // THE SHARED HEALTH READ, which the frame is already polling: this note
-  // lives for as long as the node has not applied the revision — for ever,
-  // when the node refuses it — and a poller of its own, however slow, was a
-  // second read of the one answer paid for the life of the tab.
-  const stream = useEngineHealth();
+  // THE HEALTH PUSH, which carries this node's applied epoch every five
+  // seconds to every tab — there is nothing to poll. This note lives for as
+  // long as the node has not applied the revision, which can be for ever when
+  // the node refuses it, so a poller of its own would be paid for the life of
+  // the tab.
+  const health = useEngineHealth();
   const settingsBehind =
-    settings !== null &&
-    settings.epoch !== null &&
-    (stream.data?.applied_epoch ?? 0) < settings.epoch;
+    settings !== null && settings.epoch !== null && (health?.applied_epoch ?? 0) < settings.epoch;
   const chartBehind = saved?.chart ? !saved.chart.appliedHere : false;
   if (!settingsBehind && !chartBehind) return null;
   return (
-    <Callout variant="neutral" icon={<RefreshGlyph />}>
+    <Callout variant="neutral" icon={<RotateCwGlyph />}>
       {settingsBehind && settings ? (
         <>
           This node is still applying settings revision{" "}
@@ -426,7 +418,7 @@ function ChartExportDialog({ onClose }: { onClose: () => void }) {
       open
       stackBody
       title="The org chart"
-      icon={<DescriptionGlyph />}
+      icon={<FileTextGlyph />}
       size="lg"
       onClose={onClose}
       footer={
@@ -515,7 +507,7 @@ function YamlDialog({ savedRevision, onClose }: { savedRevision: string; onClose
       open
       stackBody
       title="The settings as YAML"
-      icon={<DescriptionGlyph />}
+      icon={<FileTextGlyph />}
       size="lg"
       onClose={onClose}
       footer={

@@ -14,8 +14,11 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/crewlet/crewlet/internal/agent/builtin"
+	"github.com/crewlet/crewlet/internal/api/operator"
 	"github.com/crewlet/crewlet/internal/api/workapi"
 	"github.com/crewlet/crewlet/internal/authz"
+	"github.com/crewlet/crewlet/internal/events"
+	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/pages"
 	"github.com/crewlet/crewlet/internal/statelog"
@@ -51,8 +54,14 @@ func (c chart) LeadsAnyone(_ context.Context, actor string) (bool, error) {
 // ---- principals --------------------------------------------------------- //
 
 // person is somebody signed in and bound to a seat, holding these grants.
+//
+// THEIR ID IS DERIVED FROM THEIR LOGIN, as a person's is stable across every
+// request they make: a key is scoped by the principal that sent it, so two
+// requests from one person minted two ids would be two people.
 func person(seat string, grants ...iam.Grant) iam.Principal {
-	return iam.Principal{ID: uuid.New(), Login: seat + ".person", Seat: seat,
+	login := seat + ".person"
+	return iam.Principal{ID: uuid.NewSHA1(uuid.NameSpaceOID, []byte(login)),
+		Login: login, Seat: seat,
 		Kind: iam.KindPerson, Stage: iam.StageActive,
 		Colleague: iam.ColleagueWrite, Grants: grants}
 }
@@ -137,7 +146,7 @@ type writes struct {
 	actors  []builtin.Actor
 	created []tracker.Task
 	updates []tracker.TaskPatch
-	moved   [][2]tracker.Rank
+	placed  []tracker.Place
 	targets []string
 	purged  []string
 	edited  []string
@@ -185,6 +194,14 @@ func (b *bound) CreateTask(_ context.Context, opID string, task tracker.Task,
 	return b.w.answer(opID)
 }
 
+// CreateTaskAsking is a create that opens with a question to a seat: the same
+// task, recorded as a create.
+func (b *bound) CreateTaskAsking(ctx context.Context, opID string, task tracker.Task,
+	_ tracker.Comment, notify *tracker.Notify) (tracker.WriteResult, error) {
+
+	return b.CreateTask(ctx, opID, task, notify)
+}
+
 func (b *bound) UpdateTask(_ context.Context, opID, _, _ string, _ uint64,
 	patch tracker.TaskPatch, _ tracker.ChangeKind,
 	_ *tracker.Notify) (tracker.WriteResult, error) {
@@ -229,13 +246,20 @@ func (b *bound) MoveTaskToProject(_ context.Context, opID, _, target string,
 	return b.w.answer(opID)
 }
 
-func (b *bound) MoveTask(_ context.Context, opID, _, _ string,
-	after, before tracker.Rank) (tracker.WriteResult, error) {
+// PlaceTask is a board drag: the card, the neighbour it was dropped beside
+// and the lane, as the tool resolved them. The order step answers as every
+// write here does; the lane step wrote nothing unless the drag named one.
+func (b *bound) PlaceTask(_ context.Context, opID string, place tracker.Place,
+	_ *tracker.Notify) (tracker.PlaceResult, error) {
 
 	b.w.mu.Lock()
 	defer b.w.mu.Unlock()
-	b.w.moved = append(b.w.moved, [2]tracker.Rank{after, before})
-	return b.w.answer(opID)
+	b.w.placed = append(b.w.placed, place)
+	order, err := b.w.answer(opID)
+	if err != nil {
+		return tracker.PlaceResult{}, err
+	}
+	return tracker.PlaceResult{Order: order, Rank: "a7", Version: order.Version}, nil
 }
 
 func (b *bound) PurgeTask(_ context.Context, opID, id, project, reason string) (
@@ -256,9 +280,8 @@ func (b *bound) EditComment(_ context.Context, opID, _, _, commentID, body strin
 	return b.w.answer(opID)
 }
 
-func (b *bound) WriteInbox(_ context.Context, opID, handle string,
-	_, _, _ []tracker.InboxEntry, _ []tracker.Reason, _ tracker.Position,
-	authority tracker.PersonAuthority) (tracker.WriteResult, error) {
+func (b *bound) MarkInbox(_ context.Context, opID, handle string,
+	_ tracker.InboxGesture, authority tracker.PersonAuthority) (tracker.WriteResult, error) {
 
 	b.w.mu.Lock()
 	defer b.w.mu.Unlock()
@@ -267,8 +290,8 @@ func (b *bound) WriteInbox(_ context.Context, opID, handle string,
 	return b.w.answer(opID)
 }
 
-func (b *bound) WritePins(_ context.Context, opID, handle string, _ []string,
-	_ []tracker.Favorite, authority tracker.PersonAuthority) (tracker.WriteResult, error) {
+func (b *bound) WritePins(_ context.Context, opID, handle string, _ tracker.PinGesture,
+	authority tracker.PersonAuthority) (tracker.WriteResult, error) {
 
 	b.w.mu.Lock()
 	defer b.w.mu.Unlock()
@@ -278,7 +301,7 @@ func (b *bound) WritePins(_ context.Context, opID, handle string, _ []string,
 }
 
 func (b *bound) WritePriorities(_ context.Context, opID, handle string, _ []string,
-	authority tracker.PersonAuthority) (tracker.WriteResult, error) {
+	_ *uint64, authority tracker.PersonAuthority) (tracker.WriteResult, error) {
 
 	b.w.mu.Lock()
 	defer b.w.mu.Unlock()
@@ -418,6 +441,7 @@ type rig struct {
 	writes *writes
 	kb     *kb
 	dir    directory
+	audit  *auditLog
 }
 
 func newRig(t *testing.T, c authz.Chart) *rig {
@@ -429,7 +453,7 @@ func newRig(t *testing.T, c authz.Chart) *rig {
 func newRigWith(t *testing.T, c authz.Chart, dir directory) *rig {
 	t.Helper()
 	r := &rig{t: t, mux: http.NewServeMux(), reader: newReader(),
-		writes: &writes{}, kb: newKB(), dir: dir}
+		writes: &writes{}, kb: newKB(), dir: dir, audit: &auditLog{}}
 	svc, err := workapi.New(r.options(c))
 	if err != nil || svc == nil {
 		t.Fatalf("New: %v (%v)", err, svc)
@@ -441,9 +465,56 @@ func newRigWith(t *testing.T, c authz.Chart, dir directory) *rig {
 }
 
 // options are the surface's options over this rig's fakes: its halves, served
-// on every request.
+// on every request, and the operator dispatch over the same halves and chart.
 func (r *rig) options(c authz.Chart) workapi.Options {
-	return workapi.Options{Halves: serving(r.halves()), Chart: c}
+	halves := serving(r.halves())
+	return workapi.Options{Halves: halves, Chart: c,
+		Operator: r.operator(c, halves), Audit: r.audit}
+}
+
+// operator is the operator surface's dispatch over the halves a source finds
+// and the chart the routes decide on — what a node builds, where both read
+// one engine's halves and one chart value — auditing into the rig's log.
+func (r *rig) operator(c authz.Chart, halves func() (workapi.Halves, bool)) *operator.Server {
+	r.t.Helper()
+	s, err := operator.New(operator.Options{
+		Halves: func() (operator.Halves, bool) {
+			h, up := halves()
+			return operator.Halves{Work: h.Work, Pages: h.Pages}, up
+		},
+		Authorize: builtin.Decide(c),
+		Audit:     r.audit,
+	})
+	if err != nil {
+		r.t.Fatalf("operator.New: %v", err)
+	}
+	return s
+}
+
+// auditLog records every runtime audit record the surface publishes.
+type auditLog struct {
+	mu     sync.Mutex
+	events []*events.Event
+}
+
+func (a *auditLog) Publish(_ context.Context, _ string, ev *events.Event) error {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.events = append(a.events, ev)
+	return nil
+}
+
+// acted is every `operator_acted` record published, in order.
+func (a *auditLog) acted() []types.OperatorActed {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	var out []types.OperatorActed
+	for _, ev := range a.events {
+		if p, ok := events.DataAs[*types.OperatorActed](ev); ok {
+			out = append(out, *p)
+		}
+	}
+	return out
 }
 
 // serving is a halves source that always answers with h — a node that has met
@@ -468,6 +539,9 @@ func (r *rig) halves() workapi.Halves {
 				return r.writes.as(a)
 			},
 			ViewWriter: func(a builtin.Actor) builtin.ViewWriter {
+				return r.writes.as(a)
+			},
+			Placer: func(a builtin.Actor) builtin.WorkPlacer {
 				return r.writes.as(a)
 			},
 			Holders: r.dir,

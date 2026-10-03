@@ -166,6 +166,31 @@ func (e *RefusedError) Error() string {
 // Unwrap is what keeps every errors.Is(err, ErrUnauthorized) arm answering it.
 func (e *RefusedError) Unwrap() error { return ErrUnauthorized }
 
+// BadParamsError is [ErrBadParams] carrying the refusal's own sentence.
+//
+// A TYPE FOR [RefusedError]'s REASON: the frame has to carry something the code
+// alone cannot, and here it is the sentence. A `bad_params` refusal is the one
+// failure of a question whose text is written FOR the caller — it names the
+// parameter to change and the values it accepts ("days=91, and a spend window
+// is 1 to 90 company days — ask for at most 90") — and it used to reach the
+// debug log and nothing else, so a person who picked a window past the spend
+// history was told only that "something it needs was missing". Every other
+// failure keeps its text off the wire: a query failure can carry a database
+// path, and none of the rest has a reader.
+type BadParamsError struct {
+	What string
+	// Detail is the refusal's sentence with no sentinel prefix in front of
+	// it — what a screen shows beside the code.
+	Detail string
+}
+
+func (e *BadParamsError) Error() string {
+	return fmt.Sprintf("%v: %s: %s", ErrBadParams, e.What, e.Detail)
+}
+
+// Unwrap makes a BadParamsError an [ErrBadParams] to errors.Is.
+func (e *BadParamsError) Unwrap() error { return ErrBadParams }
+
 // Query answers one client question.
 //
 // WHO IS ASKING TRAVELS IN THE CONTEXT, which the guard resolved before this
@@ -526,9 +551,9 @@ func readLoop(ctx context.Context, conn *websocket.Conn,
 			// state-log refusal is behind it, so none is named.
 			if !client.Posture().ServesQueries() {
 				env := queryError(req, CodeUnavailable)
-				env.Unavailable = &Unavailable{
+				env.unavailable(Unavailable{
 					RetryAfter: httpjson.RetrySeconds(healthEvery),
-				}
+				})
 				client.Reply(env)
 				continue
 			}
@@ -768,7 +793,7 @@ func (a *watchAnswer) frame(id int64) Envelope {
 	env := Envelope{Kind: KindError, ID: id, What: watchWhat, Error: a.code,
 		Refused: a.refused}
 	if a.code == CodeUnavailable {
-		env.Unavailable = &Unavailable{RetryAfter: UnavailableOf(a.cause).RetryAfter}
+		env.unavailable(Unavailable{RetryAfter: UnavailableOf(a.cause).RetryAfter})
 	}
 	return env
 }
@@ -848,18 +873,22 @@ func runQuery(ctx context.Context, client *Client, query Query, req request) {
 	case errors.Is(err, ErrBadParams):
 		// DEBUG, NOT WARN: it is not this node's failure, and a poll
 		// behind a bad request writes a line per tick for as long as the
-		// screen is open. The message is worth keeping — it names the
-		// field the caller got wrong, which is the whole of the fix —
-		// but only to somebody who turned debug on to look for it.
+		// screen is open. The sentence travels on the frame's `detail`
+		// (see [BadParamsError]), so the caller reads the fix without
+		// anybody turning debug on.
 		log.DebugContext(ctx, "stream_query_refused", "what", req.What, "error", err)
-		client.Reply(queryError(req, CodeBadParams))
+		refusal := queryError(req, CodeBadParams)
+		var bad *BadParamsError
+		if errors.As(err, &bad) {
+			refusal.Detail = bad.Detail
+		}
+		client.Reply(refusal)
 	case errors.Is(err, ErrUnavailable):
-		// THE REFUSAL AND ITS HINT RIDE THE FRAME, because a node
-		// catching up and a node that will refuse this read until an
+		// THE REFUSAL, ITS WORDS AND ITS HINT RIDE THE FRAME, because a
+		// node catching up and a node that will refuse this read until an
 		// operator acts are both `unavailable` — see [Unavailable].
 		env := queryError(req, CodeUnavailable)
-		u := UnavailableOf(err)
-		env.Unavailable = &u
+		env.unavailable(UnavailableOf(err))
 		client.Reply(env)
 	default:
 		// The reason reaches the LOG, not the client. A query failure can

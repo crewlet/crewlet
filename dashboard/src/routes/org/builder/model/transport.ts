@@ -65,8 +65,13 @@ export interface HttpAnswer {
 /** A write or a dry run, ready for the transport. */
 export interface EngineRequest {
   readonly method: "PUT" | "PATCH" | "POST";
-  /** `/config`, `/chart/batch`, `/chart/seats/{handle}` or `/chart/units/{key}`, already encoded. */
-  readonly path: string;
+  /**
+   * `/config`, or a place in the org chart — `/chart/batch`,
+   * `/chart/seats/{handle}` or `/chart/units/{key}` — already encoded. TYPED TO
+   * THOSE TWO SURFACES, because they are the only two a builder write reaches,
+   * and the transport dials each by its own literal (`runtime.ts`).
+   */
+  readonly path: "/config" | `/chart/${string}`;
   readonly query: Readonly<Record<string, string>>;
   readonly contentType: "application/json" | "application/merge-patch+json";
   readonly headers: Readonly<Record<string, string>>;

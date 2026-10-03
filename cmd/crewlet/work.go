@@ -138,7 +138,7 @@ func workPurge(args []string, stdout, stderr io.Writer) error {
 	// PATIENTLY, for the reason [nodeClient.patiently] names: a purge waits on
 	// the write path's own waits, not on the network.
 	err = client.patiently(purgeRequestTimeout).postKeyed(context.Background(), path,
-		operation, &answer)
+		operation, nil, &answer)
 	var lost noAnswer
 	if errors.As(err, &lost) {
 		fmt.Fprintf(stderr, "The node did not answer, so whether the purge "+

@@ -34,7 +34,7 @@ export function SignInPage({
       <div className="signin-column">
         {/* DECORATION: the card's heading names the page, and the mark
             beside it is the product's, not a control. */}
-        <img className="signin-mark" src="/static/crewlet-icon.svg" alt="" />
+        <img className="signin-mark" src="/static/dashboard/crewlet-icon.svg" alt="" />
         <Card as="section" padding="lg" aria-labelledby={heading}>
           <Card.Title as="h1" id={heading}>
             {title}

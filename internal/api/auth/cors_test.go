@@ -60,7 +60,7 @@ func TestAPermittedOriginIsAllowed(t *testing.T) {
 // allow-list would be refusing its own dashboard.
 func TestAnUnknownOriginIsUnpermittedRatherThanRefused(t *testing.T) {
 	t.Parallel()
-	r := httptest.NewRequest(http.MethodPost, "/budgets/reset", nil)
+	r := httptest.NewRequest(http.MethodPost, "/backup", nil)
 	r.Header.Set("Origin", "https://evil.example.com")
 	rec, reached := serveCORS(t, corsFor("https://ops.example.com"), r)
 

@@ -65,7 +65,7 @@ func (h *harness) applyAt(rec chart.MutationRecord, seq uint64) (
 	rows int, gate statelog.Reason, err error) {
 
 	h.t.Helper()
-	body, encodeErr := chart.Encode(rec)
+	body, encodeErr := asPublished(rec)
 	if encodeErr != nil {
 		h.t.Fatalf("encode the record: %v", encodeErr)
 	}
@@ -102,6 +102,20 @@ func (h *harness) applyAt(rec chart.MutationRecord, seq uint64) (
 		return aErr
 	})
 	return rows, gate, err
+}
+
+// asPublished is rec's bytes as the writer that stamped it published them.
+//
+// A RECORD BELOW THIS BUILD'S VERSION IS AN OLDER PEER'S, encoded as that peer
+// encoded it — with no field table to hold it to, which is exactly how a
+// version-1 edge stating a verb or a version-2 set_manages reaches a node, and
+// what the permanent reader must still apply as it was meant. Every other
+// record goes through this build's own encoder, stamp and all.
+func asPublished(rec chart.MutationRecord) ([]byte, error) {
+	if rec.V > 0 && rec.V < chart.RecordVersion {
+		return json.Marshal(rec)
+	}
+	return chart.Encode(rec)
 }
 
 // must applies one record and fails the test on anything but a clean apply.

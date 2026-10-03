@@ -176,6 +176,24 @@ var coordinatorEntries = map[string][]entryDrive{
 			}
 		},
 	}},
+	"AnswerByTurn": {
+		{
+			name: "a person's answer naming the run by its turn",
+			call: answersByTurn,
+		},
+		{
+			name:    "an answer by turn whose resume fails",
+			arrange: func(_ *testing.T, rig *coordRig) { rig.resumer.failWith(errors.New("the node lost the seat")) },
+			call:    answersByTurn,
+		},
+		{
+			name: "an answer by turn whose resume broke after writing outside the engine",
+			arrange: func(_ *testing.T, rig *coordRig) {
+				rig.resumer.failWith(fmt.Errorf("%w: the reviewer's provider went away", ErrResumeAbandoned))
+			},
+			call: answersByTurn,
+		},
+	},
 	"FailRun": {{
 		name: "a suspension that never reached the row",
 		call: func(t *testing.T, rig *coordRig) {
@@ -402,6 +420,20 @@ func completesUnreadable(t *testing.T, rig *coordRig) {
 		inner: rig.coordinator.pending, refuse: []string{"Get"},
 	}
 	completes(t, rig)
+}
+
+// answersByTurn hands the coordinator the answer an operator gave by naming
+// the run, as the dispatcher does off the seat's inbox.
+func answersByTurn(t *testing.T, rig *coordRig) {
+	t.Helper()
+	given := types.SandboxAnswerGiven{
+		TurnID: "t1", Agent: sweID, AgentHandle: "swe", Answer: "the release branch",
+		AnsweredBy: "founder", AnsweredByKind: "human", OperatorID: "pat:founder-token",
+	}
+	if _, err := rig.coordinator.AnswerByTurn(t.Context(), given,
+		events.New(given, events.TraceContext{})); err != nil {
+		t.Logf("AnswerByTurn: %v", err)
+	}
 }
 
 // recovers takes the seat under a fresh lease, as a node claiming it does.
@@ -677,7 +709,7 @@ func (s *refusingStore) ReleaseBox(ctx context.Context, turnID string) error {
 	return s.inner.ReleaseBox(ctx, turnID)
 }
 
-func (s *refusingStore) MarkSuspended(ctx context.Context, turnID string, state map[string]any) (bool, error) {
+func (s *refusingStore) MarkSuspended(ctx context.Context, turnID string, state Suspension) (bool, error) {
 	if s.called("MarkSuspended") {
 		return false, errRefusedCall
 	}

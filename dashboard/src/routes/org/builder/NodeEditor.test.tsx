@@ -278,27 +278,24 @@ describe("the head", () => {
 });
 
 /*
- * THE HUE, STATED RATHER THAN OFFERED. The console's agent editor ends with a
- * picker over six colour schemes and stores the answer on the node; a Crewlet
- * chart has no colour field, so this dashboard derives the hue from the seat's
- * own key. The derivation is right; the silence was not.
+ * NO NODE HAS A COLOUR TO STATE. Colour on this dashboard says what a seat is
+ * DOING, never who it is, so the chart draws every node on its own neutral
+ * surface and there is no hue for an editor to explain. It used to end an
+ * agent seat's form with a read-only "Colour" fact naming a hue hashed from
+ * the seat's key — a legend for a decoration the live chart never drew.
  */
-describe("the colour", () => {
-  test("an agent seat says which hue it is drawn in, and why it cannot be set", () => {
-    edit(editing(), "seat:dev");
-    expect(screen.getByText("Colour")).toBeDefined();
-    expect(screen.getByText(/hue follows the seat's own identity/)).toBeDefined();
-    // Stated, never written: there is no control to change it.
+test("no node's editor states or offers a colour", () => {
+  for (const [state, key] of [
+    [editing(), "seat:dev"],
+    [editing(humanDev()), "seat:dev"],
+    [editing(), "unit:engineering"],
+  ] as const) {
+    edit(state, key);
+    expect(screen.queryByText("Colour"), key).toBeNull();
+    expect(screen.queryByText(/\bhue\b/i), key).toBeNull();
     expect(screen.queryByRole("radio", { name: /purple|cyan|green|amber|rose|blue/i })).toBeNull();
-  });
-
-  test("a human seat and a unit have no hue to say", () => {
-    edit(editing(humanDev()), "seat:dev");
-    expect(screen.queryByText("Colour")).toBeNull();
     cleanup();
-    edit(editing(), "unit:engineering");
-    expect(screen.queryByText("Colour")).toBeNull();
-  });
+  }
 });
 
 describe("the unsaved-changes prompt", () => {
@@ -381,9 +378,9 @@ describe("the unsaved-changes prompt", () => {
   // form holds every move and asks first; keeping the changes undoes the
   // move, and discarding them makes it.
   test("a link, Back and a push each ask before they leave a changed form", async () => {
-    const onTheLens = "#/company?lens=builder";
-    const elsewhere = "#/admin/integrations";
-    history.replaceState(null, "", onTheLens);
+    const onTheBuilder = "#/agents/edit";
+    const elsewhere = "#/settings/integrations";
+    history.replaceState(null, "", onTheBuilder);
     const view = edit(editing(), "seat:dev");
     const link = () =>
       within(screen.getByText("GitHub is not connected.", { exact: false })).getByRole("link");
@@ -391,22 +388,22 @@ describe("the unsaved-changes prompt", () => {
     await move(() => fireEvent.click(link()), elsewhere);
     expect(screen.queryByRole("alertdialog", { name: "Discard your changes?" })).toBeNull();
     await move(() => {
-      location.hash = onTheLens;
-    }, onTheLens);
+      location.hash = onTheBuilder;
+    }, onTheBuilder);
 
     type("Goal", "Ship");
     // Held, and undone: the page is back where it was, and so is the form.
-    await move(() => fireEvent.click(link()), onTheLens);
+    await move(() => fireEvent.click(link()), onTheBuilder);
     const asked = discardPrompt();
     expect(asked.textContent).toContain("you are leaving the builder");
     fireEvent.click(within(asked).getByRole("button", { name: "Keep editing" }));
     expect((field("Goal") as HTMLTextAreaElement).value).toBe("Ship");
 
-    await move(() => history.back(), onTheLens);
+    await move(() => history.back(), onTheBuilder);
     fireEvent.click(within(discardPrompt()).getByRole("button", { name: "Keep editing" }));
     expect(view.onClose).not.toHaveBeenCalled();
 
-    await move(() => history.back(), onTheLens);
+    await move(() => history.back(), onTheBuilder);
     // The move the reader asked for is made: back past the entry they were on.
     await move(
       () =>
@@ -421,17 +418,19 @@ describe("the unsaved-changes prompt", () => {
   /*
    * AND A MOVE THAT IS NOT A DEPARTURE IS NOT ASKED ABOUT. Choosing the table
    * view, or the reporting chart, is a `section` — the router PUSHES for one,
-   * so it really does reach the guard — and it keeps the lens, the draft and
-   * this form exactly as they are.
+   * so it really does reach the guard — and it keeps the builder, the draft and
+   * this form exactly as they are. A guard that asked here would be a
+   * departure prompt over a reader who chose a view, which is the shape a
+   * predicate naming the wrong screen produces for EVERY move.
    */
-  test("a move within the lens is not a departure, and asks nothing", async () => {
-    history.replaceState(null, "", "#/company?lens=builder&view=visualization");
+  test("a move within the builder is not a departure, and asks nothing", async () => {
+    history.replaceState(null, "", "#/agents/edit?view=visualization");
     const view = edit(editing(), "seat:dev");
     type("Goal", "Ship");
     for (const hash of [
-      "#/company?lens=builder&view=table",
-      "#/company?lens=builder&view=visualization&chart=reporting",
-      "#/company?lens=builder&view=visualization&chart=reporting&seat=ceo",
+      "#/agents/edit?view=table",
+      "#/agents/edit?view=visualization&chart=reporting",
+      "#/agents/edit?view=visualization&chart=reporting&seat=ceo",
     ]) {
       await move(() => {
         location.hash = hash;
@@ -582,7 +581,7 @@ describe("seat fields", () => {
   // Read only, the banner is the reason Apply is unavailable; a caption asking
   // to correct a field nobody can type in would be a second, wrong one.
   test("a read-only editor asks nobody to correct a field", () => {
-    const chart = withDev({ name: "Dev", runtime: { token_budget: -5 } });
+    const chart = withDev({ name: "Dev", runtime: { token_budget: { week: -5 } } });
     edit(editing(chart), "seat:dev", { readOnly: true });
     expect(screen.getByText(/cannot be changed right now/)).toBeDefined();
     // The foot says the posture, not the field: a form nobody can write is
@@ -595,13 +594,57 @@ describe("seat fields", () => {
     expect(shownReason("Correct the token budget first.")).toBeDefined();
   });
 
-  test("a malformed token budget blocks Apply with the reason", () => {
+  test("a malformed token ceiling blocks Apply with the reason, under its own window", () => {
     edit(editing(), "seat:dev");
-    type("Token budget", "lots");
+    type("Weekly token ceiling", "lots");
     expect(applyRefuses()).toBe(true);
     expect(
-      screen.getByText("Give a whole number of tokens, or leave it empty for unlimited."),
+      screen.getByText(
+        "Give a whole number of tokens (40000000, or 40M), or leave it empty for no weekly ceiling.",
+      ),
     ).toBeDefined();
+  });
+
+  // A 0 WAS "UNLIMITED" AND IS REFUSED NOW, by the engine and so by the form
+  // before a save: the only way to leave a window uncapped is an empty box.
+  test("a ceiling of 0 is refused in the engine's words", () => {
+    edit(editing(), "seat:dev");
+    type("Daily token ceiling", "0");
+    expect(applyRefuses()).toBe(true);
+    expect(
+      screen.getByText("A ceiling of 0 is refused: leave it empty for no daily ceiling."),
+    ).toBeDefined();
+  });
+
+  // ONE BOX PER WINDOW, and a saved window is shown in its own box: the
+  // form reads the mapping the engine writes, not one number.
+  test("each window the seat caps is shown in its own box", () => {
+    edit(
+      editing(withDev({ name: "Dev", runtime: { token_budget: { day: 1500, month: 40000 } } })),
+      "seat:dev",
+    );
+    const box = (label: string) => field(label) as HTMLInputElement;
+    expect(box("Daily token ceiling").value).toBe("1500");
+    expect(box("Weekly token ceiling").value).toBe("");
+    expect(box("Monthly token ceiling").value).toBe("40000");
+  });
+
+  // THE THREE WINDOWS ARE WRITTEN AS THE ENGINE READS THEM: one key per
+  // calendar window on the seat's runtime `token_budget`, each a number of
+  // tokens — never a single lifetime ceiling, which the periodic budgets
+  // replaced.
+  test("the budget editor writes the day, week and month the reader typed", () => {
+    const view = edit(editing(), "seat:dev");
+    type("Daily token ceiling", "2000");
+    type("Weekly token ceiling", "10000");
+    type("Monthly token ceiling", "40000");
+    apply();
+    expect(view.state().log.ops).toHaveLength(1);
+    expect(seatData(view.state(), "seat:dev").runtime?.token_budget).toEqual({
+      day: 2000,
+      week: 10000,
+      month: 40000,
+    });
   });
 
   test("changing the kind is its own step: the editor closes and opens it, unless the form has changes", () => {
@@ -663,7 +706,7 @@ describe("seat fields", () => {
     edit(editing(humanDev()), "seat:dev");
     expect((field("GitHub login") as HTMLInputElement).value).toBe("dev");
     expect(field("Availability")).toBeDefined();
-    for (const agentOnly of ["Model", "Token budget", "Behavioral guidelines"]) {
+    for (const agentOnly of ["Model", "Daily token ceiling", "Behavioral guidelines"]) {
       expect(screen.queryByLabelText(labelled(agentOnly))).toBeNull();
     }
     expect(screen.queryByRole("heading", { name: "Integrations" })).toBeNull();
@@ -676,7 +719,7 @@ describe("seat fields", () => {
     const view = edit(editing(strippedChart(fixtureChart())), "seat:dev");
     expect(screen.getByText(/runtime half was not shown to you/)).toBeDefined();
     expect(screen.queryByRole("combobox", { name: /^Model/ })).toBeNull();
-    expect(screen.queryByLabelText(labelled("Token budget"))).toBeNull();
+    expect(screen.queryByLabelText(labelled("Daily token ceiling"))).toBeNull();
     type("Goal", "Ship");
     apply();
     expect(seatData(view.state(), "seat:dev")).not.toHaveProperty("runtime");
@@ -684,7 +727,7 @@ describe("seat fields", () => {
     // The control: shown the half, the fields are there.
     edit(editing(), "seat:dev");
     expect(screen.queryByText(/runtime half was not shown to you/)).toBeNull();
-    expect(field("Token budget")).toBeDefined();
+    expect(field("Daily token ceiling")).toBeDefined();
   });
 });
 
@@ -753,7 +796,7 @@ describe("integrations", () => {
     edit(editing(), "seat:dev");
     for (const tool of ["GitHub", "Mattermost"]) {
       const note = screen.getByText(`${tool} is not connected.`, { exact: false });
-      expect(within(note).getByRole("link").getAttribute("href")).toBe("#/admin/integrations");
+      expect(within(note).getByRole("link").getAttribute("href")).toBe("#/settings/integrations");
     }
     expect(screen.queryByLabelText(labelled("Access tier"))).toBeNull();
     // GitLab provisioning is connected in the fixture.
@@ -957,7 +1000,7 @@ describe("findings", () => {
     const alert = screen.getByRole("alert");
     expect(alert.textContent).toContain("must not carry schedules");
     expect(within(alert).getByRole("link", { name: "Open Schedules" }).getAttribute("href")).toBe(
-      "#/activity/schedules",
+      "#/agents/schedules",
     );
   });
 
@@ -979,6 +1022,19 @@ describe("findings", () => {
     expect(
       isDrawnAs(caution, Callout, { variant: "warning", children: "" }, { children: "" }),
     ).toBe(true);
+  });
+
+  // THE ENGINE REFUSES A CEILING AT ITS WINDOW'S KEY, so the refusal sits
+  // under that window's box and no other: a daily ceiling of 0 blamed on the
+  // monthly box is an operator correcting the wrong number.
+  test("a refused ceiling sits beside its own window's box", () => {
+    const state = checkWith(editing(), [
+      findingOn("seat:dev", ["runtime", "token_budget", "week"], "must be at least 1 token"),
+    ]);
+    edit(state, "seat:dev");
+    expect(errorOf(field("Weekly token ceiling"))?.textContent).toContain("must be at least 1");
+    expect(errorOf(field("Daily token ceiling"))).toBeNull();
+    expect(errorOf(field("Monthly token ceiling"))).toBeNull();
   });
 
   test("a problem sits beside the field it names, and the rest are listed at the top", () => {

@@ -72,7 +72,7 @@ type MentionGrammar interface {
 // restart makes every seat deaf to every thread it was following, with no
 // way back but for somebody to mention it again.
 //
-// THE SEAT IS NAMED BY THE HANDLE IT WAS CREATED UNDER (ADR-0019), never by
+// THE SEAT IS NAMED BY THE HANDLE IT WAS CREATED UNDER (ADR-0026), never by
 // the one it answers to now: a follow is the seat's own memory of a
 // conversation, and keyed on its address a rename made it deaf to every thread
 // it had been following, with no way back but for somebody to mention it

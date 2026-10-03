@@ -8,7 +8,7 @@
 //
 // # Seat identity is DERIVED, never looked up
 //
-// That is ADR-0013, superseded by ADR-0019, and the paragraphs below are why
+// That is ADR-0013, superseded by ADR-0026, and the paragraphs below are why
 // rather than a restatement. An agent seat's runtime id is a UUIDv5 over (org
 // name, ORIGIN handle), so every node computes the same id for the same seat
 // with no database and no running instance beyond the chart row it is already
@@ -17,7 +17,7 @@
 // consumer group, so the node that wins a delivery is rarely the node running
 // the recipient. A pool miss means "not on this node", never "does not exist".
 //
-// THE ORIGIN HANDLE AND NOT THE CURRENT ONE is ADR-0019, and it is what makes
+// THE ORIGIN HANDLE AND NOT THE CURRENT ONE is ADR-0026, and it is what makes
 // a rename move a seat's ADDRESS and nothing else. A handle is prose somebody
 // types, so keying a seat's mailbox, lease, diary and schedule ledger on it
 // made every rename a new seat in an empty office, with the old one's rows
@@ -63,7 +63,7 @@ func Slugify(name string) string {
 // DeriveAgentID returns the deterministic id for a seat.
 //
 // The handle is the seat's ORIGIN handle ([Role.Origin]) at every caller that
-// has a seat to ask — see ADR-0019. It takes a string rather than a *Role
+// has a seat to ask — see ADR-0026. It takes a string rather than a *Role
 // because the two callers that do not hold one are resolving an id from a
 // handle somebody wrote, and an origin they cannot see is not one they can
 // substitute.

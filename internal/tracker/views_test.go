@@ -2,6 +2,8 @@ package tracker_test
 
 import (
 	"errors"
+	"fmt"
+	"maps"
 	"slices"
 	"strings"
 	"testing"
@@ -116,6 +118,12 @@ func TestAViewThatCouldNotBeRunIsRefusedAtTheSave(t *testing.T) {
 		{"a value the grammar refuses", func(v *tracker.View) {
 			v.Params = map[string]string{"status": "shipped"}
 		}, "does not parse"},
+		// WHICH TASK A CALLER IS STANDING ON is theirs, like a cursor: a
+		// view that pinned one would answer every reader's "3 of 18"
+		// about a task they never opened.
+		{"the task a caller stands on", func(v *tracker.View) {
+			v.Params = map[string]string{"around": "ENG-1"}
+		}, "which a saved view cannot"},
 	}
 	for i, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -244,8 +252,8 @@ func TestAProtectedViewRefusesEveryoneButItsOwner(t *testing.T) {
 	if err == nil {
 		t.Fatal("bob edited a view protected for ana")
 	}
-	if !errors.Is(err, statelog.ErrConflict) {
-		t.Fatalf("the refusal is %v, want an ErrConflict a caller can branch on", err)
+	if !errors.Is(err, tracker.ErrForbidden) {
+		t.Fatalf("the refusal is %v, want an ErrForbidden a caller can branch on", err)
 	}
 	if !strings.Contains(err.Error(), "ana") {
 		t.Fatalf("the refusal %q does not name whom to ask", err)
@@ -645,5 +653,444 @@ func TestAViewThatMovesNamesBothStrips(t *testing.T) {
 				"%s — a read of that strip would never wait for this record",
 				scope.Paths, term)
 		}
+	}
+}
+
+// A PINNED VIEW'S COUNT IS THE VIEW'S OWN TOTAL.
+//
+// The number beside a pin is what the board it opens will say it holds: the
+// `total_hint` of the view RUN — its saved parameters, in the container it was
+// saved in, as this viewer. A second definition of what a view selects would
+// be a sidebar that disagrees with the page it links to.
+func TestPinnedViewCountsAreTheViewsOwnTotal(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+	eng := tracker.Container{Kind: tracker.ContainerProject, ID: "ENG"}
+	for i, who := range []string{"ana", "ana", "ana", "bob"} {
+		assign(t, r, fmt.Sprintf("t-%d", i), who)
+	}
+	// A FINISHED ONE, which the view does not ask for: the count must use
+	// the grammar's own default scope, as the board does.
+	done := tracker.StatusDone
+	if _, err := r.writer.UpdateTask(t.Context(), "op-done", "t-0", "ENG",
+		tracker.NoIfMatch, tracker.TaskPatch{Status: &done}, tracker.ChangeStatus,
+		nil); err != nil {
+		t.Fatalf("finish t-0: %v", err)
+	}
+	r.drain()
+
+	for _, view := range []tracker.View{
+		aView("v-ana", func(v *tracker.View) { v.Name = "Ana's" }),
+		aView("v-bob", func(v *tracker.View) {
+			v.Name, v.Params = "Bob's", map[string]string{"assignee": "bob"}
+		}),
+		// A VIEW THAT NO LONGER COMPILES — the save parses, it does not
+		// resolve fields against the catalogue — so its count is a
+		// refusal on its own row rather than a failed strip.
+		aView("v-gone", func(v *tracker.View) {
+			v.Name, v.Params = "Gone", map[string]string{"f.severity": "high"}
+		}),
+	} {
+		if _, err := save(t, r.writer, "op-"+view.ID, view); err != nil {
+			t.Fatalf("save %s: %v", view.ID, err)
+		}
+		r.drain()
+	}
+	if _, err := r.writer.WriteDocument(t.Context(), "op-pins",
+		tracker.PersonSubject("ana"), "", tracker.Person{
+			V: 1, Handle: "ana", PinnedViews: []string{"v-ana", "v-gone"},
+		}, tracker.ChangePersonUpdated, nil); err != nil {
+		t.Fatalf("pin for ana: %v", err)
+	}
+	r.drain()
+
+	listing, err := r.reader.Views(t.Context(), tracker.ViewQuery{
+		Container: eng, Viewer: "ana", Level: statelog.ReadStale,
+		Counts: true, Now: wednesday, Zone: time.UTC,
+	})
+	if err != nil {
+		t.Fatalf("Views with counts: %v", err)
+	}
+	rows := map[string]tracker.ViewRow{}
+	for _, row := range listing.Views {
+		rows[row.Key] = row
+	}
+
+	// THE BOARD'S OWN ANSWER for the same view, which is what the count
+	// has to equal — asked the way every surface that runs a view asks it,
+	// every task on its own row.
+	q, err := r.reader.ExpandedQuery(t.Context(), map[string]any{
+		"view": "v-ana", "container": "project:ENG", "subtasks": "separate",
+	}, tracker.Viewer{Handle: "ana"}, wednesday, time.UTC)
+	if err != nil {
+		t.Fatalf("expand v-ana: %v", err)
+	}
+	q.Level = statelog.ReadStale
+	board, err := r.reader.Tasks(t.Context(), q, wednesday)
+	if err != nil {
+		t.Fatalf("run v-ana: %v", err)
+	}
+	if board.TotalHint != 2 {
+		t.Fatalf("the fixture is wrong: v-ana's board holds %d, want ana's two "+
+			"open tasks", board.TotalHint)
+	}
+	ana := rows["v-ana"]
+	if ana.Count == nil || *ana.Count != board.TotalHint || ana.CountCapped {
+		t.Errorf("v-ana's count is %v (capped %v), want the board's total %d",
+			ana.Count, ana.CountCapped, board.TotalHint)
+	}
+	// NOT PINNED, NOT COUNTED — a count per shared view would be a query
+	// per row of every strip on every poll.
+	if bob := rows["v-bob"]; bob.Count != nil || bob.CountRefused != "" {
+		t.Errorf("v-bob is not pinned for ana and carries a count: %+v", bob)
+	}
+	if gone := rows["v-gone"]; gone.Count != nil ||
+		!strings.Contains(gone.CountRefused, "severity") {
+		t.Errorf("v-gone filters on a field nobody declares and says %+v — "+
+			"want no count and a refusal naming the field", gone)
+	}
+	for _, row := range listing.Views {
+		if row.Builtin && row.Count != nil {
+			t.Errorf("builtin %s carries a count; nobody can pin it", row.Key)
+		}
+	}
+
+	// AND WITHOUT THE ASK, NO COUNTS: a strip is read on every poll, and
+	// the counts are a cost a caller opts into.
+	for _, row := range r.strip(eng, "ana").Views {
+		if row.Count != nil || row.CountRefused != "" {
+			t.Errorf("%s carries a count on a strip that did not ask", row.Key)
+		}
+	}
+
+	// COUNTS NEED A VIEWER, since only a viewer has pins.
+	if _, err := r.reader.Views(t.Context(), tracker.ViewQuery{
+		Container: eng, Level: statelog.ReadStale, Counts: true,
+		Now: wednesday, Zone: time.UTC,
+	}); err == nil {
+		t.Error("a strip nobody is looking at was counted — it has no pins")
+	}
+}
+
+// A PINNED VIEW'S COUNT IS THE LIST ITS ROW OPENS, subtree and all.
+//
+// Every surface that runs a view runs it FLAT — the dashboard's shapes send
+// `subtasks=separate` and `list_work_items` overrules to it — so the grammar's
+// default, a predicate on the ROOT whose subtree rides along unfiltered, is an
+// answer nobody who presses the pin is shown. Counted in that default, an
+// open-work view counted the finished subtasks of every open epic: measured on
+// a seeded company, 39 beside a pin whose list said 36 items, including a view
+// SAVED with the tree mode, which is still run flat.
+func TestAPinnedViewCountsTheListItOpens(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+	eng := tracker.Container{Kind: tracker.ContainerProject, ID: "ENG"}
+	// An open epic with one open and one FINISHED subtask, and one open
+	// task on its own: three open tasks, four in the epic's subtree view.
+	for _, id := range []string{"epic", "sub-open", "sub-done", "lone"} {
+		assign(t, r, id, "ana")
+	}
+	epic := "epic"
+	for _, id := range []string{"sub-open", "sub-done"} {
+		if _, err := r.writer.UpdateTask(t.Context(), "op-adopt-"+id, id, "ENG",
+			tracker.NoIfMatch, tracker.TaskPatch{Parent: &epic},
+			tracker.ChangeReparented, nil); err != nil {
+			t.Fatalf("adopt %s: %v", id, err)
+		}
+		r.drain()
+	}
+	done := tracker.StatusDone
+	if _, err := r.writer.UpdateTask(t.Context(), "op-done", "sub-done", "ENG",
+		tracker.NoIfMatch, tracker.TaskPatch{Status: &done}, tracker.ChangeStatus,
+		nil); err != nil {
+		t.Fatalf("finish sub-done: %v", err)
+	}
+	r.drain()
+
+	open := map[string]string{"status_group": "not_started,active"}
+	for _, view := range []tracker.View{
+		aView("v-open", func(v *tracker.View) { v.Name, v.Params = "Open", open }),
+		aView("v-tree", func(v *tracker.View) {
+			v.Name = "Open, as a tree"
+			v.Params = map[string]string{"status_group": "not_started,active",
+				"subtasks": "collapsed"}
+		}),
+	} {
+		if _, err := save(t, r.writer, "op-"+view.ID, view); err != nil {
+			t.Fatalf("save %s: %v", view.ID, err)
+		}
+		r.drain()
+	}
+	if _, err := r.writer.WriteDocument(t.Context(), "op-pins",
+		tracker.PersonSubject("ana"), "", tracker.Person{
+			V: 1, Handle: "ana", PinnedViews: []string{"v-open", "v-tree"},
+		}, tracker.ChangePersonUpdated, nil); err != nil {
+		t.Fatalf("pin for ana: %v", err)
+	}
+	r.drain()
+
+	run := func(params map[string]any) int {
+		t.Helper()
+		q, err := r.reader.ExpandedQuery(t.Context(), params,
+			tracker.Viewer{Handle: "ana"}, wednesday, time.UTC)
+		if err != nil {
+			t.Fatalf("expand %v: %v", params, err)
+		}
+		q.Level = statelog.ReadStale
+		answer, err := r.reader.Tasks(t.Context(), q, wednesday)
+		if err != nil {
+			t.Fatalf("run %v: %v", params, err)
+		}
+		return answer.TotalHint
+	}
+	// THE FIXTURE BITES: the tree answer carries the finished subtask along
+	// with its open epic, and the list a pin opens does not.
+	if tree, flat := run(map[string]any{"view": "v-open", "container": "project:ENG"}),
+		run(map[string]any{"view": "v-open", "container": "project:ENG",
+			"subtasks": "separate"}); tree != 4 || flat != 3 {
+		t.Fatalf("the fixture is wrong: the tree answer holds %d and the flat one %d, "+
+			"want 4 and 3", tree, flat)
+	}
+
+	listing, err := r.reader.Views(t.Context(), tracker.ViewQuery{
+		Container: eng, Viewer: "ana", Level: statelog.ReadStale,
+		Counts: true, Now: wednesday, Zone: time.UTC,
+	})
+	if err != nil {
+		t.Fatalf("Views with counts: %v", err)
+	}
+	for _, row := range listing.Views {
+		if row.Builtin {
+			continue
+		}
+		flat := run(map[string]any{"view": row.ID, "container": "project:ENG",
+			"subtasks": "separate"})
+		switch {
+		case row.Count == nil:
+			t.Errorf("%s carries no count (refused: %q)", row.ID, row.CountRefused)
+		case *row.Count != flat:
+			t.Errorf("%s counts %d beside a pin whose list holds %d — the "+
+				"count took the tree answer's subtree along", row.ID, *row.Count, flat)
+		}
+	}
+}
+
+// A PINNED VIEW IS COUNTED AS THE PERSON WHO OPENS IT, and the count is the
+// board's total whatever the view names about its reader.
+//
+// Three views, each of which reads its viewer a different way: a saved
+// `f.reviewers=me`, which means whoever opens it; `asked_by=` the viewer's own
+// seat, which is the author of every question they put whatever credential
+// they put it through (iam.ActorFor); and a view saved against a PERSON, which
+// a board runs as saved. The
+// count and the board share one expansion ([Reader.Expand]) — and a saved
+// `me` was once resolved by neither, so the count and the board refused it
+// alike, or, while the count carried a merge of its own, disagreed.
+func TestAPinnedViewCountsAsTheViewerWhoOpensIt(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+	eng := tracker.Container{Kind: tracker.ContainerProject, ID: "ENG"}
+	if _, err := r.writer.WriteFields(t.Context(), "op-people", []tracker.FieldDef{
+		{ID: "f-rev", Slug: "reviewers", Name: "Reviewers", Type: tracker.FieldPeople},
+	}); err != nil {
+		t.Fatalf("WriteFields: %v", err)
+	}
+	r.drain()
+	seedWithFields(t, r, "rev-ana-1", map[string]any{"f-rev": []string{"ana"}})
+	seedWithFields(t, r, "rev-ana-2", map[string]any{"f-rev": []string{"ana", "bob"}})
+	seedWithFields(t, r, "rev-bob", map[string]any{"f-rev": []string{"bob"}})
+	// The founder's questions — one through their token and one from the
+	// dashboard, both authored by their seat — and somebody else's.
+	for task, author := range map[string]string{
+		"by-token": "jane-founder", "by-seat": "jane-founder", "by-other": "cy",
+	} {
+		assign(t, r, task, "ana")
+		askOn(t, r, "op-"+task, task, tracker.Comment{
+			ID: "c-" + task, Task: task, Author: author,
+			AuthorKind: tracker.AuthorHuman, Body: "when?", Ask: "ana",
+			CreatedAt: wednesday,
+		})
+	}
+
+	anaHome := tracker.Container{Kind: tracker.ContainerPerson, ID: "ana"}
+	for _, view := range []tracker.View{
+		aView("v-mine", func(v *tracker.View) {
+			v.Name, v.Params = "To review", map[string]string{"f.reviewers": "me"}
+		}),
+		aView("v-asked", func(v *tracker.View) {
+			v.Name, v.Params = "Asked", map[string]string{"asked_by": "jane-founder"}
+		}),
+		aView("v-home", func(v *tracker.View) {
+			v.Name, v.Container = "Held", anaHome
+			v.Params = map[string]string{"assignee": "ana"}
+		}),
+	} {
+		if _, err := save(t, r.writer, "op-"+view.ID, view); err != nil {
+			t.Fatalf("save %s: %v", view.ID, err)
+		}
+		r.drain()
+	}
+	for handle, pins := range map[string][]string{
+		"ana": {"v-mine", "v-home"}, "bob": {"v-mine"},
+		"jane-founder": {"v-asked"},
+	} {
+		if _, err := r.writer.WriteDocument(t.Context(), "op-pins-"+handle,
+			tracker.PersonSubject(handle), "", tracker.Person{
+				V: 1, Handle: handle, PinnedViews: pins,
+			}, tracker.ChangePersonUpdated, nil); err != nil {
+			t.Fatalf("pin for %s: %v", handle, err)
+		}
+		r.drain()
+	}
+
+	// board is what work_items answers for the view, as the viewer.
+	// Asked flat, as every surface that runs a view asks it — see
+	// [TestAPinnedViewCountsTheListItOpens].
+	board := func(viewer tracker.Viewer, params map[string]any) int {
+		t.Helper()
+		params = maps.Clone(params)
+		params["subtasks"] = "separate"
+		q, err := r.reader.ExpandedQuery(t.Context(), params, viewer, wednesday, time.UTC)
+		if err != nil {
+			t.Fatalf("run %v as %s: %v", params, viewer.Handle, err)
+		}
+		q.Level = statelog.ReadStale
+		answer, err := r.reader.Tasks(t.Context(), q, wednesday)
+		if err != nil {
+			t.Fatalf("run %v as %s: %v", params, viewer.Handle, err)
+		}
+		return answer.TotalHint
+	}
+	count := func(container tracker.Container, viewer tracker.Viewer, id string) tracker.ViewRow {
+		t.Helper()
+		listing, err := r.reader.Views(t.Context(), tracker.ViewQuery{
+			Container: container, Viewer: viewer.Handle, Level: statelog.ReadStale,
+			Counts: true, Now: wednesday, Zone: time.UTC,
+		})
+		if err != nil {
+			t.Fatalf("Views(%s) as %s: %v", container.ID, viewer.Handle, err)
+		}
+		for _, row := range listing.Views {
+			if row.ID == id {
+				return row
+			}
+		}
+		t.Fatalf("%s is not on %s's strip for %s", id, container.ID, viewer.Handle)
+		return tracker.ViewRow{}
+	}
+
+	for _, tc := range []struct {
+		name      string
+		container tracker.Container
+		viewer    tracker.Viewer
+		view      string
+		params    map[string]any
+		want      int
+	}{
+		{"a saved me is ana", eng, tracker.Viewer{Handle: "ana"}, "v-mine",
+			map[string]any{"view": "v-mine", "container": "project:ENG"}, 2},
+		{"a saved me is bob", eng, tracker.Viewer{Handle: "bob"}, "v-mine",
+			map[string]any{"view": "v-mine", "container": "project:ENG"}, 2},
+		{"asked_by reaches every ask the founder put", eng,
+			tracker.Viewer{Handle: "jane-founder"}, "v-asked",
+			map[string]any{"view": "v-asked", "container": "project:ENG"}, 2},
+		{"a person's view runs as saved", anaHome, tracker.Viewer{Handle: "ana"},
+			"v-home", map[string]any{"view": "v-home"}, 3},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			total := board(tc.viewer, tc.params)
+			if total != tc.want {
+				t.Fatalf("the fixture is wrong: %s's board holds %d for %s, want %d",
+					tc.view, total, tc.viewer.Handle, tc.want)
+			}
+			row := count(tc.container, tc.viewer, tc.view)
+			if row.CountRefused != "" || row.Count == nil || *row.Count != total ||
+				row.CountCapped {
+				got := "none"
+				if row.Count != nil {
+					got = fmt.Sprint(*row.Count)
+				}
+				t.Errorf("%s's count for %s is %s (capped %v, refused %q), want "+
+					"the board's total %d", tc.view, tc.viewer.Handle, got,
+					row.CountCapped, row.CountRefused, total)
+			}
+		})
+	}
+}
+
+// EVERY VIEW A PERSON CAN SEE IS LISTED, WHATEVER CONTAINER IT LIVES IN.
+//
+// The inventory and the sidebar's pins read the workspace strip, so a view
+// saved with a project board's "+ View" appeared in neither — it could be
+// pinned from nowhere, and a pin set another way never reached the sidebar. A
+// project view pinned by its viewer is listed first, carries its container,
+// and is counted IN THAT CONTAINER, which is what opening it runs; somebody
+// else's personal view is in nobody else's listing.
+func TestEveryViewListsAPinnedProjectViewAndCountsItInItsProject(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+	for _, id := range []string{"t1", "t2"} {
+		assign(t, r, id, "ana")
+	}
+	for _, view := range []tracker.View{
+		aView("v-eng", func(v *tracker.View) {
+			v.Name, v.Params = "ENG, Ana's", map[string]string{"assignee": "ana"}
+		}),
+		aView("v-company", func(v *tracker.View) {
+			v.Name, v.Container = "Company", tracker.Container{Kind: tracker.ContainerWorkspace}
+			v.Params = map[string]string{"assignee": "ana"}
+		}),
+		aView("v-private", func(v *tracker.View) { v.Name, v.Owner = "Bo's own", "bo" }),
+	} {
+		if _, err := save(t, r.writer, "op-"+view.ID, view); err != nil {
+			t.Fatalf("save %s: %v", view.ID, err)
+		}
+		r.drain()
+	}
+	if _, err := r.writer.WriteDocument(t.Context(), "op-pins",
+		tracker.PersonSubject("ana"), "", tracker.Person{
+			V: 1, Handle: "ana", PinnedViews: []string{"v-eng"},
+		}, tracker.ChangePersonUpdated, nil); err != nil {
+		t.Fatalf("pin for ana: %v", err)
+	}
+	r.drain()
+
+	// THE FIXTURE BITES: the workspace strip — what both surfaces read —
+	// does not hold the project view at all.
+	for _, row := range r.strip(tracker.Container{Kind: tracker.ContainerWorkspace}, "ana").Views {
+		if row.ID == "v-eng" {
+			t.Fatal("the fixture is wrong: the workspace strip already lists the project view")
+		}
+	}
+
+	listing, err := r.reader.EveryView(t.Context(), tracker.EveryViewQuery{
+		Viewer: "ana", Level: statelog.ReadStale,
+		Counts: true, Now: wednesday, Zone: time.UTC,
+	})
+	if err != nil {
+		t.Fatalf("EveryView: %v", err)
+	}
+	var ids []string
+	for _, row := range listing.Views {
+		ids = append(ids, row.ID)
+	}
+	if want := []string{"v-eng", "v-company"}; !slices.Equal(ids, want) {
+		t.Fatalf("every view for ana is %v, want %v — the pinned project view "+
+			"first, the shared one after it, and nobody else's personal view", ids, want)
+	}
+	pinned := listing.Views[0]
+	switch {
+	case !pinned.Pinned:
+		t.Error("the project view ana pinned is not marked pinned")
+	case pinned.Container != tracker.Container{Kind: tracker.ContainerProject, ID: "ENG"}:
+		t.Errorf("the pinned view carries container %+v, want project ENG", pinned.Container)
+	case pinned.Count == nil:
+		t.Errorf("the pinned project view carries no count (refused: %q)", pinned.CountRefused)
+	case *pinned.Count != 2:
+		t.Errorf("the pinned project view counts %d, want the 2 tasks its "+
+			"project list opens on", *pinned.Count)
+	}
+	if listing.Views[1].Count != nil {
+		t.Error("a view that is not pinned was counted")
 	}
 }

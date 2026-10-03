@@ -71,7 +71,7 @@ happened to omit the key. There are four:
 | A seat's own tools, inside a turn | `linearizable` | No |
 | The operator MCP, about tracker content | `linearizable` | No |
 | The dashboard and the REST read path | `stale` | Yes — `linearizable`, `stale`, `consistent_prefix`, or `session` beside a `min_position` |
-| Any answer **about replication** — the retention report, the Fleet screen's lag, whether a purge landed | `stale`, weakening to `consistent_prefix` | No — it is derived, not chosen |
+| Any answer **about replication** — the retention report, Settings › Backups & retention's lag, whether a purge landed | `stale`, weakening to `consistent_prefix` | No — it is derived, not chosen |
 
 **Only the screen chooses**, and the reason is that only the screen can see
 what it got: the level and the lag are rendered beside the rows, so a person
@@ -91,8 +91,8 @@ somebody opened the page for.
 It weakens one step further when this node could not measure its own lag at
 all — the broker unreachable, or coordination — because `stale` is a claim
 about *age* and there is then no age to claim. `crewlet retention status` and
-the Fleet screen say so in a sentence rather than printing the same figures
-under the stronger name.
+**Settings › Backups & retention** say so in a sentence rather than printing
+the same figures under the stronger name.
 
 An agent cannot choose because the level is not a model's to pick — a tool
 argument for it would be a model trading correctness for latency it cannot
@@ -236,7 +236,7 @@ nothing to commit against.
 
 ## Which logs can be read at `linearizable`
 
-Four of the five state logs grant it; the vectors do not.
+Four of the six state logs grant it; the vectors and the usage log do not.
 
 | Log | `linearizable` | Why |
 |---|---|---|
@@ -245,6 +245,7 @@ Four of the five state logs grant it; the vectors do not.
 | The org chart (`CREWLET_CHART_LOG`) | Yes | Likewise. |
 | The identity estate (`CREWLET_IAM_LOG`) | Yes | Likewise. |
 | The vectors (`CREWLET_TRACKER_VECTORS`) | **No** — declared, not omitted | A compacted changelog keeping one message per source, and every value in it is derived from a source another log owns, so a read of the vectors claims no position a barrier could prove anything about. No surface reads them at a level: a search ranks with them, and what it answers for is the pages and tasks those sources came from. |
+| The usage log (`CREWLET_USAGE_LOG`) | **No** — declared, not omitted | A compacted changelog keeping one message per (node, company day, seat or schedule), each written by the one node whose own event log it was derived from — nothing is arbitrated, and no node can vouch for another node's day being whole until that node publishes it. A barrier would prove only that this node holds every record published before it, which a day still being written by its node never makes complete. A spend window reports the days and the `horizon` it answered from instead. |
 
 The decision is **declared per log**, in the engine's register of domains
 (`internal/engine/statelogregister.go`): each entry states either the barrier

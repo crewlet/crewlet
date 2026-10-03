@@ -2,6 +2,7 @@ package stream_test
 
 import (
 	"context"
+	"slices"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -15,14 +16,14 @@ import (
 
 // readUntil reads frames until one of kinds arrives, and reports what it
 // skipped on the way.
-func readUntil(t *testing.T, conn *websocket.Conn, kinds ...string) (map[string]any, []string) {
+func readUntil(t *testing.T, conn *websocket.Conn, kinds ...stream.Kind) (map[string]any, []stream.Kind) {
 	t.Helper()
-	var skipped []string
+	var skipped []stream.Kind
 	deadline := time.Now().Add(10 * time.Second)
 	for time.Now().Before(deadline) {
 		got := next(t, conn)
-		kind, _ := got["kind"].(string)
-		if slicesContains(kinds, kind) {
+		kind := kindOf(got)
+		if slices.Contains(kinds, kind) {
 			return got, skipped
 		}
 		skipped = append(skipped, kind)
@@ -55,9 +56,9 @@ func TestTheDegradedEnvelopeHoldsTheSocketOpen(t *testing.T) {
 			// api.framePosture maps onto the frame posture; here the
 			// mapping is stated directly, because the mapping's own
 			// correctness is internal/api's test.
-			Health: func() stream.Health { return stream.Health{Status: "shed"} },
+			Health: func() stream.Health { return health{Status: "shed"} },
 			Posture: func(h stream.Health) stream.FramePosture {
-				if h.Status == "shed" {
+				if h.NodeStatus() == "shed" {
 					return stream.FrameDegraded
 				}
 				return stream.FrameLive
@@ -112,7 +113,7 @@ func TestTheDegradedEnvelopeHoldsTheSocketOpen(t *testing.T) {
 	// THE QUERIES ARE REFUSED, and the query surface is never reached.
 	write(t, conn, map[string]any{"kind": "query", "id": 1, "what": "agents"})
 	answer, _ := readUntil(t, conn, stream.KindError, stream.KindResult)
-	if answer["kind"] != stream.KindError || answer["error"] != stream.CodeUnavailable {
+	if kindOf(answer) != stream.KindError || answer["error"] != stream.CodeUnavailable {
 		t.Errorf("a degraded node answered %v, want an %q refusal",
 			answer, stream.CodeUnavailable)
 	}
@@ -139,7 +140,7 @@ func TestTheDegradedEnvelopeHoldsTheSocketOpen(t *testing.T) {
 
 	// AND THE SOCKET IS STILL OPEN.
 	write(t, conn, map[string]any{"kind": "ping"})
-	if got, _ := readUntil(t, conn, stream.KindPong); got["kind"] != stream.KindPong {
+	if got, _ := readUntil(t, conn, stream.KindPong); kindOf(got) != stream.KindPong {
 		t.Errorf("the socket did not survive the refusal: %v", got)
 	}
 }
@@ -157,7 +158,7 @@ func TestAServingNodeAnswersTheSameSocket(t *testing.T) {
 			return map[string]any{"answered": true}, nil
 		},
 		stream.Options{
-			Health:  func() stream.Health { return stream.Health{Status: "ok"} },
+			Health:  func() stream.Health { return health{Status: "ok"} },
 			Posture: func(stream.Health) stream.FramePosture { return stream.FrameLive },
 		})
 
@@ -171,13 +172,13 @@ func TestAServingNodeAnswersTheSameSocket(t *testing.T) {
 		ID: "e1", Type: "agent_phase_started", Timestamp: "2026-06-14T12:00:00Z",
 		Category: "system", Payload: map[string]any{"agent_id": "a-lead", "role": "Lead", "task_id": "t-1"},
 	})
-	if got, _ := readUntil(t, conn, stream.KindEvent); got["kind"] != stream.KindEvent {
+	if got, _ := readUntil(t, conn, stream.KindEvent); kindOf(got) != stream.KindEvent {
 		t.Fatalf("a serving node withheld its pushes: %v", got)
 	}
 
 	write(t, conn, map[string]any{"kind": "query", "id": 1, "what": "agents"})
 	answer, _ := readUntil(t, conn, stream.KindError, stream.KindResult)
-	if answer["kind"] != stream.KindResult {
+	if kindOf(answer) != stream.KindResult {
 		t.Errorf("a serving node answered %v, want a result", answer)
 	}
 	select {
@@ -197,9 +198,9 @@ func TestAPostureChangeReachesAnAlreadyOpenSocket(t *testing.T) {
 	status.Store(&serving)
 
 	f := newSocketWith(t, nil, nil, stream.Options{
-		Health: func() stream.Health { return stream.Health{Status: *status.Load()} },
+		Health: func() stream.Health { return health{Status: *status.Load()} },
 		Posture: func(h stream.Health) stream.FramePosture {
-			if h.Status == "ok" {
+			if h.NodeStatus() == "ok" {
 				return stream.FrameLive
 			}
 			return stream.FrameDegraded

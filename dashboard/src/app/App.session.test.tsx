@@ -10,7 +10,8 @@
  */
 
 import { act, cleanup, fireEvent, render, screen, waitFor } from "~/test/inCase.ts";
-import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, test, vi } from "vitest";
+import { CHUNKS, loadChunk } from "./lazyScreen.ts";
 import { App } from "./App.tsx";
 import { Router } from "./router.tsx";
 import { ClientContext } from "~/lib/store-hooks.ts";
@@ -21,6 +22,14 @@ import {
   needSession,
   sessionRestored,
 } from "~/protocol/index.ts";
+
+// EVERY SCREEN'S CODE IS IN BEFORE A CASE STARTS — the sign-in screens' chunk
+// and every workspace's (`app/lazyScreen.ts`) — because this suite asserts
+// where a reader is sent and what is drawn there, not how long a cold
+// `import()` takes under a test transformer.
+beforeAll(async () => {
+  await Promise.all([...CHUNKS, "signin" as const].map((chunk) => loadChunk(chunk)));
+});
 
 class InertWebSocket {
   static CONNECTING = 0;
@@ -75,7 +84,7 @@ describe("a session the engine does not accept", () => {
   // THE CONTROL: a sign-in form routed to itself would lose what was typed,
   // and an invitation routed to sign-in would lose the link.
   test("leaves the sign-in screens where they are", async () => {
-    const at = loginFor("#/cost");
+    const at = loginFor("#/spend");
     mount(at);
     act(() => needSession("sign_in"));
     await screen.findByRole("heading", { name: "Sign in to Crewlet" });
@@ -95,25 +104,25 @@ describe("a session the engine does not accept", () => {
   });
 
   test("a session that may only enrol goes to the enrolment instead", async () => {
-    mount("#/admin/fleet");
+    mount("#/settings/nodes");
     act(() => needSession("second_factor"));
     await waitFor(() =>
-      expect(location.hash).toBe(`#/enrol?next=${encodeURIComponent("#/admin/fleet")}`),
+      expect(location.hash).toBe(`#/enrol?next=${encodeURIComponent("#/settings/nodes")}`),
     );
   });
 
   test("an enrolment that loses its session signs in toward where it was going", async () => {
-    mount(`#/enrol?next=${encodeURIComponent("#/cost")}`);
+    mount(`#/enrol?next=${encodeURIComponent("#/spend")}`);
     act(() => needSession("sign_in"));
-    await waitFor(() => expect(location.hash).toBe(loginFor("#/cost")));
+    await waitFor(() => expect(location.hash).toBe(loginFor("#/spend")));
   });
 
   // END TO END THROUGH A SCREEN'S OWN REQUEST: no screen recognises a lost
   // session itself, so the one path that matters is a REST 401 reaching the
   // router without the screen saying a word.
   test("a REST 401 on any screen is enough", async () => {
-    mount("#/admin/credentials");
-    await waitFor(() => expect(location.hash).toBe(loginFor("#/admin/credentials")));
+    mount("#/settings/secrets");
+    await waitFor(() => expect(location.hash).toBe(loginFor("#/settings/secrets")));
   });
 });
 

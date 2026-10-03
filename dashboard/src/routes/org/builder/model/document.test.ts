@@ -210,7 +210,7 @@ describe("reading the chart", () => {
     expect(draft.roles.map((s) => s.key)).toEqual(["seat:s"]);
   });
 
-  test("the settings a stored revision still carries a chart in are read without it", () => {
+  test("a settings document carrying a chart is read without it", () => {
     const draft = fromChart({ name: "Acme", roles: [{ name: "Old" }], units: [] } as never, null);
     expect(draft.company).toEqual({ name: "Acme" });
     expect(draft.roles).toEqual([]);

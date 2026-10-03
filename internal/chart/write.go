@@ -493,7 +493,9 @@ func (w *Writer) record(stamp statelog.Stamp, subject Subject, op OpKind, opID s
 	}
 	rec := MutationRecord{
 		RecordEnvelope: RecordEnvelope{
-			V: RecordVersion, OpID: opID, Subject: subject, Op: op,
+			// THE VERSION IS LEFT TO THE ENCODER, which stamps the lowest
+			// that reads what the record carries ([Encode]).
+			OpID: opID, Subject: subject, Op: op,
 			Gen: stamp.Gen, Writer: stamp.Writer, CreatedAt: at, Scope: scope,
 		},
 		Mutation:   body,
@@ -503,12 +505,19 @@ func (w *Writer) record(stamp statelog.Stamp, subject Subject, op OpKind, opID s
 		TurnID:     w.TurnID,
 		Revision:   w.Revision,
 	}
-	// EVERY RECORD THAT INSTALLS A GATE is pinned, not only the removal: an
-	// eviction a node's build cannot decode is deferred there, and a
-	// deferred eviction is one that node never installs — it would go on
-	// applying the evicted writer's records.
 	if rec.InstallsGate() {
+		// EVERY RECORD THAT INSTALLS A GATE is pinned, not only the
+		// removal: an eviction a node's build cannot decode is deferred
+		// there, and a deferred eviction is one that node never installs
+		// — it would go on applying the evicted writer's records.
 		rec.V = GateRecordVersion
+	} else {
+		// EVERY OTHER RECORD THIS WRITER DECIDES IS DECIDED UNDER VERSION
+		// 3'S RULES, and says so: the applier reads a record's rules off
+		// its version, and a seat's content or a seat edge that states no
+		// `manages:` list carries nothing a field-by-field stamp could
+		// see. See [MutationRecord.ManagesStructural].
+		rec.ManagesStructural = true
 	}
 	encoded, err := Encode(rec)
 	if err != nil {

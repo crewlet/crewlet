@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"log/slog"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -33,7 +34,7 @@ func TestEveryAlarmFiresOnItsConditionAndOnNothingElse(t *testing.T) {
 		"a node behind the log": {
 			statelog.KindApplyLag,
 			statelog.Reading{ApplyLag: 2 * time.Minute},
-			"2m0s behind",
+			"2m behind",
 		},
 		"reads refused for something other than lag": {
 			statelog.KindReadRefusals,
@@ -56,7 +57,7 @@ func TestEveryAlarmFiresOnItsConditionAndOnNothingElse(t *testing.T) {
 				BackupAge:    statelog.Age(30 * time.Hour),
 				BackupMaxAge: 24 * time.Hour,
 			},
-			"30h0m0s old",
+			"30h old",
 		},
 		"no backup at all": {
 			statelog.KindBackupAge,
@@ -75,14 +76,14 @@ func TestEveryAlarmFiresOnItsConditionAndOnNothingElse(t *testing.T) {
 			statelog.KindDeferredOld,
 			statelog.Reading{DeferredAge: 31 * time.Minute, DeferredSheds: true,
 				DeferredRecord: "at CREWLET_TRACKER_LOG@1:42"},
-			"(at CREWLET_TRACKER_LOG@1:42) has been held for 31m0s, past the 30m0s " +
+			"(at CREWLET_TRACKER_LOG@1:42) has been held for 31m, past the 30m " +
 				"deferral grace, at which this node's seats move to a peer",
 		},
 		"a floor nobody can read": {
 			statelog.KindFloorUnknown,
 			statelog.Reading{FloorUnknownFor: 2 * time.Minute,
 				FloorUnknownCause: "coordination unreachable"},
-			"unreadable here for 2m0s: coordination unreachable",
+			"unreadable here for 2m: coordination unreachable",
 		},
 		"a slow prefetch": {
 			statelog.KindPrefetchSlow,
@@ -103,6 +104,11 @@ func TestEveryAlarmFiresOnItsConditionAndOnNothingElse(t *testing.T) {
 			statelog.KindSearchScoped,
 			statelog.Reading{SearchScopedFraction: 0.1},
 			"part of the",
+		},
+		"fleet history missing a node": {
+			statelog.KindHistoryPartial,
+			statelog.Reading{HistoryPartialFraction: 0.25},
+			"25% of fleet history reads",
 		},
 		"recall below its floor": {
 			statelog.KindRecallBelowFloor,
@@ -153,7 +159,7 @@ func TestEveryAlarmFiresOnItsConditionAndOnNothingElse(t *testing.T) {
 				LogBytesPerDay: statelog.PerDay(300 << 20),
 				LogMaxBytes:    1 << 30, ReplayWindow: 7 * 24 * time.Hour,
 			},
-			"holds 81h55m",
+			"holds 81h 55m",
 		},
 		"a binding that has dangled past the stall grace": {
 			statelog.KindBindingDangling,
@@ -448,7 +454,7 @@ func TestNoBackupAtAllFiresAndSaysSoRatherThanNamingAnAge(t *testing.T) {
 			"advance until one exists", kindsOf(got))
 	}
 	if want := "no verified backup has been recorded, and the policy asks for " +
-		"one every 24h0m0s"; alarm.Detail != want {
+		"one every 24h"; alarm.Detail != want {
 		t.Errorf("detail = %q, want %q", alarm.Detail, want)
 	}
 	// AND IT NAMES NO AGE. The word the fabricated sentence turned on was
@@ -464,7 +470,7 @@ func TestNoBackupAtAllFiresAndSaysSoRatherThanNamingAnAge(t *testing.T) {
 		BackupAge: statelog.Age(30 * time.Hour), BackupMaxAge: policy,
 	})
 	measured, firing := find(got, statelog.KindBackupAge)
-	if !firing || !strings.Contains(measured.Detail, "30h0m0s old") {
+	if !firing || !strings.Contains(measured.Detail, "30h old") {
 		t.Errorf("a 30h backup reported %q, want its own age", measured.Detail)
 	}
 }
@@ -572,7 +578,7 @@ func TestOneKindOnTwoLogsIsTwoAlarms(t *testing.T) {
 		return statelog.Alarm{Kind: statelog.KindTrimBlocked, Domain: domain,
 			Detail: domain + ": the trim has not advanced"}
 	}
-	lagging := statelog.Alarm{Kind: statelog.KindApplyLag, Detail: "this node is 2m0s behind"}
+	lagging := statelog.Alarm{Kind: statelog.KindApplyLag, Detail: "this node is 2m behind"}
 
 	tracker.Observe(t.Context(), []statelog.Alarm{lagging, blocked("tracker"), blocked("pages")})
 	raised := lines("alarm_raised")
@@ -605,7 +611,7 @@ func TestOneKindOnTwoLogsIsTwoAlarms(t *testing.T) {
 	tracker.Observe(t.Context(), []statelog.Alarm{lagging, blocked("pages")})
 	cleared := lines("alarm_cleared")
 	if len(cleared) != 1 || cleared[0]["domain"] != "tracker" ||
-		cleared[0]["for"] != "20m0s" || cleared[0]["detail"] != "tracker: the trim has not advanced" {
+		cleared[0]["for"] != "20m" || cleared[0]["detail"] != "tracker: the trim has not advanced" {
 		t.Fatalf("one log's alarm clearing wrote %v; want one line naming the "+
 			"tracker's log, its twenty minutes and its detail", cleared)
 	}
@@ -622,12 +628,79 @@ func TestOneKindOnTwoLogsIsTwoAlarms(t *testing.T) {
 	}
 	for _, line := range cleared[1:] {
 		if line["alarm"] == string(statelog.KindTrimBlocked) &&
-			(line["domain"] != "pages" || line["for"] != "30m0s") {
+			(line["domain"] != "pages" || line["for"] != "30m") {
 			t.Errorf("the knowledge base's clear reads %v; want its own thirty minutes", line)
 		}
 	}
 	if got := gauge(t, rec, statelog.KindTrimBlocked); got != 0 {
 		t.Errorf("the gauge reads %v once every log's alarm cleared, want 0", got)
+	}
+}
+
+// THE STANDING ALARMS ARE THE LATEST EVALUATION'S, THE OLDEST FIRST — and
+// "not evaluated" is not "none firing".
+//
+// This is what every node's health envelope counts and names, so it has to
+// be exactly what the gauge and the log were just told: an alarm that cleared
+// is gone from it at once, and the name a health card shows is the condition
+// that has gone unanswered longest rather than whichever the table happens to
+// list first. Before any evaluation it says it cannot say, because an empty
+// list would render a node that has not looked as a node with nothing wrong.
+//
+// AND A KIND ON TWO LOGS STANDS TWICE, each naming its log: the count is how
+// many things an operator has to look at, and `trim_blocked` on the tracker's
+// log and on the knowledge base's is two of them with two remedies. Keyed on
+// the kind, the second log's would have been folded into the first's and the
+// name a health card shows would have sent an operator to one log while the
+// other stood.
+//
+// Mutation: return the table's order rather than the age order, report
+// (nil, true) before an evaluation, or key the order on the kind alone, and
+// this fails.
+func TestTheStandingAlarmsAreTheLatestEvaluationsOldestFirst(t *testing.T) {
+	t.Parallel()
+	clock := time.Date(2026, 3, 1, 9, 0, 0, 0, time.UTC)
+	tracker := statelog.NewTracker(nil, func() time.Time { return clock })
+
+	if standing, known := tracker.Standing(); known || standing != nil {
+		t.Fatalf("before any evaluation Standing = (%v, %v), want (nil, false)", standing, known)
+	}
+
+	// The WAL alarm is raised first; the knowledge base's blocked trim
+	// joins it two minutes later, and apply lag — which the table lists
+	// ahead of both — and the tracker's blocked trim three minutes after
+	// that.
+	wal := statelog.Alarm{Kind: statelog.KindWALLarge, Detail: "the write-ahead log is 2.0 GiB"}
+	lag := statelog.Alarm{Kind: statelog.KindApplyLag, Detail: "this node is 2m behind the log"}
+	blocked := func(domain string) statelog.Alarm {
+		return statelog.Alarm{Kind: statelog.KindTrimBlocked, Domain: domain,
+			Detail: domain + ": the trim has not advanced"}
+	}
+	tracker.Observe(t.Context(), []statelog.Alarm{wal})
+	clock = clock.Add(2 * time.Minute)
+	tracker.Observe(t.Context(), []statelog.Alarm{blocked("pages"), wal})
+	clock = clock.Add(3 * time.Minute)
+	tracker.Observe(t.Context(), []statelog.Alarm{lag, blocked("tracker"), blocked("pages"), wal})
+
+	standing, known := tracker.Standing()
+	want := []statelog.StandingAlarm{
+		{Kind: statelog.KindWALLarge},
+		{Kind: statelog.KindTrimBlocked, Domain: "pages"},
+		{Kind: statelog.KindApplyLag},
+		{Kind: statelog.KindTrimBlocked, Domain: "tracker"},
+	}
+	if !known || !slices.Equal(standing, want) {
+		t.Errorf("Standing = (%v, %v), want (%v, true): the longest-standing "+
+			"alarm leads whatever the table's order is, and each log's alarm "+
+			"stands on its own", standing, known, want)
+	}
+
+	clock = clock.Add(time.Minute)
+	tracker.Observe(t.Context(), statelog.Evaluate(statelog.Reading{}))
+	standing, known = tracker.Standing()
+	if !known || standing == nil || len(standing) != 0 {
+		t.Errorf("after an evaluation that raised nothing Standing = (%v, %v), "+
+			"want an empty list that is known", standing, known)
 	}
 }
 
@@ -680,5 +753,48 @@ func TestTheTableIsEvaluatedFinerThanItsThresholds(t *testing.T) {
 				"past %s (%s) up to a quarter of it late or worse",
 				statelog.AlarmInterval, name, threshold)
 		}
+	}
+}
+
+// THE HISTORY ALARM BORROWS THE READ BUDGET (ADR-0015).
+//
+// What makes a fleet history answer partial is a node that did not answer
+// inside the fleet read budget — so that budget IS the threshold, and the
+// alarm names the one the reads waited on, which the node that counted them
+// states in its reading ([statelog.Reading.HistoryReadBudget]). A second
+// number here would be a second opinion about one event, and the two would
+// drift: an operator told "every node had 5s" by a node that waited two would
+// go looking for a slowness that is not there. A reading that states no
+// budget names none, rather than a zero budget nobody waited on.
+//
+// Mutation: spell a budget as a literal in the detail, or print the zero
+// budget, and this fails.
+func TestHistoryPartialNamesTheBudgetItsReadsWaitedOn(t *testing.T) {
+	t.Parallel()
+	for _, budget := range []time.Duration{2 * time.Second, 3500 * time.Millisecond} {
+		alarm, found := find(statelog.Evaluate(statelog.Reading{
+			HistoryPartialFraction: 0.5, HistoryReadBudget: budget,
+		}), statelog.KindHistoryPartial)
+		if !found {
+			t.Fatal("a partial fleet read raised nothing")
+		}
+		spelled := map[time.Duration]string{
+			2 * time.Second: "the 2s fleet read budget", 3500 * time.Millisecond: "the 3.5s fleet read budget",
+		}[budget]
+		if !strings.Contains(alarm.Detail, spelled) {
+			t.Errorf("detail %q does not name the %s budget the reads waited on as %q",
+				alarm.Detail, budget, spelled)
+		}
+	}
+	alarm, found := find(statelog.Evaluate(statelog.Reading{HistoryPartialFraction: 0.5}),
+		statelog.KindHistoryPartial)
+	if !found {
+		t.Fatal("a partial fleet read with no stated budget raised nothing")
+	}
+	if strings.Contains(alarm.Detail, "0ms") || !strings.Contains(alarm.Detail, "inside the fleet read budget") {
+		t.Errorf("detail %q names a budget the reading never stated", alarm.Detail)
+	}
+	if _, found := find(statelog.Evaluate(statelog.Reading{}), statelog.KindHistoryPartial); found {
+		t.Error("a node that read no fleet history alarmed about it")
 	}
 }

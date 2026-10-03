@@ -25,4 +25,7 @@ func (stubConversations) History(context.Context, string, string, int) ([]ledger
 func (stubConversations) Threads(context.Context, string, int) ([]ledgerstore.Thread, error) {
 	return nil, nil
 }
+
+func (stubConversations) ThreadCount(context.Context, string) (int, error) { return 0, nil }
+
 func (stubConversations) Purge(context.Context, time.Time) (int64, error) { return 0, nil }

@@ -1,5 +1,5 @@
 /**
- * The seat card: the roster's row on People, and Live now's.
+ * The seat card: the roster's row on People.
  *
  * It is the one surface that draws a turn phase and is not itself a turn view,
  * which is how it came to draw every phase in one `info` fill while every other
@@ -18,10 +18,10 @@
 
 import { cleanup, render, screen } from "~/test/inCase.ts";
 import { afterEach, expect, test } from "vitest";
-import { Tag, type TagVariant } from "@crewlethq/ui";
+import { Tag } from "@crewlethq/ui";
 
 import { QueryState, SeatCard } from "./common.tsx";
-import { drawnClasses, isDrawnAs } from "~/testing.tsx";
+import { drawnClasses } from "~/testing.tsx";
 import type { Seat } from "~/lib/seats.ts";
 import type { AgentRow, LiveCall } from "~/protocol/index.ts";
 
@@ -48,56 +48,53 @@ const running = (phase: string, roundNum = 0): AgentRow =>
   ({
     id: "ada",
     role: "Ada Lovelace",
-    state: "working",
+    activity: "working",
     live_call: {
       phase,
       in_progress: true,
       round_num: roundNum,
-      rounds: Math.max(roundNum + 1, 0),
+      rounds_used: Math.max(roundNum + 1, 0),
       updated_at: new Date().toISOString(),
     } as LiveCall,
   }) as AgentRow;
 
-const PHASES: [phase: string, variant: TagVariant][] = [
-  ["execute", "phase-execute"],
-  ["review", "phase-review"],
-];
+const PHASES = ["execute", "review"] as const;
 
-test("a running seat's phase is drawn in that phase's own hue", () => {
-  const base = drawnClasses(Tag, { children: "x" })[0]!;
-  const drawn = PHASES.map(([phase, variant]) => {
+// A PHASE IS A CATEGORY, AND A CATEGORY HAS NO COLOUR. The design system took
+// its phase hues away because beside a state badge the state must be the one
+// coloured thing on the row; a seat card that tinted its phase pill again would
+// be a second hue saying "where", competing with the one saying "how".
+test("a running seat's phase is a word on the neutral pill, never a hue", () => {
+  const neutral = drawnClasses(Tag, { variant: "neutral", children: "x" });
+  const drawn = PHASES.map((phase) => {
     const { getByText, unmount } = render(
-      <SeatCard seat={seat()} agent={running(phase)} sandboxes={[]} />,
+      <SeatCard seat={seat()} agent={running(phase)} nameOf={(k) => k} />,
     );
-    const pill = getByText(phase).closest(`.${base}`)!;
-    expect(
-      isDrawnAs(pill, Tag, { variant, children: phase }, { children: phase }),
-      `the ${phase} pill is not drawn as ${variant}`,
-    ).toBe(true);
+    const pill = getByText(phase).closest(`.${neutral[0]}`)!;
     const classes = [...pill.classList];
+    expect(classes.sort(), `the ${phase} pill is not drawn as the neutral tag`).toEqual(
+      [...neutral].sort(),
+    );
     unmount();
     return classes;
   });
-  // THE REPORTED DEFECT ITSELF, and the assertion that stays red however the
-  // pill is respelled: two phases, two fills. One hardcoded variant for every
-  // phase passes every per-phase check above only if each of them names that
-  // variant, and fails this one always.
-  expect(drawn[0]).not.toEqual(drawn[1]);
+  // And the two phases are drawn IDENTICALLY — only the word differs — which
+  // stays red however a per-phase fill is respelled.
+  expect(drawn[0]).toEqual(drawn[1]);
 });
 
-test("the phase word is beside the colour, never replaced by it", () => {
-  // Colour is never the only carrier: protan and deutan vision are what the hues
-  // are measured against, and a reader with neither still reads a word. It is
-  // lowercased on the way, because the value is a store column and nothing
-  // normalises its case on the wire.
-  render(<SeatCard seat={seat()} agent={running("Execute")} sandboxes={[]} />);
+test("the phase is said as its word", () => {
+  // The word IS the phase now, so it has to be there. It is lowercased on the
+  // way, because the value is a store column and nothing normalises its case
+  // on the wire.
+  render(<SeatCard seat={seat()} agent={running("Execute")} nameOf={(k) => k} />);
   expect(screen.getByText("execute")).not.toBeNull();
 });
 
 test("a working seat whose first round has not come back says so", () => {
-  render(<SeatCard seat={seat()} agent={running("execute", -1)} sandboxes={[]} />);
-  expect(screen.getByText("starting")).toBeTruthy();
-  expect(screen.getByTitle(/first model round has not come back/)).toBeTruthy();
+  render(<SeatCard seat={seat()} agent={running("execute", -1)} nameOf={(k) => k} />);
+  expect(screen.getByText("round 1")).toBeTruthy();
+  expect(screen.getByTitle(/first model round is in flight and has not come back/)).toBeTruthy();
   expect(screen.getByText("Ada Lovelace").closest("a")?.textContent).not.toContain("—");
 });
 
@@ -105,20 +102,35 @@ test("a working seat whose first round has not come back says so", () => {
 // satisfied by deleting the field: `round_num` is zero-based and the number a
 // person reads is `round_num + 1`.
 test("a seat two rounds in reads as its third round", () => {
-  render(<SeatCard seat={seat()} agent={running("execute", 2)} sandboxes={[]} />);
+  render(<SeatCard seat={seat()} agent={running("execute", 2)} nameOf={(k) => k} />);
   expect(screen.getByText("round 3")).toBeTruthy();
 });
 
 test("a seat the engine reported no handle for still links to its page", () => {
   const { container } = render(
-    <SeatCard seat={seat({ handle: "" })} agent={undefined} sandboxes={[]} />,
+    <SeatCard seat={seat({ handle: "" })} agent={undefined} nameOf={(k) => k} />,
   );
-  // `#/company/people/` opens nothing. The seat screen resolves a NAME as well
+  // `#/agents/seats/` opens nothing. The seat screen resolves a NAME as well
   // as a handle, which is why `seatPath` exists and why the peek this card sits
   // under has always fallen back; the href had not.
   expect(container.querySelector("a.seat-card")!.getAttribute("href")).toBe(
-    "#/company/people/Ada%20Lovelace",
+    "#/agents/seats/Ada%20Lovelace",
   );
+});
+
+// A REFUSAL WITH THE ENGINE'S SENTENCE SAYS THE SENTENCE. The generic
+// `bad_params` banner blames the screen, which is right when the screen asked
+// wrong and wrong when a reader chose a window past the history — the engine's
+// words name the parameter either way, so they replace the guess.
+test("a bad_params refusal with the engine's sentence shows the sentence, not the guess", () => {
+  render(<QueryState error="bad_params" detail="days=91 is past the ninety" loading={false} />);
+  expect(
+    screen.getByText(/The engine refused this request: days=91 is past the ninety/),
+  ).toBeTruthy();
+  expect(screen.queryByText(/screen’s bug/)).toBeNull();
+  cleanup();
+  render(<QueryState error="bad_params" loading={false} />);
+  expect(screen.getByText(/screen’s bug to fix/)).toBeTruthy();
 });
 
 // A REFUSAL ON AUTHORITY SAYS WHAT WOULD CHANGE IT. The banner read "the

@@ -14,7 +14,7 @@
  */
 
 import { useSyncExternalStore } from "react";
-import { browserDay } from "./format.ts";
+import { readerDay } from "./format.ts";
 
 /** How often the shared instant moves, and so how old it may ever be. */
 const TICK_MS = 1000;
@@ -38,7 +38,10 @@ function tick(): void {
  * that rendered against that old instant until the first tick a second later:
  * relative times a sign-in's length out, and a screen keyed on its window
  * asked the engine for the window that ended when the tab opened, then again
- * for the real one.
+ * for the real one. The same holds after the last subscriber leaves: the next
+ * screen to mount rendered with the instant of the LAST tick, however long ago
+ * — so Spend's "last 30 days" was cut at that stale instant, and on a day whose
+ * company date differed from it opened the custom window a day short.
  *
  * Refreshed on the READ rather than when the ticker starts, because a
  * component subscribes after its first render and its effects run with what
@@ -48,7 +51,10 @@ function tick(): void {
  * snapshot, and the clock is never older than a running ticker would leave it.
  */
 function snapshot(): number {
-  if (!timer && Math.abs(Date.now() - now) >= TICK_MS) now = Date.now();
+  if (!timer) {
+    const t = Date.now();
+    if (Math.abs(t - now) >= TICK_MS) now = t;
+  }
   return now;
 }
 
@@ -133,20 +139,22 @@ export function useClockReading<T extends string | number | boolean>(read: (now:
 }
 
 /**
- * Today, as the browser's calendar names it (`2026-06-15`), re-rendering the
+ * Today, as the reader's calendar names it (`2026-06-15`), re-rendering the
  * caller when the day turns rather than when a second passes.
  *
  * For the screens whose only reading of the clock is WHICH DAY it is — a
  * calendar's today cell, a timeline's today line, the month a calendar opens
  * on. The work screen took the second for those and re-rendered every shape
  * it draws, the grid's rows and the timeline's layout included, once a second
- * to arrive at the same day. The BROWSER's day, because those cells are built
- * in it — see `browserDay`.
+ * to arrive at the same day. The READER's day — the zone every timestamp is
+ * drawn in — because the cells it is matched against are keyed in it: see
+ * `readerDay`. A reader who changes their zone sees today move at the next
+ * tick, which is when every other reading of the clock moves too.
  */
 export function useToday(): string {
   return useClockReading<string>(today);
 }
 
 function today(at: number): string {
-  return browserDay(new Date(at));
+  return readerDay(at);
 }

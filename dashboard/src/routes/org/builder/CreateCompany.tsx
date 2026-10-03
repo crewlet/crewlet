@@ -15,10 +15,11 @@
  * "Leads are people" option therefore creates human leads without identities,
  * and the review lists each one until it has one.
  *
- * WHAT A CREATE CANNOT DO. The dashboard writes no model provider (that is
- * `providers.llm`, which no screen edits), so the next steps after a
- * successful create name the two things left to do and give the command for
- * the one that has no screen at all.
+ * WHAT A CREATE CANNOT DO. No screen adds a model provider (`providers.llm`:
+ * Settings › Models & keys edits one the company already has, and a company
+ * just created has none), so the next steps after a successful create name
+ * the two things left to do and give the command for the one that has no
+ * screen at all.
  */
 
 import { useState } from "react";
@@ -29,7 +30,7 @@ import type { KeySource } from "./model/keys.ts";
 import type { Intent, TemplateId } from "./model/operations.ts";
 import { CONTACT_IDENTITIES, templateIntent, type LeadsAre } from "./model/templates.ts";
 import { screenPath } from "./dialogParts.tsx";
-import { AccountTreeGlyph, CheckGlyph } from "@crewlethq/icons/glyphs";
+import { NetworkGlyph, CheckGlyph } from "@crewlethq/icons/glyphs";
 import {
   Button,
   ButtonLink,
@@ -103,7 +104,7 @@ export function CreateCompany({
   return (
     <Card as="section">
       <Card.Header
-        icon={<AccountTreeGlyph size="sm" />}
+        icon={<NetworkGlyph size="sm" />}
         subtitle="the charter, a shape to start from, and your own seat"
       >
         <Card.Title>Create the company</Card.Title>
@@ -224,7 +225,7 @@ export function NextSteps({ onDismiss }: { onDismiss: () => void }) {
         icon={<CheckGlyph size="sm" />}
         subtitle="two steps the dashboard cannot take for you"
         actions={
-          <Button size="small" variant="tertiary" onClick={onDismiss}>
+          <Button size="small" variant="ghost" onClick={onDismiss}>
             Dismiss
           </Button>
         }
@@ -247,9 +248,10 @@ export function NextSteps({ onDismiss }: { onDismiss: () => void }) {
           <strong>Add a model provider</strong>
           <span className="t-caption">
             Until one is configured no agent seat takes a turn, and work sent to a seat waits on its
-            inbox until it is. No dashboard screen writes <InlineCode>providers.llm</InlineCode>.
-            Seal the key first with <InlineCode>crewlet secrets set ANTHROPIC_API_KEY</InlineCode>,
-            then patch the settings, which adds the provider and changes nothing else:
+            inbox until it is. No dashboard screen adds the first entry under{" "}
+            <InlineCode>providers.llm</InlineCode>. Seal the key first with{" "}
+            <InlineCode>crewlet secrets set ANTHROPIC_API_KEY</InlineCode>, then patch the settings,
+            which adds the provider and changes nothing else:
           </span>
           <CodeBlock plain wrap code={PROVIDER_SNIPPET} maxHeight={RECORD_MAX_HEIGHT} />
         </div>

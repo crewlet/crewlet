@@ -96,6 +96,11 @@ type ActivityRecord struct {
 	BatchID   string           `json:"batch_id,omitempty"`
 	TurnID    string           `json:"turn_id,omitempty"`
 
+	// Ask is the question this commit asked or answered, as it stands now
+	// — see [AskView]. Absent for a commit that wrote no comment, or one
+	// that is an ordinary remark.
+	Ask *AskView `json:"ask,omitempty"`
+
 	// Notified says whether the commit carried a notification — whether
 	// this change was ANNOUNCED. It is how a reader tells "nothing was
 	// announced" from "nothing happened", which is the whole reason a
@@ -560,6 +565,21 @@ func readActivity(ctx context.Context, tx *sql.Tx, q ActivityQuery, limit int) (
 	}
 	if err := rows.Err(); err != nil {
 		return nil, "", fmt.Errorf("tracker: read the activity feed: %w", err)
+	}
+	// THE ASK EACH COMMIT IS ABOUT, in one read over the page — the same
+	// resolution the inbox makes, through the same function.
+	comments := make([]string, 0, len(out))
+	for _, record := range out {
+		if record.CommentID != "" {
+			comments = append(comments, record.CommentID)
+		}
+	}
+	asks, askErr := readAskViews(ctx, tx, comments)
+	if askErr != nil {
+		return nil, "", askErr
+	}
+	for i := range out {
+		out[i].Ask = asks[out[i].CommentID]
 	}
 	next := ""
 	if more && len(out) > 0 {

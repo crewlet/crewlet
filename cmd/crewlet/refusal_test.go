@@ -118,3 +118,31 @@ func TestAForbiddenThatNamesNoGrantIsNotReadAsOne(t *testing.T) {
 		t.Errorf("a refusal no grant would lift = %q, %v; want the reason named", msg, ok)
 	}
 }
+
+// A 403 IS THE NODE JUDGING A VALID CALLER, NOT A BAD TOKEN. Only a 401 is the
+// credential: a gesture the node refuses for a reason that is not a grant — a
+// seat the chart no longer holds, a tool that forbids the act — answers 403
+// with a detail that is the whole answer, and reporting it as "check your
+// token" sends the operator after the one thing that was fine.
+func TestAForbiddenAnswerIsTheNodesRefusalNotTheToken(t *testing.T) {
+	t.Parallel()
+	body := []byte(`{"error":"seat_unavailable",` +
+		`"detail":"the seat cto is not in the org chart any more"}`)
+	err := nodeError(http.StatusForbidden, body, true)
+	if err == nil {
+		t.Fatal("a 403 was not reported as an error")
+	}
+	if strings.Contains(err.Error(), "did not accept") {
+		t.Errorf("a 403 carrying the node's own code was reported as a bad token:\n%s", err)
+	}
+	for _, want := range []string{"seat_unavailable", "not in the org chart"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("the refusal does not carry %q:\n%s", want, err)
+		}
+	}
+	// The credential sentence is still the 401's.
+	if err := nodeError(http.StatusUnauthorized, []byte(`{"error":"invalid_token"}`), true); err == nil ||
+		!strings.Contains(err.Error(), "did not accept") {
+		t.Errorf("a 401 = %v, want the token refusal", err)
+	}
+}

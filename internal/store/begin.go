@@ -18,7 +18,7 @@ import (
 // connector is a bare path with no `experimental=` list, so BEGIN CONCURRENT
 // is unreachable. And its BeginTx DISCARDS its driver.TxOptions and execs the
 // literal string "BEGIN", which is DEFERRED and takes no lock at all
-// (tursogo v0.8.0-pre.11, driver_db.go:197-202). The lock is acquired by the
+// (tursogo v0.8.0-pre.14, driver_db.go:197-202). The lock is acquired by the
 // transaction's FIRST WRITE STATEMENT, and it then excludes a write to EVERY
 // TABLE IN THE FILE rather than to the tables this transaction touches.
 //

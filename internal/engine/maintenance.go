@@ -392,6 +392,22 @@ func (e *Engine) activeSeats(ctx context.Context) ([]placement.Seat, error) {
 // before the hire. A node with no chart runtime serves the settings document's
 // own tree, which the settings epoch already covers.
 func (e *Engine) chartRoster(ctx context.Context) ([]placement.Seat, error) {
+	company, err := e.wholeRoster(ctx, e.Company)
+	if err != nil {
+		return nil, err
+	}
+	return company.Seats(), nil
+}
+
+// wholeRoster is the company current reads, known only once it holds every
+// record the org chart's log holds: the rule [Engine.chartRoster] states, for
+// every caller that judges a seat ABSENT and acts on it — the mailbox sweep,
+// and the clearing of a removed seat's pause ([Engine.clearRemovedSeatPauses]).
+//
+// THE CHART'S END BEFORE THE ROWS, and the rows before the company, for the
+// order chartRoster gives. current is read last, so a caller converging on a
+// company it already holds hands that one in.
+func (e *Engine) wholeRoster(ctx context.Context, current func() *Company) (*Company, error) {
 	reader := e.Chart()
 	var end uint64
 	if reader != nil {
@@ -404,7 +420,7 @@ func (e *Engine) chartRoster(ctx context.Context) ([]placement.Seat, error) {
 				"hold every hire: %w", err)
 		}
 	}
-	company := e.Company()
+	company := current()
 	if company == nil {
 		return nil, errors.New("engine: this node publishes no company yet; seats are " +
 			"judged once it does")
@@ -416,7 +432,7 @@ func (e *Engine) chartRoster(ctx context.Context) ([]placement.Seat, error) {
 				"that carries every hire is published", at.Seq, end)
 		}
 	}
-	return company.Seats(), nil
+	return company, nil
 }
 
 // Maintenance exposes the retention sweep.

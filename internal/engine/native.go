@@ -15,6 +15,7 @@ import (
 	"github.com/crewlet/crewlet/internal/changefeed"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
+	"github.com/crewlet/crewlet/internal/knowledge"
 	"github.com/crewlet/crewlet/internal/notify"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/pages"
@@ -203,6 +204,11 @@ func (e *Engine) startNative(ctx context.Context, c *Company) error {
 			// rename moves nobody's work, inbox or queue — see
 			// internal/tracker's people.go.
 			Identities: livePeople{engine: e},
+			// AND THE COMPANY'S CLOCK, read per call like the chart: a
+			// date field or a project's target date given as an instant
+			// is stored as the day it falls on on this clock (ADR-0018),
+			// and the clock is the epoch's to change.
+			Zone: e.Zone,
 			// THE NODE'S OWN WRITER ACTS AS THE SYSTEM, and every
 			// surface derives its own from it with Writer.As: a seat's
 			// tools act as that seat, an operator's session as that
@@ -245,8 +251,17 @@ func (e *Engine) startNative(ctx context.Context, c *Company) error {
 	// on the runtime existing, which is either backend.
 	//
 	// BEFORE the block, because the searcher built there takes it.
+	//
+	// AND IT DERIVES THE BACKLINKS from the same bodies it tokenises, through
+	// the one grammar the knowledge base owns — see [search.Backlinks].
 	n.indexer = search.NewIndexerOver(e.backends.Store,
-		lexicalSources(runTracker, wiki))
+		lexicalSources(runTracker, wiki)).WithLinks(pages.Links)
+	// ONE QUERY-VECTOR CACHE FOR BOTH SEARCHES on this node, so a phrase
+	// the palette embedded for the work search is a hit when the same
+	// phrase is searched as knowledge. Read through [Engine.queryModel]
+	// per query, because an apply replaces the provider and can turn
+	// `knowledge.vectors` off.
+	vectors := search.NewQueryVectors(e.queryModel)
 	// AND THE TRACKER'S OWN SEARCH over it, with its own fan-out rather
 	// than the knowledge searcher's: each verb's corpus filter is its own,
 	// and neither can widen into the other's.
@@ -264,13 +279,14 @@ func (e *Engine) startNative(ctx context.Context, c *Company) error {
 		n.itemSearch = tracker.NewSearcher(e.backends.Store, itemRanker{
 			index: n.indexer,
 			fan: &search.FanOut{
-				Self:   nodeID,
-				Local:  search.NodeScanner{Index: n.indexer},
-				Peers:  e.searchPeers(),
-				Roster: e.searchRoster,
-				Corpus: n.indexer.Corpus,
-				Report: e.reportSearch,
-				Enter:  e.enterSearch,
+				Self:    nodeID,
+				Local:   search.NodeScanner{Index: n.indexer},
+				Peers:   e.searchPeers(),
+				Roster:  e.liveNodes,
+				Corpus:  n.indexer.Corpus,
+				Report:  e.reportSearch,
+				Enter:   e.enterSearch,
+				Vectors: vectors,
 			},
 		})
 		// A HIT'S ASSIGNEE is shown as the reader shows one — see
@@ -336,11 +352,12 @@ func (e *Engine) startNative(ctx context.Context, c *Company) error {
 		// work items.
 		n.searcher = pages.NewSearcher(pages.SearcherOptions{
 			Index: n.indexer, SkillsContainer: e.skillsContainer,
-			Node:   nodeID,
-			Peers:  e.searchPeers(),
-			Roster: e.searchRoster,
-			Report: e.reportSearch,
-			Enter:  e.enterSearch,
+			Node:    nodeID,
+			Peers:   e.searchPeers(),
+			Roster:  e.liveNodes,
+			Report:  e.reportSearch,
+			Enter:   e.enterSearch,
+			Vectors: vectors,
 		})
 	}
 
@@ -524,6 +541,18 @@ func (e *Engine) Pages() *pages.Reader {
 		return nil
 	}
 	return n.pageReader
+}
+
+// Backlinks is this node's "linked from" reader — the lexical index, which
+// derives the links from the bodies it reads — or nil for a node with no
+// native backend. Nil only where the index is: a company on Jira and
+// Confluence has no body this engine indexes, so no link it could list.
+func (e *Engine) Backlinks() *search.Indexer {
+	n := e.native.Load()
+	if n == nil {
+		return nil
+	}
+	return n.indexer
 }
 
 // PagesStore is this node's knowledge write side, or nil.
@@ -1101,11 +1130,11 @@ func (e *Engine) workDeps(c *Company) builtin.WorkDeps {
 		// ONE WRITER PER ACTOR, derived from the turn's own seat: the
 		// tracker's rule is that a writer acts as exactly one party, and
 		// the party here is the immutable seat the tool surface bound
-		// rather than anything a model can name.
+		// rather than anything a model can name. Its provenance carries
+		// the turn's write log, so every task it commits to is one the
+		// turn can be charged by (see [builtin.Actor.Provenance]).
 		Writer: func(actor builtin.Actor) builtin.WorkWriter {
-			return n.writer.As(actor.Handle, actor.Kind, tracker.Provenance{
-				TurnID: actor.TurnID, Chain: actor.Chain,
-			})
+			return n.writer.As(actor.Handle, actor.Kind, actor.Provenance())
 		},
 		// AND THE PROJECT SETTINGS, which every surface has rather than
 		// the operator's alone: declaring a tag is open to every seat by
@@ -1114,28 +1143,22 @@ func (e *Engine) workDeps(c *Company) builtin.WorkDeps {
 		// `labels` argument on the tools it already holds. The authority
 		// for every other facet is resolved per call.
 		ProjectWriter: func(actor builtin.Actor) builtin.ProjectWriter {
-			return n.writer.As(actor.Handle, actor.Kind, tracker.Provenance{
-				TurnID: actor.TurnID, Chain: actor.Chain,
-			})
+			return n.writer.As(actor.Handle, actor.Kind, actor.Provenance())
 		},
 		// AND THE DEPENDENCY SEQUENCE, which is the same writer in its
 		// third shape: a dependency is two commits on two subjects, so
 		// it needs the replicated estate to check its counterparties
 		// before the first of them — and this writer has one.
 		Dependencies: func(actor builtin.Actor) builtin.WorkDepender {
-			return n.writer.As(actor.Handle, actor.Kind, tracker.Provenance{
-				TurnID: actor.TurnID, Chain: actor.Chain,
-			})
+			return n.writer.As(actor.Handle, actor.Kind, actor.Provenance())
 		},
 		Merges: func(actor builtin.Actor) builtin.WorkMerger {
-			return n.writer.As(actor.Handle, actor.Kind, tracker.Provenance{
-				TurnID: actor.TurnID, Chain: actor.Chain,
-			})
+			return n.writer.As(actor.Handle, actor.Kind, actor.Provenance())
 		},
+		// AND THE CROSS-PROJECT MOVE, the same writer in the shape that
+		// re-keys an item and its subtree into another project.
 		Moves: func(actor builtin.Actor) builtin.WorkMover {
-			return n.writer.As(actor.Handle, actor.Kind, tracker.Provenance{
-				TurnID: actor.TurnID, Chain: actor.Chain,
-			})
+			return n.writer.As(actor.Handle, actor.Kind, actor.Provenance())
 		},
 		// THE RANKED SEARCH, which reads and therefore takes no actor:
 		// the corpus is the same for everybody and there is nothing to
@@ -1169,8 +1192,18 @@ func (e *Engine) workDeps(c *Company) builtin.WorkDeps {
 		// clone, and a captured map would route a change by the org chart
 		// that has since moved.
 		Leads: liveLeads{engine: e},
-		Now:   func() time.Time { return time.Now().UTC() },
-		Zone:  c.Config.Tracker.Native.Location(),
+		// AND WHERE AN ASKER MAY PROMISE TO REPORT A DECISION, read per
+		// call for the chart seams' reason: a captured chart would admit
+		// a channel a unit stopped declaring and a surface the company
+		// turned off.
+		Channels: liveChannels{engine: e},
+		Now:      func() time.Time { return time.Now().UTC() },
+		// THE COMPANY'S CLOCK AS THIS EPOCH SETS IT (ADR-0018), and
+		// deliberately not read per call like the chart seams above: a
+		// turn pins its epoch, and a turn that resolved "due friday" on
+		// one clock and cut its overdue marks on the next would be
+		// running a company that never existed.
+		Zone:  c.Config.Location,
 		Await: e.WaitCommitted,
 	}
 }
@@ -1273,7 +1306,7 @@ func (l liveUnits) AllUnits() []tracker.ChartUnit {
 
 // liveSeats resolves a people field's value to exactly one seat, against the
 // CURRENT epoch, and answers the handle that seat was CREATED under — the
-// identity every person column is keyed on (ADR-0019).
+// identity every person column is keyed on (ADR-0026).
 //
 // EXACTLY ONE, and an ambiguous spelling is the same answer as an unknown one:
 // both mean "this does not name a person", which is the only thing a stored
@@ -1308,7 +1341,7 @@ func (l liveSeats) ResolveSeat(ref string) (string, bool) {
 }
 
 // livePeople is the person seam of both domains that store people — the
-// tracker's and the knowledge base's — against the CURRENT epoch (ADR-0019).
+// tracker's and the knowledge base's — against the CURRENT epoch (ADR-0026).
 //
 // A READING PER CALL, never an answer per name: Pin loads the live company
 // ONCE and hands back [chartPeople] over it, which a call — a question and its
@@ -1368,6 +1401,60 @@ func (c chartPeople) role(handle string) *org.Role {
 		return nil
 	}
 	return c.org.Role(strings.TrimSpace(handle))
+}
+
+// liveChannels is the chart's chat surfaces and unit channels, against the
+// CURRENT epoch — the [builtin.ChannelDirectory] a decision's inform is
+// checked through.
+type liveChannels struct{ engine *Engine }
+
+var _ builtin.ChannelDirectory = liveChannels{}
+
+// ChatSurfaces is the chat surfaces a seat can post on.
+//
+// BOTH HALVES, and each alone admits a promise nobody can keep: a company
+// surface the seat holds no bot on is one whose tools the seat never gets,
+// and a seat's bot on a surface the company turned off is a credential no
+// transport or tool server is started for. Mattermost's company block is
+// switched by `enabled`; Slack's is on by being declared — the rule
+// [Engine.startNotifications] starts each transport by.
+func (c liveChannels) ChatSurfaces(handle string) []tracker.InformSurface {
+	company := c.engine.Company()
+	if company == nil || company.Org == nil || company.Config == nil {
+		return nil
+	}
+	seat := company.Org.SeatByHandle(handle)
+	if seat == nil {
+		return nil
+	}
+	var out []tracker.InformSurface
+	if mm := company.Config.Integrations.Mattermost; mm != nil && mm.Enabled &&
+		seat.Mattermost.BotToken != "" {
+		out = append(out, tracker.InformMattermost)
+	}
+	if company.Config.Integrations.Slack != nil && seat.Slack.BotToken != "" {
+		out = append(out, tracker.InformSlack)
+	}
+	return out
+}
+
+// UnitChannels is every channel a unit DECLARES, once each, in chart order.
+//
+// DECLARED rather than effective: an inherited channel is its ancestor's
+// declaration, so the set is the same and the walk never lists one twice.
+func (c liveChannels) UnitChannels() []string {
+	company := c.engine.Company()
+	if company == nil || company.Org == nil {
+		return nil
+	}
+	var out []string
+	for unit := range company.Org.AllUnits() {
+		channel := strings.TrimSpace(unit.DeclaredChannel)
+		if channel != "" && !slices.Contains(out, channel) {
+			out = append(out, channel)
+		}
+	}
+	return out
 }
 
 // liveLeads resolves a wake's two fallbacks against the CURRENT epoch.
@@ -1484,6 +1571,50 @@ func LiveLeads(e *Engine) tracker.Leads { return liveLeads{engine: e} }
 
 // LiveUnits is the tracker's unit seam over the engine's current chart.
 func LiveUnits(e *Engine) tracker.Units { return liveUnits{engine: e} }
+
+// LiveChannels is the chart's chat surfaces and unit channels, read per call,
+// for a surface built once that outlives every apply — the person-facing tool
+// catalogue, whose `decision.inform` a nil directory would refuse while a
+// seat's own was admitted.
+func LiveChannels(e *Engine) builtin.ChannelDirectory { return liveChannels{engine: e} }
+
+// LiveDefaultProject is [ProjectOfSeat] over the engine's CURRENT chart, read
+// per call, for the surfaces built once and never rebuilt by an apply — the
+// operator surface, whose `create_work_item` files a PERSON's work, and the
+// dashboard's `viewer`, which says where that work lands. "" before any epoch
+// is running, and for a seat whose team and every team above it own no
+// project: the tool then refuses rather than guessing.
+//
+// ONE DERIVATION FOR BOTH, because the viewer promising one project while the
+// create files into another is the exact disagreement this seam exists to
+// rule out. The operator surface used to be handed a stub answering "" for
+// everybody, so a bound founder's create that named no project was refused
+// while the viewer's doc — and every seat's own surface — said it defaulted.
+func LiveDefaultProject(e *Engine) func(handle string) string {
+	return func(handle string) string {
+		c := e.Company()
+		if c == nil {
+			return ""
+		}
+		return ProjectOfSeat(c.Org, handle)
+	}
+}
+
+// Zone is the company's clock (ADR-0018) as the CURRENT epoch sets it, or UTC
+// before any epoch is running.
+//
+// For the surfaces that OUTLIVE an epoch — the scheduler's loop and the
+// operator's MCP surface, each built once and never rebuilt by an apply — so
+// that an apply moving the clock moves them with it on their next read. A
+// seat's own tools take the clock of the epoch their turn pinned instead; see
+// [Engine.workDeps].
+func (e *Engine) Zone() *time.Location {
+	c := e.Company()
+	if c == nil {
+		return time.UTC
+	}
+	return c.Config.Location()
+}
 
 // LiveMentions resolves @-mentions against the chart CURRENT when the comment
 // is written, rather than the one that built the caller.
@@ -1623,14 +1754,17 @@ func (e *Engine) searchPeers() search.Peers {
 	return search.Broker{Queue: e.backends.Queue}
 }
 
-// searchRoster answers which nodes may be given a bucket range.
+// liveNodes answers which nodes are in the fleet NOW: every node a fan-out may
+// hand a share of a question to — a search's bucket range, a history read.
 //
 // FROM THE LEASE VIEW rather than from the positions register, and the two
 // differ in exactly the way that matters here: a position row is held by every
 // node the trim has to wait for, INCLUDING one that has been gone for hours,
-// while a lease expires. A dead node in the roster costs every search on this
-// node a partial answer for as long as its row survives.
-func (e *Engine) searchRoster(ctx context.Context) ([]string, error) {
+// while a lease expires. A dead node in the roster costs every fanned answer on
+// this node a partial result for as long as its row survives — and a history
+// read would name it as missing on every screen, for a node nobody can bring
+// back.
+func (e *Engine) liveNodes(ctx context.Context) ([]string, error) {
 	if e.backends == nil || e.backends.Coord == nil {
 		return nil, nil
 	}
@@ -1647,6 +1781,28 @@ func (e *Engine) searchRoster(ctx context.Context) ([]string, error) {
 	return out, nil
 }
 
+// LiveNodes is how many nodes hold a presence lease now — the fleet's size as
+// every fan-out on this node sees it ([Engine.liveNodes]).
+//
+// AN ERROR IS A READ THAT DID NOT HAPPEN, never zero nodes: the health envelope
+// leaves its count out on one, because "0 nodes" beside a page this node is
+// serving is a claim nobody could act on, and the plane being unreachable is
+// already the posture's to say.
+//
+// THE CALLER BOUNDS IT: this is a key-iterating scan the NATS client's per-API
+// timeout does not cover, so it lasts as long as ctx does. The health envelope
+// hands it [ProbeReadBudget].
+func (e *Engine) LiveNodes(ctx context.Context) (int, error) {
+	if e.backends == nil || e.backends.Coord == nil {
+		return 0, errors.New("engine: no coordination backend to read the fleet's presence from")
+	}
+	nodes, err := e.liveNodes(ctx)
+	if err != nil {
+		return 0, err
+	}
+	return len(nodes), nil
+}
+
 // reportSearch counts what one answer covered.
 //
 // THE ONLY THING THAT MAKES THREE ALARMS ABLE TO FIRE. `search_slow`,
@@ -1658,17 +1814,48 @@ func (e *Engine) reportSearch(answer search.Answer, took time.Duration) {
 		return
 	}
 	e.metrics.Observe(metrics.TrackerSearchScanDuration, took,
-		metrics.Attrs{"path": "interactive", "rung": "hybrid"})
+		metrics.Attrs{"path": "interactive", "rung": searchRung(answer)})
 	coverage := "complete"
 	if answer.Partial() {
 		coverage = "scoped"
 	}
-	semantic := "full"
-	if answer.SemanticSkipped {
-		semantic = "skipped"
-	}
 	e.metrics.Add(metrics.TrackerSearchAnswers, 1,
-		metrics.Attrs{"coverage": coverage, "semantic": semantic})
+		metrics.Attrs{"coverage": coverage, "semantic": semanticState(answer)})
+}
+
+// searchRung is the ranking a scan actually ran, for the duration histogram.
+//
+// THE SERVED MODE, never a constant: every scan used to be recorded as
+// `hybrid` whatever it ran, so the histogram the interactive target is read
+// from mixed keyword-only scans — a fraction of the cost — into the figure for
+// the fused ones, and a slow semantic half hid under a fast lexical majority.
+func searchRung(answer search.Answer) string {
+	if answer.Served == "" {
+		return "none"
+	}
+	return string(answer.Served)
+}
+
+// semanticState is whether the meaning half ran, as the degraded-search alarm
+// counts it.
+//
+// THREE VALUES, because two of them are the alarm and one must never be. The
+// half that was ASKED FOR and did not run — a participant's vector scan that
+// failed, or a query vector the provider could not compute — is `skipped`,
+// the numerator of `search_degraded`. A half nobody asked for — a keyword
+// search, or a company with no embeddings provider — is `off`: counting that
+// as skipped fires the alarm on every search such a company ever runs, which
+// is an alarm red for the life of the deployment.
+func semanticState(answer search.Answer) string {
+	switch {
+	case answer.SemanticSkipped,
+		answer.Degraded == knowledge.DegradedEmbeddingFailed,
+		answer.Degraded == knowledge.DegradedSemanticPartial:
+		return "skipped"
+	case !answer.Served.Semantic() || answer.Served == "":
+		return "off"
+	}
+	return "full"
 }
 
 // enterSearch counts one scan in, and its return counts it out.

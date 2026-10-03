@@ -44,7 +44,7 @@ const fetchBatch = 256
 
 // Identify resolves a seat, by any handle it answers to, into the two
 // spellings its memory tables name it by: the handle it was CREATED under and
-// the id derived from that handle (ADR-0019). Both are empty for a handle no
+// the id derived from that handle (ADR-0026). Both are empty for a handle no
 // seat answers to.
 //
 // Injected rather than imported, because the derivation belongs to the

@@ -36,13 +36,17 @@ import {
   type ReactNode,
 } from "react";
 import { useParam } from "../router.tsx";
+import { peekHref, usePeek } from "./DetailRail.tsx";
 import { Button, EmptyState, cx } from "@crewlethq/ui";
-import { KeyboardArrowDownGlyph, KeyboardArrowUpGlyph } from "@crewlethq/icons/glyphs";
+import { ChevronDownGlyph, ChevronUpGlyph } from "@crewlethq/icons/glyphs";
 // A GRID'S EMPTY MARK IS NAME-KEYED, because `empty.icon` is part of the prop
-// every screen fills in — so the name→drawing lookup stays in `~/ui/Icon.tsx`.
-import { Mark, type MarkName } from "~/ui/glyph.tsx";
-import { useKeyChords } from "~/lib/keys.ts";
+// every screen fills in — so the name→drawing lookup is `~/ui/glyph.tsx`'s.
+import type { GlyphName } from "@crewlethq/icons/glyphs";
+import { Mark } from "~/ui/glyph.tsx";
 import { naturalCompare } from "~/lib/format.ts";
+import { useMediaQuery } from "~/lib/media.ts";
+import { useKeymap } from "../keymap.ts";
+import { PHONE_BREAKPOINT } from "../layout.ts";
 
 export interface GridColumn<T> {
   key: string;
@@ -59,9 +63,41 @@ export interface GridColumn<T> {
   label?: string;
   /** Shrink to content and never wrap. */
   shrink?: boolean;
+  /**
+   * On a grid drawn with `phoneRows="compact"`, a cell of the row's FIRST line
+   * — what the row is (a key, a title) — where every other cell is a fact
+   * about it on the line under. Ignored on the labelled card and at any width
+   * with columns.
+   */
+  phoneLead?: boolean;
+  /**
+   * Left off the COMPACT phone row, whose contract is two lines: the lead,
+   * then one line of facts. A fact the row's own page answers one click away
+   * (when it last moved) is the one that gives way there — drawn, it wrapped
+   * onto an orphan third line on every task with a status and a due date, and
+   * the rows of one list stood at three heights. Ignored on the labelled card
+   * and at any width with columns, where [drop] decides instead.
+   */
+  phoneOmit?: boolean;
   width?: string;
   /** Hidden unless named in `cols=`. */
   optional?: boolean;
+  /**
+   * The narrowest a FLEXIBLE column may be drawn — its track is
+   * `minmax(floor, 1fr)` rather than `minmax(0, 1fr)`. For the column that
+   * is the point of the list (a title, a name): at zero it gave way to every
+   * content-sized column beside it, and a work list beside a peek at 1280
+   * drew its titles 70px wide ("Which regi…"). Ignored on a `shrink` or a
+   * `width` column, whose track is sized another way.
+   */
+  floor?: string;
+  /**
+   * The order this column GIVES WAY in when the grid cannot draw every column
+   * at its size: the lowest number goes first, and a column without one never
+   * goes. See [fitColumns] — a grid that cannot fit drops columns rather than
+   * cutting them off at its clipped edge, and says which it dropped.
+   */
+  drop?: number;
 }
 
 /** One column a reader may turn on or off, as a chooser offers it. */
@@ -247,6 +283,134 @@ function compare(a: string | number, b: string | number): number {
  */
 const SHRINK_CAP = "20%";
 
+/** [SHRINK_CAP] as a fraction, for the measurement that asks whether a column is below it. */
+const SHRINK_SHARE = 0.2;
+
+/** How many rows [squeezed] reads: a page's first screen, which is what a reader sees. */
+const SQUEEZE_SAMPLE_ROWS = 12;
+
+/** What the fit has decided for one set of columns, at one width. */
+interface Fit {
+  /** The column set it was decided for (`cols=` changes it). */
+  readonly set: string;
+  /** The wrap's width when it last decided. */
+  readonly width: number;
+  /** The keys it dropped, in the order it dropped them. */
+  readonly dropped: readonly string[];
+}
+
+const NO_DROPS: readonly string[] = [];
+const NO_FIT: Fit = { set: "", width: 0, dropped: NO_DROPS };
+
+/**
+ * The next fit, or null when this one stands. PURE, so the rules are held
+ * without a layout engine:
+ *
+ * - the box GREW past the width columns were dropped at: start again from all
+ *   of them (the effect that follows drops again only what still does not fit);
+ * - the tracks OVERRUN the box: drop the visible column with the lowest
+ *   `drop`, if there is one;
+ * - otherwise remember a narrower width, so growing back past it re-tries.
+ */
+export function fitColumns({
+  fit,
+  width,
+  overflows,
+  visible,
+}: {
+  fit: Fit;
+  width: number;
+  overflows: boolean;
+  visible: readonly { key: string; drop?: number }[];
+}): Fit | null {
+  if (fit.dropped.length > 0 && width > fit.width) {
+    return { set: fit.set, width, dropped: NO_DROPS };
+  }
+  if (overflows) {
+    let next: { key: string; drop?: number } | undefined;
+    for (const c of visible) {
+      if (c.drop === undefined) continue;
+      if (!next || c.drop < next.drop!) next = c;
+    }
+    if (next) return { set: fit.set, width, dropped: [...fit.dropped, next.key] };
+  }
+  if (width !== fit.width && (fit.dropped.length > 0 || fit.width === 0)) {
+    return { ...fit, width };
+  }
+  return null;
+}
+
+/**
+ * Whether the tracks run past the wrap's inner edge: the head's last cell,
+ * against the padding box. Measured on the head because every track has a
+ * cell in it, whatever the rows hold.
+ */
+function overflowing(wrap: HTMLElement): boolean {
+  const last = wrap.querySelector(":scope > .grid-head")?.lastElementChild;
+  if (!last) return false;
+  const inner = wrap.getBoundingClientRect().left + wrap.clientLeft + wrap.clientWidth;
+  return last.getBoundingClientRect().right > inner + 0.5;
+}
+
+/**
+ * Whether a content-sized column has been SQUEEZED: drawn narrower than its
+ * cap AND cutting a value short. The other way a grid fails to fit, and the
+ * quieter one. A `shrink` track's floor is its content's min-content, and a
+ * value that ellipsises (a status pill, a truncating name) has almost none —
+ * so rather than overrun the box, the grid shrinks those columns to a letter
+ * ("T…" for "To do") while the columns that could have gone stay. Below its
+ * cap is the test that separates the two causes: a column AT its cap is cut by
+ * the cap's own rule, which dropping another column would not change.
+ *
+ * Read over the head and the first screen of rows, and only on elements with a
+ * box of their own (an inline run or a glyph has no client width to compare).
+ */
+function squeezed<T>(wrap: HTMLElement, visible: readonly GridColumn<T>[]): boolean {
+  const heads = wrap.querySelector(":scope > .grid-head")?.children;
+  if (!heads) return false;
+  const cap = wrap.clientWidth * SHRINK_SHARE - 1;
+  const rows = [...wrap.querySelectorAll(":scope > .grid-body .grid-row")].slice(
+    0,
+    SQUEEZE_SAMPLE_ROWS,
+  );
+  for (let i = 0; i < visible.length; i++) {
+    const column = visible[i]!;
+    if (!column.shrink || column.width) continue;
+    const head = heads[i];
+    if (!head || head.getBoundingClientRect().width >= cap) continue;
+    for (const row of rows) {
+      const cell = row.querySelectorAll(":scope > .grid-cell")[i];
+      if (cell && cutShort(cell)) return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * Whether an element, or anything with a box inside it, is drawn narrower than
+ * what it holds. A box one pixel wide is the screen-reader-only text a cell
+ * carries (`.sr-only` — "Unassigned" beside an empty avatar), which is narrower
+ * than its words on purpose and says nothing about the column's width.
+ */
+function cutShort(el: Element): boolean {
+  for (const node of [el, ...el.querySelectorAll("*")]) {
+    const box = node as HTMLElement;
+    if (box.clientWidth > 1 && box.scrollWidth > box.clientWidth + 1) return true;
+  }
+  return false;
+}
+
+/** "Due and Updated" — the dropped columns by the name a reader knows them by. */
+function droppedNames<T>(columns: readonly GridColumn<T>[], dropped: readonly string[]): string {
+  const names = dropped.map((key) => {
+    const c = columns.find((col) => col.key === key);
+    return (typeof c?.header === "string" && c.header) || c?.label || key;
+  });
+  return names.length <= 1
+    ? (names[0] ?? "")
+    : `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]}`;
+}
+
 /** `sort=-updated` → `{key: "updated", desc: true}`. */
 export function parseSort(raw: string): { key: string; desc: boolean } | null {
   if (!raw) return null;
@@ -292,6 +456,21 @@ export function parseSort(raw: string): { key: string; desc: boolean } | null {
 const drivable: string[] = [];
 let touched: string | null = null;
 
+/**
+ * Whether ANY grid on screen holds `j` and `k` — for a screen that binds the
+ * same two keys to something of its own (a task page stepping through the list
+ * it was opened from) and must stand aside while a grid on it takes them, so
+ * one press is never two actions.
+ *
+ * ASKED AT THE KEYSTROKE, as a `when` that is a function, for the reason the
+ * registry above gives: a hook answering it would have to re-render every
+ * caller each time a grid mounted or emptied, which is the store this
+ * registry stopped being.
+ */
+export function anyGridDriving(): boolean {
+  return drivable.length > 0;
+}
+
 function isDriving(gridId: string): boolean {
   if (touched !== null) return touched === gridId;
   return drivable[0] === gridId;
@@ -315,6 +494,8 @@ export function DataGrid<T>({
   loadedNote,
   name,
   colsName,
+  phoneRows = "labelled",
+  flush = false,
 }: {
   rows?: T[];
   bands?: GridBand<T>[];
@@ -322,12 +503,14 @@ export function DataGrid<T>({
   rowKey: (row: T) => string;
   /** A plain click. The row is still an anchor when `rowHref` is given. */
   onRowActivate?: (row: T, e: React.MouseEvent | React.KeyboardEvent) => void;
+  /** The row's object's page. A row whose link is the open peek's page is marked. */
   rowHref?: (row: T) => string;
+  /** A mark that is not the peek — the object a path addresses, a lens's subject. */
   isSelected?: (row: T) => boolean;
   isFailed?: (row: T) => boolean;
   defaultSort?: string;
   serverSorted?: boolean;
-  empty?: { title: ReactNode; hint?: ReactNode; icon?: MarkName };
+  empty?: { title: ReactNode; hint?: ReactNode; icon?: GlyphName };
   footer?: ReactNode;
   onLoadMore?: () => void;
   /** "40 of 312 loaded" — what an export would actually contain. */
@@ -362,6 +545,26 @@ export function DataGrid<T>({
    * Defaults to `name`, which is what every grid with one column set wants.
    */
   colsName?: string;
+  /**
+   * HOW A ROW IS DRAWN ON A PHONE, where there are no columns.
+   *
+   * `labelled` — the default — is a card of one labelled line per value: every
+   * grid can take it, whatever its columns are, because each value names
+   * itself. `compact` is two lines with no labels: the [GridColumn.phoneLead]
+   * cells, then every other value as a run of marks. It is for a grid whose
+   * values are marks that read without a name (a status pill, an avatar, a
+   * date) and whose reader is scanning MANY rows — the work list, where the
+   * labelled card stood eight lines and 230px tall per task and a phone showed
+   * two and a half of them.
+   */
+  phoneRows?: "labelled" | "compact";
+  /**
+   * THE GRID IS A CARD'S BODY rather than a box inside it: no border, no
+   * radius and no ground of its own, one rule above its head, so its rows run
+   * to the card's edges. A bordered box inside a bordered card drew two edges
+   * a pixel apart — a table inset in a frame the card already is.
+   */
+  flush?: boolean;
 }) {
   const [sortRaw, setSort] = useParam(name ? `sort.${name}` : "sort", defaultSort);
   const columnSet = colsName ?? name;
@@ -397,6 +600,67 @@ export function DataGrid<T>({
     const picked = asked.map((key) => byKey.get(key)).filter((c): c is GridColumn<T> => !!c);
     return picked.length > 0 ? picked : columns.filter((c) => !c.optional);
   }, [columns, colsRaw]);
+
+  // ---- Fitting the columns to the box ------------------------------------
+  //
+  // THE WRAP CLIPS (it is `overflow: clip`, which is what keeps the sticky
+  // head working), so a grid whose columns do not fit loses its last ones at
+  // the edge with nothing to scroll — or, with no floor anywhere, keeps them
+  // all and squeezes its one flexible column to nothing. Neither is a list.
+  // So when the tracks overrun the box — or a content-sized column is squeezed
+  // to a letter below its cap ([squeezed]) — the column with the lowest `drop`
+  // goes, and again, until they fit or nothing droppable is left; when the box
+  // GROWS, every column gets another chance. All of it happens in a layout
+  // effect, so the intermediate shapes are never painted.
+  //
+  // NOT ON A PHONE, where a row is a labelled card and has no tracks to
+  // overrun: a card shows every value, one per line.
+  // STATE, NOT A REF: a grid showing its empty state renders no wrap to
+  // measure, and the observer below has to attach when the rows arrive.
+  const [wrap, setWrap] = useState<HTMLDivElement | null>(null);
+  const phone = useMediaQuery(`(width < ${PHONE_BREAKPOINT}px)`);
+
+  // THE ROW THE RAIL IS OPEN ON IS MARKED, in every grid, by comparing
+  // ADDRESSES: a row's link is its object's page, and the peek names an object
+  // whose page is `peekHref` of it — the one function every row link to a
+  // peekable object is already built with. So the mark cannot name a
+  // different row from the one the rail shows, which is what four
+  // per-screen spellings of "which row is open" risked, and a grid that never
+  // wrote one (Nodes, Secrets, a seat's turns, the spend tables, the page
+  // list, most of Settings) no longer leaves the reader to find the row a
+  // peek beside it describes. `isSelected` stays for a mark that is not the
+  // peek — the credential a path addresses, the revision the Diff lens reads.
+  const peek = usePeek();
+  const peeked = peek ? peekHref(peek) : "";
+  const shownKeys = shownColumns.map((c) => c.key).join(",");
+  const [fit, setFit] = useState<Fit>(NO_FIT);
+  const dropped = !phone && fit.set === shownKeys ? fit.dropped : NO_DROPS;
+  const visibleColumns = useMemo(
+    () =>
+      dropped.length === 0 ? shownColumns : shownColumns.filter((c) => !dropped.includes(c.key)),
+    [shownColumns, dropped],
+  );
+  // A resize the wrap reports is a re-render, which is what re-runs the fit.
+  const [, setBoxWidth] = useState(0);
+  useLayoutEffect(() => {
+    if (!wrap) return;
+    const watch = new ResizeObserver(() => setBoxWidth(wrap.clientWidth));
+    watch.observe(wrap);
+    return () => watch.disconnect();
+  }, [wrap]);
+  // AFTER EVERY COMMIT, deliberately without dependencies: new rows, a sort
+  // or a resize can each change what fits, and the decision is one compare.
+  useLayoutEffect(() => {
+    const el = wrap;
+    if (!el || phone) return;
+    const next = fitColumns({
+      fit: fit.set === shownKeys ? fit : { ...NO_FIT, set: shownKeys },
+      width: el.clientWidth,
+      overflows: overflowing(el) || squeezed(el, visibleColumns),
+      visible: visibleColumns,
+    });
+    if (next !== null) setFit(next);
+  });
 
   const sortRows = useCallback(
     (input: T[]): T[] => {
@@ -506,18 +770,17 @@ export function DataGrid<T>({
   // registry above — and the cursor half is this render's, which is the one
   // the reader is looking at.
   const driving = () => isDriving(gridId);
-  useKeyChords([
-    { key: "j", run: () => step(1), when: driving },
-    { key: "k", run: () => step(-1), when: driving },
-    {
-      key: "enter",
+  useKeymap({
+    "list.next": { run: () => step(1), when: driving },
+    "list.previous": { run: () => step(-1), when: driving },
+    "list.open": {
       when: () => driving() && cursorAt >= 0 && Boolean(onRowActivate),
       run: (e) => {
         const stop = flat[cursorAt];
         if (stop && onRowActivate) onRowActivate(stop.row, e as unknown as React.KeyboardEvent);
       },
     },
-  ]);
+  });
 
   // THE ROW'S CLICK, through a ref, so a caller handing a fresh closure every
   // render — which every caller does — does not give every row a new prop and
@@ -570,8 +833,10 @@ export function DataGrid<T>({
   // that would have to be invented nineteen times and re-invented at every
   // width. It resolves against the grid's own content box, so it scales with
   // the window instead of pinning a laptop to a desktop's proportions.
-  const template = shownColumns
-    .map((c) => c.width ?? (c.shrink ? `fit-content(${SHRINK_CAP})` : "minmax(0, 1fr)"))
+  const template = visibleColumns
+    .map(
+      (c) => c.width ?? (c.shrink ? `fit-content(${SHRINK_CAP})` : `minmax(${c.floor ?? 0}, 1fr)`),
+    )
     .join(" ");
 
   // A GROUPED ANSWER WITH NO ROWS ON THIS PAGE IS NOT AN EMPTY ANSWER.
@@ -600,22 +865,26 @@ export function DataGrid<T>({
   function renderRow(row: T, path: string): ReactNode {
     const key = rowKey(row);
     const slot = slotOf(path, key);
+    const link = rowHref?.(row);
     // EVERYTHING A ROW IS HANDED IS A VALUE IT DRAWS — see [GridRow] — so a
     // render of this grid that changed nothing about a row draws nothing of it.
     // AND NOTHING IT IS HANDED IS ITS PLACE: a feed is newest first, so one new
     // row at the top moves every other one down a place, and a row handed its
     // index drew again for that alone. Whether the cursor is on it is asked of
     // its SLOT for the same reason — see `cursor`.
+    //
+    // THE ROW THE RAIL IS OPEN ON IS MARKED by comparing ADDRESSES — see
+    // `peeked` — beside whatever the caller marks itself.
     return (
       <GridRow<T>
         key={key}
         row={row}
-        columns={shownColumns}
+        columns={visibleColumns}
         id={rowDomId(gridId, slot)}
         cursor={cursor?.slot === slot}
-        selected={Boolean(isSelected?.(row))}
+        marked={Boolean(isSelected?.(row)) || (peeked !== "" && link === peeked)}
         failed={Boolean(isFailed?.(row))}
-        href={rowHref?.(row)}
+        href={link}
         activate={activatable ? activate : undefined}
       />
     );
@@ -664,12 +933,15 @@ export function DataGrid<T>({
     // above. `pointerdown` rather than `click`, so a drag on a header or a
     // press that never becomes a click still hands the keyboard over.
     <div
+      ref={setWrap}
       className="grid-wrap"
+      data-phone-rows={phoneRows === "compact" ? "compact" : undefined}
+      data-flush={flush || undefined}
       style={{ gridTemplateColumns: template }}
       onPointerDown={claimKeyboard}
     >
       <div className="grid-head" role="row">
-        {shownColumns.map((column) => {
+        {visibleColumns.map((column) => {
           const sorted = sort?.key === column.key;
           const className = cx(
             "grid-th",
@@ -692,11 +964,7 @@ export function DataGrid<T>({
             <>
               <span className="truncate">{column.header}</span>
               {sorted &&
-                (sort?.desc ? (
-                  <KeyboardArrowDownGlyph size="xs" />
-                ) : (
-                  <KeyboardArrowUpGlyph size="xs" />
-                ))}
+                (sort?.desc ? <ChevronDownGlyph size="xs" /> : <ChevronUpGlyph size="xs" />)}
             </>
           );
           if (!column.sortValue) {
@@ -737,10 +1005,17 @@ export function DataGrid<T>({
           : ordered.rows.map((row) => renderRow(row, ""))}
       </div>
 
-      {(footer || onLoadMore || loadedNote) && (
+      {(footer || onLoadMore || loadedNote || dropped.length > 0) && (
         <div className="grid-foot">
           {footer}
           <span className="spacer" />
+          {/* A DROPPED COLUMN IS SAID. A column that vanished without a word is
+              a value the reader cannot tell was ever there; this names what
+              the width took, and widening the window (or closing the peek)
+              brings it back. */}
+          {dropped.length > 0 && (
+            <span className="t-caption">Hidden to fit: {droppedNames(shownColumns, dropped)}</span>
+          )}
           {loadedNote && <span className="t-caption">{loadedNote}</span>}
           {onLoadMore && (
             <Button size="small" variant="secondary" onClick={onLoadMore}>
@@ -805,12 +1080,16 @@ function rowDomId(gridId: string, slot: string): string {
 
 interface GridRowProps<T> {
   row: T;
-  /** The columns as drawn — `cols=` applied, in the reader's order. */
+  /** The columns as drawn — `cols=` applied, in the reader's order, less what the fit dropped. */
   columns: GridColumn<T>[];
   /** The row's own element id ([rowDomId]): its overlay link's name, and where a cursor step scrolls. */
   id: string;
   cursor: boolean;
-  selected: boolean;
+  /**
+   * The row is the one the open peek shows, or one the caller marks for a
+   * reason of its own (`isSelected`) — drawn and SAID alike.
+   */
+  marked: boolean;
   failed: boolean;
   /** The row's link; `undefined` where the grid takes no `rowHref`. */
   href: string | undefined;
@@ -822,8 +1101,8 @@ interface GridRowProps<T> {
  * One row, drawn again only when something it draws has changed.
  *
  * MEMOISED ON VALUES, and every prop is one the row draws: its object, the
- * columns, its id, and three booleans and a string the grid works out for
- * it — and never its PLACE, which a new row above it moves without changing
+ * columns as drawn (`cols=` applied, and whatever the fit dropped), its id,
+ * and three booleans and a string the grid works out for it — and never its PLACE, which a new row above it moves without changing
  * anything it draws. The click is the one function, and the grid hands every row the same
  * one through a ref, because a caller's `onRowActivate` is a fresh closure on
  * every render of every screen. So a cursor stepping from one row to the next
@@ -845,7 +1124,7 @@ function GridRowView<T>({
   columns,
   id,
   cursor,
-  selected,
+  marked,
   failed,
   href,
   activate,
@@ -884,6 +1163,8 @@ function GridRowView<T>({
     <span
       key={column.key}
       className={cx("grid-cell", column.align === "right" && "right", column.shrink && "shrink")}
+      data-lead={column.phoneLead || undefined}
+      data-phone-omit={column.phoneOmit || undefined}
       data-label={
         (typeof column.header === "string" && column.header ? column.header : column.label) ||
         undefined
@@ -892,7 +1173,7 @@ function GridRowView<T>({
       {column.cell(row)}
     </span>
   ));
-  const className = cx("grid-row", selected && "selected", failed && "failed", cursor && "cursor");
+  const className = cx("grid-row", marked && "selected", failed && "failed", cursor && "cursor");
   const linked = href !== undefined;
   // THE ROW'S OWN LINK IS AN OVERLAY, NOT THE ROW.
   //
@@ -918,6 +1199,7 @@ function GridRowView<T>({
       className={className}
       role={!linked && activate ? "button" : undefined}
       tabIndex={!linked && activate ? 0 : undefined}
+      aria-current={!linked && marked ? "true" : undefined}
       onClick={!linked && activate ? (e) => activate(row, e) : undefined}
     >
       {linked && (
@@ -925,6 +1207,10 @@ function GridRowView<T>({
           className="row-link"
           href={href}
           aria-labelledby={id}
+          // THE MARK IS SAID, NOT ONLY PAINTED: the tint is the one cue a
+          // sighted reader gets, and a screen reader walking the rows hears
+          // which one is the open one.
+          aria-current={marked ? "true" : undefined}
           onClick={(e) => activate?.(row, e)}
         />
       )}

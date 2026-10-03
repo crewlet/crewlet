@@ -147,19 +147,19 @@ roles:
 // get there and the operator learns nothing from it.
 func TestAPostureReadIsBounded(t *testing.T) {
 	t.Parallel()
-	if posturePollBudget <= 0 {
+	if ProbeReadBudget <= 0 {
 		t.Fatal("the posture read carries no budget")
 	}
 	// Inside a typical 5s liveness timeout, so a slow plane degrades to
 	// the fail-open answer rather than to a probe timeout.
-	if posturePollBudget >= 5*time.Second {
-		t.Errorf("posturePollBudget = %v, which is not inside a 5s liveness timeout",
-			posturePollBudget)
+	if ProbeReadBudget >= 5*time.Second {
+		t.Errorf("ProbeReadBudget = %v, which is not inside a 5s liveness timeout",
+			ProbeReadBudget)
 	}
 	// And well inside the reconcile cadence, so a probe can never outlive
 	// the tick that would correct what it reports.
-	if posturePollBudget >= configplane.ReconcileInterval {
-		t.Errorf("posturePollBudget = %v, want well inside the %v reconcile tick",
-			posturePollBudget, configplane.ReconcileInterval)
+	if ProbeReadBudget >= configplane.ReconcileInterval {
+		t.Errorf("ProbeReadBudget = %v, want well inside the %v reconcile tick",
+			ProbeReadBudget, configplane.ReconcileInterval)
 	}
 }

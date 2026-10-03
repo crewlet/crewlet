@@ -14,6 +14,7 @@ import (
 	"github.com/crewlet/crewlet/internal/api/httpjson"
 	"github.com/crewlet/crewlet/internal/api/livestate"
 	"github.com/crewlet/crewlet/internal/api/mcpbridge"
+	"github.com/crewlet/crewlet/internal/api/operator"
 	"github.com/crewlet/crewlet/internal/api/pagepolicy"
 	"github.com/crewlet/crewlet/internal/api/queries"
 	"github.com/crewlet/crewlet/internal/api/stream"
@@ -55,12 +56,6 @@ type App struct {
 	nodeID       string
 	queueBackend string
 
-	// events is the node's own log, for the ONE thing this package does
-	// with it outside the read registry: seeding the live spend window at
-	// boot. Required, like every other estate the engine beside this
-	// process opens.
-	events *store.EventLog
-
 	// now is the clock, shared with the stream service so a hydration
 	// window and a health tick cannot disagree about what time it is.
 	now func() time.Time
@@ -68,12 +63,12 @@ type App struct {
 	// queries is the read surface both transports answer from.
 	queries *queries.Registry
 
-	// budgets is the fleet's token counter, for the one route that WRITES
-	// to it.
-	budgets budgetResetter
-
 	// backup takes a copy of this node's durable state.
 	backup backupTaker
+
+	// audit publishes the runtime audit record every backup leaves; see
+	// [operator.Audit].
+	audit operator.AuditPublisher
 
 	// retention is the fleet's own record of what the log may delete, for
 	// the one gesture that WRITES to it: an operator's backup
@@ -206,11 +201,11 @@ type guardedMounter interface {
 //
 // # What is required, and why a nil is refused rather than served around
 //
-// Runtime, Sources.Company, Sources.Chart, Sources.Holders, Sources.Events,
-// Sources.NodeID, the
-// Inbound edge's Publisher, Claims, Secrets and AppFlow, Config, Secrets, Setup,
-// Budgets, Retention, Capacity and Backup are REQUIRED, and [New] refuses a
-// missing one by name.
+// Runtime, Inbox, EventLog, Sources.Company, Sources.Chart, Sources.Holders,
+// Sources.WithheldContacts, Sources.Events, Sources.NodeID, Sources.Coord, the
+// Inbound edge's Publisher, Claims, Secrets and AppFlow, Config, Secrets,
+// Setup, Chart, Retention, Capacity, Backup, Nodes, AuthEvents and Audit are
+// REQUIRED, and [New] refuses a missing one by name.
 //
 // Every one of them is something the engine beside the API holds: `crewlet
 // run` is the only thing that builds an App, it builds one over an engine that
@@ -320,18 +315,30 @@ type Options struct {
 	// State is the projection to serve. Nil builds an empty one.
 	State *livestate.LiveState
 
+	// EventLog is this node's OWN event store, which the webhook edge writes
+	// every delivery it accepts into. Not the read surface's history, which
+	// is the fleet's (Sources.Events): a write goes to this node and nowhere
+	// else, and a read of one node's store is a third of a three-node
+	// fleet's.
+	EventLog *store.EventLog
+
 	// Sources are what the read surface answers from. Company, Events,
-	// NodeID, Chart and Holders are required; see above. NodeID is the node's
-	// RESOLVED id, and it names this node on the health body as well as in
-	// the fleet answer, so the two cannot disagree about who answered. Chart
-	// is who leads whom, which every personal question a lead asks about a
-	// report is decided by — left nil it answered UNKNOWN to every one of
-	// them for the life of the process, which is a 503 that never clears
-	// rather than a narrower node. Holders is whose record somebody else's
-	// login names, which every personal question naming one resolves
-	// through — left nil, every such question is the same 503 for ever, and
-	// read literally, as it was, a bound person's login named a record
-	// nothing of theirs is kept under. Any other source left
+	// NodeID, Chart, Holders, WithheldContacts and Coord are required; see
+	// above. NodeID is the node's RESOLVED id, and it names this node on the
+	// health body as well as in the fleet answer, so the two cannot disagree
+	// about who answered. Chart is who leads whom, which every personal
+	// question a lead asks about a report is decided by — left nil it
+	// answered UNKNOWN to every one of them for the life of the process,
+	// which is a 503 that never clears rather than a narrower node. Holders
+	// is whose record somebody else's login names, which every personal
+	// question naming one resolves through — left nil, every such question
+	// is the same 503 for ever, and read literally, as it was, a bound
+	// person's login named a record nothing of theirs is kept under.
+	// WithheldContacts is whose contact identities the identity directory
+	// withholds from what a lead and `colleague` are shown — left nil, a
+	// suspended person's chat ids stayed readable. Coord is the fleet's
+	// lease table, which the placement push and the fleet answer read. Any
+	// other source left
 	// nil makes its questions UNREGISTERED rather than failing, which is the
 	// honest answer for a node that does not have that surface at all (no
 	// knowledge backend, no native tracker) and distinct from an empty one.
@@ -442,30 +449,24 @@ type Options struct {
 	// node without the ingress role serves it alone, through [BridgeOnly].
 	Bridge *mcpbridge.Bridge
 
-	// Operator is the company's own tracker and knowledge base, served to
-	// an operator's AI assistant over MCP, as each request finds them —
-	// [NativeOperator]. Nil serves none and the route is ABSENT, which is
-	// what a suite about something else has.
+	// Operator is the company's own tracker and knowledge base as ONE tool
+	// catalogue, served to the people who run it — over MCP for an
+	// operator's own AI assistant, and over the act route for a person at
+	// the dashboard (ADR-0024) — and the one dispatch the human write
+	// surface's tool-backed routes call. Nil serves none and both routes are
+	// ABSENT, which is what a suite about something else has.
 	//
-	// A SOURCE, not a server, for [Options.Work]'s reason: the catalogue
-	// is the native halves', which a node meets at its first company. A
-	// request before that answers `503 no_active_revision`, and one to a
-	// node whose company keeps nothing this surface could manage — its
-	// tracker and its wiki both a vendor's — answers as the route's
-	// absence would.
+	// ONE SERVER, BUILT ONCE, WHOSE CATALOGUE IS READ PER CALL: the
+	// catalogue is the native halves', which a node meets at its first
+	// company. A request before that answers `503 no_active_revision`, and
+	// one to a node whose catalogue is empty answers as the route's absence
+	// would. [HumanSurfaces.Mount] is what hands it over.
 	//
 	// GUARDED, like every route the exemption list does not name. It
-	// writes to the company, and the credential's own name is what lands
-	// on each record as the author — so a request with no principal has
+	// writes to the company, and the request's principal is what lands on
+	// each record as the author — so a request with no principal has
 	// nobody to attribute the write to.
-	Operator OperatorSource
-
-	// Budgets is the fleet's token counter. Supplied separately from
-	// Sources.Budget, which is the READ half: a reset is an operator
-	// action against a spend ceiling, and giving the read surface a
-	// method that clears one would put it a typo away from every screen
-	// that renders spend.
-	Budgets budgetResetter
+	Operator *operator.Server
 
 	// Retention is the fleet's record of what the log may delete, for the
 	// operator's backup acknowledgement.
@@ -507,6 +508,14 @@ type Options struct {
 	// worst" — a node with nothing replicated would then never be ready.
 	Estate EstateFloor
 
+	// Audit is where a backup publishes its runtime audit record — this
+	// node's own queue, whose publish listener writes the event store. The
+	// operator surface is handed the same one by whoever builds it
+	// ([operator.Options.Audit]). REQUIRED: copying every credential the
+	// company holds to a directory somebody named is the one call an audit
+	// is most often opened to find.
+	Audit operator.AuditPublisher
+
 	// Assets overrides the embedded dashboard tree. Nil serves the one
 	// compiled into the binary, which is what every deployment does; a
 	// test supplies its own to assert about serving rather than about the
@@ -544,7 +553,6 @@ func New(opts Options) (*App, error) {
 		runtime:      opts.Runtime,
 		nodeID:       opts.Sources.NodeID,
 		queueBackend: opts.QueueBackend,
-		events:       opts.Sources.Events,
 		now:          now,
 		// DERIVED FROM THE SOURCE THAT ALREADY EXISTS, rather than a
 		// second field an embedder could set inconsistently with it:
@@ -568,14 +576,21 @@ func New(opts Options) (*App, error) {
 		// renamed seat to the handle it used to have.
 		Seats: opts.Sources.Seats,
 		// The three config-derived surfaces, read live for the same
-		// reason Seats is: an apply replaces the company.
-		Roster: func() []map[string]any { return rosterTick(opts.Sources.Company, opts.Runtime) },
+		// reason Seats is: an apply replaces the company. The roster is
+		// the CONFIGURATION alone: what each seat is doing comes from the
+		// live projection over the placement below.
+		Roster: func() []map[string]any { return roster(opts.Sources.Company) },
 		Org:    func() any { return orgProjection(opts.Sources.Company) },
 		Tools:  func() []map[string]any { return toolRows(opts.Runtime) },
 		// The CONFIGURED rows only. The dispatch ledger is a store read
 		// and the snapshot makes none; the screen fetches that half
 		// itself through the `schedules` question.
 		Schedules: func() any { return opts.Sources.ConfiguredSchedules() },
+		// WHICH SEATS SOME NODE HOLDS, from the fleet's lease table, for
+		// the seat-state vocabulary's `unplaced`.
+		Placement: func() (map[string]bool, error) {
+			return placementTick(opts.Sources.Company, opts.Sources.Coord, opts.Runtime)
+		},
 
 		// WHO LEADS WHOM, which a `watch` frame is decided by — the SAME
 		// seam the `work_inbox` question about the same seat asks.
@@ -605,21 +620,20 @@ func New(opts Options) (*App, error) {
 	// answering one question from two implementations is how they end up
 	// disagreeing with nobody noticing.
 	sources := opts.Sources
-	if sources.Health == nil {
-		sources.Health = func(ctx context.Context) any { return a.health(ctx) }
+	if sources.State == nil {
+		sources.State = state
 	}
 	// ONE CLOCK PER APP. The questions read [queries.Sources.Now] while the
 	// stream service and the webhook edge read [Options.Now], so a caller
 	// that pinned the app's clock and not the sources' had its pushes and
 	// deliveries at the pinned instant and its answers on the wall clock —
-	// and a test that pinned the app to compare one question across both
-	// transports compared two wall-clock readings instead. A caller that
-	// pinned the sources' own clock keeps it.
+	// a question stamping "now" on its answer, the live spend window's
+	// edges, answered a REST call and a socket call a second apart with two
+	// different windows, and a test that pinned the app to compare one
+	// question across both transports compared two wall-clock readings
+	// instead. A caller that pinned the sources' own clock keeps it.
 	if sources.Now == nil {
 		sources.Now = now
-	}
-	if sources.State == nil {
-		sources.State = state
 	}
 	// Only the engine knows which parsers registered and what its ${VAR}s
 	// resolved to, so both are read off the runtime rather than taken from
@@ -630,10 +644,16 @@ func New(opts Options) (*App, error) {
 	sources.Verifiable = func(ctx context.Context) []string {
 		return opts.Runtime.Snapshot(ctx).VerifiableSources
 	}
+	// WHAT THIS PRINCIPAL MAY DO, from the SAME catalogue the act route
+	// serves and the same authority every one of its tools is decided by:
+	// a list computed anywhere else would be a second opinion about which
+	// buttons work. A caller that supplied its own keeps it.
+	if sources.Acts == nil && opts.Operator != nil {
+		sources.Acts = opts.Operator.Acts
+	}
 	a.queries = queries.NewRegistry()
 	queries.Register(a.queries, sources)
-	a.budgets = opts.Budgets
-	a.backup = opts.Backup
+	a.backup, a.audit = opts.Backup, opts.Audit
 	a.retention, a.nodes = opts.Retention, opts.Nodes
 	a.capacity = opts.Capacity
 
@@ -644,17 +664,18 @@ func New(opts Options) (*App, error) {
 	// The NAMED read routes — the public REST API. Adapters over the same
 	// registry the generic form above reaches; see rest.go.
 	a.mountReads(mux)
-	// THE DEPLOYMENT'S OWN CONTROLS — the budget reset, the backup, the
-	// retention gestures and the capacity window — each mounted with the
-	// grant it takes, and failing the boot where a policy is missing.
+	// THE DEPLOYMENT'S OWN CONTROLS — the backup, the retention gestures
+	// and the capacity window — each mounted with the grant it takes, and
+	// failing the boot where a policy is missing.
 	if err := a.mountDeployment(mux); err != nil {
 		return nil, fmt.Errorf("api: mount the deployment's controls: %w", err)
 	}
 	mux.Handle(auth.SocketPath, stream.Handler(a.guard, a.csrf, a.stream, a.answer))
-	// The OPERATOR MCP surface: the same tracker and knowledge tools a
-	// seat holds, offered to a person's own assistant. Under its own
-	// always-guarded prefix rather than under /mcp/, which is exempt
-	// wholesale for the sandbox bridge — see opsmcp.Path.
+	// The OPERATOR surface: the same tracker and knowledge tools a seat
+	// holds, offered to a person's own assistant over MCP and to the person
+	// themself over the act route. Under its own
+	// prefix rather than under /mcp/, which is exempt from the guard
+	// wholesale for the sandbox bridge — see operator.MCPPath.
 	a.mountOperator(mux, opts.Operator)
 	// The dashboard shell and its assets. All four paths are exempt from
 	// the guard: the page that prompts for a token cannot itself require
@@ -667,7 +688,7 @@ func New(opts Options) (*App, error) {
 	// The inbound edge. Exempt from the guard by prefix (see the auth
 	// package) because each route authenticates by provider credential,
 	// which is why every one of them verifies before it does anything.
-	if err := a.mountWebhooks(mux, opts.Inbound, sources, now); err != nil {
+	if err := a.mountWebhooks(mux, opts.Inbound, opts.EventLog, now); err != nil {
 		return nil, err
 	}
 	// The SANDBOX TELEMETRY edge, exempt by the same prefix rule and for
@@ -783,10 +804,13 @@ func (o Options) missing() error {
 		{"Runtime", o.Runtime == nil},
 		{"Inbox", o.Inbox == nil},
 		{"Sources.Company", o.Sources.Company == nil},
+		{"EventLog", o.EventLog == nil},
 		{"Sources.Events", o.Sources.Events == nil},
 		{"Sources.NodeID", strings.TrimSpace(o.Sources.NodeID) == ""},
 		{"Sources.Chart", o.Sources.Chart == nil},
 		{"Sources.Holders", o.Sources.Holders == nil},
+		{"Sources.WithheldContacts", o.Sources.WithheldContacts == nil},
+		{"Sources.Coord", o.Sources.Coord == nil},
 		{"Inbound.Publisher", o.Inbound.Publisher == nil},
 		{"Inbound.Claims", o.Inbound.Claims == nil},
 		{"Inbound.Secrets", o.Inbound.Secrets == nil},
@@ -795,12 +819,12 @@ func (o Options) missing() error {
 		{"Secrets", o.Secrets == nil},
 		{"Setup", o.Setup == nil},
 		{"Chart", o.Chart == nil},
-		{"Budgets", o.Budgets == nil},
 		{"Retention", o.Retention == nil},
 		{"Capacity", o.Capacity == nil},
 		{"Backup", o.Backup == nil},
 		{"Nodes", o.Nodes == nil},
 		{"AuthEvents", o.AuthEvents == nil},
+		{"Audit", o.Audit == nil},
 	} {
 		if field.absent {
 			names = append(names, "Options."+field.name)
@@ -815,8 +839,8 @@ func (o Options) missing() error {
 }
 
 // mountDeployment registers the routes that operate the DEPLOYMENT rather
-// than the company: the budget reset, the backup, the retention gestures and
-// the capacity window. Every one takes [iam.GrantFleetOperate], through the
+// than the company: the backup, the retention gestures and the capacity
+// window. Every one takes [iam.GrantFleetOperate], through the
 // authority table's [authz.ActionFleetOperate] for a write and
 // [authz.ActionFleetRead] for a read, stated where it is mounted.
 //
@@ -866,10 +890,10 @@ func (a *App) mountDeployment(mux *http.ServeMux) error {
 // mount it is handed: separate from the router, so a walk can read the whole
 // list without standing the deployment up.
 func (a *App) deploymentRoutes(mount func(string, http.HandlerFunc)) {
-	// POSTs, and a read posture of any kind never opens them: clearing a
-	// company's spend ceiling, and copying every credential and every
-	// seat's memory to a path the caller names, are not reads.
-	mount("POST /budgets/reset", a.serveBudgetReset)
+	// A POST, and a read posture of any kind never opens it: copying every
+	// credential and every seat's memory to a path the caller names is not
+	// a read. There is no budget reset beside it — a window's turnover IS
+	// the reset (ADR-0019), and a raw reset would re-arm a company mid-window.
 	mount("POST /backup", a.serveBackup)
 	// The three retention gestures that write. See retention.go.
 	a.mountRetention(mount)
@@ -925,7 +949,7 @@ type Inbound struct {
 }
 
 // mountWebhooks registers the inbound edge.
-func (a *App) mountWebhooks(mux *http.ServeMux, in Inbound, sources queries.Sources, now func() time.Time) error {
+func (a *App) mountWebhooks(mux *http.ServeMux, in Inbound, events *store.EventLog, now func() time.Time) error {
 	receiver, err := webhooks.New(webhooks.Options{
 		Secrets:    in.Secrets,
 		Publisher:  in.Publisher,
@@ -933,7 +957,7 @@ func (a *App) mountWebhooks(mux *http.ServeMux, in Inbound, sources queries.Sour
 		Keys:       in.Keys,
 		AppFlow:    in.AppFlow,
 		Recheck:    in.Recheck,
-		Events:     sources.Events,
+		Events:     events,
 		Stream:     a.stream,
 		Configured: a.Configured,
 		Now:        now,
@@ -1055,7 +1079,7 @@ const ReasonEstateBehind = "estate_behind"
 // applied the revision — degrading the socket there would blind every operator
 // at the moment the fleet most needs watching.
 func framePosture(h stream.Health) stream.FramePosture {
-	if _, diverged := divergedPostures[h.Status]; diverged {
+	if _, diverged := divergedPostures[h.NodeStatus()]; diverged {
 		return stream.FrameDegraded
 	}
 	return stream.FrameLive
@@ -1159,10 +1183,10 @@ func (a *App) answer(ctx context.Context, what string, params map[string]any) (a
 		// THE ONLY ONE HERE THAT KEEPS THE ORIGINAL ERROR, because it is
 		// the only one whose message is written FOR the caller: it names
 		// the field that was missing and the values the field accepts,
-		// and [stream] logs exactly that at debug. The others are
+		// and the frame carries it as `detail`. The others are
 		// deliberately reduced to the query name — a failure's own text
 		// can carry a database path, and none of them has a reader.
-		return nil, fmt.Errorf("%w: %s: %w", stream.ErrBadParams, what, err)
+		return nil, &stream.BadParamsError{What: what, Detail: queries.RefusalDetail(err)}
 	case errors.Is(err, queries.ErrUnavailable):
 		// THE CAUSE IS KEPT, and only its STRUCTURE reaches the frame:
 		// [stream.UnavailableOf] reads the state log's refusal and its
@@ -1248,8 +1272,12 @@ func writeQueryError(w http.ResponseWriter, what string, err error) {
 	case errors.Is(err, queries.ErrBadParams):
 		// 400 AND ITS OWN CODE. The status was already right; the code
 		// said `query_failed`, which names a fault of this node for a
-		// request the caller has to change.
-		httpjson.Fail(w, http.StatusBadRequest, httpjson.CodeBadParams)
+		// request the caller has to change. AND ITS SENTENCE, as the
+		// socket's frame carries it: the refusal names the parameter to
+		// change, which is the whole of the fix, and the envelope's
+		// `message` cannot say which one.
+		httpjson.FailWithFields(w, http.StatusBadRequest, httpjson.CodeBadParams,
+			httpjson.Detail{"detail": queries.RefusalDetail(err)})
 	case errors.Is(err, queries.ErrNotFound):
 		httpjson.Fail(w, http.StatusNotFound, httpjson.CodeNotFound)
 	case errors.Is(err, stream.ErrNoCompany):

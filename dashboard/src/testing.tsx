@@ -124,17 +124,10 @@ export function treeCanvasParts(): {
   /** The space the chart keeps around itself, which the layout also measures. */
   margin: string;
   links: string;
-  /** What a card gains when it stands for somebody outside the system. */
-  outlined: string;
 } {
-  const plain = referenceChart(false);
-  const marked = referenceChart(true);
-  const names = {
-    ...plain,
-    outlined: marked.cardClasses.filter((name) => !plain.cardClasses.includes(name))[0] ?? "",
-  };
+  const names = referenceChart();
   for (const [part, name] of Object.entries(names)) {
-    if (typeof name === "string" && !name) {
+    if (!name) {
       throw new Error(`the tree canvas draws no ${part} this harness can find`);
     }
   }
@@ -142,12 +135,11 @@ export function treeCanvasParts(): {
 }
 
 /** One chart rendered to be read: what it calls each part it draws. */
-function referenceChart(outline: boolean): {
+function referenceChart(): {
   card: string;
   gap: string;
   margin: string;
   links: string;
-  cardClasses: string[];
 } {
   // RENDERED THE WAY EVERY SUITE RENDERS, into the document, because this one
   // is a whole chart rather than a single element: it holds a layer host that
@@ -163,7 +155,6 @@ function referenceChart(outline: boolean): {
         nodes: [{ id: "a", label: "A", children: [{ id: "b", label: "B" }] }],
         cards: () => [{ id: "a", children: [{ id: "b", children: [] }] }],
         cardOf: (id: string) => id,
-        cardOutline: () => outline,
         renderCard: (id: string, card: TreeCardContext) => createElement("div", card.item(id), id),
       }),
     );
@@ -199,7 +190,6 @@ function referenceChart(outline: boolean): {
     gap: className(probes[0] ?? null),
     margin: className(probes[1] ?? null),
     links: className(svg),
-    cardClasses: [...(card?.classList ?? [])],
   };
   unmount();
   return read;
@@ -530,43 +520,59 @@ export function menuEntryLabel(item: HTMLElement): string {
 }
 
 /**
- * A media query list the suite drives.
+ * A window width the suite drives, answered to every width query asked of it.
  *
- * jsdom has no `matchMedia` and the setup file's stub answers "never
- * matches", which is the wide layout. Crossing the shell's breakpoint is a
- * state only a controllable one can reach, and it is the state the narrow
- * layout's drawer lives and dies in.
+ * jsdom has no `matchMedia`, and the setup file's stub answers "never
+ * matches" to everything — which is one layout, and the frame has several.
+ * The peek's shape turns on a width the shell computes per screen and per
+ * density (`app/layout.ts`), so a suite has to stand at a width and have
+ * every `(width >= N)` and `(width < N)` answered the way a browser would —
+ * the kit's own drawer query included — and move the window and hear the
+ * change. Any other feature answers as the setup stub does. `asked` is every
+ * query the page put, in order, for a suite that holds WHICH width a frame
+ * asked about.
  */
-export function installMedia(initial: boolean): {
-  set: (matches: boolean) => void;
+export function installWindow(initial: number): {
+  set: (width: number) => void;
+  asked: string[];
   restore: () => void;
 } {
   const listeners = new Set<() => void>();
-  let matches = initial;
+  const asked: string[] = [];
+  let width = initial;
+  const matches = (query: string): boolean => {
+    const ranges = [...query.matchAll(/\(width\s*(>=|<)\s*(\d+(?:\.\d+)?)px\)/g)];
+    if (ranges.length === 0) return false;
+    return ranges.every(([, op, n]) => (op === ">=" ? width >= Number(n) : width < Number(n)));
+  };
   const had = Object.getOwnPropertyDescriptor(globalThis, "matchMedia");
   Object.defineProperty(globalThis, "matchMedia", {
     configurable: true,
     writable: true,
-    value: (query: string) => ({
-      get matches() {
-        return matches;
-      },
-      media: query,
-      onchange: null,
-      addEventListener: (_: string, listener: () => void) => void listeners.add(listener),
-      removeEventListener: (_: string, listener: () => void) => void listeners.delete(listener),
-      addListener: (listener: () => void) => void listeners.add(listener),
-      removeListener: (listener: () => void) => void listeners.delete(listener),
-      dispatchEvent: () => false,
-    }),
+    value: (query: string) => {
+      asked.push(query);
+      return {
+        get matches() {
+          return matches(query);
+        },
+        media: query,
+        onchange: null,
+        addEventListener: (_: string, listener: () => void) => void listeners.add(listener),
+        removeEventListener: (_: string, listener: () => void) => void listeners.delete(listener),
+        addListener: (listener: () => void) => void listeners.add(listener),
+        removeListener: (listener: () => void) => void listeners.delete(listener),
+        dispatchEvent: () => false,
+      };
+    },
   });
   return {
-    set: (next: boolean) => {
-      matches = next;
+    set: (next: number) => {
+      width = next;
       act(() => {
         for (const listener of [...listeners]) listener();
       });
     },
+    asked,
     restore: () => {
       if (had) Object.defineProperty(globalThis, "matchMedia", had);
       else delete (globalThis as Record<string, unknown>).matchMedia;

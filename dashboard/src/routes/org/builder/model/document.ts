@@ -191,9 +191,10 @@ export function fromChart(settings: CompanyDocument | null, chart: ChartRead | n
 }
 
 /**
- * The settings document without the two keys a settings revision no longer
- * holds. A revision stored before the chart left the document still carries
- * them, and the builder draws the chart from the chart alone.
+ * The settings document without the two keys a settings revision never holds:
+ * every door that writes one keeps them out, and the builder draws the chart
+ * from the chart alone, so a document that did would put no seat on the
+ * canvas.
  */
 function stripChart(settings: CompanyDocument): CompanyDocument {
   const { roles: _roles, units: _units, ...rest } = settings;

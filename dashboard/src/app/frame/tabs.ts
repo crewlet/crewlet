@@ -47,31 +47,34 @@
  */
 
 import { useParam } from "../router.tsx";
-import { useKeyChords } from "~/lib/keys.ts";
+import { useKeymap } from "../keymap.ts";
 
 export function useTab<T extends string>(
   key: string,
   tabs: readonly T[],
   kind: "section" | "filter" = "section",
+  landing: T = tabs[0] as T,
 ): [T, (value: T) => void] {
   // THE FIRST TAB IS THE FALLBACK, which is also what makes the URL clean:
   // `useParam` drops a parameter equal to its fallback, so landing on an
   // object writes no `tab=` at all and only a reader who moved carries one.
-  const first = tabs[0] as T;
-  const [asked, set] = useParam(key, first, kind);
-  const shown = (tabs as readonly string[]).includes(asked) ? (asked as T) : first;
+  // An ADDRESS may name another tab to land on — `#/settings/config/revisions`
+  // is the configuration's history — and the same rule holds for it: the tab
+  // the address lands on is the one the URL does not have to spell, and the
+  // tab order (and so the digits) stays the object's own.
+  const [asked, set] = useParam(key, landing, kind);
+  const shown = (tabs as readonly string[]).includes(asked) ? (asked as T) : landing;
 
-  // ONE BINDING PER TAB rather than a range check, because the chord list IS
-  // the shortcut table: a digit past the end of this object's tabs has no
-  // binding and falls through to whatever else wants it, instead of being
-  // swallowed by a strip that could not have used it.
-  useKeyChords(
-    tabs.slice(0, 9).map((tab, i) => ({
-      key: String(i + 1),
-      run: () => set(tab),
-      when: kind === "section",
-    })),
-  );
+  // A DIGIT PAST THE END OF THIS OBJECT'S TABS IS OFF, not swallowed: it
+  // falls through to whatever else wants it rather than being taken by a
+  // strip that could not have used it. The digits themselves are the
+  // `tab` row of `keymap.ts`, which hands over which one was pressed.
+  useKeymap({
+    tab: {
+      run: (_, i) => set(tabs[i] as T),
+      when: (i) => kind === "section" && i < tabs.length,
+    },
+  });
 
   return [shown, set as (value: T) => void];
 }

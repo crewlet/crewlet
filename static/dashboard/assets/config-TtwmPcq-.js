@@ -1,0 +1,1 @@
+var e=[{kind:`llm-providers`,label:`LLM providers`},{kind:`mcp-servers`,label:`MCP servers`}],t=[{period:`day`,label:`Daily token ceiling`,none:`No daily ceiling`},{period:`week`,label:`Weekly token ceiling`,none:`No weekly ceiling`},{period:`month`,label:`Monthly token ceiling`,none:`No monthly ceiling`}];export{e as n,t};

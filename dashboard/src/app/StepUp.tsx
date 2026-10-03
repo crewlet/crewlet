@@ -32,7 +32,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { Button, Callout, FormField, Input, Modal, Text } from "@crewlethq/ui";
-import { ShieldPersonGlyph } from "@crewlethq/icons/glyphs";
+import { ShieldUserGlyph } from "@crewlethq/icons/glyphs";
 import { refusalText } from "~/lib/refusal.ts";
 import { useClient } from "~/lib/store-hooks.ts";
 import {
@@ -123,7 +123,7 @@ function StepUpDialog({
     <Modal
       open
       title="Confirm it is you"
-      icon={<ShieldPersonGlyph size="md" />}
+      icon={<ShieldUserGlyph size="md" />}
       onClose={() => onDone(false)}
       dismissable={!busy}
       closeDisabledReason="Waiting for the engine to answer."
@@ -132,7 +132,7 @@ function StepUpDialog({
       onSubmit={() => void confirm()}
       footer={
         <>
-          <Button variant="tertiary" onClick={() => onDone(false)} disabled={busy}>
+          <Button variant="ghost" onClick={() => onDone(false)} disabled={busy}>
             Cancel
           </Button>
           <Button type="submit" variant="primary" disabled={busy || password === ""}>

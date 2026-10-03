@@ -64,7 +64,7 @@ type seatView struct {
 	FormerHandles []string `json:"former_handles,omitempty"`
 
 	// OriginHandle is the handle this seat was CREATED under — its IDENTITY
-	// (ADR-0020), which no rename moves and the chart never issues to
+	// (ADR-0026), which no rename moves and the chart never issues to
 	// anything else — served as the row holds it: absent until the first
 	// rename, while the seat still answers to it. A client that keeps its own
 	// picture of the chart across renames has to be able to say "the same
@@ -481,7 +481,7 @@ func (s *Service) getSeats(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 		// ASKED BY THE SEAT'S IDENTITY, the handle it was created under,
-		// exactly as the report asks: a binding names that (ADR-0020), so
+		// exactly as the report asks: a binding names that (ADR-0027), so
 		// asked by the handle it answers to now, a renamed seat somebody
 		// holds was listed as one nobody does.
 		if unheld && held[seat.Origin()] {

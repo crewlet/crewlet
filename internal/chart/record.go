@@ -4,9 +4,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/jsoncarry"
+	"github.com/crewlet/crewlet/internal/statelog"
 )
 
 // RecordVersion is the record shape THIS BUILD writes and reads.
@@ -62,7 +64,73 @@ import (
 // exists to stop — and a version-2 build reading a version-3 content record
 // would read the list it no longer carries as one somebody cleared, so each
 // retains the record instead, and applies it once upgraded.
+//
+// # What a record is STAMPED with is the table's, and it is the ceiling here
+//
+// A record is stamped by [Encode] with the lowest version that reads what it
+// carries, over [versionedFields], and this constant moves only with that
+// table, exactly to its highest version. On this domain the lowest honest
+// version of every record but a gate, a barrier and a generation IS this one:
+// the applier reads its RULES off the record's version, so a record decided
+// under version 3's rules says so whatever fields it happens to carry —
+// which is what [MutationRecord.ManagesStructural] is for.
 const RecordVersion = 3
+
+// versionedFields is every field a chart record has gained since the base
+// format, and the version a reader must be at to apply a record carrying it.
+//
+// # Adding a field to any record or payload is adding a row here
+//
+// A field an older build has no home for is decoded AROUND: the build reads the
+// version, finds it readable, applies what it understands and drops the rest,
+// so its rows for that object differ from every upgraded node's for good, on
+// tables the identity claim compares byte for byte. The row is what makes the
+// encoder stamp a version that build retains instead. A new field takes the
+// next version above [RecordVersion], which moves with it, and the domain's
+// statelogtest candidate gains a record carrying it — which is what certifies
+// the path is the one the encoder actually writes.
+//
+// # And a new RULE is a row too
+//
+// This domain's applier reads what a record MEANS off its version
+// ([exactVersion], [managesVersion]), so a record whose fields are all old can
+// still need a new reader: a seat's content record stating no `manages:` list
+// meant "manages nobody" below version 3 and "leave the list alone" from it. A
+// rule like that is stamped by a marker on the record's root
+// ([MutationRecord.ManagesStructural], after the tracker's `keeps_place`), set
+// by the writer on every record it decides under the rule.
+var versionedFields = statelog.RecordFields{
+	// A STRUCTURAL EDGE THAT STATES ITS VERB, a rename's source and a seat's
+	// kind, all at version 2 ([exactVersion]). A version-1 build reads an edge
+	// as an object, a parent and a lead: it would apply a create that met a
+	// held address as a move of whatever held it, a rename as a placement of
+	// an object at an address it never held, and leave a seat's kind where
+	// the edge changed it. Every op, because an edge rides both a placement
+	// and an import and no other payload has `edges`.
+	{Name: "Edge.Op", Since: exactVersion,
+		Path: []string{"mutation", "edges", "op"}},
+	{Name: "Edge.From", Since: exactVersion,
+		Path: []string{"mutation", "edges", "from"}},
+	{Name: "Edge.Kind", Since: exactVersion,
+		Path: []string{"mutation", "edges", "k"}},
+	// A SEAT'S `manages:` LIST ON ITS EDGE, at version 3 ([managesVersion]): a
+	// version-2 build reads the list as the content record's to state and
+	// would leave the stored one in place of the one the edge says.
+	{Name: "Edge.Manages", Since: managesVersion,
+		Path: []string{"mutation", "edges", "m"}},
+	// THE RULE VERSION 3 IS, carried as a marker on the record's root —
+	// [MutationRecord.ManagesStructural]. The list is OMITTED from a content
+	// record and from a seat edge whose seat manages nobody, so a record
+	// stamped by what it carries would be version 1 or 2, and every build
+	// below 3 — this one too, since it reads the rules off the version —
+	// would read that absence as a list somebody cleared.
+	{Name: "MutationRecord.ManagesStructural", Since: managesVersion,
+		Path: []string{"manages_structural"}},
+}
+
+// VersionedFields is the table, for the conformance suite and for an operator
+// surface that names why a record was held back.
+func VersionedFields() statelog.RecordFields { return slices.Clone(versionedFields) }
 
 // exactVersion is the first record version whose structure is EXACT: its edges
 // state their verb, and every version-2 rule above is asked of it.
@@ -271,6 +339,25 @@ type MutationRecord struct {
 	OperatorID string     `json:"operator_id,omitempty"`
 	TurnID     string     `json:"turn_id,omitempty"`
 
+	// ManagesStructural says this record was decided under version 3's rules
+	// ([managesVersion]): a seat's `manages:` list is STRUCTURE, so a seat
+	// edge states it whole and a content record carries none.
+	//
+	// A MARKER AND NOT A VALUE, read through the record's VERSION rather than
+	// by the applier, after the tracker's `keeps_place`: its whole job is the
+	// row in [versionedFields] that makes the encoder stamp version 3. The
+	// list's ABSENCE is the one thing presence cannot stamp — omitted from a
+	// content record, and from a seat edge whose seat manages nobody — and a
+	// build below 3 reads that absence as a list somebody cleared. Set by the
+	// writer on EVERY record it decides that is not a gate, a barrier or a
+	// generation, because the applier reads every rule a record is applied
+	// under off its version, and each of those records is decided under
+	// version 3's; a unit's content and a placement of units alone need only
+	// version 2's, and stamping them 3 holds them back from a version-2 peer
+	// one upgrade longer than strictly necessary, which is the price of one
+	// marker rather than one per rule.
+	ManagesStructural bool `json:"manages_structural,omitempty"`
+
 	// Revision is the company configuration revision this change came
 	// from, when it came from one.
 	//
@@ -419,23 +506,96 @@ func Decode(payload []byte) (MutationRecord, error) {
 	return rec, nil
 }
 
-// Encode renders a record, carrying back whatever a newer build wrote.
+// Encode renders a record, stamping it with the lowest version that reads it
+// and carrying back whatever a newer build wrote.
+//
+// A ZERO VERSION IS "STAMP IT": the writer leaves V unset on every record it
+// decides and this computes the minimum over [versionedFields] from the bytes
+// it is about to publish, so the stamp cannot drift from what the record
+// carries. A version the caller DID set is kept — a gate, a barrier and a
+// generation are pinned, and a relay re-encodes a record at the version its
+// writer gave it — but is refused when it is below what the record's own fields
+// need, because that record would be applied, lossily, by exactly the builds
+// the stamp exists to hold it back from. A record every build must read
+// ([MutationRecord.readByEveryBuild]) is refused whenever it carries a
+// versioned field at all.
 //
 // LOSSLESS IN BOTH DIRECTIONS, which is what makes a rolling upgrade safe: a
 // node that read a record it only half understood and republished it — the
-// reanchor path does exactly that — must not strip the half it did not.
-//
-// It goes through the same [encode] every document shape here uses, rather than
-// a second merge of its own: a carried field LOSES to a known one, and two
+// reanchor path does exactly that — must not strip the half it did not. It
+// goes through [jsoncarry], as every document shape here does, rather than a
+// second merge of its own: a carried field LOSES to a known one, and two
 // implementations of that rule are one place where a stale carried copy undoes
 // the write that set it.
 func Encode(rec MutationRecord) ([]byte, error) {
+	return rec.encodeWith(versionedFields)
+}
+
+// encodeWith is [Encode] under a named field table — the seam the stamping
+// rule is tested through with a field a later build would add.
+func (rec MutationRecord) encodeWith(fields statelog.RecordFields) ([]byte, error) {
+	stamp := rec.V == 0
+	if stamp {
+		// THE LOWEST, never [RecordVersion]: the table raises it to what
+		// the record's own fields need.
+		rec.V = BaseRecordVersion
+	}
 	data, err := jsoncarry.Encode(rec, rec.Extra)
 	if err != nil {
 		return nil, fmt.Errorf("chart: encode the record on %s: %w",
 			rec.Subject, err)
 	}
+	// THE STAMP IS TAKEN OVER WHAT THIS BUILD WROTE, never over what it
+	// CARRIES: a carried field is one this build does not read, so it
+	// cannot be what this build's table stamps — and a relay of a record
+	// carrying one keeps the version its writer gave it.
+	known := data
+	if len(rec.Extra) > 0 {
+		if known, err = jsoncarry.Encode(rec, nil); err != nil {
+			return nil, fmt.Errorf("chart: encode the record on %s: %w",
+				rec.Subject, err)
+		}
+	}
+	minimum, err := fields.Minimum(string(rec.Op), known)
+	if err != nil {
+		return nil, fmt.Errorf("chart: stamp the record on %s: %w", rec.Subject, err)
+	}
+	switch {
+	case rec.readByEveryBuild() && minimum > BaseRecordVersion:
+		// A GATE, A BARRIER OR A GENERATION NEVER CARRIES A VERSIONED
+		// FIELD, stamped or set: a gate an older node cannot read is one
+		// it defers, and a deferred gate licenses every record above it;
+		// a barrier or a generation it cannot read is one it retains.
+		return nil, fmt.Errorf("chart: the %s record on %s must be readable by "+
+			"every build for ever, and it carries %s — a field it needs belongs "+
+			"on a record that is not a gate", rec.Op, rec.Subject,
+			strings.Join(fields.Carried(string(rec.Op), known), ", "))
+	case rec.V >= minimum:
+	case stamp:
+		rec.V = minimum
+		if data, err = jsoncarry.Encode(rec, rec.Extra); err != nil {
+			return nil, fmt.Errorf("chart: encode the record on %s: %w",
+				rec.Subject, err)
+		}
+	default:
+		return nil, fmt.Errorf("chart: the %s record on %s is stamped version %d "+
+			"and carries %s — a build reading %d would decode it, drop what it "+
+			"has no field for and apply the rest; leave the version unset and "+
+			"the encoder stamps the lowest one that reads it", rec.Op,
+			rec.Subject, rec.V, strings.Join(fields.Carried(string(rec.Op), known), ", "),
+			rec.V)
+	}
 	return data, nil
+}
+
+// readByEveryBuild reports a record every build there will ever be must be
+// able to read: a gate, whose version is pinned at [GateRecordVersion] so an
+// undecodable one is a stop rather than a deferral, and the read index's
+// barrier and a reanchor's generation, pinned at [BaseRecordVersion] because an
+// older node RETAINS a record it cannot read — a barrier once per linearizable
+// read anywhere in the fleet, a generation as a transition it never makes.
+func (rec MutationRecord) readByEveryBuild() bool {
+	return rec.InstallsGate() || rec.Op == OpBarrier || rec.Op == OpGeneration
 }
 
 // recordFields is every top-level name this build writes.

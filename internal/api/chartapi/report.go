@@ -29,8 +29,8 @@ import (
 //
 // That pair is where the expensive failures live. A revision that removes a
 // provider key is a perfectly valid revision; every seat whose model chain
-// names it now has no model at all, and nothing says so until one of them
-// takes a turn and fails. A seat pointed at a worker template somebody
+// names it now runs on the company's fallback model, which nobody chose for it
+// and which it bills against, and nothing says so. A seat pointed at a worker template somebody
 // deleted narrows its delegate grant to nothing. A seat with a sandbox gate
 // on a company with no sandbox backend cannot run code and reports it as a
 // tool error.
@@ -52,7 +52,7 @@ import (
 
 // Held answers which seats somebody in the identity directory is bound to,
 // each named by its IDENTITY — the handle it was created under
-// ([org.Role.Origin], ADR-0020) — and read in ONE snapshot.
+// ([org.Role.Origin], ADR-0027) — and read in ONE snapshot.
 //
 // # One read for the whole answer
 //
@@ -104,8 +104,9 @@ type FindingKind string
 
 const (
 	// KindProviderUnknown is a seat whose model chain names a provider key
-	// the applied settings do not declare. The seat has NO MODEL: provider
-	// resolution falls through the chain and finds nothing.
+	// the applied settings do not declare. The seat runs on a model nobody
+	// chose for it: provider resolution drops the missing key and falls back
+	// to `default`, else the first provider declared (phase.Registry.Chain).
 	KindProviderUnknown FindingKind = "provider_unknown"
 
 	// KindWorkerUnknown is a seat whose `workers:` narrowing names a
@@ -206,6 +207,24 @@ const (
 	// seat, making it a person's — cannot see the setting. An error, because
 	// the coverage the field exists to give is not there.
 	KindAlertFallbackUnrouted FindingKind = "alert_fallback_unrouted"
+
+	// KindBudgetIdle is an agent seat's token ceiling the company's own
+	// ceiling makes unable to refuse the seat a turn: everything a seat
+	// spends is the company's spend too, so a company ceiling at or below
+	// the seat's, on a window that holds the seat's whole, is always reached
+	// first. One finding per idle window, naming the window.
+	//
+	// HERE BECAUSE THE TWO CEILINGS LIVE IN TWO HALVES. A seat's ceilings
+	// are its org chart runtime, raised through `PATCH /chart/seats/{handle}`,
+	// and the company's are its settings, raised through `/config` — so a
+	// company file's validation, which says this as a warning, sees both and
+	// no write to a running company does. Judged by the file's own rule
+	// ([config.TokenBudget.IdleUnder]) and said in its own sentence, so the
+	// same pair reads the same in `crewlet validate` and here. A warning,
+	// because it runs exactly as written and admits nothing a working
+	// ceiling would refuse: what it does is mislead a founder into reading
+	// a headroom the seat does not have.
+	KindBudgetIdle FindingKind = "budget_idle"
 )
 
 // FindingKinds is every kind, for the walks and for a surface rendering a
@@ -214,7 +233,7 @@ var FindingKinds = []FindingKind{
 	KindProviderUnknown, KindWorkerUnknown, KindSandboxUnconfigured,
 	KindReferenceDangling, KindSeatUnheld, KindSeatUnreachable,
 	KindIdentityShared, KindScheduleUnrunnable, KindReferenceRetired,
-	KindAlertFallbackUnrouted,
+	KindAlertFallbackUnrouted, KindBudgetIdle,
 }
 
 // Resolve answers a `${VAR}` name through this node's own resolution chain —
@@ -366,9 +385,10 @@ func seatFindings(role *org.Role, settings *config.Company) []Finding {
 		out = append(out, Finding{
 			Kind: KindProviderUnknown, Severity: SeverityError,
 			Object: handle, Names: key,
-			Detail: fmt.Sprintf("%s runs on provider %q and the applied "+
-				"settings declare no such provider, so this seat resolves to "+
-				"no model at all and every turn it takes fails", handle, key),
+			Detail: fmt.Sprintf("%s names provider %q and the applied "+
+				"settings declare no such provider, so this seat runs on the "+
+				"company's fallback model instead, and is billed against it",
+				handle, key),
 			Remedy: "declare the provider under providers.llm, or point the " +
 				"seat's chain at one that exists",
 		})
@@ -396,6 +416,19 @@ func seatFindings(role *org.Role, settings *config.Company) []Finding {
 			Remedy: "configure providers.sandbox, or close the seat's " +
 				"sandbox gate",
 		})
+	}
+	if role.IsAgent() {
+		for _, idle := range settings.TokenBudget.IdleUnder(role.TokenBudget) {
+			out = append(out, Finding{
+				Kind: KindBudgetIdle, Severity: SeverityWarning,
+				Object: handle, Names: string(idle.Window),
+				Detail: idle.Sentence(handle),
+				Remedy: fmt.Sprintf("a seat's ceiling is its runtime: remove or "+
+					"lower %s's token_budget.%s with PATCH /chart/seats/%s; the "+
+					"company's is its settings' token_budget, written through "+
+					"/config", handle, idle.Window, handle),
+			})
+		}
 	}
 	if unreachable(role) {
 		out = append(out, Finding{
@@ -458,7 +491,7 @@ func (h holding) finding(role *org.Role) (*Finding, bool) {
 		return nil, true
 	}
 	// ASKED BY THE SEAT'S IDENTITY — the handle it was created under — which
-	// is what a binding names (ADR-0020): asked by the handle it answers to
+	// is what a binding names (ADR-0027): asked by the handle it answers to
 	// now, a renamed seat whose holder is bound read as unheld.
 	if h.seats[role.Origin()] {
 		return nil, false

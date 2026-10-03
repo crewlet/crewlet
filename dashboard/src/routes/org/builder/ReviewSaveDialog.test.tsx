@@ -14,9 +14,9 @@ import {
   company,
   Engine,
   json,
-  lensToolbar,
+  builderToolbar,
   mountBuilder,
-  type MountedLens,
+  type MountedBuilder,
   pressInToolbar,
   pressInView,
   type SentRequest,
@@ -54,54 +54,56 @@ const dialogNamed = (name: string) => screen.getByRole("dialog", { name });
 
 /** Whether Review and save opens. */
 const reviewOpens = () =>
-  !(within(lensToolbar()).getByRole("button", { name: "Review and save" }) as HTMLButtonElement)
+  !(within(builderToolbar()).getByRole("button", { name: "Review and save" }) as HTMLButtonElement)
     .disabled;
 
 /** Presses a stand-in view's button, and settles on the clean check of what it did. */
-async function act_(lens: MountedLens, name: string, said: string) {
+async function act_(builder: MountedBuilder, name: string, said: string) {
   pressInView(name);
-  await lens.checked();
+  await builder.checked();
   expect(liveRegion().textContent).toContain(said);
 }
 
 /** Opens the review once the check is clean. */
-async function openReview(lens: MountedLens) {
-  await lens.checked();
+async function openReview(builder: MountedBuilder) {
+  await builder.checked();
   pressInToolbar("Review and save");
   return dialogNamed("Review and save");
 }
 
 /** Presses the review's Save, and settles on everything the save set in motion. */
-async function save(lens: MountedLens, dialog: HTMLElement) {
+async function save(builder: MountedBuilder, dialog: HTMLElement) {
   fireEvent.click(within(dialog).getByRole("button", { name: "Save" }));
-  await lens.settle();
+  await builder.settle();
 }
 
-/** Opens the builder, edits the CEO, and opens the review: the lens, and the review it opened. */
-async function reviewEdit(engine: Engine): Promise<{ lens: MountedLens; dialog: HTMLElement }> {
-  const lens = mountBuilder({ engine });
-  await lens.checked();
-  await act_(lens, "Edit CEO", "Edited CEO: goal.");
-  return { lens, dialog: await openReview(lens) };
+/** Opens the builder, edits the CEO, and opens the review: the builder, and the review it opened. */
+async function reviewEdit(
+  engine: Engine,
+): Promise<{ builder: MountedBuilder; dialog: HTMLElement }> {
+  const builder = mountBuilder({ engine });
+  await builder.checked();
+  await act_(builder, "Edit CEO", "Edited CEO: goal.");
+  return { builder, dialog: await openReview(builder) };
 }
 
 /** Renames the company in the draft, which the check dry-runs as a settings write. */
-async function renameTheCompany(lens: MountedLens, engine: Engine) {
+async function renameTheCompany(builder: MountedBuilder, engine: Engine) {
   pressInView("Rename the company");
-  await lens.checked();
+  await builder.checked();
   expect(engine.checks()).toHaveLength(1);
 }
 
 describe("the save", () => {
   test("writes a changed seat's whole content under its operation id, then reads the chart back", async () => {
     const engine = new Engine(company());
-    const { lens, dialog } = await reviewEdit(engine);
+    const { builder, dialog } = await reviewEdit(engine);
     expect(within(dialog).getByText("Edits CEO: goal.")).toBeDefined();
     // The chart records who made each change, and no settings are written, so
     // there is no summary to ask for.
     expect(within(dialog).queryByLabelText("Audit summary")).toBeNull();
     const before = engine.requests.length;
-    await save(lens, dialog);
+    await save(builder, dialog);
 
     expect(toastText()).toContain("Saved. The engine is applying it.");
     const sent = engine.requests.slice(before);
@@ -129,7 +131,7 @@ describe("the save", () => {
 
     // Said once: the toast's host is a live region of its own, and the
     // Builder's region repeating it had a screen reader read it twice. Read
-    // once the lens has settled, so a sentence the region was about to say
+    // once the builder has settled, so a sentence the region was about to say
     // has been said.
     // INSIDE THE BUILDER'S OWN LAYER HOST, not at the document root: a
     // fullscreen canvas renders only its own subtree, so a toast portalled
@@ -141,20 +143,20 @@ describe("the save", () => {
     // What it wrote is read back and stood on: the next check is clean, and
     // the kept draft is gone with the work saved.
     expect(screen.getByText("editable")).toBeDefined();
-    expect(within(lensToolbar()).getByText("No problems")).toBeDefined();
+    expect(within(builderToolbar()).getByText("No problems")).toBeDefined();
     expect(sessionStorage.getItem(DRAFT_STORAGE_KEY)).toBeNull();
     expect(screen.queryByRole("dialog")).toBeNull();
   });
 
   test("the settings are written after the chart, conditional on the base, with a signed summary", async () => {
     const engine = new Engine(company());
-    const lens = mountBuilder({ engine });
-    await lens.checked();
-    await act_(lens, "Edit CEO", "Edited CEO: goal.");
-    await renameTheCompany(lens, engine);
-    const dialog = await openReview(lens);
+    const builder = mountBuilder({ engine });
+    await builder.checked();
+    await act_(builder, "Edit CEO", "Edited CEO: goal.");
+    await renameTheCompany(builder, engine);
+    const dialog = await openReview(builder);
     fireEvent.click(within(dialog).getByRole("checkbox"));
-    await save(lens, dialog);
+    await save(builder, dialog);
 
     expect(engine.requests.filter(isSettingsWrite)).toHaveLength(1);
     const settings = engine.requests.filter(isSettingsWrite)[0]!;
@@ -178,13 +180,13 @@ describe("the save", () => {
 
   test("a seat added in the draft is created by a batch, filled in, and stays selected", async () => {
     const engine = new Engine(company());
-    const lens = mountBuilder({ engine });
-    await lens.checked();
-    await act_(lens, "Add an analyst", "Analyst");
+    const builder = mountBuilder({ engine });
+    await builder.checked();
+    await act_(builder, "Add an analyst", "Analyst");
     pressInView("Select Analyst");
-    const dialog = await openReview(lens);
+    const dialog = await openReview(builder);
     expect(within(dialog).getByText("Adds the seat Analyst.")).toBeDefined();
-    await save(lens, dialog);
+    await save(builder, dialog);
     expect(toastText()).toContain("Saved. The engine is applying it.");
 
     const [batch, content] = engine.chartWrites();
@@ -203,18 +205,20 @@ describe("the save", () => {
     expect(screen.getByText("editable")).toBeDefined();
     expect(location.hash).toContain("seat=analyst");
     expect(
-      within(lensToolbar()).getByRole("button", { name: "Analyst" }).getAttribute("aria-haspopup"),
+      within(builderToolbar())
+        .getByRole("button", { name: "Analyst" })
+        .getAttribute("aria-haspopup"),
     ).toBe("menu");
   });
 
   test("a removal is a batch of its own, sent after the structure", async () => {
     const engine = new Engine(company());
-    const lens = mountBuilder({ engine });
-    await lens.checked();
-    await act_(lens, "Remove Designer", "Designer");
-    const dialog = await openReview(lens);
+    const builder = mountBuilder({ engine });
+    await builder.checked();
+    await act_(builder, "Remove Designer", "Designer");
+    const dialog = await openReview(builder);
     expect(within(dialog).getByText("Removes the seat Designer.")).toBeDefined();
-    await save(lens, dialog);
+    await save(builder, dialog);
     expect(toastText()).toContain("Saved. The engine is applying it.");
     expect(engine.chartWrites().map((r) => r.body)).toEqual([
       { operations: [{ kind: "remove", object: { kind: "seat", id: "designer" } }] },
@@ -224,18 +228,18 @@ describe("the save", () => {
 
   test("a chart somebody else changed first leads into update my draft, then back to the review", async () => {
     const engine = new Engine(company());
-    const { lens, dialog } = await reviewEdit(engine);
+    const { builder, dialog } = await reviewEdit(engine);
     engine.seats.find((s) => s.handle === "designer")!.goal = "Design things";
-    await save(lens, dialog);
+    await save(builder, dialog);
 
     const update = dialogNamed("Update my draft and review");
     // Found by the read before the first write: nothing of this save was sent.
     expect(engine.chartWrites()).toHaveLength(0);
     fireEvent.click(within(update).getByRole("button", { name: "Update my draft" }));
-    await lens.settle();
+    await builder.settle();
     const review = dialogNamed("Review and save");
     expect(within(review).getByText("Edits CEO: goal.")).toBeDefined();
-    await save(lens, review);
+    await save(builder, review);
     expect(toastText()).toContain("Saved. The engine is applying it.");
     // Written over the colleague's rows, never over the colleague's change.
     expect(engine.seats.find((s) => s.handle === "designer")!.goal).toBe("Design things");
@@ -257,12 +261,12 @@ describe("the save", () => {
             403,
           )
         : null;
-    const lens = mountBuilder({ engine });
-    await lens.checked();
-    await act_(lens, "Edit CEO", "Edited CEO: goal.");
-    await act_(lens, "Edit Designer", "Edited Designer: goal.");
-    const dialog = await openReview(lens);
-    await save(lens, dialog);
+    const builder = mountBuilder({ engine });
+    await builder.checked();
+    await act_(builder, "Edit CEO", "Edited CEO: goal.");
+    await act_(builder, "Edit Designer", "Edited Designer: goal.");
+    const dialog = await openReview(builder);
+    await save(builder, dialog);
 
     expect(
       within(dialog).getByText(
@@ -295,11 +299,11 @@ describe("the save", () => {
             422,
           )
         : null;
-    const lens = mountBuilder({ engine });
-    await lens.checked();
-    await act_(lens, "Add an analyst", "Analyst");
-    const dialog = await openReview(lens);
-    await save(lens, dialog);
+    const builder = mountBuilder({ engine });
+    await builder.checked();
+    await act_(builder, "Add an analyst", "Analyst");
+    const dialog = await openReview(builder);
+    await save(builder, dialog);
     expect(
       within(dialog).getByText(
         "The engine refused the change to the chart's structure (Analyst): The handle analyst is reserved.",
@@ -320,8 +324,8 @@ describe("a write whose answer never arrives", () => {
       e.answer(r);
       return Promise.reject(new TypeError("network connection was lost"));
     };
-    const { lens, dialog } = await reviewEdit(engine);
-    await save(lens, dialog);
+    const { builder, dialog } = await reviewEdit(engine);
+    await save(builder, dialog);
     expect(
       within(dialog).getByText(/^Whether the seat CEO was written could not be confirmed\./),
     ).toBeDefined();
@@ -333,7 +337,7 @@ describe("a write whose answer never arrives", () => {
     );
 
     fireEvent.click(within(dialog).getByRole("button", { name: "Retry" }));
-    await lens.settle();
+    await builder.settle();
     expect(toastText()).toContain("Saved. The engine is applying it.");
     const writes = engine.requests.filter(isSeatWrite("ceo"));
     expect(writes).toHaveLength(2);
@@ -352,12 +356,12 @@ describe("a write whose answer never arrives", () => {
       }
       return null;
     };
-    const lens = mountBuilder({ engine });
-    await lens.checked();
-    await renameTheCompany(lens, engine);
-    const dialog = await openReview(lens);
+    const builder = mountBuilder({ engine });
+    await builder.checked();
+    await renameTheCompany(builder, engine);
+    const dialog = await openReview(builder);
     fireEvent.click(within(dialog).getByRole("checkbox"));
-    await save(lens, dialog);
+    await save(builder, dialog);
     expect(toastText()).toContain("Saved. The engine is applying it.");
     expect(engine.sent("GET", "/config/revisions/r-saved")).toHaveLength(1);
     expect(engine.requests.filter(isSettingsWrite)).toHaveLength(1);
@@ -373,22 +377,22 @@ describe("a write whose answer never arrives", () => {
       }
       return null;
     };
-    const lens = mountBuilder({ engine });
-    await lens.checked();
-    await renameTheCompany(lens, engine);
-    const dialog = await openReview(lens);
+    const builder = mountBuilder({ engine });
+    await builder.checked();
+    await renameTheCompany(builder, engine);
+    const dialog = await openReview(builder);
     fireEvent.click(within(dialog).getByRole("checkbox"));
-    await save(lens, dialog);
+    await save(builder, dialog);
     expect(
       within(dialog).getByText(/The settings did not reach the engine, and nothing was stored\./),
     ).toBeDefined();
     fireEvent.click(within(dialog).getByRole("button", { name: "Retry" }));
-    await lens.settle();
+    await builder.settle();
     expect(toastText()).toContain("Saved. The engine is applying it.");
     expect(engine.revisions.size).toBe(1);
   });
 
-  test("a save that lands after the lens was left still clears the kept draft", async () => {
+  test("a save that lands after the builder was left still clears the kept draft", async () => {
     const engine = new Engine(company());
     let answer: () => void = () => {};
     engine.script = (r, e) => {
@@ -398,7 +402,7 @@ describe("a write whose answer never arrives", () => {
         answer = () => resolve(response);
       });
     };
-    const { lens, dialog } = await reviewEdit(engine);
+    const { builder, dialog } = await reviewEdit(engine);
     fireEvent.click(within(dialog).getByRole("button", { name: "Save" }));
     await engine.reached(() => engine.requests.some(isSeatWrite("ceo")));
 
@@ -407,15 +411,15 @@ describe("a write whose answer never arrives", () => {
     // Settled on the answer the suite released, which the page that left
     // still owns: a kept log of a saved draft would be offered for replay
     // onto its own rows.
-    await lens.settle();
+    await builder.settle();
     expect(sessionStorage.getItem(DRAFT_STORAGE_KEY)).toBeNull();
   });
 
   // LEFT BEFORE THE ANSWER CAME, AND THE ANSWER NEVER CAME. The save may have
   // landed, and its kept log is carried onto whatever did, never offered as
   // Keep and never replayed as though nothing had.
-  describe("after the lens was left", () => {
-    /** Saves an edit of the CEO, leaves the lens while the write is out, and loses its answer. */
+  describe("after the builder was left", () => {
+    /** Saves an edit of the CEO, leaves the builder while the write is out, and loses its answer. */
     async function loseTheAnswer(engine: Engine, { lands }: { lands: boolean }) {
       let lose: () => void = () => {};
       engine.script = (r, e) => {
@@ -425,7 +429,7 @@ describe("a write whose answer never arrives", () => {
           lose = () => reject(new TypeError("network connection was lost"));
         });
       };
-      const { lens, dialog } = await reviewEdit(engine);
+      const { builder, dialog } = await reviewEdit(engine);
       fireEvent.click(within(dialog).getByRole("button", { name: "Save" }));
       await engine.reached(() => engine.requests.some(isSeatWrite("ceo")));
       // Marked before it went, so a reload now would find it too.
@@ -434,7 +438,7 @@ describe("a write whose answer never arrives", () => {
       );
       cleanup();
       lose();
-      await lens.settle();
+      await builder.settle();
       expect(JSON.parse(sessionStorage.getItem(DRAFT_STORAGE_KEY)!).write).toMatch(
         /^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
       );
@@ -446,15 +450,15 @@ describe("a write whose answer never arrives", () => {
       await loseTheAnswer(engine, { lands: true });
       expect(engine.seats.find((s) => s.handle === "ceo")!.goal).toBe("Lead and more");
 
-      const lens = mountBuilder({ engine });
-      await lens.settle();
+      const builder = mountBuilder({ engine });
+      await builder.settle();
       // CARRIED ONTO WHAT LANDED, never offered as Keep: the replay finds the
       // edit already in the rows and says so.
       const restore = dialogNamed("Restore the kept draft");
       expect(within(restore).getByText(/It is saved already\./)).toBeDefined();
       expect(screen.queryByRole("button", { name: "Keep the draft" })).toBeNull();
       fireEvent.click(within(restore).getByRole("button", { name: "Restore the draft" }));
-      await lens.checked();
+      await builder.checked();
       expect(sessionStorage.getItem(DRAFT_STORAGE_KEY)).toBeNull();
       // Nothing left to save, and nothing written twice.
       expect(reviewOpens()).toBe(false);
@@ -468,8 +472,8 @@ describe("a write whose answer never arrives", () => {
       await loseTheAnswer(engine, { lands: false });
       expect(engine.seats.find((s) => s.handle === "ceo")!.goal).toBe("Lead");
 
-      const lens = mountBuilder({ engine });
-      await lens.checked();
+      const builder = mountBuilder({ engine });
+      await builder.checked();
       expect(JSON.parse(sessionStorage.getItem(DRAFT_STORAGE_KEY)!).write).toBeUndefined();
       expect(reviewOpens()).toBe(true);
       expect(engine.ledger.size).toBe(0);
@@ -478,7 +482,7 @@ describe("a write whose answer never arrives", () => {
     // LEFT AND OPENED AGAIN WHILE THE SAVE IS STILL OUT. Deciding beside it
     // would carry the log onto a chart that is still changing under it, so
     // the page waits for its own save instead.
-    test("a save still out when the lens opens again is waited for, never decided beside it", async () => {
+    test("a save still out when the builder opens again is waited for, never decided beside it", async () => {
       const engine = new Engine(company());
       let answerWrite: () => void = () => {};
       engine.script = (r, e) =>
@@ -514,10 +518,10 @@ describe("a write whose answer never arrives", () => {
 describe("the review", () => {
   test("a company rename cannot be saved until its consequence is acknowledged", async () => {
     const engine = new Engine(company());
-    const lens = mountBuilder({ engine });
-    await lens.checked();
-    await renameTheCompany(lens, engine);
-    const dialog = await openReview(lens);
+    const builder = mountBuilder({ engine });
+    await builder.checked();
+    await renameTheCompany(builder, engine);
+    const dialog = await openReview(builder);
     expect(within(dialog).getByText("Renames the company from Acme to Acme Labs.")).toBeDefined();
     // And for many: every agent seat onboards again under the new id.
     expect(
@@ -535,10 +539,10 @@ describe("the review", () => {
   // again" is the kind of copy an operator reads as a draft nobody proofread.
   test("a consequence about a single seat agrees with its count", async () => {
     const engine = new Engine(company());
-    const lens = mountBuilder({ engine });
-    await lens.checked();
-    await act_(lens, "Move Dev to the top", "Dev");
-    const dialog = await openReview(lens);
+    const builder = mountBuilder({ engine });
+    await builder.checked();
+    await act_(builder, "Move Dev to the top", "Dev");
+    const dialog = await openReview(builder);
     expect(
       within(dialog).getByText("1 seat onboards again because it moves to another unit: Dev."),
     ).toBeDefined();
@@ -547,16 +551,16 @@ describe("the review", () => {
   // A NEW ADDRESS IS NOT A NEW SEAT: the review says what keeps working.
   test("a new address says the seat keeps its identity and its old address", async () => {
     const engine = new Engine(company());
-    const lens = mountBuilder({ engine });
-    await lens.checked();
-    await act_(lens, "Readdress Engineering", "Engineering");
-    const dialog = await openReview(lens);
+    const builder = mountBuilder({ engine });
+    await builder.checked();
+    await act_(builder, "Readdress Engineering", "Engineering");
+    const dialog = await openReview(builder);
     expect(
       within(dialog).getByText(
         "Engineering is addressed as engineering-two instead of engineering. It keeps its identity, and engineering goes on reaching it until something else takes that address.",
       ),
     ).toBeDefined();
-    await save(lens, dialog);
+    await save(builder, dialog);
     expect(toastText()).toContain("Saved. The engine is applying it.");
     // The rename, and the CEO's `manages:` list as the draft holds it: stated
     // whole, which is what the rename's own cascade leaves, so the plan never
@@ -578,10 +582,10 @@ describe("the review", () => {
 
   test("an empty audit summary cannot be saved where the settings are written", async () => {
     const engine = new Engine(company());
-    const lens = mountBuilder({ engine });
-    await lens.checked();
-    await renameTheCompany(lens, engine);
-    const dialog = await openReview(lens);
+    const builder = mountBuilder({ engine });
+    await builder.checked();
+    await renameTheCompany(builder, engine);
+    const dialog = await openReview(builder);
     fireEvent.click(within(dialog).getByRole("checkbox"));
     fireEvent.change(within(dialog).getByLabelText("Audit summary"), { target: { value: "  " } });
     expect(

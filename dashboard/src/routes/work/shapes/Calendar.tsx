@@ -37,6 +37,9 @@ export function CalendarView({
   onOpen,
   onMonth,
   onToday,
+  dayHref,
+  onDay,
+  more,
 }: {
   weeks: CalendarCell[][];
   rows: WorkSummary[];
@@ -46,6 +49,11 @@ export function CalendarView({
   onOpen: (row: WorkSummary) => void;
   onMonth: (month: string) => void;
   onToday: () => void;
+  /** Where a day's "+N more" goes: this list, as a list, narrowed to that day. */
+  dayHref: (day: string) => string;
+  onDay: (day: string) => void;
+  /** The rest of the month, where the answer carried a cursor. */
+  more?: { load: () => void; note: string };
 }) {
   const buckets = useMemo(() => bucketByDay(rows), [rows]);
   return (
@@ -71,7 +79,7 @@ export function CalendarView({
             title="The month after"
             onClick={() => onMonth(shiftMonth(month, 1))}
           />
-          <Button size="small" variant="tertiary" onClick={onToday}>
+          <Button size="small" variant="ghost" onClick={onToday}>
             Today
           </Button>
         </div>
@@ -123,8 +131,20 @@ export function CalendarView({
                     <span className="truncate">{row.title}</span>
                   </a>
                 ))}
+                {/* THE REST OF A BUSY DAY IS A LINK, to this list narrowed to
+                    that day — where it was a dead count, so a sixth task due on
+                    one Tuesday was reachable from nowhere on this shape. */}
                 {due.length > shownChips.length && (
-                  <span className="work-cal-more">+{due.length - shownChips.length} more</span>
+                  <a
+                    className="work-cal-more"
+                    href={dayHref(cell.key)}
+                    // THE FRAME'S ONE RULE for which clicks stay on the page
+                    // and which open elsewhere — see the chip above.
+                    onClick={rowPeekHandler(() => onDay(cell.key))}
+                  >
+                    +{due.length - shownChips.length} more
+                    <span className="sr-only"> due {dayLabel(cell.key)}</span>
+                  </a>
                 )}
               </div>
             );
@@ -147,8 +167,20 @@ export function CalendarView({
             rendered. The toolbar's count says the same thing from the other end
             — see [countedLabel]. */}
         <div className="work-cal-note">
-          Only work due in this window appears here. Work with no due date, and work due outside
-          these days, is on the list.
+          <span>
+            Only work due in this window appears here. Work with no due date, and work due outside
+            these days, is on the list.
+          </span>
+          {/* A MONTH PAST ITS FIRST PAGE: the chips drawn are the ones loaded,
+              so the rest of the window is one press rather than silently cut. */}
+          {more && (
+            <span className="work-cal-page">
+              <span className="t-caption">{more.note}</span>
+              <Button size="small" variant="secondary" onClick={more.load}>
+                Load more
+              </Button>
+            </span>
+          )}
         </div>
       </div>
     </Card>

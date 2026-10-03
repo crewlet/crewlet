@@ -8,6 +8,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/agent/builtin"
 	"github.com/crewlet/crewlet/internal/statelog"
+	"github.com/crewlet/crewlet/internal/tools"
 	"github.com/crewlet/crewlet/internal/tracker"
 )
 
@@ -84,7 +85,7 @@ func TestTheProjectToolsCarryTheirArguments(t *testing.T) {
 
 	callWork(t, reg, tracker.ListProjectsTool, map[string]any{
 		"q": "platform", "unit": "Engineering", "archived": "only",
-		"sort": "-open", "limit": 12,
+		"sort": "-active", "limit": 12,
 	})
 	q := trk.projectQuery
 	if q.Q != "platform" || q.Unit != "Engineering" || q.Limit != 12 {
@@ -98,8 +99,8 @@ func TestTheProjectToolsCarryTheirArguments(t *testing.T) {
 		t.Errorf("archived=only reached the query as %q, want %q",
 			q.Archived, tracker.ArchivedOnly)
 	}
-	if q.Sort != tracker.ProjectSortOpen || !q.Descending {
-		t.Errorf("sort=-open reached the query as %q/%v, want open descending "+
+	if q.Sort != tracker.ProjectSortActive || !q.Descending {
+		t.Errorf("sort=-active reached the query as %q/%v, want active descending "+
 			"— a seat's page is fifty of the company's projects, so which "+
 			"fifty is what the ordering decides", q.Sort, q.Descending)
 	}
@@ -319,5 +320,47 @@ func TestTaskActivityOffersItsKindsAndRefusesAnotherAsTheArgument(t *testing.T) 
 	if got := trk.activityQuery.Kinds; len(got) != 1 || got[0] != "status_changed" {
 		t.Errorf("the read was asked for %v, want the kind as it came — the "+
 			"tracker's read is what refuses it", got)
+	}
+}
+
+// A MISTYPED PROJECT KEY IS NOT A READ FAILURE. It used to be reported as one
+// — "could not read the tracker … do not conclude the item does not exist" —
+// which told a model that typed ENGG for ENG to keep believing in ENGG, and
+// dropped the reader's own sentence naming the nearest keys. And a `for_type`
+// the company does not file is the ARGUMENT's fault, about a project that is
+// right there.
+func TestDescribingAProjectThatIsNotThereSaysSo(t *testing.T) {
+	t.Parallel()
+	for _, c := range []struct {
+		name string
+		err  error
+		want tools.Refusal
+		says string
+	}{
+		{"no project", fmt.Errorf("tracker: no project \"ENGG\" — did you mean ENG: %w",
+			tracker.ErrNoProject), tools.RefusalNotFound, "did you mean ENG"},
+		{"no type", fmt.Errorf("tracker: no type \"epic\" — this company files bug, task: %w",
+			tracker.ErrNoType), tools.RefusalInvalid, "this company files bug, task"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			trk := newFakeTracker()
+			trk.readErr = c.err
+			reg := workRegistry(t, builtin.WorkDeps{Reader: trk, Writer: trk.as})
+			got := callWork(t, reg, tracker.DescribeProjectTool, map[string]any{
+				"project": "ENGG",
+			})
+			if !got.Failed || tools.RefusalOf(got) != c.want {
+				t.Fatalf("answered failed %v class %q, want %q", got.Failed,
+					tools.RefusalOf(got), c.want)
+			}
+			// AND THE READER'S OWN ERROR IS BENEATH THE CLASS, so a caller
+			// branching on the tracker's sentinel still finds it.
+			if !errors.Is(got.Cause, c.err) {
+				t.Errorf("the cause %v does not carry the reader's error", got.Cause)
+			}
+			if !strings.Contains(got.Output, c.says) || strings.Contains(got.Output, "could not read") {
+				t.Errorf("the refusal %q is not the reader's own sentence", got.Output)
+			}
+		})
 	}
 }

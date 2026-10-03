@@ -12,13 +12,13 @@
    is — one recipe, two grounds, no second component. */
 
 .panel-foot {
-  padding: var(--space-2) var(--space-4);
-  border-top: 1px solid var(--border-subtle);
-  font-size: var(--fs-2xs);
-  color: var(--text-muted);
+  padding: var(--spacing-2) var(--spacing-4);
+  border-top: 1px solid var(--color-border-default);
+  font-size: var(--font-size-xs);
+  color: var(--color-text-tertiary);
   display: flex;
   align-items: center;
-  gap: var(--space-2);
+  gap: var(--spacing-2);
 }
 
 /* One remark in a thread — a work item's and a page's alike, which is why it
@@ -29,10 +29,10 @@
 .comment {
   display: flex;
   flex-direction: column;
-  gap: var(--space-2);
-  padding: var(--space-3);
-  background: var(--surface-raised);
-  border-radius: var(--r-sm);
+  gap: var(--spacing-2);
+  padding: var(--spacing-3);
+  background: var(--color-surface-elevated);
+  border-radius: var(--radius-sm);
 }
 
 /* A FIGURE COLUMN, fixed width and right-aligned, so a header label and the
@@ -47,7 +47,7 @@
 
    7rem BECAUSE OF THE HEADING, not the figure. A fixed column wraps its own
    heading rather than growing for it, and the widest one these blocks carry
-   — APPROX. TOKENS — measures 103px at `--fs-3xs` with `--track-wide`, so at
+   — APPROX. TOKENS — measures 103px at `--font-size-2xs` with `--font-letter-spacing-wide`, so at
    the 5.5rem this started on it broke across two lines while every value
    under it sat on one. A label is what says which number this is, so it is
    the label that sets the width; 112px clears the measurement with room for
@@ -117,8 +117,8 @@
    cleared five columns at the 5.5rem `.num-col` then had — about 570px — by
    38px. `.num-col` went to 7rem so APPROX. TOKENS would stop wrapping, which
    moved five columns by 120px, and nobody re-derived 608. The ceiling stopped
-   being a ceiling and became the layout: at a 1570px viewport, where the rail
-   and the workspace sidebar leave the card 1163px of room, the weights block
+   being a ceiling and became the layout: at a 1570px viewport, where the
+   navigation of the day left the card 1163px of room, the weights block
    clamped to 608 and scrolled 138px of itself out of sight, cutting the very
    heading the 7rem was bought for down to `APPR…` — and the prefetch block
    did the same, 104px of it, on every turn whose thread was handed over
@@ -129,8 +129,8 @@
    heading, because the table it was derived from is 746px on a turn that ran
    twice. The width such a number has to clear is the column COUNT
    (`Turn.tsx`), `.num-col` above, the gap (a token), WHICH ROW this turn
-   produced, and the rendered width of a heading at `--fs-3xs` with
-   `--track-wide` — font metrics, which live in no file at all. Any literal
+   produced, and the rendered width of a heading at `--font-size-2xs` with
+   `--font-letter-spacing-wide` — font metrics, which live in no file at all. Any literal
    here is a sixth quantity nothing can hold in step with five it cannot see,
    and it fails SILENTLY: a `max-width` narrower than its content is not an
    error, not a warning, and in a diff it is a file nobody touched.
@@ -144,8 +144,8 @@
    above, because `overflow-x: auto` only ever scrolls a box narrower than its
    own content: measured with the ceiling removed outright, on a 390px phone
    the weights block draws 746px out of a card whose content box is 332px,
-   from x=29 to x=775. Nothing scrolls it — `.app` and `.screen` are both
-   `overflow-x: hidden` (frame.css, shell.css), so the page does not take the
+   from x=29 to x=775. Nothing scrolls it — the shell and its `main` are both
+   `overflow-x: hidden` (the kit's `AppShell`), so the page does not take the
    overflow either — and three of the five figure columns, APPROX. TOKENS
    among them, sit past x=390 with no way to reach them at all. The same box
    with wrappable content does clamp, which is exactly why deleting this line
@@ -186,7 +186,7 @@
    drawn at its full intrinsic width, so the class was decoration here and the
    block grew in its place. A bound is what makes it mean its own name.
 
-   20rem BECAUSE OF THE NOTES, measured at `--fs-2xs`. Three of the four the
+   20rem BECAUSE OF THE NOTES, measured at `--font-size-xs`. Three of the four the
    thread block can say are whole diagnostic sentences that have to arrive
    intact, because telling them apart is the entire reason the engine puts
    `thread_context_read` on the wire: `the thread could not be read from that
@@ -226,20 +226,20 @@
    line between two. A divider is a fact about the card, so it spans the
    card. */
 .ledger-follows:not(:first-child) {
-  border-top: 1px solid var(--border-subtle);
-  padding-top: var(--space-3);
+  border-top: 1px solid var(--color-border-default);
+  padding-top: var(--spacing-3);
 }
 
 /* A count beside a section title. Neutral by design: a coloured count is a
    claim about severity that a number alone cannot support. */
 .count-chip {
-  font-size: var(--fs-3xs);
-  font-weight: var(--fw-medium);
+  font-size: var(--font-size-2xs);
+  font-weight: var(--font-weight-medium);
   font-variant-numeric: tabular-nums;
-  color: var(--text-muted);
-  background: var(--surface-inset);
-  border-radius: var(--r-full);
-  padding: 1px var(--space-2);
+  color: var(--color-text-tertiary);
+  background: var(--color-surface-inset);
+  border-radius: var(--radius-pill);
+  padding: 1px var(--spacing-2);
   min-width: 20px;
   text-align: center;
 }
@@ -252,37 +252,31 @@
 .dot {
   width: 6px;
   height: 6px;
-  border-radius: var(--r-full);
-  background: var(--text-faint);
+  border-radius: var(--radius-pill);
+  background: var(--color-text-muted);
   flex: none;
 }
 .dot.positive {
-  background: var(--positive);
+  background: var(--color-feedback-success);
 }
 .dot.caution {
-  background: var(--caution);
+  background: var(--color-feedback-warning);
 }
 .dot.critical {
-  background: var(--critical);
+  background: var(--color-feedback-danger);
 }
 .dot.info {
-  background: var(--info);
+  background: var(--color-feedback-info);
 }
 .dot.accent {
-  background: var(--accent);
+  background: var(--color-brand-accent);
 }
-.dot.working {
-  background: var(--info);
-  animation: pulse-dot 1.8s var(--ease) infinite;
-}
-@keyframes pulse-dot {
-  0%,
-  100% {
-    opacity: 1;
-  }
-  50% {
-    opacity: 0.35;
-  }
+/* A badge that names its seat itself (`ui/SeatAvatar.tsx`): the wrapper is
+   the image a reader hears, so it takes the badge's box and nothing more —
+   no line box of its own around it, and never squeezed by a row it sits in. */
+.seat-avatar {
+  display: inline-flex;
+  flex: none;
 }
 
 /* A link that IS a row takes the page's text colour, not the link colour.
@@ -292,12 +286,13 @@
 a.seat-card,
 a.list-row,
 a.feed-row,
+a.trace-row,
 a.org-node,
 a.seat-chip {
   color: inherit;
 }
 a.seat-chip:hover {
-  color: var(--accent-ink);
+  color: var(--color-brand-accent-ink);
 }
 
 /* ---- Table --------------------------------------------------------------
@@ -314,10 +309,10 @@ a.seat-chip:hover {
 
 .table {
   width: 100%;
-  font-size: var(--fs-2xs);
+  font-size: var(--font-size-xs);
 }
 .table td {
-  padding: var(--space-1) var(--space-2);
+  padding: var(--spacing-1) var(--spacing-2);
   border-bottom: 0;
   vertical-align: middle;
 }
@@ -344,7 +339,7 @@ a.seat-chip:hover {
    children's display unless the table itself stops being one: leaving `.table`
    as a table and blocking only the rows leaves the anonymous table box in
    place, and the columns come back. */
-@media (max-width: 860px) {
+@media (width < 640px) {
   .table,
   .table tbody,
   .table tr,
@@ -352,10 +347,10 @@ a.seat-chip:hover {
     display: block;
   }
   .table tr {
-    padding: var(--space-2) 0;
+    padding: var(--spacing-2) 0;
   }
   .table tr + tr {
-    border-top: 1px solid var(--border-subtle);
+    border-top: 1px solid var(--color-border-default);
   }
   .table td {
     padding: 1px 0;
@@ -363,7 +358,7 @@ a.seat-chip:hover {
   /* THE NAME IS THE BLOCK'S HEAD, so it keeps its own line and its nowrap —
      a term name is an identifier and breaking it mid-word helps nobody. */
   .table td:first-child {
-    padding-bottom: var(--space-1);
+    padding-bottom: var(--spacing-1);
   }
 }
 
@@ -391,22 +386,22 @@ a.seat-chip:hover {
   position: sticky;
   top: var(--sticky-top);
   z-index: 1;
-  padding: var(--space-2) var(--row-inline) var(--space-1);
-  background: var(--surface-panel);
-  border-bottom: 1px solid var(--border-subtle);
-  font-size: var(--fs-3xs);
-  font-weight: var(--fw-medium);
+  padding: var(--spacing-2) var(--row-inline) var(--spacing-1);
+  background: var(--color-surface-subtle);
+  border-bottom: 1px solid var(--color-border-default);
+  font-size: var(--font-size-2xs);
+  font-weight: var(--font-weight-medium);
   text-transform: uppercase;
   letter-spacing: 0.06em;
-  color: var(--text-muted);
+  color: var(--color-text-tertiary);
 }
 .list-row {
   display: flex;
   align-items: center;
-  gap: var(--space-3);
-  padding: var(--space-2) var(--row-inline);
-  border-bottom: 1px solid var(--border-subtle);
-  min-height: var(--row-h);
+  gap: var(--spacing-3);
+  padding: var(--spacing-2) var(--row-inline);
+  border-bottom: 1px solid var(--color-border-default);
+  min-height: var(--size-row-md);
   min-width: 0;
   text-align: left;
   width: 100%;
@@ -418,14 +413,14 @@ a.seat-chip:hover {
   cursor: pointer;
 }
 .list-row.clickable:hover {
-  background: var(--surface-hover);
+  background: var(--color-surface-hover);
 }
 .list-row.selected {
-  background: var(--accent-soft);
-  box-shadow: inset 2px 0 0 var(--accent);
+  background: var(--color-brand-accent-soft);
+  box-shadow: inset 2px 0 0 var(--color-brand-accent);
 }
 .list-row.failed {
-  box-shadow: inset 2px 0 0 var(--critical);
+  box-shadow: inset 2px 0 0 var(--color-feedback-danger);
 }
 
 /* ---- Controls ----------------------------------------------------------- */
@@ -454,7 +449,7 @@ a.seat-chip:hover {
   left: 0;
   right: 0;
   margin: 0;
-  padding: var(--space-1);
+  padding: var(--spacing-1);
   list-style: none;
   /* BOUNDED AND SCROLLED. A company with forty sealed entries would
      otherwise draw a list past the bottom of the dialog. */
@@ -465,73 +460,107 @@ a.seat-chip:hover {
      show through the names. */
   /* THE RUNG ABOVE ITS GROUND, not the same one: this opens over a modal, and a
      modal paints the panel rung. */
-  background: var(--surface-raised);
-  border: 1px solid var(--border);
-  border-radius: var(--r-sm);
-  box-shadow: var(--shadow-2);
+  background: var(--color-surface-elevated);
+  border: 1px solid var(--color-border-hover);
+  border-radius: var(--radius-sm);
+  box-shadow: var(--shadow-md);
 }
 .input-suggest {
-  padding: var(--space-1) var(--space-2);
-  border-radius: var(--r-xs);
+  padding: var(--spacing-1) var(--spacing-2);
+  border-radius: var(--radius-xs);
   cursor: pointer;
   /* THE SAME FACE A REFERENCE WEARS in the box above and on the Secrets
      screen: these are the names that go in one, and a list drawn in the
      page's prose font reads as prose rather than as values. */
-  font-family: var(--font-mono);
+  font-family: var(--font-family-mono);
   font-variant-ligatures: none;
-  font-size: var(--fs-2xs);
-  color: var(--text-secondary);
+  font-size: var(--font-size-xs);
+  color: var(--color-text-secondary);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
 .input-suggest.is-active {
-  background: var(--surface-hover);
-  color: var(--text);
+  background: var(--color-surface-hover);
+  color: var(--color-text-primary);
 }
 
 /* Segmented control — lenses, tabs, ranges. One implementation; the system
-   this replaces had lens tabs, room tabs and filter pills as three. */
+   this replaces had lens tabs, room tabs and filter pills as three.
+
+   IT WRAPS RATHER THAN OVERFLOWING. Its options never shrink (a label cut
+   mid-word is not a choice anybody can read), so on one unbroken row a group
+   wider than its container ran off the edge: on a phone the spend chart's
+   "Split by" ended at "Worke", clipped by the card with no way to reach the
+   rest. Wrapped, every option stays visible, clickable and inside the
+   focus ring's room — which a horizontal scroll strip would clip.
+
+   IT HUGS ITS OPTIONS WHEREVER IT SITS. `inline-flex` is its outside only in
+   a line box: as the child of a flex column or a grid the item is stretched,
+   and Configuration's collection picker drew as a full-width grey band with
+   its four options at the left, beside a lens control in the page bar that
+   hugged its own. A `width` that is not `auto` is never stretched, and
+   `fit-content` still wraps inside a narrower container. */
 .segmented {
   display: inline-flex;
+  flex-wrap: wrap;
   align-items: center;
+  width: fit-content;
   gap: 2px;
   padding: 2px;
-  background: var(--surface-inset);
-  border-radius: var(--r-sm);
+  /* THE TRACK IS DRAWN, border and raised ground, as the approved artboards
+     set it: on the inset ground alone the group had no edge in the dark theme
+     and read as three loose words rather than one choice. */
+  background: var(--color-surface-elevated);
+  border: 1px solid var(--color-border-default);
+  border-radius: var(--radius-md);
   min-width: 0;
+  max-width: 100%;
 }
 .segmented > button {
   display: inline-flex;
   align-items: center;
-  gap: var(--space-1);
-  height: calc(var(--control-h) - 6px);
-  padding: 0 var(--space-3);
-  border-radius: calc(var(--r-sm) - 1px);
-  font-size: var(--fs-2xs);
-  font-weight: var(--fw-medium);
-  color: var(--text-muted);
+  gap: var(--spacing-1);
+  height: calc(var(--size-control-md) - 6px);
+  padding: 0 var(--spacing-3);
+  border-radius: calc(var(--radius-md) - 2px);
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-medium);
+  color: var(--color-text-secondary);
   white-space: nowrap;
   transition:
-    background var(--dur-fast) var(--ease),
-    color var(--dur-fast) var(--ease);
+    background var(--motion-duration-fast) var(--motion-easing-default),
+    color var(--motion-duration-fast) var(--motion-easing-default);
 }
 .segmented > button:hover {
-  color: var(--text);
+  color: var(--color-text-primary);
 }
 /* A RADIO GROUP, so the state attribute is aria-checked. The role moved from
    `tab` to `radio` because not one call site controls a tabpanel — see
    `Segmented` in ui/primitives.tsx — and a selector left on the old attribute
    is how a correct role ships with the selected segment drawn as unselected. */
 .segmented > button[aria-checked="true"] {
-  background: var(--surface-panel);
-  color: var(--text);
-  box-shadow: var(--shadow-1);
+  background: var(--color-surface-subtle);
+  color: var(--color-text-primary);
+  box-shadow:
+    var(--shadow-sm),
+    0 0 0 1px var(--color-border-default);
+}
+/* AN OPTION THIS PLACE CANNOT SERVE stays in the row and in the arrows' path
+   — a reader lands on it to hear why — and is drawn quieter, with the
+   not-allowed pointer; the reason is written beside the group, never only in
+   a tooltip. */
+.segmented > button[aria-disabled="true"] {
+  color: var(--color-text-tertiary);
+  cursor: not-allowed;
+}
+.segmented > button[aria-disabled="true"]:hover {
+  color: var(--color-text-tertiary);
 }
 .segmented.sm > button {
-  height: calc(var(--control-h-sm) - 4px);
-  padding: 0 var(--space-2);
-  font-size: var(--fs-3xs);
+  height: calc(var(--size-control-sm) - 4px);
+  padding: 0 var(--spacing-2);
+  font-size: var(--font-size-2xs);
 }
 
 /* Tabs — the in-page navigation a section owns. The STRIP is uilet's
@@ -539,83 +568,42 @@ a.seat-chip:hover {
 
    THE PANEL CARRIES THE COLUMN THE SCREEN WOULD HAVE GIVEN ITS CHILDREN.
    Before the tab relationship existed, a screen's switched sections were
-   direct children of `.screen-inner` — a flex column with a gap — and they
+   direct children of the shell's content column — a flex column with a gap — and they
    took their vertical rhythm from it. Wrapping them in one panel element puts
    a plain block between the column and them, so without this every panel on
    the Seat screen renders with its cards butted together. Nothing in the test
    suite can see that: the markup is correct either way.
 
-   The focus ring is suppressed because the panel takes a tab stop for reach
-   rather than for interaction — a reader lands here on their way INTO the
-   content, and a box drawn around 600px of page is noise rather than a cue.
-   It stays keyboard-reachable; only the outline goes. */
+   THE PANEL KEEPS THE KIT'S FOCUS RING. It takes a tab stop (`tabIndex={0}`,
+   the ARIA tabs pattern) so a keyboard reader lands on the content, and a
+   stop that draws nothing is a stop the reader cannot find — WCAG 2.4.7. A
+   `.tabpanel:focus { outline: none }` used to sit here; at (0,2,0) it beat
+   the baseline's `:focus-visible` ring, so the ring never drew for anyone.
+   The baseline already draws nothing on a pointer focus. */
 .tabpanel {
   display: flex;
   flex-direction: column;
-  gap: var(--space-5);
+  gap: var(--spacing-5);
   min-width: 0;
-}
-
-.tabpanel:focus {
-  outline: none;
-}
-
-/* ---- Meter --------------------------------------------------------------
-   A budget, a share, a fill. The track is always drawn: a bar with no track is
-   a bar whose maximum the reader has to guess. */
-
-.meter {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-1);
-  min-width: 0;
-}
-.meter-track {
-  height: 4px;
-  border-radius: var(--r-full);
-  background: var(--surface-inset);
-  overflow: hidden;
-}
-.meter-fill {
-  height: 100%;
-  border-radius: var(--r-full);
-  background: var(--accent);
-  transition: width var(--dur-slow) var(--ease-out);
-}
-
-.meter-fill[data-tone="caution"] {
-  background: var(--caution);
-}
-.meter-fill[data-tone="critical"] {
-  background: var(--critical);
-}
-.meter-fill[data-tone="positive"] {
-  background: var(--positive);
-}
-.meter-fill[data-tone="neutral"] {
-  background: var(--text-faint);
-}
-.meter-legend {
-  display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: var(--space-2);
-  font-size: var(--fs-2xs);
-  color: var(--text-muted);
 }
 
 /* ---- Inline code -------------------------------------------------------- */
 
 code.inline {
   font-size: 0.92em;
-  background: var(--surface-inset);
-  border-radius: var(--r-xs);
+  background: var(--color-surface-inset);
+  border-radius: var(--radius-xs);
   padding: 1px 4px;
-  color: var(--text-secondary);
+  color: var(--color-text-secondary);
   /* A URL IS ONE UNBREAKABLE WORD to a line breaker, and these chips carry
      public base URLs. Without this the chip is pushed whole onto its own
      line and the sentence around it is torn into fragments. */
   overflow-wrap: anywhere;
+}
+/* A SHORT SPAN IS NOT BROKEN at its spaces — see `UnbrokenCode` in
+   lib/markdown.ts, which decides what short is. */
+code.inline.is-whole {
+  white-space: nowrap;
 }
 /* A REFUSAL'S PROBLEMS, one per line.
  *
@@ -626,10 +614,10 @@ code.inline {
  */
 .problems {
   margin: 0;
-  padding-left: var(--space-4);
+  padding-left: var(--spacing-4);
   display: flex;
   flex-direction: column;
-  gap: var(--space-1);
+  gap: var(--spacing-1);
 }
 /* INHERITED, not restated — and that is uilet's `InlineCode` now, which the
    problems are drawn with: `tone="inherit"` is the chip inside a message that
@@ -641,50 +629,14 @@ code.inline {
    its own quiet grey, which is the half nobody noticed. */
 
 kbd {
-  font-family: var(--font-mono);
-  font-size: var(--fs-3xs);
-  background: var(--surface-inset);
-  border: 1px solid var(--border-subtle);
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-2xs);
+  background: var(--color-surface-inset);
+  border: 1px solid var(--color-border-default);
   border-bottom-width: 2px;
-  border-radius: var(--r-xs);
+  border-radius: var(--radius-xs);
   padding: 1px 5px;
-  color: var(--text-muted);
-}
-
-/* ---- Overlay ------------------------------------------------------------ */
-
-/* WHAT IS LEFT HERE IS THE VEIL, and only because the command palette still
-   draws one: every dialog in the product is `@crewlethq/ui`'s Modal now, which
-   brings its own overlay, frame and head/body/foot bands. The four recipes
-   that used to follow this one — .dialog, .dialog-head, .dialog-body and
-   .dialog-foot — went with the component that wrote them.
-
-   The palette keeps ours because it is a modal whose header IS its input: it
-   takes uilet's layer WITHOUT uilet's frame (see app/CommandPalette.tsx), so
-   the ground it sits on has to be declared somewhere, and this is where. */
-.veil {
-  position: fixed;
-  inset: 0;
-  background: color-mix(in srgb, var(--surface-panel) 72%, transparent);
-  backdrop-filter: blur(3px);
-  display: flex;
-  align-items: flex-start;
-  justify-content: center;
-  padding: var(--space-16) var(--space-4) var(--space-4);
-  z-index: var(--z-modal);
-  animation: fade var(--dur) var(--ease);
-}
-@keyframes fade {
-  from {
-    opacity: 0;
-  }
-}
-/* The palette is its one caller now — `.palette`, in shell.css. */
-@keyframes rise {
-  from {
-    opacity: 0;
-    transform: translateY(8px);
-  }
+  color: var(--color-text-tertiary);
 }
 
 /* ---- Chart -------------------------------------------------------------- */
@@ -694,73 +646,54 @@ kbd {
   overflow: visible;
 }
 .chart .axis-line {
-  stroke: var(--border-subtle);
+  stroke: var(--color-border-default);
   stroke-width: 1;
 }
 .chart .grid-line {
-  stroke: var(--border-subtle);
+  stroke: var(--color-border-default);
   stroke-width: 1;
   stroke-dasharray: 2 4;
 }
 
-/* A stacked column per time bucket — see StackedTimeSeries.
- *
- * The columns FLEX EQUALLY and never wrap: one bucket is one column whatever
- * the window's length, so 24 hours and 30 days draw the same chart at two
- * densities rather than one chart and one overflowing row. A minimum width of
- * one pixel is what keeps an empty bucket's gap visible at the widest window.
- */
-.stackseries {
+/* ---- The key legend -----------------------------------------------------
+   `?` anywhere. Its groups flow into as many columns as the dialog holds —
+   two on a desktop, one on a phone — because a single column of forty rows
+   is a legend nobody scrolls to the end of. A group never splits across
+   columns: its heading is what says where the keys under it are live. */
+.key-legend {
   display: flex;
-  align-items: flex-end;
-  gap: 2px;
-  width: 100%;
-  padding: 0;
+  flex-direction: column;
+  gap: var(--spacing-5);
 }
-.stackseries-col {
-  position: relative;
-  flex: 1 1 0;
-  min-width: 1px;
-  height: 100%;
+.key-legend-groups {
+  columns: 2 280px;
+  column-gap: var(--spacing-6);
+}
+.key-legend-group {
+  break-inside: avoid;
+  margin-bottom: var(--spacing-5);
+}
+.key-legend-group dl {
+  margin: var(--spacing-2) 0 0;
+}
+.key-legend-row {
   display: flex;
-  align-items: flex-end;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--spacing-3);
+  min-height: var(--size-row-sm);
+  padding-block: var(--spacing-1);
+  border-bottom: 1px solid var(--color-border-default);
 }
-.stackseries-stack {
-  position: relative;
-  z-index: 1;
-  width: 100%;
-  min-height: 1px;
-  display: flex;
-  flex-direction: column-reverse;
-  border-radius: 2px 2px 0 0;
-  overflow: hidden;
-  background: var(--surface-inset);
+.key-legend-row dt {
+  font-size: var(--font-size-sm);
+  color: var(--color-text-secondary);
 }
-.stackseries-stack > span {
-  display: block;
-  width: 100%;
-}
-/* The prior period as a MARK AT ITS OWN HEIGHT, not a second set of bands: a
- * comparison needs a height, and a ghost drawn in its own hues is a chart with
- * twice the legend.
- *
- * ABOVE the stack (z-index), not behind it. Drawn behind, the mark vanished
- * the moment the current period was the larger of the two — so "last week was
- * smaller" and "there is no last week" rendered identically, which is exactly
- * the comparison this is for. A one-pixel dash over an opaque column reads in
- * both directions. */
-.stackseries-ghost {
-  position: absolute;
-  inset-inline: 0;
-  bottom: 0;
-  z-index: 2;
-  pointer-events: none;
-  border-top: 1px dashed var(--text-secondary);
-}
-
-/* The palette's scope hints, with the one in use marked: a sigil nobody is
-   told about is a feature that does not exist. */
-.palette-foot .is-on {
-  color: var(--accent-ink);
-  font-weight: 600;
+.key-legend-keys {
+  margin: 0;
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--spacing-1);
+  font-size: var(--font-size-xs);
 }

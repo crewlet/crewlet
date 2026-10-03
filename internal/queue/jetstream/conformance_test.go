@@ -6,6 +6,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/nats-io/nats.go"
+
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/queue/queuetest"
@@ -24,9 +26,9 @@ func TestConformance(t *testing.T) {
 // Own broker per queue, not per test binary: the suite asserts things like
 // "a subscription nobody created retains nothing", which a shared broker
 // carrying another subtest's streams could satisfy accidentally.
-func newConformanceQueue(t *testing.T) queue.EventQueue {
+func newConformanceQueue(t *testing.T, opts ...queue.Option) queue.EventQueue {
 	t.Helper()
-	return openForTest(t, Config{})
+	return openForTest(t, Config{}, opts...)
 }
 
 // openForTest starts a broker owned by the TEST, not by the queue, and
@@ -36,7 +38,7 @@ func newConformanceQueue(t *testing.T) queue.EventQueue {
 // the client that used it — "the mail survived a node leaving" is precisely
 // the property seat ownership rests on, and it is unobservable if stopping
 // the node also took the broker down.
-func openForTest(t *testing.T, cfg Config) *Queue {
+func openForTest(t *testing.T, cfg Config, opts ...queue.Option) *Queue {
 	t.Helper()
 	// Production timings would make this suite take hours: a 30-minute ack
 	// window, a one-second poll, a one-second redelivery delay. The
@@ -60,9 +62,14 @@ func openForTest(t *testing.T, cfg Config) *Queue {
 	if err != nil {
 		t.Fatalf("StartServer: %v", err)
 	}
-	t.Cleanup(srv.Shutdown)
+	// ONCE, because the BrokerDown capability may stop this server before
+	// the cleanup does, and [Server.Shutdown] is idempotent only when the
+	// two calls cannot overlap.
+	var shutdown sync.Once
+	stopServer := func() { shutdown.Do(srv.Shutdown) }
+	t.Cleanup(stopServer)
 
-	q, err := srv.Client(t.Context())
+	q, err := srv.Client(t.Context(), opts...)
 	if err != nil {
 		t.Fatalf("Client: %v", err)
 	}
@@ -82,16 +89,50 @@ func openForTest(t *testing.T, cfg Config) *Queue {
 	t.Cleanup(func() { _ = admin.Stop(context.WithoutCancel(t.Context())) })
 	adminMu.Lock()
 	admins[q] = admin
+	servers[q] = stopServer
 	adminMu.Unlock()
 
 	return q
 }
 
-// admins maps a queue under test to the inspection client for its broker.
+// admins maps a queue under test to the inspection client for its broker, and
+// servers to what stops that broker's server — the BrokerDown capability's
+// one way of taking a broker away.
 var (
 	adminMu sync.Mutex
 	admins  = map[*Queue]*Queue{}
+	servers = map[*Queue]func(){}
 )
+
+// takeBrokerDown stops the server q is a client of and returns once q's
+// connection has noticed, so the verb sent next meets a connection that is
+// down rather than racing the client's discovery of it.
+//
+// STOPPED, NOT PARTITIONED, because stopping is the one outage the harness can
+// produce exactly: the connection goes into the reconnect loop every
+// connection to a broker that went away goes into, and stays there for the
+// reconnect budget — far longer than any case takes to send its verbs.
+func takeBrokerDown(t *testing.T, q queue.EventQueue) {
+	t.Helper()
+	jq, ok := q.(*Queue)
+	if !ok {
+		t.Fatalf("BrokerDown called with a %T", q)
+	}
+	adminMu.Lock()
+	stop := servers[jq]
+	adminMu.Unlock()
+	if stop == nil {
+		t.Fatalf("BrokerDown called with a queue openForTest did not open")
+	}
+	stop()
+	deadline := time.Now().Add(10 * time.Second)
+	for jq.nc.Status() == nats.CONNECTED {
+		if time.Now().After(deadline) {
+			t.Fatalf("the connection still reads CONNECTED 10s after its server stopped")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+}
 
 // inspector returns the client to run a capability read through: the
 // long-lived admin client when there is one, else the queue itself.
@@ -175,6 +216,8 @@ func capabilities() queuetest.Capabilities {
 		ConsumerProposals: func(q queue.EventQueue) int {
 			return q.(*Queue).ConsumerProposals()
 		},
+
+		BrokerDown: takeBrokerDown,
 
 		// Deliberately NOT declared, each for a measured reason:
 		//

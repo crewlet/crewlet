@@ -115,13 +115,14 @@ func (t *mergeWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	before, err := t.deps.Reader.Task(ctx, ref, tracker.DetailWants{}, seatRead)
 	switch {
 	case errors.Is(err, tracker.ErrNoTask):
-		return failedBy(err, fmt.Sprintf("There is no work item %q.", clip(ref))), nil
+		return refusedBy(tools.RefusalNotFound, err, fmt.Sprintf("There is no work item %q.",
+			clip(ref))), nil
 	case err != nil:
-		return readFailed(tracker.MergeWorkItemTool, err), nil
+		return readFailure(ctx, tracker.MergeWorkItemTool, err), nil
 	}
-	survivor, refused := t.deps.resolveRef(ctx, tracker.MergeWorkItemTool, "`into`", into)
-	if refused != nil {
-		return *refused, nil
+	survivor, refusal := t.deps.resolveRef(ctx, tracker.MergeWorkItemTool, "`into`", into)
+	if refusal != nil {
+		return *refusal, nil
 	}
 	if survivor == before.Task.ID {
 		return failed(fmt.Sprintf("%s cannot be folded into itself.",
@@ -145,13 +146,14 @@ func (t *mergeWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		// THE REFUSAL NAMES BOTH WAYS OUT, in this surface's own words:
 		// the tracker knows the gesture that clears it and not the tool
 		// or the argument a caller reaches it by.
-		return failedBy(err, fmt.Sprintf("merge_work_item was refused: %v. Move %s "+
+		return refusedBy(tools.RefusalInvalid, err, fmt.Sprintf("merge_work_item "+
+			"was refused: %v. Move %s "+
 			"into the surviving item's project with move_work_item first — its "+
 			"subtasks go with it — or merge with `move_subtasks: false`, which "+
 			"leaves them under the duplicate.", err, before.Address())), nil
 	}
 	if err != nil {
-		return writeFailed(actor, tracker.MergeWorkItemTool, err), nil
+		return writeFailure(ctx, actor, tracker.MergeWorkItemTool, err), nil
 	}
 	if got.Outcome == statelog.OutcomeUnknown {
 		// NEVER A RECEIPT FOR A MERGE NOBODY CAN SAY LANDED — see

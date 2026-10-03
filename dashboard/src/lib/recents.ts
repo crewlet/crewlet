@@ -21,7 +21,7 @@
  * One desk is not one person: a shared machine is the ordinary case for a
  * dashboard people sign in to, and a single list per browser drew the last
  * person's recent titles — a colleague's review, an incident, a person's page
- * — in the next person's palette and rail. So each principal the tab is read
+ * — in the next person's palette. So each principal the tab is read
  * by (`lib/reader.ts`) has a list of their own, under a key of its own, and a
  * tab that has not learned its reader yet draws none and records none: there
  * is nobody to show them to.
@@ -38,47 +38,28 @@
  * this browser. What it costs is a person's own list after they sign out; the
  * same person signing in again after their session lapsed keeps theirs.
  *
- * # A SLOT IS STABLE, AND THAT IS THE ORDER THIS LIST KEEPS
+ * # ONE SURFACE, SO ONE ORDER: MOST RECENTLY VISITED FIRST
  *
- * The stored order is ARRIVAL order — a place the reader has not been enters
- * at the top, and going back to one already here moves nothing. It used to be
- * visit order, every visit re-inserting at index 0, and that is a defect the
- * moment the list is DRAWN rather than searched: pressing the third row of
- * the workspace sidebar's Recent section sent it to the first and slid the two
- * above it down, so the list rearranged itself under the pointer at the
- * instant it was hit. `.side-row` eases its colours and nothing else, and the
- * React key is the path, so the browser MOVES the existing node — an
- * untweened jump rather than anything a transition could soften.
+ * The palette is the only surface that draws this list, and it is opened
+ * fresh, ranks what it offers and closes — so it has a re-sort boundary, and
+ * "where I just was" is exactly what a reader opening an empty one wants
+ * first. The list is STORED in that order: a visit moves its place to the top.
  *
- * No launcher does this. VS Code's Recent list, JetBrains' Recent Files and a
- * browser's own history sidebar all re-sort when the surface is opened, never
- * while it is being used, because a rail is navigated by POSITION and a rail
- * that re-sorts on use destroys the only thing that makes it faster than
- * searching.
- *
- * # …AND THE PALETTE STILL GETS VISIT ORDER
- *
- * Which is not a contradiction, it is the other surface. The palette is
- * opened fresh, ranks what it offers, and closes — so it HAS a re-sort
- * boundary the rail does not, and "where I just was" is exactly what a reader
- * opening an empty one wants first. [useRecentsByVisit] is that order,
- * derived at read time from the `at` this module has stored all along and
- * until now never read.
- *
- * The cap evicts by `at` for the same reason: the entry to lose is the one
- * nobody has opened in longest, never whichever happens to sit at the bottom
- * of a list that no longer moves.
- *
- * AND THAT EVICTION CAN TAKE A ROW OUT OF THE MIDDLE, which is the one thing
- * this arrangement gives up: the old rule always dropped the bottom row. It
- * only ever fires when a place the reader has not been arrives, which already
- * moves every row down one, so there is no gesture under which the rail moves
- * and the reader was not asking for it — and dropping the bottom row instead
- * is exactly what would lose the board somebody opens every morning.
+ * It was not always. While the workspace sidebar drew a Recent section, a
+ * visit that moved its row slid the list under the pointer that had just
+ * pressed it, so the list was stored in arrival order, the palette re-sorted
+ * a copy, and the cap was counted per workspace because the rail drew one
+ * workspace's share. The sidebar keeps no recents now — a place kept on
+ * purpose is a star (`lib/starred.ts`), and a sidebar that also carried what
+ * was merely opened is the tree this one replaced — so all three of those
+ * arrangements lost their reader, and each would have been a rule defending
+ * a surface that no longer exists.
  */
 
-import { useMemo, useSyncExternalStore } from "react";
+import { useSyncExternalStore } from "react";
 import { currentReader, forgetReadersUnder, onReader } from "./reader.ts";
+import { STORAGE_KEYS } from "~/lib/storage.ts";
+import { resolves } from "~/app/routes.ts";
 
 /** One place the reader was. */
 export interface Recent {
@@ -87,20 +68,16 @@ export interface Recent {
   /** What to call it. The label the screen itself showed, never re-derived. */
   label: string;
   /**
-   * Which workspace it belongs to.
-   *
-   * PART OF THE IDENTITY, not a decoration: the rail draws one workspace's
-   * rows and the cap counts them per workspace, so a row with none is a row
-   * nothing can draw and nothing can evict. `valid` refuses one, and the
-   * Shell does not record a route no workspace owns.
+   * Which workspace it belongs to — the palette's hint beside the label, so
+   * two places with one name ("Runbook" in two spaces) are told apart. The
+   * Shell does not record a route no workspace owns, and `valid` refuses a
+   * row without one.
    */
   workspace: string;
-  /** When it was last opened, epoch ms. */
-  at: number;
 }
 
 /** Where every reader's recents are kept: [recentsKey]'s prefix. */
-const RECENTS_PREFIX = "crewlet_recents/";
+const RECENTS_PREFIX = STORAGE_KEYS.recents;
 
 /** The storage key a reader's recents are kept under. */
 export function recentsKey(reader: string): string {
@@ -108,48 +85,16 @@ export function recentsKey(reader: string): string {
 }
 
 /**
- * How many are kept, PER WORKSPACE.
+ * How many are kept.
  *
- * Eight: enough that a morning's work is in the list and few enough that the
- * list is scanned rather than searched — which is the whole difference between
- * recents and a history.
- *
- * AND THAT IS A CLAIM ABOUT THE DRAWN LIST, which is why the bucket is the
- * workspace. It was a single global bound, written when the command palette
- * was the only reader and the list it offered was the whole of it. The
- * workspace sidebar's Recent section came later and draws one workspace's
- * share — `sections` are appended to whichever tree is shown — so across a
- * rail of eight workspaces the reader saw one or two rows where the number
- * says eight, and a morning spent in Work could push every Activity row out
- * of a rail that had no Work rows in it either.
+ * Eight: enough that a morning's work is in the list and few enough that an
+ * empty palette is scanned rather than searched — which is the whole
+ * difference between recents and a history. ONE BOUND OVER THE WHOLE LIST,
+ * because the palette draws the whole list: counted per workspace, as it was
+ * while a sidebar drew one workspace's share, it let an empty palette open on
+ * up to eight rows for each of nine workspaces.
  */
 export const MaxRecents = 8;
-
-/**
- * At most [MaxRecents] per workspace, oldest visit first to go.
- *
- * ARRIVAL ORDER IS PRESERVED — this drops rows, it never reorders them — and
- * the bucket is what the rail filters on, so the number the cap counts and
- * the number a reader sees are the same number.
- */
-function capped(rows: readonly Recent[]): Recent[] {
-  const over = new Map<string, Recent[]>();
-  for (const row of rows) {
-    const bucket = over.get(row.workspace);
-    if (bucket) bucket.push(row);
-    else over.set(row.workspace, [row]);
-  }
-  const drop = new Set<Recent>();
-  for (const bucket of over.values()) {
-    if (bucket.length <= MaxRecents) continue;
-    // The oldest VISIT leaves, not the last row in the bucket — see
-    // [remember]. Sorted on a copy: `bucket` is this pass's own array, but
-    // its entries are the caller's and their order is the answer.
-    const byVisit = [...bucket].sort((a, b) => a.at - b.at);
-    for (const row of byVisit.slice(0, bucket.length - MaxRecents)) drop.add(row);
-  }
-  return drop.size === 0 ? [...rows] : rows.filter((row) => !drop.has(row));
-}
 
 /**
  * WHAT THIS TAB IS PAINTING, and nothing else.
@@ -179,7 +124,7 @@ function stored(reader: string): Recent[] {
   try {
     const raw = localStorage.getItem(recentsKey(reader));
     const parsed: unknown = raw ? JSON.parse(raw) : [];
-    return Array.isArray(parsed) ? capped(parsed.filter(valid)) : [];
+    return Array.isArray(parsed) ? parsed.filter(valid).slice(0, MaxRecents) : [];
   } catch {
     // A private window, blocked site data, or a value somebody's other tab
     // wrote in a shape this build does not have. None of them is a reason
@@ -213,12 +158,14 @@ function valid(row: unknown): row is Recent {
     r.path.length > 0 &&
     r.path.every((p) => typeof p === "string") &&
     typeof r.label === "string" &&
-    // A ROW WITH NO WORKSPACE CAN BE DRAWN BY NOTHING — see [Recent.workspace]
-    // — so it is a shape this build cannot use rather than one it renders
-    // into a rail that has no section for it.
+    // A ROW WITH NO WORKSPACE is a shape an older build wrote, and one the
+    // palette has no hint for — see [Recent.workspace].
     typeof r.workspace === "string" &&
     r.workspace !== "" &&
-    typeof r.at === "number"
+    // A PATH THE ROUTE TABLE NO LONGER HAS IS DROPPED ON READ. Storage
+    // outlives every build: a row kept before a route moved would be drawn
+    // as a row that leads to Not Found, forever, with nothing to say why.
+    resolves(r.path)
   );
 }
 
@@ -236,56 +183,41 @@ function write(reader: string, next: Recent[]): void {
 /**
  * Record that the reader opened something.
  *
- * KEYED ON THE PATH, so a place is here once however often it is opened.
+ * KEYED ON THE PATH, so a place is here once however often it is opened, and
+ * a visit moves it to the top. At the cap the bottom row leaves, which in
+ * visit order is the place nobody has opened in longest.
  *
  * `named` IS WHETHER A SCREEN SUPPLIED THE LABEL, and it is required rather
  * than optional because its zero value is the bug. A label the screen has not
  * resolved yet is the route's own segment — a uuid for a turn — and every
  * screen publishes its name a render AFTER the route, so the first write of
  * every navigation carries the identifier and the second carries the name.
- * That is fine on a first visit and wrong on a REVISIT: the row the reader
- * pressed already had its name, and the click replaced it with a hex string
- * until the query came back. Which is the flash they see, on the row they
- * aimed at, caused by the act of aiming at it.
- *
- * So a name is never replaced by an identifier: an unnamed write to a path
- * this list already holds keeps the stored label and moves only `at`. A path
- * it does not hold is stored either way, because an object NOTHING ever names
- * — a turn with no plan summary — has its id and nothing else, and a rail that
- * dropped it would lose a place the reader was.
- *
- * A REVISIT KEEPS ITS SLOT: only `at` moves, and nothing the reader is
- * looking at does. See the module doc for why a drawn list may not re-sort
- * under the pointer that is using it.
- *
- * A PLACE THE READER HAS NOT BEEN ENTERS AT THE TOP, and at the cap the entry
- * with the OLDEST VISIT leaves — not the last one in the list, which under
- * arrival order is simply the one that has been here longest. That is what
- * keeps the board somebody opens every morning alive although it never moves.
- * The cap is per WORKSPACE, so a morning in Work cannot empty the Activity
- * rail; see [MaxRecents].
+ * That is fine on a first visit and wrong on a REVISIT: the place already had
+ * its name, and the visit replaced it with a hex string until the query came
+ * back. So a name is never replaced by an identifier: an unnamed write to a
+ * path this list already holds keeps the stored label. A path it does not
+ * hold is stored either way, because an object NOTHING ever names — a turn
+ * with no plan summary — has its id and nothing else, and dropping it would
+ * lose a place the reader was.
  */
-export function remember(entry: Omit<Recent, "at">, named: boolean): void {
+export function remember(entry: Recent, named: boolean): void {
   if (entry.path.length === 0 || entry.workspace === "") return;
   // NOBODY TO REMEMBER IT FOR: a place visited before the tab knows who reads
   // it would land in no list, or in the wrong one.
   const reader = currentReader();
   if (reader === null) return;
   const key = entry.path.join("/");
-  const at = Date.now();
   // STORED, NOT THE RENDER SNAPSHOT — see [cache]. A write replaces the whole
   // key, so building it on what this tab last painted hands back a list
   // missing everything another tab has done since.
   const held = stored(reader);
-  const found = held.findIndex((r) => r.path.join("/") === key);
-  if (found >= 0) {
-    const was = held[found]!;
-    const next = held.slice();
-    next[found] = { ...entry, label: named ? entry.label : was.label, at };
-    write(reader, next);
-    return;
-  }
-  write(reader, capped([{ ...entry, at }, ...held]));
+  const was = held.find((r) => r.path.join("/") === key);
+  const label = was && !named ? was.label : entry.label;
+  const rest = held.filter((r) => r !== was);
+  write(
+    reader,
+    [{ path: entry.path, label, workspace: entry.workspace }, ...rest].slice(0, MaxRecents),
+  );
 }
 
 /**
@@ -308,7 +240,7 @@ export function forgetAll(): void {
  * Subscribe, and follow ANOTHER TAB while anybody is.
  *
  * `storage` fires in every OTHER document of the origin, so this is what
- * lets a second tab's recent reach this one's rail rather than waiting for a
+ * lets a second tab's recent reach this one's palette rather than waiting for a
  * reload. Installed on the first subscriber and removed with the last: the
  * event only matters to a surface that is drawing the list, and every WRITE
  * reads storage for itself (see [cache]), so correctness does not depend on
@@ -336,29 +268,9 @@ function follow(e: StorageEvent): void {
   for (const fn of listeners) fn();
 }
 
-/**
- * The reader's recents, in ARRIVAL order — newest arrival first, and a
- * revisit moving nothing. This is the order a drawn list takes.
- */
+/** The reader's recents, most recently visited first. */
 export function useRecents(): Recent[] {
   return useSyncExternalStore(subscribe, read, () => []);
-}
-
-/**
- * The same places, most recently VISITED first.
- *
- * For a surface that is opened fresh each time and therefore has a re-sort
- * boundary a rail does not — the command palette, which ranks an empty query
- * on "where you just were". Sorted on read rather than stored that way,
- * because storing it is what made the rail jump; see the module doc.
- *
- * A COPY, never `held.sort(...)`: the argument is the live snapshot every
- * other reader shares, and sorting in place would reorder the rail from
- * inside the palette.
- */
-export function useRecentsByVisit(): Recent[] {
-  const held = useRecents();
-  return useMemo(() => [...held].sort((a, b) => b.at - a.at), [held]);
 }
 
 /** Test seam: drop the in-process cache so a fresh read hits storage. */

@@ -50,12 +50,6 @@ const (
 	FrameDegraded FramePosture = "degraded"
 )
 
-// framePostures is how many there are. It is the width of the per-broadcast
-// encode cache, which is an ARRAY rather than a map: a broadcast is the
-// engine's hot path and allocating a map to hold at most two entries would
-// cost more than the second encode it saves.
-const framePostures = 2
-
 // Valid reports whether p is one of the declared postures. False for the zero
 // value — see [FramePosture].
 func (p FramePosture) Valid() bool {
@@ -97,7 +91,7 @@ func (p FramePosture) index() int {
 // one that says why the others stopped. Everything else is derived from this
 // node's copy of the company, which is what being degraded means it cannot
 // vouch for.
-func (p FramePosture) Delivers(kind string) bool {
+func (p FramePosture) Delivers(kind Kind) bool {
 	switch p {
 	case FrameLive:
 		return RouteOf(kind).Valid()
@@ -166,7 +160,7 @@ func (r Route) Valid() bool {
 // own source for the Kind… constants — so a kind added in hub.go without a
 // route fails the build rather than reaching whichever default a switch
 // happened to have.
-func RouteOf(kind string) Route { return routes[kind] }
+func RouteOf(kind Kind) Route { return routes[kind] }
 
 // Frame is one encoded envelope, SHARED by every client it is delivered to.
 //
@@ -180,13 +174,13 @@ func RouteOf(kind string) Route { return routes[kind] }
 // than a copy — copying it per client would give back exactly what the shared
 // encode saved — so nothing may write into it.
 type Frame struct {
-	kind string
+	kind Kind
 	raw  []byte
 }
 
 // Kind is the push kind this frame carries, kept beside the bytes so the hub
 // and its tests can route and assert without decoding.
-func (f *Frame) Kind() string { return f.kind }
+func (f *Frame) Kind() Kind { return f.kind }
 
 // Raw is the encoded frame, exactly as it goes on the wire.
 //

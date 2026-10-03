@@ -60,9 +60,9 @@ func TestAParserFailureIsReportedWhereItWasWritten(t *testing.T) {
 		},
 		{
 			name: "a value of the wrong type",
-			doc:  "name: Acme\nroles:\n  - name: Dev\n    token_budget: [1]\n    goal: {a: 1}\n",
+			doc:  "name: Acme\nroles:\n  - name: Dev\n    manages: {a: 1}\n    goal: {a: 1}\n",
 			want: []found{
-				{"roles[0].token_budget", 4, "shape"},
+				{"roles[0].manages", 4, "shape"},
 				{"roles[0].goal", 5, "shape"},
 			},
 		},
@@ -71,8 +71,35 @@ func TestAParserFailureIsReportedWhereItWasWritten(t *testing.T) {
 			// the line holds two value nodes and only the refused node's
 			// tag tells which one the failure is about.
 			name: "a value of the wrong type as the first key of a list item",
-			doc:  "name: Acme\nroles:\n  - token_budget: abc\n    name: Dev\n",
-			want: []found{{"roles[0].token_budget", 3, "shape"}},
+			doc:  "name: Acme\nroles:\n  - responsibilities: abc\n    name: Dev\n",
+			want: []found{{"roles[0].responsibilities", 3, "shape"}},
+		},
+		{
+			// The form every example used to show is a WRONG SHAPE now,
+			// refused at the key with the line to write instead.
+			name: "a token budget that is one number",
+			doc:  "name: Acme\n\n# the bill\ntoken_budget: 5000\n",
+			want: []found{{"token_budget", 4, "shape"}},
+		},
+		{
+			name: "a mistyped window and a ceiling that is not a number, in a seat's budget",
+			doc: "name: Acme\nunits:\n  - name: Eng\n    roles:\n      - name: Dev\n" +
+				"        token_budget:\n          # per day\n          day: lots\n          wek: 5\n",
+			want: []found{
+				{"units[0].roles[0].token_budget.day", 8, "shape"},
+				{"units[0].roles[0].token_budget.wek", 9, "unknown_field"},
+			},
+		},
+		{
+			// One line, so the COLUMN is what tells the two apart: each
+			// lands on the key it is about rather than on the first one the
+			// line holds.
+			name: "a token budget in a compact JSON body",
+			doc:  `{"name":"Acme","roles":[{"name":"Dev","token_budget":{"day":"x","wek":1}}]}`,
+			want: []found{
+				{"roles[0].token_budget.day", 1, "shape"},
+				{"roles[0].token_budget.wek", 1, "unknown_field"},
+			},
 		},
 		{
 			name: "an llm field that is neither a key nor a list",
@@ -162,13 +189,13 @@ func TestADocumentThatDoesNotParseIsOneProblem(t *testing.T) {
 func TestEveryProblemInAFileIsReported(t *testing.T) {
 	t.Parallel()
 	path := filepath.Join(t.TempDir(), "company.yaml")
-	doc := "name: Acme\ntoken_budget: -1\nnotification_rate_limit: -2\n"
+	doc := "name: Acme\ntoken_budget: {day: -1}\nnotification_rate_limit: -2\n"
 	if err := os.WriteFile(path, []byte(doc), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	_, err := config.LoadCompany(path)
 	want := []found{
-		{"token_budget", 0, "out_of_range"},
+		{"token_budget.day", 0, "out_of_range"},
 		{"notification_rate_limit", 0, "out_of_range"},
 	}
 	if got := faultsOf(err); !reflect.DeepEqual(got, want) {

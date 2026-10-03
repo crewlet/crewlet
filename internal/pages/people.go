@@ -10,7 +10,7 @@ import (
 //
 // # What it cost here
 //
-// A seat's identity is the handle it was CREATED under (ADR-0019), and a rename
+// A seat's identity is the handle it was CREATED under (ADR-0026), and a rename
 // moves only the address. This domain stored the handle a person answered to AT
 // THE WRITE in every value that names somebody: a page's author, its watchers
 // and its mutes, a revision's author, a remark's author and whom it mentions,

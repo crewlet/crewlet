@@ -23,7 +23,7 @@ import { act, cleanup, render, screen } from "~/test/inCase.ts";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 
 import { useClockReading, useNow, useToday } from "./clock.ts";
-import { browserDay } from "./format.ts";
+import { readerDay } from "./format.ts";
 
 const T0 = Date.parse("2031-04-16T12:00:00Z");
 
@@ -106,7 +106,7 @@ test("today renders its reader when the day turns, and not before", () => {
 
   tick(1);
   expect(renders).toBe(mounted + 1);
-  expect(seen).toBe(browserDay(new Date(midnight)));
+  expect(seen).toBe(readerDay(midnight));
 });
 
 /** What a screen rendering the clock draws: the instant, and every read of one render. */
@@ -170,4 +170,44 @@ test("a wall clock set back by more than a tick is read afresh too", () => {
   vi.setSystemTime(earlier);
   render(<Instant />);
   expect(shown()).toBe(`${new Date(earlier).toISOString()} one instant`);
+});
+
+/** One reader of the second, for the cases that count readers rather than reads. */
+function Now() {
+  return <span data-testid="now">{useNow()}</span>;
+}
+
+// A STOPPED CLOCK IS NOT A CLOCK, in either direction and however many times
+// it stops: each first reader after every subscriber had gone gets the wall
+// clock, never the instant of the last tick — months ahead of it, then years
+// behind.
+test("the first reader after the clock stopped reads the wall clock, not the last tick", () => {
+  // Mount and unmount once, so the module's instant is from a tick.
+  render(<Now />);
+  tick(1);
+  cleanup();
+  for (const at of ["2032-01-01T00:00:00Z", "2026-06-15T12:00:00Z"]) {
+    vi.setSystemTime(new Date(at));
+    render(<Now />);
+    expect(Number(screen.getByTestId("now").textContent)).toBe(Date.parse(at));
+    cleanup();
+  }
+});
+
+// WITHIN A TICK IT IS ONE NUMBER across components too, not only across the
+// reads of one: two readers mounted together agree after the wall clock has
+// moved by less than a tick.
+test("two readers mounted within a tick read the same instant", () => {
+  render(
+    <>
+      <Now />
+      <Now />
+    </>,
+  );
+  act(() => {
+    vi.setSystemTime(T0 + 500);
+  });
+  const [a, b] = screen.getAllByTestId("now").map((el) => el.textContent);
+  expect(a).toBe(b);
+  expect(Number(a)).toBe(T0);
 });

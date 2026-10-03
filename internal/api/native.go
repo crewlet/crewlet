@@ -5,14 +5,14 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/crewlet/crewlet/internal/agent/builtin"
-	"github.com/crewlet/crewlet/internal/api/opsmcp"
+	"github.com/crewlet/crewlet/internal/api/operator"
 	"github.com/crewlet/crewlet/internal/api/queries"
 	"github.com/crewlet/crewlet/internal/api/stream"
 	"github.com/crewlet/crewlet/internal/engine"
 	"github.com/crewlet/crewlet/internal/knowledge"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/pages"
+	"github.com/crewlet/crewlet/internal/search"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tracker"
 )
@@ -31,9 +31,11 @@ import (
 // route, had no board, no pages and no assistant until somebody restarted the
 // node it was bootstrapped on.
 //
-// So each source here asks the engine per request. The identity estate and
-// the org chart need none of this: they are the engine's CORE, running from
-// boot on every node, and are wired once like everything else.
+// So each source here asks the engine per request — the read surface's
+// questions, and the halves the operator surface builds its catalogue from for
+// every call ([NativeOperatorHalves]). The identity estate and the org chart
+// need none of this: they are the engine's CORE, running from boot on every
+// node, and are wired once like everything else.
 //
 // # Three answers, and why a half that is not up is not a half that is absent
 //
@@ -56,16 +58,18 @@ import (
 // [httpjson.NativeHalvesNotUp] as its words.
 var errNoCompanyYet = fmt.Errorf("%w: %w", queries.ErrUnavailable, stream.ErrNoCompany)
 
-// NativeSources are the read surface's three native sources — the board, the
-// knowledge base and ranked item search — each resolved per question.
+// NativeSources are the read surface's four native sources — the board, the
+// knowledge base, the links between its pages and ranked item search — each
+// resolved per question.
 //
 // ONE CONSTRUCTOR for `crewlet run` and the end-to-end suite, for
 // [NewHumanSurfaces]' reason: a copy of the rule in either would be a harness
 // agreeing with itself.
 func NativeSources(e *engine.Engine) (queries.WorkReader, queries.PageReader,
-	queries.WorkSearcher) {
+	queries.PageBacklinks, queries.WorkSearcher) {
 
-	return liveWork{engine: e}, livePages{engine: e}, liveWorkSearch{engine: e}
+	return liveWork{engine: e}, livePages{engine: e}, liveBacklinks{engine: e},
+		liveWorkSearch{engine: e}
 }
 
 // nativeAbsent is why a half is not here: the node has not met its company
@@ -107,12 +111,30 @@ func (l liveWork) Task(ctx context.Context, idOrKey string, want tracker.DetailW
 	return r.Task(ctx, idOrKey, want, fresh)
 }
 
+func (l liveWork) TurnsOf(ctx context.Context, idOrKey, cursor string, limit int,
+	fresh statelog.Freshness) (tracker.TaskTurns, error) {
+	r, err := l.reader()
+	if err != nil {
+		return tracker.TaskTurns{}, err
+	}
+	return r.TurnsOf(ctx, idOrKey, cursor, limit, fresh)
+}
+
 func (l liveWork) Views(ctx context.Context, q tracker.ViewQuery) (tracker.ViewListing, error) {
 	r, err := l.reader()
 	if err != nil {
 		return tracker.ViewListing{}, err
 	}
 	return r.Views(ctx, q)
+}
+
+func (l liveWork) EveryView(ctx context.Context, q tracker.EveryViewQuery) (
+	tracker.ViewListing, error) {
+	r, err := l.reader()
+	if err != nil {
+		return tracker.ViewListing{}, err
+	}
+	return r.EveryView(ctx, q)
 }
 
 func (l liveWork) ExpandedQuery(ctx context.Context, params map[string]any,
@@ -151,13 +173,13 @@ func (l liveWork) Project(ctx context.Context, q tracker.ProjectDetailQuery) (
 	return r.Project(ctx, q)
 }
 
-func (l liveWork) Workload(ctx context.Context, q tracker.WorkloadQuery, now time.Time) (
-	tracker.WorkloadAnswer, error) {
+func (l liveWork) Workload(ctx context.Context, q tracker.WorkloadQuery, now time.Time,
+	loc *time.Location) (tracker.WorkloadAnswer, error) {
 	r, err := l.reader()
 	if err != nil {
 		return tracker.WorkloadAnswer{}, err
 	}
-	return r.Workload(ctx, q, now)
+	return r.Workload(ctx, q, now, loc)
 }
 
 func (l liveWork) Activity(ctx context.Context, q tracker.ActivityQuery, now time.Time) (
@@ -169,13 +191,13 @@ func (l liveWork) Activity(ctx context.Context, q tracker.ActivityQuery, now tim
 	return r.Activity(ctx, q, now)
 }
 
-func (l liveWork) MyWork(ctx context.Context, q tracker.MyWorkQuery, now time.Time) (
-	tracker.MyWork, error) {
+func (l liveWork) MyWork(ctx context.Context, q tracker.MyWorkQuery, now time.Time,
+	loc *time.Location) (tracker.MyWork, error) {
 	r, err := l.reader()
 	if err != nil {
 		return tracker.MyWork{}, err
 	}
-	return r.MyWork(ctx, q, now)
+	return r.MyWork(ctx, q, now, loc)
 }
 
 func (l liveWork) Person(ctx context.Context, q tracker.PersonQuery, now time.Time) (
@@ -203,6 +225,42 @@ func (l liveWork) Routing(ctx context.Context, q tracker.RoutingQuery, now time.
 		return tracker.RoutingAnswer{}, err
 	}
 	return r.Routing(ctx, q, now)
+}
+
+func (l liveWork) Flow(ctx context.Context, q tracker.FlowQuery, now time.Time,
+	loc *time.Location) (tracker.FlowAnswer, error) {
+	r, err := l.reader()
+	if err != nil {
+		return tracker.FlowAnswer{}, err
+	}
+	return r.Flow(ctx, q, now, loc)
+}
+
+func (l liveWork) CompanyFeed(ctx context.Context, q tracker.FeedQuery) (
+	tracker.FeedPage, error) {
+	r, err := l.reader()
+	if err != nil {
+		return tracker.FeedPage{}, err
+	}
+	return r.CompanyFeed(ctx, q)
+}
+
+func (l liveWork) Decisions(ctx context.Context, q tracker.DecisionsQuery, now time.Time,
+	loc *time.Location) (tracker.DecisionsAnswer, error) {
+	r, err := l.reader()
+	if err != nil {
+		return tracker.DecisionsAnswer{}, err
+	}
+	return r.Decisions(ctx, q, now, loc)
+}
+
+func (l liveWork) TurnPlaces(ctx context.Context, runs []string,
+	fresh statelog.Freshness) (map[string]tracker.TurnPlace, error) {
+	r, err := l.reader()
+	if err != nil {
+		return nil, err
+	}
+	return r.TurnPlaces(ctx, runs, fresh)
 }
 
 // livePages is the knowledge base's read side, resolved per question.
@@ -261,6 +319,23 @@ func (l livePages) Revision(ctx context.Context, pageID string, version int,
 	return r.Revision(ctx, pageID, version, fresh)
 }
 
+// liveBacklinks is which pages link to a page, resolved per question.
+//
+// ITS OWN SOURCE, and a native-half one: the links are an index the engine
+// keeps over its own knowledge base's pages, which comes up with the node's
+// first company and is absent for a company whose wiki is a vendor's.
+type liveBacklinks struct{ engine *engine.Engine }
+
+func (l liveBacklinks) LinkedFrom(ctx context.Context, pageID string) (
+	search.Backlinks, error) {
+	started := l.engine.NativeStarted()
+	x := l.engine.Backlinks()
+	if x == nil {
+		return search.Backlinks{}, nativeAbsent(started, "knowledge base")
+	}
+	return x.LinkedFrom(ctx, pageID)
+}
+
 // liveWorkSearch is ranked item search, resolved per question.
 //
 // ITS OWN SOURCE, as [queries.Sources.WorkSearch] is, and present exactly
@@ -269,96 +344,43 @@ func (l livePages) Revision(ctx context.Context, pageID string, version int,
 // company that keeps its tracker here ([engine.Engine.WorkSearch]).
 type liveWorkSearch struct{ engine *engine.Engine }
 
-func (l liveWorkSearch) Search(ctx context.Context, text string, limit int) (
-	[]tracker.Ranked, error) {
+func (l liveWorkSearch) Search(ctx context.Context, q tracker.SearchQuery) (
+	tracker.SearchAnswer, error) {
 	started := l.engine.NativeStarted()
 	s := l.engine.WorkSearch()
 	if s == nil {
-		return nil, nativeAbsent(started, "tracker")
+		return tracker.SearchAnswer{}, nativeAbsent(started, "tracker")
 	}
-	return s.Search(ctx, text, limit)
+	return s.Search(ctx, q)
 }
 
-// OperatorSource is the operator's MCP surface as a request finds it: the
-// server over the catalogue this node serves NOW, nil where it serves none,
-// and false where it cannot say yet because it has not been handed a company.
-// See [Options.Operator].
-type OperatorSource func() (*opsmcp.Server, bool)
-
-// NativeOperator is the operator's MCP surface over this engine, built per
-// request.
+// NativeOperatorHalves are the halves the operator surface builds its
+// catalogue from for every call, as the call finds them, and false where this
+// node has not been handed a company yet ([operator.Options.Halves]).
 //
-// PER REQUEST, and for more than the halves. The catalogue is the native
-// halves' — which a node meets at its first company — and the knowledge
-// search beside them is whatever backend the company runs NOW, which an apply
-// can add: a server built once served the knowledge search the company had
-// when the API was wired, for the life of the process. Building one is the
-// same catalogue [workapi] builds for every request it serves, and the
-// transport is stateless, so there is no session a rebuilt server strands.
-func NativeOperator(e *engine.Engine) OperatorSource {
-	return func() (*opsmcp.Server, bool) {
+// [engine.Engine.NativeStarted] FIRST, and the halves after: it is monotonic,
+// so a half read as absent after it said "started" is one this company does
+// not run rather than one not published yet — see the file comment.
+//
+// THE KNOWLEDGE SEARCH IS WHATEVER BACKEND THE COMPANY RUNS NOW, native or not:
+// ranked search over the company's own wiki is exactly as useful to an
+// operator's assistant on Confluence, and an apply can add one — so it is read
+// per call too, and present exactly where the engine has a searcher.
+func NativeOperatorHalves(e *engine.Engine) func() (operator.Halves, bool) {
+	return func() (operator.Halves, bool) {
 		if !e.NativeStarted() {
-			return nil, false
+			return operator.Halves{}, false
 		}
-		return operatorMCP(e), true
-	}
-}
-
-// operatorMCP builds the operator's own MCP surface over what this node serves
-// now, or nil where that is nothing.
-//
-// THE SAME DEPS A SEAT'S TOOLS GET, with one field different: the actor. That
-// is what makes this one implementation of ten tools rather than two — see
-// [builtin.WorkDeps.Actor].
-//
-// The DEFAULTS are deliberately absent. A seat files into its unit's project
-// when it names none, because a seat HAS a unit; an operator does not, so the
-// argument is required and the tool refuses naming it rather than guessing a
-// project on a person's behalf.
-//
-// Which UNIT the work is filed into is not a default of this surface and no
-// longer needs one: the tracker reads it off the project's own row at the
-// write, so an operator's item belongs to the team that owns the project it
-// named. It used to be stamped from the caller's own team, which an operator
-// has not got — so every item filed here read "Filed into: no unit" beside a
-// project page naming its unit.
-func operatorMCP(e *engine.Engine) *opsmcp.Server {
-	var opts opsmcp.Options
-	if c := e.Company(); c != nil && c.Config != nil {
-		opts.Company = c.Config.Name
-	}
-	opts.Work, opts.Pages = NativeToolDeps(e)
-	// THE PRINCIPAL IS THE PARTY, and it comes from the request's context
-	// rather than from the call: a tracker whose author field is chosen by
-	// the writer is not an audit trail, and there is deliberately no way to
-	// name a seat to act as. [builtin.PrincipalActor] is the one conversion
-	// the HTTP write surface makes too.
-	opts.Work.Actor = builtin.PrincipalActor
-	opts.Pages.Actor = builtin.PrincipalPageActor
-	// SEARCH IS OFFERED WHENEVER THE COMPANY HAS A BACKEND, native or not:
-	// unlike the ten write tools, ranked search over the company's own
-	// wiki is exactly as useful to an operator's assistant on Confluence.
-	if e.Knowledge() != nil {
-		opts.Knowledge = operatorKnowledge{engine: e}
-		// AND THE CHART BESIDE IT. An operator has no turn, so the org
-		// the search is scoped against comes from here; resolved per
-		// call, because a config apply replaces it. Search is the only
-		// tool that reads it: WHO the caller is comes from the identity
-		// directory through the request's principal, never the chart.
-		opts.Org = func() *org.Organization {
-			c := e.Company()
-			if c == nil {
-				return nil
-			}
-			return c.Org
+		var halves operator.Halves
+		halves.Work, halves.Pages = NativeToolDeps(e)
+		if e.Knowledge() != nil {
+			halves.Knowledge = operatorKnowledge{engine: e}
 		}
+		if c := e.Company(); c != nil && c.Config != nil {
+			halves.Company = c.Config.Name
+		}
+		return halves, true
 	}
-	// THE AUTHORITY DECISION, which is the SAME one every seat's registry
-	// is built with — one table, one function, three surfaces. It reads
-	// the chart per call, because an apply replaces the epoch under a
-	// long-lived MCP session.
-	opts.Authorize = builtin.Decide(engine.ChartAuthorityOf(e))
-	return opsmcp.New(opts)
 }
 
 // operatorKnowledge resolves the node's searcher per call, for the reason the
@@ -371,10 +393,10 @@ func (k operatorKnowledge) CanSearch(seat *org.Role, o *org.Organization) bool {
 	return s != nil && s.CanSearch(seat, o)
 }
 
-func (k operatorKnowledge) Search(ctx context.Context, q knowledge.Query) []knowledge.Hit {
+func (k operatorKnowledge) Search(ctx context.Context, q knowledge.Query) knowledge.Result {
 	s := k.engine.Knowledge()
 	if s == nil {
-		return nil
+		return knowledge.Result{}
 	}
 	return s.Search(ctx, q)
 }

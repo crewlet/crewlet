@@ -41,8 +41,9 @@
  */
 
 import { useSyncExternalStore } from "react";
+import { STORAGE_KEYS } from "./storage.ts";
 
-const KEY = "crewlet_reader";
+const KEY = STORAGE_KEYS.reader;
 
 const listeners = new Set<() => void>();
 

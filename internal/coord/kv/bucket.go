@@ -37,10 +37,9 @@
 //     that asked it that the key existed, though nobody had created it.
 //
 // Each of those surfaced as a wrong answer rather than an error — a charge
-// counted short, a run just created read back as absent, a reset that missed
-// the counter it was resetting — which is the worst
-// shape under this package's three-valued rule: a definite answer that is
-// false. And they are not confined to one bucket. A lease read that misses
+// counted short, a run just created read back as absent, a listing that missed
+// the record it was asked for — which is the worst shape under this package's
+// three-valued rule: a definite answer that is false. And they are not confined to one bucket. A lease read that misses
 // this node's own acquire answers "definitively not held"; a completion that
 // misses the write a peer made a moment ago runs the turn twice; the trim
 // floor, a MINIMUM over the position rows, rises over a row it cannot see and
@@ -66,10 +65,12 @@
 // future caller of a read, so it is never made. The client's handle is held
 // behind an interface on which no POINT read compiles — not Get, not Create,
 // not a key lister — and whose one read, the Watch a listing's ordered pass is
-// made of, is still a replica's: it has one caller, [orderedPass], whose one
-// caller, [eachEntryUnder], closes the pass on the leader before a single row
-// reaches its caller. A second caller of Watch would be a listing without
-// that close.
+// made of, is still a replica's. It has two callers and each makes its own
+// answer the leader's: [orderedPass], whose one caller, [eachEntryUnder],
+// closes the pass on the leader before a single row reaches its caller; and
+// [leaderBucket.Watch], which hands its consumer KEYS and nothing else, so the
+// only value a consumer can act on is one it then reads from the leader. A
+// third caller of the client's Watch would be a replica's answer with neither.
 //
 // # What a leader read does not rule out
 //
@@ -118,13 +119,15 @@ import (
 
 // clientBucket is what this package may call on the client's bucket handle:
 // the writes, each a publish the stream leader arbitrates; the ordered pass a
-// listing starts from (walk.go makes it complete); and the bucket's name.
+// listing starts from (walk.go makes it complete) and the change hint a watch
+// is made of ([leaderBucket.Watch]); and the bucket's name.
 //
 // NO POINT READ IS ON IT — not Get, not Create, not a key lister — because
 // every one of those goes through a direct get any replica may answer. Watch
-// is on it and is a replica's read too, which is why [orderedPass] is its only
-// caller and every pass is closed on the leader before a row is visited. See
-// the file doc.
+// is on it and is a replica's read too, which is why its two callers are
+// [orderedPass], every pass of which is closed on the leader before a row is
+// visited, and [leaderBucket.Watch], which hands on keys rather than values.
+// See the file doc.
 type clientBucket interface {
 	Bucket() string
 	Put(ctx context.Context, key string, value []byte) (uint64, error)
@@ -234,6 +237,73 @@ func (b *leaderBucket) settle(ctx context.Context, op, key string, write func(co
 	return err
 }
 
+// Watch is a HINT that something under keys has changed since the call, and
+// NOTHING ELSE: the channel carries the KEY of each change — a write, a
+// removal, a marker the bucket's age left — and never its value, so the only
+// value a consumer can act on is the one it reads from the leader with
+// [leaderBucket.Get] once the hint arrives.
+//
+// # Why only a hint
+//
+// It is the client's watch, an ordered consumer the server places on any
+// replica (see the file doc), so what it delivers is that replica's copy:
+// a member that is behind an acknowledged write delivers the write late, and
+// a value read off it would be the bucket as it was. Handing on the key and
+// not the value is what makes "confirm on the leader" the only shape a caller
+// can write rather than a rule it has to remember — and because every hint is
+// confirmed, the order hints arrive in, a duplicate, or a hint for a write
+// the leader has since replaced all cost one more leader read rather than a
+// wrong answer.
+//
+// What it does NOT give is a starting picture: it delivers changes from now
+// on (UpdatesOnly) and no marker, so a consumer that needs the records that
+// already exist starts this first and lists second — a write landing between
+// the two is in the listing AND hinted, which is harmless for the reason
+// above, while the other order loses it. A replica cut off for good hints
+// nothing more; the channel then stays open and silent, which is why a hint
+// is never the only way a consumer learns of a record it must act on.
+//
+// The channel is closed when ctx ends or the client's watch ends (a closed
+// connection, a deleted consumer). The goroutine forwarding it owns the
+// client's watcher and stops it on every exit.
+func (b *leaderBucket) Watch(ctx context.Context, keys string) (<-chan string, error) {
+	if !validFilter(keys) {
+		return nil, fmt.Errorf("coord/kv: watch %s: %q is not a key filter", b.Bucket(), keys)
+	}
+	// MetaOnly: the value would be a replica's, and nothing here may read
+	// it, so the server is not asked to send it.
+	w, err := b.client.Watch(ctx, keys, jetstream.UpdatesOnly(), jetstream.MetaOnly())
+	if err != nil {
+		return nil, err
+	}
+	out := make(chan string)
+	go func() {
+		defer close(out)
+		defer func() { _ = w.Stop() }()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case kve, ok := <-w.Updates():
+				if !ok {
+					return
+				}
+				if kve == nil {
+					// No marker is asked for (UpdatesOnly); skipped
+					// rather than forwarded if a client ever sends one.
+					continue
+				}
+				select {
+				case out <- kve.Key():
+				case <-ctx.Done():
+					return
+				}
+			}
+		}
+	}()
+	return out, nil
+}
+
 // Get reads a key's current value from the stream leader. A key that was
 // never written, or whose newest message is a removal's marker, is
 // [jetstream.ErrKeyNotFound] — the client's own Get answers both that way.
@@ -246,6 +316,42 @@ func (b *leaderBucket) Get(ctx context.Context, key string) (jetstream.KeyValueE
 	case err != nil:
 		return nil, err
 	case !found || e.op != jetstream.KeyValuePut:
+		return nil, jetstream.ErrKeyNotFound
+	}
+	return e, nil
+}
+
+// GetRevision reads ONE revision of a key from the stream leader: the message
+// at that sequence, when it is still there and is this key's value. A revision
+// the stream no longer holds — the key was written again since, and a bucket
+// keeps one message per key — one that is another key's, and one that is a
+// removal's marker are all [jetstream.ErrKeyNotFound], as the client's own
+// GetRevision answers them.
+//
+// The leader's for the reason [leaderBucket.Get] is: a replica behind the
+// write that produced the revision answers "not found" for a revision the
+// quorum holds, which a caller reads as a record somebody else replaced.
+func (b *leaderBucket) GetRevision(ctx context.Context, key string, revision uint64) (jetstream.KeyValueEntry, error) {
+	if !validKey(key) {
+		return nil, jetstream.ErrInvalidKey
+	}
+	if revision == 0 {
+		// Sequence zero names no message; asked for, the server reads it
+		// as "no sequence" and answers something else entirely.
+		return nil, jetstream.ErrKeyNotFound
+	}
+	m, found, err := b.ask(ctx, msgGetRequest{Seq: revision})
+	if err != nil {
+		return nil, err
+	}
+	if !found {
+		return nil, jetstream.ErrKeyNotFound
+	}
+	e, err := b.entryOf(m)
+	if err != nil {
+		return nil, err
+	}
+	if e.key != key || e.op != jetstream.KeyValuePut {
 		return nil, jetstream.ErrKeyNotFound
 	}
 	return e, nil

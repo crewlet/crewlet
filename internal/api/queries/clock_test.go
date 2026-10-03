@@ -40,59 +40,6 @@ func TestATokensAnswerIsLabelledOnTheSourcesClock(t *testing.T) {
 	}
 }
 
-// A SPEND ANSWER COUNTS THE WINDOW IT IS LABELLED WITH.
-//
-// `tokens` and `token_series` head their answer with the window measured from
-// the sources' clock, and the store re-derived the window for the rows on a
-// clock of its own — so the heading and the rows were two evaluations, a few
-// microseconds apart in production and, once a caller pinned the clock, two
-// different windows: a rollup headed with the pinned day over the wall
-// clock's rows. The pinned instant here is three days back, so the two
-// windows share no record and the one that was counted says which instant the
-// store measured from.
-func TestASpendAnswerCountsTheWindowItIsLabelledWith(t *testing.T) {
-	t.Parallel()
-	log := openStore(t).Events()
-	wall := time.Now().UTC()
-	// On the hour, so the series axis, whose edges are whole buckets, ends
-	// on it too.
-	at := wall.Add(-72 * time.Hour).Truncate(time.Hour)
-	seedSpend(t, log, "inside-the-pinned-window", at.Add(-time.Hour), "PM", "plan", 7, 0)
-	seedSpend(t, log, "inside-the-wall-clocks", wall.Add(-time.Hour), "PM", "plan", 1000, 0)
-	r := registryOver(t, queries.Sources{
-		State: livestate.New(), Events: log,
-		Now: func() time.Time { return at },
-	})
-	// Two days, which is not the live window's one: that one is answered
-	// from the projection and never reaches the store.
-	params := map[string]any{"since_days": float64(2)}
-
-	t.Run("tokens", func(t *testing.T) {
-		t.Parallel()
-		got := askRaw(t, r, "tokens", params).(tokens.Rollup)
-		if want := at.Format(time.RFC3339); got.Until != want {
-			t.Fatalf("until = %s, want the sources' clock %s", got.Until, want)
-		}
-		if got.Totals.TotalTokens != 7 {
-			t.Errorf("a rollup headed as ending at %s counted %d tokens, want 7 — "+
-				"the rows are from a window the heading does not name",
-				got.Until, got.Totals.TotalTokens)
-		}
-	})
-	t.Run("token_series", func(t *testing.T) {
-		t.Parallel()
-		got := seriesOver(t, r, params)
-		if want := at.Format(time.RFC3339); got.Until != want {
-			t.Fatalf("until = %s, want the sources' clock %s", got.Until, want)
-		}
-		if got.Totals.TotalTokens != 7 {
-			t.Errorf("an axis headed as ending at %s counted %d tokens, want 7 — "+
-				"the bars are from a window the axis does not name",
-				got.Until, got.Totals.TotalTokens)
-		}
-	})
-}
-
 // EVERY ANSWER READS THE SOURCES' CLOCK, and nothing here reads the wall clock
 // but [queries.Sources] itself.
 //

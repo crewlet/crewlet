@@ -106,6 +106,29 @@ type TaskRow struct {
 	Rank     Rank      `json:"rank,omitempty"`
 	Updated  time.Time `json:"updated"`
 	Version  uint64    `json:"version"`
+
+	// THE OPT-IN FACTS, each ABSENT unless the caller named it in
+	// `fields=` — see [RowField] for why they are not on every row. When
+	// asked for, each is PRESENT even at zero: a card that asked how many
+	// tasks this one blocks is told "0" rather than left to guess whether
+	// the engine understood the question. Hence `omitzero` on a slice that
+	// is non-nil and empty when asked, and pointers for the numbers.
+	Tags            []string  `json:"tags,omitzero"`
+	DependentsCount *int      `json:"dependents_count,omitempty"`
+	OpenAsks        *int      `json:"open_asks,omitempty"`
+	Spend           *RowSpend `json:"spend,omitempty"`
+}
+
+// RowSpend is what one task has cost, as a board card and the most expensive
+// tasks read it: the running totals the applier derives from the task's own
+// turn records ([Spend]), narrowed to the five a row draws. Tokens only —
+// nothing here is a price.
+type RowSpend struct {
+	Tokens   int `json:"tokens"`
+	Turns    int `json:"turns"`
+	Workers  int `json:"workers"`
+	SentBack int `json:"sent_back"`
+	Reopens  int `json:"reopens"`
 }
 
 // Address is the reference that opens this row's task. See [ItemAddress].
@@ -279,6 +302,11 @@ type Answer struct {
 
 	Complete   bool        `json:"complete"`
 	Incomplete *Incomplete `json:"incomplete,omitempty"`
+
+	// Around is where [Query.Around]'s task sits in this answer's drawing
+	// order, and NIL when the caller asked and the task is not in it — or
+	// did not ask, which the caller knows. See [Around].
+	Around *Around `json:"around,omitempty"`
 }
 
 // TotalHintCeiling is where the count stops.
@@ -449,12 +477,23 @@ func (r *Reader) tasks(ctx context.Context, q Query, now time.Time) (Answer, err
 		// AND THE PAGE BOUNDARY IS THE ROW READ'S ALONE — see
 		// [pageClause]. The hint and the totals are about the whole
 		// matched set, and neither carries a sort join.
-		page, pageArgs, err := pageClause(q, fields)
-		if err != nil {
-			return err
+		//
+		// EXCEPT UNDER A PRIORITY LIST, whose order is not one SQL can
+		// resume — see [readListOrdered], which pages it itself.
+		listed := listOrdered(q)
+		page, pageArgs := "", []any(nil)
+		if !listed {
+			page, pageArgs, err = pageClause(q, fields)
+			if err != nil {
+				return err
+			}
 		}
 		rowWhere, rowArgs := andPage(where, args, page, pageArgs)
-		if q.GroupBy != "" {
+		// The whole list-ordered set, in its drawn order, kept for the
+		// one other reader of that order — [readAround].
+		var listedRows []TaskRow
+		switch {
+		case q.GroupBy != "":
 			// A GROUPED ANSWER IS A DIFFERENT SHAPE, and the flat
 			// rows stay empty — see [Answer.Groups].
 			// A GROUPED ANSWER MINTS NO CURSOR AND TAKES NONE —
@@ -470,14 +509,34 @@ func (r *Reader) tasks(ctx context.Context, q Query, now time.Time) (Answer, err
 				personAxis(q.GroupBy, fields), personAxis(q.GroupBy2, fields))
 			answer.GroupsDropped = groups.Dropped
 			answer.GroupsOverlap = groups.Overlap
-		} else {
+		case listed:
+			//nolint:govet // shadow: `x, err := f()` declares x too; see .golangci.yml
+			all, _, err := readTasks(ctx, tx, where, args, terms,
+				MaxPriorities, q.DayStart)
+			if err != nil {
+				return err
+			}
+			listedRows = orderByList(all, q)
+			answer.Rows, answer.NextCursor, err = pageListed(listedRows,
+				q.Cursor, limit)
+			if err != nil {
+				return err
+			}
+		default:
 			//nolint:govet // shadow: `x, err := f()` declares x too; see .golangci.yml
 			rows, cursor, err := readTasks(ctx, tx, rowWhere, rowArgs, terms,
 				limit, q.DayStart)
 			if err != nil {
 				return err
 			}
-			answer.Rows, answer.NextCursor = orderByList(rows, q), cursor
+			answer.Rows, answer.NextCursor = rows, cursor
+		}
+		// THE OPT-IN ROW FACTS, over every row this answer carries — the
+		// flat page or every column's and lane's slice — in this same
+		// transaction, so a card's cost describes the snapshot its title
+		// was read at. See [RowField].
+		if err = fillRowFields(ctx, tx, q, answerRows(&answer)); err != nil {
+			return err
 		}
 
 		hint, capped, err := countHint(ctx, tx, where, args)
@@ -485,6 +544,16 @@ func (r *Reader) tasks(ctx context.Context, q Query, now time.Time) (Answer, err
 			return err
 		}
 		answer.TotalHint, answer.TotalCapped = hint, capped
+
+		// WHERE ONE TASK SITS, after the count its own total reads and in
+		// the same transaction as the rows it is placed among.
+		if q.Around != "" {
+			answer.Around, err = readAround(ctx, tx, q, fields, where, args,
+				terms, &answer, listedRows)
+			if err != nil {
+				return err
+			}
+		}
 
 		// THE SAME PREDICATE AND THE SAME TRANSACTION as the rows, so a
 		// total and the page it sits above describe one instant.
@@ -727,7 +796,7 @@ func compileWhere(q Query, now time.Time, fields map[string]resolvedField,
 	}
 	if q.HasOpenAsks != nil {
 		clause := "EXISTS (SELECT 1 FROM tracker_comments m WHERE m.task_id = t.id " +
-			"AND m.ask <> '' AND m.resolved = 0 AND m.answered_by IS NULL AND m.removed = 0)"
+			"AND " + openAskSQL + ")"
 		if !*q.HasOpenAsks {
 			clause = "NOT " + clause
 		}
@@ -866,14 +935,23 @@ func compileWhere(q Query, now time.Time, fields map[string]resolvedField,
 	case branch:
 		// THE ANSWER'S SHAPE, NOT THIS ARM'S — see [compileWhere].
 	case q.ShowClosed.All:
-	case q.ShowClosed.Recent > 0:
+	case q.ShowClosed.Recent > 0 || q.ShowClosed.Since != nil:
 		// THE WINDOW APPLIES TO THE WHOLE FINISHED SET, so a task
 		// cancelled inside it is in the answer exactly as one done
 		// inside it is — which is what the finish stamp being by GROUP
 		// buys, and why the board's Cancelled column is not empty.
+		//
+		// ONE CLAUSE FOR BOTH SPELLINGS of the bound — a duration back
+		// from now, or a calendar instant the parse resolved on the
+		// company's clock — because they are one question with two ways
+		// to name where the window starts.
+		since := now.Add(-q.ShowClosed.Recent)
+		if q.ShowClosed.Since != nil {
+			since = *q.ShowClosed.Since
+		}
 		add("(t.status_group IN ("+openGroupsSQL+") OR "+
 			"(t.finished_at IS NOT NULL AND t.finished_at >= ?))",
-			store.EncodeTime(now.Add(-q.ShowClosed.Recent)))
+			store.EncodeTime(since))
 	default:
 		add("t.status_group IN (" + openGroupsSQL + ")")
 	}
@@ -1279,7 +1357,8 @@ var sortColumns = map[string]sortColumn{
 	"title":          {Column: "t.title"},
 	"estimate":       {Column: "t.estimate_min"},
 	"points":         {Column: "t.points"},
-	"spend":          {Column: "t.spend_tokens"},
+	"spend_tokens":   {Column: "t.spend_tokens"},
+	"reopens":        {Column: "t.reopens"},
 	"status_entered": {Column: "t.status_entered_at"},
 
 	// NULLABLE, and the two that made this rule necessary: a task with no
@@ -1796,12 +1875,27 @@ func loadBlockers(ctx context.Context, tx *sql.Tx, rows []TaskRow) error {
 func countHint(ctx context.Context, tx *sql.Tx, where string,
 	args []any) (int, bool, error) {
 
-	query := `SELECT COUNT(*) FROM (SELECT 1 FROM tracker_tasks t WHERE ` +
+	counted, capped, err := countCapped(ctx, tx, "tracker_tasks t", where, args)
+	if err != nil {
+		return 0, false, fmt.Errorf("tracker: count the answer: %w", err)
+	}
+	return counted, capped, nil
+}
+
+// countCapped is [countHint] over any FROM clause: the rows `from` joins and
+// `where` selects, counted one past [TotalHintCeiling] and clamped.
+//
+// ONE CEILING FOR EVERY COUNT this package answers, so a task total and an
+// ask total cannot disagree about where "more than we counted" begins.
+func countCapped(ctx context.Context, tx *sql.Tx, from, where string,
+	args []any) (int, bool, error) {
+
+	query := `SELECT COUNT(*) FROM (SELECT 1 FROM ` + from + ` WHERE ` +
 		where + ` LIMIT ?)`
 	var n int
 	if err := tx.QueryRowContext(ctx, query,
 		append(append([]any{}, args...), TotalHintCeiling+1)...).Scan(&n); err != nil {
-		return 0, false, fmt.Errorf("tracker: count the answer: %w", err)
+		return 0, false, err
 	}
 	counted, capped := capHint(n)
 	return counted, capped, nil

@@ -35,6 +35,8 @@
 
 import { useCallback, useSyncExternalStore } from "react";
 import { currentReader, forgetReadersUnder, onReader } from "./reader.ts";
+import { STORAGE_KEYS } from "~/lib/storage.ts";
+import { resolves } from "~/app/routes.ts";
 
 /** One thing the reader kept. */
 export interface Star {
@@ -49,7 +51,7 @@ export interface Star {
 }
 
 /** Where every reader's stars are kept: [starsKey]'s prefix. */
-const STARS_PREFIX = "crewlet_starred/";
+const STARS_PREFIX = STORAGE_KEYS.starred;
 
 /** The storage key a reader's stars are kept under. */
 export function starsKey(reader: string): string {
@@ -113,7 +115,11 @@ function valid(row: unknown): row is Star {
     r.path.length > 0 &&
     r.path.every((p) => typeof p === "string") &&
     typeof r.label === "string" &&
-    typeof r.at === "number"
+    typeof r.at === "number" &&
+    // A PATH THE ROUTE TABLE NO LONGER HAS IS DROPPED ON READ. Storage
+    // outlives every build: a row kept before a route moved would be drawn
+    // as a row that leads to Not Found, forever, with nothing to say why.
+    resolves(r.path)
   );
 }
 

@@ -41,7 +41,13 @@ type Unavailable struct {
 	// holds itself to that: it composes every refusal's detail and sends
 	// the error behind one — a store's, a transport's — to its log
 	// ([statelog.Unavailable]).
-	Detail string `json:"detail,omitempty"`
+	//
+	// NOT MARSHALLED FROM HERE: a socket frame carries it as the envelope's
+	// own `detail` ([Envelope.Detail]), the one key a `bad_params` refusal's
+	// sentence travels under too — two `detail` fields flattened into one
+	// frame would each shadow the other — and the REST envelope reads it
+	// through [Unavailable.Fields].
+	Detail string `json:"-"`
 
 	// RetryAfter is how many whole seconds to wait before asking THIS node
 	// again, by [statelog.RetryAfter]'s rule — the refusal's own derived

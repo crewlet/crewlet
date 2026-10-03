@@ -27,3 +27,11 @@ func TestSuiteRunsWithoutAnAdvancer(t *testing.T) {
 	}
 	coordtest.Run(t, func(t *testing.T) coord.Backend { return opaque{memory.New()} })
 }
+
+// TestAWindowRollsAtItsBoundary is ADR-0019's named gate, run against the twin.
+// [coordtest.RunFleet] runs the same case against every backend, the broker's
+// included; this is the name the decision record points at.
+func TestAWindowRollsAtItsBoundary(t *testing.T) {
+	t.Parallel()
+	coordtest.AWindowRollsAtItsBoundary(t, memory.NewFleet())
+}

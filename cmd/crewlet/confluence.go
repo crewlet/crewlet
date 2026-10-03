@@ -216,7 +216,7 @@ func runConfluenceResync(args []string, stdout, stderr io.Writer) error {
 	if err != nil {
 		return err
 	}
-	loaded, report := skills.Admit(pages)
+	loaded, report := skills.Admit(pages, skills.Origin{Backend: confluence.Backend, Container: key})
 	fmt.Fprintf(stdout, "%s holds %d page(s): %d skill(s), %d ordinary page(s).\n",
 		key, report.Pages, len(loaded), report.Ordinary)
 	for _, skill := range loaded {

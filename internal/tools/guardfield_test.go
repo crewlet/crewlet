@@ -9,6 +9,8 @@ import (
 	"slices"
 	"strings"
 	"testing"
+
+	"github.com/crewlet/crewlet/internal/sourcetree"
 )
 
 // THE GUARD FIELD IS THE SKILL GATE'S, AND AUTHORITY NEVER GOES THROUGH IT.
@@ -37,10 +39,13 @@ func TestTheSkillGateStillHoldsTheGuardField(t *testing.T) {
 		"internal/agent/runner/phases.go",
 		"internal/agent/subagent/subagent.go",
 	}
-	root := filepath.Join("..", "..")
+	// THROUGH sourcetree, from the module's own root: a counted `../..` is
+	// right from exactly one depth, and a nested checkout under the tree is
+	// another commit's copy whose installers are not this build's.
+	root := sourcetree.Root(t)
 	var installers, authority []string
 	for _, dir := range []string{"internal", "cmd"} {
-		err := filepath.WalkDir(filepath.Join(root, dir), func(path string,
+		err := sourcetree.Walk(filepath.Join(root, dir), func(path string,
 			d fs.DirEntry, err error) error {
 			if err != nil {
 				return err

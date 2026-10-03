@@ -589,3 +589,44 @@ func TestASeatWithNoConversationsListsNothing(t *testing.T) {
 		})
 	}
 }
+
+// A CUT LISTING SAYS WHAT IT WAS CUT FROM. Threads is bounded, and the count
+// beside it is the seat's whole set — other seats' threads not included — so a
+// screen can write "latest 3 of 10" rather than drawing three as the seat's all.
+func TestThreadCountIsTheWholeSetAPageIsCutFrom(t *testing.T) {
+	t.Parallel()
+	for name, s := range conversationImpls(t) {
+		t.Run(name, func(t *testing.T) {
+			ctx := context.Background()
+			for i := range 10 {
+				key := "thread-" + string(rune('a'+i))
+				// Two entries in each, so a count of ENTRIES would read 20.
+				for j := range 2 {
+					reply := key + string(rune('0'+j))
+					if err := s.Append(ctx, "ceo", key, ledger.Session{Reply: reply}, reply,
+						base.Add(time.Duration(i*2+j)*time.Minute), 0); err != nil {
+						t.Fatal(err)
+					}
+				}
+			}
+			if err := s.Append(ctx, "cto", "thread-z", ledger.Session{Reply: "theirs"},
+				"theirs", base, 0); err != nil {
+				t.Fatal(err)
+			}
+			page, err := s.Threads(ctx, "ceo", 3)
+			if err != nil {
+				t.Fatalf("Threads: %v", err)
+			}
+			total, err := s.ThreadCount(ctx, "ceo")
+			if err != nil {
+				t.Fatalf("ThreadCount: %v", err)
+			}
+			if len(page) != 3 || total != 10 {
+				t.Fatalf("a page of %d from a total of %d, want 3 of the seat's 10", len(page), total)
+			}
+			if none, err := s.ThreadCount(ctx, "nobody"); err != nil || none != 0 {
+				t.Fatalf("a seat with no threads counts %d (%v), want 0", none, err)
+			}
+		})
+	}
+}

@@ -4,7 +4,8 @@
  * # One machine, three frames
  *
  * `#/work` is this over the whole company, `#/work/{KEY}`'s Items lens is this
- * over one project, and `#/me`'s Assigned tab is this over one person. They
+ * over one project, and `#/me`'s Queue and Asked by me are this over one
+ * person. They
  * ask the same question with one parameter different, so they are one
  * component: written twice, the second copy is the one that quietly falls
  * behind, and a reader who narrowed a board and then opened a project — or
@@ -13,7 +14,8 @@
  * # A HOST fixes what its screen IS, and the reader keeps the rest
  *
  * A [ItemsHost] is the third frame's whole difference: one narrowing the
- * screen cannot be without (the assignee on `#/me`), what the list OPENS on
+ * screen cannot be without (on `#/me`, the person who holds the work, or the
+ * person waiting on an answer about it), what the list OPENS on
  * (grouped by due band, soonest first), and what an empty one says in that
  * screen's own voice. Everything else — the shape, the grouping, the second
  * axis, the order, the columns, every other filter — stays the reader's and
@@ -25,58 +27,87 @@
  * applies it after everything else so no saved default and no hand-edited
  * address can widen the list past the person it is about.
  *
- * # Three controls, not eleven
+ * # Two rows: what is drawn, and how the answer is cut
  *
- * FILTER adds a narrowing and each one is a chip under the bar. DISPLAY
- * decides the drawing — shape, grouping, order, columns. The SCOPE switch
- * stays in the bar because it is the one control a reader presses constantly
- * and it is always set to something. Everything else about the query is in the
- * chips, which exist only when a filter does.
+ * The first row is the SHAPE (five tabs), the saved views this reader pinned,
+ * the substring box and the Display menu; the second — the sticky toolbar — is
+ * the chips ending in "+ Filter", then which work is shown and the two
+ * arrangements a reader changes constantly, Group by and Sort, with a board's
+ * lanes out of view and the count. `toolbar/WorkBar.tsx` carries why each sits
+ * where it does.
  *
  * # A view is the query; a shape is the drawing
  *
  * `view=` names what somebody saved and supplies the defaults; `shape=`
  * overrides how it is drawn. They were one key, so switching a saved board to
- * a list threw the saved filters away — and the five shapes sat in the view
- * strip as though a way of drawing were a thing somebody had saved.
+ * a list threw the saved filters away.
  *
- * # Read-only, deliberately
+ * # It writes, as the reader
  *
- * Nothing here writes. An item is filed and moved by a seat's own tools, or by
- * an operator through the MCP surface, and both are attributed to somebody —
- * where a board button would write as "the dashboard", which is not a person
- * and not a seat and cannot be asked why. That is also why there is no drag: a
- * rank is a value on the task, and dragging one would be the dashboard
- * deciding a team's order.
+ * A board card can be dragged, and a writer changes a row's status, priority
+ * or holder in place — each through `useAct`, as the principal the request
+ * resolves to (ADR-0024), conditional on the version the row was drawn at.
+ * Nothing moves until the engine answers; see `shapes/Board.tsx` and
+ * `shapes/cells.tsx`.
+ *
+ * # Every row is reachable
+ *
+ * A list and a table are a page of a hundred and a calendar or a timeline a
+ * page of five hundred, and the rest follow the answer's cursor on "Load more"
+ * ([usePagedItems]). A board's lanes each end in a link to the list narrowed to
+ * that lane. `[` and `]` walk the rows in the order they are DRAWN — lanes left
+ * to right, bands top to bottom — and a task opened from here carries the list
+ * it came from (`list=`), so its own page can say "3 of 18".
  */
 
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { buildHash, href, useNavigator, useParam, useRoute } from "~/app/router.tsx";
 import { usePeek, usePeekControls } from "~/app/frame/DetailRail.tsx";
 import { usePeekNeighbours } from "~/app/frame/PeekHost.tsx";
 import { QueryState } from "~/components/common.tsx";
-import { Coverage, type RowChrome } from "~/components/work.tsx";
+import {
+  Coverage,
+  cardHidden,
+  cardHideParam,
+  type CardWaiting,
+  type RowChrome,
+} from "~/components/work.tsx";
+import { PinButton, SaveViewButton } from "~/components/writes.tsx";
 import { Board } from "./shapes/Board.tsx";
 import { CalendarView } from "./shapes/Calendar.tsx";
 import { TimelineView } from "./shapes/Timeline.tsx";
 import { WorkGrid, colsParam, isGridShape, removalsOf } from "./shapes/Grid.tsx";
+import { headingOf } from "./shapes/group.tsx";
 import { FilterMenu } from "./toolbar/FilterMenu.tsx";
 import { DisplayMenu } from "./toolbar/DisplayMenu.tsx";
 import { FilterChips } from "./toolbar/FilterChips.tsx";
+import {
+  AllViewsLink,
+  ArrangeControls,
+  SCOPE_OPTIONS,
+  ScopeControl,
+  ShapeTabs,
+  SubstringBox,
+  ViewTabs,
+} from "./toolbar/WorkBar.tsx";
 import { FEED_PAGE, PurgeBand } from "./feed.tsx";
-import { Button, Callout, EmptyState, IconButton, Input, Skeleton, Tabs } from "@crewlethq/ui";
-import { CloseGlyph, DashboardGlyph, SearchGlyph } from "@crewlethq/icons/glyphs";
-// OURS, DELIBERATELY. `SegmentedControl` welds keyboard ACTIVATION to its
-// `semantics`: `radio` selects as the arrows move, `tabs` is manual but
-// demands a `panelId` naming a TabPanel this row does not control. The scope
-// row drives a `useParam` that re-runs the board's query, which is exactly
-// what our own `activate="manual"` exists for — arrowing across three options
-// would ask the engine three times.
-import { Segmented } from "~/ui/primitives.tsx";
+import { usePagedItems } from "./usePagedItems.ts";
+import { Button, Callout, EmptyState, Skeleton } from "@crewlethq/ui";
+import { LayoutDashboardGlyph } from "@crewlethq/icons/glyphs";
+import { useOpenNewTask } from "~/app/newTask.ts";
 import { useQuery } from "~/lib/useQuery.ts";
-import { useOrg } from "~/lib/store-hooks.ts";
-import { indexOrg, seatResolvers } from "~/lib/seats.ts";
+import { useAgents, useOrg } from "~/lib/store-hooks.ts";
+import { useViewer } from "~/lib/viewer.ts";
+import {
+  activityOf,
+  indexOrg,
+  liveOnItems,
+  ringOf,
+  seatResolvers,
+  type SeatRing,
+} from "~/lib/seats.ts";
 import { useToday } from "~/lib/clock.ts";
+import { useScrollEdges } from "~/lib/useScrollEdges.ts";
 import {
   anyFilter,
   asScope,
@@ -84,28 +115,45 @@ import {
   buildItemsParams,
   calendarWeeks,
   countedLabel,
+  dayRange,
   defaultView,
+  drawnRows,
   effectiveArrangement,
   endNote,
   EXPLICIT_NONE,
   filterChips,
   filterPatchForGroup,
+  finishedLanes,
   gridRange,
+  hiddenLanes,
+  hideParam,
   itemAddress,
   itemPath,
+  listParam,
+  loadedOf,
+  manualOrder,
   monthOrToday,
   seededScope,
   shapeOf,
   shownRows,
   totalHint,
+  unfinished,
   URL_HOMES,
   viewParams,
+  viewQuery,
+  type ItemsLock,
   type Scope,
   type Shape,
   type TrackerFilters,
 } from "~/lib/work.ts";
 import { plural } from "~/lib/format.ts";
-import type { WorkSummary, WorkTaskCounts, WorkView } from "~/protocol/index.ts";
+import {
+  isLogRefusal,
+  type QueryFailure,
+  type WorkSummary,
+  type WorkTaskCounts,
+  type WorkView,
+} from "~/protocol/index.ts";
 
 /**
  * Every custom-field narrowing on the address, as the grammar spells them.
@@ -141,12 +189,13 @@ function useFieldFilters(): Record<string, string> {
  */
 export interface ItemsHost {
   /**
-   * The one assignee every read here is narrowed to.
+   * The one narrowing every read here is held to — the person who holds the
+   * work, or the person waiting on an answer about it.
    *
    * Handed to [buildItemsParams] as its lock rather than as a filter — see
    * that function and this file's head for what the difference buys.
    */
-  assignee: string;
+  lock: ItemsLock;
   /**
    * What this list OPENS on, as `work_items` parameters.
    *
@@ -169,6 +218,18 @@ export interface ItemsHost {
    */
   empty: (scope: Scope) => { title: string; description: string };
 }
+
+/**
+ * How often the rows are asked again. A change to an item publishes onto the
+ * seat inbox rather than to the dashboard socket, so there is no push behind
+ * this and a poll is correct; twenty seconds because a board is read rather
+ * than watched, and a tracker's own pace is a person typing a comment. A turn
+ * ending on a task on screen asks at once — see [ItemsView].
+ */
+const ITEMS_POLL_MS = 20_000;
+
+/** No lanes put away, as a set that keeps its identity across renders. */
+const NOTHING_HIDDEN: ReadonlySet<string> = new Set();
 
 export function ItemsView({
   project = "",
@@ -193,6 +254,9 @@ export function ItemsView({
 }) {
   const org = useOrg();
   const index = useMemo(() => indexOrg(org), [org]);
+  const viewer = useViewer();
+  const agents = useAgents();
+  const openNewTask = useOpenNewTask();
   // THE DAY, NOT THE SECOND. Which day it is — the calendar's today cell and
   // the month it opens on — is all this screen reads off the clock itself.
   // It held the second, and every shape it draws re-rendered with it: two
@@ -208,6 +272,14 @@ export function ItemsView({
   const [viewKey, setViewKey] = useParam("view", "", "section");
   const [shapeKey, setShapeKey] = useParam("shape", "", "section");
   const [month, setMonth] = useParam("month", "", "section");
+  // THE BOARD LANES PUT AWAY — a drawing of the same answer, so it replaces
+  // like a filter rather than pushing like a section.
+  const [hide, setHide] = useParam("hide", "");
+  const hidden = useMemo(() => hiddenLanes(hide), [hide]);
+  // AND THE CARD FACTS PUT AWAY, the same kind of key: how the board's cards
+  // are drawn, never what the board holds.
+  const [cardHide, setCardHide] = useParam("card_hide", "");
+  const cardOmit = useMemo(() => cardHidden(cardHide), [cardHide]);
 
   // AND THE FILTERS, which replace: four ticked chips are ONE screen. Read
   // one key at a time and WRITTEN THROUGH ONE PATCH ([setFilter]), so a chip
@@ -222,24 +294,29 @@ export function ItemsView({
   // grammar — nothing on the screen writes it, no chip draws it and the lock
   // overwrites it on the way to the wire — so one left on the address by hand
   // is inert rather than a second, silent narrowing under the person's name.
+  // ONLY WHERE THE HOST LOCKS THE ASSIGNEE: a list held to what somebody
+  // ASKED keeps the assignee as an ordinary filter, since who holds the work
+  // a question is waiting on is a fair thing to narrow by.
   const [assigneeKey] = useParam("assignee", "");
-  const assignee = host ? "" : assigneeKey;
+  const lockedAssignee = host && "assignee" in host.lock ? host.lock.assignee : "";
+  const assignee = lockedAssignee ? "" : assigneeKey;
   const [tag] = useParam("tag", "");
   // THE TEAM, which arrives from an item's own "Filed into" line rather than
   // from a control — see [TrackerFilters.unit]. An ordinary filter key from
   // here on: it narrows the query, it carries a chip, and the chip takes it
   // off.
   const [unit] = useParam("unit", "");
-  const [groupBy, setGroupBy] = useParam("group_by", "");
+  // WRITTEN THROUGH THE ONE PATCH ([onGroupBy]), never on its own: a column
+  // filter belongs to its axis and goes with it.
+  const [groupBy] = useParam("group_by", "");
   const [groupBy2, setGroupBy2] = useParam("group_by2", "");
   // THE COLUMN NARROWING IS THREE-VALUED and `useParam` cannot say so: its
   // value is "the key, or the fallback", which reads an ABSENT key and a
   // PRESENT EMPTY one as the same string — and the empty one is a real column,
   // the one holding the rows with no value on this axis. So the value is read
   // off the whole query, the way [useFieldFilters] reads the custom fields, and
-  // the setter is kept for the one gesture that CLEARS it. See
+  // cleared through the one patch that moves its axis ([onGroupBy]). See
   // [TrackerFilters.group].
-  const [, setGroup] = useParam("group", "");
   const [sort, setSort] = useParam("sort", "");
   const [blocked] = useParam("blocked", "");
   const [due] = useParam("due", "");
@@ -290,6 +367,12 @@ export function ItemsView({
   // is not part of a hosted list's grammar at all: no control writes it and
   // nothing reads it, rather than a key that steers a screen with no tab
   // showing which way.
+  //
+  // AND IT NAMES NOBODY. A pin is a person's, and the engine answers this
+  // reader's pins from their credential — the record kept under their own
+  // name, a seat or a login — so there is no `viewer=` to send: the engine
+  // refuses the key on every question, because whose record a read is about is
+  // never a typed name.
   const strip = useQuery("work_views", { container }, { pollMs: 120_000, enabled: !host });
   // THE TYPES AND THE COMPANY'S OWN FIELDS COME FROM THE CATALOGUE, never from
   // the rows: a filter built from the page can only offer what happens to be
@@ -308,30 +391,44 @@ export function ItemsView({
   // that has saved nothing.
   const viewShape: Shape = shapeOf(chosenView, views);
   const shape: Shape = isShape(shapeKey) ? shapeKey : viewShape;
+  // A SAVED VIEW'S OWN SHAPE, and nothing where the view running is a builtin
+  // or none: the Display menu's way back to "this view's own shape" is a way
+  // back to what somebody SAVED, and offered over a plain board it pointed at
+  // a view nobody was looking at.
+  const savedShape = saved.find((v) => v.key === chosenView)?.type;
   const detail = overview.data;
   // AND THE ACTIVE SET'S VALUE, for the menu that writes it.
   const cols = shape === "table" ? tableCols : listCols;
   const setCols = shape === "table" ? setTableCols : setListCols;
 
   // THE VIEW SETS THE SCOPE, and it is the view's own `status_group` read back
-  // through the segment that expresses it. [buildItemsParams] spreads a view's
-  // params and then OVERWRITES that key from the scope, so seeding the segment
+  // through the scope that expresses it. [buildItemsParams] spreads a view's
+  // params and then OVERWRITES that key from the scope, so seeding the scope
   // from the view is what makes the two agree.
   //
   // A HOST FILLS THE SAME SLOT, which is the whole of what "opens on" means
   // here: its defaults are overridden by the reader's own keys through the
-  // same [effectiveArrangement] and the same segment seeding, so `#/me` opens
+  // same [effectiveArrangement] and the same scope seeding, so `#/me` opens
   // grouped by due band and soonest first and still lets anybody group by
   // status, sort by priority or look at their week as a board.
   const viewOwn = useMemo(
     () => host?.opens ?? viewParams(chosenView, views),
     [host, chosenView, views],
   );
-  const viewScope = seededScope(viewOwn);
+  const viewScope = seededScope(viewOwn, shape);
   // ONE READING OF THE SEGMENT for the control, the query, the lanes and the
   // empty state — see [asScope] for what a hand-edited value did to the four of
   // them separately.
-  const [scopeKey, setScope] = useParam("scope", viewScope);
+  //
+  // THE TRASH WIDENS IT, as a default rather than as a write: a removed task
+  // is very often a finished one, and under the Open scope the trash showed
+  // only the removals of work nobody had finished — which reads as a company
+  // that deletes almost nothing. It was written by the Filter menu's gesture
+  // alone, so the same trash opened from its own address (`removed=true`,
+  // a link somebody sent) said "1 in Open" and hid the rest. A default reads
+  // the same whichever way the reader arrived, and a Show picked on the bar
+  // still overrides it.
+  const [scopeKey, setScope] = useParam("scope", removed === "true" ? "all" : viewScope);
   const scope = asScope(scopeKey);
 
   // WHAT THE ARRANGEMENT ACTUALLY IS, which is not what the address holds: a
@@ -381,7 +478,7 @@ export function ItemsView({
         view: viewOwn,
         filters,
         range: weeks.length ? gridRange(weeks) : undefined,
-        lock: host ? { assignee: host.assignee } : undefined,
+        lock: host?.lock,
       }),
     // The filters object is a fresh literal on every render; its content is
     // what the query depends on. THE LOCK IS A DEPENDENCY IN ITS OWN RIGHT: it
@@ -389,14 +486,24 @@ export function ItemsView({
     // not name it kept asking for the previous person's work when `#/me`'s
     // whose-day picker moved.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [container, shape, chosenView, views, viewOwn, host?.assignee, weeks, JSON.stringify(filters)],
+    [
+      container,
+      shape,
+      chosenView,
+      views,
+      viewOwn,
+      JSON.stringify(host?.lock),
+      weeks,
+      JSON.stringify(filters),
+    ],
   );
 
   // A change to an item publishes onto the seat inbox rather than to the
   // dashboard socket, so there is no push behind this and a poll is correct.
   // Twenty seconds: a board is read, not watched, and a tracker's own pace is
   // a person typing a comment.
-  const { data, loading, error, refusal } = useQuery("work_items", params, { pollMs: 20_000 });
+  const paged = usePagedItems(params, { pollMs: ITEMS_POLL_MS });
+  const { data, loading, error, refusal } = paged;
 
   // A TRASH LISTING IS THE ONE VIEW WHOSE ROWS DO NOT CARRY THEIR OWN STORY.
   // The row says a task is removed; WHO removed it, WHEN, and whether the
@@ -421,19 +528,90 @@ export function ItemsView({
   // drawing, and an emptiness derived from one would report a company with no
   // work at all as a populated board.
   const groups = useMemo(() => data?.groups ?? [], [data]);
-  const rows = useMemo(() => data?.items ?? [], [data]);
-  // WHAT `[` AND `]` WALK: the rows this list actually loaded, sorted and
-  // filtered as the reader left them. Published rather than handed to the
-  // rail, because only the list knows that order — see `PeekHost`.
+  // EVERY PAGE LOADED, the first and every "Load more" after it.
+  const rows = paged.rows;
+  // WHAT `[` AND `]` WALK: the rows in the order they are DRAWN — a board's
+  // lanes left to right, a grouped list's bands top to bottom — which is what
+  // the reader is looking at. It walked the flat `items`, which a grouped
+  // answer does not carry, so on every board and every grouped list the two
+  // keys stepped through nothing. Published rather than handed to the rail,
+  // because only the list knows that order — see `PeekHost`.
+  const drawn = useMemo(
+    () => drawnRows(rows, groups, shape === "board" ? hidden : NOTHING_HIDDEN),
+    [rows, groups, shape, hidden],
+  );
   //
   // BY ADDRESS, like everything else that names a row here — see
   // [itemAddress]: a key two rows share would make the stepper land on the
   // claimant from both of them.
   const neighbours = useMemo(
-    () => rows.map((r) => ({ kind: "item" as const, id: itemAddress(r) })),
-    [rows],
+    () => drawn.map((r) => ({ kind: "item" as const, id: itemAddress(r) })),
+    [drawn],
   );
-  usePeekNeighbours(neighbours);
+  // AND THE QUESTION, so a task opened through the peek's Open carries it like
+  // one opened from its row — see `PeekHost` and `ListPosition`.
+  const listQuery = useMemo(() => {
+    const list = listParam(params);
+    return list ? { list } : undefined;
+  }, [params]);
+  usePeekNeighbours(neighbours, listQuery);
+
+  // WHAT IS HAPPENING ON THE CARDS: the turn a seat is running on each task,
+  // its holder's state ring, and the coding runs parked on a question put to
+  // THIS READER — every task keyed on its ID, which no two tasks share, where
+  // a key two tasks hold would draw one task's turn on both cards. All the
+  // engine's words: `activity` from the push, the item the turn is charged
+  // to, and `decisions`' own reading of which runs wait on this person.
+  const live = useMemo(() => liveOnItems(agents), [agents]);
+  const rings = useMemo(() => {
+    const out = new Map<string, SeatRing>();
+    for (const a of agents) {
+      const ring = ringOf(activityOf(a));
+      if (a.handle && ring) out.set(a.handle, ring);
+    }
+    return out;
+  }, [agents]);
+  // THE READER'S OWN RECORD, asked by nothing but their credential: a run is
+  // parked on a question to whoever requested it — a seat, or a person the
+  // directory binds to none, whose record is their login — so an UNBOUND
+  // reader has runs waiting on them too, and gating this on a seat hid them.
+  const decisions = useQuery("decisions", undefined, {
+    enabled: shape === "board" && viewer.owner !== "",
+    pollMs: ITEMS_POLL_MS,
+  });
+  const waiting = useMemo(() => {
+    const out = new Map<string, CardWaiting>();
+    for (const item of decisions.data?.items ?? []) {
+      const id = item.run?.work_item?.id;
+      if (item.kind === "run" && id && !out.has(id)) out.set(id, { since: item.run?.paused_at });
+    }
+    return out;
+  }, [decisions.data]);
+  const facts = useMemo(
+    () => ({ live, waiting, ring: (handle: string) => rings.get(handle) }),
+    [live, waiting, rings],
+  );
+
+  // A TURN ENDING ON A TASK THIS LIST DRAWS IS A TASK THAT JUST CHANGED — the
+  // seat moved it, commented, handed it on — and nothing pushes the row. So
+  // when a task on screen loses its running turn, the list asks again then,
+  // rather than drawing the task as it was for up to a poll's length.
+  const runningHere = drawn
+    .filter((r) => live.has(r.id))
+    .map((r) => r.id)
+    .join(",");
+  const wasRunning = useRef("");
+  // THE BAR'S RUN, which scrolls on a phone and fades the edge with more past
+  // it — see the markup below.
+  const barRun = useRef<HTMLDivElement>(null);
+  const barEdges = useScrollEdges(barRun);
+  const { refetch } = paged;
+  useEffect(() => {
+    const before = wasRunning.current ? wasRunning.current.split(",") : [];
+    const running = new Set(runningHere ? runningHere.split(",") : []);
+    wasRunning.current = runningHere;
+    if (before.some((id) => !running.has(id))) refetch();
+  }, [runningHere, refetch]);
   const shown = useMemo(() => shownRows(rows, groups), [rows, groups]);
   // THE BANDS A LIST DRAWS, which are not the lanes a board draws — see
   // [bandsOf]: the engine mints every lane a closed axis admits, and a band
@@ -485,15 +663,10 @@ export function ItemsView({
 
   /** Writes one filter key by name, which is what a chip and the menu both do. */
   const setFilter = (param: string, value: string) => {
-    // THE SCOPE WIDENS WITH THE TRASH, because a removed task is very often a
-    // finished one: under the Open segment the trash shows only the removals
-    // of work nobody had finished, which reads as a company that deletes
-    // almost nothing. One patch, so the two land together; the segment is
-    // right beside the chip, so narrowing it back is one press and visible.
-    if (param === "removed" && value) {
-      setFilters({ removed: value, scope: "all" });
-      return;
-    }
+    // THE TRASH'S WIDER SCOPE IS THE SCOPE'S OWN DEFAULT (see `scopeKey`),
+    // so adding the Removed filter writes that key alone — and taking the chip
+    // off puts the list back on the scope it had, rather than leaving an
+    // `scope=all` behind that nobody chose.
     setFilters({ [param]: value || null });
   };
 
@@ -530,7 +703,11 @@ export function ItemsView({
   // drew one link and peeked one task. ONE pair of functions for every shape,
   // so the board, the grid, the timeline and the calendar cannot disagree
   // about which task a row is.
-  const itemHref = (row: WorkSummary) => href(itemPath(row));
+  //
+  // AND A TASK OPENED FROM HERE CARRIES THIS LIST'S QUESTION, so its own page
+  // can ask where it sits in it (`around=`) and step to the next one.
+  const list = useMemo(() => listParam(params), [params]);
+  const itemHref = (row: WorkSummary) => href(itemPath(row), list ? { list } : undefined);
   const openItem = (row: WorkSummary) => openPeek({ kind: "item", id: itemAddress(row) });
 
   // WHERE A COLUMN FOOTER GOES, as the link the browser follows on a middle
@@ -578,14 +755,14 @@ export function ItemsView({
 
   // WHETHER THE READER NARROWED THIS, which decides both what an empty list
   // says and what the foot of a full one calls its rows. `anyFilter` counts a
-  // scope off `open`, so the segment is compared against the VIEW's own rather
+  // scope off `open`, so the scope is compared against the VIEW's own rather
   // than against the default: a saved view whose author asked for finished work
   // is not a reader who narrowed anything.
   const narrowed = anyFilter(filters) || scope !== viewScope;
   // AND THE SCOPE IS NOT A NARROWING TO THE EMPTY PANEL, though it is one to
   // the foot above. "Nothing matches" blames a filter and carries the control
   // that removes it, and a reader who only pressed Closed has no chip to take
-  // off — so the segment decides WHICH of the other three sentences is due,
+  // off — so the scope decides WHICH of the other three sentences is due,
   // never whether the filter one is.
   const filtered = anyFilter({ ...filters, scope: "open" });
   // A TRASH WITH NOTHING IN IT IS NOT A FILTER THAT MATCHED NOTHING, and it is
@@ -602,6 +779,27 @@ export function ItemsView({
     (shape === "board"
       ? groups.every((group) => group.count === 0)
       : shown.length === 0 && bands.length === 0);
+  // THE REST OF A PAGED ANSWER: "Load more", and what is loaded out of how
+  // many match. Absent on a complete answer and on a grouped one, which has no
+  // cursor.
+  const pageMore = paged.next
+    ? {
+        load: paged.more,
+        note: paged.pageFailure
+          ? nextPageFailed(paged.pageFailure)
+          : loadedOf(rows.length, data?.total_hint ?? 0, data?.total_capped),
+      }
+    : undefined;
+  // A BUSY CALENDAR DAY, as this list narrowed to that day and drawn as a
+  // list: the day is then the whole screen, every task due on it a row.
+  const dayPatch = (day: string) => ({ shape: "list", due: dayRange(day), month: null });
+  const dayListHref = (day: string) => patchedHref(route.path, route.query, dayPatch(day));
+  // WHO CAN HOLD A TASK, for a writer's inline assignee picker.
+  const seats = useMemo(
+    () => index.seats.map((s) => ({ handle: s.handle, name: s.name, human: s.kind === "human" })),
+    [index],
+  );
+
   const foot = endNote({
     shown: shown.length,
     hint: data?.total_hint ?? 0,
@@ -610,145 +808,160 @@ export function ItemsView({
     narrowed,
   });
 
+  // WHAT THE GROUP BY PICKER WRITES, which is the same three-way rule the
+  // Display menu used to carry: a board's own default is status, so choosing
+  // it is choosing nothing.
+  const onGroupBy = (next: string) => {
+    const chosen = shape === "board" && next === "status" && !viewOwn.group_by ? "" : next;
+    // ONE PATCH: a column filter belongs to its axis and goes with it, and a
+    // second axis without a first is nothing the engine takes.
+    setFilters({
+      group_by: chosen || off(viewOwn.group_by) || null,
+      group: null,
+      ...(next ? {} : { group_by2: null }),
+    });
+  };
+  // THE SAVED VIEW RUNNING, if one is — what the strip's pin acts on.
+  const running = saved.find((v) => v.key === chosenView && v.id);
+  // WHERE THE BOARD NAMES ITS LANES OUT OF VIEW: a slot at the bar's end the
+  // board portals its pager into, so naming them costs the lanes no row.
+  const [laneSlot, setLaneSlot] = useState<HTMLElement | null>(null);
+  const laneLabel = (key: string) => {
+    const group = groups.find((g) => g.key === key);
+    return group ? headingOf(axis || "status", group, labels) : key || "No value";
+  };
+
   return (
     <>
-      {/* THE STRIP IS ALWAYS DRAWN ON THE SCREENS THAT ARE THIS LIST, and the
-          gate it lost was `saved.length > 0`.
-          The first tab is the container's OWN list — a real destination, not
-          decoration — so gating the strip on somebody else having saved a query
-          threw away the one thing that names this page inside its own content
-          column, and left the toolbar as the top edge of a screen whose title
-          is in the shell. A company that has saved nothing is the only state
-          every company starts in.
-
-          IT IS ALSO THE ONLY WAY INTO THE INVENTORY from here, which is why
-          the trailing link is part of the strip rather than the page actions:
-          saved views are undiscoverable until somebody has used them, and a
-          strip with nothing after the container tab says nothing about what
-          else the strip is for.
-
-          A HOSTED LIST HAS NEITHER, and both reasons above are why: the host's
-          own tabs already name the page, and the inventory is a link that
-          screen carries. See [ItemsHost]. */}
-      {!host && (
-        <div className="work-strip">
-          <Tabs
-            ariaLabel="Saved views"
-            value={saved.some((v) => v.key === chosenView) ? chosenView : ""}
-            onValueChange={(key) => applyView(key, saved, setViewKey)}
-            items={[
-              // THE CONTAINER'S OWN DEFAULT IS A TAB, because a strip of saved
-              // views with no way back to the unsaved list is a strip a reader
-              // gets stuck in.
-              //
-              // AND IT CARRIES NO COUNT. The engine's total is over the FILTER,
-              // not over the container, so a number here would say "All work 2"
-              // on a company with two hundred items and one chip on — a number
-              // the answer does not give is not drawn. The count belongs where
-              // the filters are, which is the bar.
-              { value: "", label: project ? "All in this project" : "All work" },
-              ...saved.map((v) => ({
-                value: v.key,
-                label: `${v.pinned ? "★ " : ""}${v.name}`,
-              })),
-            ]}
+      {/* THE FIRST ROW: what is drawn. The shape tabs, then — on the screens
+          that ARE this list, never on a host, whose own tabs already name the
+          page — the container's own list, the views this reader pinned, a way
+          to save the query on screen, and the inventory. See
+          `toolbar/WorkBar.tsx`. */}
+      <div className="work-tabs">
+        <ShapeTabs shape={shape} onShape={(next) => setShapeKey(next === viewShape ? "" : next)} />
+        {!host && (
+          <>
+            <span className="work-tabs-sep" aria-hidden="true" />
+            <ViewTabs
+              views={saved}
+              chosen={chosenView}
+              containerLabel={project ? "All in this project" : "All work"}
+              onView={(key) => applyView(key, saved, setViewKey)}
+            />
+            {/* THE VIEW RUNNING, PINNED OR UNPINNED FROM WHERE IT RUNS: a pin
+                is offered wherever a view is listed, and a project's strip is
+                the only list a view saved on that project was ever in. */}
+            {running?.id && (
+              <PinButton
+                key={running.id}
+                view={running.id}
+                name={running.name}
+                pinned={Boolean(running.pinned)}
+              />
+            )}
+            <SaveViewButton
+              container={container}
+              type={shape}
+              params={viewQuery(params, shape)}
+              onSaved={setViewKey}
+            />
+            <AllViewsLink />
+          </>
+        )}
+        {/* THE TOOLS ARE ONE CLUSTER, so a row too narrow for everything
+            wraps them together onto a line of their own, right-aligned —
+            never the Display button alone under the rest. */}
+        <div className="work-tabs-tools">
+          <SubstringBox value={q} onChange={setQ} scopeLabel={project || "work"} />
+          <DisplayMenu
+            shape={shape}
+            workspace={!project}
+            viewShape={savedShape}
+            groupBy={axis}
+            groupBy2={axis2}
+            cols={cols}
+            hidden={[...hidden].map((key) => ({ key, label: laneLabel(key) }))}
+            onShape={(next) => setShapeKey(next === viewShape ? "" : next)}
+            onGroupBy2={(next) => setGroupBy2(next || off(viewOwn.group_by2))}
+            onCols={setCols}
+            onShowLane={(key) =>
+              setHide(key === undefined ? "" : hideParam([...hidden].filter((k) => k !== key)))
+            }
+            cardHidden={cardOmit}
+            onCardHidden={(next) => setCardHide(cardHideParam(next))}
           />
-          {/* A REAL ANCHOR rather than a button that navigates, for the reason
-            `Work.tsx` gives at its own two: it leaves the list, so it is
-            middle-clickable and goes through the router's history rules
-            instead of around them. Beside the tabs rather than among them — a
-            link is not a tab, and one inside the set would be selectable and
-            would break the roving focus. */}
-          <a className="t-link work-strip-more" href={href(["work", "views"])}>
-            All views →
-          </a>
         </div>
-      )}
-
-      {/* `toolbar` FIRST, and it is not decoration: `.screen:has(.toolbar)` is
-          what publishes `--sticky-top`, and every other thing that sticks in
-          this scroller — the grid's column heads, a band head, the peek —
-          offsets itself by it. */}
-      <div className="toolbar work-bar">
-        <FilterMenu
-          filters={filters}
-          shape={shape}
-          onSet={setFilter}
-          lockedAssignee={host?.assignee}
-          types={catalogue.data?.types}
-          statuses={detail?.statuses}
-          tags={detail?.tags}
-          fields={catalogue.data?.fields}
-          seats={roster}
-        />
-        {/* THE SUBSTRING BOX IS NOT THE SEARCH SCREEN, and the two looked like
-            one control in a bar. This one narrows the rows on screen by key or
-            title; `#/work/search` ranks the whole company against a phrase the
-            way an agent does. Kept as a chip so it reads as one narrowing
-            among the others. */}
-        <SubstringSearch value={q} onChange={setQ} />
-        <span className="spacer" />
-        {/* THREE SEGMENTS, not a checkbox: "open", "closed" and "everything"
-            are three real questions, and a two-state control would make the
-            third unreachable. */}
-        <Segmented
-          value={scope}
-          onChange={setScope}
-          ariaLabel="Open or closed"
-          options={[
-            { value: "open", label: "Open" },
-            { value: "closed", label: "Closed" },
-            { value: "all", label: "All" },
-          ]}
-        />
-        <DisplayMenu
-          shape={shape}
-          axis={String(params.group_by ?? "")}
-          workspace={!project}
-          viewShape={viewShape}
-          groupBy={axis}
-          groupBy2={axis2}
-          sort={order}
-          cols={cols}
-          onShape={(next) => setShapeKey(next === viewShape ? "" : next)}
-          onGroupBy={(next) => {
-            // A BOARD'S OWN DEFAULT IS STATUS, so choosing it is choosing
-            // nothing: it is written as the absence of the key, unless a view
-            // supplies another axis, which the choice then has to override.
-            const chosen = shape === "board" && next === "status" && !viewOwn.group_by ? "" : next;
-            setGroupBy(chosen || off(viewOwn.group_by));
-            // A COLUMN FILTER BELONGS TO ITS AXIS. Left behind when the axis
-            // changes it narrows the list to a key the new axis has never
-            // heard of, which answers nothing.
-            setGroup("");
-            // AND A SECOND AXIS WITHOUT A FIRST IS NOTHING THE ENGINE TAKES,
-            // so it goes with it — as a deletion rather than an override,
-            // since the key is inert either way and `none` on the address
-            // would outlive the grouping it was written against.
-            if (!next) setGroupBy2("");
-          }}
-          onGroupBy2={(next) => setGroupBy2(next || off(viewOwn.group_by2))}
-          onSort={(next) => setSort(next || off(viewOwn.sort))}
-          onCols={setCols}
-        />
-        <span className="work-summary">
-          <Coverage answer={data} />
-          {!loading && !error && (
-            <span>
-              {countedLabel(shown.length, params)}{" "}
-              {totalHint(data?.total_hint ?? 0, shown.length, data?.total_capped)}
-            </span>
-          )}
-        </span>
       </div>
 
-      {anyFilter(filters) && (
-        <FilterChips
-          chips={chips}
-          onRemove={(param) => setFilter(param, "")}
-          onClear={clearFilters}
-        />
-      )}
+      {/* THE SECOND ROW: how the answer is cut. `toolbar` FIRST, and it is not
+          decoration: the scroller's `:has(.toolbar)` is what publishes
+          `--sticky-top`, and every other thing that sticks in this scroller —
+          the grid's column heads, a band head, the peek — offsets itself by
+          it. */}
+      <div className="toolbar work-bar">
+        {/* THE RUN IS ITS OWN BOX so a phone can scroll it and fade the edge
+            with more past it while the band stays opaque: a fade on the
+            sticky band itself would let the rows scrolling under it show
+            through. Wider, the run is `display: contents` and its children lay
+            out on the band exactly as they did. */}
+        <div ref={barRun} className="work-bar-run" {...barEdges}>
+          {/* THE CHIPS OPEN THE ROW, ending in "+ Filter": what narrows the
+            answer is what a reader reads first, and the control that adds a
+            narrowing sits after the ones it adds to — the approved board's
+            one bar, with the arrangement at its far end. */}
+          <FilterChips
+            chips={anyFilter({ ...filters, scope: "open" }) ? chips : []}
+            onRemove={(param) => setFilter(param, "")}
+            onClear={clearFilters}
+            add={
+              <FilterMenu
+                filters={filters}
+                shape={shape}
+                onSet={setFilter}
+                lockedAssignee={lockedAssignee || undefined}
+                types={catalogue.data?.types}
+                statuses={detail?.statuses}
+                tags={detail?.tags}
+                fields={catalogue.data?.fields}
+                seats={roster}
+              />
+            }
+          />
+          {/* THE ARRANGEMENT AND THE COUNT ARE ONE CLUSTER at the far end, so a
+            narrow row — an open peek, a 1280 window — moves them down
+            together rather than leaving the count alone on a line. */}
+          <span className="work-bar-end">
+            <ScopeControl scope={scope} onScope={setScope} />
+            <ArrangeControls
+              shape={shape}
+              workspace={!project}
+              groupBy={axis}
+              sort={order}
+              manual={manualOrder(order, project)}
+              onGroupBy={onGroupBy}
+              onSort={(next) => setSort(next || off(viewOwn.sort))}
+            />
+            {/* THE LANES OUT OF A BOARD'S VIEW are named here, at the bar's end,
+              rather than on a row of their own above the lanes: see
+              `shapes/Board.tsx`, which draws them into this slot. */}
+            <span className="work-bar-lanes" ref={setLaneSlot} />
+            <span className="work-summary">
+              <Coverage answer={data} />
+              {!loading && !error && (
+                <span>
+                  {countedLabel(
+                    shown.length,
+                    params,
+                    SCOPE_OPTIONS.find((o) => o.value === scope)?.label,
+                  )}{" "}
+                  {totalHint(data?.total_hint ?? 0, shown.length, data?.total_capped)}
+                </span>
+              )}
+            </span>
+          </span>
+        </div>
+      </div>
 
       {data?.groups_overlap && (
         <Callout variant="info">
@@ -800,6 +1013,25 @@ export function ItemsView({
                 onOpen={openItem}
                 onOverflow={(axis, key) => openOverflow(filterPatchForGroup(axis, key), "push")}
                 overflowHref={boardOverflowHref}
+                facts={facts}
+                hidden={hidden}
+                onHide={(key) => setHide(hideParam([...hidden, key]))}
+                movable={manualOrder(order, project)}
+                finishedLanes={finishedLanes(String(params.group_by ?? "status"))}
+                weekly={scope === "recent"}
+                laneSlot={laneSlot}
+                cardOmit={cardOmit}
+                // A LANE'S `+` FILES INTO THAT LANE: the one sheet, told what
+                // puts a task in the lane (the board decides which lanes take
+                // one, from [presetForLane]) and the project this list is
+                // scoped to — and, on a person's own list, that it is theirs.
+                onAdd={(lane) =>
+                  openNewTask({
+                    ...(project ? { project } : {}),
+                    ...(lockedAssignee ? { assignee: lockedAssignee } : {}),
+                    ...lane,
+                  })
+                }
               />
             )}
             {/* ONE BRANCH FOR BOTH GRID SHAPES. The list and the table are one
@@ -832,6 +1064,8 @@ export function ItemsView({
                 // The words are `endNote`'s, once, for every shape that takes
                 // one.
                 foot={foot}
+                seats={seats}
+                more={pageMore}
               />
             )}
             {!nothingShown && shape === "timeline" && (
@@ -842,6 +1076,7 @@ export function ItemsView({
                 selected={peek?.kind === "item" ? peek.id : ""}
                 hrefOf={itemHref}
                 onOpen={openItem}
+                more={pageMore}
               />
             )}
             {!nothingShown && shape === "calendar" && (
@@ -854,6 +1089,9 @@ export function ItemsView({
                 onOpen={openItem}
                 onMonth={setMonth}
                 onToday={() => setMonth("")}
+                dayHref={dayListHref}
+                onDay={(day) => openOverflow(dayPatch(day), "push")}
+                more={pageMore}
               />
             )}
           </QueryState>
@@ -863,6 +1101,26 @@ export function ItemsView({
       </div>
     </>
   );
+}
+
+/**
+ * What a "Load more" that failed says in the list's foot.
+ *
+ * "TRY AGAIN" ONLY WHERE AGAIN CAN ANSWER. A page the state log refused with
+ * no wait behind it (`retryAfter` 0 — a log this node cannot decode, a node
+ * evicted from it) is refused the same way on every press, so telling the
+ * reader to press again sends them round a loop the engine already said has
+ * no exit.
+ */
+function nextPageFailed(failure: QueryFailure): string {
+  const { refusal } = failure;
+  if (refusal && isLogRefusal(refusal) && refusal.retryAfter === 0) {
+    return "The next page was refused by this node's log, and asking again will not change that.";
+  }
+  if (failure.error === "unauthorized") {
+    return "The next page was refused — your credential does not reach it.";
+  }
+  return "The next page could not be read — try again.";
 }
 
 /** Whether a `shape=` off the address is one this product draws. */
@@ -969,8 +1227,8 @@ export function patchedQuery(
  * here at all.
  *
  * AND (b) CARRIES A NUMBER ONLY WHERE ONE EXISTS. A project detail carries the
- * three maintained `task_counts`, so the sentence can say how much finished
- * work the other segment holds. The workspace has no such counts — `work_items`
+ * maintained `task_counts`, so the sentence can say how much finished
+ * work the other scope holds. The workspace has no such counts — `work_items`
  * counts what MATCHED and nothing else — so it names the switch and claims
  * nothing about what is behind it.
  */
@@ -1031,7 +1289,7 @@ function EmptyList({
   //
   // BEFORE THE SCOPE BRANCHES, because the cause is the container rather than
   // the switch: Open, Closed and All all answer nothing here, and each of the
-  // three sentences below would blame the segment or claim the company has
+  // three sentences below would blame the scope or claim the company has
   // filed nothing — over a company holding every item it ever filed, in
   // projects it has retired. The reader's next move is the projects, not the
   // scope switch, so this says how many there are and goes to them, which is
@@ -1062,10 +1320,10 @@ function EmptyList({
     );
   }
 
-  // NOTHING AT ALL. The All segment has every scope on screen already, so an
+  // NOTHING AT ALL. The All scope has every scope on screen already, so an
   // empty answer under it is the container's whole tracker; a container with
   // its own counts can say the same thing sooner and exactly.
-  const total = counts ? counts.open + counts.done + counts.closed : undefined;
+  const total = counts ? unfinished(counts) + counts.done + counts.closed : undefined;
   if (scope === "all" || total === 0) {
     // THE PROJECT'S OWN EMPTY STATE IS ABOVE THIS LIST, and two panels saying
     // one thing is one too many — the same rule the page keeps at workspace
@@ -1084,7 +1342,8 @@ function EmptyList({
   // counts give one AND it is not zero: "0 items under Closed" beside "nothing
   // open" is a contradiction a reader has to work out, where the numberless
   // sentence is true in both states.
-  const elsewhere = scope === "open" ? (counts && counts.done + counts.closed) || 0 : counts?.open;
+  const elsewhere =
+    scope === "open" ? (counts && counts.done + counts.closed) || 0 : counts && unfinished(counts);
   if (scope === "open") {
     return (
       <EmptyState
@@ -1126,67 +1385,9 @@ function EmptyList({
 export function NoWorkYet() {
   return (
     <EmptyState
-      icon={<DashboardGlyph size={32} />}
+      icon={<LayoutDashboardGlyph size={32} />}
       title="No work has been filed yet"
       description="Nothing can be filed until a unit in the company config declares a `project` key, and this company has none. Once one does, seats file work with create_work_item — an inbound webhook or a schedule is usually what starts them."
     />
-  );
-}
-
-/**
- * Narrowing the rows on screen by key or title, as one control that opens.
- *
- * TWO SEARCHES LOOKED LIKE ONE. This is an escaped substring over the rows'
- * own key and title — `q=` in the query grammar — and `#/work/search` ranks
- * the whole company against a phrase the way an agent does, over the engine's
- * own BM25 index. Drawn as the widest box in the bar, the narrow one read as
- * the product's search; drawn as a mark that opens, it reads as what it is.
- *
- * IT OPENS WHEN IT HOLDS SOMETHING, so a reader who lands on a filtered
- * address sees the words that are narrowing their rows rather than a mark
- * whose pressed state is the only evidence.
- */
-function SubstringSearch({
-  value,
-  onChange,
-}: {
-  value: string;
-  onChange: (value: string) => void;
-}) {
-  const [open, setOpen] = useState(false);
-  if (!open && !value) {
-    return (
-      <IconButton
-        size="sm"
-        variant="ghost"
-        icon={<SearchGlyph size="sm" />}
-        label="Narrow these rows by key or title"
-        onClick={() => setOpen(true)}
-      />
-    );
-  }
-  return (
-    <span className="work-bar-find">
-      <Input
-        type="search"
-        width="full"
-        value={value}
-        onChange={(e) => onChange(e.target.value)}
-        aria-label="Narrow these rows by key or title"
-        leading={<SearchGlyph size="sm" />}
-        placeholder="Key or title"
-        autoFocus
-      />
-      <IconButton
-        size="sm"
-        variant="ghost"
-        icon={<CloseGlyph size="sm" />}
-        label="Stop narrowing by key or title"
-        onClick={() => {
-          onChange("");
-          setOpen(false);
-        }}
-      />
-    </span>
   );
 }

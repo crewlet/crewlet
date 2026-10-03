@@ -38,7 +38,7 @@ import type { CheckStatus, SaveRules } from "./model/scheduler.ts";
 import type { BuilderMode } from "./model/transport.ts";
 import { signedSummary } from "./model/writes.ts";
 import { stepLabel, type SavePhase, type SaveRun } from "./useSave.ts";
-import { CableGlyph, RefreshGlyph, SaveGlyph } from "@crewlethq/icons/glyphs";
+import { PlugGlyph, RotateCwGlyph, SaveGlyph } from "@crewlethq/icons/glyphs";
 import { Button, Callout, Checkbox, InlineCode, Modal } from "@crewlethq/ui";
 
 /** Why a group of seats onboards again, agreeing with how many there are. */
@@ -264,7 +264,7 @@ export function ReviewSaveDialog({
         </Callout>
       )}
       {phase.kind === "settling" && (
-        <Callout variant="warning" icon={<RefreshGlyph />}>
+        <Callout variant="warning" icon={<RotateCwGlyph />}>
           The engine's answer to the settings did not arrive. Checking whether they were stored.
         </Callout>
       )}
@@ -299,7 +299,7 @@ export function ReviewSaveDialog({
         </ul>
       )}
       {status === "unreachable" && (
-        <Callout variant="warning" icon={<CableGlyph />}>
+        <Callout variant="warning" icon={<PlugGlyph />}>
           The engine could not be reached to check this draft. Saving still reads the chart first,
           and every write is decided where it lands.
         </Callout>

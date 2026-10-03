@@ -53,7 +53,8 @@ func configSurface(t *testing.T, docs ...string) (*configapi.Service, []string) 
 			t.Fatal(err)
 		}
 		id, err := db.Configs().InsertActive(t.Context(), store.Revision{
-			Source: "test", CreatedBy: "operator", Summary: "revision",
+			CreatedByKind: iam.ActorOperator,
+			Source:        "test", CreatedBy: "operator", Summary: "revision",
 			Payload: payload, CreatedAt: pinned.Add(time.Duration(i) * time.Minute),
 		})
 		if err != nil {
@@ -111,20 +112,20 @@ func TestTheEntityQueryAnswersWhatTheConfigRoomAsksFor(t *testing.T) {
 	sources := queries.Sources{Config: surface}
 
 	list := asMap(t, answer(t, sources, "config_entities",
-		map[string]any{"kind": "roles"}))
+		map[string]any{"kind": configapi.EntityLLMProviders}))
 	ids, _ := list["ids"].([]any)
 	if len(ids) == 0 {
-		t.Fatalf("the roles collection came back empty: %v", list)
+		t.Fatalf("the providers collection came back empty: %v", list)
 	}
 
 	one := asMap(t, answer(t, sources, "config_entities",
-		map[string]any{"kind": "roles", "id": ids[0]}))
+		map[string]any{"kind": configapi.EntityLLMProviders, "id": ids[0]}))
 	entity, _ := one["entity"].(map[string]any)
 	if entity == nil {
 		t.Fatalf("opening %v produced no entity: %v", ids[0], one)
 	}
-	if entity["name"] == nil {
-		t.Errorf("the entity carries no name, so the editor renders nothing: %v", entity)
+	if entity["model"] == nil {
+		t.Errorf("the entity carries no model, so the editor renders nothing: %v", entity)
 	}
 }
 
@@ -143,7 +144,10 @@ func TestTheEntityQueryRefusesWhatItCannotAddress(t *testing.T) {
 	}{
 		{"no kind at all", map[string]any{}},
 		{"a kind nothing addresses", map[string]any{"kind": "widgets"}},
-		{"an id nothing carries", map[string]any{"kind": "roles", "id": "nobody"}},
+		{"an id nothing carries", map[string]any{"kind": configapi.EntityLLMProviders, "id": "nobody"}},
+		// THE ORG CHART IS NOT A COLLECTION OF THE SETTINGS, so naming it
+		// is a kind nothing addresses rather than an empty one.
+		{"a chart collection", map[string]any{"kind": "roles"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
@@ -165,7 +169,7 @@ func TestTheEntityQueryOnAnUnconfiguredNodeIsNullNotAnError(t *testing.T) {
 	t.Parallel()
 	surface, _ := configSurface(t)
 	got := answer(t, queries.Sources{Config: surface}, "config_entities",
-		map[string]any{"kind": "roles"})
+		map[string]any{"kind": configapi.EntityLLMProviders})
 	if got != nil {
 		t.Fatalf("an unconfigured node answered %v", got)
 	}

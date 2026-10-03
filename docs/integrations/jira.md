@@ -17,7 +17,7 @@ Crewlet integrates with Jira in two directions: agents control Jira via MCP tool
 
 ## Setting it up from the dashboard
 
-Atlassian appears as one tool on the Integrations screen, with Jira and
+Atlassian appears as one tool in Settings › Integrations, with Jira and
 Confluence as sections, because one Atlassian account serves both. The first
 field asks which Atlassian you run, and it decides every question after it:
 

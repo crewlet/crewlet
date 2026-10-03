@@ -9,6 +9,8 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+
+	"github.com/crewlet/crewlet/internal/iam"
 )
 
 // DefaultRevisionPage is how many revisions a listing returns when the caller
@@ -32,9 +34,18 @@ type Revision struct {
 	// to be, which held the credential and so named, for a revision written
 	// through a person's machine token, a token whose row the identity
 	// sweep collects a week after it lapses. See
-	// `0035_a_write_names_its_author_beside_its_credential.sql`.
+	// `0041_a_write_names_its_author_beside_its_credential.sql`.
+	//
+	// THE KIND IS [iam.ActorKind], the vocabulary every other trail in the
+	// engine records an author in, rather than a second one of this
+	// table's: a label alone cannot say whether a person or the engine
+	// wrote the revision — the name spaces overlap, and nothing stops a
+	// token being called after a node — so the writer states it at the
+	// write, where it is a fact. EMPTY only on a revision this node adopted
+	// from a pointer that did not say, which a reader shows as "not
+	// recorded" rather than picking a kind.
 	CreatedBy     string
-	CreatedByKind string
+	CreatedByKind iam.ActorKind
 	OperatorID    string
 
 	Source  string
@@ -56,7 +67,7 @@ type Revision struct {
 	// which is why it is a stamp rather than a silent rewrite: a diff
 	// across a scrub boundary shows a tombstone, and the next reader has
 	// to be able to tell that from corruption. See
-	// `0032_a_superseded_revision_can_be_scrubbed.sql`.
+	// `0038_a_superseded_revision_can_be_scrubbed.sql`.
 	ScrubbedAt time.Time
 
 	// ChartPosition is the org chart position THIS NODE composed its epoch
@@ -69,7 +80,7 @@ type Revision struct {
 	// recorded position at all. A plain int64 would report every historical
 	// activation as having run on an empty company.
 	//
-	// See `0033_an_activation_records_the_chart_it_ran.sql` for why the
+	// See `0039_an_activation_records_the_chart_it_ran.sql` for why the
 	// company needs both halves to be answerable.
 	ChartPosition *int64
 }
@@ -137,7 +148,19 @@ func (c *Configs) Insert(ctx context.Context, r Revision) (string, error) {
 
 // insert is the one INSERT both writes share, so a revision stored active and
 // one stored inactive cannot differ in anything but the flag.
+//
+// THE KIND IS REQUIRED, and held to [iam.ActorKind.Valid]. Every writer on
+// this node knows whether it is a person, a credential or the engine, and a
+// revision stored without saying is exactly the row the audit screen used to
+// fill in with a guess. Only a WRITE is held to it: [Configs.Adopt] stores the
+// kind the fleet's pointer carries, which may be one a newer build added — an
+// unknown kind off the wire is a value, and refusing it would stop this node
+// recording a revision it is running.
 func (c *Configs) insert(ctx context.Context, r Revision, active bool) (string, error) {
+	if !r.CreatedByKind.Valid() {
+		return "", fmt.Errorf("store: a config revision needs its author's kind "+
+			"(one of %q), got %q", iam.ActorKinds, r.CreatedByKind)
+	}
 	id := r.ID
 	if id == "" {
 		id = uuid.NewString()
@@ -170,7 +193,7 @@ func (c *Configs) insert(ctx context.Context, r Revision, active bool) (string, 
 			      is_active, activated_at)
 			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 			id, NullText(r.ParentID), EncodeTime(at), r.CreatedBy,
-			r.CreatedByKind, r.OperatorID, r.Source, r.Summary,
+			string(r.CreatedByKind), r.OperatorID, r.Source, r.Summary,
 			string(payload), isActive, activatedAt)
 		return err
 	})
@@ -179,7 +202,8 @@ func (c *Configs) insert(ctx context.Context, r Revision, active bool) (string, 
 	}
 	log.InfoContext(ctx, "config_revision_stored",
 		"revision", id, "source", r.Source, "by", r.CreatedBy,
-		"operator", r.OperatorID, "active", active)
+		"by_kind", string(r.CreatedByKind), "operator", r.OperatorID,
+		"active", active)
 	return id, nil
 }
 
@@ -254,6 +278,22 @@ func (c *Configs) Activate(ctx context.Context, revisionID string, at time.Time)
 // The id is REQUIRED, and that is the difference from InsertActive minting
 // one: this row's identity belongs to the fleet, and a generated id would
 // make the node's own history disagree with the pointer it converged on.
+//
+// # The author is the ORIGIN's, never this node's
+//
+// The caller passes the author, kind, credential, source and creation instant
+// the fleet's pointer carries, so a revision reads the same on every node
+// rather than "peer" everywhere but the one it was written on. The kind is NOT
+// held to [iam.ActorKind.Valid] here, as a local write's is: an unknown kind
+// off the wire is a value, and refusing it would stop this node recording a
+// revision it is running.
+//
+// A row that is already here keeps its body, but an author it did not know
+// is FILLED IN when the fleet now says: a node that adopted a revision from a
+// pointer that named nobody learns who wrote it — and through which
+// credential — the next time the fleet points at it. A known author is never
+// overwritten — the row this node wrote itself is the authority on its own
+// write.
 func (c *Configs) Adopt(ctx context.Context, r Revision) error {
 	if r.ID == "" {
 		return fmt.Errorf("store: adopting a revision needs its fleet id")
@@ -277,9 +317,14 @@ func (c *Configs) Adopt(ctx context.Context, r Revision) error {
 			      created_by_kind, operator_id, source, summary, payload,
 			      is_active, activated_at)
 			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?)
-			 ON CONFLICT (revision_id) DO NOTHING`,
+			 ON CONFLICT (revision_id) DO UPDATE
+			    SET created_by = excluded.created_by,
+			        created_by_kind = excluded.created_by_kind,
+			        operator_id = excluded.operator_id
+			  WHERE company_config.created_by_kind = ''
+			    AND excluded.created_by_kind <> ''`,
 			r.ID, NullText(r.ParentID), EncodeTime(at), r.CreatedBy,
-			r.CreatedByKind, r.OperatorID, r.Source, r.Summary,
+			string(r.CreatedByKind), r.OperatorID, r.Source, r.Summary,
 			string(payload), EncodeTime(at)); err != nil {
 			return err
 		}
@@ -294,7 +339,8 @@ func (c *Configs) Adopt(ctx context.Context, r Revision) error {
 	if err != nil {
 		return fmt.Errorf("store: adopt config revision %s: %w", r.ID, err)
 	}
-	log.InfoContext(ctx, "config_revision_adopted", "revision", r.ID, "source", r.Source)
+	log.InfoContext(ctx, "config_revision_adopted", "revision", r.ID, "source", r.Source,
+		"by", r.CreatedBy, "by_kind", string(r.CreatedByKind), "operator", r.OperatorID)
 	return nil
 }
 
@@ -373,8 +419,9 @@ func scanRevision(rows *sql.Rows) (Revision, error) {
 	var createdAt int64
 	var activatedAt, scrubbedAt, chartPosition sql.NullInt64
 	var active int64
+	var kind string
 	if err := rows.Scan(&r.ID, &parent, &createdAt, &r.CreatedBy,
-		&r.CreatedByKind, &r.OperatorID, &r.Source, &r.Summary, &payload,
+		&kind, &r.OperatorID, &r.Source, &r.Summary, &payload,
 		&active, &activatedAt, &scrubbedAt, &chartPosition); err != nil {
 		return Revision{}, fmt.Errorf("store: read config revision: %w", err)
 	}
@@ -382,6 +429,7 @@ func scanRevision(rows *sql.Rows) (Revision, error) {
 		r.ChartPosition = &chartPosition.Int64
 	}
 	r.ParentID = Text(parent)
+	r.CreatedByKind = iam.ActorKind(kind)
 	r.CreatedAt = DecodeTime(createdAt)
 	r.Payload = json.RawMessage(payload)
 	r.Active = active != 0
@@ -411,7 +459,7 @@ var ErrRevisionIsActive = errors.New(
 // rewrite underneath them would be a config change nothing activated. An
 // operator who wants the address out of the live company edits the company.
 //
-// `0032_a_superseded_revision_can_be_scrubbed.sql` is where the narrowed
+// `0038_a_superseded_revision_can_be_scrubbed.sql` is where the narrowed
 // immutability is written down.
 func (c *Configs) Scrub(ctx context.Context, revisionID string, payload json.RawMessage, at time.Time) error {
 	result, err := c.db.sql.ExecContext(ctx,

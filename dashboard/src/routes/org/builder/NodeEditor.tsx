@@ -8,9 +8,9 @@
  * and Undo takes back the whole of what Apply did. Closing a form with
  * changes in it, by Cancel, Close, Escape or the veil, asks first, because a
  * form's changes exist nowhere else, and so does every move that leaves the
- * Builder lens (one of its links, Back or Forward, a reload): the form holds
+ * builder (one of its links, Back or Forward, a reload): the form holds
  * a leave guard (`app/router.useLeaveGuard`) for as long as it has changes.
- * A move within the lens (Back from the outline to the canvas) keeps the
+ * A move within the builder (Back from the outline to the canvas) keeps the
  * editor open with its form, so it is let go without a question
  * (`BuilderContext.keepsTheLens`).
  *
@@ -56,6 +56,7 @@ import { useLeaveGuard } from "~/app/router.tsx";
 import type { CompanyDocument } from "~/protocol/index.ts";
 import { REDACTED, plural } from "~/lib/format.ts";
 import { ConfigField, type FieldChoice } from "~/components/ConfigField.tsx";
+import { BUDGET_WINDOWS } from "~/contract/config.ts";
 import {
   keepsTheLens,
   useBuilder,
@@ -72,9 +73,11 @@ import {
   schedulesOf,
   seatForm,
   seatParts,
-  tokenBudgetError,
+  tokenBudgetErrors,
   unitForm,
   unitParts,
+  type BudgetForm,
+  type BudgetWindow,
   type CompanyForm,
   type SeatForm,
   type UnitForm,
@@ -83,7 +86,6 @@ import {
   ACKNOWLEDGEMENT_TEXT,
   ADDRESS_HELP,
   EditorSection,
-  HueFact,
   NAME_HELP,
   NodeProblems,
   NotConnected,
@@ -264,7 +266,7 @@ function EditorShell({
 }) {
   // `leave` is the move the router held (a link, Back or Forward) when the
   // question came from one, so the same question serves a close and a move,
-  // and discarding then makes the move. Only a move off the lens is held: the
+  // and discarding then makes the move. Only a move off the builder is held: the
   // Builder keeps this editor, form and all, through a move within it.
   const [confirming, setConfirming] = useState<{ leave: (() => void) | null } | null>(null);
   const requestClose = () => (dirty ? setConfirming({ leave: null }) : onClose());
@@ -882,7 +884,10 @@ function seatFieldPaths(
         ]
       : [
           ["runtime", "llm"],
+          // The block, for a problem about its shape, and each window, so a
+          // refused ceiling is drawn under the box it was typed in.
           ["runtime", "token_budget"],
+          ...BUDGET_WINDOWS.map(({ period }) => ["runtime", "token_budget", period] as Segment[]),
           ...(schedulesOf(data).length > 0 ? [["runtime", "schedules"] as Segment[]] : []),
           ...(isConnected(company, "github") ? [GITHUB_TIER, GITHUB_REPOS] : []),
           ...(isConnected(company, "mattermost") &&
@@ -971,7 +976,7 @@ function AddressField({
       />
       {hidden && (
         <Button
-          variant="tertiary"
+          variant="ghost"
           size="small"
           disabled={disabled}
           onClick={() => onChange(initial)}
@@ -1019,13 +1024,13 @@ function SeatEditor({
   );
   const disabled = api.readOnly;
 
-  const budgetError = human || !runtimeVisible ? undefined : tokenBudgetError(form.tokenBudget);
+  const budgetErrors = human || !runtimeVisible ? {} : tokenBudgetErrors(form.tokenBudget);
   const blocked =
     form.name.trim() === ""
       ? "A seat needs a name."
       : form.handle.trim() === ""
         ? "A seat needs a handle."
-        : budgetError
+        : Object.keys(budgetErrors).length > 0
           ? "Correct the token budget first."
           : null;
 
@@ -1166,8 +1171,18 @@ function SeatEditor({
             chain={form.llm}
             onChain={(llm) => set({ llm })}
             budget={form.tokenBudget}
-            onBudget={(tokenBudget) => set({ tokenBudget })}
-            budgetError={budgetError ?? errorFor(["runtime", "token_budget"])}
+            onBudget={(window, typed) =>
+              set({ tokenBudget: { ...form.tokenBudget, [window]: typed } })
+            }
+            budgetError={(window) =>
+              budgetErrors[window] ??
+              errorFor(["runtime", "token_budget", window]) ??
+              // A problem with the block as a whole — its shape — belongs
+              // to every box, and is drawn under the first.
+              (window === BUDGET_WINDOWS[0].period
+                ? errorFor(["runtime", "token_budget"])
+                : undefined)
+            }
             chainError={errorFor(["runtime", "llm"])}
             disabled={disabled}
           />
@@ -1189,13 +1204,6 @@ function SeatEditor({
             disabled={disabled}
           />
           <RuntimeFacts data={data} handle={handle} />
-          {/*
-           * Last, where the console's agent editor ends too. An agent seat is
-           * the only node the chart tints, so it is the only one with a hue
-           * to state: a human seat wears the dashed boundary and a unit is
-           * the chart's own neutral surface (`nodeTone.ts`).
-           */}
-          <HueFact nodeKey={key} />
         </>
       )}
     </EditorShell>
@@ -1353,9 +1361,9 @@ function ModelSection({
 }: {
   chain: readonly string[];
   onChain: (next: string[]) => void;
-  budget: string;
-  onBudget: (next: string) => void;
-  budgetError: string | undefined;
+  budget: BudgetForm;
+  onBudget: (window: BudgetWindow, typed: string) => void;
+  budgetError: (window: BudgetWindow) => string | undefined;
   chainError: string | undefined;
   disabled: boolean;
 }) {
@@ -1396,16 +1404,22 @@ function ModelSection({
           />
         )}
       </FormField>
-      <ConfigField
-        label="Token budget"
-        kind="id"
-        value={budget}
-        onChange={onBudget}
-        required={false}
-        disabled={disabled}
-        help="Tokens this seat may spend. Empty or 0 is unlimited."
-        error={budgetError}
-      />
+      {/* ONE BOX PER WINDOW, each optional: a seat may cap its day, its
+          week and its month independently, and a turn runs only while every
+          capped window has room. The company's own ceilings apply on top. */}
+      {BUDGET_WINDOWS.map(({ period, label, none }) => (
+        <ConfigField
+          key={period}
+          label={label}
+          kind="id"
+          value={budget[period]}
+          onChange={(typed) => onBudget(period, typed)}
+          required={false}
+          disabled={disabled}
+          help={`Tokens this seat may spend in one ${period} on the company clock, as 40000000 or 40M. Empty is ${none.toLowerCase()}.`}
+          error={budgetError(period)}
+        />
+      ))}
     </EditorSection>
   );
 }

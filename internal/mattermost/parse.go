@@ -40,7 +40,7 @@ type Seat struct {
 	Handle string
 
 	// Origin is the handle the seat was CREATED under ([org.Role.Origin],
-	// ADR-0019), and what its thread follows are keyed on — see
+	// ADR-0026), and what its thread follows are keyed on — see
 	// [Seat.Identity].
 	Origin string
 

@@ -3,6 +3,8 @@ package pages
 import (
 	"context"
 	"database/sql"
+	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"slices"
@@ -113,10 +115,17 @@ func (r *Reader) At() statelog.Position { return r.committed() }
 type Filter struct {
 	Container string
 	ParentID  string
-	Status    []Status
-	Label     string
-	Watcher   string `person:"seat"`
-	Title     string
+
+	// Roots narrows to the pages at the TOP of their container — the ones
+	// with no parent. Its own field rather than an empty ParentID, because an
+	// empty ParentID already means "any parent", and a tree loading its first
+	// level asks the opposite question.
+	Roots bool
+
+	Status  []Status
+	Label   string
+	Watcher string `person:"seat"`
+	Title   string
 
 	// Skills narrows to tool-skill pages, or excludes them. A POINTER
 	// because all three states are real: only skills (the sync walk),
@@ -126,9 +135,18 @@ type Filter struct {
 	// Onboarding narrows to the pages a seat's reading chain starts at.
 	Onboarding bool
 
-	Limit  int
-	Offset int
+	Limit int
+
+	// After is the [Listing.After] of the page before this one, or empty for
+	// the first page. A CURSOR rather than an offset: a listing is read while
+	// seats write, and an offset over a set a create or a rename just moved
+	// repeats one row and skips another with nothing to say it did — which a
+	// tree's "Load more" is exactly the reader to notice.
+	After string
 }
+
+// ErrBadCursor refuses an [Filter.After] this reader did not mint.
+var ErrBadCursor = errors.New("pages: that cursor is not one this listing minted")
 
 // DefaultLimit and MaxLimit bound a listing, on [work]'s reasoning.
 const (
@@ -151,9 +169,20 @@ type Summary struct {
 	Labels     []string  `json:"labels,omitempty"`
 	Updated    time.Time `json:"updated_at"`
 	Revision   uint64    `json:"revision"`
+
+	// Children is how many pages sit directly under this one that the SAME
+	// listing would show — its status and skill narrowing applied to them,
+	// nothing else. A tree draws an expander off it, and a count that included
+	// a trashed child would draw one that opens onto nothing.
+	Children int `json:"children,omitempty"`
 }
 
 // Listing is a page listing and what it is true as of.
+//
+// THE TOTAL AND THE CURSOR TRAVEL WITH THE ROWS, because a page of rows alone
+// cannot say whether it is everything: fifty pages in a container of fifty and
+// fifty in a container of four hundred were the same answer, and every screen
+// that drew one said "50" about both.
 //
 // THE POSITION AND THE COVERAGE TRAVEL WITH THE ROWS, because a caller cannot
 // reconstruct either afterwards: [Reader.At] answers about NOW rather than
@@ -161,6 +190,15 @@ type Summary struct {
 // not account for everything is indistinguishable from a short one.
 type Listing struct {
 	Pages []Summary `json:"pages"`
+
+	// Total is how many pages the filter matches, ALL of them rather than
+	// this page — counted in the same transaction as the rows, so the two
+	// can never describe different instants.
+	Total int `json:"total"`
+
+	// After is what to pass as [Filter.After] for the next page, and ABSENT
+	// on the last one.
+	After string `json:"after,omitempty"`
 
 	// Level is what the read was SERVED at, which is the level asked for
 	// or a refusal — never the level requested, which is how a level
@@ -237,15 +275,33 @@ func (r *Reader) listing(ctx context.Context, f Filter, fresh statelog.Freshness
 		where = append(where, `p.title LIKE ? ESCAPE '\'`)
 		args = append(args, store.LikeContains(title))
 	}
+	// WHAT A CHILD IS COUNTED UNDER: the listing's own status and skill
+	// narrowing, on the child. Only those two — a label or a title filter
+	// selects which pages are LISTED, and a child that does not share its
+	// parent's label is still under it.
+	child := listSpec{where: []string{"c.parent_id = p.id"}}
+	if len(f.Status) > 0 {
+		marks := make([]string, len(f.Status))
+		for i, s := range f.Status {
+			marks[i] = "?"
+			child.args = append(child.args, string(s))
+		}
+		child.where = append(child.where, "c.status IN ("+strings.Join(marks, ",")+")")
+	}
 	if f.Skills != nil {
 		if *f.Skills {
 			where = append(where, "COALESCE(k.skill, 0) = 1")
+			child.where = append(child.where, "COALESCE(ck.skill, 0) = 1")
 		} else {
 			where = append(where, "COALESCE(k.skill, 0) = 0")
+			child.where = append(child.where, "COALESCE(ck.skill, 0) = 0")
 		}
 	}
 	if f.Onboarding {
 		where = append(where, "COALESCE(k.onboarding, 0) = 1")
+	}
+	if f.Roots {
+		where = append(where, "p.parent_id = ''")
 	}
 
 	limit := f.Limit
@@ -255,43 +311,123 @@ func (r *Reader) listing(ctx context.Context, f Filter, fresh statelog.Freshness
 	if limit > MaxLimit {
 		limit = MaxLimit
 	}
-	var out []Summary
+	var after *listCursor
+	if f.After != "" {
+		c, err := parseListCursor(f.After)
+		if err != nil {
+			return Listing{}, err
+		}
+		after = &c
+	}
+	var out listPage
 	served, err := r.log.Read(ctx, fresh.Query(ReadScope(f.Container, ""), true), func(tx *sql.Tx) error {
 		var err error
-		out, err = r.list(ctx, tx, where, args, limit, max(f.Offset, 0))
+		out, err = r.list(ctx, tx, listSpec{where: where, args: args}, child, limit, after)
 		return err
 	})
 	if err != nil {
 		return Listing{}, err
 	}
 	return Listing{
-		Pages: out, Level: served.Level, Complete: served.Complete,
+		Pages: out.rows, Total: out.total, After: out.after,
+		Level: served.Level, Complete: served.Complete,
 		Position: served.Position, LogLag: served.Lag,
 	}, nil
+}
+
+// listSpec is one set of predicates and the arguments they bind, in order.
+type listSpec struct {
+	where []string
+	args  []any
+}
+
+// listPage is one window of a listing: its rows, how many the predicate
+// matches in all, and where the next window starts.
+type listPage struct {
+	rows  []Summary
+	total int
+	after string
+}
+
+// listCursor is where a listing window stopped: the ORDER's own columns, so
+// the next window is everything strictly after it in that order. The id is the
+// tie-break, because a title is unique only among a container's LIVE pages —
+// a trashed page keeps its title while a new one claims it.
+type listCursor struct {
+	Container string `json:"c"`
+	Title     string `json:"t"`
+	ID        string `json:"i"`
+}
+
+func (c listCursor) String() string {
+	body, err := json.Marshal(c)
+	if err != nil {
+		return ""
+	}
+	return base64.RawURLEncoding.EncodeToString(body)
+}
+
+func parseListCursor(raw string) (listCursor, error) {
+	body, err := base64.RawURLEncoding.DecodeString(raw)
+	if err != nil {
+		return listCursor{}, fmt.Errorf("%w: %w", ErrBadCursor, err)
+	}
+	var c listCursor
+	if err := json.Unmarshal(body, &c); err != nil || c.ID == "" {
+		return listCursor{}, fmt.Errorf("%w: it decodes to no position", ErrBadCursor)
+	}
+	return c, nil
 }
 
 // list is the listing inside one transaction, so [Reader.Get] can take the
 // children it reports from the same snapshot as the page itself.
 //
 // THE BOUND IS BOUND HERE, not by the caller. The placeholders are positional,
-// so a caller that appended the page window to `args` itself would be one
+// so a caller that appended the window to `args` itself would be one
 // reordering away from paging the listing by a filter value — and the caller
-// that got it right would still be stating the same two numbers twice.
-func (r *Reader) list(ctx context.Context, tx *sql.Tx, where []string,
-	args []any, limit, offset int) ([]Summary, error) {
+// that got it right would still be stating the same numbers twice. The child
+// count's arguments come FIRST because its subquery is in the SELECT list,
+// which a statement binds before its WHERE.
+//
+// THE TOTAL IS THE PREDICATE WITHOUT THE CURSOR, counted in the same
+// transaction: it describes the whole listing rather than what is left of it.
+func (r *Reader) list(ctx context.Context, tx *sql.Tx, spec, child listSpec,
+	limit int, after *listCursor) (listPage, error) {
 
-	args = append(slices.Clip(args), limit, offset)
+	var page listPage
+	where := strings.Join(spec.where, " AND ")
+	if err := tx.QueryRowContext(ctx, `
+		SELECT COUNT(*)
+		  FROM pages_heads p
+		  LEFT JOIN pages_skills k ON k.page_id = p.id
+		 WHERE `+where, spec.args...).Scan(&page.total); err != nil {
+		return listPage{}, fmt.Errorf("pages: count pages: %w", err)
+	}
+
+	args := append(slices.Clip(child.args), spec.args...)
+	if after != nil {
+		// EXPANDED rather than a row-value comparison: the order is three
+		// columns deep and each leg says which one it is breaking a tie on.
+		where += ` AND (p.container > ? OR (p.container = ? AND (p.title > ? OR (p.title = ? AND p.id > ?))))`
+		args = append(args, after.Container, after.Container, after.Title, after.Title, after.ID)
+	}
+	// ONE MORE THAN THE WINDOW, which is how the answer knows whether there
+	// is a next one without a second statement.
+	args = append(args, limit+1)
 	rows, err := tx.QueryContext(ctx, `
 		SELECT p.id, p.container, p.parent_id, p.title, p.status, p.author,
 		       p.edit_version, COALESCE(k.skill, 0), COALESCE(k.onboarding, 0),
-		       p.updated_at, MAX(p.version, p.scoped_through)
+		       p.updated_at, MAX(p.version, p.scoped_through),
+		       (SELECT COUNT(*) FROM pages_heads c
+		          LEFT JOIN pages_skills ck ON ck.page_id = c.id
+		         WHERE `+strings.Join(child.where, " AND ")+`)
 		  FROM pages_heads p
 		  LEFT JOIN pages_skills k ON k.page_id = p.id
-		 WHERE `+strings.Join(where, " AND ")+`
-		 ORDER BY p.container, p.title
-		 LIMIT ? OFFSET ?`, args...)
+		 WHERE `+where+`
+		 ORDER BY p.container, p.title, p.id
+		 LIMIT ?`, args...)
 	if err != nil {
-		return nil, fmt.Errorf("pages: list pages: %w", err)
+		return listPage{}, fmt.Errorf("pages: list pages: %w", err)
 	}
 	defer rows.Close()
 
@@ -303,8 +439,9 @@ func (r *Reader) list(ctx context.Context, tx *sql.Tx, where []string,
 			updated, revision int64
 		)
 		if err := rows.Scan(&s.ID, &s.Container, &s.ParentID, &s.Title, &s.Status,
-			&s.Author, &s.Version, &skill, &onboarding, &updated, &revision); err != nil {
-			return nil, fmt.Errorf("pages: scan page: %w", err)
+			&s.Author, &s.Version, &skill, &onboarding, &updated, &revision,
+			&s.Children); err != nil {
+			return listPage{}, fmt.Errorf("pages: scan page: %w", err)
 		}
 		s.Skill, s.Onboarding = skill != 0, onboarding != 0
 		s.Updated = store.DecodeTime(updated)
@@ -312,9 +449,15 @@ func (r *Reader) list(ctx context.Context, tx *sql.Tx, where []string,
 		out = append(out, s)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("pages: list pages: %w", err)
+		return listPage{}, fmt.Errorf("pages: list pages: %w", err)
 	}
-	return out, r.attachLabels(ctx, tx, out)
+	if len(out) > limit {
+		out = out[:limit]
+		last := out[len(out)-1]
+		page.after = listCursor{Container: last.Container, Title: last.Title, ID: last.ID}.String()
+	}
+	page.rows = out
+	return page, r.attachLabels(ctx, tx, out)
 }
 
 func (r *Reader) attachLabels(ctx context.Context, tx *sql.Tx, items []Summary) error {
@@ -348,11 +491,28 @@ func (r *Reader) attachLabels(ctx context.Context, tx *sql.Tx, items []Summary) 
 
 // Detail is one page with everything a reader opening it wants.
 type Detail struct {
-	Page     Page              `json:"page"`
-	Revision uint64            `json:"revision"`
+	Page     Page   `json:"page"`
+	Revision uint64 `json:"revision"`
+
+	// Skill and Onboarding are what the applier DERIVED from the page —
+	// whether its body parses as a tool skill, whether it is the onboarding
+	// page — read from `pages_skills` in the same transaction. They sit
+	// beside the page rather than on it because [Page] is the record's own
+	// document and neither flag is anything a writer wrote. They were
+	// missing from this answer altogether, so a tool-skill page's own screen
+	// never said what it was: a listing row carried the mark and the page it
+	// opened did not.
+	Skill      bool `json:"skill"`
+	Onboarding bool `json:"onboarding"`
+
 	Comments []Comment         `json:"comments,omitempty"`
 	History  []RevisionSummary `json:"history,omitempty"`
 	Children []Summary         `json:"children,omitempty"`
+
+	// ChildrenTotal is how many children the page has, of which Children
+	// is the first [DefaultLimit] by title — so a page with sixty children
+	// says sixty rather than drawing fifty as all of them.
+	ChildrenTotal int `json:"children_total"`
 
 	// Ancestors are the parent chain, outermost first. Carried because
 	// the auto-draft exclusion is by ancestor and a reader wants the
@@ -434,17 +594,28 @@ func (r *Reader) detail(ctx context.Context, ref string, fresh statelog.Freshnes
 			return refused
 		}
 		detail = Detail{Page: page, Revision: revision}
+		var skill, onboarding int
+		switch serr := tx.QueryRowContext(ctx,
+			`SELECT skill, onboarding FROM pages_skills WHERE page_id = ?`, id).
+			Scan(&skill, &onboarding); {
+		case errors.Is(serr, sql.ErrNoRows):
+		case serr != nil:
+			return fmt.Errorf("pages: read what %s was derived as: %w", id, serr)
+		}
+		detail.Skill, detail.Onboarding = skill != 0, onboarding != 0
 		if detail.Comments, err = r.comments(ctx, tx, id); err != nil {
 			return err
 		}
 		if detail.History, err = r.history(ctx, tx, id); err != nil {
 			return err
 		}
-		if detail.Children, err = r.list(ctx, tx,
-			[]string{"1 = 1", "p.parent_id = ?"}, []any{id},
-			DefaultLimit, 0); err != nil {
+		children, err := r.list(ctx, tx,
+			listSpec{where: []string{"p.parent_id = ?"}, args: []any{id}},
+			listSpec{where: []string{"c.parent_id = p.id"}}, DefaultLimit, nil)
+		if err != nil {
 			return err
 		}
+		detail.Children, detail.ChildrenTotal = children.rows, children.total
 		detail.Ancestors, err = r.ancestors(ctx, tx, page.ParentID)
 		return err
 	})
@@ -631,9 +802,11 @@ func (r *Reader) locate(ctx context.Context, tx *sql.Tx, ref string) (document s
 	return document, uint64(rev), id, nil
 }
 
+// comments reads a page's thread.
 func (r *Reader) comments(ctx context.Context, tx *sql.Tx, pageID string) ([]Comment, error) {
 	rows, err := tx.QueryContext(ctx,
-		`SELECT document FROM pages_comments WHERE page_id = ? ORDER BY created_at, id`,
+		`SELECT document FROM pages_comments
+		  WHERE page_id = ? ORDER BY created_at, id`,
 		pageID)
 	if err != nil {
 		return nil, fmt.Errorf("pages: read the thread on %s: %w", pageID, err)

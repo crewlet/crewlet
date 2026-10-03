@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/crewlet/crewlet/internal/api"
 	"github.com/crewlet/crewlet/internal/api/auth"
@@ -94,12 +95,14 @@ func serveAPI(
 // because a fleet member is built off the test's goroutine, where t.Fatalf
 // ends only that goroutine and leaves the test running with a nil member.
 //
-// THE NATIVE SOURCES ARE NOT COPIED EITHER — the read surface's board, pages
-// and search and the operator's assistant — and for the same cure: each is
-// built by internal/api ([api.NativeSources], [api.NativeOperator]) over the
-// engine, resolved per request, because a node meets its tracker and knowledge
-// base at its first company, which a node that booted with none meets after
-// its API is serving.
+// THE NATIVE SOURCES ARE NOT COPIED EITHER — the read surface's board, pages,
+// backlinks and search, and the operator surface both transports serve — and
+// for the same cure: each is built by internal/api ([api.NativeSources], and
+// the operator inside [api.NewHumanSurfaces]) over the engine, resolved per
+// request, because a node meets its tracker and knowledge base at its first
+// company, which a node that booted with none meets after its API is serving.
+// So `/operator/act` here is the route a person's dashboard writes through,
+// and the viewer names the same verbs.
 func wireAPI(
 	ctx context.Context, e *engine.Engine, boot *config.Bootstrap, amend func(*api.Options),
 ) (*api.App, *httptest.Server, []func(), error) {
@@ -238,7 +241,7 @@ func wireAPI(
 		return fail("chart surface", err)
 	}
 
-	workSource, pageSource, searchSource := api.NativeSources(e)
+	workSource, pageSource, backlinkSource, searchSource := api.NativeSources(e)
 	opts := api.Options{
 		Bootstrap:    boot,
 		SeatBindings: auth.SeatBindings{Directory: e, Chart: engine.SeatViewOf(e)},
@@ -246,27 +249,42 @@ func wireAPI(
 		Inbox:        e,
 		Chart:        chartSurface,
 		QueueBackend: backends.Queue.Backend(),
-		// THE OPERATOR'S ASSISTANT, as cmd/crewlet mounts it.
-		Operator: api.NativeOperator(e),
+		EventLog:     backends.Store.Events(),
 		Sources: queries.Sources{
-			Events:  backends.Store.Events(),
+			// THE ENGINE'S OWN fleet reader, as cmd/crewlet wires it, so
+			// the node the harness serves answers history the way a real
+			// node does — from every live member.
+			Events:  e.History(),
+			Usage:   e.UsageEstate(),
 			Company: company,
 			NodeID:  nodeID,
 			Chart:   engine.ChartAuthorityOf(e),
 			// WHOSE RECORD SOMEBODY ELSE'S LOGIN NAMES, as cmd/crewlet
 			// hands it: api.New refuses a missing one by name.
 			Holders: e,
+			// AND WHOSE CONTACT IDENTITIES THE REGISTRY WITHHOLDS, which
+			// api.New requires too.
+			WithheldContacts: e.WithheldContacts,
+			// THE FLEET'S LEASE TABLE, as cmd/crewlet wires it: the seat
+			// states the dashboard is served read placement from it.
+			Coord: backends.Coord,
+			// THE FLEET'S TOKEN COUNTERS, which the `budgets` question
+			// and every seat's live meter read.
+			Budget: backends.Fleet,
 			// AND THE NATIVE HALVES, per question, as cmd/crewlet hands
 			// them.
-			Work: workSource, Pages: pageSource, WorkSearch: searchSource,
+			Work: workSource, Pages: pageSource, Backlinks: backlinkSource,
+			WorkSearch: searchSource,
 		},
 		Config:    configSurface,
 		Secrets:   secretSurface,
 		Setup:     setupSurface,
-		Budgets:   backends.Fleet,
 		Retention: backends.Fleet,
 		Capacity:  e,
 		Backup:    copier,
+		// THE RUNTIME AUDIT, onto this node's own queue as cmd/crewlet
+		// hands it: api.New requires it.
+		Audit: backends.Queue,
 		// THE EVICTION GATE, which every node holds from boot and api.New
 		// requires.
 		Nodes: e.NodeGate(),
@@ -314,10 +332,31 @@ func wireAPI(
 	// has ended, which is exactly when a cancelled stop would do nothing.
 	stops = append(stops, func() { projector.Stop(context.WithoutCancel(ctx)) })
 
+	// AND THE HISTORY BEHIND IT, seeded as cmd/crewlet seeds it: after the
+	// subscription so nothing falls into the gap, before the listener so the
+	// first socket sees the seeded snapshot. A harness without it served a
+	// node `crewlet run` never produces — one whose envelope carries no
+	// `seeded_from` and whose feed starts at boot — and every case reading
+	// either proved the harness rather than the node. FAILED here rather than
+	// warned about, as cmd/crewlet does: a seed that cannot read the fleet it
+	// was just built beside is a broken case, not a degraded node.
+	seedCtx, cancelSeed := context.WithTimeout(ctx, seedBudget)
+	_, composed := company()
+	err = observe.Seed(seedCtx, e.History(), composed, app.Stream().State())
+	cancelSeed()
+	if err != nil {
+		return fail("seed the live projection", err)
+	}
+
 	srv := httptest.NewServer(app)
 	stops = append(stops, srv.Close)
 	return app, srv, stops, nil
 }
+
+// seedBudget bounds the harness's boot seed, at cmd/crewlet's
+// projectionSeedBudget: the same read, over the same fan-out, against a fleet
+// that is booting just as a real one is.
+const seedBudget = 5 * time.Second
 
 // stopInReverse runs a teardown in the reverse of the order it was built.
 func stopInReverse(stops []func()) {

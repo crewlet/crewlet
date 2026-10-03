@@ -363,3 +363,106 @@ test("the tab coming back asks again where the read asked for it", async () => {
   act(() => void document.dispatchEvent(new Event("visibilitychange")));
   expect(read).toHaveBeenCalledTimes(2);
 });
+
+// AN ANSWER BELONGS TO THE KEY THAT ASKED FOR IT: a read under a key the
+// screen has left is aborted, and if it lands after the new key's answer it
+// does not put the old key's answer on a screen showing the new one.
+test("an older key's answer landing late is dropped, and its request ended", async () => {
+  const pending: Array<{ resolve: (v: string) => void; signal: AbortSignal }> = [];
+  const read = (signal: AbortSignal) =>
+    new Promise<string>((resolve) => pending.push({ resolve, signal }));
+  const view = mount(read, undefined, "/a");
+  view.rerender({ k: "/b", o: undefined });
+  expect(pending).toHaveLength(2);
+  expect(pending[0]!.signal.aborted).toBe(true);
+  act(() => pending[1]!.resolve("b"));
+  await wait(0);
+  act(() => pending[0]!.resolve("a"));
+  await wait(0);
+  expect(view.result.current.data).toBe("b");
+});
+
+// A SCREEN THAT HAS GONE has nothing to write into: its read is ended, and an
+// answer that lands anyway writes nothing and arms nothing.
+test("an unmounted screen's read is ended and writes nothing", async () => {
+  let land: (value: string) => void = () => {};
+  let signal: AbortSignal | null = null;
+  const read = vi.fn((s: AbortSignal) => {
+    signal = s;
+    return new Promise<string>((resolve) => {
+      land = resolve;
+    });
+  });
+  const view = mount(read);
+  const before = view.result.current;
+  view.unmount();
+  expect(signal!.aborted).toBe(true);
+  await act(async () => land("late"));
+  await wait(60_000);
+  expect(view.result.current).toBe(before);
+  expect(read).toHaveBeenCalledTimes(1);
+});
+
+// A READ THAT THROWS SOMETHING ELSE failed to make sense of what it was given
+// — a transform over a body shaped unlike its type — which is a failure the
+// screen draws, never nothing.
+test("a read that throws something other than a refusal is a failure", async () => {
+  const thrown = new TypeError("rows is not iterable");
+  const { result } = mount(scripted([fails(thrown)]));
+  await wait(0);
+  expect(result.current.failure?.error).toBe("query_failed");
+  expect(result.current.error).toBe(thrown);
+  expect(result.current.loading).toBe(false);
+});
+
+// A NEWER READ SUPERSEDES THE WAIT AN OLDER ONE ARMED: the engine's hint is a
+// wait for the read it answered, and a read that has since answered needs it
+// no more.
+test("a newer read cancels the wait an older refusal armed", async () => {
+  const { result } = mount(
+    scripted([fails(new RestError(503, { error: "identity_unavailable" }, 5)), answers("rows")]),
+  );
+  await wait(0);
+  act(() => result.current.refetch());
+  await wait(0);
+  expect(result.current.data).toBe("rows");
+  await wait(10_000);
+  expect(began).toHaveLength(2);
+});
+
+// A READ ON ITS OWN CADENCE IS QUIET: what is on screen stays, and nothing
+// blinks into a skeleton to say nothing new.
+test("a cadence re-read keeps what is on screen", async () => {
+  const seen: boolean[] = [];
+  const read = scripted([answers("one"), answers("two")]);
+  const view = renderHook(
+    () => {
+      const reading = useRestRead("/runs", read, { cadence: () => 4_000 });
+      seen.push(reading.loading);
+      return reading;
+    },
+    { wrapper },
+  );
+  await wait(0);
+  expect(view.result.current.data).toBe("one");
+  seen.length = 0;
+  await wait(4_000);
+  expect(began).toHaveLength(2);
+  expect(view.result.current.data).toBe("two");
+  expect(seen.every((loading) => !loading)).toBe(true);
+});
+
+// A PAGE LOAD IS NOT A RECONNECT: the socket first coming up under a read
+// that answered over HTTP asks nothing more, and a reconnect after it does.
+test("a read that answered is not asked again when the socket first comes up", async () => {
+  const read = vi.fn(() => Promise.resolve("rows"));
+  mount(read);
+  await wait(0);
+  act(() => store.setConnected(true));
+  await wait(0);
+  expect(read).toHaveBeenCalledTimes(1);
+  act(() => store.setConnected(false));
+  act(() => store.setConnected(true));
+  await wait(0);
+  expect(read).toHaveBeenCalledTimes(2);
+});

@@ -1,5 +1,5 @@
 /**
- * The Builder lens decides its posture from what the engine answers, checks
+ * The builder decides its posture from what the engine answers, checks
  * every draft against the chart it was made on and the settings it would
  * write, and keeps the operator's work through a change of reader.
  */
@@ -22,7 +22,7 @@ import {
   fakeSurfaces,
   FakeView,
   json,
-  lensToolbar,
+  builderToolbar,
   mountBuilder,
   pressInToolbar,
   pressInView,
@@ -52,7 +52,7 @@ const liveRegion = () => document.querySelector("[data-live-region]")!;
 const labels = (menu: HTMLElement) => within(menu).getAllByRole("menuitem").map(menuEntryLabel);
 
 /** What the toolbar's check status says. */
-const toolbarSays = (text: string) => within(lensToolbar()).getByText(text);
+const toolbarSays = (text: string) => within(builderToolbar()).getByText(text);
 
 /** Opens the toolbar's Add menu and picks `entry`. */
 function addFromTheToolbar(entry: string): void {
@@ -165,7 +165,7 @@ describe("the posture table", () => {
   // a grant, not a token: "needs an operator token" sent a person signed in
   // without `config:read` to look for a token they have no use for, and the
   // toolbar and the paused-editing reason said the same thing.
-  test("a refusal that names a grant says which, wherever the lens says it", async () => {
+  test("a refusal that names a grant says which, wherever the builder says it", async () => {
     const engine = new Engine(company());
     engine.script = () =>
       json({ error: "unauthorized", reason: "no_grant", grants: ["config:read"] }, 403);
@@ -219,9 +219,9 @@ describe("the posture table", () => {
   // about. `readonly` was the other one, and it went with the 503
   // `no_control_plane` that was its only producer: no process serves the API
   // without the coordination store that refusal described.
-  test("a halted lens marks the toolbar's add entries unavailable", async () => {
+  test("a halted builder marks the toolbar's add entries unavailable", async () => {
     const engine = new Engine(company());
-    // The lens reads the company, and the check that follows is refused.
+    // The builder reads the company, and the check that follows is refused.
     let reads = 0;
     engine.script = (r) =>
       r.method === "GET" && r.path === "/chart" && ++reads > 1
@@ -246,7 +246,7 @@ describe("the posture table", () => {
   });
 });
 
-describe("the views the lens hosts", () => {
+describe("the views the builder hosts", () => {
   /** A view that registers `handle` exactly as `useBuilderView` does, counting each registration. */
   function registering(handle: BuilderViewHandle, count: { n: number }) {
     return function RegisteringView() {
@@ -291,7 +291,7 @@ describe("the views the lens hosts", () => {
   /*
    * THE SWITCH BETWEEN THE TWO CHARTS IS DRAWN BY THE CHART, in the canvas's
    * own corner where the console keeps it, and the page still owns it: it
-   * writes the lens's own section param. It sat in the page toolbar, naming
+   * writes the builder's own section param. It sat in the page toolbar, naming
    * two things that exist only inside the canvas, 800px from them.
    */
   test("the canvas is handed the chart the toolbar chooses, and the switch that chooses it", async () => {
@@ -299,9 +299,9 @@ describe("the views the lens hosts", () => {
     const { settle } = mountBuilder({ engine });
     await settle();
     expect(screen.getByText("Drawing the structure chart")).toBeDefined();
-    // Inside what the lens hands the canvas, not in the toolbar beside it.
+    // Inside what the builder hands the canvas, not in the toolbar beside it.
     const reporting = screen.getByRole("tab", { name: "Reporting" });
-    expect(lensToolbar().contains(reporting)).toBe(false);
+    expect(builderToolbar().contains(reporting)).toBe(false);
     fireEvent.click(reporting);
     await settle();
     expect(screen.getByText("Drawing the reporting chart")).toBeDefined();
@@ -310,7 +310,7 @@ describe("the views the lens hosts", () => {
   });
 
   /*
-   * AN ADD IS THE ONE REQUEST THIS LENS DOES NOT ALWAYS ANSWER WITH A DIALOG.
+   * AN ADD IS THE ONE REQUEST THIS BUILDER DOES NOT ALWAYS ANSWER WITH A DIALOG.
    * The structure chart draws the form in the ghost of the node about to
    * exist, on the branch it will hang from; nothing is mounted over the
    * picture, and the picture is not pushed back either, so `about` stays
@@ -339,12 +339,12 @@ describe("the views the lens hosts", () => {
   test("an add asked from the table or the reporting chart is a dialog", async () => {
     const { settle, checked } = mountBuilder({
       engine: new Engine(company()),
-      hash: "#/company?lens=builder&view=table",
+      hash: "#/agents/edit?view=table",
     });
     await checked();
     addFromTheToolbar("Add agent seat");
     await settle();
-    const dialog = screen.getByRole("dialog", { name: "Add to the company" });
+    const dialog = screen.getByRole("dialog", { name: "Add to Acme" });
     fireEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
     await settle();
     expect(screen.queryByRole("dialog")).toBeNull();
@@ -357,11 +357,11 @@ describe("the views the lens hosts", () => {
     expect(screen.getByText("Drawing the reporting chart")).toBeDefined();
     addFromTheToolbar("Add agent seat");
     await settle();
-    expect(screen.getByRole("dialog", { name: "Add to the company" })).toBeDefined();
+    expect(screen.getByRole("dialog", { name: "Add to Acme" })).toBeDefined();
   });
 
   /*
-   * AND AN ADD FOLLOWS THE VIEW. The request is the lens's, not the chart's,
+   * AND AN ADD FOLLOWS THE VIEW. The request is the builder's, not the chart's,
    * so moving to the table while a ghost is open asks the same question in the
    * dialog rather than leaving the reader with a form they can no longer see.
    */
@@ -373,7 +373,7 @@ describe("the views the lens hosts", () => {
     expect(screen.getByText("Adding unit to the company")).toBeDefined();
     fireEvent.click(screen.getByRole("tab", { name: "Table" }));
     await settle();
-    expect(screen.getByRole("dialog", { name: "Add to the company" })).toBeDefined();
+    expect(screen.getByRole("dialog", { name: "Add to Acme" })).toBeDefined();
     fireEvent.click(screen.getByRole("tab", { name: "Visualization" }));
     await settle();
     expect(screen.queryByRole("dialog")).toBeNull();
@@ -396,17 +396,17 @@ describe("the views the lens hosts", () => {
     await settle();
     expect(screen.getByText("Drawing the structure chart")).toBeDefined();
     const toggle = () => screen.getByRole("button", { name: "Fullscreen" });
-    expect(lensToolbar().contains(toggle())).toBe(false);
+    expect(builderToolbar().contains(toggle())).toBe(false);
 
     fireEvent.click(screen.getByRole("tab", { name: "Table" }));
     await settle();
     expect(screen.queryByText("Drawing the structure chart")).toBeNull();
-    expect(lensToolbar().contains(toggle())).toBe(true);
+    expect(builderToolbar().contains(toggle())).toBe(true);
   });
 
   /*
    * ONE QUESTION, ONE SHAPE. The node editor asks exactly this and asks it as
-   * a prompt; the lens's own asked it as a framed dialog with a head band, a
+   * a prompt; the builder's own asked it as a framed dialog with a head band, a
    * mark and a close control that did what the Keep editing two inches below
    * it did. Announced as an `alertdialog`, so the consequence is read with the
    * name rather than after it.
@@ -417,7 +417,7 @@ describe("the views the lens hosts", () => {
     await checked();
     pressInView("Edit CEO");
     await checked();
-    const discard = within(lensToolbar()).getByRole("button", { name: "Discard changes" });
+    const discard = within(builderToolbar()).getByRole("button", { name: "Discard changes" });
     expect((discard as HTMLButtonElement).disabled).toBe(false);
     fireEvent.click(discard);
     await settle();
@@ -464,7 +464,7 @@ describe("checking the draft", () => {
     expect(engine.checks()).toHaveLength(0);
   });
 
-  // A BURST IS CHECKED ONCE, after the debounce, which is time on the LENS'S
+  // A BURST IS CHECKED ONCE, after the debounce, which is time on the BUILDER'S
   // clock: nothing is asked before it has passed, and the check that goes
   // asks about the last of the burst.
   test("an edit is checked once the debounce has passed, and not before", async () => {
@@ -478,7 +478,7 @@ describe("checking the draft", () => {
     clock.advance(CHECK_DEBOUNCE_MS - 1);
     await act(async () => {});
     expect(engine.chartReads()).toHaveLength(reads);
-    expect(within(lensToolbar()).getByText("Checking")).toBeDefined();
+    expect(within(builderToolbar()).getByText("Checking")).toBeDefined();
     clock.advance(1);
     await settle();
     // One check for the two edits, and it is the draft holding both.
@@ -537,7 +537,7 @@ describe("checking the draft", () => {
   });
 
   // THE REGION IS EMPTIED FIRST, and the sentence written once the pause has
-  // passed on the lens's clock: a polite region announces a CHANGE, so the
+  // passed on the builder's clock: a polite region announces a CHANGE, so the
   // same sentence twice in a row would otherwise be said once.
   test("the live region is emptied, then says the sentence once the pause has passed", async () => {
     const engine = new Engine(company());
@@ -573,7 +573,39 @@ describe("checking the draft", () => {
   });
 });
 
-// NO PROVIDER, NO TURN. The dashboard writes none, so the lens says where one
+// ONE CHECK PER DRAFT AND BASE. On a cold open the draft is read from the
+// chart while the socket's snapshot delivers the company, and the snapshot is
+// the company that read already returned rather than a push: checked again,
+// the builder would read the chart twice on every such open. Every PUSH is a
+// write that may have landed, and is checked — one deep-equal to the last
+// included, which is what counting the pushes (`useOrgPushes`) is for.
+describe("what an org push re-checks", () => {
+  test("the snapshot's org is not a push, and the draft is checked once", async () => {
+    const engine = new Engine(company());
+    const { store, checked } = mountBuilder({ engine });
+    await checked();
+    const reads = engine.chartReads().length;
+    act(() => store.applySnapshot({ org: engine.orgPush() } as never));
+    await checked();
+    expect(engine.chartReads()).toHaveLength(reads);
+
+    act(() => store.applyOrg(engine.orgPush()));
+    await checked();
+    expect(engine.chartReads()).toHaveLength(reads + 1);
+  });
+
+  test("an org the tab held when the builder opened is re-checked when it is pushed again", async () => {
+    const engine = new Engine(company());
+    const { store, checked } = mountBuilder({ engine, org: engine.orgPush() });
+    await checked();
+    const reads = engine.chartReads().length;
+    act(() => store.applyOrg(engine.orgPush()));
+    await checked();
+    expect(engine.chartReads()).toHaveLength(reads + 1);
+  });
+});
+
+// NO PROVIDER, NO TURN. No screen adds the first, so the builder says where one
 // comes from rather than leaving agents whose work waits with nothing to say
 // why.
 test("a company with no model provider is told so, and one with a provider is not", async () => {
@@ -620,18 +652,18 @@ describe("the selection in the URL", () => {
     const engine = new Engine(company());
     const byKey = mountBuilder({
       engine,
-      hash: "#/company?lens=builder&view=visualization&unit=engineering",
+      hash: "#/agents/edit?view=visualization&unit=engineering",
     });
     await byKey.checked();
-    expect(within(lensToolbar()).getByRole("button", { name: "Engineering" })).toBeDefined();
+    expect(within(builderToolbar()).getByRole("button", { name: "Engineering" })).toBeDefined();
     cleanup();
 
     const byName = mountBuilder({
       engine: new Engine(company()),
-      hash: "#/company?lens=builder&view=visualization&unit=Engineering",
+      hash: "#/agents/edit?view=visualization&unit=Engineering",
     });
     await byName.checked();
-    expect(within(lensToolbar()).queryByRole("button", { name: "Engineering" })).toBeNull();
+    expect(within(builderToolbar()).queryByRole("button", { name: "Engineering" })).toBeNull();
   });
 
   // THE COMPANY IS A NODE TOO, and the only one the draft's tree cannot
@@ -654,17 +686,23 @@ describe("the selection in the URL", () => {
     pressInView("Edit CEO");
     await checked();
     expect(engine.chartReads().length).toBe(reads + 1);
-    expect(within(lensToolbar()).getByRole("button", { name: "Acme" })).toBeDefined();
+    expect(within(builderToolbar()).getByRole("button", { name: "Acme" })).toBeDefined();
   });
 
-  test("a link naming a seat selects it, and the toolbar offers that seat's actions", async () => {
+  test("a link naming a seat selects it and opens its editor, and the toolbar offers that seat's actions", async () => {
     const engine = new Engine(company());
     const { settle, checked } = mountBuilder({
       engine,
-      hash: "#/company?lens=builder&view=visualization&seat=ceo",
+      hash: "#/agents/edit?view=visualization&seat=ceo",
     });
     await checked();
-    const actions = within(lensToolbar()).getByRole("button", { name: "CEO" });
+    // The link was a request to edit the seat, so its form is what opens
+    // (`editWiring.test.tsx` holds when, and that it happens once); closed,
+    // the seat stays selected under it.
+    fireEvent.keyDown(screen.getByRole("dialog", { name: "Edit CEO" }), { key: "Escape" });
+    await settle();
+    expect(screen.queryByRole("dialog")).toBeNull();
+    const actions = within(builderToolbar()).getByRole("button", { name: "CEO" });
     expect(actions.getAttribute("aria-haspopup")).toBe("menu");
     const menu = toolbarMenu("CEO");
     // The same actions, in the same order, as the seat's own card offers.
@@ -719,7 +757,7 @@ describe("a company saved by somebody else", () => {
     engine.position += 1;
   };
 
-  // NOTHING TO PROTECT, SO NOTHING TO ASK. A lens with no changes on it is
+  // NOTHING TO PROTECT, SO NOTHING TO ASK. A builder with no changes on it is
   // stood on the newer company; the conflict banner, and the pause that
   // comes with it, are for a draft that holds work.
   test("an untouched draft is stood on the chart the org push reports", async () => {
@@ -761,7 +799,7 @@ describe("a company saved by somebody else", () => {
   // and the store keeps a push deep-equal to the last as the object it already
   // held — so a revision that moved nothing the projection carries leaves
   // `org` where it was. The push still says an apply landed, which is what
-  // this lens checks again on.
+  // this builder checks again on.
   test("an untouched draft is stood on a revision its org push looks the same for", async () => {
     const engine = new Engine(company());
     const { store, settle, checked } = mountBuilder({ engine });
@@ -849,7 +887,7 @@ describe("a new reader mid-edit", () => {
   });
 
   // THE CONTROL: a viewer read again as the SAME person is not a new reader,
-  // and a lens that re-read on every reconnect would re-check a draft for
+  // and a builder that re-read on every reconnect would re-check a draft for
   // every blip of the socket.
   test("the same reader read again changes nothing", async () => {
     const engine = new Engine(company());
@@ -915,17 +953,17 @@ describe("a new reader mid-edit", () => {
 });
 
 /**
- * THE CHART LENS TAKES THE WINDOW, and gives it back.
+ * THE CHART VIEW TAKES THE WINDOW, and gives it back.
  *
  * A canvas fills the box its screen gives it and clips, so the application
  * frame's scroller has to stop being one while the chart is on. The shell
  * used to work that out for itself, from a rule in this package's stylesheet
  * that reached up at a wrapper the shell drew; the design system's shell
  * draws no such wrapper, which left the canvas with no definite height
- * anywhere above it. The lens says so now, and this is what says it still
+ * anywhere above it. The builder says so now, and this is what says it still
  * does, and still stops saying it on the outline.
  */
-describe("the lens that fills the window", () => {
+describe("the builder that fills the window", () => {
   function asked(hash: string): { calls: boolean[]; settle: () => Promise<void> } {
     const calls: boolean[] = [];
     const { settle } = mountBuilder({
@@ -938,21 +976,21 @@ describe("the lens that fills the window", () => {
     return { calls, settle };
   }
 
-  test("the chart lens asks the frame for the window's height", async () => {
-    const { calls, settle } = asked("#/company?lens=builder&view=visualization");
-    // Not before the engine has answered: until then the lens draws a posture
+  test("the chart view asks the frame for the window's height", async () => {
+    const { calls, settle } = asked("#/agents/edit?view=visualization");
+    // Not before the engine has answered: until then the builder draws a posture
     // screen, which is an ordinary column and scrolls like one.
     expect(calls).not.toContain(true);
     await settle();
     expect(calls).toContain(true);
   });
 
-  test("the outline lens asks for nothing and leaves the scroller alone", async () => {
-    const { calls, settle } = asked("#/company?lens=builder&view=table");
-    // The toolbar is what both lenses draw once the engine has answered, so
+  test("the table view asks for nothing and leaves the scroller alone", async () => {
+    const { calls, settle } = asked("#/agents/edit?view=table");
+    // The toolbar is what both views draw once the engine has answered, so
     // settling on it is settling on the same moment the case above measures.
     await settle();
-    expect(lensToolbar()).toBeDefined();
+    expect(builderToolbar()).toBeDefined();
     expect(calls).not.toContain(true);
   });
 });

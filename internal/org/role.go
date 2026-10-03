@@ -164,6 +164,23 @@ type Identity struct {
 	ExternalID string
 }
 
+// Clone returns a copy the caller may normalise without touching the original,
+// or nil for nil.
+//
+// A seat is BUILT on every read of the org — from an authored file by the
+// config layer, and from the chart rows this node has applied by [FromRows],
+// whose rows a reader may hold across many builds — and
+// [Organization.Normalize] then rewrites the contact in place. Shared, that
+// rewrote the source's own contact, from several goroutines at once: a data
+// race, and a document or a cached row silently changed by being read.
+func (c *HumanContact) Clone() *HumanContact {
+	if c == nil {
+		return nil
+	}
+	dup := *c
+	return &dup
+}
+
 // Normalize strips whitespace and lowercases the literal values of the
 // case-normalised fields. It is idempotent.
 //
@@ -660,8 +677,10 @@ type Role struct {
 
 	BehavioralGuidelines []string `yaml:"behavioral_guidelines,omitempty" json:"behavioral_guidelines,omitempty"`
 
-	// TokenBudget caps this seat's spend; 0 is unlimited.
-	TokenBudget int `yaml:"token_budget,omitempty" json:"token_budget,omitempty"`
+	// TokenBudget caps this seat's spend per calendar window; a window it
+	// does not name is uncapped, and the company's own ceilings apply on
+	// top of it.
+	TokenBudget TokenCeilings `yaml:"token_budget,omitempty" json:"token_budget,omitempty"`
 
 	// LLM is the provider chain used when a phase does not name its own.
 	LLM ProviderKeys `yaml:"llm,omitempty" json:"llm,omitzero"`
@@ -868,7 +887,7 @@ func (r *Role) humanForbidden() []string {
 		{"llm_judge", len(r.LLMJudge) > 0},
 		{"llm_sandbox", len(r.LLMSandbox) > 0},
 		{"sandbox", r.Sandbox != nil},
-		{"token_budget", r.TokenBudget != 0},
+		{"token_budget", len(r.TokenBudget) > 0},
 		{"workers", len(r.Workers) > 0},
 		{"learning_enabled", r.LearningEnabled.IsSet()},
 		{"schedules", len(r.Schedules) > 0},
@@ -938,6 +957,33 @@ func (r *Role) Validate() error {
 			name, ErrInvalidHandle, r.Handle(), len(r.Handle()), iam.MaxLogin))
 	}
 
+	errs = append(errs, r.runtimeFaults(name)...)
+	return errors.Join(errs...)
+}
+
+// ValidateRuntime reports every rule this seat's RUNTIME HALF breaks, joined
+// — the rules about the fields a seat's chart row does not carry, judged
+// against its kind — each a [SeatError] as [Role.Validate] reports it.
+//
+// THE CHART'S DOOR TO THE SAME RULES. A seat written through the org chart
+// carries its runtime half as an opaque document the chart cannot read
+// (runtime.go), so a ceiling of 0, a window that is no window or a schedule
+// with no cron reached every node with nothing refusing it — config validates
+// a company FILE, and a chart write is not one. [RuntimeShape.Check] decodes
+// the half onto a seat of the row's kind and asks this, so a chart write is
+// held to exactly what a company file is.
+func (r *Role) ValidateRuntime() error {
+	return errors.Join(r.runtimeFaults(strings.TrimSpace(r.Name))...)
+}
+
+// runtimeFaults is every rule about the runtime half: the fields a seat of the
+// other kind may not carry, the contact's own, the schedules' and the token
+// ceilings'.
+func (r *Role) runtimeFaults(name string) []error {
+	var errs []error
+	add := func(field []any, err error) {
+		errs = append(errs, &SeatError{Seat: r, Field: field, Err: err})
+	}
 	if r.IsHuman() {
 		if offending := r.humanForbidden(); len(offending) > 0 {
 			add(fieldOf(offending), fmt.Errorf(
@@ -957,6 +1003,13 @@ func (r *Role) Validate() error {
 				"role %q: %w: %s (did you mean kind: human?)",
 				name, ErrAgentSeatField, strings.Join(humanOnly, ", ")))
 		}
+		// EVERY CEILING IS ONE, at the key to change. An agent seat only:
+		// a human seat's whole `token_budget` is refused above, and a
+		// fault inside a key that has to go anyway is advice nobody needs.
+		for _, f := range r.TokenBudget.Faults() {
+			add([]any{"token_budget", string(f.Window)},
+				fmt.Errorf("role %q: %w", name, f))
+		}
 	}
 
 	for _, f := range r.Contact.faults() {
@@ -965,7 +1018,7 @@ func (r *Role) Validate() error {
 	for _, f := range validateSchedules(fmt.Sprintf("role %q", name), r.Schedules) {
 		add(f.field, f.err)
 	}
-	return errors.Join(errs...)
+	return errs
 }
 
 // fieldOf is where a rule about these authored fields is reported: at the

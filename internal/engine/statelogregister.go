@@ -18,6 +18,7 @@ import (
 	"github.com/crewlet/crewlet/internal/search"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tracker"
+	"github.com/crewlet/crewlet/internal/usage"
 )
 
 // THE REGISTER: every domain this build runs, and everything the engine has to
@@ -93,14 +94,15 @@ import (
 // registration is one domain's complete entry in the register.
 //
 // Every field but [registration.Barrier], [registration.NoBarrier],
-// [registration.NewGate], [registration.Feed] and
+// [registration.NewGate], [registration.Feed], [registration.OpsRetention] and
 // [registration.OpsKindRetention] is required, and [checkRegister] is what
 // says so: an entry that omits one is a boot failure naming the domain and the
 // field, never a node that runs a domain it cannot apply, cannot write to,
 // cannot size a stream for or cannot re-anchor. NewGate is required exactly
 // when the domain claims identity, and refused when it does not; Feed exactly
 // when the domain declares a wake feed ([statelog.Domain.FeedGroup]), and
-// refused when it does not.
+// refused when it does not; OpsRetention exactly when the domain keeps an
+// operation ledger ([statelog.Domain.OpsTable]), and refused when it does not.
 type registration struct {
 	// Domain is the declaration itself.
 	Domain statelog.Domain
@@ -194,7 +196,9 @@ type registration struct {
 	// where it is declared, rather than by moving a constant the others
 	// read.
 	//
-	// Zero takes [statelog.OpsRetention].
+	// REQUIRED EXACTLY WHEN THE DOMAIN KEEPS A LEDGER
+	// ([statelog.Domain.OpsTable]) and refused when it does not — see
+	// [checkLedgerEntry]. A compacted domain declares none.
 	OpsRetention time.Duration
 
 	// OpsKindRetention is a SHORTER horizon for the ledger rows of a subject
@@ -339,8 +343,9 @@ func register() []registration {
 			// encoder rather than by a nil here: every node re-anchors its
 			// own copy of a compacted log, so there is no fleet question a
 			// record on it could answer.
-			Generation:   search.GenerationRecord{},
-			OpsRetention: statelog.OpsRetention,
+			Generation: search.GenerationRecord{},
+			// NO OPERATION LEDGER, like the usage log: the domain declares
+			// no ops table ([search.Domain.OpsTable]).
 			Ceiling: func(stream config.Stream, free int64) domainCeiling {
 				bytes, _ := stream.VectorsMaxBytes(free)
 				return domainCeiling{Bytes: bytes,
@@ -565,6 +570,50 @@ func register() []registration {
 					Floor: config.IamLogMaxBytesFloor}
 			},
 		},
+		{
+			// WHAT EACH NODE'S SEATS AND SCHEDULES DID EACH COMPANY DAY
+			// (ADR-0020): the second compacted domain, written by every
+			// node for its own days and summed by every reader.
+			Domain: usage.Domain{},
+			NewApplier: func(*stateLog) (statelog.Applier, error) {
+				return usage.NewApplier(), nil
+			},
+			NewSeams: func(s *stateLog, _ *jetstream.DomainLog,
+				_ *statelog.Runner) (writeSeams, error) {
+
+				rows, err := usage.NewRows(s.db)
+				if err != nil {
+					return writeSeams{}, err
+				}
+				// NO EVICTION READER, for the vectors' reason and one of
+				// its own: an evicted node's usage is still what its seats
+				// did, and a fence here would erase that from every peer.
+				return writeSeams{Rows: rows, Fence: usage.NewFence(),
+					Gates: usage.NewGates()}, nil
+			},
+			// NO BARRIER, DECLARED: one writer per object and a reader
+			// that sums across nodes, so a read makes no claim about a
+			// position and there is nothing a barrier could prove.
+			NoBarrier: true,
+			// AND NO GENERATION RECORD, declared by the domain's own
+			// encoder, for the vectors' reason: every node re-anchors its
+			// own copy of a compacted log.
+			Generation: usage.GenerationRecord{},
+			// NO OPERATION LEDGER and so no horizon for one: the domain
+			// declares no ops table ([usage.Domain.OpsTable]), and
+			// [checkRegister] refuses a horizon for a ledger nobody keeps.
+			//
+			// NOT DERIVED FROM THE DISK, like the org chart's and the
+			// identity estate's: the log is a census of node-day objects
+			// over the domain's horizon, and a larger volume buys none
+			// of them — see [config.Stream.UsageMaxBytes].
+			Ceiling: func(stream config.Stream, _ int64) domainCeiling {
+				bytes, derived := stream.UsageMaxBytes()
+				return domainCeiling{Bytes: bytes,
+					Field: "stream.usage_log_max_bytes", Explicit: !derived,
+					Floor: config.UsageLogMaxBytesFloor}
+			},
+		},
 	}
 }
 
@@ -607,22 +656,8 @@ func checkRegister(entries []registration) error {
 				"no floor for its ceiling's field, so a boot the broker refuses could "+
 				"not say how small a ceiling the field accepts", name)
 		}
-		if entry.OpsRetention <= 0 {
-			return fmt.Errorf("engine: the state-log register's entry for %q declares an "+
-				"operation-ledger horizon of %s — a domain's ledger row answers a "+
-				"retrying client, and a horizon of zero or less would sweep a row "+
-				"the client has not had a chance to re-ask with",
-				name, entry.OpsRetention)
-		}
-		for kind, horizon := range entry.OpsKindRetention {
-			if horizon <= 0 || horizon >= entry.OpsRetention {
-				return fmt.Errorf("engine: the state-log register's entry for %q "+
-					"declares a %s horizon for its %q ledger rows beside a domain "+
-					"horizon of %s — a kind's own horizon exists to be SHORTER, and "+
-					"one at or past the domain's would never be what sweeps a row, "+
-					"while zero or less sweeps a row before its writer can re-ask",
-					name, horizon, kind, entry.OpsRetention)
-			}
+		if err := checkLedgerEntry(entry); err != nil {
+			return err
 		}
 		if entry.Generation == nil {
 			return fmt.Errorf("engine: the state-log register's entry for %q declares "+
@@ -647,6 +682,45 @@ func checkRegister(entries []registration) error {
 	if len(entries) == 0 {
 		return errors.New("engine: the state-log register is empty, so this node would " +
 			"provision no log, apply no record and serve no domain's rows")
+	}
+	return nil
+}
+
+// checkLedgerEntry is what [checkRegister] asks of an entry's operation-ledger
+// horizons: one exactly when the domain keeps a ledger
+// ([statelog.Domain.OpsTable]), and none when it does not.
+//
+// BOTH DIRECTIONS, because each fails silently. A ledger with no horizon is a
+// table that grows for the life of the deployment, and a horizon on a domain
+// with no ledger is a sweep job named after a table that does not exist —
+// which is what every node ran against `vectors_ops`, purging nothing every
+// tick and listed beside the real sweeps as though it were one.
+func checkLedgerEntry(entry registration) error {
+	name := entry.Domain.Name()
+	if entry.Domain.OpsTable() == "" {
+		if entry.OpsRetention != 0 || len(entry.OpsKindRetention) > 0 {
+			return fmt.Errorf("engine: the state-log register's entry for %q declares "+
+				"an operation-ledger horizon, and the domain keeps no ledger — the "+
+				"sweep would run against a table that does not exist", name)
+		}
+		return nil
+	}
+	if entry.OpsRetention <= 0 {
+		return fmt.Errorf("engine: the state-log register's entry for %q declares an "+
+			"operation-ledger horizon of %s — a domain's ledger row answers a "+
+			"retrying client, and a horizon of zero or less would sweep a row "+
+			"the client has not had a chance to re-ask with",
+			name, entry.OpsRetention)
+	}
+	for kind, horizon := range entry.OpsKindRetention {
+		if horizon <= 0 || horizon >= entry.OpsRetention {
+			return fmt.Errorf("engine: the state-log register's entry for %q "+
+				"declares a %s horizon for its %q ledger rows beside a domain "+
+				"horizon of %s — a kind's own horizon exists to be SHORTER, and "+
+				"one at or past the domain's would never be what sweeps a row, "+
+				"while zero or less sweeps a row before its writer can re-ask",
+				name, horizon, kind, entry.OpsRetention)
+		}
 	}
 	return nil
 }

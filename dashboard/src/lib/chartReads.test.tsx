@@ -13,7 +13,7 @@
 import { act, cleanup, renderHook, waitFor } from "~/test/inCase.ts";
 import type { ReactNode } from "react";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
-import { chartSeatPath, chartUnitPath, useChartRead, WITH_RUNTIME } from "./chartReads.ts";
+import { chartSeat, chartUnit, useChartRead, WITH_RUNTIME } from "./chartReads.ts";
 import { ClientContext } from "./store-hooks.ts";
 import { LiveSocket, Store } from "~/protocol/index.ts";
 
@@ -60,7 +60,7 @@ function engine(answer: (path: string) => Response | Promise<Response>) {
 test("a read answers the value, and asks with the query it was given", async () => {
   const asked = engine(() => json({ seat: { handle: "ceo" }, runtime: true }));
   const { result } = renderHook(
-    () => useChartRead<{ seat: { handle: string } }>(chartSeatPath("ceo"), WITH_RUNTIME, 1),
+    () => useChartRead<{ seat: { handle: string } }>(chartSeat("ceo"), WITH_RUNTIME, 1),
     { wrapper },
   );
   expect(result.current).toEqual({ state: "unread" });
@@ -71,8 +71,8 @@ test("a read answers the value, and asks with the query it was given", async () 
 });
 
 test("an address is escaped into its path, never spliced", () => {
-  expect(chartSeatPath("a/b")).toBe("/chart/seats/a%2Fb");
-  expect(chartUnitPath("eng ops")).toBe("/chart/units/eng%20ops");
+  expect(chartSeat("a/b")).toBe("/seats/a%2Fb");
+  expect(chartUnit("eng ops")).toBe("/units/eng%20ops");
 });
 
 // FIVE OUTCOMES. Each failure is its own answer, and none of them is "empty".
@@ -106,7 +106,7 @@ test.each([
   ],
 ])("%s", async (_name, answer, expected) => {
   engine(() => answer());
-  const { result } = renderHook(() => useChartRead(chartUnitPath("engineering"), undefined, 1), {
+  const { result } = renderHook(() => useChartRead(chartUnit("engineering"), undefined, 1), {
     wrapper,
   });
   await waitFor(() => expect(result.current.state).not.toBe("unread"));
@@ -131,7 +131,7 @@ test("a refused re-read replaces the value an earlier read showed", async () => 
       : json({ unit: { key: "engineering" } }),
   );
   const { result, rerender } = renderHook(
-    ({ refresh }) => useChartRead(chartUnitPath("engineering"), WITH_RUNTIME, refresh),
+    ({ refresh }) => useChartRead(chartUnit("engineering"), WITH_RUNTIME, refresh),
     { wrapper, initialProps: { refresh: 1 } },
   );
   await waitFor(() => expect(result.current.state).toBe("read"));
@@ -157,7 +157,7 @@ test("an answer about the previous object is never shown under the next one's pa
     return json({ seat: { handle: path.split("/").pop() } });
   });
   const { result, rerender } = renderHook(
-    ({ handle }) => useChartRead<{ seat: { handle: string } }>(chartSeatPath(handle), undefined, 1),
+    ({ handle }) => useChartRead<{ seat: { handle: string } }>(chartSeat(handle), undefined, 1),
     { wrapper, initialProps: { handle: "ceo" } },
   );
   await waitFor(() => expect(result.current.state).toBe("read"));
@@ -195,7 +195,7 @@ test.each([
   let calls = 0;
   engine(() => (++calls === 1 ? failure() : json({ unit: { key: "engineering" } })));
   const { result } = renderHook(
-    () => useChartRead(chartUnitPath("engineering"), undefined, "the one push"),
+    () => useChartRead(chartUnit("engineering"), undefined, "the one push"),
     { wrapper },
   );
   await act(async () => {
@@ -227,8 +227,7 @@ test("an org push reads again, keeping the answer on screen until the new one la
     return json({ unit: { key: `read ${calls}` } });
   });
   const { result, rerender } = renderHook(
-    ({ refresh }) =>
-      useChartRead<{ unit: { key: string } }>(chartUnitPath("e"), undefined, refresh),
+    ({ refresh }) => useChartRead<{ unit: { key: string } }>(chartUnit("e"), undefined, refresh),
     { wrapper, initialProps: { refresh: 1 } },
   );
   await waitFor(() => expect(result.current.state).toBe("read"));

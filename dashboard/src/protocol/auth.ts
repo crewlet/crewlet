@@ -34,11 +34,6 @@ import type {
  */
 const INVITE_SECRET_HEADER = "X-Crewlet-Invite-Secret";
 
-/** The invitation route for one id, its segment encoded. */
-function invitePath(id: string): string {
-  return `/auth/invite/${encodeURIComponent(id)}`;
-}
-
 export const auth = {
   /** What a sign-in page may know before anybody has signed in. */
   config: async (): Promise<AuthConfig> => (await rest.get("/auth/config")) as AuthConfig,
@@ -63,7 +58,7 @@ export const auth = {
   /** Render an invitation without spending it. */
   viewInvite: async (id: string, secret: string): Promise<InvitationView> =>
     (
-      await rest.request("GET", invitePath(id), {
+      await rest.request("GET", `/auth/invite/${encodeURIComponent(id)}`, {
         headers: { [INVITE_SECRET_HEADER]: secret },
       })
     ).body as InvitationView,
@@ -72,7 +67,8 @@ export const auth = {
   redeemInvite: async (
     id: string,
     body: { secret: string; login: string; name: string; password: string },
-  ): Promise<SignedIn> => (await rest.post(invitePath(id), body)) as SignedIn,
+  ): Promise<SignedIn> =>
+    (await rest.post(`/auth/invite/${encodeURIComponent(id)}`, body)) as SignedIn,
 
   /**
    * Enrolment's first leg: a seed, and nothing stored. A person who never

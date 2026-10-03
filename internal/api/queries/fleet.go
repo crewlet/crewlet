@@ -44,13 +44,23 @@ func (s Sources) fleet(ctx context.Context, _ Params) (any, error) {
 	for _, lease := range seats {
 		node := nodeOf(lease.Owner)
 		held[node]++
-		seatRows = append(seatRows, map[string]any{
+		row := map[string]any{
 			"handle":     seatHandleOf(byID, lease.Resource),
 			"node":       node,
 			"owner":      lease.Owner,
 			"epoch":      lease.Epoch,
 			"expires_in": secondsLeft(lease.ExpiresAt, now),
-		})
+		}
+		// SINCE WHEN this node has held it: the tenure's start, which a
+		// renewal does not move, so "node-2 since 08:02" means the seat
+		// has not moved since 08:02. ABSENT when the lease was written by
+		// a build older than the stamp — that tenure's start was never
+		// recorded, and an empty string or the zero instant would render
+		// as a time.
+		if !lease.AcquiredAt.IsZero() {
+			row["acquired_at"] = isoOrEmpty(lease.AcquiredAt)
+		}
+		seatRows = append(seatRows, row)
 	}
 	slices.SortFunc(seatRows, func(a, b map[string]any) int {
 		return cmp.Compare(a["handle"].(string), b["handle"].(string))
@@ -242,7 +252,7 @@ func (s Sources) activation(ctx context.Context) activationTarget {
 // seatHandles is every seat the running company has, by the ID its lease is
 // named under.
 //
-// A SEAT LEASE CARRIES NO HANDLE. It is named by the seat's id (ADR-0019),
+// A SEAT LEASE CARRIES NO HANDLE. It is named by the seat's id (ADR-0026),
 // because a handle is an address a rename moves and a lease is what stops two
 // nodes running one seat. What a fleet view is FOR, though, is a person
 // reading it, so every row is resolved back through the company here rather

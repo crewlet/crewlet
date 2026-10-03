@@ -130,8 +130,8 @@ the group name alone finds nothing.
 A term that **could not be read** blocks, exactly as one that permits nothing
 does. A term nobody could read is not a term that is satisfied, and treating it
 as satisfied is how a trim advances past a node that could not report. A term
-this domain does not **have** — the vector log, the org chart's and the
-identity estate's have no wake feed — is `n/a`
+this domain does not **have** — the vector log, the org chart's, the identity
+estate's and the usage log's have no wake feed — is `n/a`
 rather than zero, which is a different thing again. And a term that was
 read and **binds nothing** — no hold is pinning the log, or a solo fleet takes
 no snapshots — reads `unbounded` rather than carrying a sequence. Inside the
@@ -216,6 +216,12 @@ Two policies decide which copies count:
 
   Under this policy the trim does not advance until that acknowledgement has
   been given at least once.
+
+The **backup-age alarm** (`backup_age`) ages the same point the trim reads,
+under the same policy: under `operator` a node's nightly copies are fresh
+while the trim waits on an acknowledgement, and the alarm fires on the missing
+acknowledgement rather than staying green beside a log that cannot be trimmed.
+**Settings › Backups & retention** marks that point **counted · newest**.
 
 An **unverified** copy satisfies neither. A file that exists and was never
 opened is not a backup, and deleting the log's only copy of a record against
@@ -597,8 +603,9 @@ a readmission is judged by it.
 
 The trim counts nodes **per log**, so an eviction is a record on every log it
 counts nodes on — every log that claims identity: the tracker's, the knowledge
-base's, the org chart's and the identity estate's. (The vector log counts
-nothing — a node behind on it is a coverage figure — and gets none.) Every
+base's, the org chart's and the identity estate's. (The vector log and the
+usage log count nothing and get none: a node behind on the vectors is a
+coverage figure, and an evicted node's usage is still what its seats did.) Every
 node running the state log can make the gesture, whichever backends the
 company uses: every node runs every one of those logs, and a company on an
 external tracker still runs all four.
@@ -690,7 +697,8 @@ the flags it has. The dashboard renders the same actions as its own controls.
 
 ### From the dashboard
 
-The Fleet screen offers **Evict…** and **Readmit…** on every node row, and the
+**Settings › Backups & retention** offers **Evict…** and **Readmit…** on every
+node row, and the
 dialog behind them is the same gesture as the command, answered the same way:
 one row per log with its outcome and position — no position for `unknown` —
 or the reason it was not written and what to do.
@@ -813,13 +821,13 @@ exists to prevent.
 A single record larger than its log takes is a different refusal,
 `record_too_large`, on a log with room to spare, and no ceiling or trim
 changes it. Every log declares the largest record it publishes — 8 MiB less
-4 KiB on the tracker's, the knowledge base's and the vector changelog's, which
-is the largest the embedded broker's 8 MiB messages carry once a record is
-signed, 2 MiB on the org chart's, 128 KiB on the identity estate's — and a
-record past it is refused before it is sent; the stream's own `max_msg_size`
-is that declaration plus 4 KiB for what a stored record carries beside it, so
-the broker holds a peer on another build to it too. Two more limits can refuse
-a record, and the detail says which it was: the file store's per-record limit,
+4 KiB on the tracker's, the knowledge base's, the vector changelog's and the
+usage log's, which is the largest the embedded broker's 8 MiB messages carry
+once a record is signed, 2 MiB on the org chart's, 128 KiB on the identity
+estate's — and a record past it is refused before it is sent; the stream's
+own `max_msg_size` is that declaration plus 4 KiB for what a stored record
+carries beside it, so the broker holds a peer on another build to it too. Two
+more limits can refuse a record, and the detail says which it was: the file store's per-record limit,
 and a NATS server's `max_payload` — never that of the server a node started
 against, since a node refuses to start against one that holds it to less than
 8 MiB, but that of one it has reconnected to since: a cluster member
@@ -832,6 +840,15 @@ node [stops itself](deployment.md#an-external-nats-server). See
 A full log costs `linearizable` reads, because those append a barrier — which
 is every seat tool read. `stale` keeps answering, so the dashboard and the read
 API are unaffected. See [Read consistency](consistency.md).
+
+The **usage log** refuses the same way, and what it costs is different: no read
+appends to it, so nothing a seat does is refused — what stops is the
+replication of each node's days. Every node keeps re-deriving its day and
+retrying on every tick, nothing is lost from any node's own event log, and the
+`log_headroom` alarm names the domain (`usage: …`) long before the ceiling. Its
+size is a count of node-days rather than a rate — one message per (node, day,
+seat or schedule) for 181 days — so a log that fills has outgrown its census:
+raise `stream.usage_log_max_bytes` as below.
 
 The refusal carries **no retry hint**, deliberately: the only thing that frees
 a byte is a fifteen-minute gated job, and the log is full precisely because
@@ -864,10 +881,10 @@ for the reserve and is not a node's eviction or readmission — a purge included
 — is refused before anything is sent, and passes none of the fences an
 eviction is excused.
 
-| | the four identity logs | vector changelog |
+| | the four identity logs | vector changelog, usage log |
 |---|---|---|
 | ordinary writes and barriers refused at | the ceiling less the reserve | the ceiling |
-| gate records refused at | the ceiling | — (it carries none) |
+| gate records refused at | the ceiling | — (they carry none) |
 | `headroom_fraction` measured against | the ceiling less the reserve | the ceiling |
 
 The reserve is sized so it holds however the fleet's writes race. Each node
@@ -901,7 +918,8 @@ soft ceiling left, is there so that never happens.
 
 A log's Tier A ceiling (`stream.tracker_log_max_bytes`,
 `stream.tracker_vectors_max_bytes`, `stream.pages_log_max_bytes`,
-`stream.chart_log_max_bytes`, `stream.iam_log_max_bytes`) is not a live
+`stream.chart_log_max_bytes`, `stream.iam_log_max_bytes`,
+`stream.usage_log_max_bytes`) is not a live
 setting: it is the value the log's stream is created with, sized with the
 other logs inside what the broker can grant (see
 [Replication](replication.md#how-the-byte-ceilings-are-sized)). Changing a
@@ -912,14 +930,15 @@ maintenance window**, and the reason is not caution:
   that a moving quantity. The verb decides it before the window opens: a
   target whose soft ceiling — the target less its
   [gate reserve](#the-gate-reserve), on the four identity logs; the whole
-  target on the vector changelog — is at or below what the log already holds
-  is refused, naming both and the least target that would do, because that
-  ceiling would refuse every ordinary append the moment it applied. So is a
-  target under the floor Tier A holds that log's field to — a gibibyte on the
-  tracker's, the knowledge base's and the vector changelog's, 64 MiB on the
-  org chart's and the identity estate's — naming the field. Anything else is
-  fair, including a target under the current ceiling, which is how a log
-  created larger than its budget gives the reservation back.
+  target on the vector changelog and the usage log — is at or below what the
+  log already holds is refused, naming both and the least target that would
+  do, because that ceiling would refuse every ordinary append the moment it
+  applied. So is a target under the floor Tier A holds that log's field to — a
+  gibibyte on the tracker's, the knowledge base's and the vector changelog's,
+  64 MiB on the org chart's, the identity estate's and the usage log's —
+  naming the field. Anything else is fair, including a target under the
+  current ceiling, which is how a log created larger than its budget gives
+  the reservation back.
 - A raise is a reservation too, and the broker refuses one it cannot honour.
   Where the node can read the limit the broker holds an update to (a lone
   embedded node, or a NATS account's own JetStream limit on any topology), a
@@ -994,9 +1013,9 @@ are missing, any unresolved write attempt, and any admission still blocking
 activation.
 
 **You do not have to go looking for it.** While an operation is open, both
-`crewlet retention status` and the Fleet screen lead with it — the stream, the
-phase, the attempt, how long it has been open, who ran the verb, and who is
-still outstanding — because every number underneath describes a fleet in which
+`crewlet retention status` and **Settings › Backups & retention** lead with
+it — the stream, the phase, the attempt, how long it has been open, who ran
+the verb, and who is still outstanding — because every number underneath describes a fleet in which
 nothing is running, and a blocked trim read without knowing that sends you
 after the wrong thing. **No acknowledgement outstanding is not progress**: it
 means the operation is waiting on its operator, and both surfaces say so
@@ -1347,10 +1366,10 @@ the request.
 **Today that log is the work tracker's**, `CREWLET_TRACKER_LOG`. A reanchor is
 three steps only the log's own domain can take — reset its rows' versions,
 publish its generation record, write its audit row — and the knowledge base,
-the org chart, the identity estate and the vectors have none of their own
-yet, so naming one of their logs is refused before anything moves. It used to
-run the tracker's steps for them, resetting the tracker's rows for a log that
-was not the tracker's. Recover one of those logs by adopting the snapshot of a
+the org chart, the identity estate, the vectors and the usage log have none of
+their own yet, so naming one of their logs is refused before anything moves.
+It used to run the tracker's steps for them, resetting the tracker's rows for a
+log that was not the tracker's. Recover one of those logs by adopting the snapshot of a
 peer hydrated on the live stream, or from a backup.
 
 > **The verb could not have completed before this build.** Its reset named
@@ -1410,8 +1429,8 @@ of asking. There is no project to name: the task's own row says which project
 the record is filed under. The **reason is required** because it is the
 only thing that survives: the rows are destroyed, and the deletion marker's
 reason is the entire account of what used to be at that key. A purge is an
-**operator gesture** — a person or an operator token, never an agent and never
-the engine — because nothing else can be asked to confirm it.
+**operator gesture** — `fleet:operate`, held by a person or a token, never an
+agent and never the engine — because nothing else can be asked to confirm it.
 
 It answers the same three-valued outcome every write here has. `pending` means
 the record is on the log and each node's rows go as it reaches them; do not run
@@ -1519,6 +1538,14 @@ trimmed; the tables are not.
 That is what makes the storage forecast a function of how much a company has
 ever done rather than of how much it is doing — and it is why the numbers below
 are worth reading before the fleet is large.
+
+The **usage history** is the one replicated table set with a horizon of its
+own: each node's company days — spend, turns, page reads, schedule fires — are
+kept **181 days**, which is a ninety-day window, the ninety days it is compared
+with, and the day a moved clock can touch. Nothing sweeps them: every record for
+a day deletes the rows older than that day minus 181 in the same transaction
+that writes it, on every node, and the stream's own age bound forgets the same
+days. See [Replication](replication.md#two-compacted-domains-the-embeddings-and-each-nodes-day).
 
 Two tables are the exception, and both are swept **per node** rather than once
 across the fleet — each node applies the log into its own copy, so a fleet

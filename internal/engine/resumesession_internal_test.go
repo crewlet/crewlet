@@ -302,6 +302,8 @@ func (failingResumeConversations) Threads(context.Context, string, int) ([]ledge
 	return nil, nil
 }
 
+func (failingResumeConversations) ThreadCount(context.Context, string) (int, error) { return 0, nil }
+
 func (failingResumeConversations) Purge(context.Context, time.Time) (int64, error) { return 0, nil }
 
 // THREE FACTS HAVE TO REACH THE ROW for any of the above to fire, and the

@@ -237,7 +237,7 @@ const (
 // That makes the derived name a DURABLE ADDRESS living in somebody else's
 // system — and a handle is not one. A handle is prose a founder retypes, and
 // [org.Role.Origin] exists because renaming a seat must not make it a
-// different seat (adr/0019). Built from the live handle, every rename did
+// different seat (adr/0026). Built from the live handle, every rename did
 // three things at once, silently and in somebody's real workspace:
 //
 //   - the next pass looked up a name nothing holds, so it CREATED A SECOND

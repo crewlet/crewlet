@@ -179,7 +179,7 @@ describe("outside the chart", () => {
     const html = view.container.ownerDocument.body.innerHTML;
     expect(html).not.toContain("__redacted__");
     expect(screen.getByRole("link", { name: "Open Secrets" }).getAttribute("href")).toBe(
-      "#/admin/credentials",
+      "#/settings/secrets",
     );
   });
 
@@ -288,7 +288,7 @@ describe("before the seats go", () => {
       ],
     });
     const agents: AgentRow[] = [
-      { id: "1", agent_id: "id-1", role: "Runner", handle: "runner", state: "working" },
+      { id: "1", agent_id: "id-1", role: "Runner", handle: "runner", activity: "working" },
     ];
     open(checkedEdit(chart), "seat:runner", { agents });
     expect(screen.getByText(/Schedule sweep on Ops would have no runner/)).toBeDefined();
@@ -302,9 +302,9 @@ describe("before the seats go", () => {
         agent_id: "id-1",
         role: "VP Engineering",
         handle: "vp-engineering",
-        state: "working",
+        activity: "working",
       },
-      { id: "2", agent_id: "id-2", role: "SRE", handle: "sre", state: "working" },
+      { id: "2", agent_id: "id-2", role: "SRE", handle: "sre", activity: "working" },
     ];
     open(checkedEdit(), "unit:engineering", { agents });
     const notes = screen.getAllByText(/is working now/);

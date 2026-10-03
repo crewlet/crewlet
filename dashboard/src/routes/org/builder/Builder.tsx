@@ -1,5 +1,5 @@
 /**
- * The Builder lens of the Org chart screen (`#/company?lens=builder`): editing the
+ * Agents › Edit org (`#/agents/edit`), the builder: editing the
  * organization, and creating the company where none exists.
  *
  * THE POSTURE IS WHAT THE ENGINE ANSWERS, never what the browser holds. Being
@@ -9,7 +9,7 @@
  * changes this tab's cookie too — its settings from `GET /config` and its org
  * chart from `GET /chart` — and the answers decide:
  *
- * | `GET /config` answers                            | The lens shows |
+ * | `GET /config` answers                            | The builder shows |
  * |---|---|
  * | 200, and the chart is read                       | edit mode |
  * | 404 `no_active_revision`, no company in the org  | create mode |
@@ -29,8 +29,8 @@
  * The views and dialogs it hosts are handed in as [BuilderSurfaces] and reach
  * all of it through `BuilderContext`, so none of them starts a request.
  *
- * THE LAYOUT FILLS THE SCREEN in the canvas view: the lens is a flex column
- * whose canvas takes the height left under the toolbar, so `.screen` has
+ * THE LAYOUT FILLS THE SCREEN in the canvas view: the builder is a flex column
+ * whose canvas takes the height left under the toolbar, so the scroller has
  * nothing to scroll and a wheel over the page never lands in a canvas that is
  * half off screen. Fullscreen takes the whole builder container (toolbar,
  * view, dialogs, its own toast outlet and live region), because a fullscreen
@@ -52,6 +52,7 @@ import {
 } from "react";
 import { href, useLeaveGuard, useNavigator, useParam, useUnloadGuard } from "~/app/router.tsx";
 import { useFillScreen } from "~/app/fill.tsx";
+import { matchesRow } from "~/app/keymap.ts";
 import { fmtDateTime, plural } from "~/lib/format.ts";
 import { useAgents, useConnection, useOrg, useOrgPushes, useSandboxes } from "~/lib/store-hooks.ts";
 import { needsSentence } from "~/lib/refusal.ts";
@@ -117,28 +118,29 @@ import { useDraftKeeping } from "./useDraftKeeping.ts";
 import { addMenu, nodeMenu } from "./nodeActions.tsx";
 import { useOpenScreen, useStructure } from "./useCharts.ts";
 import { screenPath } from "./dialogParts.tsx";
+import { PHONE_BREAKPOINT } from "~/app/layout.ts";
 import {
   type GlyphProps,
-  AccountTreeGlyph,
-  AddGlyph,
-  CableGlyph,
+  NetworkGlyph,
+  PlusGlyph,
+  PlugGlyph,
   CheckGlyph,
-  DeleteGlyph,
-  DnsGlyph,
-  ErrorGlyph,
-  FullscreenExitGlyph,
-  FullscreenGlyph,
+  TrashGlyph,
+  ServerGlyph,
+  CircleAlertGlyph,
+  MinimizeGlyph,
+  MaximizeGlyph,
   KeyGlyph,
-  KeyboardArrowDownGlyph,
-  KeyboardArrowUpGlyph,
+  ChevronDownGlyph,
+  ChevronUpGlyph,
   ListGlyph,
-  MemoryGlyph,
-  MoreVertGlyph,
+  CpuGlyph,
+  EllipsisVerticalGlyph,
   RedoGlyph,
-  RefreshGlyph,
+  RotateCwGlyph,
   SaveGlyph,
   UndoGlyph,
-  WarningGlyph,
+  TriangleAlertGlyph,
 } from "@crewlethq/icons/glyphs";
 import {
   Button,
@@ -190,7 +192,7 @@ export interface AddDialogProps {
 /**
  * The views and dialogs the Builder hosts. They read and act through
  * `BuilderContext`; the Builder decides which is mounted. Every one is
- * required: a lens missing its canvas or its editor is not a smaller lens
+ * required: a builder missing its canvas or its editor is not a smaller builder
  * but a broken one, so an unbound surface is a type error rather than a
  * screen that apologises at run time.
  */
@@ -236,7 +238,7 @@ export interface BuilderSurfaces {
   changeKind: ComponentType<NodeDialogProps>;
 }
 
-/** A dialog the lens is asked to open. */
+/** A dialog the builder is asked to open. */
 type DialogRequest =
   | { readonly type: "editor"; readonly key: NodeKey; readonly section?: EditorSectionName }
   | { readonly type: "move" | "remove" | "changeKind"; readonly key: NodeKey }
@@ -244,7 +246,7 @@ type DialogRequest =
   | { readonly type: "discard" };
 
 /**
- * A dialog the lens has open, and which opening of it this is.
+ * A dialog the builder has open, and which opening of it this is.
  *
  * ONE MOUNT PER OPENING. The host keys each dialog by `opening`, so every
  * opening builds its form afresh (another node, or the same node again),
@@ -298,7 +300,7 @@ function chartOf(answer: HttpAnswer): ChartRead | null {
 }
 
 /**
- * Decides the lens posture from the two reads — `GET /config` and `GET
+ * Decides the builder's posture from the two reads — `GET /config` and `GET
  * /chart` — and the org snapshot. The settings decide the mode; the chart is
  * required to edit, and its refusal is the reader's posture as much as the
  * settings' would be.
@@ -371,7 +373,7 @@ interface StatusLook {
 
 /**
  * What a refusal on authority says the reader lacks, in the three places the
- * lens says it: the toolbar's status, the paused-editing reason and the
+ * builder says it: the toolbar's status, the paused-editing reason and the
  * banner. ONE FUNCTION so the three cannot disagree.
  *
  * THE GRANTS COME FIRST, FROM THE ANSWER. All three said "needs an operator
@@ -416,15 +418,15 @@ function statusLook(
 ): StatusLook {
   switch (status) {
     case "checking":
-      return { label: "Checking", tone: "neutral", icon: RefreshGlyph };
+      return { label: "Checking", tone: "neutral", icon: RotateCwGlyph };
     case "clean":
       return { label: "No problems", tone: "success", icon: CheckGlyph };
     case "problems":
-      return { label: plural(problems, "problem"), tone: "danger", icon: ErrorGlyph };
+      return { label: plural(problems, "problem"), tone: "danger", icon: CircleAlertGlyph };
     case "unreachable":
-      return { label: "Could not reach the engine to check", tone: "warning", icon: CableGlyph };
+      return { label: "Could not reach the engine to check", tone: "warning", icon: PlugGlyph };
     case "conflict":
-      return { label: "The company changed", tone: "warning", icon: WarningGlyph };
+      return { label: "The company changed", tone: "warning", icon: TriangleAlertGlyph };
     case "guarded":
       return { label: guarded.label, tone: "danger", icon: KeyGlyph };
   }
@@ -439,7 +441,7 @@ function statusLook(
  * nothing more, so no answer for the new generation ever arrives, and the
  * engine still holds the newer revision the last answer named. Read only for
  * the current generation, that answer vanished and took the Update my draft
- * banner with it, leaving a lens paused with no way forward.
+ * banner with it, leaving a builder paused with no way forward.
  */
 function conflictOf(state: BuilderState): Extract<CheckOutcome, { status: "conflict" }> | null {
   const outcome = state.check.outcome;
@@ -477,7 +479,7 @@ function isPresent(state: BuilderState, key: NodeKey): boolean {
 
 /** The filters that name `key`, or `null` when the node has no name the URL can carry yet. */
 function paramsOf(state: BuilderState, key: NodeKey): SelectionParams | null {
-  // The company is what the lens opens on, so it names itself with no filter.
+  // The company is what the builder opens on, so it names itself with no filter.
   if (key === COMPANY_KEY) return { unit: "", seat: "" };
   const found = locate(state.draft, key);
   if (!found) return null;
@@ -505,6 +507,55 @@ function keyOfParams(state: BuilderState, params: SelectionParams): NodeKey | nu
   return null;
 }
 
+/** The kind an `add=` asks for, or `null` for a value that names none. */
+function addKindOf(value: string): AddKind | null {
+  return value === "unit" || value === "agent" || value === "human" ? value : null;
+}
+
+/**
+ * What the address a reader ARRIVED at asks the builder to do, beyond showing
+ * the organization: open one node's editor (`seat=` or `unit=`), or open an
+ * Add (`add=`, under the unit `unit=` names or at the company's root).
+ *
+ * WHY A LINK OPENS SOMETHING AT ALL. Every way into this section from another
+ * screen is a request to change one thing: the profile's "Edit" beside a
+ * seat's setup, the seat menu's "Edit in org", the org chart's "Add seat". The
+ * section used to answer all of them with the whole chart at fit-to-view and
+ * one node outlined somewhere in it, so the reader had to find the card they
+ * had just asked for and press it again — and `add=` was not read at all, so
+ * "Add seat" opened a chart with nothing to add.
+ *
+ * ONLY ON ARRIVAL, AND ONCE. `seat=` and `unit=` are also where the builder
+ * MIRRORS its own selection, so every press on a card writes them: opening an
+ * editor whenever they changed would open one on every press, and on a Back
+ * that restored an older selection. So what is honoured is the address the
+ * builder was MOUNTED on, and only until it is answered or the reader moves
+ * the selection first. `add=` is then taken out of the address, so a reload or
+ * a copied link does not ask for a second node; `seat=` stays, because it is
+ * also the selection, and a link to a selected seat is a link to its editor.
+ *
+ * WHICH MAKES EVERY MOUNT ON A SELECTION AN ARRIVAL. A reload, or a Back into
+ * this section from the profile a node's "Open seat" went to, mounts on the
+ * address the builder itself wrote, and nothing in it tells that from a link
+ * somebody sent: both open the editor. `docs/guides/org-builder.md` says so.
+ * Telling them apart needs a request the address spends (an `edit=` the link
+ * sets and this removes, as `add=` is), which is a change to the section's
+ * URL grammar rather than to this effect.
+ *
+ * AND ONLY WHEN THE BUILDER CAN EDIT. The draft has to be loaded (a link
+ * names a seat by its handle and a unit by its key, the addresses the chart's
+ * own rows carry), in edit mode and not paused — a kept draft waiting for
+ * Keep or Discard, a save whose outcome is unknown, a conflict. The request
+ * waits through all of those rather than opening a form that could not be
+ * applied, and a reader who resolves them is then shown what the link asked
+ * for.
+ */
+interface Arrival {
+  readonly unit: string;
+  readonly seat: string;
+  readonly add: string;
+}
+
 // ---------------------------------------------------------------------------
 // The live region
 // ---------------------------------------------------------------------------
@@ -516,7 +567,7 @@ function keyOfParams(state: BuilderState, params: SelectionParams): NodeKey | nu
  * once unless the region is emptied first; a few frames apart is enough for
  * every screen reader to observe the empty state.
  *
- * Measured on the LENS'S clock ([useLiveRegion]).
+ * Measured on the BUILDER'S clock ([useLiveRegion]).
  */
 export const ANNOUNCE_DELAY_MS = 50;
 
@@ -541,11 +592,11 @@ export function announcementOf(last: LastChange): string {
 /**
  * The region, and the sentence it is about to say.
  *
- * ON THE LENS'S CLOCK, the one the check's debounce runs on, rather than on a
- * bare `setTimeout`. The lens takes its time as an argument so a suite can
- * drive it; a sentence written on a timer only the browser moved was the one
- * thing the lens did on its own time, so a suite could only poll for it — and
- * a poll has a deadline, which a busy machine misses.
+ * ON THE BUILDER'S CLOCK, the one the check's debounce runs on, rather than on
+ * a bare `setTimeout`. The builder takes its time as an argument so a suite
+ * can drive it; a sentence written on a timer only the browser moved was the
+ * one thing the builder did on its own time, so a suite could only poll for
+ * it — and a poll has a deadline, which a busy machine misses.
  */
 function useLiveRegion(clock: Clock): { text: string; announce: (message: string) => void } {
   const [text, setText] = useState("");
@@ -572,15 +623,16 @@ function useLiveRegion(clock: Clock): { text: string; announce: (message: string
 }
 
 // ---------------------------------------------------------------------------
-// The lens
+// The builder
 // ---------------------------------------------------------------------------
 
 /**
- * Below this width the drawer takes the whole window and
- * a visualization has no room beside it, so a lens opened with no `view`
- * starts on the table.
+ * Below the kit's phone step a visualization has no room to be read, so a
+ * builder opened with no `view` starts on the table. It was 860, the width at
+ * which the old rail became a bottom bar; the frame has no such width any
+ * more, and the one it has for "a phone" is `breakpoint.phone`.
  */
-const NARROW_QUERY = "(max-width: 860px)";
+const NARROW_QUERY = `(width < ${PHONE_BREAKPOINT}px)`;
 
 /** Undo and redo, as the keyboard handler below accepts them. */
 const UNDO_KEYS = ["Mod", "z"] as const;
@@ -621,7 +673,7 @@ export function Builder({
           nothing happens. useToast finds the nearest provider. */}
       <LayerHost>
         <ToastProvider>
-          <Lens
+          <BuilderScreen
             surfaces={surfaces}
             transport={transport}
             clock={clock}
@@ -635,7 +687,7 @@ export function Builder({
   );
 }
 
-function Lens({
+function BuilderScreen({
   surfaces,
   transport,
   clock,
@@ -672,6 +724,7 @@ function Lens({
   const chart: ChartKind = chartParam === "reporting" ? "reporting" : "structure";
   const [unitParam] = useParam("unit", "", "filter");
   const [seatParam] = useParam("seat", "", "filter");
+  const [addParam] = useParam("add", "", "filter");
   const viewPanel = useId();
   const chartPanel = useId();
 
@@ -685,7 +738,7 @@ function Lens({
      one while this view is on: a wheel turned over a page that scrolls
      otherwise lands in a canvas half off screen. The table is an ordinary
      column and gives the scroller straight back, and so does the posture
-     screen this lens draws instead of either until the engine has answered.
+     screen this builder draws instead of either until the engine has answered.
 
      ABOVE THAT POSTURE RETURN, because a hook below one runs on some renders
      and not others. */
@@ -974,7 +1027,7 @@ function Lens({
   // Say what the last operation did, and put focus where it leads.
   const viewHandle = useRef<BuilderViewHandle | null>(null);
   const focusNode = useCallback((key: NodeKey) => viewHandle.current?.focusNode(key), []);
-  // ONE IDENTITY FOR THE LENS'S LIFETIME. A view registers in an effect that
+  // ONE IDENTITY FOR THE BUILDER'S LIFETIME. A view registers in an effect that
   // depends on this function, so a new one per state change unregistered and
   // registered the mounted view again after every edit and every answer.
   const registerView = useCallback((handle: BuilderViewHandle) => {
@@ -1004,14 +1057,15 @@ function Lens({
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
       if (e.defaultPrevented || isComposing(e) || isModalLayerOpen()) return;
-      if (!(e.metaKey || e.ctrlKey) || e.altKey) return;
-      if (e.code !== "KeyZ" && e.key.toLowerCase() !== "z") return;
+      if (e.altKey) return;
+      const redo = matchesRow("builder.redo", e);
+      if (!redo && !matchesRow("builder.undo", e)) return;
       const root = container.current;
       const target = e.target instanceof HTMLElement ? e.target : null;
       if (!root || (target && target !== document.body && !root.contains(target))) return;
       if (target && isTextEntry(target)) return;
       e.preventDefault();
-      dispatch({ type: e.shiftKey ? "redo" : "undo" });
+      dispatch({ type: redo ? "redo" : "undo" });
     }
     document.addEventListener("keydown", onKey);
     return () => document.removeEventListener("keydown", onKey);
@@ -1105,6 +1159,39 @@ function Lens({
     [readOnlyReason, announce, openDialog],
   );
 
+  // WHAT THE ADDRESS THIS BUILDER WAS MOUNTED ON ASKED FOR — see [Arrival].
+  // Read once, in the first render, and spent the moment it is answered or the
+  // reader moves the selection before the builder could answer it.
+  const arrival = useRef<Arrival | null>(
+    unitParam !== "" || seatParam !== "" || addParam !== ""
+      ? { unit: unitParam, seat: seatParam, add: addParam }
+      : null,
+  );
+  useEffect(() => {
+    const asked = arrival.current;
+    if (asked === null) return;
+    if (asked.unit !== unitParam || asked.seat !== seatParam) {
+      // The reader chose another node (or none) first: the link is spent.
+      arrival.current = null;
+      return;
+    }
+    if (!loaded || state.mode !== "edit" || readOnlyReason !== null || dialog !== null) return;
+    arrival.current = null;
+    if (asked.add !== "") {
+      nav.filter({ add: null });
+      const kind = addKindOf(asked.add);
+      if (kind === null) return;
+      const parent = asked.unit !== "" ? keyOfParams(state, { unit: asked.unit, seat: "" }) : null;
+      // A unit the draft does not hold is no place to add under, and the
+      // company's root is not what the link meant either.
+      if (asked.unit !== "" && parent === null) return;
+      openDialog({ type: "add", parent, kind });
+      return;
+    }
+    const key = keyOfParams(state, { unit: asked.unit, seat: asked.seat });
+    if (key !== null) openDialog({ type: "editor", key });
+  }, [loaded, state, readOnlyReason, dialog, unitParam, seatParam, nav, openDialog]);
+
   const exitFullscreen = useFullscreenExit();
   const askToSignIn = useCallback(() => {
     // The sign-in is a screen of its own, outside the fullscreen element; the
@@ -1127,7 +1214,7 @@ function Lens({
   // later one: a node behind a load balancer can still answer with the
   // draft's own base, and rebasing onto that would lose the change the
   // conflict was about. The chart needs no such wait — every read of it is
-  // linearizable. `stand` is the lens with no work moving onto that company
+  // linearizable. `stand` is the builder with no work moving onto that company
   // (see below): an update of nothing, confirmed at once, so nothing is
   // offered for review.
   const beginUpdate = useCallback(
@@ -1180,7 +1267,7 @@ function Lens({
   }, [conflict]);
 
   // A DRAFT WITH NO WORK STANDS ON THE NEWER COMPANY. The conflict flow
-  // exists to protect the operator's changes; with none (a lens somebody is
+  // exists to protect the operator's changes; with none (a builder somebody is
   // only reading when a colleague saves, which the org push reports at
   // once) it would pause editing behind a banner offering to update nothing.
   // A kept draft still waiting for its decision is left alone: it was offered
@@ -1189,7 +1276,7 @@ function Lens({
   //
   // THROUGH THE UPDATE, NEVER A PLAIN READ, so everything a selection or an
   // open editor holds is carried across by the one rebase every update takes
-  // (`reducer.rekeyed`), rather than a load that starts the lens over.
+  // (`reducer.rekeyed`), rather than a load that starts the builder over.
   const draftIsEmpty = state.log.ops.length === 0 && state.log.undone.length === 0;
   const keptPending = keeping.pending || keeping.offer !== null;
   useEffect(() => {
@@ -1227,8 +1314,8 @@ function Lens({
   // session storage, which a reload or a trip to another screen of this page
   // finds again and a closed tab does not, so while the draft has changes the
   // browser asks before the tab goes. Where storage cannot keep the draft at
-  // all, leaving the lens loses it as well, and that move is asked about
-  // first; moving within the lens (a view, a chart, a selection) keeps it.
+  // all, leaving the builder loses it as well, and that move is asked about
+  // first; moving within the builder (a view, a chart, a selection) keeps it.
   useUnloadGuard(changed);
   const [leaving, setLeaving] = useState<{ leave: () => void } | null>(null);
   useLeaveGuard(
@@ -1397,8 +1484,9 @@ function Lens({
   const llm = isRecord(providers) ? providers.llm : undefined;
   // THE COMPANY RUNS AND ITS AGENTS WAIT. The engine applies a company with no
   // providers.llm and places its seats, then holds every delivery on the
-  // seat's inbox until an apply brings a provider (engine/nomodels.go). The
-  // dashboard writes none, so the lens says where one comes from.
+  // seat's inbox until an apply brings a provider (engine/nomodels.go). No
+  // screen adds one — Settings › Models & keys edits a provider the company
+  // already has — so the builder says where the first comes from.
   const noProvider = state.mode === "edit" && !(isRecord(llm) && Object.keys(llm).length > 0);
   const documentProblems = problemsCurrent ? state.check.problems.document : [];
 
@@ -1535,20 +1623,20 @@ function Lens({
     {
       key: "expand",
       label: "Expand all",
-      icon: <KeyboardArrowDownGlyph />,
+      icon: <ChevronDownGlyph />,
       onSelect: handlers.expandAll,
     },
     {
       key: "collapse",
       label: "Collapse all",
-      icon: <KeyboardArrowUpGlyph />,
+      icon: <ChevronUpGlyph />,
       onSelect: handlers.collapseAll,
     },
     { kind: "separator", key: "s2" },
     {
       key: "discard",
       label: "Discard changes",
-      icon: <DeleteGlyph />,
+      icon: <TrashGlyph />,
       onSelect: handlers.discard,
       disabled: readOnly || !changed,
       danger: true,
@@ -1568,7 +1656,7 @@ function Lens({
               onValueChange={setView}
               size="sm"
               options={[
-                { value: "visualization", label: "Visualization", icon: <AccountTreeGlyph /> },
+                { value: "visualization", label: "Visualization", icon: <NetworkGlyph /> },
                 // `ListGlyph` rather than a table glyph: `@crewlethq/icons`
                 // ships none, and a rows-of-records mark is what this one is.
                 { value: "table", label: "Table", icon: <ListGlyph /> },
@@ -1599,10 +1687,10 @@ function Lens({
                   buttons that moved from the toolbar to the table's top edge
                   when the reader changed view. `TableView` passes
                   `controls={false}` so this is the only one. */}
-              <Button size="small" variant="tertiary" onClick={handlers.expandAll}>
+              <Button size="small" variant="ghost" onClick={handlers.expandAll}>
                 Expand all
               </Button>
-              <Button size="small" variant="tertiary" onClick={handlers.collapseAll}>
+              <Button size="small" variant="ghost" onClick={handlers.collapseAll}>
                 Collapse all
               </Button>
             </span>
@@ -1611,7 +1699,7 @@ function Lens({
             </span>
             <Menu
               label={selectedView ? `Actions for ${selectedName}` : "Add to the organization"}
-              icon={selectedView ? <MoreVertGlyph /> : <AddGlyph />}
+              icon={selectedView ? <EllipsisVerticalGlyph /> : <PlusGlyph />}
               items={toolbarItems}
               trigger={selectedView ? selectedName : "Add"}
             />
@@ -1625,7 +1713,7 @@ function Lens({
             <span className="org-builder-wide">
               <Button
                 size="small"
-                variant="tertiary"
+                variant="ghost"
                 onClick={handlers.discard}
                 disabled={readOnly || !changed}
               >
@@ -1661,7 +1749,7 @@ function Lens({
           </Callout>
         )}
         {posture.kind === "unreachable" && (
-          <Callout variant="warning" icon={<CableGlyph />}>
+          <Callout variant="warning" icon={<PlugGlyph />}>
             The engine could not be reached to read the company again. Your draft is kept on this
             page.
           </Callout>
@@ -1682,14 +1770,14 @@ function Lens({
           </Callout>
         )}
         {/* KEPT TO READ, NEVER TO SAVE. Every check and save of this draft is
-            refused while the lens is read-only over it, so the way on stays
+            refused while the builder is read-only over it, so the way on stays
             on screen after the dialog that first offered it is closed. */}
         {conflict &&
           (conflict.reason === "already_configured" || conflict.reason === "chart_exists") &&
           !companyExists && (
             <Callout
               variant="warning"
-              icon={<WarningGlyph />}
+              icon={<TriangleAlertGlyph />}
               action={
                 <Button size="small" variant="primary" onClick={openExistingCompany}>
                   Discard it and open the company
@@ -1703,7 +1791,7 @@ function Lens({
         {conflict && conflict.reason === "no_active_revision" && (
           <Callout
             variant="warning"
-            icon={<WarningGlyph />}
+            icon={<TriangleAlertGlyph />}
             action={
               <Button
                 variant="secondary"
@@ -1728,17 +1816,17 @@ function Lens({
           conflict.reason !== "already_configured" && (
             <Callout
               variant="warning"
-              icon={<WarningGlyph />}
+              icon={<TriangleAlertGlyph />}
               action={
                 <span className="row gap-1 wrap">
                   {/* WHAT CHANGED SINCE THE DRAFT'S BASE is the newer revision
-                    against that base. The Configuration screen compares with
+                    against that base. Settings › Configuration compares with
                     the active revision unless told otherwise, and the base
                     against the active one reads every change backwards. */}
                   {state.base.revision && conflict.currentRevisionId && (
                     <ButtonLink
                       size="small"
-                      variant="tertiary"
+                      variant="ghost"
                       href={href(screenPath("config"), {
                         lens: "diff",
                         revision: conflict.currentRevisionId,
@@ -1789,7 +1877,7 @@ function Lens({
           <Callout
             variant={keeping.notice.tone}
             action={
-              <Button size="small" variant="tertiary" onClick={keeping.dismissNotice}>
+              <Button size="small" variant="ghost" onClick={keeping.dismissNotice}>
                 Dismiss
               </Button>
             }
@@ -1798,10 +1886,10 @@ function Lens({
           </Callout>
         )}
         {noProvider && (
-          <Callout variant="warning" icon={<MemoryGlyph />}>
+          <Callout variant="warning" icon={<CpuGlyph />}>
             No model provider is configured, so no agent seat takes a turn: work sent to a seat
-            waits on its inbox until one is added. The dashboard does not write providers: add one
-            with a merge patch of <InlineCode>providers</InlineCode> to{" "}
+            waits on its inbox until one is added. No dashboard screen adds the first: add it with a
+            merge patch of <InlineCode>providers</InlineCode> to{" "}
             <InlineCode>PATCH /config</InlineCode>, which changes nothing else.
           </Callout>
         )}
@@ -1809,7 +1897,7 @@ function Lens({
           <Callout
             variant="warning"
             action={
-              <Button size="small" variant="tertiary" onClick={() => setRefusal(null)}>
+              <Button size="small" variant="ghost" onClick={() => setRefusal(null)}>
                 Dismiss
               </Button>
             }
@@ -1843,7 +1931,7 @@ function Lens({
         {readBack?.failed && (
           <Callout
             variant="warning"
-            icon={<CableGlyph />}
+            icon={<PlugGlyph />}
             action={
               <Button
                 variant="secondary"
@@ -1925,7 +2013,7 @@ function Lens({
             open
             stackBody
             title="Leave the builder?"
-            icon={<WarningGlyph />}
+            icon={<TriangleAlertGlyph />}
             onClose={() => setLeaving(null)}
             footer={
               <>
@@ -1957,7 +2045,7 @@ function Lens({
             open
             stackBody
             title="A company already exists on this engine"
-            icon={<WarningGlyph />}
+            icon={<TriangleAlertGlyph />}
             onClose={() => setCompanyExists(false)}
             footer={
               <>
@@ -2126,7 +2214,7 @@ function DialogHost({
     case "discard":
       /*
        * ONE QUESTION, ONE ANSWER, in the shape every other confirmation in
-       * this lens takes: the node editor asks the same thing and asks it as a
+       * this builder takes: the node editor asks the same thing and asks it as a
        * prompt. Written here as a framed Modal it carried a head band, a
        * pencil-sized mark and a close control that did exactly what the Keep
        * editing two inches below it did, so one question was drawn two ways on
@@ -2181,7 +2269,7 @@ function DocumentProblems({ problems }: { problems: readonly PlacedProblem[] }) 
       className="org-builder-problems"
       role="group"
       aria-label="Problems with the whole configuration"
-      icon={<ErrorGlyph size="sm" />}
+      icon={<CircleAlertGlyph size="sm" />}
     >
       <ul className="col gap-1">
         {problems.map((p, i) => (
@@ -2232,7 +2320,7 @@ function PostureScreen({
     case "behind":
       return (
         <EmptyState
-          icon={<RefreshGlyph />}
+          icon={<RotateCwGlyph />}
           title="This node has not caught up with the fleet's configuration yet."
           description="The fleet already runs a company. Try again once this node has applied its revision, or open the dashboard on another node."
           action={retry}
@@ -2254,7 +2342,7 @@ function PostureScreen({
     case "unserved":
       return (
         <EmptyState
-          icon={<DnsGlyph />}
+          icon={<ServerGlyph />}
           title="This process does not serve the configuration"
           description="The builder reads and writes the company through the node that runs it. Open the dashboard on a node running the engine."
         />
@@ -2262,7 +2350,7 @@ function PostureScreen({
     case "unreachable":
       return (
         <EmptyState
-          icon={<CableGlyph />}
+          icon={<PlugGlyph />}
           title="The engine could not be reached"
           description={posture.detail || "Nothing answered the request for the configuration."}
           action={retry}
@@ -2271,7 +2359,7 @@ function PostureScreen({
     case "failed":
       return (
         <EmptyState
-          icon={<ErrorGlyph />}
+          icon={<CircleAlertGlyph />}
           title="The engine could not serve the configuration"
           description={posture.detail}
           action={retry}
@@ -2319,7 +2407,7 @@ function FullscreenToggle({ container }: { container: RefObject<HTMLDivElement |
   return (
     <IconButton
       label={active ? "Leave fullscreen" : "Fullscreen"}
-      icon={active ? <FullscreenExitGlyph /> : <FullscreenGlyph />}
+      icon={active ? <MinimizeGlyph /> : <MaximizeGlyph />}
       size="sm"
       onClick={() => {
         const el = container.current;

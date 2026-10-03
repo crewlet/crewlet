@@ -104,6 +104,53 @@ func TestALaunchIsAnnouncedAndRoutedToTheSeat(t *testing.T) {
 	}
 }
 
+// A LAUNCH RECORDS THE ITEM ITS TURN IS ON, on the row and on the announcement.
+//
+// The row is what the resumed turn reads its item from — the event that
+// resumes it names none — and the announcement is what a running-runs panel
+// reads, which cannot join back to a turn that parked days ago.
+func TestALaunchRecordsTheItemItsTurnIsOn(t *testing.T) {
+	rig := newWaiterRig(t)
+	req := launchReq("t1")
+	item := types.WorkItem{Backend: types.WorkNative, ID: "task-1", Key: "ENG-1", Project: "ENG"}
+	req.Turn.WorkItem = &item
+	if _, err := Launch(t.Context(), rig.manager, rig.pending, rig.queue, req); err != nil {
+		t.Fatalf("Launch: %v", err)
+	}
+	if run := rig.get("t1"); run.WorkItem == nil || *run.WorkItem != item {
+		t.Fatalf("the row records %+v, want the turn's item", run.WorkItem)
+	}
+	rig.queue.mu.Lock()
+	defer rig.queue.mu.Unlock()
+	started := rig.queue.published[0].event.Data.(*types.SandboxRunStarted)
+	if started.WorkItem == nil || *started.WorkItem != item {
+		t.Fatalf("the announcement names %+v, want the turn's item", started.WorkItem)
+	}
+}
+
+// THE ANNOUNCEMENT NAMES ITS JOB: the launch id the store minted and when it
+// recorded the launch — what pairs the start with the job's own phase record,
+// and what a request for the running job's live output names. A turn can
+// launch more than one job, so without it a watcher could not say which of
+// them is still running.
+func TestTheStartedEventNamesTheJobItAnnounces(t *testing.T) {
+	rig := newWaiterRig(t)
+	if _, err := Launch(t.Context(), rig.manager, rig.pending, rig.queue, launchReq("t1")); err != nil {
+		t.Fatalf("Launch: %v", err)
+	}
+	run := rig.get("t1")
+	rig.queue.mu.Lock()
+	defer rig.queue.mu.Unlock()
+	started := rig.queue.published[0].event.Data.(*types.SandboxRunStarted)
+	if started.LaunchID == "" || started.LaunchID != run.LaunchID {
+		t.Errorf("the announcement names launch %q; the row holds %q", started.LaunchID, run.LaunchID)
+	}
+	if !started.StartedAt.Equal(run.Launch.StartedAt) || started.StartedAt.IsZero() {
+		t.Errorf("the announcement says the job started at %v; the row says %v",
+			started.StartedAt, run.Launch.StartedAt)
+	}
+}
+
 // The full brief lives on the row; the wire carries a label for one panel row.
 func TestTheStartedEventCarriesALabelNotTheWholeBrief(t *testing.T) {
 	rig := newWaiterRig(t)
@@ -157,6 +204,30 @@ func TestTheCodingAgentIsToldTheGoalAndItsEnvironment(t *testing.T) {
 	}
 	if strings.Contains(brief, "Success criteria") {
 		t.Errorf("the retired criteria section is still rendered:\n%s", brief)
+	}
+}
+
+// THE CODING AGENT IS TOLD IT MAY ASK, and whom — the addendum the engine
+// composes rides the brief the box is started with. Without it the ask shim was
+// installed and never mentioned, so a run blocked on a decision could not park
+// on a question at all.
+//
+// And the row records WHO ASKED, which is what the park resolves a question to
+// "the requester" against days later.
+func TestTheCodingAgentIsToldHowToAskAndTheRowWhoAsked(t *testing.T) {
+	rig := newWaiterRig(t)
+	req := launchReq("t1")
+	req.Ask = "## If you get blocked on a human decision\nRun crewlet-ask --to founder"
+	req.Turn.Requester = "ada"
+	if _, err := Launch(t.Context(), rig.manager, rig.pending, rig.queue, req); err != nil {
+		t.Fatalf("Launch: %v", err)
+	}
+	started := rig.runner.Started()
+	if len(started) != 1 || !strings.Contains(started[0].Brief, "crewlet-ask --to founder") {
+		t.Fatalf("the coding agent's brief does not carry how to ask:\n%v", started)
+	}
+	if got := rig.get("t1").Requester; got != "ada" {
+		t.Errorf("the row records requester %q, want the seat whose wake started the turn", got)
 	}
 }
 

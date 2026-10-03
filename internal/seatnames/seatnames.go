@@ -1,6 +1,6 @@
 // Package seatnames is how a record names a seat: by the handle the seat was
 // CREATED under, which is its identity, and never by the handle it answers to
-// now, which is only its address (ADR-0019).
+// now, which is only its address (ADR-0026).
 //
 // # Why a package of its own
 //

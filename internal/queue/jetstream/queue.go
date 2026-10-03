@@ -24,8 +24,11 @@ import (
 	"github.com/crewlet/crewlet/internal/queue/topics"
 )
 
-// Errors this backend reports. Callers branch on these; everything else is
-// wrapped transport failure.
+// Errors this backend reports. Callers branch on these, or on the contract's
+// sentinels they wrap. A transport failure the broker's silence or a dropped
+// connection caused is wrapped in queue.ErrUnavailable and one NATS closed
+// for good in [ErrConnectionLost] — see [Queue.brokerFailed]; every other is
+// the client's error, wrapped and unmarked.
 var (
 	// ErrSubject means a subject belongs to no stream — a publish that
 	// would land where nobody consumes.
@@ -264,6 +267,11 @@ type Queue struct {
 	log *slog.Logger
 	cfg Config
 
+	// contract is the contract-level settings this client was built with —
+	// the node it publishes for among them. Fixed at construction, so it is
+	// read without the lock.
+	contract queue.Options
+
 	// embedded is the in-process broker, when there is one. A client may
 	// reference a server it does NOT own — see ownsServer.
 	embedded *embeddedServer
@@ -314,15 +322,18 @@ type attachKey struct{ topic, group string }
 // owns one broker: stopping the queue stops the broker with it. A deployment
 // that needs several clients of one embedded broker — a fleet test, a peer —
 // uses StartServer and Server.Client instead.
-func Open(ctx context.Context, cfg Config) (*Queue, error) {
+//
+// opts are the contract-level settings; see [Server.Client].
+func Open(ctx context.Context, cfg Config, opts ...queue.Option) (*Queue, error) {
+	contract := queue.Resolve(opts...)
 	if cfg.URL != "" {
-		return newQueueOn(ctx, cfg, nil, false)
+		return newQueueOn(ctx, cfg, nil, false, contract)
 	}
 	e, err := startEmbedded(ctx, cfg)
 	if err != nil {
 		return nil, fmt.Errorf("start embedded nats: %w", err)
 	}
-	q, err := newQueueOn(ctx, cfg, e, true)
+	q, err := newQueueOn(ctx, cfg, e, true, contract)
 	if err != nil {
 		e.shutdown()
 		return nil, err
@@ -332,10 +343,13 @@ func Open(ctx context.Context, cfg Config) (*Queue, error) {
 
 // newQueueOn builds a client against an already-running broker (or an
 // external URL when embedded is nil).
-func newQueueOn(ctx context.Context, cfg Config, embedded *embeddedServer, owns bool) (*Queue, error) {
+func newQueueOn(ctx context.Context, cfg Config, embedded *embeddedServer, owns bool,
+	contract queue.Options,
+) (*Queue, error) {
 	q := &Queue{
 		log:         logging.Get("queue.jetstream"),
 		cfg:         cfg,
+		contract:    contract,
 		embedded:    embedded,
 		ownsServer:  owns,
 		attachments: map[attachKey][]*attachment{},
@@ -896,8 +910,12 @@ func (q *Queue) streamFor(ctx context.Context, subject string) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	// MARKED HERE TOO, at the same door: a stream this process has not
+	// provisioned yet costs a round trip before the verb's own, and a
+	// broker that did not answer it is the same condition whichever of the
+	// two it failed to answer.
 	if err := q.ensureStream(ctx, spec); err != nil {
-		return "", err
+		return "", q.brokerFailed(ctx, err)
 	}
 	return spec.name, nil
 }
@@ -1071,6 +1089,12 @@ func (q *Queue) Start(context.Context) error { return nil }
 // it — with replicas configured, that acknowledgement is a quorum commit, so
 // "published" means "survives losing this node".
 func (q *Queue) Publish(ctx context.Context, topic string, ev *events.Event) error {
+	if ev == nil {
+		// Refused rather than encoded: json.Marshal writes a nil event as
+		// `null`, which the broker stores and every consumer decodes into
+		// an event with no id and no type.
+		return errors.New("jetstream: publish a nil event")
+	}
 	if topic == "" {
 		// An empty subject is what an unroutable handle produces. It must
 		// not become a real subject nobody reads.
@@ -1087,6 +1111,10 @@ func (q *Queue) Publish(ctx context.Context, topic string, ev *events.Event) err
 		return ErrClosed
 	}
 
+	// THE ORIGIN BEFORE THE BYTES, so the message every consumer decodes and
+	// the event every listener is handed name the same node. See
+	// [queue.Options.Stamp].
+	ev = q.contract.Stamp(ev)
 	data, err := json.Marshal(ev)
 	if err != nil {
 		return fmt.Errorf("serialize event %s: %w", ev.Type, err)
@@ -1102,7 +1130,12 @@ func (q *Queue) Publish(ctx context.Context, topic string, ev *events.Event) err
 			return fmt.Errorf("%s: %w: %w", tooLarge(q.nc, "publish", topic, len(data)),
 				queue.ErrTooLarge, err)
 		}
-		return fmt.Errorf("publish %s: %w", topic, err)
+		// MARKED, for the contract's reason: a broker that did not
+		// acknowledge — a connection reconnecting, a stream whose
+		// leader did not answer — is a condition a caller retries,
+		// and an unmarked one reads above this package as the node's
+		// own fault. See [Queue.brokerFailed].
+		return fmt.Errorf("publish %s: %w", topic, q.brokerFailed(ctx, err))
 	}
 
 	// Listeners run inline, and must: the event store's writer is one of
@@ -1240,7 +1273,7 @@ func (q *Queue) EnsureSubscription(ctx context.Context, topic, group string) (bo
 				"the create below decides it rather than the boot failing on "+
 				"a question nobody answered")
 	default:
-		return false, fmt.Errorf("inspect consumer %s: %w", name, getErr)
+		return false, fmt.Errorf("inspect consumer %s: %w", name, q.brokerFailed(ctx, getErr))
 	}
 
 	cons, won, err := q.ensureDurableConsumer(ctx, stream, jetstream.ConsumerConfig{
@@ -1262,7 +1295,7 @@ func (q *Queue) EnsureSubscription(ctx context.Context, topic, group string) (bo
 		MaxDeliver:    budgetFor(q.cfg),
 	})
 	if err != nil {
-		return false, fmt.Errorf("ensure consumer %s: %w", name, err)
+		return false, fmt.Errorf("ensure consumer %s: %w", name, q.brokerFailed(ctx, err))
 	}
 	// WON IS THE WHOLE ANSWER, because the lookup half is already spent:
 	// the only way to reach here is a lookup that said "not there" or said
@@ -1481,7 +1514,8 @@ func (q *Queue) DeleteSubscription(ctx context.Context, topic, group string) (bo
 		// caller's intent is "this must not exist", and it does not.
 		return false, nil
 	default:
-		return false, fmt.Errorf("delete consumer for %s/%s: %w", topic, group, err)
+		return false, fmt.Errorf("delete consumer for %s/%s: %w", topic, group,
+			q.brokerFailed(ctx, err))
 	}
 }
 
@@ -1564,7 +1598,7 @@ func (q *Queue) ListSubscriptions(ctx context.Context, topicPattern string) ([]q
 		}
 	}
 	if err := names.Err(); err != nil {
-		return nil, fmt.Errorf("list streams: %w", err)
+		return nil, fmt.Errorf("list streams: %w", q.brokerFailed(ctx, err))
 	}
 
 	var out []queue.Subscription
@@ -1575,7 +1609,7 @@ func (q *Queue) ListSubscriptions(ctx context.Context, topicPattern string) ([]q
 			continue
 		}
 		if err != nil {
-			return nil, fmt.Errorf("open stream %s: %w", name, err)
+			return nil, fmt.Errorf("open stream %s: %w", name, q.brokerFailed(ctx, err))
 		}
 		consumers := stream.ListConsumers(ctx)
 		for info := range consumers.Info() {
@@ -1585,7 +1619,8 @@ func (q *Queue) ListSubscriptions(ctx context.Context, topicPattern string) ([]q
 			}
 		}
 		if err := consumers.Err(); err != nil {
-			return nil, fmt.Errorf("list consumers of stream %s: %w", name, err)
+			return nil, fmt.Errorf("list consumers of stream %s: %w", name,
+				q.brokerFailed(ctx, err))
 		}
 	}
 	slices.SortFunc(out, func(a, b queue.Subscription) int {

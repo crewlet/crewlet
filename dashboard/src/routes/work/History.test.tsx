@@ -15,10 +15,11 @@
  * for somebody else.
  */
 
-import { cleanup, fireEvent, render, screen, waitFor, within } from "~/test/inCase.ts";
+import { cleanup, fireEvent, render, screen, waitFor } from "~/test/inCase.ts";
 import { afterEach, expect, test, vi } from "vitest";
 
 import { History, HistoryView } from "./History.tsx";
+import { pick } from "~/testing.tsx";
 import { Router } from "~/app/router.tsx";
 import { usePageCoverage } from "~/app/Shell.tsx";
 import { useClient, useConnection, useOrg } from "~/lib/store-hooks.ts";
@@ -30,6 +31,7 @@ import {
   DUPLICATE_HREF,
   SHARED_KEY,
 } from "~/test/keyCollision.ts";
+import { ViewerProvider } from "~/lib/viewer.ts";
 
 vi.mock("~/lib/store-hooks.ts", async () => {
   const actual =
@@ -90,9 +92,11 @@ function record(over: Partial<WorkActivityRecord> = {}): WorkActivityRecord {
 
 const mount = () =>
   render(
-    <Router>
-      <History />
-    </Router>,
+    <ViewerProvider>
+      <Router>
+        <History />
+      </Router>
+    </ViewerProvider>,
   );
 
 /** What `work_activity` was actually asked. */
@@ -101,8 +105,8 @@ function asked(query: ReturnType<typeof serving>): Record<string, unknown> {
   return calls.findLast(([what]) => what === "work_activity")?.[1] ?? {};
 }
 
-/** The rails, by the caption each one carries under its chips. */
-const rails = () => screen.getAllByText(/counts over the rows loaded/);
+/** The bar's pickers, by the dimension each one narrows. */
+const picker = (name: string) => screen.getByRole("combobox", { name });
 
 // THE WINDOW IS A WALL-CLOCK RANGE, which is what a reader choosing one means:
 // the engine's own `from`/`to` over the AUTHORED instants, never a log
@@ -154,19 +158,29 @@ test("a write an operator made is marked as one", async () => {
       records: [
         record({ id: "r1", actor: "founder", actor_kind: "operator" }),
         record({ id: "r2", actor: "ada", actor_kind: "agent" }),
+        // A PERSON THE DIRECTORY BINDS TO A SEAT writes AS the seat, so the
+        // row names them as every other screen does, and keeps the
+        // credential the write came through on the title.
+        record({ id: "r3", actor: "ada", actor_kind: "human", operator_id: "pat:0193a8" }),
       ],
       complete: true,
     },
   });
   const { container } = mount();
-  await waitFor(() => expect(container.querySelectorAll(".work-log-row").length).toBe(2));
+  await waitFor(() => expect(container.querySelectorAll(".work-log-row").length).toBe(3));
   // READ OFF THE ROWS, because the facet rail lists the same authors one band
   // up: a bare text query would match either and prove neither.
-  const who = [...container.querySelectorAll(".work-log-who")].map((el) => el.textContent ?? "");
+  const rows = [...container.querySelectorAll(".work-log-who")];
+  const who = rows.map((el) => el.textContent ?? "");
   expect(who[0]).toContain("founder");
   expect(who[0]).toContain("operator");
   // AN AGENT'S WRITE IS THE ORDINARY CASE, so only the others are marked.
   expect(who[1]).not.toContain("agent");
+  expect(who[2]).toContain("Ada Okonkwo");
+  expect(who[2]).toContain("human");
+  expect(rows[2]!.querySelector("[title]")?.getAttribute("title")).toBe(
+    "Written through pat:0193a8",
+  );
 });
 
 // A HANDLE IS THE DATABASE'S WORD FOR A PERSON, resolved through the chart
@@ -185,10 +199,12 @@ test("a change the engine made names the engine", async () => {
   await waitFor(() => expect(screen.getByText("the engine")).toBeTruthy());
 });
 
-// THE FACETS COUNT THE ROWS LOADED, and the rail says so: the engine answers
-// this question with rows rather than with counts, so a chip claiming a total
-// would be a number this screen invented about somebody's company.
-test("a facet says what its count is a count of", async () => {
+// THE PICKERS COUNT THE ROWS LOADED, and the bar says so ONCE: the engine
+// answers this question with rows rather than with counts, so an option
+// claiming a total would be a number this screen invented about somebody's
+// company — and three rails each ending in the same caption said it three
+// times.
+test("a picker's counts say what they are a count of, once", async () => {
   serving({
     work_activity: {
       records: [
@@ -200,16 +216,19 @@ test("a facet says what its count is a count of", async () => {
     },
   });
   mount();
-  // ONE RAIL PER DIMENSION — the kinds, the authors and the projects — and each
-  // says what it counted.
-  await waitFor(() => expect(rails().length).toBe(3));
+  // ONE PICKER PER DIMENSION — the kinds, the authors and the projects — in
+  // the one bar, and one sentence for all three.
+  await waitFor(() =>
+    expect(screen.getAllByText("Counts are over the changes loaded")).toHaveLength(1),
+  );
+  expect(picker("Kind")).toBeTruthy();
+  expect(picker("By")).toBeTruthy();
+  expect(picker("Project")).toBeTruthy();
   // AND THE SET IS WHAT THE PAGE HOLDS rather than a closed set of thirty-two
-  // kinds, most of them zero: a rail of thirty-two chips is not a filter.
-  // Read off the rail itself, because a row's own delta names its field with
-  // the same word.
-  const rail = rails()[0]?.closest(".facet-row");
-  expect(within(rail as HTMLElement).getByText("status")).toBeTruthy();
-  expect(within(rail as HTMLElement).getByText("comment")).toBeTruthy();
+  // kinds, most of them zero, each with how many of the loaded rows carry it.
+  fireEvent.click(picker("Kind"));
+  expect(screen.getByRole("option", { name: /^status.*2 changes/ })).toBeTruthy();
+  expect(screen.getByRole("option", { name: /^comment.*1 change/ })).toBeTruthy();
 });
 
 // PICKING A FACET ASKS THE ENGINE AGAIN rather than hiding rows this client
@@ -234,24 +253,26 @@ test("the project rail narrows the log to one project", async () => {
     },
   });
   mount();
-  await waitFor(() => expect(rails().length).toBe(3));
-  const rail = rails()[2]?.closest(".facet-row") as HTMLElement;
-  fireEvent.click(within(rail).getByText("ENG"));
+  await waitFor(() => expect(screen.getAllByText("ENG-1")).toHaveLength(2));
+  pick(picker("Project"), /^ENG/);
   // THE CONTAINER, which is how `work_activity` takes a project: the engine
   // maps `project:KEY` onto its own `h.project_key` predicate.
   await waitFor(() => expect(asked(query).container).toBe("project:ENG"));
-  expect(screen.getByLabelText("Show every project")).toBeTruthy();
+  expect(picker("Project").textContent).toContain("ENG");
 });
 
-// A PROJECT NARROWING IS ALSO A CHIP, because the page is reached from a
-// project's own feed and a reader who cannot see the narrowing reads one
-// project's changes as the company's.
+// A PROJECT NARROWING IS VISIBLE, because the page is reached from a project's
+// own feed and a reader who cannot see the narrowing reads one project's
+// changes as the company's — so the picker shows it even when no loaded row
+// carries it, and choosing "Every project" takes it off.
 test("a project narrowing arriving in the address is visible and removable", async () => {
   location.hash = "#/work/history?project=ENG";
   const query = serving({ work_activity: { records: [], complete: true } });
   mount();
   await waitFor(() => expect(asked(query).container).toBe("project:ENG"));
-  expect(screen.getByLabelText("Show every project")).toBeTruthy();
+  expect(picker("Project").textContent).toContain("ENG");
+  pick(picker("Project"), "Every project");
+  await waitFor(() => expect(asked(query).container).toBe("workspace"));
 });
 
 // THE PAGE BOUNDARY IS CROSSED, not announced. The screen used to print that
@@ -315,6 +336,43 @@ test("a window with nothing in it says so and offers the way out", async () => {
   expect(screen.getByText(/Widen the window/)).toBeTruthy();
 });
 
+// NOTHING HAPPENED AND NOTHING COULD BE READ ARE OPPOSITE FACTS. A node
+// holding records this build cannot decode answers an empty window too, and
+// "Nothing changed" over that told a reader their company had been quiet when
+// the changes were there and unread.
+test("an empty window this node could not read is not a quiet one", async () => {
+  serving({
+    work_activity: {
+      records: [],
+      complete: false,
+      incomplete: {
+        records: 3,
+        version: 14,
+        from: { seq: 41, generation: 1, stream: "CREWLET_WORK_LOG" },
+        scope: ["project:ENG"],
+      },
+    },
+  });
+  mount();
+  await waitFor(() => expect(screen.getByText("No change here could be read")).toBeTruthy());
+  expect(screen.queryByText("Nothing changed in this window")).toBeNull();
+  expect(screen.getByText(/3 record\(s\) this build cannot read/)).toBeTruthy();
+  expect(screen.getByText(/not a refresh/)).toBeTruthy();
+});
+
+// AND A NODE BEHIND ITS LOG says how far it applied, in the position words
+// every coverage surface uses, rather than that nothing happened.
+test("an empty window on a node behind its log says how far it has applied", async () => {
+  serving({
+    work_activity: { records: [], complete: true, applied_through: 41, log_seq: 88 },
+  });
+  mount();
+  await waitFor(() =>
+    expect(screen.getByText("Nothing in this window has been applied here")).toBeTruthy(),
+  );
+  expect(screen.getByText(/applied through 41 of 88/)).toBeTruthy();
+});
+
 /** An answer from a node that is behind, which is the only state coverage draws in. */
 const behind = (records: WorkActivityRecord[]) => ({
   records,
@@ -343,16 +401,19 @@ test("the lens draws its own coverage and publishes none", async () => {
   // would pass on a screen that had simply loaded no project.
   serving({ work_activity: behind([record({ project: "ENG" })]) });
   const { container } = render(
-    <Router>
-      <HistoryView container="project:ENG" embedded />
-    </Router>,
+    <ViewerProvider>
+      <Router>
+        <HistoryView container="project:ENG" embedded />
+      </Router>
+    </ViewerProvider>,
   );
   await waitFor(() => expect(screen.getByText("ENG-1")).toBeTruthy());
   expect(vi.mocked(usePageCoverage)).not.toHaveBeenCalled();
   expect(container.querySelector(".work-coverage")).toBeTruthy();
-  // AND NO PROJECT RAIL: every row under a project's header carries the same
-  // key, so a rail there is one chip that narrows nothing.
-  expect(rails().length).toBe(2);
+  // AND NO PROJECT PICKER: every row under a project's header carries the
+  // same key, so a picker there is one option that narrows nothing.
+  expect(screen.queryByRole("combobox", { name: "Project" })).toBeNull();
+  expect(picker("Kind")).toBeTruthy();
 });
 
 // THE ANSWER'S OWN RESOLUTION REACHES THE SENTENCE. The delta carries the other
@@ -424,6 +485,23 @@ test("a reader looking at their own queue is still addressed as themselves", asy
   await waitFor(() =>
     expect(container.querySelector(".work-log-what")?.textContent).toContain("your priorities"),
   );
+});
+
+// THE BAR SAYS HOW MUCH IS SHOWN IN PLAIN WORDS, with the way to more beside it:
+// "100 changes loaded, and older ones beyond them" described a paging state
+// where a reader wanted a number and a button.
+test("the bar says how many are shown and offers the older ones", async () => {
+  const query = servingWith((what, params) => {
+    if (what !== "work_activity") return {};
+    return params?.cursor
+      ? { records: [record({ id: "r2", subject_key: "ENG-2" })], complete: true }
+      : { records: [record({ id: "r1" })], next_cursor: "c1", complete: true };
+  });
+  mount();
+  await waitFor(() => expect(screen.getByText(/Showing the latest 1/)).toBeTruthy());
+  fireEvent.click(screen.getByRole("button", { name: "Load older" }));
+  await waitFor(() => expect(asked(query).cursor).toBe("c1"));
+  await waitFor(() => expect(screen.getByText(/Showing the latest 2/)).toBeTruthy());
 });
 
 // AND AN UNBOUND READER'S QUEUE IS KEPT UNDER THEIR LOGIN, which is the name a

@@ -84,7 +84,7 @@ func TestARetiredHandleResolvesAndALiveOneAlwaysWins(t *testing.T) {
 
 // THE HANDLE A SEAT WAS CREATED UNDER RESOLVES FOR EVER, AND SO DOES A UNIT'S.
 //
-// The alias list is capped and the origin is not, which is ADR-0019's own
+// The alias list is capped and the origin is not, which is ADR-0026's own
 // argument: an identity a cap can drop is no identity. So once a seat has been
 // renamed often enough that the address it was created under fell off the
 // list, that address still names it — as it does in the chart, whose rows this

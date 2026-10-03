@@ -41,7 +41,7 @@ func (Domain) Name() string { return "iam" }
 //
 // A SESSION OPERATION RE-ASKED PAST THE HOUR IS NOT DECIDED AGAIN. The sweep
 // that takes these rows records that THIS KIND lost them, apart from the
-// table's month (migration 0037), so the publisher answers an operation minted
+// table's month (migration 0045), so the publisher answers an operation minted
 // before that instant whose row is gone `unknown` without publishing it
 // ([statelog.Result.Unvouched]) — never a second start of a session, never a
 // close decided on rows that may already hold the first — while every other
@@ -247,11 +247,11 @@ func (Domain) ScopeIndex() string { return "iam_log_deferred_scope" }
 //
 // THE FRAMEWORK'S COLUMNS AND NOTHING ELSE — the operation, its subject, where
 // it landed, when this node applied it and the broker's instant for the record
-// that did (migration 0036) — and TWO HORIZONS, stated rather than hidden in a
+// that did (migration 0044) — and TWO HORIZONS, stated rather than hidden in a
 // column: a session subject's rows go after [SessionOpsRetention] and every
 // other kind's after the framework's month. The sweep of the hour is a range
-// over the stored SUBJECT, which already carries the kind (migration 0030),
-// and it records that kind's loss APART from the table's (migration 0037), so
+// over the stored SUBJECT, which already carries the kind (migration 0038),
+// and it records that kind's loss APART from the table's (migration 0045), so
 // the publisher holds a session operation to the hour and every other kind to
 // the month. One watermark moved hourly would have answered every identity
 // operation minted more than an hour earlier — a redemption, a create retried

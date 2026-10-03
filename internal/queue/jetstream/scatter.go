@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"sync/atomic"
+	"time"
 
 	"github.com/nats-io/nats.go"
 
@@ -88,7 +89,7 @@ func (q *Queue) Serve(ctx context.Context, subject string, h queue.AnswerFunc) (
 	})
 	if err != nil {
 		retire()
-		return nil, fmt.Errorf("serve %s: %w", subject, err)
+		return nil, fmt.Errorf("serve %s: %w", subject, q.brokerFailed(ctx, err))
 	}
 	// FLUSHED BEFORE RETURNING, and it is a correctness requirement rather
 	// than tidiness. A core NATS subscription is registered when the
@@ -98,10 +99,11 @@ func (q *Queue) Serve(ctx context.Context, subject string, h queue.AnswerFunc) (
 	// that did not answer. Measured: the conformance suite's peer arm
 	// failed exactly that way under load, intermittently, which is the
 	// worst shape a missing flush has.
-	if err := q.nc.Flush(); err != nil {
+	if err := q.flush(ctx); err != nil {
 		retire()
 		_ = sub.Unsubscribe()
-		return nil, fmt.Errorf("serve %s: register the subscription: %w", subject, err)
+		return nil, fmt.Errorf("serve %s: register the subscription: %w", subject,
+			q.brokerFailed(ctx, err))
 	}
 	q.log.Debug("scatter_server_added", "subject", subject)
 
@@ -114,6 +116,28 @@ func (q *Queue) Serve(ctx context.Context, subject string, h queue.AnswerFunc) (
 		q.log.Debug("scatter_server_removed", "subject", subject)
 		return nil
 	}, nil
+}
+
+// flushBudget bounds the round trip that confirms the broker holds what this
+// connection has sent, where the caller's context sets no shorter deadline of
+// its own.
+//
+// TEN SECONDS IS THE CLIENT'S OWN Flush() DEFAULT, which both scatter verbs
+// called before this existed, and the value is kept: on a connection that is
+// up the round trip is a PING and a PONG, and on one that is down it ends when
+// the connection returns, so a registration that has heard nothing in ten
+// seconds is on a connection the reconnect budget is deciding about — waiting
+// longer would only defer that decision to it. What changed is that the
+// caller's own deadline and cancellation now end the wait as well, because
+// Flush() honours neither.
+const flushBudget = 10 * time.Second
+
+// flush waits for the broker to confirm what this connection has sent, for at
+// most [flushBudget] and never past ctx.
+func (q *Queue) flush(ctx context.Context) error {
+	ctx, cancel := context.WithTimeout(ctx, flushBudget)
+	defer cancel()
+	return q.nc.FlushWithContext(ctx)
 }
 
 // answer runs one answerer, turning a panic into a failure to answer.
@@ -138,6 +162,15 @@ func (q *Queue) Ask(ctx context.Context, subject string, request []byte, want in
 		return nil, fmt.Errorf("ask %s: %d bytes exceeds the %d-byte limit: %w",
 			subject, len(request), queue.MaxPayloadBytes, queue.ErrTooLarge)
 	}
+	// NOT INTO A CONNECTION THAT IS DOWN. The client would take the request
+	// into its reconnect buffer and answer nothing, and the buffer would
+	// send it once the connection came back — to servers answering a
+	// mailbox nobody reads, after this asker had already been told the
+	// ask failed. A scatter retains nothing, its requests included; see
+	// [queue.EventQueue.Ask].
+	if err := q.reachable(); err != nil {
+		return nil, fmt.Errorf("ask %s: %w", subject, err)
+	}
 
 	// ONE REPLY MAILBOX, SUBSCRIBED BEFORE THE REQUEST GOES OUT. A server
 	// on the same host can answer inside a microsecond, so a subscription
@@ -146,7 +179,8 @@ func (q *Queue) Ask(ctx context.Context, subject string, request []byte, want in
 	inbox := nats.NewInbox()
 	replies, err := q.nc.SubscribeSync(inbox)
 	if err != nil {
-		return nil, fmt.Errorf("ask %s: open a reply mailbox: %w", subject, err)
+		return nil, fmt.Errorf("ask %s: open a reply mailbox: %w", subject,
+			q.brokerFailed(ctx, err))
 	}
 	defer func() { _ = replies.Unsubscribe() }()
 	if err := q.nc.PublishRequest(subject, inbox, request); err != nil {
@@ -161,10 +195,14 @@ func (q *Queue) Ask(ctx context.Context, subject string, request []byte, want in
 			return nil, fmt.Errorf("%s: %w: %w", tooLarge(q.nc, "ask", subject,
 				len(request)), queue.ErrTooLarge, err)
 		}
-		return nil, fmt.Errorf("ask %s: %w", subject, err)
+		return nil, fmt.Errorf("ask %s: %w", subject, q.brokerFailed(ctx, err))
 	}
-	if err := q.nc.Flush(); err != nil {
-		return nil, fmt.Errorf("ask %s: flush: %w", subject, err)
+	// BOUNDED BY THE ASK'S OWN DEADLINE, which the client's Flush() was
+	// not: it waits ten seconds whatever its caller has, so an ask given
+	// two seconds against a connection that dropped after the check above
+	// took ten — the one thing this verb promises not to do.
+	if err := q.flush(ctx); err != nil {
+		return nil, fmt.Errorf("ask %s: flush: %w", subject, q.brokerFailed(ctx, err))
 	}
 
 	out := make([][]byte, 0, max(want, 1))

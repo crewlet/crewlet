@@ -127,13 +127,17 @@
 //     WHOLE matrix rather than probing the verb you suspect — the suspected one
 //     is chosen from inside the blind spot.
 //
-// One lifecycle this suite does not visit at all: the BACKEND'S REACHABILITY.
-// Every case here runs against a healthy broker, so nothing certifies what a
-// verb answers when the store is unreachable — and "nil, false, or an empty
-// slice with no error" all read as facts about a subscription that a call which
-// never reached the broker does not have. Closing it needs fault injection the
-// contract has no hook for, so it is named as a known gap rather than left as
-// an assumption.
+// One lifecycle this suite visits only through a capability: the BACKEND'S
+// REACHABILITY. Every other case runs against a healthy broker, and what a verb
+// answers when the broker is unreachable is a contract clause of its own —
+// "nil, false, or an empty slice with no error" all read as facts about a
+// subscription that a call which never reached the broker does not have, and
+// an error with no mark read above the queue as this node's own fault. The
+// contract has no hook to inject that fault, so [Capabilities.BrokerDown] is
+// one, and runReachability holds every verb to queue.ErrUnavailable through it.
+// What it still cannot visit is a broker that comes BACK: the real backend's
+// harness can only take its server away, so recovery is a known gap rather
+// than an assumption.
 //
 // One limit, and it binds the two entries above that recommend a guard rather
 // than excusing them: a guard that names its own assumption DIAGNOSES a race,
@@ -338,6 +342,22 @@ type Capabilities struct {
 	// still stands and this is not one.
 	ConsumerProposals func(q queue.EventQueue) int
 
+	// BrokerDown takes away the broker q is a client of, for the rest of the
+	// case, as a broker whose server stopped is taken away: q is NOT
+	// stopped, and as far as it knows it is still live. It returns once q
+	// has noticed, so the next verb sent meets the outage rather than racing
+	// it.
+	//
+	// THE ONLY FAULT INJECTION IN THE SUITE, and it exists for
+	// runReachability: whether a verb that could not reach its broker says
+	// so with queue.ErrUnavailable — a condition every caller retries —
+	// rather than with an unmarked error a caller above the queue reads as
+	// this node's own fault, or with queue.ErrNotLive, which a seat release
+	// reads as proof the mailbox is torn down. One-way, because the
+	// shipped backend's harness can only stop a server; see the package
+	// doc.
+	BrokerDown func(t *testing.T, q queue.EventQueue)
+
 	// History reports every event published through this backend, for the
 	// one assertion that has to distinguish "not delivered" from "not
 	// accepted".
@@ -419,13 +439,20 @@ type Capabilities struct {
 //
 // newQueue must return a FRESH, UNSTARTED queue on every call: the suite owns
 // the lifecycle, because start/stop ordering is itself part of the contract.
-func Run(t *testing.T, newQueue func(t *testing.T) queue.EventQueue) {
+// It must honour the [queue.Option]s it is handed — they are the settings the
+// CONTRACT defines, so a backend cannot answer them as a capability, and the
+// suite certifies what every backend does with them.
+func Run(t *testing.T, newQueue Factory) {
 	RunWith(t, newQueue, Capabilities{})
 }
 
+// Factory builds a fresh, unstarted queue with the contract-level options
+// given — see [Run].
+type Factory func(t *testing.T, opts ...queue.Option) queue.EventQueue
+
 // RunWith is Run with the backend's capabilities filled in. A backend that can
 // answer more gets certified on more; nothing it cannot answer fails.
-func RunWith(t *testing.T, newQueue func(t *testing.T) queue.EventQueue, caps Capabilities) {
+func RunWith(t *testing.T, newQueue Factory, caps Capabilities) {
 	t.Helper()
 	s := &suite{newQueue: newQueue, caps: caps}
 	t.Run("EventQueue", s.runCore)
@@ -446,6 +473,8 @@ func RunWith(t *testing.T, newQueue func(t *testing.T) queue.EventQueue, caps Ca
 	// A "no" has two halves: the answer and the write that must not
 	// happen. See runNegativePaths.
 	t.Run("NegativePaths", s.runNegativePaths)
+	// What a verb answers when its broker is gone. See runReachability.
+	t.Run("Reachability", s.runReachability)
 	// Named for what it is: shared contract functions, not backend
 	// behaviour. See runContractPolicy for the scope this group does and
 	// does not cover.
@@ -453,14 +482,14 @@ func RunWith(t *testing.T, newQueue func(t *testing.T) queue.EventQueue, caps Ca
 }
 
 type suite struct {
-	newQueue func(t *testing.T) queue.EventQueue
+	newQueue Factory
 	caps     Capabilities
 }
 
 // start returns a started queue whose Stop is already registered as cleanup.
-func (s *suite) start(ctx context.Context, t *testing.T) queue.EventQueue {
+func (s *suite) start(ctx context.Context, t *testing.T, opts ...queue.Option) queue.EventQueue {
 	t.Helper()
-	return startQueue(ctx, t, s.newQueue(t))
+	return startQueue(ctx, t, s.newQueue(t, opts...))
 }
 
 func startQueue(ctx context.Context, t *testing.T, q queue.EventQueue) queue.EventQueue {

@@ -80,7 +80,10 @@ func (t *Tool[T]) Call(_ context.Context, args map[string]any) (tools.Result, er
 		// fix, and refusing the turn over a malformed submission throws
 		// away everything the phase already did.
 		//nolint:nilerr // Deliberate: see the paragraph above.
-		return tools.Result{Output: "Invalid submission: " + err.Error(), Failed: true}, nil
+		return tools.Result{
+			Output: "Invalid submission: " + err.Error(), Failed: true,
+			Cause: tools.Classify(tools.RefusalInvalid, err),
+		}, nil
 	}
 	// LAST WRITE WINS, and the call is still accepted. A model that
 	// submits twice has corrected itself; rejecting the second submission

@@ -2,14 +2,15 @@
  * After a save, the builder follows what it wrote until every node has
  * applied it — the settings revision by each node's epoch, the chart's writes
  * by each node's applied position on the chart's log — or says which node
- * refused it, and the read lenses admit that they still draw the company
- * before it.
+ * refused it, and the org chart admits that it still draws the company before
+ * it.
  */
 
-import { answered, cleanup, fireEvent, render, screen, within } from "~/test/inCase.ts";
+import { act, answered, cleanup, fireEvent, render, screen, within } from "~/test/inCase.ts";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { Router } from "~/app/router.tsx";
 import { ClientContext } from "~/lib/store-hooks.ts";
+import { ViewerProvider } from "~/lib/viewer.ts";
 import {
   LiveSocket,
   Store,
@@ -17,7 +18,7 @@ import {
   type RetentionNode,
   type RetentionReport,
 } from "~/protocol/index.ts";
-import { CompanyScreen } from "~/routes/company/Company.tsx";
+import { OrgChart } from "~/routes/agents/OrgChart.tsx";
 import { applyState, chartApplyState } from "./AfterSaveStrip.tsx";
 import { clearSavedChanges, recordSavedChanges } from "./savedChanges.ts";
 import {
@@ -25,11 +26,11 @@ import {
   Engine,
   InertWebSocket,
   mountBuilder,
-  type MountedLens,
+  type MountedBuilder,
   pressInToolbar,
   pressInView,
 } from "./testkit.tsx";
-import { SETTLE_MS } from "~/routes/admin/recheck.ts";
+import { SETTLE_MS } from "~/routes/settings/recheck.ts";
 import { toastText } from "~/testing.tsx";
 
 beforeEach(() => {
@@ -219,15 +220,15 @@ describe("what the strip says of the chart", () => {
 describe("in the builder", () => {
   /**
    * Saves an edit of the CEO, and a rename of the company with it when
-   * `settings` — and hands the case the waits of the lens it mounted.
+   * `settings` — and hands the case the waits of the builder it mounted.
    */
   async function save(
     engine: Engine,
     query: (what: string) => unknown,
     { settings = false }: { settings?: boolean } = {},
-  ): Promise<MountedLens> {
-    const lens = mountBuilder({ engine, query });
-    const { settle, checked } = lens;
+  ): Promise<MountedBuilder> {
+    const builder = mountBuilder({ engine, query });
+    const { settle, checked } = builder;
     await checked();
     pressInView("Edit CEO");
     if (settings) {
@@ -242,17 +243,16 @@ describe("in the builder", () => {
     fireEvent.click(within(dialog).getByRole("button", { name: "Save" }));
     await settle();
     expect(toastText()).toContain("Saved. The engine is applying it.");
-    return lens;
+    return builder;
   }
 
   /*
    * THE STRIP'S OWN READS RUN ON THE PAGE'S TIMERS — the recheck a save
-   * starts, the shared health poll, the fleet's and the retention report's —
-   * so the two cases that wait for an apply to land hold those timers
-   * themselves rather than waiting seconds of real time for them, which a
-   * busy machine turned into a deadline missed. Only the four calls that
-   * arm and cancel a timer are faked: the scheduler React flushes through,
-   * and the microtasks every answer resolves on, stay real.
+   * starts, the fleet's and the retention report's — so the cases about an
+   * apply hold those timers themselves rather than waiting seconds of real
+   * time for them, which a busy machine turned into a deadline missed. Only
+   * the four calls that arm and cancel a timer are faked: the scheduler React
+   * flushes through, and the microtasks every answer resolves on, stay real.
    */
   const holdTheTimers = () =>
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "setInterval", "clearInterval"] });
@@ -266,15 +266,13 @@ describe("in the builder", () => {
     await answered(() => vi.advanceTimersByTime(SETTLE_MS));
   }
 
+  // THIS NODE'S EPOCH ARRIVES ON THE HEALTH PUSH — the strip asks for nothing
+  // to learn it, so the tick moving it is what resolves the strip.
   test("the strip follows the saved revision and offers the diff", async () => {
     holdTheTimers();
     const engine = new Engine(company());
-    let applied = 1;
-    await save(
-      engine,
-      (what) => (what === "stream" ? { status: "ok", applied_epoch: applied } : null),
-      { settings: true },
-    );
+    const { store } = await save(engine, () => null, { settings: true });
+    act(() => store.applyHealth({ status: "ok", applied_epoch: 1 }));
     const strip = () => screen.getByText(/Saved settings revision/);
     expect(strip().textContent).toContain("The engine is applying it.");
     expect(within(strip()).getByText("r-saved")).toBeDefined();
@@ -282,10 +280,9 @@ describe("in the builder", () => {
     // built on. Against the active revision, which the save now is, the diff
     // would be empty.
     expect(screen.getByRole("link", { name: "View changes" }).getAttribute("href")).toBe(
-      "#/admin/config?lens=diff&revision=r-saved&against=r1",
+      "#/settings/config?lens=diff&revision=r-saved&against=r1",
     );
-    applied = 2;
-    await readAgain();
+    act(() => store.applyHealth({ status: "ok", applied_epoch: 2 }));
     expect(strip().textContent).toContain("Applied.");
   });
 
@@ -376,54 +373,51 @@ describe("in the builder", () => {
   });
 });
 
-describe("the read lenses", () => {
+describe("the org chart", () => {
   /**
-   * The company screen over a node that has applied `appliedEpoch`. A case
-   * lets the shared health read answer, and renders what it says, with
-   * [answered].
-   *
-   * EVERY CASE READS THE PAGE ONCE THE ANSWER IS IN. Until the read answers,
-   * the page knows of no applied epoch and draws the note whatever the node
-   * has applied, so a `findBy` that found the note at once said nothing about
-   * the answer — an off-by-one in the comparison passed the first case — and
-   * the absence the second case asks about is a claim only after it. The
-   * answer is the stubbed socket's promise, so `act` runs it to the end.
+   * Agents › Org chart over a node whose health push says it has applied
+   * `appliedEpoch`. A case reads the page once its questions are answered
+   * ([answered]), so an absence it asks about is a claim about the page as it
+   * settled rather than about one still loading.
    */
   function mountCompany(appliedEpoch: number): void {
     Object.defineProperty(globalThis, "WebSocket", { writable: true, value: InertWebSocket });
-    location.hash = "#/company";
+    location.hash = "#/agents";
     const store = new Store();
-    store.applyHealth({ status: "ok" });
+    // The health push, which is where this node's applied epoch comes from.
+    store.applyHealth({ status: "ok", applied_epoch: appliedEpoch });
     store.applyOrg({ name: "Acme", roles: [{ name: "CEO", handle: "ceo" }], units: [] });
     const socket = new LiveSocket(store);
-    (socket as unknown as { query: (what: string) => Promise<unknown> }).query = (what) =>
-      Promise.resolve(what === "stream" ? { status: "ok", applied_epoch: appliedEpoch } : null);
+    (socket as unknown as { query: (what: string) => Promise<unknown> }).query = () =>
+      Promise.resolve(null);
     render(
       <ClientContext.Provider value={{ store, socket }}>
-        <Router>
-          <CompanyScreen />
-        </Router>
+        <ViewerProvider>
+          <Router>
+            <OrgChart />
+          </Router>
+        </ViewerProvider>
       </ClientContext.Provider>,
     );
   }
 
   const settings = { revisionId: "r-saved", parentRevisionId: "r1", epoch: 4 };
 
-  test("say they still draw the previous revision until this node applies the saved one", async () => {
+  test("says it still draws the previous revision until this node applies the saved one", async () => {
     recordSavedChanges({ settings, chart: null });
     mountCompany(3);
     await answered();
     expect(screen.getByText(/still applying settings revision/)).toBeDefined();
   });
 
-  test("say nothing once the node has applied it", async () => {
+  test("says nothing once the node has applied it", async () => {
     recordSavedChanges({ settings, chart: null });
     mountCompany(4);
     await answered();
     expect(screen.queryByText(/still applying/)).toBeNull();
   });
 
-  test("name the chart's changes beside a revision this node has not applied", async () => {
+  test("names the chart's changes beside a revision this node has not applied", async () => {
     recordSavedChanges({
       settings,
       chart: { position: "CREWLET_CHART_LOG@1:12", appliedHere: false },

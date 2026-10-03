@@ -126,9 +126,9 @@ func (d WorkDeps) resolveRefs(ctx context.Context, tool, field string,
 		{in.Values, &out.Values}, {in.Add, &out.Add}, {in.Remove, &out.Remove},
 	} {
 		for _, ref := range group.from {
-			id, refused := d.resolveRef(ctx, tool, "`"+field+"`", ref)
-			if refused != nil {
-				return setArg{}, refused
+			id, refusal := d.resolveRef(ctx, tool, "`"+field+"`", ref)
+			if refusal != nil {
+				return setArg{}, refusal
 			}
 			*group.into = append(*group.into, id)
 		}
@@ -157,17 +157,16 @@ func (d WorkDeps) dependencyChange(ctx context.Context, tool string,
 		{"waiting_on", waitingOn(task), &change.WaitingOnAdd, &change.WaitingOnRemove},
 		{"blocking", task.Dependents, &change.BlockingAdd, &change.BlockingRemove},
 	} {
-		stated, held, refusal := parseSetArg(args, side.name)
-		if refusal != "" {
-			refused := failed(refusal)
-			return change, &refused
+		stated, held, bad := parseSetArg(args, side.name)
+		if bad != "" {
+			return change, refusalOf(failed(bad))
 		}
 		if !held {
 			continue
 		}
-		resolved, refused := d.resolveRefs(ctx, tool, side.name, stated)
-		if refused != nil {
-			return change, refused
+		resolved, refusal := d.resolveRefs(ctx, tool, side.name, stated)
+		if refusal != nil {
+			return change, refusal
 		}
 		if !resolved.Whole {
 			*side.add, *side.remove = resolved.Add, resolved.Remove
@@ -230,18 +229,17 @@ func (d WorkDeps) inertRelations(ctx context.Context, tool string,
 		{"linked", tracker.RelationLinked, true},
 		{"linked_pages", tracker.RelationPage, false},
 	} {
-		stated, held, refusal := parseSetArg(args, side.name)
-		if refusal != "" {
-			refused := failed(refusal)
-			return nil, &refused
+		stated, held, bad := parseSetArg(args, side.name)
+		if bad != "" {
+			return nil, refusalOf(failed(bad))
 		}
 		if !held {
 			continue
 		}
 		if side.resolve {
-			var refused *tools.Result
-			if stated, refused = d.resolveRefs(ctx, tool, side.name, stated); refused != nil {
-				return nil, refused
+			var refusal *tools.Result
+			if stated, refusal = d.resolveRefs(ctx, tool, side.name, stated); refusal != nil {
+				return nil, refusal
 			}
 		}
 		touched = true
@@ -280,9 +278,9 @@ func (d WorkDeps) inertRelations(ctx context.Context, tool string,
 	// a duplicate of ONE other item, and offering a list would invite one
 	// nothing downstream means.
 	if ref := strings.TrimSpace(argString(args, "duplicate_of")); ref != "" {
-		id, refused := d.resolveRef(ctx, tool, "`duplicate_of`", ref)
-		if refused != nil {
-			return nil, refused
+		id, refusal := d.resolveRef(ctx, tool, "`duplicate_of`", ref)
+		if refusal != nil {
+			return nil, refusal
 		}
 		touched = true
 		intent.Add = append(intent.Add, tracker.Relation{
@@ -349,8 +347,7 @@ func (d WorkDeps) resolveThread(ctx context.Context,
 	q tracker.ThreadQuery) (tracker.ResolvedThread, *tools.Result) {
 
 	if d.Reader == nil {
-		refused := unconfigured(CommentOnWorkTool)
-		return tracker.ResolvedThread{}, &refused
+		return tracker.ResolvedThread{}, refusalOf(unconfigured(CommentOnWorkTool))
 	}
 	if q.ReplyTo == "" && q.Answers == "" && q.Ask == "" {
 		// NOTHING TO RESOLVE. A top-level remark that asks nobody and
@@ -364,13 +361,57 @@ func (d WorkDeps) resolveThread(ctx context.Context,
 	if err != nil {
 		var ambiguous *tracker.ErrAmbiguousAnswer
 		if errors.As(err, &ambiguous) {
-			refused := failed(ambiguousText(ambiguous))
-			return tracker.ResolvedThread{}, &refused
+			return tracker.ResolvedThread{}, refusalOf(failed(ambiguousText(ambiguous)))
 		}
-		refused := readFailed(CommentOnWorkTool, err)
-		return tracker.ResolvedThread{}, &refused
+		if refusal, ok := answerRefusal(err); ok {
+			return tracker.ResolvedThread{}, refusalOf(refusal)
+		}
+		return tracker.ResolvedThread{}, refusalOf(readFailure(ctx, CommentOnWorkTool, err))
 	}
 	return resolved, nil
+}
+
+// answerRefusal is the reader's refusal of an `answers`, in its own words, or
+// false when the read itself failed.
+//
+// NOT A READ FAILURE, which is what every one of these used to be reported as:
+// a comment that answered a remark, somebody else's question or one already
+// answered was told "could not read the tracker … do not conclude the item
+// does not exist" and to try again — a retry that refused identically, over a
+// sentence that had dropped the one thing the reader said, which comment was
+// wrong and why. The reader's error rides beneath the class ([refusedBy]), so a
+// caller branching on the tracker's sentinel still finds it. Each has its own
+// class because each asks something different of the caller: a mistyped id is not_found, a question that was somebody
+// else's is forbidden, an answered one is already_answered, and a remark or a
+// removed comment is an argument to change.
+func answerRefusal(err error) (tools.Result, bool) {
+	var class tools.Refusal
+	switch {
+	case errors.Is(err, tracker.ErrNoComment):
+		class = tools.RefusalNotFound
+	case errors.Is(err, tracker.ErrForbidden):
+		class = tools.RefusalForbidden
+	case errors.Is(err, tracker.ErrAlreadyAnswered):
+		class = tools.RefusalAlreadyAnswered
+	case errors.Is(err, tracker.ErrInvalid):
+		class = tools.RefusalInvalid
+	default:
+		return tools.Result{}, false
+	}
+	if class == tools.RefusalAlreadyAnswered {
+		// NOT "CHANGE `answers`": nothing about the call is wrong, the
+		// question simply has its answer — and the reader's sentence
+		// names who gave it and when, which is where to look.
+		return refusedBy(class, err, fmt.Sprintf("%s was refused: %s. Nothing "+
+			"was posted.", CommentOnWorkTool, tracker.Sentence(err))), true
+	}
+	// THE ARGUMENT THE SENTENCE NAMES, not always `answers`: a choice
+	// that is not one of the ask's options is refused through this same
+	// read, and telling that caller to change `answers` sent it to edit
+	// the one argument that was right.
+	return refusedBy(class, err, fmt.Sprintf("%s was refused: %s. Nothing was "+
+		"posted — change the argument this names (`answers`, or `choice`) "+
+		"and comment again.", CommentOnWorkTool, tracker.Sentence(err))), true
 }
 
 // inferOnly is the top-level case: no thread to read, but an open ask
@@ -382,8 +423,7 @@ func (d WorkDeps) inferOnly(ctx context.Context,
 	if err != nil {
 		var ambiguous *tracker.ErrAmbiguousAnswer
 		if errors.As(err, &ambiguous) {
-			refused := failed(ambiguousText(ambiguous))
-			return tracker.ResolvedThread{}, &refused
+			return tracker.ResolvedThread{}, refusalOf(failed(ambiguousText(ambiguous)))
 		}
 		// BEST EFFORT ON THIS PATH ALONE. The caller asked for no
 		// answer and named no thread, so a read failure costs an

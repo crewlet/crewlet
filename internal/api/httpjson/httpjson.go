@@ -148,7 +148,10 @@ const (
 	// CodeInvalidToken is a credential that is missing, or present and not
 	// one this engine accepts — a Tier A token, a session, a machine token.
 	// ONE code for both, because telling them apart in the answer tells an
-	// unauthenticated caller which half of the guess was right.
+	// unauthenticated caller which half of the guess was right — and one
+	// spelling for every place that refuses one: the request guard, the
+	// socket handshake and a per-run token's endpoint (the OTLP receiver,
+	// the MCP bridge), which each spelled it by hand until it was named here.
 	CodeInvalidToken Code = "invalid_token"
 )
 
@@ -361,6 +364,15 @@ const (
 	// path names.
 	CodeIdentityMismatch Code = "identity_mismatch"
 
+	// CodeEntityExists is a create-only entity write (If-None-Match: *)
+	// naming an id the active document already holds.
+	CodeEntityExists Code = "entity_exists"
+
+	// CodeConflictingPreconditions is a write carrying both
+	// `If-None-Match: *` and `If-Match`, which describe two different
+	// resources at an entity's address.
+	CodeConflictingPreconditions Code = "conflicting_preconditions"
+
 	// CodeValidationError is a write whose resulting document is invalid.
 	CodeValidationError Code = "validation_error"
 
@@ -488,14 +500,18 @@ const (
 	// is a leaf and cannot import that one to share the constant.
 	CodeSeatUnavailable Code = "seat_unavailable"
 
-	// CodeForbidden is a WRITE the human write surface refused: a caller
-	// this node knows, whose grants or relations do not reach the verb.
+	// CodeForbidden is a write the DOMAIN forbade this caller on a rule of
+	// its own, beside the authority table's: an agent re-ordering a
+	// colleague's queue, an edit of somebody else's remark, a write into a
+	// reserved container. It is the tool refusal class of the same name
+	// (internal/mcp's RefusalForbidden), and its detail is the domain's
+	// sentence, which names who may.
 	//
-	// ITS OWN CODE rather than [CodeUnauthorized] because the detail is a
-	// different shape: it carries the verb's own refusal SENTENCE, worded
-	// once in the tools and read identically in a turn, in the operator's
-	// assistant and here, where [CodeUnauthorized]'s detail is the table's
-	// `reason` and `grants` as values.
+	// NOT [CodeUnauthorized], which is the AUTHORITY TABLE's refusal and
+	// carries the rule's `reason` and `grants` as values: "the table does not
+	// admit you" is remedied by a grant or a relation, and "this domain does
+	// not let anybody in your position do that" by asking whoever its
+	// sentence names.
 	CodeForbidden Code = "forbidden"
 
 	// CodeStale is a write that lost to somebody else's: a version that
@@ -509,8 +525,63 @@ const (
 	// because it is the only thing that says what to change.
 	CodeRefused Code = "refused"
 
-	// THE DEPLOYMENT'S OWN CONTROLS: a backup, a budget reset, the
-	// retention gestures and the capacity window. Each spelled its codes
+	// THE TOOL REFUSAL CLASSES, beside [CodeNotFound], [CodeForbidden] and
+	// [CodeUnavailable], which are classes as well and declared above with
+	// the meaning the class has. internal/mcp's Refusal is what a
+	// first-party tool states about a call that did not do what it was
+	// asked, and internal/api/operator's ONE refusal mapping answers each
+	// with the class's own spelling as the code — on the act route, the
+	// operator's MCP surface and the human write surface alike — so a
+	// client reads one vocabulary whichever of them it wrote through, and a
+	// screen branches on the class rather than on a sentence written for a
+	// model. Declared here, on the table, for the reason every code is: a
+	// code with no sentence answers a person with nothing.
+
+	// CodeInvalid is an argument the tool refused, and its detail names
+	// which: the only class whose fix is to send something different.
+	CodeInvalid Code = "invalid"
+	// CodeStaleVersion is an object that changed after the caller read it.
+	CodeStaleVersion Code = "stale_version"
+	// CodeConflict is a write that lost its race against other writers, or
+	// another gesture holding the object; it clears on its own.
+	CodeConflict Code = "conflict"
+	// CodeExists is a create of something that already exists.
+	CodeExists Code = "exists"
+	// CodeAlreadyAnswered is an answer to a question that has one.
+	CodeAlreadyAnswered Code = "already_answered"
+	// CodeReassignmentBudget is an item handed on as often as it may be —
+	// the class that must not invite another attempt.
+	CodeReassignmentBudget Code = "reassignment_budget"
+	// CodeInboxFull is a person's inbox list at its ceiling.
+	CodeInboxFull Code = "inbox_full"
+	// CodeNotRunning is a run or turn that is not running, or not waiting
+	// for what the call supplies.
+	CodeNotRunning Code = "not_running"
+	// CodeSteerUnsupported is a running turn whose runtime cannot take a
+	// note mid-turn.
+	CodeSteerUnsupported Code = "steer_unsupported"
+	// CodeBudgetExhausted is a call that would spend tokens refused because
+	// a window of the company's budget has no room left; nothing was spent.
+	CodeBudgetExhausted Code = "budget_exhausted"
+	// CodePeerUpgrading is a gesture the fleet has a node too old to carry.
+	CodePeerUpgrading Code = "peer_upgrading"
+
+	// THE ACT ROUTE'S OWN — `POST /operator/act/{tool}`, the dashboard's
+	// write transport — about the request rather than the tool.
+
+	// CodeUnknownTool is a tool this company's operator catalogue does not
+	// serve. 404.
+	CodeUnknownTool Code = "unknown_tool"
+	// CodeReadOnlyTool is a tool the catalogue serves as a proven read,
+	// sent to a transport that only writes. 400.
+	CodeReadOnlyTool Code = "read_only_tool"
+	// CodeUnsupportedMediaType is an act whose body is not declared
+	// `application/json`, which is what keeps a cross-site form — which
+	// needs no preflight — from reaching a write. 415.
+	CodeUnsupportedMediaType Code = "unsupported_media_type"
+
+	// THE DEPLOYMENT'S OWN CONTROLS: a backup, the retention gestures and
+	// the capacity window. Each spelled its codes
 	// inline in a bare `{"error": …}` body with no `message`, so the one
 	// surface an operator reaches for when something is wrong was the one
 	// whose refusals a screen had nothing to show for. The wire values are
@@ -523,11 +594,6 @@ const (
 	// destination the caller named is the problem, and the detail names it;
 	// 500 otherwise, with the reason in the log alone.
 	CodeBackupFailed Code = "backup_failed"
-	// CodeBudgetUnreadable is a reset that could not read the counters it
-	// was about to clear, so it cleared nothing.
-	CodeBudgetUnreadable Code = "budget_unreadable"
-	// CodeBudgetResetFailed is a reset the counters refused.
-	CodeBudgetResetFailed Code = "budget_reset_failed"
 	// CodePositionRequired is a backup acknowledgement that named no stream
 	// or no sequence: it moves the floor the trim deletes against, so
 	// neither has a default.
@@ -727,12 +793,38 @@ var codes = map[Code]string{
 	CodeInviteSpent: "This invitation is no longer valid. Ask whoever sent it " +
 		"for a new one.",
 
-	CodeForbidden: "You are signed in, and you may not make this change. The " +
-		"detail names what it needs.",
+	CodeForbidden: "That change is not yours to make here, and nothing was " +
+		"written. The detail says whose it is.",
 	CodeStale: "Somebody changed this after you read it, so nothing was " +
 		"written. Read it again and decide from what it says now.",
 	CodeRefused: "That change was refused and nothing was written. The detail " +
 		"says why.",
+	CodeInvalid: "That change was refused and nothing was written. The detail " +
+		"names what to send differently.",
+	CodeStaleVersion: "Somebody changed this after you read it, so nothing was " +
+		"written. Read it again and decide from what it says now.",
+	CodeConflict: "This collided with another change landing at the same " +
+		"moment, and nothing was written. Read it again, then retry.",
+	CodeExists:          "That already exists, so nothing was created.",
+	CodeAlreadyAnswered: "Somebody has already answered it.",
+	CodeReassignmentBudget: "It has been handed between seats as often as it " +
+		"may be. A person has to pick it up now.",
+	CodeInboxFull: "The inbox holds as many marks as it may. Mark everything " +
+		"up to here read first.",
+	CodeNotRunning: "It is not running any more, or not waiting for this.",
+	CodeSteerUnsupported: "That turn cannot take a note: it runs in a coding " +
+		"agent's own loop.",
+	CodeBudgetExhausted: "The token budget for this window is spent, so " +
+		"nothing was spent on this. Raise it, or wait for the window to turn " +
+		"over.",
+	CodePeerUpgrading: "The node that would carry this out is mid-upgrade. " +
+		"Try again once the fleet has finished.",
+	CodeUnknownTool: "This engine does not make that change. It may be running " +
+		"a different version from the client — reload.",
+	CodeReadOnlyTool: "That is a read, and this route only makes changes. Ask " +
+		"the question through its own route.",
+	CodeUnsupportedMediaType: "Send the change as JSON, declared " +
+		"Content-Type: application/json.",
 
 	CodeNoDestination: "Name the directory to write the backup into, as an " +
 		"absolute path on the engine's host.",
@@ -740,10 +832,6 @@ var codes = map[Code]string{
 		"so nothing in that directory counts as a backup. If the detail names " +
 		"the destination, choose another; otherwise the reason is in this " +
 		"node's log.",
-	CodeBudgetUnreadable: "The budget counters could not be read, so nothing " +
-		"was reset. The reason is in this node's log.",
-	CodeBudgetResetFailed: "The budget counters could not be reset. The reason " +
-		"is in this node's log, and running the reset again is safe.",
 	CodePositionRequired: "Name the stream and the sequence your copy reaches. " +
 		"An acknowledgement moves what the trim may delete, so neither has a " +
 		"default.",
@@ -829,6 +917,11 @@ var codes = map[Code]string{
 	CodeNoSuchEntity: "The active configuration holds nothing by that name.",
 	CodeIdentityMismatch: "The body renames what the path names, and this " +
 		"route does not rename. Send it back under the name it already has.",
+	CodeEntityExists: "Something by that name is already in the " +
+		"configuration, so nothing was added. Pick another name, or edit " +
+		"the one that is there.",
+	CodeConflictingPreconditions: "A create (If-None-Match: *) and an edit " +
+		"(If-Match) were both asked for. Send one of them.",
 	CodeValidationError: "The configuration this change would produce is not " +
 		"valid, so nothing was stored. The detail names what to fix.",
 	CodeInvalidPatch: "The change could not be applied to the configuration, " +

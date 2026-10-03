@@ -390,20 +390,42 @@ func TestADryRunIsRefusedForWhatTheWriteIsRefusedFor(t *testing.T) {
 	}
 }
 
+// duplicateStepsDoc breaks one ADMISSION rule and no runnable one: two of the
+// company's own sandbox setup steps share a name. A step's name is how a run's
+// account of its setup says which step failed, so a submitted document is
+// refused for the pair — but a box runs both steps exactly as written, so a
+// stored revision carrying them still applies, warned about.
+//
+// A SETTINGS RULE, deliberately: a revision carries no org chart, so the
+// admission rules a stored revision can break are the ones its own half holds.
+const duplicateStepsDoc = `
+name: Acme
+providers:
+  llm:
+    zulu:
+      type: anthropic
+      model: claude-sonnet-5
+      api_keys: ["sk-literal"]
+  sandbox:
+    fake: true
+    setup:
+      - {name: registry, commands: ["true"]}
+      - {name: registry, commands: ["true"]}
+`
+
 // EVERY WRITE ANSWERS WHAT IT PRODUCED: its revision, its epoch and its
 // warnings.
 //
 // A reload and a revert re-activate a stored company under the runnable rules
 // only, so theirs is the answer that can carry an admission warning: a company
 // stored before a rule, which runs and which a write keeping it would be
-// refused for.
-//
-// THE ENTITY WRITE IS AN MCP SERVER, because the two collections this door
-// used to edit one at a time are the org chart's now and it refuses them.
+// refused for. Every other write here submits a document that breaks no
+// admission rule, so its answer carries none — the control that keeps the
+// first half from passing on a surface that warned about everything.
 func TestEveryWriteAnswersItsWarnings(t *testing.T) {
 	t.Parallel()
 	s := newCountedSurface(t)
-	first := s.seedStored(t, duplicateNamesDoc, func(map[string]any) {})
+	first := s.seedStored(t, duplicateStepsDoc, func(map[string]any) {})
 
 	for _, tc := range []struct{ name, method, path, body string }{
 		{"reload", http.MethodPost, "/config/reload", ""},
@@ -450,4 +472,78 @@ func problemsOf(t *testing.T, res interface{ Result() *http.Response }) []config
 		t.Fatalf("decode the refusal: %v", err)
 	}
 	return body.Problems
+}
+
+// AN ENTITY WRITE HAS A CHECK TOO, and it is the same write storing nothing.
+//
+// The caller of an entity write never sees the rest of the document, so the
+// whole-company validation behind the splice is the only place it can learn
+// that a provider fine on its own leaves the company invalid. Without the
+// parameter the route stored every check as a revision and an epoch; with it
+// read after the body, a mistyped value was a write.
+func TestAnEntityDryRunChecksTheWholeCompanyAndStoresNothing(t *testing.T) {
+	t.Parallel()
+	s := newCountedSurface(t)
+	base := s.seed(t, companyDoc)
+	s.forget()
+
+	provider := entityOf(t, s.surface, configapi.EntityLLMProviders, "zulu")
+	provider["model"] = "claude-opus-5"
+	changed, err := json.Marshal(provider)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// No summary: nothing is stored to record one on.
+	res := s.do(t, http.MethodPut, "/config/llm-providers/zulu?dry_run=true", string(changed), nil)
+	if res.Code != http.StatusOK {
+		t.Fatalf("an entity check = %d, want 200: %s", res.Code, res.Body)
+	}
+	var answer struct {
+		Valid bool   `json:"valid"`
+		Base  string `json:"base_revision_id"`
+	}
+	if err := json.Unmarshal(res.Body.Bytes(), &answer); err != nil {
+		t.Fatalf("decode: %v (%s)", err, res.Body)
+	}
+	if !answer.Valid || answer.Base != base {
+		t.Errorf("valid = %v, base = %q, want true and %q", answer.Valid, answer.Base, base)
+	}
+	if got := s.writes(); got != (writeCounts{}) {
+		t.Errorf("an entity check wrote %+v, want nothing", got)
+	}
+	if model := entityOf(t, s.surface, configapi.EntityLLMProviders, "zulu")["model"]; model != "claude-sonnet-5" {
+		t.Errorf("the check changed the provider: model = %v", model)
+	}
+
+	// A refusal is the write's own, located at the key to correct.
+	provider["type"] = "nonsense"
+	broken, err := json.Marshal(provider)
+	if err != nil {
+		t.Fatal(err)
+	}
+	refused := s.do(t, http.MethodPut, "/config/llm-providers/zulu?dry_run=true", string(broken), nil)
+	if refused.Code != http.StatusBadRequest ||
+		!strings.Contains(refused.Body.String(), "providers.llm.zulu.type") {
+		t.Errorf("a check of an unknown type = %d %s, want 400 located at the key", refused.Code, refused.Body)
+	}
+	if got := s.writes(); got != (writeCounts{}) {
+		t.Errorf("a refused entity check wrote %+v, want nothing", got)
+	}
+
+	// And a mistyped parameter is refused before the body is read.
+	if bad := s.do(t, http.MethodPut, "/config/llm-providers/zulu?dry_run=yes", string(changed), nil); bad.Code != http.StatusBadRequest ||
+		decode(t, bad)["error"] != "invalid_query" {
+		t.Errorf("dry_run=yes = %d %s, want 400 invalid_query", bad.Code, bad.Body)
+	}
+
+	// THE FAKES CAN COUNT: the same request as a write makes one of each.
+	written := s.do(t, http.MethodPut, "/config/llm-providers/zulu", string(changed),
+		map[string]string{"X-Summary": "move zulu to opus"})
+	if written.Code != http.StatusCreated {
+		t.Fatalf("the entity write = %d, want 201: %s", written.Code, written.Body)
+	}
+	if got := s.writes(); got != oneWrite {
+		t.Errorf("an entity write counted %+v, want one of each", got)
+	}
 }

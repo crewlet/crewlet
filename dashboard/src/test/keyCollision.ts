@@ -48,7 +48,13 @@ export function collidingRows(over: Partial<WorkSummary> = {}): [WorkSummary, Wo
 
 /** The two as ranked search hits, the claimant first. */
 export function collidingHits(): [WorkRanked, WorkRanked] {
-  const base = { key: SHARED_KEY, project: "ENG", type: "task", status: "todo" };
+  const base = {
+    key: SHARED_KEY,
+    project: "ENG",
+    type: "task",
+    status: "todo",
+    priority: "normal",
+  };
   return [
     { ...base, id: CLAIMANT, title: CLAIMANT_TITLE, rank: 1 },
     { ...base, id: DUPLICATE, title: DUPLICATE_TITLE, rank: 2, key_collision: true },

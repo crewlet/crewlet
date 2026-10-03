@@ -82,8 +82,8 @@ func TestAProgressRoundFillsInTheCall(t *testing.T) {
 	if call.Model != "claude-sonnet-5" || call.Response != "thinking" {
 		t.Errorf("call = %+v", call)
 	}
-	if call.RoundNum != 2 || call.Rounds != 3 {
-		t.Errorf("round = %d, rounds = %d, want 2 and 3", call.RoundNum, call.Rounds)
+	if call.RoundNum != 2 || call.RoundsUsed != 3 {
+		t.Errorf("round = %d, rounds used = %d, want 2 and 3", call.RoundNum, call.RoundsUsed)
 	}
 	if call.TotalTokens != 14 {
 		t.Errorf("total tokens = %d, want 14", call.TotalTokens)
@@ -323,11 +323,11 @@ func TestAProgressRoundWakesASeatThatWasNotWorking(t *testing.T) {
 		streamOnly, at("2026-06-14T12:00:10+00:00")))
 
 	got := overlayOf(t, s, "Lead")
-	if got.State != "working" {
-		t.Errorf("state = %q, want working", got.State)
+	if got.Activity != livestate.ActivityWorking {
+		t.Errorf("activity = %q, want working", got.Activity)
 	}
-	if got.AFKReason != "" {
-		t.Errorf("afk reason = %q, want cleared", got.AFKReason)
+	if got.StoppedReason != nil {
+		t.Errorf("stopped reason = %v, want cleared", *got.StoppedReason)
 	}
 }
 
@@ -418,11 +418,11 @@ func TestADiscardedStragglerDoesNotLeaveTheSeatLookingBusy(t *testing.T) {
 	s := livestate.New()
 	s.Apply(env("agent_phase_started", planCall()))
 	s.Apply(env("agent_phase_completed", planCall(), at("2026-06-14T12:00:05+00:00")))
-	s.Apply(env("reflection_completed", map[string]any{"agent_id": "Lead"},
+	s.Apply(env("agent_turn_completed", map[string]any{"agent_id": "Lead", "turn_id": "tn-1"},
 		at("2026-06-14T12:00:06+00:00")))
 
-	if got := overlayOf(t, s, "Lead"); got.State != "idle" {
-		t.Fatalf("state = %q before the straggler, want idle", got.State)
+	if got := overlayOf(t, s, "Lead"); got.Activity != livestate.ActivityIdle {
+		t.Fatalf("activity = %q before the straggler, want idle", got.Activity)
 	}
 
 	s.Apply(env("agent_turn_progress",
@@ -430,11 +430,11 @@ func TestADiscardedStragglerDoesNotLeaveTheSeatLookingBusy(t *testing.T) {
 		streamOnly, at("2026-06-14T12:00:04+00:00")))
 
 	got := overlayOf(t, s, "Lead")
-	if got.State == "working" && got.LiveCall == nil {
+	if got.Activity == livestate.ActivityWorking && got.LiveCall == nil {
 		t.Error("a discarded straggler left the seat working with no call to show for it")
 	}
-	if got.State != "idle" {
-		t.Errorf("state = %q, want the seat left as the reflection found it", got.State)
+	if got.Activity != livestate.ActivityIdle {
+		t.Errorf("activity = %q, want the seat left as the turn's end found it", got.Activity)
 	}
 }
 
@@ -580,5 +580,93 @@ func TestAnOpeningFrameThatArrivesLateStillDeliversThePrompt(t *testing.T) {
 	// And it rolled NOTHING back.
 	if call.RoundNum != 2 || call.Response != "already going" || call.TotalTokens != 90 {
 		t.Errorf("the late opening frame overwrote the round it arrived after: %+v", call)
+	}
+}
+
+func TestTheRunningCallAppearsAndClears(t *testing.T) {
+	t.Parallel()
+	// The frame before a tool call names it; the frame after it returns
+	// does not. Carrying the previous frame's value forward, like the
+	// prompt is carried, would leave a call that returned drawn as running.
+	s := livestate.New()
+	base := with(planCall(), map[string]any{"node": "core-1",
+		"work_item": map[string]any{"backend": "native", "id": "t-1", "key": "ENG-1"}})
+	s.Apply(env("agent_turn_progress", with(base, map[string]any{
+		"round_num": 0, "max_rounds": 8, "round_ceiling": 24,
+		"round_started_at":  "2026-06-14T12:00:01Z",
+		"cache_read_tokens": 900, "cache_write_tokens": 40,
+		"rounds": []any{map[string]any{"round": 1, "duration_ms": 1200, "tool_calls": 1}},
+		"running_call": map[string]any{
+			"round": 1, "name": "search_knowledge", "started_at": "2026-06-14T12:00:02Z",
+		},
+	}), streamOnly, at("2026-06-14T12:00:02Z")))
+
+	call := liveCallOf(t, s, "Lead")
+	if call.RunningCall == nil || call.RunningCall["name"] != "search_knowledge" {
+		t.Fatalf("running call = %+v, want search_knowledge in flight", call.RunningCall)
+	}
+	if call.MaxRounds != 8 || call.RoundCeiling != 24 || call.RoundStartedAt != "2026-06-14T12:00:01Z" ||
+		call.CacheReadTokens != 900 || call.CacheWriteTokens != 40 || len(call.Rounds) != 1 ||
+		call.Node != "core-1" || call.WorkItem == nil || call.WorkItem.Key != "ENG-1" ||
+		call.RoundsUsed != 1 {
+		t.Errorf("call = %+v, want every field the frame stated", call)
+	}
+
+	// The call returned: the next frame names none, and names no item or
+	// node either, as a frame from an older build would not.
+	s.Apply(env("agent_turn_progress", with(planCall(), map[string]any{
+		"round_num": 0, "rounds": []any{map[string]any{"round": 1}},
+	}), streamOnly, at("2026-06-14T12:00:03Z")))
+	call = liveCallOf(t, s, "Lead")
+	if call.RunningCall != nil {
+		t.Errorf("running call = %+v, want it cleared once the frame stopped naming it", call.RunningCall)
+	}
+	if call.Node != "core-1" || call.WorkItem == nil {
+		t.Errorf("node %q item %+v, want both carried from the frame that named them",
+			call.Node, call.WorkItem)
+	}
+}
+
+func TestAFrozenFailedCallHasNoCallInFlight(t *testing.T) {
+	t.Parallel()
+	// The phase is over, and a failed card still reading "running" against
+	// a tool call that will never return is the streaming caret again.
+	s := livestate.New()
+	s.Apply(env("agent_turn_progress", with(planCall(), map[string]any{
+		"round_num":        0,
+		"round_started_at": "2026-06-14T12:00:01Z",
+		"running_call":     map[string]any{"name": "run_sandbox"},
+	}), streamOnly, at("2026-06-14T12:00:02Z")))
+	s.Apply(env("agent_phase_completed", with(planCall(), map[string]any{
+		"failed": true, "error": "boom",
+	}), at("2026-06-14T12:00:03Z")))
+
+	call := liveCallOf(t, s, "Lead")
+	if !call.Failed {
+		t.Fatalf("call = %+v, want it frozen as failed", call)
+	}
+	if call.RunningCall != nil || call.RoundStartedAt != "" {
+		t.Errorf("frozen call keeps %+v in flight since %q", call.RunningCall, call.RoundStartedAt)
+	}
+}
+
+// THE NOTES A PHASE READ RIDE ITS LIVE CALL, with the round that read each, so
+// a person who steered a turn sees their note land on the round it changed —
+// and a copy handed to a reader is its own, since the next frame replaces the
+// list.
+func TestTheLiveCallCarriesTheNotesItsPhaseRead(t *testing.T) {
+	t.Parallel()
+	s := livestate.New()
+	s.Apply(env("agent_turn_progress", with(planCall(), map[string]any{
+		"round_num": 1,
+		"steers":    []any{map[string]any{"round": 2, "note_id": "req-1"}},
+	}), streamOnly, at("2026-06-14T12:00:02Z")))
+	call := liveCallOf(t, s, "Lead")
+	if len(call.Steers) != 1 || call.Steers[0].(map[string]any)["note_id"] != "req-1" {
+		t.Fatalf("steers = %+v, want the note the frame named", call.Steers)
+	}
+	call.Steers[0] = "scribbled"
+	if again := liveCallOf(t, s, "Lead"); again.Steers[0] == "scribbled" {
+		t.Error("a reader's copy of the call aliases the projection's own list")
 	}
 }

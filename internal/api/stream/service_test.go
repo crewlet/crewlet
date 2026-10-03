@@ -3,8 +3,10 @@ package stream_test
 import (
 	"context"
 	"errors"
+	"maps"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -22,6 +24,18 @@ func newService(t *testing.T, opts stream.Options) (*stream.Service, *stream.Cli
 	return s, c
 }
 
+// health stands in for `api.Health`, which this package carries to the wire
+// without reading into but its status — so any value the function returns is
+// what reaches the tab, and a case can assert it came through untouched.
+type health struct {
+	Status       string
+	InFlight     int
+	ShuttingDown bool
+}
+
+// NodeStatus is the one fact a socket's posture is decided from.
+func (h health) NodeStatus() string { return h.Status }
+
 // buildService fills every required function a case leaves unset with the
 // answer a node with no company gives, so a case names only what it is about.
 func buildService(t *testing.T, opts stream.Options) *stream.Service {
@@ -30,7 +44,7 @@ func buildService(t *testing.T, opts stream.Options) *stream.Service {
 		opts.Now = func() time.Time { return clock }
 	}
 	if opts.Health == nil {
-		opts.Health = func() stream.Health { return stream.Health{Status: "ok"} }
+		opts.Health = func() stream.Health { return health{Status: "ok"} }
 	}
 	if opts.Posture == nil {
 		opts.Posture = func(stream.Health) stream.FramePosture { return stream.FrameLive }
@@ -61,6 +75,10 @@ func buildService(t *testing.T, opts stream.Options) *stream.Service {
 		// the directory it means.
 		opts.Holders = blindDirectory{}
 	}
+	if opts.Placement == nil {
+		// NO LEASE READ YET, which claims no seat is unplaced.
+		opts.Placement = func() (map[string]bool, error) { return map[string]bool{}, nil }
+	}
 	s, err := stream.NewService(livestate.New(), opts)
 	if err != nil {
 		t.Fatalf("stream.NewService: %v", err)
@@ -82,8 +100,8 @@ func TestNewServiceRefusesEveryMissingFunctionByName(t *testing.T) {
 		t.Fatal("a service with no surface functions was built")
 	}
 	for _, field := range []string{
-		"Health", "Posture", "Seats", "Roster", "Org", "Tools", "Schedules", "Chart",
-		"Holders",
+		"Health", "Posture", "Seats", "Roster", "Org", "Tools", "Schedules", "Placement",
+		"Chart", "Holders",
 	} {
 		if !strings.Contains(err.Error(), "Options."+field) {
 			t.Errorf("the refusal does not name Options.%s: %v", field, err)
@@ -107,8 +125,8 @@ func envelope(etype string, payload map[string]any) livestate.Envelope {
 }
 
 // kindsOf lists the push kinds a client received, in order.
-func kindsOf(c *stream.Client) []string {
-	var out []string
+func kindsOf(c *stream.Client) []stream.Kind {
+	var out []stream.Kind
 	for _, frame := range drain(c) {
 		out = append(out, frame.Kind())
 	}
@@ -121,7 +139,9 @@ func TestIngestPushesTheResultOfApplyingAnEvent(t *testing.T) {
 	// the raw event stream. Every tab used to keep its own copy of the
 	// projection, and each drifted its own way.
 	s, c := newService(t, stream.Options{})
-	s.Ingest(envelope("agent_phase_started", map[string]any{"agent_id": "a-lead", "role": "Lead", "task_id": "t-1"}))
+	s.Ingest(envelope("agent_phase_started", map[string]any{
+		"agent_id": "a-lead", "role": "Lead", "turn_id": "tn-1",
+	}))
 
 	got := drain(c)
 	var agents *stream.Frame
@@ -151,9 +171,99 @@ func TestIngestPushesTheResultOfApplyingAnEvent(t *testing.T) {
 		t.Errorf("row agent_id = %v; the client keys on this field and drops a "+
 			"row without it", got)
 	}
-	if got := rows[0]["state"]; got != "working" {
-		t.Errorf("row state = %v, want working", got)
+	if got := rows[0]["activity"]; got != string(livestate.ActivityWorking) {
+		t.Errorf("row activity = %v, want working", got)
 	}
+}
+
+// A SEAT MOVES BETWEEN NODES ON A LEASE, WHICH PUBLISHES NOTHING, so the
+// placement is READ — on the shared tick and on every snapshot — and the seats
+// whose state it moved are pushed to every open tab. A read that fails moves
+// nothing: an unreachable lease table is not "no node holds anything".
+func TestPlacementIsReadAndWhatItMovedIsPushed(t *testing.T) {
+	t.Parallel()
+	var (
+		mu     sync.Mutex
+		placed = map[string]bool{"a-lead": true}
+		fail   error
+	)
+	s, c := newService(t, stream.Options{
+		Placement: func() (map[string]bool, error) {
+			mu.Lock()
+			defer mu.Unlock()
+			return maps.Clone(placed), fail
+		},
+	})
+	s.RefreshPlacement()
+	drain(c)
+
+	mu.Lock()
+	placed["a-lead"] = false
+	mu.Unlock()
+	s.RefreshPlacement()
+	rows := agentRows(t, drain(c))
+	if len(rows) != 1 || rows[0]["agent_id"] != "a-lead" ||
+		rows[0]["activity"] != string(livestate.ActivityStopped) {
+		t.Fatalf("pushed = %v, want the seat no node holds, by its agent id, stopped", rows)
+	}
+	if got := rows[0]["stopped_reason"]; got != string(livestate.StoppedUnplaced) {
+		t.Errorf("stopped_reason = %v, want unplaced", got)
+	}
+
+	// Nothing moved, nothing pushed.
+	s.RefreshPlacement()
+	if rows := agentRows(t, drain(c)); len(rows) != 0 {
+		t.Errorf("an unchanged placement pushed %v", rows)
+	}
+
+	// A failed read keeps what was last read.
+	mu.Lock()
+	placed, fail = map[string]bool{}, errors.New("lease table unreachable")
+	mu.Unlock()
+	s.RefreshPlacement()
+	if rows := agentRows(t, drain(c)); len(rows) != 0 {
+		t.Errorf("a failed read moved seats: %v", rows)
+	}
+	if snap := s.Snapshot(reader)["agents"].([]map[string]any); len(snap) != 0 {
+		t.Errorf("snapshot = %v with an empty roster", snap)
+	}
+}
+
+// A RUN RECORD'S READ-BACK PUSHES THE SEATS IT MOVED, not only the panel: a
+// question found by the reconcile makes its seat need somebody on every open
+// screen at the moment the panel shows it.
+func TestAReconcilePushesTheSeatsItMoved(t *testing.T) {
+	t.Parallel()
+	s, c := newService(t, stream.Options{
+		Placement: func() (map[string]bool, error) { return map[string]bool{"a-coder": true}, nil },
+	})
+	s.RefreshPlacement()
+	drain(c)
+
+	s.ReconcileSandboxes([]livestate.SandboxRecord{{Entry: livestate.SandboxEntry{
+		TurnID: "tn-1", AgentID: "a-coder", Role: "Coder", Status: livestate.SandboxAwaiting,
+	}}}, clock)
+	rows := agentRows(t, drain(c))
+	if len(rows) != 1 || rows[0]["agent_id"] != "a-coder" ||
+		rows[0]["activity"] != string(livestate.ActivityNeeds) {
+		t.Errorf("pushed = %v, want the seat needing somebody", rows)
+	}
+}
+
+// agentRows is every row the `agents` pushes among the frames carried, decoded
+// from the bytes a client reads.
+func agentRows(t *testing.T, got []*stream.Frame) []map[string]any {
+	t.Helper()
+	var out []map[string]any
+	for _, frame := range got {
+		if frame.Kind() != stream.KindAgents {
+			continue
+		}
+		var rows []map[string]any
+		decodeData(t, frame, &rows)
+		out = append(out, rows...)
+	}
+	return out
 }
 
 func TestTheEventArrivesBeforeItsConsequences(t *testing.T) {
@@ -221,13 +331,35 @@ func TestSandboxAndBudgetPushTheirOwnKinds(t *testing.T) {
 	}
 
 	s.Ingest(livestate.Envelope{
-		ID: "e2", Type: "budget_reported", Timestamp: "2026-06-14T12:00:01Z",
-		Payload: map[string]any{"meter_id": "m-1", "seq": 1, "org_used_tokens": 5},
+		ID: "e2", Type: "budget_meters", Timestamp: "2026-06-14T12:00:01Z",
+		Payload: map[string]any{"meter_id": "m-1", "seq": 1, "timezone": "UTC",
+			"org": map[string]any{"windows": []any{map[string]any{
+				"period": "day", "window": "2026-06-14", "used": 5, "limit": 10, "state": "ok",
+			}}}},
 	})
 	if kinds := kindsOf(c); !contains(kinds, stream.KindBudget) {
 		t.Errorf("kinds = %v, want a budget push", kinds)
 	}
 
+}
+
+// A RECONCILE THAT MOVED THE SET IS PUSHED, and one that did not is not: the
+// reconcile is what corrects an open panel after a lost event, and a push every
+// interval whether or not anything changed would redraw every panel for nothing.
+func TestAReconcilePushesTheSandboxSetOnlyWhenItMoved(t *testing.T) {
+	t.Parallel()
+	s, c := newService(t, stream.Options{})
+	record := livestate.SandboxRecord{Entry: livestate.SandboxEntry{
+		TurnID: "tn-1", Role: "Coder", Status: livestate.SandboxRunning,
+	}}
+	s.ReconcileSandboxes([]livestate.SandboxRecord{record}, clock)
+	if kinds := kindsOf(c); !slices.Equal(kinds, []stream.Kind{stream.KindSandboxes}) {
+		t.Fatalf("kinds = %v, want one sandboxes push", kinds)
+	}
+	s.ReconcileSandboxes([]livestate.SandboxRecord{record}, clock.Add(time.Second))
+	if kinds := kindsOf(c); len(kinds) != 0 {
+		t.Errorf("kinds = %v, want nothing pushed for a reconcile that moved nothing", kinds)
+	}
 }
 
 func TestSpendIsFoldedOnTheTickAndNotOnThePublishPath(t *testing.T) {
@@ -285,7 +417,7 @@ func TestSpendIsFoldedOnTheTickAndNotOnThePublishPath(t *testing.T) {
 	}
 }
 
-func contains(haystack []string, needle string) bool {
+func contains(haystack []stream.Kind, needle stream.Kind) bool {
 	return slices.Contains(haystack, needle)
 }
 
@@ -320,7 +452,7 @@ func TestTheHealthTickIsSharedAndKeepsTicking(t *testing.T) {
 	// answer for every tab, so a timer per client would multiply identical
 	// work by however many people happened to be watching.
 	s := buildService(t, stream.Options{
-		Health: func() stream.Health { return stream.Health{Status: "ok", InFlight: 3} },
+		Health: func() stream.Health { return health{Status: "ok", InFlight: 3} },
 	})
 
 	a, b := stream.NewClient(reader), stream.NewClient(reader)
@@ -336,10 +468,10 @@ func TestTheHealthTickIsSharedAndKeepsTicking(t *testing.T) {
 			if frame.Kind() != stream.KindHealth {
 				t.Errorf("%s received %q, want a health tick", name, frame.Kind())
 			}
-			var health stream.Health
-			decodeData(t, frame, &health)
-			if health.InFlight != 3 {
-				t.Errorf("%s health = %#v", name, health)
+			var got health
+			decodeData(t, frame, &got)
+			if got.InFlight != 3 {
+				t.Errorf("%s health = %#v", name, got)
 			}
 		case <-time.After(3 * stream.HealthInterval):
 			t.Fatalf("%s never received a health tick", name)
@@ -354,12 +486,12 @@ func TestTheSnapshotCarriesTheEnginesOwnHealth(t *testing.T) {
 	// next tick.
 	s, _ := newService(t, stream.Options{
 		Health: func() stream.Health {
-			return stream.Health{Status: "shutting_down", InFlight: 2, ShuttingDown: true}
+			return health{Status: "shutting_down", InFlight: 2, ShuttingDown: true}
 		},
 	})
-	health, _ := s.Snapshot(reader)["health"].(stream.Health)
-	if health.Status != "shutting_down" || health.InFlight != 2 || !health.ShuttingDown {
-		t.Errorf("health = %#v, want the engine's own answer", health)
+	got, _ := s.Snapshot(reader)["health"].(health)
+	if got.Status != "shutting_down" || got.InFlight != 2 || !got.ShuttingDown {
+		t.Errorf("health = %#v, want the engine's own answer", got)
 	}
 }
 
@@ -442,14 +574,15 @@ func TestACancelledContextEndsTheTick(t *testing.T) {
 //
 // The roster, the org tree, the tool catalogue and the schedules come from the
 // company and no event ever corrects them, so each is sent whole on every
-// publish. The kinds are this package's own constants: the one caller used to
-// spell all four as literals in another package, which compiles cleanly the
-// day a constant here is renamed and sends a frame the dashboard drops.
+// publish. The kinds are this package's own constants, named by the one method
+// that sends them: the one caller used to spell all four as literals in another
+// package, which compiled cleanly the day a constant here was renamed and sent
+// a frame the dashboard drops.
 func TestAPublishedCompanyReSendsEveryCompanyDerivedPush(t *testing.T) {
 	t.Parallel()
 	s, c := newService(t, stream.Options{})
 	s.CompanyPublished()
-	var got []string
+	var got []stream.Kind
 	for range 4 {
 		select {
 		case frame := <-c.Out():
@@ -459,7 +592,7 @@ func TestAPublishedCompanyReSendsEveryCompanyDerivedPush(t *testing.T) {
 		}
 	}
 	slices.Sort(got)
-	want := []string{stream.KindOrg, stream.KindSchedules, stream.KindSeats, stream.KindTools}
+	want := []stream.Kind{stream.KindOrg, stream.KindSchedules, stream.KindSeats, stream.KindTools}
 	slices.Sort(want)
 	if !slices.Equal(got, want) {
 		t.Errorf("a published company re-sent %v, want %v", got, want)

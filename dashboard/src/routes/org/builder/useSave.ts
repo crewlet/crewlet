@@ -34,7 +34,7 @@
  *   settings revision, a write that lost a race on one object). The draft is
  *   updated onto what is there, never written over it.
  *
- * A WRITE IN FLIGHT IS NEVER ABORTED. Leaving the lens mid-save unmounts the
+ * A WRITE IN FLIGHT IS NEVER ABORTED. Leaving the builder mid-save unmounts the
  * Builder, but aborting would only turn a write that may land into one nobody
  * hears about, so the run goes on and its events still fire. Before its first
  * write the run marks the kept log with its write id and the nodes it creates

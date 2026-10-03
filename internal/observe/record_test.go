@@ -61,7 +61,7 @@ func TestANonPhaseEventCarriesNoSpend(t *testing.T) {
 	}
 }
 
-// THE INTEGRATIONS ROOM'S TWO COUNTS COME OFF A TAG, and this is the door
+// SETTINGS › INTEGRATIONS' TWO COUNTS COME OFF A TAG, and this is the door
 // they come through.
 //
 // A listing never selects the payload column, so `notification_source` is all

@@ -270,7 +270,9 @@ func (s *Store) decide(stamp statelog.Stamp, actor Actor, subject Subject, op Op
 	}
 	record := MutationRecord{
 		RecordEnvelope: RecordEnvelope{
-			V: recordVersionOf(payload), OpID: opID, Subject: subject, Op: op,
+			// NO VERSION: the encoder stamps the lowest one that reads
+			// what this record carries — see [RecordVersion].
+			OpID: opID, Subject: subject, Op: op,
 			CreatedAt: at, Gen: stamp.Gen, Writer: stamp.Writer, Scope: scope,
 		},
 		Mutation:   body,

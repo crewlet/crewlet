@@ -171,7 +171,7 @@ func TestEveryPushKindHasARoute(t *testing.T) {
 	// stopped finding it would look exactly like a pass — and it is the
 	// one kind whose route decides WHO receives it rather than whether
 	// anybody does.
-	if !slicesContains(kinds, stream.KindInboxChanged) {
+	if !slices.Contains(kinds, stream.KindInboxChanged) {
 		t.Fatalf("the walk found %v and not %q, so it is not reading the "+
 			"frozen list", kinds, stream.KindInboxChanged)
 	}
@@ -184,7 +184,7 @@ func TestEveryPushKindHasARoute(t *testing.T) {
 			"entry is dropped rather than guessed at", unrouted)
 	}
 	// THE CONTROL: mount a kind with no route and the walk goes red.
-	if got := withoutARoute([]string{"from_the_future"}); len(got) != 1 {
+	if got := withoutARoute([]stream.Kind{"from_the_future"}); len(got) != 1 {
 		t.Errorf("a kind with no route passed the walk (%v), so this test is "+
 			"asserting nothing", got)
 	}
@@ -249,9 +249,9 @@ func seatProducers(t *testing.T) map[string]bool {
 
 // declaredKindConsts is every Kind… string constant in this package's source,
 // by name.
-func declaredKindConsts(t *testing.T) map[string]string {
+func declaredKindConsts(t *testing.T) map[string]stream.Kind {
 	t.Helper()
-	out := map[string]string{}
+	out := map[string]stream.Kind{}
 	for _, file := range parsedSource(t) {
 		for _, decl := range file.Decls {
 			gen, ok := decl.(*ast.GenDecl)
@@ -275,7 +275,7 @@ func declaredKindConsts(t *testing.T) map[string]string {
 					if err != nil {
 						t.Fatalf("%s: %v", ident.Name, err)
 					}
-					out[ident.Name] = kind
+					out[ident.Name] = stream.Kind(kind)
 				}
 			}
 		}
@@ -307,8 +307,8 @@ func parsedSource(t *testing.T) []*ast.File {
 }
 
 // withoutARoute is the kinds with no entry on the route table.
-func withoutARoute(kinds []string) []string {
-	var out []string
+func withoutARoute(kinds []stream.Kind) []stream.Kind {
+	var out []stream.Kind
 	for _, kind := range kinds {
 		if !stream.RouteOf(kind).Valid() {
 			out = append(out, kind)
@@ -318,7 +318,7 @@ func withoutARoute(kinds []string) []string {
 }
 
 // declaredKinds is every string constant named Kind… in this package's source.
-func declaredKinds(t *testing.T) []string {
+func declaredKinds(t *testing.T) []stream.Kind {
 	t.Helper()
 	kinds := slices.Sorted(maps.Values(declaredKindConsts(t)))
 	if len(kinds) == 0 {
@@ -398,7 +398,7 @@ func TestAnAnswerIsNeverBroadcast(t *testing.T) {
 	c := stream.NewClient(reader)
 	h.Register(c)
 
-	for _, kind := range []string{stream.KindResult, stream.KindError, stream.KindPong, "from_the_future"} {
+	for _, kind := range []stream.Kind{stream.KindResult, stream.KindError, stream.KindPong, "from_the_future"} {
 		h.Broadcast(stream.Push(kind, nil, clock))
 	}
 	if got := drain(c); len(got) != 0 {
@@ -438,19 +438,10 @@ func TestUnregisteringLeavesTheSeatIndex(t *testing.T) {
 }
 
 // kindsIn is the kinds of a frame slice, for a failure message.
-func kindsIn(frames []*stream.Frame) []string {
-	out := make([]string, 0, len(frames))
+func kindsIn(frames []*stream.Frame) []stream.Kind {
+	out := make([]stream.Kind, 0, len(frames))
 	for _, f := range frames {
 		out = append(out, f.Kind())
 	}
 	return out
-}
-
-func slicesContains(haystack []string, needle string) bool {
-	for _, item := range haystack {
-		if item == needle {
-			return true
-		}
-	}
-	return false
 }

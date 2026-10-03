@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
+	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/knowledge"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/textcut"
@@ -39,7 +40,7 @@ const searchQueryMax = 400
 // about what a knowledge backend is.
 type KnowledgeSearcher interface {
 	CanSearch(seat *org.Role, o *org.Organization) bool
-	Search(ctx context.Context, q knowledge.Query) []knowledge.Hit
+	Search(ctx context.Context, q knowledge.Query) knowledge.Result
 }
 
 // searchKnowledge searches the team knowledge base on demand.
@@ -68,6 +69,10 @@ type searchKnowledge struct {
 	// company's own account rather than somebody's". Nil here means a
 	// caller that must bring a turn, which is every seat registry.
 	org func() *org.Organization
+
+	// events receives the `knowledge_read` a seat's search records. Nil
+	// records nothing, which is a registry built outside an engine.
+	events Telemetry
 }
 
 var _ tools.SeatCallable = (*searchKnowledge)(nil)
@@ -98,6 +103,16 @@ func (t *searchKnowledge) Parameters() map[string]any {
 					"ticket keys, service and function names. Not a question, " +
 					"and not the whole task.",
 			},
+			"mode": map[string]any{
+				"type": "string",
+				"enum": []any{string(knowledge.ModeHybrid), string(knowledge.ModeKeyword),
+					string(knowledge.ModeSemantic)},
+				"description": "How to rank. `hybrid` (the default) ranks by the " +
+					"words and by meaning together. `keyword` ranks by the words " +
+					"alone — for an exact identifier, error code or name. " +
+					"`semantic` ranks by meaning alone — to find a page that says " +
+					"the same thing in other words.",
+			},
 		},
 		"required": []any{"query"},
 	}
@@ -125,6 +140,13 @@ func (t *searchKnowledge) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	// replacement character, and rejected outright by some. The cap is
 	// bytes because that is what a backend's own limit is measured in.
 	query = textcut.Bytes(query, searchQueryMax)
+	// A MODE THIS BUILD DOES NOT KNOW IS REFUSED, naming the ones it does:
+	// falling back to the default would answer a different question from
+	// the one asked.
+	mode, err := knowledge.ParseMode(argString(args, "mode"))
+	if err != nil {
+		return failed(fmt.Sprintf("search_knowledge: %v.", err)), nil
+	}
 	// THE TURN'S ORG, or the wiring's where there is no turn — see
 	// [searchKnowledge.org]. Reading the turn unconditionally made this
 	// tool refuse every call on the operator surface, where it is
@@ -138,7 +160,8 @@ func (t *searchKnowledge) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		company = t.org()
 	}
 	if company == nil {
-		return failed("No organization is in scope, so there is no knowledge base to search."), nil
+		return refused(tools.RefusalUnavailable,
+			"No organization is in scope, so there is no knowledge base to search."), nil
 	}
 	// THE CHEAP GATE FIRST, exactly as the turn-start prefetch does it:
 	// CanSearch does no I/O, and a seat whose search could not hit anything
@@ -151,8 +174,8 @@ func (t *searchKnowledge) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 			"from what you have."}, nil
 	}
 
-	hits := t.search.Search(ctx, knowledge.Query{
-		Text: query, Seat: seat, Org: company, Limit: searchHits,
+	result := t.search.Search(ctx, knowledge.Query{
+		Text: query, Seat: seat, Org: company, Limit: searchHits, Mode: mode,
 		// AUTO-DRAFTS HIDDEN, the same exclusion the turn-start prefetch
 		// applies. Those pages are unreviewed proposals a synthesis pass
 		// wrote; an agent cannot tell one from a ratified runbook, and
@@ -160,11 +183,35 @@ func (t *searchKnowledge) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		// without anybody agreeing to it.
 		ExcludeAncestors: []string{knowledge.AutoDraftedParent},
 	})
+	hits := result.Hits
+	degraded := degradedNote(mode, result.Outcome)
+	if len(hits) == 0 && result.ServedMode == "" {
+		// NOTHING RAN, which is not "nothing matched": telling a seat
+		// the company has not written this down, when the knowledge
+		// base could not be read at all, is how it goes and writes a
+		// duplicate of a page that exists. A ranking the backend cannot
+		// serve at all says which, so the seat asks another way.
+		if degraded != "" {
+			return tools.Result{Output: "Nothing was searched, so this says " +
+				"nothing about whether a page exists." + degraded}, nil
+		}
+		return tools.Result{Output: "The knowledge base could not be searched just " +
+			"now, so this says nothing about whether a page exists. Try again " +
+			"shortly, or work from what you have."}, nil
+	}
+	partial := partialNote(result.Coverage) + degraded
 	if len(hits) == 0 {
 		return tools.Result{Output: fmt.Sprintf(
 			"No team documents match %q. Try different keywords, or work from what "+
-				"you have — not everything is written down.", clip(query))}, nil
+				"you have — not everything is written down.%s", clip(query), partial)}, nil
 	}
+	// EVERY HIT THE MODEL WAS SHOWN, in the order it was shown them. A
+	// search is a read of titles and snippets rather than of pages, and
+	// recorded as such (`via: search`) — which pages a company's searches
+	// surface is a different question from which ones get opened, and a
+	// knowledge base is curated against both.
+	note(ctx, t.events, turn, knowledgeRead(turn, types.ReadViaSearch,
+		hits[0].Backend, query, knowledge.ReadPages(hits)))
 
 	var b strings.Builder
 	fmt.Fprintf(&b, "%d team documents match %q:\n", len(hits), clip(query))
@@ -179,7 +226,55 @@ func (t *searchKnowledge) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	// two hundred characters of a runbook.
 	b.WriteString("\nTo read any of these in full, look it up by title with your " +
 		"knowledge-base tools.")
+	b.WriteString(partial)
 	return tools.Result{Output: b.String()}, nil
+}
+
+// degradedNote is the sentence a search that ranked other than it was asked
+// to owes the seat that asked, or nothing when it served the mode asked for.
+//
+// SAID TO THE MODEL for [partialNote]'s reason: a keyword answer read as a
+// hybrid one is a seat concluding no page means what it typed, and a semantic
+// search that served nothing read as "nothing matched" is the same mistake
+// with no hits at all. internal/knowledge's mode doc is the rule — a search
+// never serves another ranking without saying so.
+func degradedNote(asked knowledge.Mode, o knowledge.Outcome) string {
+	switch o.Degraded {
+	case knowledge.NotDegraded:
+		return ""
+	case knowledge.DegradedSemanticPartial:
+		return "\n\nMeaning was ranked over only part of the knowledge base — " +
+			"some of the fleet could not compare by meaning — so a page that " +
+			"says this in other words may be missing here."
+	}
+	why := "this knowledge base has no ranking by meaning"
+	switch o.Degraded {
+	case knowledge.DegradedNoEmbeddings:
+		why = "this company has no embeddings provider, so nothing ranks by meaning"
+	case knowledge.DegradedEmbeddingFailed:
+		why = "the query's meaning could not be computed just now; asking again may " +
+			"rank by it"
+	}
+	if asked.Resolved() == knowledge.ModeSemantic {
+		return "\n\nNo search by meaning ran: " + why + ". Search with mode " +
+			"`keyword` to rank by the words instead."
+	}
+	return "\n\nRanked by the words alone: " + why + "."
+}
+
+// partialNote is the sentence a search over part of the knowledge base owes
+// the seat that asked, or nothing when it covered all of it.
+//
+// SAID TO THE MODEL rather than only logged, because the model is the one
+// deciding what the answer means: a short list over two thirds of the corpus
+// reads exactly like a short list over all of it, and "nothing about this is
+// written down" is the conclusion a seat acts on by writing it down again.
+func partialNote(c knowledge.Coverage) string {
+	if c.Complete || c.BucketsMissing == 0 {
+		return ""
+	}
+	return "\n\nThis search covered only part of the knowledge base — some of the " +
+		"fleet did not answer in time — so a page not listed here may still exist."
 }
 
 // renderHit renders one page as a bullet.

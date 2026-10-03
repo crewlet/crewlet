@@ -2,8 +2,14 @@ package queries
 
 import (
 	"context"
+	"errors"
+	"fmt"
+	"strings"
 
+	"github.com/crewlet/crewlet/internal/authz"
+	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/notify"
+	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/sandbox"
 )
 
@@ -45,16 +51,145 @@ type PendingRuns interface {
 	ListActive(ctx context.Context) ([]sandbox.PendingRun, error)
 }
 
-func (s Sources) sandboxRuns(ctx context.Context, _ Params) (any, error) {
+// SandboxTails answers a running coding run's live output from the node that
+// owns it — the one method this surface calls of [sandbox.TailReader].
+type SandboxTails interface {
+	Tail(ctx context.Context, turnID, launchID string) (sandbox.TailAnswer, error)
+}
+
+// sandboxTail answers `sandbox_tail{turn_id, launch_id}`: the tail of that
+// launch while it runs, `not_running` with the record's own status once it is
+// not, or the owning node NAMED where it did not answer (`owner_silent`) or
+// runs a build that cannot (`owner_upgrading`).
+//
+// BOTH IDS ARE REQUIRED. A run is one execution of a turn and a turn can launch
+// more than one job; a request naming only the turn would show whichever job
+// its row holds now, which is a different job from the span a person clicked
+// the moment a second launch replaces the first.
+func (s Sources) sandboxTail(ctx context.Context, p Params) (any, error) {
+	turnID := strings.TrimSpace(p.String("turn_id"))
+	launchID := strings.TrimSpace(p.String("launch_id"))
+	if turnID == "" || launchID == "" {
+		return nil, fmt.Errorf("%w: sandbox_tail needs a turn_id and the launch_id of the "+
+			"run's job", ErrBadParams)
+	}
+	return s.SandboxTail.Tail(ctx, turnID, launchID)
+}
+
+// sandboxRuns answers the board, or — with `audience=<name>` — the runs whose
+// question is put to that one person.
+//
+// THE NAME IS A RECORD'S, resolved as every personal read here resolves one
+// ([iam.OwnerOf]): the caller's own with no name or one of theirs, a person's
+// LOGIN to the seat the identity directory binds them to — never read as a
+// seat's handle — and anything else as the seat it names. The directory is
+// asked only once [authz.ActionPersonRead] admits looking, so a caller who
+// leads nobody filters by a seat's handle and cannot read the directory off
+// this filter. NO SCOPE RULE beyond that, unlike the tracker's personal
+// reads: the unfiltered board already carries every run's audience to anybody
+// who may read it, so a narrower answer reveals nothing the wider one did not.
+//
+// A run parked by a build that resolved no audience carries none, and is
+// therefore nobody's by this filter — which is the truth about it: nothing
+// recorded whom its question was put to.
+func (s Sources) sandboxRuns(ctx context.Context, p Params) (any, error) {
 	runs, err := s.Sandbox.ListActive(ctx)
 	if err != nil {
 		return nil, err
 	}
+	organization := s.organization()
+	who, filtered := "", false
+	if asked := strings.TrimSpace(p.String("audience")); asked != "" {
+		if who, err = s.audienceOf(ctx, asked); err != nil {
+			return nil, err
+		}
+		filtered = true
+	}
 	out := make([]any, 0, len(runs))
 	for _, run := range runs {
+		if filtered && !putTo(organization, run, who) {
+			continue
+		}
 		out = append(out, serialiseRun(run))
 	}
 	return map[string]any{"runs": out}, nil
+}
+
+// audienceOf resolves the name `audience=` filters by to the record it names —
+// see [Sources.sandboxRuns]. An EMPTY record with no error is a login nobody
+// holds a seat by, which no run's question can be put to.
+func (s Sources) audienceOf(ctx context.Context, asked string) (string, error) {
+	principal, how := iam.From(ctx)
+	if how == iam.Unknown {
+		return "", unresolved(ctx, "sandbox_runs")
+	}
+	owner, _, err := iam.OwnerOf(ctx, principal, asked, s.Holders,
+		s.mayLook(principal, authz.ActionPersonRead))
+	var looked *iam.LookRefused
+	switch {
+	case errors.As(err, &looked):
+		return "", looked.Err
+	case errors.Is(err, iam.ErrNoHolder), errors.Is(err, iam.ErrHolderUnseated):
+		// A LOGIN THAT NAMES NO SEAT is put nothing: a run's question is
+		// put to seats, and a person holding none has none put to them.
+		// Answered as an empty board rather than a refusal, because the
+		// caller was let look and the directory's answer is the fact.
+		return "", nil
+	case err != nil:
+		// THE DIRECTORY'S OWN WORDS GO TO THE LOG: they name the seat a
+		// login is bound to, and this error is what a caller is answered.
+		log.WarnContext(ctx, "queries_audience_undecidable", "name", asked,
+			"error", err.Error())
+		return "", fmt.Errorf("%w: this node cannot say whose record %q is yet",
+			ErrUnavailable, asked)
+	case owner == "":
+		return "", errNoRecord
+	}
+	return owner, nil
+}
+
+// putTo reports whether a run's question is put to the seat a record names.
+//
+// COMPARED BY IDENTITY, through one chart reading: a run's audience was
+// resolved to handles when it parked, and a seat renamed since answers to its
+// old handle as an alias — so the two names are matched on the handle each
+// seat was CREATED under ([org.Role.Origin]), never on their spelling, which a
+// rename between the park and the read would have made two people.
+func putTo(organization *org.Organization, run sandbox.PendingRun, who string) bool {
+	if who == "" {
+		return false
+	}
+	want := seatIdentity(organization, who)
+	for _, handle := range run.AudienceHandles {
+		if seatIdentity(organization, handle) == want {
+			return true
+		}
+	}
+	return false
+}
+
+// seatIdentity is the handle the seat a name addresses was created under — its
+// identity — or the name itself for one no seat on this chart answers to: a
+// login, or a seat the company no longer has, which nothing else can have been
+// given.
+func seatIdentity(organization *org.Organization, name string) string {
+	if organization != nil {
+		if role := organization.Role(name); role != nil {
+			return role.Origin()
+		}
+	}
+	return name
+}
+
+// currentHandle is the handle the seat a name addresses answers to NOW, or
+// the name itself for one no seat on this chart answers to.
+func currentHandle(organization *org.Organization, name string) string {
+	if organization != nil {
+		if role := organization.Role(name); role != nil {
+			return role.Handle()
+		}
+	}
+	return name
 }
 
 func serialiseRun(run sandbox.PendingRun) map[string]any {
@@ -72,8 +207,19 @@ func serialiseRun(run sandbox.PendingRun) map[string]any {
 		// THROUGH THE ACCESSOR, because nothing rewrites a parked row: a
 		// run suspended before the identities were split carries the key
 		// in its turn id instead. Empty when the run genuinely has none.
-		"work_key":     run.UnitOfWork(),
+		"work_key": run.UnitOfWork(),
+		// THE ITEM THE LAUNCHING TURN WAS CHARGED TO, which the row has
+		// carried since runs named one and this answer never served — so a
+		// parked run's question reached a person with no task beside it.
+		// Null on a run launched by a turn charged to no item.
+		"work_item":    run.WorkItem,
 		"agent_handle": run.AgentHandle,
+		// THE JOB THE ROW HOLDS NOW, which is what `sandbox_tail` is asked
+		// by: a turn can launch more than one, and the run's own page polls
+		// the live output of the job it is showing rather than of whichever
+		// replaced it. Empty on a row a build that predates it wrote, and
+		// such a run has no live output to ask for.
+		"launch_id":    run.LaunchID,
 		"role":         run.Role,
 		"status":       run.Status,
 		"coding_agent": run.CodingAgent,
@@ -86,9 +232,16 @@ func serialiseRun(run sandbox.PendingRun) map[string]any {
 		"task_description": run.TaskDescription,
 		"question":         run.Question,
 		"audience":         run.Audience,
-		"branch":           run.Branch,
-		"trace_id":         run.TraceID,
-		"owner":            run.Owner,
+		// WHO THE QUESTION IS PUT TO, resolved against the chart when the
+		// run parked, and whether that is a fallback — the seat's lead
+		// chain — because the audience above named nobody the chart has.
+		// Always an array, empty on a run that is not parked or that a
+		// build which resolved nothing parked.
+		"audience_handles":  nonNilStrings(run.AudienceHandles),
+		"audience_fallback": run.AudienceFallback,
+		"branch":            run.Branch,
+		"trace_id":          run.TraceID,
+		"owner":             run.Owner,
 		// The two facts the board draws, rather than the ids themselves: a
 		// non-empty sandbox id means a box exists, and a set paused_at
 		// means it is currently held as a snapshot and being paid for.
@@ -156,4 +309,13 @@ func serialiseRun(run sandbox.PendingRun) map[string]any {
 // have left this route confidently offering a thread that does not exist.
 func answerableInChat(conversation string) bool {
 	return notify.Derived(conversation)
+}
+
+// nonNilStrings is a list that encodes as `[]` rather than `null` when empty,
+// so a reader indexes it without a presence check.
+func nonNilStrings(list []string) []string {
+	if list == nil {
+		return []string{}
+	}
+	return list
 }

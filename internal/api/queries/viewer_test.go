@@ -159,6 +159,59 @@ func TestAnAnonymousReaderIsNeitherBoundNorSeated(t *testing.T) {
 	}
 }
 
+// THE VIEWER NAMES WHAT IT MAY ACT ON, as the authority table decides it for
+// THIS principal — see [queries.Sources.Acts]. Any principal the guard resolved
+// may call the act transport, so the list is never "a bound person's or
+// nothing": it is whatever the table admits the caller to before an object is
+// named, and the viewer hands back exactly that. An array either way, because
+// "may do nothing" is a value a screen tests, not an absence it has to guess
+// the meaning of.
+func TestTheViewerNamesWhatItMayAct(t *testing.T) {
+	t.Parallel()
+	sources := viewerSources(t, &stubWork{})
+	var asked []string
+	var mu sync.Mutex
+	sources.Acts = func(_ context.Context, p iam.Principal) ([]string, error) {
+		mu.Lock()
+		asked = append(asked, p.Login)
+		mu.Unlock()
+		if p.Seat == "ana" {
+			return []string{"create_work_item", "mark_inbox"}, nil
+		}
+		return []string{}, nil
+	}
+	answered, err := askAsSeat(t, sources, "ana", "viewer", nil)
+	if acts, _ := answerMap(t, answered, err)["acts"].([]string); !slices.Equal(acts,
+		[]string{"create_work_item", "mark_inbox"}) {
+		t.Errorf("ana's acts = %v, want what the table admits her to", acts)
+	}
+	answered, err = askAsOperator(t, sources, "viewer", nil)
+	if acts, ok := answerMap(t, answered, err)["acts"].([]string); !ok || len(acts) != 0 {
+		t.Errorf("a credential the table admits to nothing got acts %#v, want []", acts)
+	}
+	if !slices.Contains(asked, "ana") {
+		t.Errorf("the table was asked about %v, never about the caller", asked)
+	}
+
+	// A NODE WITH NOTHING TO SERVE ANSWERS AN EMPTY LIST, rather than a
+	// null a screen would read as "not loaded".
+	answered, err = askAsSeat(t, viewerSources(t, &stubWork{}), "ana", "viewer", nil)
+	if acts, ok := answerMap(t, answered, err)["acts"].([]string); !ok || len(acts) != 0 {
+		t.Errorf("a node serving no acts answered %#v", acts)
+	}
+
+	// AND A TABLE THAT CANNOT DECIDE IS NOT "MAY DO NOTHING": answered as an
+	// empty list, a screen would lock every control a person holds the
+	// authority for while this node is behind its chart.
+	sources.Acts = func(context.Context, iam.Principal) ([]string, error) {
+		return nil, errors.New("this node cannot read its chart")
+	}
+	if _, err := askAsSeat(t, sources, "ana", "viewer", nil); !errors.Is(err,
+		queries.ErrUnavailable) {
+		t.Errorf("an undecidable table answered %v, want %v", err, queries.ErrUnavailable)
+	}
+}
+
 // THE PERSONAL QUESTIONS ARE SCOPED, NOT OPERATOR-GATED.
 //
 // `work_my_work` was registered operator-only and demanded a handle, which
@@ -521,7 +574,7 @@ func TestALoginThatNamesNobodyIsNotARosterForAQuestion(t *testing.T) {
 func TestAnUnbindableCallerHasNoSeatTrailOfItsOwn(t *testing.T) {
 	t.Parallel()
 	s := viewerSources(t, &stubWork{})
-	s.Conversations = &stubConversations{}
+	s.Memory = &stubMemory{}
 	r := queries.NewRegistry()
 	queries.Register(r, s)
 	_, err := r.Answer(everyGrant(t), "conversations", nil)
@@ -563,19 +616,19 @@ func TestEveryInboxFilterReachesTheReader(t *testing.T) {
 	t.Parallel()
 	work := &stubWork{}
 	_, err := askAsSeat(t, viewerSources(t, work), "ana", "work_inbox", map[string]any{
-		"unread":          true,
-		"primary_only":    true,
-		"include_snoozed": true,
-		"reasons":         "mention,asked",
-		"limit":           7,
-		"cursor":          "c-9",
+		"unread":       true,
+		"primary_only": true,
+		"snoozed":      "only",
+		"reasons":      "mention,asked",
+		"limit":        7,
+		"cursor":       "c-9",
 	})
 	if err != nil {
 		t.Fatalf("work_inbox: %v", err)
 	}
 	q := work.inboxQuery
-	if !q.Unread || !q.PrimaryOnly || !q.IncludeSnoozed {
-		t.Errorf("the three flags reached the reader as %+v", q)
+	if !q.Unread || !q.PrimaryOnly || q.Snoozed != tracker.SnoozeOnly {
+		t.Errorf("the three filters reached the reader as %+v", q)
 	}
 	if q.Limit != 7 || q.Cursor != "c-9" {
 		t.Errorf("limit/cursor reached the reader as %d/%q", q.Limit, q.Cursor)
@@ -598,6 +651,34 @@ func TestAnUnknownInboxReasonIsRefusedNamingTheSet(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "mention") {
 		t.Errorf("the refusal %q does not name what would have worked", err)
+	}
+}
+
+// THE SNOOZED SCOPE DEFAULTS TO HIDING THEM, AND A SCOPE THIS BUILD DOES NOT
+// KNOW IS REFUSED. The reader refuses the zero value, so the surface is what
+// makes "my inbox" mean "not what I put off"; and a misspelt scope answered as
+// the default would be the very defect the scope replaced — a Snoozed tab
+// listing the whole inbox.
+func TestTheSnoozedScopeDefaultsToExcludeAndRefusesAnUnknownOne(t *testing.T) {
+	t.Parallel()
+	work := &stubWork{}
+	if _, err := askAsOperator(t, viewerSources(t, work), "work_inbox",
+		map[string]any{}); err != nil {
+		t.Fatalf("work_inbox: %v", err)
+	}
+	if work.inboxQuery.Snoozed != tracker.SnoozeExclude {
+		t.Errorf("an absent `snoozed` reached the reader as %q, want %q",
+			work.inboxQuery.Snoozed, tracker.SnoozeExclude)
+	}
+	_, err := askAsOperator(t, viewerSources(t, &stubWork{}), "work_inbox",
+		map[string]any{"snoozed": "bogus"})
+	if !errors.Is(err, queries.ErrBadParams) {
+		t.Fatalf("snoozed=bogus = %v, want bad_params", err)
+	}
+	for _, scope := range []string{"exclude", "include", "only"} {
+		if !strings.Contains(err.Error(), scope) {
+			t.Errorf("the refusal %q does not name %q", err, scope)
+		}
 	}
 }
 
@@ -755,5 +836,57 @@ func TestACallerWithNoAuthorityLearnsNothingFromTheDirectoryOnAQuestion(t *testi
 					err, queries.ErrUnavailable)
 			}
 		})
+	}
+}
+
+// THE VIEWER SAYS WHERE THEIR CREATE LANDS, from the chart the answer was
+// read from and through the engine's one derivation (`engine.ProjectOfSeat`,
+// the seat's own, else its team's, else the nearest ancestor's) — the project
+// `create_work_item` files a person's work into when it names none — so
+// "Create task" can say where rather than a screen working out a second
+// answer. The bound seat's, and "" for a caller with no seat or a seat whose
+// teams own none.
+func TestTheViewerSaysWhereTheirCreateLands(t *testing.T) {
+	t.Parallel()
+	const company = `
+name: Acme
+units:
+  - name: Engineering
+    type: department
+    project: ENG
+    children:
+      - name: Platform
+        type: team
+        roles:
+          - name: Ana Diaz
+            handle: ana
+            kind: human
+roles:
+  - name: Bo Lang
+    handle: bo
+    kind: human
+`
+	cfg, err := config.ParseCompany([]byte(company))
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	s := queries.Sources{Company: companySource(t, cfg), Work: &stubWork{}}
+
+	answered, err := askAsSeat(t, s, "ana", "viewer", nil)
+	if got := answerMap(t, answered, err); got["project"] != "ENG" {
+		t.Errorf("project = %v, want ENG: Ana's team owns none, so her department's", got["project"])
+	}
+
+	// A SEAT WITH NO PROJECT ANYWHERE ABOVE IT answers "", the value a
+	// create must fill in — never a project borrowed from somebody else.
+	answered, err = askAsSeat(t, s, "bo", "viewer", nil)
+	if got := answerMap(t, answered, err); got["project"] != "" {
+		t.Errorf("a seat no team holds: project = %v, want \"\"", got["project"])
+	}
+
+	// AND A CALLER BOUND TO NO SEAT answers "", for the same reason.
+	answered, err = askAsOperator(t, s, "viewer", nil)
+	if unbound := answerMap(t, answered, err); unbound["project"] != "" {
+		t.Errorf("an unbound viewer's project = %v, want \"\"", unbound["project"])
 	}
 }

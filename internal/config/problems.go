@@ -165,6 +165,12 @@ var problemKinds = []struct {
 	{"conflict", org.ErrDuplicateIdentity},
 	{"conflict", org.ErrDuplicateUnit},
 	{"conflict", org.ErrHumanSeatField},
+	// A seat's token ceiling below one token is a number outside what the
+	// key accepts, and a budget keyed by something no calendar window is
+	// a value outside the set — the company's own block reports the first
+	// as [ErrOutOfRange] through the same org rule.
+	{"out_of_range", org.ErrTokenCeiling},
+	{"unknown_value", org.ErrUnknownWindow},
 	{"conflict", org.ErrAgentSeatField},
 	{"conflict", org.ErrUnrunnableSchedule},
 	{"conflict", org.ErrMisplacedUnitRef},
@@ -568,7 +574,7 @@ func (c *Company) AdvisoryWarnings() []Warning {
 					"host's value on", unsupplied.name)))
 		}
 	}
-	return out
+	return append(out, c.budgetWarnings()...)
 }
 
 // Warnings is everything valid about this bootstrap that its author should

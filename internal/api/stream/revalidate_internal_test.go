@@ -115,6 +115,16 @@ func TestAnUnverifiableIdentityDegradesTheSocketAndRecovers(t *testing.T) {
 		t.Fatalf("the tab was not told its identity is unverifiable: %s %s",
 			held.Kind, held.Data)
 	}
+	// WHEN TO LOOK AGAIN, under the socket's one key for it — the key an
+	// `unavailable` error frame carries its wait under too — rather than a
+	// second spelling of the same hint a client would have to know as well.
+	var hint struct {
+		RetryAfter *int `json:"retry_after"`
+	}
+	if err := json.Unmarshal(held.Data, &hint); err != nil || hint.RetryAfter == nil ||
+		*hint.RetryAfter <= 0 {
+		t.Fatalf("the unverifiable frame names no wait under `retry_after`: %s", held.Data)
+	}
 	// AND ITS PUSHES STOPPED: a broadcast now reaches nobody here, which the
 	// next frame read proves by being the release rather than this.
 	f.svc.Hub().Broadcast(Push(KindEvent, map[string]any{"id": "e-1"}, time.Now()))
@@ -225,13 +235,14 @@ func openRevalidatedOver(t *testing.T, opened iam.Principal,
 
 	t.Helper()
 	svc, err := NewService(livestate.New(), Options{
-		Health:          func() Health { return Health{Status: "ok"} },
+		Health:          func() Health { return nodeHealth{Status: "ok"} },
 		Posture:         func(Health) FramePosture { return FrameLive },
 		Seats:           func() tokens.Seats { return tokens.Seats{} },
 		Roster:          func() []map[string]any { return nil },
 		Org:             func() any { return map[string]any{} },
 		Tools:           func() []map[string]any { return nil },
 		Schedules:       func() any { return []any{} },
+		Placement:       func() (map[string]bool, error) { return map[string]bool{}, nil },
 		Chart:           chart,
 		Holders:         blindHolders{},
 		RevalidateEvery: testInterval,
@@ -261,7 +272,7 @@ func openRevalidatedOver(t *testing.T, opened iam.Principal,
 }
 
 type frame struct {
-	Kind string          `json:"kind"`
+	Kind Kind            `json:"kind"`
 	Data json.RawMessage `json:"data"`
 }
 

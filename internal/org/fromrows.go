@@ -2,6 +2,7 @@ package org
 
 import (
 	"cmp"
+	"maps"
 	"slices"
 
 	"github.com/crewlet/crewlet/internal/chart"
@@ -108,9 +109,9 @@ func FromRows(rows chart.Chart, settings Settings) *View {
 			Name:           settings.Name,
 			Mission:        settings.Mission,
 			Vision:         settings.Vision,
-			Policies:       settings.Policies,
-			TokenBudget:    settings.TokenBudget,
-			KnowledgeScope: settings.KnowledgeScope,
+			Policies:       slices.Clone(settings.Policies),
+			TokenBudget:    maps.Clone(settings.TokenBudget),
+			KnowledgeScope: slices.Clone(settings.KnowledgeScope),
 		},
 		At: ViewPosition{
 			Generation: rows.Position.Generation,
@@ -154,7 +155,11 @@ type Settings struct {
 	Vision   string
 	Policies []string
 
-	TokenBudget    int
+	// TokenBudget is the company's ceiling per calendar window, already in
+	// the shape the engine reads: the caller builds it from the authored
+	// block (config.TokenBudget.Ceilings), so this package never sees a
+	// window's pointer.
+	TokenBudget    TokenCeilings
 	KnowledgeScope []string
 }
 
@@ -254,6 +259,12 @@ func attachSeats(rows chart.Chart, units []*Unit) []*Role {
 		return cmp.Compare(a.Handle, b.Handle)
 	})
 
+	// NOTHING A SEAT HOLDS IS THE ROW'S OWN: its runtime half — the contact
+	// among it — is decoded fresh from the row's bytes, and every slice is
+	// copied ([seatFrom]). The engine keeps the rows it applied and builds a
+	// view from them on every apply, and Normalize rewrites a seat's contact
+	// and lists in place — shared, that rewrote the rows every later build
+	// reads, from whichever goroutine built a view at the time.
 	var root []*Role
 	for _, row := range ordered {
 		seat := seatFrom(row, rows.Manages[row.Handle])
@@ -295,12 +306,12 @@ func unitFrom(row chart.Unit) *Unit {
 	unit.FormerKeys = slices.Clone(row.FormerKeys)
 	unit.Type = UnitType(row.Type)
 	unit.Purpose = row.Purpose
-	unit.Goals = row.Goals
+	unit.Goals = slices.Clone(row.Goals)
 	unit.Lead = row.Lead
 	unit.Channel = row.Channel
 	unit.Project = row.Project
 	unit.Space = row.Space
-	unit.KnowledgeRefs = row.KnowledgeRefs
+	unit.KnowledgeRefs = slices.Clone(row.KnowledgeRefs)
 	unit.parentKey = row.ParentKey
 	// THE CASCADE'S OWN BOOKKEEPING IS RESET, whatever a blob held: these
 	// record what this unit DECLARED, and the row is the declaration.
@@ -346,8 +357,8 @@ func seatFrom(row chart.Seat, manages []string) *Role {
 	seat.Email = row.Email
 	seat.Backstory = row.Backstory
 	seat.Goal = row.Goal
-	seat.Responsibilities = row.Responsibilities
-	seat.BehavioralGuidelines = row.BehavioralGuidelines
+	seat.Responsibilities = slices.Clone(row.Responsibilities)
+	seat.BehavioralGuidelines = slices.Clone(row.BehavioralGuidelines)
 	seat.Manages = slices.Clone(manages)
 	seat.Project = row.Project
 	seat.Space = row.Space

@@ -11,7 +11,7 @@
  */
 
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
-import { RETRY_AFTER_MAX_MS, UNAVAILABLE_RETRY_MS } from "./retry.ts";
+import { RETRY_AFTER_MAX_MS, UNAVAILABLE_RETRY_MS } from "../contract/retry.ts";
 import { LiveSocket, QueryRefusedError } from "./socket.ts";
 import { Store } from "./store.ts";
 

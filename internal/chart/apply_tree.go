@@ -756,8 +756,8 @@ func (a *Applier) applyRemoval(ctx context.Context, tx *sql.Tx, at applyContext,
 		rows += int(n)
 
 		// AND THE ADDRESS IT WAS CREATED UNDER, when a rename moved it
-		// off that one. The origin is the object's identity (ADR-0019,
-		// ADR-0020) and the one address nothing else may ever take — a
+		// off that one. The origin is the object's identity (ADR-0026,
+		// ADR-0027) and the one address nothing else may ever take — a
 		// creation onto it would inherit the removed seat's mailbox, its
 		// diary and every person the directory still binds to it — and a
 		// tombstone is what every creation path already refuses. Read

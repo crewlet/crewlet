@@ -21,6 +21,7 @@ const (
 	BackupDuration                   = "crewlet.backup.duration"
 	BackupHolds                      = "crewlet.backup.holds"
 	ChartApplyDeclined               = "crewlet.chart.apply.declined"
+	HistoryAnswers                   = "crewlet.history.answers"
 	StatelogAppliedThrough           = "crewlet.statelog.applied_through"
 	StatelogApplyBatchRows           = "crewlet.statelog.apply.batch.rows"
 	StatelogApplyLagSeconds          = "crewlet.statelog.apply.lag.seconds"

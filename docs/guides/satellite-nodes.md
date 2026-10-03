@@ -47,8 +47,8 @@ Slack message routed to that agent works exactly as before.
 
 A satellite is also a **replica**, not just an agent host: it applies
 every one of the company's shared state logs — the work tracker, the
-knowledge base, the search vectors, the org chart and the identity
-directory — into its own database, exactly as a core node does. Roles
+knowledge base, the search vectors, the org chart, the identity directory
+and every node's usage history — into its own database, exactly as a core node does. Roles
 decide what a node serves and which duties it holds, never which logs it
 applies; see [what a satellite holds](#what-a-satellite-holds) before you
 choose a host for one.
@@ -184,7 +184,7 @@ crewlet run -roles seats
 
 ## Verify it landed
 
-The **Fleet** screen in the dashboard is the direct answer: it reads the
+The **Settings › Nodes** screen in the dashboard is the direct answer: it reads the
 lease table, so it gives the same picture from whichever node you happen
 to reach. Look for the satellite in *Nodes* with its roles and labels,
 and for the pinned handle in *Seat ownership* against that node.
@@ -211,8 +211,9 @@ Two failures to know by sight:
 
 ## What a satellite holds
 
-The work tracker, the knowledge base, the search vectors, the org chart
-and the identity directory are [replicated state machines](replication.md).
+The work tracker, the knowledge base, the search vectors, the org chart,
+the identity directory and every node's usage history are [replicated state
+machines](replication.md).
 Each is one ordered log the whole fleet shares, and every node applies
 **every** log into its own copy of the rows — so it answers questions
 about each one locally, and so it can donate a snapshot of all of them to

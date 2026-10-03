@@ -403,17 +403,20 @@ func TestALeafsMoveIsOneRecord(t *testing.T) {
 	}
 }
 
-// THE MARK IS WRITTEN AT THE VERSION THAT ADDED IT, AND NOTHING ELSE IS RAISED.
+// THE MARK IS WRITTEN AT THE VERSION THAT ADDED IT, AND NOTHING ELSE IS RAISED
+// TO IT.
 //
-// A build that reads only version 1 decodes a patch by dropping the field it
-// does not know and applies the rest — a root re-homed with no mark on that
-// node's row where every newer node holds one. At version 2 that build
-// retains the record instead. Every other record stays at 1, because a
-// retained record holds back every later record nested under its scope.
+// A build that reads only the version before the mark decodes a patch by
+// dropping the field it does not know and applies the rest — a root re-homed
+// with no mark on that node's row where every newer node holds one. At the
+// mark's own version that build retains the record instead. Every other record
+// stays below it, at whatever its own fields need, because a retained record
+// holds back every later record nested under its scope.
 func TestTheMoveMarkIsWrittenAtTheVersionThatAddedIt(t *testing.T) {
 	t.Parallel()
-	if got := (tracker.Domain{}).RecordVersion(); got != 2 {
-		t.Fatalf("this build reads record version %d, want 2", got)
+	markAt := moveMarkVersion(t)
+	if got := (tracker.Domain{}).RecordVersion(); got < markAt {
+		t.Fatalf("this build reads record version %d, below the mark's %d", got, markAt)
 	}
 	r := moveFixture(t, "m-kid")
 	start := r.logEnd(t)
@@ -428,13 +431,17 @@ func TestTheMoveMarkIsWrittenAtTheVersionThatAddedIt(t *testing.T) {
 		var patch tracker.TaskPatch
 		carriesMark := rec.Subject.Kind == tracker.KindTask &&
 			json.Unmarshal(rec.Mutation, &patch) == nil && patch.Moving != nil
-		want := 1
-		if carriesMark {
-			want, marks = 2, marks+1
-		}
-		if rec.V != want {
-			t.Errorf("the %s record on %s carries version %d, want %d",
-				rec.Op, rec.Subject, rec.V, want)
+		switch {
+		case carriesMark:
+			marks++
+			if rec.V != markAt {
+				t.Errorf("the %s record on %s carries the mark at version %d, "+
+					"want %d", rec.Op, rec.Subject, rec.V, markAt)
+			}
+		case rec.V >= markAt:
+			t.Errorf("the %s record on %s carries no mark and is stamped %d — "+
+				"a build before the mark retains it, and everything nested "+
+				"under its scope with it", rec.Op, rec.Subject, rec.V)
 		}
 	}
 	if marks != 2 {
@@ -454,9 +461,9 @@ func TestTheMoveMarkIsWrittenAtTheVersionThatAddedIt(t *testing.T) {
 	}
 }
 
-// A BUILD THAT READS ONLY VERSION 1 RETAINS THE MARKED RECORDS RATHER THAN
-// APPLYING HALF OF THEM — through the real framework loop, over the real log —
-// and goes on applying the records it can read.
+// A BUILD THAT READS ONLY UP TO THE VERSION BEFORE THE MARK RETAINS THE MARKED
+// RECORDS RATHER THAN APPLYING HALF OF THEM — through the real framework loop,
+// over the real log — and goes on applying the records it can read.
 func TestAnOlderBuildRetainsAMoveMark(t *testing.T) {
 	t.Parallel()
 	r := moveFixture(t, "m-kid")
@@ -486,7 +493,7 @@ func TestAnOlderBuildRetainsAMoveMark(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = older.Close() })
 	runner, err := statelog.NewRunner(statelog.RunnerDeps{
-		Domain:   versionOneTracker{},
+		Domain:   beforeMoveMark{markAt: moveMarkVersion(t)},
 		Applier:  tracker.NewApplier("node-older", nil),
 		Fetch:    &trackerLogFetch{log: r.log, next: 1},
 		Log:      r.log,
@@ -577,11 +584,26 @@ func (r *roundTrip) recordAt(t *testing.T, seq uint64) tracker.MutationRecord {
 	return rec
 }
 
-// versionOneTracker is this domain as a build that reads only record version
-// 1 sees it.
-type versionOneTracker struct{ tracker.Domain }
+// beforeMoveMark is this domain as the build before the cross-project move's
+// mark sees it: reading every record version up to the one the mark added.
+type beforeMoveMark struct {
+	tracker.Domain
+	markAt int
+}
 
-func (versionOneTracker) RecordVersion() int { return 1 }
+func (d beforeMoveMark) RecordVersion() int { return d.markAt - 1 }
+
+// moveMarkVersion is the version the field table says the mark closed on.
+func moveMarkVersion(t *testing.T) int {
+	t.Helper()
+	for _, field := range tracker.VersionedFields() {
+		if field.Name == "TaskPatch.Moving" {
+			return field.Since
+		}
+	}
+	t.Fatal("the field table names no TaskPatch.Moving")
+	return 0
+}
 
 // trackerLogFetch hands a framework loop every record on a harness's log, in
 // order.

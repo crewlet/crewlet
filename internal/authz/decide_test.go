@@ -421,14 +421,62 @@ func TestTheAuthorityTableDecidesEveryClass(t *testing.T) {
 			authz.Object{Kind: authz.KindTask, Author: "sre"},
 			false, authz.ReasonNotAuthor},
 
-		// --- a rank move ------------------------------------------------- //
+		// --- a place on a board ----------------------------------------- //
 		// THE CAPABILITY THAT FILES WORK ARRANGES IT, and nothing less: a
 		// board's order is nobody's object, so the relation is none.
 		{"work:write moves a card", person("jane.doe", iam.GrantWorkWrite),
-			authz.ActionWorkRank, authz.Object{Kind: authz.KindTask},
+			authz.ActionWorkPlace, authz.Object{Kind: authz.KindTask},
 			true, authz.ReasonGrant},
 		{"state:read alone does not", person("jane.doe", iam.GrantStateRead),
-			authz.ActionWorkRank, authz.Object{Kind: authz.KindTask},
+			authz.ActionWorkPlace, authz.Object{Kind: authz.KindTask},
+			false, authz.ReasonNoGrant},
+		// AND NEVER A SEAT, however it is granted: a board is a person's
+		// arrangement.
+		{"a seat does not rearrange a board", seat("sre", iam.GrantWorkWrite),
+			authz.ActionWorkPlace, authz.Object{Kind: authz.KindTask},
+			false, authz.ReasonSeatRefused},
+
+		// --- whether a seat works ---------------------------------------- //
+		// ITS LEAD PAUSES IT, and nobody who merely reads the board: every
+		// person signed in holds a credential, so a rule that asked for one
+		// would let any reader stop any seat.
+		{"a lead pauses their report", personLeading("cto", iam.GrantStateRead),
+			authz.ActionSeatPause, authz.Object{Kind: authz.KindPerson, Owner: "sre"},
+			true, authz.ReasonLead},
+		{"a reader does not", person("jane.doe", iam.GrantStateRead),
+			authz.ActionSeatPause, authz.Object{Kind: authz.KindPerson, Owner: "sre"},
+			false, authz.ReasonNotSelf},
+		{"the deployment's grant resumes any seat",
+			person("jane.doe", iam.GrantFleetOperate), authz.ActionSeatResume,
+			authz.Object{Kind: authz.KindPerson, Owner: "sre"},
+			true, authz.ReasonGrant},
+		{"a seat resumes nobody, itself included", seat("sre", iam.GrantFleetOperate),
+			authz.ActionSeatResume, authz.Object{Kind: authz.KindPerson, Owner: "sre"},
+			false, authz.ReasonSeatRefused},
+		{"a lead steers their report's turn", personLeading("cto"),
+			authz.ActionTurnSteer, authz.Object{Kind: authz.KindPerson, Owner: "sre"},
+			true, authz.ReasonLead},
+		{"and a colleague does not", personLeading("sam"),
+			authz.ActionTurnSteer, authz.Object{Kind: authz.KindPerson, Owner: "sre"},
+			false, authz.ReasonNotSelf},
+		// THE REQUESTER ANSWERS A RUN THROUGH THE SELF ARM: the tool asks
+		// about the requester's own seat when that is who is calling.
+		{"the requester answers the run they asked for", personLeading("sam"),
+			authz.ActionRunAnswer, authz.Object{Kind: authz.KindPerson, Owner: "sam"},
+			true, authz.ReasonSelf},
+		{"the run's seat's lead answers it", personLeading("cto"),
+			authz.ActionRunAnswer, authz.Object{Kind: authz.KindPerson, Owner: "sre"},
+			true, authz.ReasonLead},
+
+		// --- a question answered from the company's knowledge ------------ //
+		{"a person holding the read grant asks",
+			personLeading("sam", iam.GrantStateRead), authz.ActionKnowledgeAnswer,
+			authz.Object{Kind: authz.KindCompany}, true, authz.ReasonGrant},
+		{"a seat never does — it has a search and a model of its own",
+			seat("sre", iam.GrantStateRead), authz.ActionKnowledgeAnswer,
+			authz.Object{Kind: authz.KindCompany}, false, authz.ReasonSeatRefused},
+		{"work:write alone discloses nothing", person("ci.release", iam.GrantWorkWrite),
+			authz.ActionKnowledgeAnswer, authz.Object{Kind: authz.KindCompany},
 			false, authz.ReasonNoGrant},
 
 		// --- operator ---------------------------------------------------- //

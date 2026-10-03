@@ -16,9 +16,9 @@ import { describe, expect, test } from "vitest";
  * are silent: a valid stylesheet, no warning, and a suite that renders the
  * frame stays green because jsdom computes no cascade.
  *
- * Both had happened. Five rules spent `--accent` as text — the rail's current
+ * Both had happened. Five rules spent `--color-brand-accent` as text — the rail's current
  * row, the sidebar's, a grid's more-row and two hover states — against nine
- * that already took `--accent-ink`, so the drift was visible in the file
+ * that already took `--color-brand-accent-ink`, so the drift was visible in the file
  * before it was visible on a screen. Measured in a browser: 3.09:1 on the soft
  * ground the first two also carry and 3.71 on the page, against the 4.5 small
  * text needs, where the ink gives 5.96 and 7.15.
@@ -33,8 +33,14 @@ import { describe, expect, test } from "vitest";
 
 const STYLES = fileURLToPath(new URL(".", import.meta.url));
 
-/** The families that publish an ink rung. */
-const FILLS = ["accent", "positive", "caution", "critical", "info"];
+/** The families that publish an ink rung: the accent and the four states. */
+const FILLS = [
+  "brand-accent",
+  "feedback-success",
+  "feedback-warning",
+  "feedback-danger",
+  "feedback-info",
+];
 
 const SHEETS = readdirSync(STYLES).filter((f) => f.endsWith(".css"));
 
@@ -79,8 +85,8 @@ function fillAsText(css: string): string[] {
   const out: string[] = [];
   for (const rule of rules(css)) {
     for (const fill of FILLS) {
-      if (new RegExp(`(^|[;\\s])color:\\s*var\\(--${fill}\\)`).test(rule.body)) {
-        out.push(`${rule.selector} — color: var(--${fill})`);
+      if (new RegExp(`(^|[;\\s])color:\\s*var\\(--color-${fill}\\)`).test(rule.body)) {
+        out.push(`${rule.selector} — color: var(--color-${fill})`);
       }
     }
   }
@@ -92,9 +98,9 @@ function inkOnFill(css: string): string[] {
   const out: string[] = [];
   for (const rule of rules(css)) {
     for (const fill of FILLS) {
-      if (!new RegExp(`color:\\s*var\\(--${fill}-ink\\)`).test(rule.body)) continue;
-      if (new RegExp(`background(-color)?:\\s*var\\(--${fill}\\)`).test(rule.body)) {
-        out.push(`${rule.selector} — var(--${fill}-ink) on var(--${fill})`);
+      if (!new RegExp(`color:\\s*var\\(--color-${fill}-ink\\)`).test(rule.body)) continue;
+      if (new RegExp(`background(-color)?:\\s*var\\(--color-${fill}\\)`).test(rule.body)) {
+        out.push(`${rule.selector} — var(--color-${fill}-ink) on var(--color-${fill})`);
       }
     }
   }
@@ -102,12 +108,13 @@ function inkOnFill(css: string): string[] {
 }
 
 /**
- * A MARK, ONLY. `--text-faint` is about 3:1 against the ground in BOTH themes —
- * #8f8f95 on white is 3.22, #686b70 on the dark ground 3.35 — which is the
- * floor WCAG sets for a NON-TEXT mark and not the 4.5 a word needs.
+ * A MARK, ONLY. `--color-text-muted` is about 3:1 against the ground in BOTH
+ * themes — #8d8d94 on the light sheet is 3.13, #5f5f68 on the dark one 3.01 —
+ * which is the floor WCAG sets for a NON-TEXT mark and not the 4.5 a word
+ * needs.
  *
- * `uilet.css` has said "DECORATION ONLY" at the alias since it was written, and
- * nothing measured it: the rung had decayed onto twenty-six rules. Every grid
+ * The palette has said "DECORATION ONLY" at the token since it was written,
+ * and nothing measured it: the rung had decayed onto twenty-six rules. Every grid
  * column head, every sidebar section name and sub-label, the state bar's facts,
  * a fact's label and its provenance, the properties rail's section heads, the
  * palette's group heads and its own scope footer — the one thing the palette
@@ -115,7 +122,7 @@ function inkOnFill(css: string): string[] {
  * that does not exist" — and the empty states, "No project has been created
  * yet." included. All at three to one, in both themes, at 11px.
  *
- * What is left is ten marks, named here with the reason each is one. Two-sided:
+ * What is left is the marks named here with the reason each is one. Two-sided:
  * a new rule reaching for this rung fails until somebody writes down why it is
  * a mark, and an entry whose rule is gone fails so the list cannot outlive what
  * it excuses.
@@ -128,21 +135,6 @@ describe("the faint rung is decoration", () => {
         "The utility, and both call sites are drawings: `Trace.tsx`'s `└` tree " +
         "branch and `Seat.tsx`'s `→` between the entries of a fallback chain, " +
         'which carries `title="falls back to"` for the meaning.',
-    },
-    {
-      selector: ".rail-lock",
-      why: 'A KeyGlyph with `title="needs you signed in"`. An icon, and the title is the text.',
-    },
-    {
-      selector: ".rail-collapse",
-      why:
-        "An icon-only button — a chevron with an `aria-label`. A UI component " +
-        "takes the 3:1 floor rather than 4.5, it clears it, and `:hover` takes " +
-        "it to `--text`.",
-    },
-    {
-      selector: ".side-twist",
-      why: "The sidebar tree's disclosure chevron: the same icon-only control.",
     },
     {
       selector: ".crumb-sep",
@@ -162,21 +154,23 @@ describe("the faint rung is decoration", () => {
     {
       selector: ".work-nobody",
       why:
-        'The unassigned mark: a PersonGlyph with an `.sr-only` "Unassigned". ' +
-        "Where the name is also drawn it is a `.muted` span of its own, so this " +
-        "rung paints the glyph and nothing else.",
+        'The unassigned mark: a UserGlyph with an `.sr-only` "Unassigned". ' +
+        "Where the name is also drawn it is a `.muted` span BESIDE the square, " +
+        "outside it, so this rung paints the glyph and nothing else.",
     },
-    { selector: ".work-hist-row > svg", why: "The history row's icon — an SVG, never a word." },
     {
-      selector: ".pulse-glyph",
-      why: "The pulse row's leading icon, likewise: a drawing beside the sentence that says what happened.",
+      selector: "span.list-position-step",
+      why:
+        "The task page's previous or next chevron where there is no neighbour to " +
+        "step to — an `aria-hidden` glyph, drawn so the count between the two keeps " +
+        "its place; the live one is an anchor on the secondary rung.",
     },
   ];
 
   const faint = SHEETS.flatMap((name) => {
     const css = readFileSync(join(STYLES, name), "utf8");
     return rules(css)
-      .filter((r) => /(^|[;\s])color:\s*var\(--text-faint\)/.test(r.body))
+      .filter((r) => /(^|[;\s])color:\s*var\(--color-text-muted\)/.test(r.body))
       .map((r) => r.selector);
   });
 
@@ -184,7 +178,7 @@ describe("the faint rung is decoration", () => {
     const excused = new Set(MARKS.map((m) => m.selector));
     expect(
       faint.filter((sel) => !excused.has(sel)),
-      "this rung is about 3:1 in both themes — a word takes `--text-muted`",
+      "this rung is about 3:1 in both themes — a word takes `--color-text-tertiary`",
     ).toEqual([]);
   });
 
@@ -241,16 +235,20 @@ describe("a fill is not an ink", () => {
   // A VACUITY FLOOR. A broken regex finds nothing, which is indistinguishable
   // from a clean tree by either assertion above.
   test("the scan reads a rule at all, and only the wrong ones", () => {
-    expect(fillAsText(".a { color: var(--accent); }")).toHaveLength(1);
-    expect(fillAsText(".a { color: var(--accent-ink); }")).toHaveLength(0);
-    expect(fillAsText(".a { border-color: var(--accent); }")).toHaveLength(0);
-    expect(fillAsText(".a { accent-color: var(--accent); }")).toHaveLength(0);
-    expect(fillAsText(".a { background: var(--caution); }")).toHaveLength(0);
-    expect(inkOnFill(".a { background: var(--caution); color: var(--caution-ink); }")).toHaveLength(
-      1,
-    );
+    expect(fillAsText(".a { color: var(--color-brand-accent); }")).toHaveLength(1);
+    expect(fillAsText(".a { color: var(--color-brand-accent-ink); }")).toHaveLength(0);
+    expect(fillAsText(".a { border-color: var(--color-brand-accent); }")).toHaveLength(0);
+    expect(fillAsText(".a { accent-color: var(--color-brand-accent); }")).toHaveLength(0);
+    expect(fillAsText(".a { background: var(--color-feedback-warning); }")).toHaveLength(0);
     expect(
-      inkOnFill(".a { background: var(--caution-soft); color: var(--caution-ink); }"),
+      inkOnFill(
+        ".a { background: var(--color-feedback-warning); color: var(--color-feedback-warning-ink); }",
+      ),
+    ).toHaveLength(1);
+    expect(
+      inkOnFill(
+        ".a { background: var(--color-feedback-warning-soft); color: var(--color-feedback-warning-ink); }",
+      ),
     ).toHaveLength(0);
     // AND IT READS THE SHEETS, not an empty directory: a resolve that returned
     // nothing would pass both rules above on no input at all.

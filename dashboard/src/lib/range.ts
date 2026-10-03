@@ -28,7 +28,7 @@
 
 import { useMemo } from "react";
 import { useParam } from "~/app/router.tsx";
-import { fmtMinute, parseUTC } from "~/lib/format.ts";
+import { dateFormatter, fmtMinute, parseUTC } from "~/lib/format.ts";
 import { useClockReading } from "~/lib/clock.ts";
 
 /** The windows every time-ranged screen offers, in the order a control reads. */
@@ -66,7 +66,19 @@ export const RANGE_LABEL: Record<Range, string> = {
 export interface Interval {
   from: number;
   to: number;
+  /**
+   * The COMPANY'S DAY SO FAR, from its first instant to now — named rather
+   * than two instants, so the URL says `window=today` and the window moves
+   * with the clock the way a named duration does. Set only by [todayWindow].
+   *
+   * Its `to` is the instant it was cut at and NOT an edge: the day so far
+   * ends whenever it is asked, which is the instant [windowEdges] is handed.
+   */
+  today?: true;
 }
+
+/** `window=` for the company's day so far. See [Interval.today]. */
+export const TODAY = "today";
 
 /** What `window=` means: one of the closed set, or an interval a reader named. */
 export type Window = Range | Interval;
@@ -91,6 +103,28 @@ export interface Offer {
   fallback: Range;
   /** Which bucket widths this screen's own question accepts. See [bucketFor]. */
   buckets?: readonly Bucket[];
+  /**
+   * Whether `today` is one of this screen's windows — the company's day so
+   * far, cut at midnight on [zone].
+   */
+  today?: boolean;
+  /**
+   * Whether a custom window is named in WHOLE COMPANY DAYS on [zone] rather
+   * than to the minute: the picker takes two dates, both inclusive, and the
+   * window runs from the first instant of the first to the first instant
+   * after the last. For a screen whose question is company days — spend is
+   * read from the usage domain, whose smallest unit is one — a picker that
+   * took minutes would offer a precision the answer cannot have, and a reader
+   * who chose 14:00 would be shown the whole day with nothing saying why.
+   */
+  customDays?: boolean;
+  /**
+   * The company's zone (`org.timezone`), which is where its day begins. A
+   * screen that offers `today` passes it; before the org arrives the day is
+   * cut in UTC, which is a label on one screen for one render rather than a
+   * reason to draw nothing.
+   */
+  zone?: string;
 }
 
 /**
@@ -104,9 +138,10 @@ export interface Offer {
  * was: the engine's windows are half-open, so `to <= from` names no rows at
  * all and the screen would render the engine's refusal rather than its data.
  */
-export function parseWindow(raw: string, offer: Offer): Window {
+export function parseWindow(raw: string, offer: Offer, now: number = Date.now()): Window {
   const value = raw.trim();
   if ((offer.ranges as readonly string[]).includes(value)) return value as Range;
+  if (offer.today && value === TODAY) return todayWindow(now, offer.zone);
   if (offer.custom) {
     const cut = value.indexOf("/");
     if (cut > 0) {
@@ -123,12 +158,14 @@ export function parseWindow(raw: string, offer: Offer): Window {
 /** A window back as the URL spells it. */
 export function windowParam(w: Window): string {
   if (isRange(w)) return w;
+  if (w.today) return TODAY;
   return `${new Date(w.from).toISOString()}/${new Date(w.to).toISOString()}`;
 }
 
 /** What to call a window in a heading. */
 export function windowLabel(w: Window): string {
   if (isRange(w)) return RANGE_LABEL[w];
+  if (w.today) return "Today";
   // TO THE MINUTE, because that is the resolution the picker has: the seconds
   // are always `:00` and are fourteen characters of noise in a label that has
   // to sit in a page bar beside everything else.
@@ -209,7 +246,17 @@ export const BUCKET_MS: Record<Bucket, number> = {
  */
 export function bucketFor(w: Window, offer: readonly Bucket[] = BUCKETS): Bucket {
   const span = spanOf(w);
-  const want: Bucket = span <= RANGE_MS["1h"] ? "minute" : span <= RANGE_MS["1d"] ? "hour" : "day";
+  // TODAY IS A DAY HOWEVER MUCH OF IT HAS PASSED: its chart draws hours from
+  // the first one, rather than minutes until one o'clock and hours after —
+  // a bucket that changed under the reader mid-morning.
+  const want: Bucket =
+    !isRange(w) && w.today
+      ? "hour"
+      : span <= RANGE_MS["1h"]
+        ? "minute"
+        : span <= RANGE_MS["1d"]
+          ? "hour"
+          : "day";
   const from = BUCKETS.indexOf(want);
   // The first offered bucket at or after the one the window wants, and the
   // coarsest offered otherwise — never finer than the question accepts,
@@ -320,14 +367,24 @@ export interface TimeRange extends WindowChoice {
  * lengths compares two numbers that do not answer the same question, which is
  * how a 28-day February outperforms every other month in every dashboard that
  * gets it wrong.
+ *
+ * `days` IS A SCREEN OF WHOLE COMPANY DAYS, which aligns to neither a bucket
+ * nor the clock but to the company's midnights — see [dayEdges].
  */
 export function windowEdges(
   w: Window,
   now: number,
   step = 0,
+  days?: { zone: string | undefined },
 ): Pick<TimeRange, "since" | "until" | "previous"> {
-  const span = spanOf(w);
-  const edge = isRange(w) ? (step > 0 ? Math.ceil(now / step) * step : now) : w.to;
+  if (days) return dayEdges(w, now, days.zone);
+  // A NAMED WINDOW MOVES WITH THE CLOCK — a duration, and today — and an
+  // interval a reader typed does not.
+  const moving = isRange(w) || w.today === true;
+  const edge = moving ? (step > 0 ? Math.ceil(now / step) * step : now) : w.to;
+  // TODAY STARTS WHERE THE COMPANY'S DAY DID, whatever the clock says now, so
+  // its span is measured from that edge rather than carried in the value.
+  const span = !isRange(w) && w.today ? edge - w.from : spanOf(w);
   const since = new Date(edge - span);
   const before = new Date(edge - span * 2);
   return {
@@ -338,6 +395,57 @@ export function windowEdges(
 }
 
 /**
+/**
+ * The edges of a window on a screen of WHOLE COMPANY DAYS (`Offer.customDays`).
+ *
+ * EVERY EDGE IS A COMPANY MIDNIGHT, because that is what the question is: the
+ * engine answers `days=30` as the thirty company days ending TODAY on the
+ * company's clock, so the window runs from the first instant of the first of
+ * them to the first instant after today. Aligning a named range to a UTC day
+ * bucket instead named a different window — in Berlin, for twenty-two hours of
+ * every twenty-four, an edge at 02:00 TOMORROW, so thirty-one company days
+ * ending tomorrow — and the custom dialog, which is prefilled from these
+ * edges, then offered to ask for that.
+ *
+ * The comparison window is the SAME NUMBER OF DAYS ending where this one
+ * starts — counted in days rather than milliseconds, since a window across a
+ * clock change is a day of 23 or 25 hours and is still one day.
+ */
+function dayEdges(
+  w: Window,
+  now: number,
+  zone: string | undefined,
+): Pick<TimeRange, "since" | "until" | "previous"> {
+  // The first and last company day, both inclusive.
+  let first: string;
+  let last: string;
+  if (isRange(w)) {
+    last = dayLabelIn(now, zone);
+    first = shiftDay(last, 1 - Math.max(1, Math.round(RANGE_MS[w] / 86_400_000)));
+  } else {
+    const covered = companyDays(w.today ? { from: w.from, to: now } : w, zone);
+    first = covered.since;
+    last = covered.until;
+  }
+  const count = Math.round((Date.parse(last) - Date.parse(first)) / 86_400_000) + 1;
+  const at = (label: string) =>
+    new Date(dayStartIn(label, zone) ?? Date.parse(label)).toISOString();
+  return {
+    since: at(first),
+    until: at(shiftDay(last, 1)),
+    previous: { since: at(shiftDay(first, -count)), until: at(first) },
+  };
+}
+
+/** A company date `n` days after `label` (before it for a negative `n`). */
+function shiftDay(label: string, n: number): string {
+  // CALENDAR ARITHMETIC ON THE LABEL, in UTC where every day is 24 hours: a
+  // date is not an instant, and stepping an instant by 86,400,000 across a
+  // clock change lands on the wrong side of a midnight.
+  return new Date(Date.parse(`${label}T00:00:00Z`) + n * 86_400_000).toISOString().slice(0, 10);
+}
+
+/**
  * `window=`, as this screen can show it, and the setter that moves it.
  *
  * THE CLOCK DOES NOT ENTER IT, so its identity changes when the reader picks
@@ -345,30 +453,38 @@ export function windowEdges(
  * computes its edges when it asks (`useQuery`'s `window` option), so its
  * newest row is the newest row as of the ask, and a second passing between
  * two asks changes no question and redraws nothing.
+ *
+ * ONE EXCEPTION, and it is a day long: `today` begins at the company's
+ * midnight, which is an instant, so the window is re-cut when the company's
+ * day turns — read off the clock as that midnight (`useClockReading`), which
+ * moves once a day — and at no other tick. Cut once and held, a list left
+ * open across midnight would go on asking for yesterday as "today".
  */
 export function useWindow(offer: Offer): WindowChoice {
   const [raw, setRaw] = useParam("window", offer.fallback, "section");
-  const { ranges, custom, fallback, buckets } = offer;
+  const { ranges, custom, fallback, buckets, today, zone, customDays } = offer;
   // Rebuilt from the fields rather than held by identity: every caller writes
   // its offer inline, so a new object arrives on every render and an offer in
   // the dependency list would rebuild the window on every one of them.
   const settled = useMemo(
-    () => ({ ranges, custom, fallback, buckets }),
-    [ranges, custom, fallback, buckets],
+    () => ({ ranges, custom, fallback, buckets, today, zone, customDays }),
+    [ranges, custom, fallback, buckets, today, zone, customDays],
   );
+  const cutsToday = settled.today === true && raw.trim() === TODAY;
+  const midnight = useClockReading((now) => (cutsToday ? companyMidnight(now, settled.zone) : 0));
   // THE WINDOW AS A STRING is what the memo holds, because `parseWindow`
   // returns a fresh object for an interval and a dependency compared by
   // identity would rebuild on every render.
-  const key = windowParam(parseWindow(raw, settled));
+  const key = windowParam(parseWindow(raw, settled, midnight));
   return useMemo(() => {
-    const window = parseWindow(key, settled);
+    const window = parseWindow(key, settled, midnight);
     return {
       window,
       bucket: bucketFor(window, settled.buckets),
       offer: settled,
       set: (next: Window) => setRaw(windowParam(next)),
     };
-  }, [key, settled, setRaw]);
+  }, [key, settled, midnight, setRaw]);
 }
 
 /**
@@ -378,7 +494,8 @@ export function useWindow(offer: Offer): WindowChoice {
  * edges change once per column, and a question keyed on them is asked again
  * when a column rolls rather than when a second passes. A list that asks the
  * engine has no column to roll; it takes [useWindow] and computes its edges
- * when it asks.
+ * when it asks. On a screen of WHOLE COMPANY DAYS (`Offer.customDays`) the
+ * column is a company day, so the edges move at the company's midnight.
  *
  * AND IT READS THE CLOCK AS THAT EDGE, not as the second (`useClockReading`):
  * a screen that held `now` to hand in here rendered once a second — its grid,
@@ -387,14 +504,19 @@ export function useWindow(offer: Offer): WindowChoice {
  *
  * AN INTERVAL'S ANCHOR IS NOTHING: a reader who named two instants asked for
  * those instants, so the tick that advances every other clock on the screen
- * must not give this one new edges.
+ * must not give this one new edges. `today` is not one: it is the company's
+ * day SO FAR, so its top edge moves with the clock as a named range's does.
  */
 export function useTimeRange(offer: Offer): TimeRange {
   const choice = useWindow(offer);
-  const step = stepOf(choice.bucket);
-  const ranged = isRange(choice.window);
-  const edge = useClockReading((now) => (ranged ? Math.ceil(now / step) * step : 0));
-  const { since, until, previous } = windowEdges(choice.window, edge, step);
+  const { window, bucket, offer: settled } = choice;
+  const step = stepOf(bucket);
+  const days = settled.customDays ? { zone: settled.zone } : undefined;
+  const moving = isRange(window) || window.today === true;
+  const edge = useClockReading((now) =>
+    !moving ? 0 : days ? companyMidnight(now, days.zone) : Math.ceil(now / step) * step,
+  );
+  const { since, until, previous } = windowEdges(window, edge, step, days);
   // `previous.until` IS `since`, so these three strings are every instant the
   // value carries, and the memo holds on exactly them.
   const before = previous.since;
@@ -477,3 +599,133 @@ export function barsOver(
  * can place.
  */
 export const MAX_BARS = 90;
+
+/**
+ * The first instant of the company's day that `now` falls in, on the
+ * company's own clock (`org.timezone`, ADR-0018).
+ *
+ * THE FIRST INSTANT OF THE DATE, found rather than assumed to be local
+ * midnight: in a zone that moves its clock across midnight the day does not
+ * begin at 00:00 — Santiago springs from 00:00 straight to 01:00, so 00:00
+ * does not exist, and Amman falls back from 01:00 to 00:00, so it exists
+ * twice and the day began at the first. `time.Date` gets both wrong in the
+ * engine's own calendar for the same reason (`internal/period`), and a
+ * "Today" that disagreed with the engine's day by an hour would count a
+ * turn the engine charged to yesterday.
+ *
+ * So the date `now` falls on is read in the zone, and the earliest instant
+ * that reads as the same date is searched for across the day before it: the
+ * date an instant falls on only moves forward as the instant does, which is
+ * what a binary search needs. A zone this runtime cannot format in falls back
+ * to UTC rather than throwing on a screen that only wanted a label.
+ */
+export function companyMidnight(now: number, zone: string | undefined): number {
+  const day = dateIn(zone);
+  const target = day(now);
+  // A DAY IS AT MOST 25 HOURS on any clock, so its start is inside the 26
+  // hours before `now`.
+  let lo = now - 26 * 3_600_000;
+  let hi = now;
+  while (hi - lo > 1) {
+    const mid = Math.floor((lo + hi) / 2);
+    if (day(mid) < target) lo = mid;
+    else hi = mid;
+  }
+  return hi;
+}
+
+/** Today on the company's clock, from its first instant to `now`. */
+export function todayWindow(now: number, zone: string | undefined): Interval {
+  return { from: companyMidnight(now, zone), to: now, today: true };
+}
+
+/** The company date (`YYYY-MM-DD`) an instant falls on in `zone`. */
+export function dayLabelIn(at: number, zone: string | undefined): string {
+  return dateIn(zone)(at);
+}
+
+/**
+ * The first instant of the company date `label` in `zone`, or null for a
+ * value that is not a date.
+ *
+ * FOUND, NOT ASSUMED, for the reason [companyMidnight] gives: noon UTC of the
+ * date is within a day of noon wherever the zone is (every offset is under
+ * fifteen hours), so it lands on the date itself or on a neighbour, one step
+ * away. Stepping onto the date and taking its company midnight is then exact
+ * in the zones that move their clocks across midnight too.
+ */
+export function dayStartIn(label: string, zone: string | undefined): number | null {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(label.trim());
+  if (!m) return null;
+  const day = dateIn(zone);
+  let at = Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3]), 12);
+  if (Number.isNaN(at) || new Date(at).toISOString().slice(0, 10) !== label.trim()) return null;
+  for (let step = 0; step < 2 && day(at) !== label.trim(); step++) {
+    at += day(at) < label.trim() ? 86_400_000 : -86_400_000;
+  }
+  if (day(at) !== label.trim()) return null;
+  return companyMidnight(at, zone);
+}
+
+/**
+ * The company days an interval covers, both inclusive: the date its first
+ * instant falls on and the date its last instant does. The end is EXCLUSIVE,
+ * so the last instant is one millisecond before it — an interval ending at a
+ * midnight covers the day before and not the day it ends on.
+ */
+export function companyDays(
+  w: Interval,
+  zone: string | undefined,
+): { since: string; until: string } {
+  const day = dateIn(zone);
+  return { since: day(w.from), until: day(Math.max(w.from, w.to - 1)) };
+}
+
+/** Two company dates as a heading says them: one date, or the first and last. */
+export function daysLabel(days: { since: string; until: string }): string {
+  return days.since === days.until ? days.since : `${days.since} – ${days.until}`;
+}
+
+/**
+ * The interval two company dates name, both inclusive — from the first
+ * instant of `since` to the first instant after `until` — or null when either
+ * is not a date or the second is before the first.
+ */
+export function daysInterval(
+  since: string,
+  until: string,
+  zone: string | undefined,
+): Interval | null {
+  const from = dayStartIn(since, zone);
+  const last = dayStartIn(until, zone);
+  if (from === null || last === null || last < from) return null;
+  // A DAY IS AT MOST 25 HOURS, so 26 past the last day's start is inside the
+  // day after it, whose midnight is where this window ends.
+  return { from, to: companyMidnight(last + 26 * 3_600_000, zone) };
+}
+
+/**
+ * A function reading the `YYYY-MM-DD` an instant falls on in `zone`.
+ *
+ * THROUGH `lib/format.ts`'s kept formatters, like every other date in the
+ * product: [companyMidnight] reads a date some twenty-seven times per call and
+ * a chart over company days asks it once a tick, so a formatter built per
+ * call was the construction cost `dateFormatter` exists to pay once.
+ */
+function dateIn(zone: string | undefined): (at: number) => string {
+  let format: Intl.DateTimeFormat;
+  try {
+    format = dateFormatter("en-CA", dateOptions(zone || "UTC"));
+  } catch {
+    // A ZONE THIS RUNTIME CANNOT FORMAT IN is never kept by `dateFormatter`,
+    // so it throws here every time and is read in UTC every time.
+    format = dateFormatter("en-CA", dateOptions("UTC"));
+  }
+  // `en-CA` writes a date as `YYYY-MM-DD`, which sorts as the date does.
+  return (at) => format.format(at);
+}
+
+/** The options [dateIn] formats with, in one order so they key one formatter. */
+function dateOptions(timeZone: string): Intl.DateTimeFormatOptions {
+  return { timeZone, year: "numeric", month: "2-digit", day: "2-digit" };
+}

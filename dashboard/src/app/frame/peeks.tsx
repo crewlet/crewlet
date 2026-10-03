@@ -34,22 +34,28 @@
  */
 
 import type { ObjectKind, ObjectRef } from "./objects.ts";
-import { ItemPeek } from "~/routes/work/WorkItem.tsx";
-import { ProjectPeek } from "~/routes/work/Project.tsx";
-import { SeatPeek } from "~/routes/company/Seat.tsx";
-import { UnitPeek } from "~/routes/company/Company.tsx";
-import { TurnPeek } from "~/routes/activity/Turn.tsx";
-import { RunPeek } from "~/routes/activity/Runs.tsx";
-import { ChannelPeek } from "~/routes/activity/Conversations.tsx";
-import { EventPeek } from "~/routes/activity/Event.tsx";
-import { SchedulePeek } from "~/routes/activity/Schedules.tsx";
-import { NodePeek } from "~/routes/admin/Fleet.tsx";
-import { ToolPeek } from "~/routes/admin/Tools.tsx";
-import { IntegrationPeek } from "~/routes/admin/Integrations.tsx";
-import { CredentialPeek } from "~/routes/admin/Secrets.tsx";
-import { RevisionPeek } from "~/routes/admin/Config.tsx";
-import { PagePeek } from "~/routes/knowledge/Pages.tsx";
-import { ContainerPeek } from "~/routes/knowledge/Knowledge.tsx";
+import { lazyScreen } from "../lazyScreen.ts";
+
+// EACH PEEK LIVES IN ITS WORKSPACE'S CHUNK, beside the screen it previews, and
+// is fetched with it: a peek imported here statically would pull every
+// workspace back into the entry chunk through the frame. `PeekHost` draws
+// the body inside a suspense and an error boundary of its own.
+const ItemPeek = lazyScreen("work", (m) => m.ItemPeek);
+const ProjectPeek = lazyScreen("work", (m) => m.ProjectPeek);
+const SeatPeek = lazyScreen("agents", (m) => m.SeatPeek);
+const UnitPeek = lazyScreen("agents", (m) => m.UnitPeek);
+const SchedulePeek = lazyScreen("agents", (m) => m.SchedulePeek);
+const TurnPeek = lazyScreen("live", (m) => m.TurnPeek);
+const RunPeek = lazyScreen("live", (m) => m.RunPeek);
+const ChannelPeek = lazyScreen("live", (m) => m.ChannelPeek);
+const EventPeek = lazyScreen("live", (m) => m.EventPeek);
+const NodePeek = lazyScreen("settings", (m) => m.NodePeek);
+const ToolPeek = lazyScreen("settings", (m) => m.ToolPeek);
+const IntegrationPeek = lazyScreen("settings", (m) => m.IntegrationPeek);
+const CredentialPeek = lazyScreen("settings", (m) => m.CredentialPeek);
+const RevisionPeek = lazyScreen("settings", (m) => m.RevisionPeek);
+const PagePeek = lazyScreen("knowledge", (m) => m.PagePeek);
+const ContainerPeek = lazyScreen("knowledge", (m) => m.ContainerPeek);
 
 /**
  * What every peek is handed.

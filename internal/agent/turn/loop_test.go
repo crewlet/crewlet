@@ -1227,3 +1227,50 @@ func TestAQuietRoundDoesNotUnsayAnEarlierWrite(t *testing.T) {
 		t.Error("round two only read, and the turn forgot that round one posted")
 	}
 }
+
+// AN ANSWER THAT OWES A CHAT POST IS NOT DISCHARGED ON THE TRACKER.
+//
+// A seat asked a decision on a work item and promised to report the outcome
+// in a chat channel; the answer wakes it from the TRACKER, owing the chat
+// surface. A round that only comments on the item — a real delivery, on the
+// surface the wake came from — is sent back rather than closed, and the round
+// that posts on the owed surface ends the turn. Without this the person who
+// answered was told the outcome would be posted, and it never was.
+func TestAnOwedChatPostIsNotDischargedByATrackerComment(t *testing.T) {
+	t.Parallel()
+	surface := turn.Surface{
+		Catalogue: []string{"comment_on_work_item", "slack_post"},
+		Deliveries: map[string]string{
+			"comment_on_work_item": "work",
+			"slack_post":           "slack",
+		},
+	}
+	commented := turn.Work{
+		Outcome: turn.OutcomeDelivered, Summary: "noted the choice on the item",
+		Text: "noted", Calls: []ledger.Call{{Name: "comment_on_work_item"}},
+	}
+	posted := turn.Work{
+		Outcome: turn.OutcomeDelivered, Summary: "posted the outcome",
+		Text: "posted", Calls: []ledger.Call{{Name: "slack_post"}},
+	}
+	f := &fake{
+		works:    []turn.Work{commented, posted},
+		surfaces: []turn.Surface{surface},
+		reviews:  []turn.Review{{Decision: phase.Done}},
+	}
+	res, err := turn.Run(context.Background(), f, settings(),
+		turn.Input{RunID: "t1", Reply: turn.ToolReply("slack")})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if f.workRounds != 2 {
+		t.Fatalf("the executor ran %d round(s), want two — the tracker-only "+
+			"round closed a turn that owed a chat post", f.workRounds)
+	}
+	if !strings.Contains(at(f.notesSeen, 2), "slack") {
+		t.Errorf("the correction does not name the owed surface: %q", at(f.notesSeen, 2))
+	}
+	if res.Decision != phase.Done || res.Artifact != "posted" {
+		t.Errorf("the turn ended %s with %q, want done on the post", res.Decision, res.Artifact)
+	}
+}

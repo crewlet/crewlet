@@ -303,6 +303,23 @@ export function currentYear(now: number): string {
 
 let lastYear = { now: Number.NaN, zone: "", year: "" };
 
+/**
+ * "Sep 9", from a COMPANY DATE LABEL (`2026-09-09`) — a day the engine cut on
+ * the company's clock, drawn as that date rather than re-derived from an
+ * instant on this browser's: read at noon UTC and formatted in UTC, so no
+ * reader's zone moves it to the day before. The label as it came where it is
+ * not a date.
+ *
+ * ONE COPY. Home's completed chart, its projects' target dates and a seat's
+ * turns-per-day chart each wrote this privately, which is how three charts
+ * come to label one day three ways.
+ */
+export function companyDateLabel(date: string): string {
+  const at = Date.parse(`${date}T12:00:00Z`);
+  if (!Number.isFinite(at)) return date;
+  return dateFormatter(undefined, { month: "short", day: "numeric", timeZone: "UTC" }).format(at);
+}
+
 /** Which calendar year an instant falls in, IN THE VIEWER'S ZONE. */
 function calendarYear(at: Date): string {
   return dateFormatter("en-US", { year: "numeric", timeZone: zone() }).format(at);
@@ -365,17 +382,62 @@ export function inTime(ts: string | null | undefined, now: number): string {
   return fmtDate(ts);
 }
 
-/** A duration in ms as the shortest honest string. */
+/**
+ * "in 1h 20m" — [inTime] with a second unit, for instants that are read
+ * against EACH OTHER in a series.
+ *
+ * `inTime` rounds to one unit, which is the right answer for one instant a
+ * reader holds in their head and the wrong one for a list whose rows are
+ * compared: a schedule firing every twenty minutes read "in 1h", "in 1h" for
+ * the fires at 20:40 and 21:00, on the one list whose whole point is the
+ * spacing between its rows. Two units tell apart any two instants a minute or
+ * more apart inside a day. The terminus is [inTime]'s, for the reason given
+ * there.
+ */
+export function inTimeExact(ts: string | null | undefined, now: number): string {
+  const at = tsKey(ts);
+  if (!at) return EMPTY_VALUE;
+  const secs = Math.round((at - now) / 1000);
+  if (secs < 60 * 60) return inTime(ts, now);
+  const mins = Math.floor(secs / 60);
+  const hours = Math.floor(mins / 60);
+  if (hours < 24) return mins % 60 ? `in ${hours}h ${mins % 60}m` : `in ${hours}h`;
+  const days = Math.floor(hours / 24);
+  if (days < 30) return hours % 24 ? `in ${days}d ${hours % 24}h` : `in ${days}d`;
+  return fmtDate(ts);
+}
+
+/**
+ * A duration in ms as the shortest honest string.
+ *
+ * UNIT LETTERS WITH NO SPACE AT EVERY MAGNITUDE — "340ms", "1.2s", "45s",
+ * "1m 2s", "2h 3m" — which is how [fmtElapsed] and a waterfall's axis
+ * (`tickLabel`) write one too. This wrote "340 ms" and "1.2 s" under a minute
+ * and "1m 2s" above it, so a trace's duration column and the ruler over it
+ * read as three conventions on one screen.
+ *
+ * NO ZERO FIELD — "30m", "24h", never "30m 0s" — because a finished span has
+ * no second hand to keep steady, and "inside the 30m 0s window" read as a
+ * measurement to the second of a setting nobody wrote that way. And ONE
+ * ROUNDING PER MAGNITUDE, split afterwards, so 59.6s is "1m" and 1h 59m 45s is
+ * "2h" rather than "60s" and "1h 60m" — the carry `attention.ts` documents.
+ * The engine's alarm sentences spell a duration by the same rule
+ * (`internal/statelog`'s `spoken`), so a figure and the sentence beside it
+ * agree.
+ */
 export function fmtDuration(ms: number | null | undefined): string {
   if (ms == null || !Number.isFinite(ms) || ms < 0) return EMPTY_VALUE;
-  if (ms < 1000) return `${Math.round(ms)} ms`;
-  const s = ms / 1000;
-  if (s < 60) return `${s < 10 ? s.toFixed(1) : Math.round(s)} s`;
-  const m = Math.floor(s / 60);
-  const rem = Math.round(s % 60);
-  if (m < 60) return `${m}m ${rem}s`;
-  const h = Math.floor(m / 60);
-  return `${h}h ${m % 60}m`;
+  const pair = (a: number, au: string, b: number, bu: string) =>
+    b === 0 ? `${a}${au}` : `${a}${au} ${b}${bu}`;
+  if (Math.round(ms) < 1000) return `${Math.round(ms)}ms`;
+  const tenths = Math.round(ms / 100);
+  if (tenths < 100)
+    return `${Number.isInteger(tenths / 10) ? tenths / 10 : (tenths / 10).toFixed(1)}s`;
+  const secs = Math.round(ms / 1000);
+  if (secs < 60) return `${secs}s`;
+  if (secs < 3600) return pair(Math.floor(secs / 60), "m", secs % 60, "s");
+  const mins = Math.round(ms / 60_000);
+  return pair(Math.floor(mins / 60), "h", mins % 60, "m");
 }
 
 /**
@@ -412,39 +474,51 @@ export function elapsedMs(from?: string | null, to?: string | null): number | nu
 // ---------------------------------------------------------------------------
 
 /**
- * A `Date` as the `YYYY-MM-DD` it falls on IN THE BROWSER'S OWN CALENDAR.
+ * The `YYYY-MM-DD` an instant falls on IN THE READER'S ZONE — the one
+ * [zone] names, which is the browser's until the reader picks another.
  *
- * ONE DEFINITION. It was written out twice, byte for byte, in `lib/work.ts`
- * and `lib/timeline.ts` — the calendar's cell keys and the timeline axis's —
- * which is the shape this repository keeps paying for (`textcut`, `whsec`,
+ * ONE DEFINITION. The calendar's cell keys (`lib/work.ts`) and the timeline
+ * axis's (`lib/timeline.ts`) both come from here, which is the shape this
+ * repository keeps paying for when it is not (`textcut`, `whsec`,
  * `httpjson`): two copies of one rule, agreeing today, and nothing that
  * notices the day one of them changes. A bar and a calendar cell disagreeing
  * about which day a task is due is a silent wrong answer, not a broken screen.
  *
- * BROWSER-LOCAL ON PURPOSE, and it is the one thing in this file that does not
- * go through [zone]. This is a BUCKETING key, not a spelling: `calendarWeeks`
- * builds its cells with `new Date(y, m, d)` and `timeline`'s axis steps days
- * with `setDate`, both of which are the browser's calendar, and a key derived
- * in a different one from the cells it is matched against puts a task in a
- * cell whose own label disagrees with it. `lib/work.ts`'s `gridRange` says the
- * same thing from the other end — the engine resolves a bare date in the
- * COMPANY's zone and these cells bucket in the reader's, which the grid's
- * bounds absorb.
- *
- * It is not a second timezone today: nothing in the product calls `setZone`,
- * there is no settings route and `crewlet_timezone` is written nowhere, so
- * [zone] IS the browser's zone for every reader who can exist. THE DAY A ZONE
- * PICKER SHIPS that stops being true, and the fix is not this function alone —
- * the cell arithmetic has to move into the chosen zone with it, in one change:
- * `calendarWeeks`, `gridRange`, `dayKey`, and `dayOf`/`shiftDay`/`daysBetween`
- * on the timeline. The machinery is already here, in [fromWall]'s two-pass
- * offset resolution.
+ * THE SAME ZONE EVERY TIMESTAMP IS DRAWN IN. It used to be the browser's own
+ * calendar (`getFullYear`/`getDate`) while every spelling went through
+ * [zone], which was harmless only while nothing could set a zone: once the
+ * preference had a control, a reader in Berlin who chose `Asia/Tokyo` saw a
+ * task stamped "Sep 23" filed in the cell for the 22nd.
  */
-export function browserDay(date: Date): string {
-  const y = date.getFullYear();
-  const m = String(date.getMonth() + 1).padStart(2, "0");
-  const d = String(date.getDate()).padStart(2, "0");
-  return `${y}-${m}-${d}`;
+export function readerDay(at: Date | number): string {
+  const p = wallParts(typeof at === "number" ? at : at.getTime(), zone());
+  return `${p.year}-${p.month}-${p.day}`;
+}
+
+/*
+ * A DAY KEY IS A CIVIL DATE, and arithmetic over one is zone-free. Only the
+ * step from an INSTANT to a key needs a zone ([readerDay]); stepping a key by
+ * days, counting days between two, or laying a month out on a grid is
+ * calendar arithmetic, done here at UTC midnight where no day is 23 or 25
+ * hours long and no reader's zone can move a cell. The browser's own `Date`
+ * setters would bring the browser's DST back into it.
+ */
+
+/** A `YYYY-MM-DD` key as the UTC midnight that starts it, or null. */
+export function civilAt(key: string): number | null {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(key);
+  if (!m) return null;
+  const at = Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3]));
+  return Number.isNaN(at) ? null : at;
+}
+
+/** The civil `YYYY-MM-DD` of a UTC-midnight instant — [civilAt]'s inverse. */
+export function civilKey(at: number): string {
+  const d = new Date(at);
+  const y = String(d.getUTCFullYear()).padStart(4, "0");
+  const m = String(d.getUTCMonth() + 1).padStart(2, "0");
+  const day = String(d.getUTCDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
 }
 
 // ---------------------------------------------------------------------------
@@ -462,10 +536,15 @@ export function fmtCount(n: number | null | undefined): string {
   if (n == null || !Number.isFinite(n)) return EMPTY_VALUE;
   const abs = Math.abs(n);
   if (abs < 10_000) return grouped(n);
-  if (abs < 1_000_000) return `${(n / 1000).toFixed(abs < 100_000 ? 1 : 0)}k`;
-  if (abs < 1_000_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
-  return `${(n / 1_000_000_000).toFixed(2)}B`;
+  if (abs < 1_000_000) return `${whole((n / 1000).toFixed(abs < 100_000 ? 1 : 0))}k`;
+  if (abs < 1_000_000_000) return `${whole((n / 1_000_000).toFixed(1))}M`;
+  return `${whole((n / 1_000_000_000).toFixed(2))}B`;
 }
+
+/** A shortened figure that is whole at its precision says so: `60M`, not
+ *  `60.0M`. The `.0` was a digit carrying nothing, on the ceilings a founder
+ *  writes as round numbers above all ("60.0M/day and 900.0M/month"). */
+const whole = (fixed: string) => fixed.replace(/\.0+$/, "");
 
 /** Always the exact figure, grouped. For a cell a reader is comparing. */
 export function fmtExact(n: number | null | undefined): string {
@@ -476,6 +555,17 @@ export function fmtPct(part: number, whole: number, digits = 0): string {
   if (!whole) return EMPTY_VALUE;
   return `${((part / whole) * 100).toFixed(digits)}%`;
 }
+
+/**
+ * How many UTF-8 BYTES a string takes — the unit every engine text cap is
+ * counted in. `length` counts UTF-16 code units, which agree with it only for
+ * ASCII: a title in Japanese reaches a 256-byte cap at about 85 characters.
+ */
+export function utf8Bytes(s: string): number {
+  return encoder.encode(s).length;
+}
+
+const encoder = new TextEncoder();
 
 export function fmtBytes(n: number | null | undefined): string {
   if (n == null || !Number.isFinite(n)) return EMPTY_VALUE;
@@ -514,6 +604,25 @@ export function splitConversationKey(key: string): { source: string; local: stri
   const idx = (key ?? "").indexOf(":");
   if (idx < 0) return { source: "", local: key ?? "" };
   return { source: key.slice(0, idx), local: key.slice(idx + 1) };
+}
+
+/** A uuid anywhere inside an identifier. */
+const UUID_IN = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi;
+
+/**
+ * A conversation key as a row prints it: every uuid inside it cut to its first
+ * eight characters — `work:task:4d631f6d` — and everything else as it is, so
+ * `work:ENG-32` and `slack:C9:1718.001` are untouched.
+ *
+ * THE KEY IS THE THREAD'S ONLY IDENTITY on a list of threads, and a native task
+ * nobody gave a key is `work:task:` and a uuid — 46 unbreakable characters that
+ * no row has room for, so a list of them read `work:task…` five times over.
+ * The head of a uuid is how this product names one everywhere a row is narrow
+ * (`workItemLabel`'s "task 4d631f6d"); the whole key belongs on the title, and
+ * every caller puts it there.
+ */
+export function conversationLabel(key: string): string {
+  return (key ?? "").replace(UUID_IN, (id) => id.slice(0, 8));
 }
 
 /**
@@ -672,6 +781,21 @@ export function configValueKind(
 }
 
 /**
+ * How many nodes the fleet has, as the health push counted them — or that the
+ * count is not known.
+ *
+ * `nodes` is ABSENT when the engine could not read the fleet's presence, and
+ * on an older node that predates the field; it is never 0, because the node
+ * answering is itself one. So an absence is said as an absence rather than
+ * guessed at: "0 nodes" beside a page this node is serving is false, and "1
+ * node" is a guess that hides a coordination plane nobody can reach.
+ */
+export function nodeCountLabel(nodes: number | null | undefined): string {
+  if (nodes == null || !Number.isFinite(nodes) || nodes <= 0) return "node count unavailable";
+  return plural(nodes, "node");
+}
+
+/**
  * How far back the event log can be read, as a sentence, from what the engine
  * REPORTED.
  *
@@ -683,11 +807,41 @@ export function configValueKind(
  * paging early.
  */
 export function eventHistoryLabel(seconds: number | null | undefined): string {
-  if (seconds == null || !Number.isFinite(seconds) || seconds <= 0) {
-    return "this engine did not report how far back the log goes";
-  }
+  const span = historySpan(seconds);
+  return span ? `the store keeps ${span}` : "this engine did not report how far back the log goes";
+}
+
+/**
+ * The span a read of the event log covers, as the tail of a sentence ("the last
+ * 30 days"), from the floor the engine REPORTED — for a count or an empty state
+ * that is bounded by that floor and must say by how much. The same rounding as
+ * {@link eventHistoryLabel}, so the two can never name different spans; an
+ * engine that did not report one gets the window's name, not a guessed number.
+ */
+export function eventHistorySpan(seconds: number | null | undefined): string {
+  const span = historySpan(seconds);
+  return span ? `the last ${span}` : "the event log's window";
+}
+
+function historySpan(seconds: number | null | undefined): string | null {
+  if (seconds == null || !Number.isFinite(seconds) || seconds <= 0) return null;
   const days = Math.round(seconds / 86_400);
-  if (days >= 1) return `the store keeps ${plural(days, "day")}`;
-  const hours = Math.max(1, Math.round(seconds / 3_600));
-  return `the store keeps ${plural(hours, "hour")}`;
+  if (days >= 1) return plural(days, "day");
+  return plural(Math.max(1, Math.round(seconds / 3_600)), "hour");
+}
+
+/**
+ * The first line of a body that says anything — what a row or a picker shows
+ * of a comment or a question when there is one line to show it in.
+ *
+ * ONE COPY. It was three: the Inbox's list, its composer (which imported it
+ * from the list) and the Home decision row, which kept a private duplicate.
+ */
+export function firstLine(body: string): string {
+  return (
+    body
+      .split("\n")
+      .find((l) => l.trim())
+      ?.trim() ?? ""
+  );
 }

@@ -51,9 +51,10 @@ var log = logging.Get("api.config")
 
 // MaxBodyBytes bounds a config upload.
 //
-// The document is an org chart and its settings: the largest real one in this
-// repository is tens of kilobytes, so 4 MiB is three orders of magnitude of
-// headroom and still finite. The route is guarded, so this is a bound on a
+// The document is the company's settings — its providers, integrations, MCP
+// servers and worker templates: the largest real one in this repository is
+// tens of kilobytes, so 4 MiB is two orders of magnitude of headroom and still
+// finite. The route is guarded, so this is a bound on a
 // mistake rather than on an attacker.
 const MaxBodyBytes = 4 << 20
 
@@ -190,11 +191,13 @@ func (s *Service) Routes(mux authz.Mux) error {
 	read("GET /config/revisions/{id}", s.getRevision)
 	read("GET /config/revisions/{id}/diff", s.diff)
 	write("POST /config/revisions/{id}/revert", s.revert)
-	// THE ENTITY ROUTES, one per addressable collection rather than a
+	// THE ENTITY ROUTES, one pair per addressable collection rather than a
 	// single {kind} wildcard: a wildcard would also match
 	// /config/revisions/{id}, and a route that answers for a path it was
-	// never meant to serve is worse than four explicit lines. See
-	// entities.go for what a write does.
+	// never meant to serve is worse than a line per collection. The org
+	// chart's seats and units are not among them — see entities.go — so a
+	// path naming one is the mux's own 404. See entities.go for what a
+	// write does.
 	for _, kind := range EntityKinds() {
 		// THE READ AND THE WRITE ON ONE URI. The entity was addressable
 		// for writing long before it was readable here, so the documented
@@ -203,24 +206,7 @@ func (s *Service) Routes(mux authz.Mux) error {
 		// not accept. GET here answers the entity itself, so `GET | PUT`
 		// round-trips with nothing in between.
 		read("GET /config/"+kind+"/{id}", s.getEntity(kind))
-	}
-	// AND THE WRITE ONLY WHERE THERE IS ONE. `roles` and `units` are the
-	// org chart, which is a domain of its own with its own routes — so the
-	// pattern is ABSENT here rather than mounted and refusing. A route that
-	// exists and answers 400 to everything reads as a surface that is
-	// broken; one that is not there matches what the product says, and the
-	// per-entity refusal in chartdoor.go still covers the PATH, because a
-	// caller who reaches it deserves the sentence rather than a 405.
-	for _, kind := range WritableEntityKinds() {
 		write("PUT /config/"+kind+"/{id}", s.putEntity(kind))
-	}
-	// THE CHART'S OWN COLLECTIONS, answered by NAME rather than by the
-	// method fallthrough: a 405 on `PUT /config/roles/ceo` tells an
-	// operator that the verb is wrong, when what is wrong is the surface.
-	// Decided as the write it attempts, so the sentence pointing at /chart
-	// is read by somebody who could have made the write here.
-	for _, kind := range []string{EntityRoles, EntityUnits} {
-		write("PUT /config/"+kind+"/{id}", s.refuseChartWrite(kind))
 	}
 	// AND THOSE TWO ARE JSON, like every other answer here: see
 	// [httpjson.Mux].
@@ -232,8 +218,8 @@ func (s *Service) Routes(mux authz.Mux) error {
 
 // noStore marks every response it wraps as never to be stored.
 //
-// EVERY ONE, reads, refusals and 304s alike. A /config body is the whole company
-// document: its org chart, its contact identities, the ${VAR} name behind every
+// EVERY ONE, reads, refusals and 304s alike. A /config body is the company's
+// settings: which integrations are wired and where, the ${VAR} name behind every
 // credential and the shape of the rest. Answered with an ETag and no
 // Cache-Control, a browser keeps it in its HTTP disk cache, where it outlives
 // the tab, the session and the operator token that was needed to read it. An
@@ -423,9 +409,10 @@ func (s *Service) checkPatchMediaType(w http.ResponseWriter, r *http.Request) bo
 			"hint": "PATCH /config takes a JSON Merge Patch (RFC 7396): an object " +
 				"shaped like the document. A JSON Patch (RFC 6902) list of " +
 				"operations is a different format this surface does not serve. " +
-				"Editing one list member is its own route: PATCH " +
-				"/chart/seats/{handle} or PATCH /chart/units/{key} for a seat or " +
-				"a unit, PUT /config/{collection}/{id} for anything else",
+				"Editing one list member is its own route: " + ChartRoutes.SeatContent +
+				" or " + ChartRoutes.UnitContent + " for a seat or a unit, " +
+				"PUT /config/{kind}/{id} for one member of " +
+				strings.Join(EntityKinds(), " or "),
 		})
 	return false
 }
@@ -667,10 +654,10 @@ func (s *Service) patch(w http.ResponseWriter, r *http.Request) {
 	if _, ok := s.checkPrecondition(w, r, active, found); !ok {
 		return
 	}
-	// ON WHAT THE CALLER SENT, never on the merge: a revision written
-	// before the chart's split still carries one inside it, so judging the
-	// merged document would refuse an operator patching a mission for a
-	// chart they did not send and cannot see. See chartdoor.go.
+	// ON WHAT THE CALLER SENT, never on the merge: `{"units": null}`
+	// names the chart and merges onto a settings revision as nothing, so
+	// judging the merge would answer success for a write that did nothing.
+	// See chartdoor.go.
 	if refuseChartIn(w, sent, http.MethodPatch) {
 		return
 	}
@@ -905,6 +892,9 @@ func attributionOf(r *http.Request) iam.Actor {
 	return auth.AttributionOf(r.Context())
 }
 
+// revisionSource is the source every revision this surface writes records.
+const revisionSource = "api"
+
 // nudge tells every node an activation happened.
 //
 // BEST EFFORT and deliberately thin — the event carries no payload, because
@@ -1084,8 +1074,9 @@ func meta(revision store.Revision) map[string]any {
 		"created_at":  revision.CreatedAt.Format(time.RFC3339Nano),
 		"created_by":  revision.CreatedBy,
 		// THE KIND AND THE CREDENTIAL BESIDE THE AUTHOR, as every other
-		// trail answers them — empty on a revision written before either
-		// was recorded, and the credential empty on one no credential made.
+		// trail answers them. The kind is always one of iam's (the store
+		// refuses a revision without one); the credential is empty on a
+		// revision no credential made, such as the engine's own boot seed.
 		"created_by_kind": revision.CreatedByKind,
 		"operator_id":     revision.OperatorID,
 		"source":          revision.Source,

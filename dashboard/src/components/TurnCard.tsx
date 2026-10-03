@@ -14,7 +14,7 @@
 
 import { memo, useState } from "react";
 import { Button, cx, EmptyValue, Tag } from "@crewlethq/ui";
-import { ChevronRightGlyph, KeyboardArrowDownGlyph, LayersGlyph } from "@crewlethq/icons/glyphs";
+import { ChevronRightGlyph, ChevronDownGlyph, LayersGlyph } from "@crewlethq/icons/glyphs";
 // STILL OURS, and for the reason PhaseCard gives at its own import: `PhaseTag`
 // has a peer, but it is a `~/ui` primitive, so its port belongs to that file
 // rather than to a third inlined copy of the phase variant table.
@@ -81,7 +81,7 @@ function TurnCardView({
   return (
     <article className={cx("turn-card", group.live && "live", group.failed && "failed")}>
       <header className="turn-head" onClick={() => setOpen((v) => !v)}>
-        {open ? <KeyboardArrowDownGlyph size="sm" /> : <ChevronRightGlyph size="sm" />}
+        {open ? <ChevronDownGlyph size="sm" /> : <ChevronRightGlyph size="sm" />}
         <div className="col" style={{ gap: 2, flex: 1, minWidth: 0 }}>
           {/* THE ONE SENTENCE A COLLAPSED CARD CARRIES, and it CLAMPS where it
               used to be cut at a line. `.truncate` is the cell rule: it is right
@@ -230,7 +230,7 @@ function TurnCardView({
               size="small"
               variant="secondary"
               leadingIcon={<LayersGlyph />}
-              onClick={() => nav.to(["activity", "turns", group.turnId])}
+              onClick={() => nav.to(["live", "turns", group.turnId])}
               title={`turn ${group.turnId}`}
             >
               Open the whole turn

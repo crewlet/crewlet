@@ -14,7 +14,7 @@
  * a rename does not lose it; a seat this draft created has none, because
  * nothing is running it yet; and a seat that becomes human in the draft, or
  * was already human when it was saved, has none either. Plus the size promise
- * every mark on a node makes: a push changes a word and never a measured box.
+ * every mark on a row makes: a push changes a word and never a measured box.
  */
 
 import { cleanup, render, screen } from "~/test/inCase.ts";
@@ -23,7 +23,7 @@ import type { AgentRow, SandboxEntry } from "~/protocol/index.ts";
 import type { BuilderApi } from "./BuilderContext.tsx";
 import type { SeatView } from "./chartModel.ts";
 import { COMPANY_KEY, type NodeKey } from "./model/keys.ts";
-import { LiveState, ProblemCount, seatKindLabel, unitTypeLabel } from "./nodeMarks.tsx";
+import { LiveState, seatKindLabel, unitTypeLabel } from "./nodeMarks.tsx";
 
 afterEach(cleanup);
 
@@ -45,17 +45,20 @@ function seat(over: Partial<SeatView> = {}): SeatView {
   };
 }
 
-/** Only the two fields `LiveState` reads, and a `problemsFor` for the count. */
-function api(agents: AgentRow[], sandboxes: SandboxEntry[] = [], problems: number = 0): BuilderApi {
-  return {
-    agents,
-    sandboxes,
-    problemsFor: () => Array.from({ length: problems }, (_, at) => ({ message: `p${at}` })),
-  } as unknown as BuilderApi;
+/** Only the two fields `LiveState` reads. */
+function api(agents: AgentRow[], sandboxes: SandboxEntry[] = []): BuilderApi {
+  return { agents, sandboxes } as unknown as BuilderApi;
 }
 
 const agent = (over: Partial<AgentRow> = {}): AgentRow =>
-  ({ id: "a1", agent_id: "id-a1", role: "Dev", handle: "dev", state: "idle", ...over }) as AgentRow;
+  ({
+    id: "a1",
+    agent_id: "id-a1",
+    role: "Dev",
+    handle: "dev",
+    activity: "idle",
+    ...over,
+  }) as AgentRow;
 
 describe("a seat's live state", () => {
   /*
@@ -67,9 +70,8 @@ describe("a seat's live state", () => {
   test("is found by the saved handle, through a rename in the draft", () => {
     render(
       <LiveState
-        api={api([agent({ state: "working" })])}
+        api={api([agent({ activity: "working" })])}
         view={seat({ name: "Builder", handle: "builder" })}
-        compact
       />,
     );
     expect(screen.getByText("working")).toBeDefined();
@@ -83,12 +85,11 @@ describe("a seat's live state", () => {
   test("a live row under another handle is not this seat's, whatever it is called", () => {
     render(
       <LiveState
-        api={api([agent({ handle: "dev-2", role: "Dev", state: "afk" })])}
+        api={api([agent({ handle: "dev-2", role: "Dev", activity: "working" })])}
         view={seat()}
-        compact
       />,
     );
-    expect(screen.queryByText("afk")).toBeNull();
+    expect(screen.queryByText("working")).toBeNull();
     expect(screen.getByText("offline")).toBeDefined();
   });
 
@@ -104,16 +105,14 @@ describe("a seat's live state", () => {
    * not read a handle off `null`, which is the state this pins.
    */
   test("says nothing for a seat the saved company does not hold", () => {
-    const { container } = render(
-      <LiveState api={api([agent()])} view={seat({ saved: null })} compact />,
-    );
+    const { container } = render(<LiveState api={api([agent()])} view={seat({ saved: null })} />);
     expect(container.firstChild).toBeNull();
   });
 
   /* And the pair the chart actually produces for a created seat. */
   test("a created seat, as the chart marks one, says nothing", () => {
     const { container } = render(
-      <LiveState api={api([agent()])} view={seat({ saved: null, running: false })} compact />,
+      <LiveState api={api([agent()])} view={seat({ saved: null, running: false })} />,
     );
     expect(container.firstChild).toBeNull();
   });
@@ -125,7 +124,7 @@ describe("a seat's live state", () => {
    */
   test("says nothing for a seat that is not a running agent seat", () => {
     const { container } = render(
-      <LiveState api={api([agent()])} view={seat({ kind: "human", running: false })} compact />,
+      <LiveState api={api([agent()])} view={seat({ kind: "human", running: false })} />,
     );
     expect(container.firstChild).toBeNull();
   });
@@ -136,80 +135,41 @@ describe("a seat's live state", () => {
    * the engine was asked and had nothing to say.
    */
   test("a saved agent seat the engine never mentions is offline", () => {
-    render(<LiveState api={api([])} view={seat()} compact />);
+    render(<LiveState api={api([])} view={seat()} />);
     expect(screen.getByText("offline")).toBeDefined();
   });
 
   /*
-   * A RUN WAITING ON ITS BOX outranks whatever the seat's own row says, which
-   * is `runState`'s rule and the reason the chart passes the sandboxes at all.
+   * THE ROW'S WORD IS THE ENGINE'S, a seat's coding runs included: the chart
+   * folds nothing in. A running box beside an idle row is a row the engine
+   * has not yet re-sent, not a seat this client may call busy.
    */
-  test("a seat with a sandbox waiting says so rather than what its row says", () => {
+  test("a seat says the engine's word, and a box beside it changes nothing", () => {
     render(
       <LiveState
-        api={api([agent({ state: "idle" })], [{ role: "Dev", agent_id: "id-a1" } as SandboxEntry])}
+        api={api(
+          [agent({ activity: "needs" })],
+          [{ role: "Dev", agent_id: "id-a1", status: "running" } as SandboxEntry],
+        )}
         view={seat()}
-        compact
       />,
     );
-    expect(screen.getByText("sandbox")).toBeDefined();
+    expect(screen.getByText("needs you")).toBeDefined();
   });
 
   /*
-   * AND ONLY ITS OWN BOX. A run is paired with its seat by agent id, so a
-   * namesake's run — the same name, another seat — leaves this one's state
-   * alone.
+   * THE TABLE WRITES THE WORD OUT, in a slot that keeps its room: a push
+   * twice per tool-loop round changes the word and never the row's height.
+   * The chart node draws no state at all (see `CanvasView.tsx`), so there is
+   * one drawing of this component and it is this one.
    */
-  test("a namesake's sandbox does not park this seat", () => {
-    render(
-      <LiveState
-        api={api([agent({ state: "idle" })], [{ role: "Dev", agent_id: "id-a2" } as SandboxEntry])}
-        view={seat()}
-        compact
-      />,
-    );
-    expect(screen.queryByText("sandbox")).toBeNull();
-    expect(screen.getByText("idle")).toBeDefined();
-  });
-
-  /*
-   * THE CHART'S DRAWING IS THE TONE AND THE WORD IS STILL SAID. A node is one
-   * rank tall and the slot a push arrives in is one control step wide whatever
-   * it holds, so "awaiting sandbox" written out would be clipped rather than
-   * read. It is the mark's own accessible name and the tooltip a pointer gets,
-   * and the table beside the chart writes it out.
-   */
-  test("the compact drawing carries the word for a reader who cannot see it", () => {
+  test("the state is the engine's word, in its own slot", () => {
     const { container } = render(
-      <LiveState api={api([agent({ state: "working" })])} view={seat()} compact />,
+      <LiveState api={api([agent({ activity: "working" })])} view={seat()} />,
     );
-    expect(container.querySelector(".bnode-state")?.getAttribute("title")).toBe("working");
-    expect(screen.getByText("working")).toBeDefined();
-  });
-});
-
-describe("a node's problem count", () => {
-  /*
-   * A SLOT THAT KEEPS ITS ROOM. The count is the last check of the CURRENT
-   * draft's, so it is absent while a check is out, which is after every edit.
-   * Drawn in a line of its own it collapsed and came back, changing the card's
-   * measured height twice per edit and moving every card beside it.
-   */
-  test("keeps its slot whether or not the last check placed anything", () => {
-    const { container: none } = render(
-      <ProblemCount api={api([], [], 0)} nodeKey={"n" as NodeKey} />,
-    );
-    expect(none.querySelector(".bnode-count")).not.toBeNull();
-    expect(none.querySelector(".bnode-count")?.textContent).toBe("");
-
-    const { container } = render(<ProblemCount api={api([], [], 3)} nodeKey={"n" as NodeKey} />);
-    expect(container.querySelector(".bnode-count")?.textContent).toBe("3");
-  });
-
-  /* THE COUNT IS DRAWN AND THE SENTENCE IS SAID, for the reason the state is. */
-  test("says how many problems in words, for a reader who cannot see the number", () => {
-    render(<ProblemCount api={api([], [], 1)} nodeKey={"n" as NodeKey} />);
-    expect(screen.getByLabelText("1 problem")).toBeDefined();
+    const slot = container.querySelector(".bnode-state");
+    expect(slot).not.toBeNull();
+    expect(slot!.textContent).toBe("working");
   });
 });
 

@@ -226,7 +226,7 @@ func TestThePostureMatrix(t *testing.T) {
 			[len(shapes)]int{ok, ok, ok, ok, ok, ok, ok, ok, ok, ok, ok, ok, ok, ok}},
 		{"the dashboard shell", "GET", "/dashboard", "",
 			[len(shapes)]int{ok, ok, ok, ok, ok, ok, ok, ok, ok, ok, ok, ok, ok, ok}},
-		{"the company's working state", "GET", "/query/stream", "",
+		{"who is asking, and what they may do", "GET", "/query/viewer", "",
 			[len(shapes)]int{unath, unath, ok, forbd, ok, forbd, ok, ok, unath, ok, forbd, unath, ok, ok}},
 		{"an agent's transcripts", "GET", "/query/events", "",
 			[len(shapes)]int{unath, unath, forbd, forbd, ok, forbd, ok, ok, unath, forbd, forbd, unath, forbd, ok}},
@@ -242,8 +242,6 @@ func TestThePostureMatrix(t *testing.T) {
 			[len(shapes)]int{unath, unath, ok, forbd, ok, forbd, ok, ok, unath, ok, forbd, unath, ok, ok}},
 
 		// --- the deployment's own controls: fleet:operate ------------ //
-		{"clearing a spend ceiling", "POST", "/budgets/reset", "",
-			[len(shapes)]int{unath, unath, forbd, forbd, forbd, ok, ok, ok, unath, forbd, ok, unath, forbd, stepUp}},
 		{"copying the node's durable state", "POST", "/backup?dir=/srv/posture", "",
 			[len(shapes)]int{unath, unath, forbd, forbd, forbd, ok, ok, ok, unath, forbd, ok, unath, forbd, stepUp}},
 		// ADMITTED AS A 404: this fixture runs no domain log, so the

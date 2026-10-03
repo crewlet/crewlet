@@ -293,7 +293,7 @@ func TestAnUnconfiguredNodeHasNoWebhookSecrets(t *testing.T) {
 //
 // Four third-party apps once had config models, webhook routes and generated schema
 // and no parser behind any of them, so a company naming one got a block that
-// validated, appeared on the dashboard's Integrations room beside the
+// validated, appeared in the dashboard's Settings › Integrations beside the
 // working ones, and woke nobody. This is what catches a third-party app whose config
 // ships without its wiring and, in the other direction, a third-party app whose
 // wiring is dropped from startNotifications by a refactor.

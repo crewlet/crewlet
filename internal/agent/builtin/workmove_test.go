@@ -240,9 +240,11 @@ func (m *landingMover) MoveTaskToProject(_ context.Context, opID, _, target stri
 		return m.first(opID)
 	}
 	if opID != m.ops[0] {
-		return tracker.WriteResult{}, fmt.Errorf("tracker: task i1 is already in "+
+		// MARKED, as the tracker marks every refusal it writes about what
+		// was asked: an unmarked error is the node's failure instead.
+		return tracker.WriteResult{}, fmt.Errorf("%w: task i1 is already in "+
 			"%s, and this node's operation ledger holds no record of this move "+
-			"putting it there", target)
+			"putting it there", tracker.ErrInvalid, target)
 	}
 	return tracker.WriteResult{Key: target + "-3", Result: statelog.Result{
 		Outcome: statelog.OutcomeApplied, OpID: opID, Collapsed: true,
@@ -312,7 +314,7 @@ func TestTheRetryOfAMoveThatLandedIsAnsweredByTheMove(t *testing.T) {
 
 // A MOVE INTO THE PROJECT AN ITEM IS ALREADY IN THAT NO EARLIER ATTEMPT MADE is
 // the tracker's to refuse, and it does — so passing the gate there hands a seat
-// nothing: the answer is the refusal, and says the change was not made.
+// nothing: the answer is the tracker's refusal, in its own words.
 func TestAMoveIntoTheItemsOwnProjectIsTheTrackersToRefuse(t *testing.T) {
 	t.Parallel()
 	trk := newFakeTracker()
@@ -321,10 +323,11 @@ func TestAMoveIntoTheItemsOwnProjectIsTheTrackersToRefuse(t *testing.T) {
 	reg := moverRegistry(t, trk,
 		func(builtin.Actor) builtin.WorkMover { return mover }, chartRefuses)
 	got := callMove(t, reg, map[string]any{"item": "ENG-1", "project": "ENG"})
-	if !got.Failed || !strings.Contains(got.Output, "no record of this move") ||
-		!strings.Contains(got.Output, "NOT made") {
-		t.Errorf("a move into the item's own project answered %q, want the "+
-			"tracker's refusal", got.Output)
+	if !got.Failed || tools.RefusalOf(got) != tools.RefusalInvalid ||
+		!strings.Contains(got.Output, "no record of this move") ||
+		!strings.Contains(got.Output, "refused that") {
+		t.Errorf("a move into the item's own project answered %q (%s), want the "+
+			"tracker's refusal", got.Output, tools.RefusalOf(got))
 	}
 }
 
@@ -358,8 +361,8 @@ func (m stoppedMover) MoveTaskToProject(_ context.Context, opID, _, _ string,
 // "NOT made".
 func TestAMoveStoppedAfterItsRootMovedSaysWhatFinishesIt(t *testing.T) {
 	t.Parallel()
-	refused := errors.New("statelog: unavailable (log_full): the broker refused " +
-		"to store the record")
+	refused := &statelog.Unavailable{Reason: statelog.ReasonLogFull,
+		Detail: "the broker refused to store the record"}
 	for name, tc := range map[string]struct {
 		stop      tracker.MoveStopped
 		want      []string

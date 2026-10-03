@@ -3,7 +3,7 @@
 - **Status:** accepted
 - **Authority:** `internal/coord`
 - **Enforced-by:** nothing
-- **Cost-when-tried:** both existing bumps were silent corruption in a mixed fleet, which is the bar for spending one. v2 = holding a seat means consulting the completion ledger; v3 = claiming a seat means this node satisfies the role's placement. In each case a node on either version was individually correct and the pair was jointly wrong.
+- **Cost-when-tried:** every bump so far was silent corruption in a mixed fleet, which is the bar for spending one. v2 = holding a seat means consulting the completion ledger; v3 = claiming a seat means this node satisfies the role's placement; v4 = running a seat means charging the windowed token counters (ADR-0019) — a v3 node beside it would have charged the lifetime counter its build kept, each build seeing only its own share of the spend, and every cap would have bound late by what the other had spent; v5 = a seat's lease and its mailbox are named by the seat's ID rather than its handle (ADR-0026) — a v4 node beside it would have claimed the handle-named lease and mailbox for the same seat, and the two would each have run it. In each case a node on either version was individually correct and the pair was jointly wrong.
 - **Tag-status:** unreleased
 
 ## The decision
@@ -46,9 +46,9 @@ direction it is unified.
 
 Make the lease round-trip like the envelope, and a mixed fleet silently runs
 two different ownership protocols. Nothing errors; that is the whole problem.
-Both bumps in the history above are exactly this shape, and neither would have
-produced a symptom until a seat had already been run twice or a turn had
-already been repeated.
+Every bump in the history above is exactly this shape, and none would have
+produced a symptom until a seat had already been run twice, a turn had already
+been repeated or a cap had already been spent past.
 
 Make the envelope refuse like the lease, and every rolling upgrade is an outage
 by construction: the older half of the fleet stops processing the newer half's

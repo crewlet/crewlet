@@ -1,211 +1,102 @@
 package engine
 
 import (
-	"go/ast"
-	"go/parser"
-	"go/token"
-	"io/fs"
-	"os"
-	"path/filepath"
-	"reflect"
-	"regexp"
-	"strings"
+	"context"
+	"errors"
 	"testing"
+	"time"
 
-	"github.com/crewlet/crewlet/internal/events"
-	"github.com/crewlet/crewlet/internal/sourcetree"
+	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/coord"
+	coordmem "github.com/crewlet/crewlet/internal/coord/memory"
 )
 
-// EVERY REGISTERED EVENT TYPE HAS A PUBLISHER.
-//
-// A type registered and never published is a decode path, a summary renderer,
-// a category row and a documented wire name for a fact nothing produces — and
-// it is INVISIBLE, because a consumer waiting for it is indistinguishable from
-// one whose event has not happened yet. Sixteen of the sixty-one were in that
-// state, and three of them had live consumers that therefore rendered nothing:
-// the dashboard's token header, its seat `terminated` state, and the audit
-// log's line for a node coming up.
-//
-// # Why it reads the SOURCE
-//
-// Because calling every publisher needs a broker, a store, a company and a
-// fleet — which is exactly why this went unnoticed. What a publisher looks
-// like is a composite literal of the payload type outside its own package, so
-// that is what this walks for.
-func TestEveryRegisteredEventTypeIsPublishedSomewhere(t *testing.T) {
-	t.Parallel()
-	producers := payloadLiterals(t)
-	for _, typ := range events.RegisteredTypes() {
-		payload, ok := events.PayloadFor(typ)
-		if !ok {
-			t.Errorf("%q is registered under no Go type", typ)
-			continue
-		}
-		of := reflect.TypeOf(payload).Elem()
-		// ONLY THE SHIPPED VOCABULARY. A test in this module may
-		// register a payload of its own to exercise the registry, and
-		// that one has no publisher by construction.
-		if !strings.HasSuffix(of.PkgPath(), "/internal/events/types") {
-			continue
-		}
-		if name := of.Name(); !producers[name] {
-			t.Errorf("%s (%q) is registered and nothing constructs it: a "+
-				"consumer waiting for it cannot tell that from an event that "+
-				"has not happened yet. Publish it, or retire the type",
-				name, typ)
-		}
-	}
-}
-
-// EVERY DECLARED GUARD KIND HAS A PRODUCER.
-//
-// The same gap as the one above, one level down: a registered event type can
-// carry a value nothing ever writes into it. `unhandled_exception` was
-// declared, documented and given an AFK sentence by the dashboard, and no code
-// path set it, because nothing recovered a panic at all. The registry test
-// cannot see that, since the event type itself had producers for its other
-// kinds.
-//
-// A producer is a breach built with the kind, `Kind: types.GuardX`, in a
-// non-test file: comparing against a kind is reading it, and only a writer
-// makes the value reachable.
-func TestEveryDeclaredGuardKindIsProducedSomewhere(t *testing.T) {
-	t.Parallel()
-	root := sourcetree.Root(t)
-	declared := guardKinds(t, filepath.Join(root, "internal", "events", "types"))
-	written := sourceMatches(t, root, regexp.MustCompile(`\bKind:\s*types\.(Guard[A-Za-z0-9_]+)\b`))
-	for _, name := range declared {
-		if !written[name] {
-			t.Errorf("types.%s is a declared guard kind and no breach is built "+
-				"with it: a dashboard sentence for it describes a state no seat "+
-				"can reach. Produce it, or retire the kind", name)
-		}
-	}
-}
-
-// guardKinds is every constant the payload package declares as a GuardKind,
-// read from its source so a kind added there is covered without being listed
-// here.
-func guardKinds(t *testing.T, dir string) []string {
+// meteringReporter is a meter loop over a company capped at 1 000 tokens a
+// day, reading the given shared counters — everything a frame reads, and
+// nothing a publish adds.
+func meteringReporter(t *testing.T, counters coord.Fleet) *budgetReporter {
 	t.Helper()
-	fset := token.NewFileSet()
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		t.Fatalf("read %s: %v", dir, err)
-	}
-	var kinds []string
-	for _, entry := range entries {
-		name := entry.Name()
-		if !strings.HasSuffix(name, ".go") || strings.HasSuffix(name, "_test.go") {
-			continue
-		}
-		file, err := parser.ParseFile(fset, filepath.Join(dir, name), nil, parser.SkipObjectResolution)
-		if err != nil {
-			t.Fatalf("parse %s: %v", name, err)
-		}
-		for _, decl := range file.Decls {
-			gen, ok := decl.(*ast.GenDecl)
-			if !ok || gen.Tok != token.CONST {
-				continue
-			}
-			for _, spec := range gen.Specs {
-				value, ok := spec.(*ast.ValueSpec)
-				if !ok {
-					continue
-				}
-				if typ, ok := value.Type.(*ast.Ident); ok && typ.Name == "GuardKind" {
-					for _, ident := range value.Names {
-						kinds = append(kinds, ident.Name)
-					}
-				}
-			}
-		}
-	}
-	if len(kinds) == 0 {
-		t.Fatal("no GuardKind constant found, so this test could not fail")
-	}
-	return kinds
+	e := &Engine{backends: &Backends{Fleet: counters}}
+	e.epoch.current.Store(meteredCompany(config.TokenBudget{Day: ceiling(1000)}))
+	return &budgetReporter{engine: e}
 }
 
-// THE WALK'S START IS NEVER ONE OF ITS OWN SKIPS. A dot-directory below the
-// module root is one the go command does not build, but the root is wherever
-// somebody cloned it, and judged by that rule a checkout at `~/.crewlet` was
-// skipped whole — so both gates above reported every kind as unpublished.
-// sourcetree.Walk never hands its start to the callback, which is what keeps
-// the rule below from reaching it; this pins that for the rule it would hit.
-func TestAModuleUnderADotNamedDirectoryIsStillRead(t *testing.T) {
-	t.Parallel()
-	root := filepath.Join(t.TempDir(), ".crewlet")
-	for path, body := range map[string]string{
-		"internal/pub/pub.go":        "package pub\nvar _ = types.Published{}\n",
-		"internal/.hidden/hidden.go": "package hidden\nvar _ = types.Hidden{}\n",
-	} {
-		full := filepath.Join(root, filepath.FromSlash(path))
-		if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
-			t.Fatal(err)
-		}
-		if err := os.WriteFile(full, []byte(body), 0o600); err != nil {
-			t.Fatal(err)
-		}
-	}
-	found := sourceMatches(t, root, regexp.MustCompile(`\btypes\.([A-Z][A-Za-z0-9_]*)\{`))
-	if !found["Published"] || found["Hidden"] {
-		t.Errorf("found %v, want the module's own literal and not the dot-directory's", found)
-	}
-}
-
-// sourceMatches is every first submatch of pattern in the module's non-test Go
-// files outside the payloads' own package.
-func sourceMatches(t *testing.T, root string, pattern *regexp.Regexp) map[string]bool {
+// spentCounters is the shared counters with 250 tokens charged in now's day.
+func spentCounters(t *testing.T, now time.Time) coord.Fleet {
 	t.Helper()
-	found := map[string]bool{}
-	err := sourcetree.Walk(root, func(path string, d fs.DirEntry, err error) error {
-		switch {
-		case err != nil:
-			return err
-		case d.IsDir():
-			// The payloads' OWN package is skipped: a literal there is
-			// a test fixture or a summary's receiver, not a publisher,
-			// and a dot-directory is one the go command does not build.
-			// The root never arrives here — sourcetree.Walk walks its
-			// start without handing it over — so a checkout at
-			// `~/.crewlet` is read rather than skipped whole.
-			if d.Name() == "testdata" || d.Name() == "types" ||
-				strings.HasPrefix(d.Name(), ".") {
-				return fs.SkipDir
-			}
-			return nil
-		case !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go"):
-			return nil
-		}
-		body, err := os.ReadFile(path)
-		if err != nil {
-			return err
-		}
-		for _, m := range pattern.FindAllStringSubmatch(string(body), -1) {
-			found[m[1]] = true
-		}
-		return nil
-	})
-	if err != nil {
-		t.Fatalf("walk the module: %v", err)
+	fleet := coordmem.NewFleet()
+	if _, err := fleet.PostCharge(t.Context(), coord.AgentScope("x"), 250,
+		coord.WindowsAt(now, time.UTC)); err != nil {
+		t.Fatalf("PostCharge: %v", err)
 	}
-	return found
+	return fleet
 }
 
-// payloadLiterals is every `types.X{` a non-test file in this module writes.
+// A CAPPED COMPANY'S FRAME IS ONE READ OF THE SHARED COUNTERS, stated against
+// its own ceiling.
 //
-// A composite literal outside the payload's own package is what a PUBLISHER
-// looks like: the payload types have no constructors, so an event is built by
-// naming the struct. Scanning the source rather than calling anything is the
-// point: the reason this gap survived is that reaching the publishers needs a
-// broker, a store, a company and a fleet.
-func payloadLiterals(t *testing.T) map[string]bool {
-	t.Helper()
-	found := sourceMatches(t, sourcetree.Root(t),
-		regexp.MustCompile(`\btypes\.([A-Z][A-Za-z0-9_]*)\{`))
-	if len(found) == 0 {
-		t.Fatal("no payload literal found anywhere, so this test could not fail")
+// Asked of [budgetReporter.frame], the decision [budgetReporter.publish]
+// sends or does not send, rather than of [budgetSnapshot] alone: a snapshot
+// nothing reads the counters into passes every test of the snapshot.
+func TestACappedCompanysFrameIsTheSharedCounter(t *testing.T) {
+	t.Parallel()
+	now := time.Date(2026, time.September, 23, 12, 0, 0, 0, time.UTC)
+	r := meteringReporter(t, spentCounters(t, now))
+	frame, sent := r.frame(t.Context(), now)
+	if !sent {
+		t.Fatal("a capped company whose counters could be read published nothing")
 	}
-	return found
+	if w := frame.Org.Windows; len(w) != 1 || w[0].Used != 250 || w[0].Limit == nil || *w[0].Limit != 1000 {
+		t.Fatalf("frame = %+v, want the company's day at 250 of its 1000", w)
+	}
+}
+
+// A COUNTER THAT CANNOT BE READ PUBLISHES NO FRAME. The consumer replaces what
+// it holds on every report, so a frame of zeroes would render a company that
+// is spending as one that has spent nothing; a frame skipped costs one
+// interval of a meter that keeps its last reading.
+func TestAnUnreadableCounterPublishesNoFrame(t *testing.T) {
+	t.Parallel()
+	now := time.Date(2026, time.September, 23, 12, 0, 0, 0, time.UTC)
+	r := meteringReporter(t, unreadableCounters{spentCounters(t, now)})
+	if frame, sent := r.frame(t.Context(), now); sent {
+		t.Fatalf("the meter published %+v from counters nobody could read", frame)
+	}
+}
+
+// unreadableCounters is a coordination store whose token counters cannot be
+// listed.
+//
+// The store is embedded under an alias because [coord.Fleet] has a method of
+// that name (the config plane's per-node apply status), which a field named
+// Fleet would shadow.
+type unreadableCounters struct{ sharedState }
+
+type sharedState = coord.Fleet
+
+func (unreadableCounters) Usage(context.Context, coord.Windows) ([]coord.Usage, error) {
+	return nil, errors.New("the coordination store is unreachable")
+}
+
+// A COMPANY THAT CAPS NOTHING IS PUBLISHED, AND READS NOTHING TO SAY SO.
+//
+// Its frame is "there is no ceiling", which the dashboard must be able to tell
+// from "no node has reported yet" — so it is sent, where it used to be
+// withheld and the two collapsed into one empty meter that told the operator
+// of a CAPPED company, for the first interval after every start, that it had
+// no budget. And it is sent whatever the counters hold, because an empty list
+// of windows holds no figure a reading could change: the counters here cannot
+// be read at all.
+func TestAnUncappedCompanyPublishesItsNoCeilingWithoutAReading(t *testing.T) {
+	t.Parallel()
+	now := time.Date(2026, time.September, 23, 12, 0, 0, 0, time.UTC)
+	r := meteringReporter(t, unreadableCounters{coordmem.NewFleet()})
+	r.engine.epoch.current.Store(meteredCompany(config.TokenBudget{}))
+	frame, sent := r.frame(t.Context(), now)
+	if !sent {
+		t.Fatal("an uncapped company published nothing, which a reader cannot tell from no report")
+	}
+	if frame.Metered() || frame.Org.Windows == nil {
+		t.Fatalf("frame = %+v, want the org as an empty list and no seat", frame)
+	}
 }

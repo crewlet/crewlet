@@ -188,19 +188,43 @@ type Sealer interface {
 var ErrSealTaken = errors.New("chart: the sealed name already holds a " +
 	"different value")
 
-// Runtime is where an object's runtime half keeps its credentials — the one
-// thing this domain needs to know about a half it cannot read.
+// Runtime is the two things this domain needs to know about a half it cannot
+// read: where its credentials are, and whether it is one the object may run
+// with.
 //
 // CONSUMER-DEFINED and satisfied by internal/org, which owns the half's shape
 // at both ends: it walks the encoded half against its own types with
 // [secrets.Walk], so which values are credentials is the `secret:"true"` tag
-// on those types and nothing written here.
+// on those types and nothing written here — and it holds the half to the rules
+// its own types state, so a seat written through the chart is held to exactly
+// what a seat in a company file is.
 type Runtime interface {
 	// Credentials hands visit every credential in one object's runtime
 	// half and answers the half with each answer in its place — the
 	// half's own bytes where no answer differed.
 	Credentials(kind ObjectKind, runtime json.RawMessage, visit secrets.Visit) (
 		json.RawMessage, error)
+
+	// Check refuses a runtime half its object may not run with — a token
+	// ceiling below one token or under a key that is no calendar window,
+	// a schedule that cannot fire, a field the seat's KIND may not carry —
+	// naming the field and what to write instead. The object is the one
+	// the half is written onto: its kind, its name, and for a seat the kind
+	// of seat its row holds. Nil for a half with nothing wrong, and for no
+	// half at all.
+	Check(object RuntimeOwner, runtime json.RawMessage) error
+}
+
+// RuntimeOwner is the object a runtime half is checked as: what the chart's
+// row says about it, which the half cannot.
+type RuntimeOwner struct {
+	// Kind is a unit or a seat.
+	Kind ObjectKind
+	// Name is the object's own, for a refusal to name it by.
+	Name string
+	// Seat is the kind of seat the row holds, on a seat: what decides which
+	// runtime fields it may carry. Empty on a unit.
+	Seat SeatKind
 }
 
 // secretPrefix opens every name this domain seals under.

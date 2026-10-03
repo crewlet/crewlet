@@ -17,6 +17,11 @@
 //
 // A publish listener for the projection would have the same defect from the
 // other side: it only ever sees what its own node published.
+//
+// And the store's own consequence: each node's store holds what that node
+// published and nothing else, so a READ of history is not this package's — it
+// is asked of every live node at query time by internal/eventfan, and a read
+// of one node's store alone is a third of a three-node fleet (ADR-0021).
 package observe
 
 import "github.com/crewlet/crewlet/internal/events"

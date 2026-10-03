@@ -1,0 +1,128 @@
+package livestate
+
+import (
+	"time"
+
+	"github.com/crewlet/crewlet/internal/iam"
+)
+
+// A SEAT A PERSON PAUSED, as the dashboard draws it.
+//
+// The pause itself is a coordination record every node reads (coord.SeatPause);
+// what this projection holds is the account of it a screen needs — who paused
+// the seat, when, why, and whether they also stopped its turn — moved by the
+// `seat_paused` and `seat_resumed` events the winning writer publishes, and
+// seeded from the record itself at boot, because a pause taken last week is in
+// no event this process will ever hear.
+//
+// It is an INPUT to the seat's state, not the state: whether a paused seat
+// reads as stopped, and above what, is the one seat-state vocabulary's to say,
+// and a screen reads it from there rather than deriving it here.
+
+// Paused is who paused a seat, when, and why.
+type Paused struct {
+	// By is who paused it, ByKind what sort of author that is, and
+	// OperatorID the credential they did it through — the three halves
+	// iam.ActorFor names and the pause record and its event carry: the
+	// seat for a person the identity directory binds to one (kind human),
+	// the login for anybody else. The credential is what an audit asks
+	// about; the author is who a screen names.
+	By         string        `json:"by"`
+	ByKind     iam.ActorKind `json:"by_kind"`
+	OperatorID string        `json:"operator_id,omitempty"`
+
+	// At is when the seat was paused, RFC 3339 in UTC.
+	At string `json:"at"`
+
+	// Reason is why, in the pauser's words; empty when none was given.
+	Reason string `json:"reason,omitempty"`
+
+	// StopRunning is whether the pause also ended the turn the seat was on
+	// rather than letting it finish.
+	StopRunning bool `json:"stop_running"`
+}
+
+func (p *Paused) clone() *Paused {
+	if p == nil {
+		return nil
+	}
+	c := *p
+	return &c
+}
+
+// SeedPause is one paused seat as the coordination record holds it, named by
+// the AGENT ID this projection keys seats by — which is what the record itself
+// is keyed on (coord.SeatPause.Seat), so a pause follows its seat through a
+// rename rather than staying with the handle it was taken under.
+type SeedPause struct {
+	AgentID string
+	Paused  Paused
+}
+
+// applyPause moves a seat's pause for one event, reporting whether it did.
+//
+// ORDERED BY THE EVENT'S OWN INSTANT against the last one that moved it, as
+// every other part of a seat is: a pause and its resume travel on different
+// subjects, and a resume that arrived first must not be undone by the pause it
+// lifted.
+func (s *LiveState) applyPause(agent *agentLive, env Envelope, payload map[string]any) bool {
+	var next *Paused
+	switch env.Type {
+	case "seat_paused":
+		next = &Paused{
+			By:          str(payload, "paused_by"),
+			ByKind:      iam.ActorKind(str(payload, "paused_by_kind")),
+			OperatorID:  str(payload, "operator_id"),
+			At:          str(payload, "paused_at"),
+			Reason:      str(payload, "reason"),
+			StopRunning: flag(payload, "stop_running"),
+		}
+	case "seat_resumed":
+	default:
+		return false
+	}
+	at := newStamp(env.Timestamp)
+	if !at.empty() && !agent.pausedAt.empty() && at.before(agent.pausedAt) {
+		return false
+	}
+	if !at.empty() {
+		agent.pausedAt = at
+	}
+	before := agent.paused
+	agent.paused = next
+	return !samePaused(before, next)
+}
+
+// SeedPauses sets each named seat's pause from the coordination record,
+// reporting the seats it moved.
+//
+// A seat the stream has already moved keeps what the stream said: that is
+// newer than any record read before it arrived.
+func (s *LiveState) SeedPauses(pauses []SeedPause) Change {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var change Change
+	for _, p := range pauses {
+		if p.AgentID == "" {
+			continue
+		}
+		agent := s.ensureAgent(p.AgentID)
+		if !agent.pausedAt.empty() {
+			continue
+		}
+		paused := p.Paused
+		agent.paused = &paused
+		if at, err := time.Parse(time.RFC3339Nano, paused.At); err == nil {
+			agent.pausedAt = newStamp(at.UTC().Format(time.RFC3339Nano))
+		}
+		change.agentMoved(p.AgentID)
+	}
+	return change
+}
+
+func samePaused(a, b *Paused) bool {
+	if a == nil || b == nil {
+		return a == b
+	}
+	return *a == *b
+}

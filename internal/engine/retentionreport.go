@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/coord"
+	"github.com/crewlet/crewlet/internal/eventfan"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/statelog/metrics"
 )
@@ -75,7 +76,12 @@ func (r *retention) Report(ctx context.Context) statelog.Report {
 		floors[row.Domain] = row
 	}
 	backups, _ := r.fleet.BackupPoints(ctx)
-	newest, haveBackup := coord.NewestBackup(backups)
+	// THE POINT THE TRIM COUNTS, under the operator's own policy — not the
+	// newest of every owner. Under `backup_floor: operator` the nodes' own
+	// nightly copies are fresh while the trim waits on an acknowledgement,
+	// and an alarm aging the copies stayed green beside a log that could not
+	// be trimmed.
+	newest, haveBackup := r.newestCounted(backups)
 
 	// perLog is each identity-claiming log's own tombstones, which the node
 	// block folds into one answer per node below.
@@ -552,6 +558,29 @@ func (r *retention) observed(out *statelog.Reading) {
 		out.SearchScopedFraction = float64(scoped) / float64(answers)
 		out.SearchDegradedFraction = float64(degraded) / float64(answers)
 	}
+
+	// AND THE FLEET'S HISTORY READS, the same fraction over a different
+	// counter: every question counts, because a partial turn and a partial
+	// event page are the same missing node.
+	var reads, partial uint64
+	for _, snapshot := range reading {
+		if snapshot.Name != metrics.HistoryAnswers {
+			continue
+		}
+		reads += snapshot.Total
+		if snapshot.Attrs["coverage"] == historyPartial {
+			partial += snapshot.Total
+		}
+	}
+	if reads > 0 {
+		out.HistoryPartialFraction = float64(partial) / float64(reads)
+	}
+	// AND THE BUDGET THOSE READS WAITED ON, which the alarm's sentence names.
+	// Read off the fan-out's own constant rather than restated: statelog
+	// cannot import the layer above it, so the reading is where the one
+	// number crosses, and a second copy of it in the alarm text would drift
+	// the day somebody re-tuned the fan-out.
+	out.HistoryReadBudget = eventfan.FleetReadBudget
 
 	// THE DECLARED RATE, beside the observed one below. It is a constant
 	// rather than a configured value because it is a term in the log's own

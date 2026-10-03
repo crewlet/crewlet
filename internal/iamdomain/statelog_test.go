@@ -3,6 +3,7 @@ package iamdomain_test
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"testing"
 	"time"
 
@@ -37,15 +38,83 @@ func TestTheIdentityDomainIsACertifiedDomain(t *testing.T) {
 			// would be a schema the suite proved and the migration did
 			// not.
 			Encode: encodeSuiteRecord,
-			Kinds:  suiteKinds(),
-			Rows:   iamdomain.NewRows,
-			Write:  suiteWrite,
+			// THE VERSIONED-FIELD TABLE, and a record carrying each of
+			// its fields — which is what certifies the path the table
+			// names is where the encoder actually writes the field.
+			Fields:   iamdomain.VersionedFields(),
+			Carrying: carryingSuiteField,
+			Kinds:    suiteKinds(),
+			Rows:     iamdomain.NewRows,
+			Write:    suiteWrite,
 			// THE GATE RECORD, which this domain had an applier, a fence
 			// and a table for and no writer — so the trim never learned
 			// an evicted node had left this log.
 			EncodeGate: encodeSuiteGate,
 		}
 	})
+}
+
+// carryingSuiteField builds a valid record carrying exactly one versioned
+// field, with its version left for the encoder to stamp.
+//
+// EVERY FIELD THE TABLE NAMES HAS A CASE, and a field without one fails here
+// rather than passing unexamined: the suite reads the version this returns,
+// and a record that did not carry the field would be stamped at 1 and reported
+// as the path being wrong, which is a fixture fault dressed as a domain one.
+func carryingSuiteField(field statelog.VersionedField) ([]byte, error) {
+	at := time.Unix(1_700_000_000, 0).UTC()
+	person := iamdomain.PeopleScope(suitePerson)
+	rec := iamdomain.MutationRecord{
+		RecordEnvelope: iamdomain.RecordEnvelope{
+			OpID: "suite-carrying", CreatedAt: at, Gen: 1, Writer: "suite-node",
+		},
+		Actor: "suite", ActorKind: iam.KindMachine,
+	}
+	var payload any
+	switch field.Name {
+	case "MutationRecord.CollectsSpent":
+		bucket := iamdomain.BucketOf(suitePerson)
+		rec.Subject, rec.Op, rec.Scope = iamdomain.SweepSubject(bucket),
+			iamdomain.OpSweep, iamdomain.BucketScope(bucket)
+		payload = iamdomain.Sweep{V: iamdomain.DocumentVersion, Bucket: bucket, Expired: at}
+		rec.CollectsSpent = true
+	case "MutationRecord.OperatorID":
+		// A STAGE CHANGE THROUGH A TOKEN, the gesture the field was
+		// added for: its trail row names the credential.
+		rec.Subject, rec.Op, rec.Scope = iamdomain.PersonSubject(suitePerson),
+			iamdomain.OpStatus, person
+		rec.Person = suitePerson
+		rec.OperatorID = "pat:018f3a9c-0000-7000-8000-00000000000a"
+	case "Session.EnrolmentOnly":
+		rec.Subject, rec.Op, rec.Scope = iamdomain.SessionSubject("suite-lineage"),
+			iamdomain.OpOpen, person
+		rec.Person = suitePerson
+		payload = iamdomain.Session{V: iamdomain.DocumentVersion, Person: suitePerson,
+			Epoch: 1, AbsoluteExpiresAt: at.Add(time.Hour), EnrolmentOnly: true}
+	case "Invitation.Verifier", "Invitation.Seat":
+		blind := "suite-blind"
+		rec.Subject, rec.Op = iamdomain.EmailSubject(blind), iamdomain.OpInvite
+		rec.Scope = iamdomain.BucketScope(iamdomain.BucketOf(blind))
+		invitation := iamdomain.Invitation{V: iamdomain.DocumentVersion, ID: "suite-invite",
+			Sealed: "sealed:address", ExpiresAt: at.Add(time.Hour)}
+		if field.Name == "Invitation.Verifier" {
+			invitation.Verifier = iamdomain.InvitationVerifier("suite-secret")
+		} else {
+			invitation.Seat = "018f3a9c-0000-7000-8000-0000000000cc"
+		}
+		payload = invitation
+	default:
+		return nil, fmt.Errorf("no suite record carries %s — add a case that sets "+
+			"it and nothing else versioned", field.Name)
+	}
+	if payload != nil {
+		body, err := json.Marshal(payload)
+		if err != nil {
+			return nil, err
+		}
+		rec.Mutation = body
+	}
+	return iamdomain.Encode(rec)
 }
 
 // suiteWrite is one write through the identity estate's own [iamdomain.Writer]

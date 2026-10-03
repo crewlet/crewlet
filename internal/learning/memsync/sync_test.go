@@ -481,7 +481,7 @@ func TestIdentityTellsTheFourCasesApart(t *testing.T) {
 // the seat next replayed an empty prefix and reported success, and everything
 // the seat had learned sat on the stream under an address nothing would ask
 // for again. The id is anchored on the handle the seat was CREATED under
-// (ADR-0019), so it does not move — and so is the handle the handle-keyed
+// (ADR-0026), so it does not move — and so is the handle the handle-keyed
 // tables are selected and read by, so neither half of a rename's memory is
 // left behind.
 func TestARenamedSeatHydratesItsOwnDiary(t *testing.T) {

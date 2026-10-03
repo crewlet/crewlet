@@ -65,6 +65,10 @@ func TestEveryDirectoryWriteCarriesAnInstantItsLedgerCanVouchFor(t *testing.T) {
 				t.Fatalf("answered %d: %v", got.status, got.body)
 			}
 			gesture, _ := got.body["op_id"].(string)
+			// AN INVITATION'S ISSUE IS PUBLISHED UNDER ITS GESTURE'S SEED,
+			// the uuid its scoped key begins with: the domain derives the
+			// invitation's id from it ([iamapi.Service] createKey).
+			seed, _, _ := strings.Cut(gesture, ".")
 			gestureAt, ok := statelog.OpMintedAt(gesture)
 			if !ok || gestureAt.Before(floor) {
 				t.Fatalf("the gesture answered op_id %q, which carries no "+
@@ -80,7 +84,8 @@ func TestEveryDirectoryWriteCarriesAnInstantItsLedgerCanVouchFor(t *testing.T) {
 							call, op, err)
 						continue
 					}
-					if !strings.HasPrefix(op, gesture) {
+					if !strings.HasPrefix(op, gesture) &&
+						(call != "invite" || op != seed) {
 						t.Errorf("%s published under %q, which is no step of "+
 							"the gesture %q", call, op, gesture)
 					}
@@ -100,14 +105,11 @@ func TestEveryDirectoryWriteCarriesAnInstantItsLedgerCanVouchFor(t *testing.T) {
 // carries no instant is one the ledger can never vouch for: every retry of it
 // — the only thing a key is for — would be answered `unknown` without being
 // published, for ever. So it is held to [statelog.CheckCallerOpID], the rule
-// every surface holds a caller's id to, and refused naming the header. A
-// create's key seeds the id it creates, so it is a BARE uuid7 as well: a name
-// after it would be a second key naming the same person.
+// every surface holds a caller's id to, and refused naming the header.
 //
 // Mutation: take the header as sent and every row publishes.
 func TestAKeyOutsideTheGrammarIsRefusedBeforeAnyWrite(t *testing.T) {
 	t.Parallel()
-	named := statelog.NewOpID(time.Now(), "people-create")
 	for _, c := range []struct {
 		name, method, target, key string
 		body                      any
@@ -120,10 +122,6 @@ func TestAKeyOutsideTheGrammarIsRefusedBeforeAnyWrite(t *testing.T) {
 			"/iam/people/" + bob.String() + "/sessions", "retry-7", nil},
 		{"a create", http.MethodPost, "/iam/people", "retry-1",
 			map[string]any{"login": "dana.sre", "email": "dana@example.com"}},
-		{"a create under a named key", http.MethodPost, "/iam/people", named,
-			map[string]any{"login": "dana.sre", "email": "dana@example.com"}},
-		{"an invitation under a named key", http.MethodPost, "/iam/invitations",
-			named, map[string]any{"email": "dana@example.com"}},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			t.Parallel()
@@ -336,8 +334,44 @@ func TestAStepsRefusalIsAnsweredUnderItsGesture(t *testing.T) {
 		t.Fatalf("the bind was never asked for (%v); this case tests nothing",
 			r.writer.calls)
 	}
-	if got.body["op_id"] != key {
-		t.Errorf("answered op_id %v, want the gesture's %q — the one a retry "+
-			"sends back", got.body["op_id"], key)
+	// THE GESTURE'S KEY, SCOPED BY THE CALLER: what every step was
+	// published as a step of, and what a retry sends back — never the
+	// refused step's own id.
+	answered, _ := got.body["op_id"].(string)
+	claimed := r.writer.ops["claim:seat"]
+	if answered == "" || len(claimed) == 0 || !strings.HasPrefix(claimed[0], answered+".") {
+		t.Errorf("answered op_id %q, want the gesture every step (%v) is a step of "+
+			"— the one a retry sends back", answered, claimed)
+	}
+	if answered == statelog.StepOpID(key, "bind") {
+		t.Errorf("answered the refused step's own id %q", answered)
+	}
+}
+
+// TWO KEYS THAT SHARE A UUID ARE TWO CREATES. A create's id is derived from
+// the uuid its scoped key begins with, and the scope derives that from the
+// WHOLE key the caller sent — so a key with a name after the uuid is another
+// operation naming another person, never a second key naming the same one,
+// which a seed read off the caller's own uuid would be. Mutation: seed the
+// create from the uuid the caller sent rather than the scoped key's, and the
+// two creates name one person.
+func TestTwoKeysSharingAUUIDCreateTwoPeople(t *testing.T) {
+	t.Parallel()
+	bare := statelog.NewOpID(time.Now(), "")
+	named := statelog.StepOpID(bare, "people-create")
+	people := map[string]string{}
+	for _, key := range []string{bare, named} {
+		r := newRig(t)
+		got := r.asWith(administrator(), http.MethodPost, "/iam/people",
+			map[string]any{"login": "dana.sre", "email": "dana@example.com"},
+			http.Header{opkey.Header: {key}})
+		if got.status/100 != 2 {
+			t.Fatalf("a create under %q answered %d: %v", key, got.status, got.body)
+		}
+		people[key] = r.writer.enrolled.PersonID
+	}
+	if people[bare] == "" || people[bare] == people[named] {
+		t.Errorf("the keys %q and %q created %q and %q, want two people",
+			bare, named, people[bare], people[named])
 	}
 }

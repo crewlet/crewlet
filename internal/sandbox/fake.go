@@ -284,6 +284,11 @@ type FakeRunner struct {
 	PollErr error
 	// CollectErr, when set, fails every Collect.
 	CollectErr error
+	// PeekErr, when set, fails every Peek.
+	PeekErr error
+
+	output Output
+	peeks  int
 }
 
 var _ Runner = (*FakeRunner)(nil)
@@ -335,6 +340,34 @@ func (r *FakeRunner) Collect(ctx context.Context, box Sandbox, handle RunHandle)
 		return Result{}, r.CollectErr
 	}
 	return r.result, nil
+}
+
+// Peek returns the output a test set with [FakeRunner.SetOutput], and says
+// the job is finished once [FakeRunner.Finish] has been called.
+func (r *FakeRunner) Peek(ctx context.Context, box Sandbox, handle RunHandle) (Output, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.PeekErr != nil {
+		return Output{}, r.PeekErr
+	}
+	out := r.output
+	out.Finished = r.done
+	r.peeks++
+	return out, nil
+}
+
+// SetOutput is what the next Peek reports the job has said so far.
+func (r *FakeRunner) SetOutput(out Output) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.output = out
+}
+
+// Peeks is how many times the box was peeked at.
+func (r *FakeRunner) Peeks() int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.peeks
 }
 
 // Finish makes the next Poll report done and the next Collect return result.

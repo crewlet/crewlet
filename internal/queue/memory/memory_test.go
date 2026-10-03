@@ -37,7 +37,9 @@ import (
 func TestConformance(t *testing.T) {
 	t.Parallel()
 	queuetest.RunWith(t,
-		func(*testing.T) queue.EventQueue { return memory.New() },
+		func(_ *testing.T, opts ...queue.Option) queue.EventQueue {
+			return memory.New(memory.Contract(opts...))
+		},
 		queuetest.Capabilities{
 			Peer: func(_ *testing.T, q queue.EventQueue) queue.EventQueue {
 				return q.(*memory.Queue).Client()
@@ -80,6 +82,13 @@ func TestConformance(t *testing.T) {
 			},
 			History: func(q queue.EventQueue) []*events.Event {
 				return q.(*memory.Queue).History()
+			},
+			// The broker, not the client: every client of it loses it
+			// at once, as every connection to a server that stopped
+			// does on the backend that ships. Nothing to wait for — the
+			// twin's clients read the flag under the broker's lock.
+			BrokerDown: func(_ *testing.T, q queue.EventQueue) {
+				q.(*memory.Queue).Broker().Fail()
 			},
 			// Publish drains before returning, so batch boundaries are
 			// deterministic and a member rotation is exact. Both are

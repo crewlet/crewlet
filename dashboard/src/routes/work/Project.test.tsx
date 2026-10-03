@@ -24,11 +24,20 @@ import {
   DUPLICATE_HREF,
   SHARED_KEY,
 } from "~/test/keyCollision.ts";
+import { ViewerProvider } from "~/lib/viewer.ts";
 
 vi.mock("~/lib/store-hooks.ts", async () => {
   const actual =
     await vi.importActual<typeof import("~/lib/store-hooks.ts")>("~/lib/store-hooks.ts");
-  return { ...actual, useClient: vi.fn(), useConnection: vi.fn(), useOrg: vi.fn() };
+  // THE AGENTS PUSH, which the list reads for the turn running on each card:
+  // no seat is working in these cases, so the push is empty.
+  return {
+    ...actual,
+    useClient: vi.fn(),
+    useConnection: vi.fn(),
+    useOrg: vi.fn(),
+    useAgents: () => [],
+  };
 });
 
 afterEach(() => {
@@ -61,7 +70,7 @@ const detail = (over: Partial<WorkProjectDetail> = {}): WorkProjectDetail => ({
   purpose: "Build and ship the product",
   unit: { key: "platform", name: "Platform", resolved: true },
   lead: { handle: "ada", kind: "agent" },
-  task_counts: { open: 12, done: 40, closed: 3 },
+  task_counts: { todo: 9, active: 3, done: 40, closed: 3 },
   version: 1,
   statuses: [],
   types: [],
@@ -73,9 +82,11 @@ const detail = (over: Partial<WorkProjectDetail> = {}): WorkProjectDetail => ({
 
 const mount = (key = "ENG") =>
   render(
-    <Router>
-      <Project projectKey={key} />
-    </Router>,
+    <ViewerProvider>
+      <Router>
+        <Project projectKey={key} />
+      </Router>
+    </ViewerProvider>,
   );
 
 /** What `work_items` was actually asked, which is what a lens's claim rests on. */
@@ -101,7 +112,8 @@ function precedes(first: Element | null, second: Element | null): boolean {
 // facts a board can say none of from its rows. A HANDLE IS THE DATABASE'S WORD
 // FOR A PERSON, and every other surface resolves it through the chart.
 test("the header says what the container is, in the company's own words", async () => {
-  serving({ work_project: detail(), work_items: { items: [], groups: [], complete: true } });
+  location.hash = "#/work/ENG?lens=about";
+  serving({ work_project: detail(), work_activity: { records: [], complete: true } });
   mount();
   await waitFor(() => expect(screen.getByText("Engineering")).toBeTruthy());
   expect(screen.getByText("Ada Okonkwo")).toBeTruthy();
@@ -114,7 +126,8 @@ test("the header says what the container is, in the company's own words", async 
 // come AFTER the census, so a chart stood between the object's name and the
 // sentence saying what it is for.
 test("the purpose is the sentence under the name, above the census", async () => {
-  serving({ work_project: detail(), work_items: { items: [], groups: [], complete: true } });
+  location.hash = "#/work/ENG?lens=about";
+  serving({ work_project: detail(), work_activity: { records: [], complete: true } });
   const { container } = mount();
   await waitFor(() => expect(screen.getByText("Build and ship the product")).toBeTruthy());
   const note = container.querySelector(".page-note");
@@ -129,8 +142,12 @@ test("the purpose is the sentence under the name, above the census", async () =>
 // case, not the exception. The fallback names the unit that owns it, and says
 // when nothing has been filed.
 test("a project with no purpose says whose it is, and whether anything is in it", async () => {
+  location.hash = "#/work/ENG?lens=about";
   serving({
-    work_project: detail({ purpose: undefined, task_counts: { open: 0, done: 0, closed: 0 } }),
+    work_project: detail({
+      purpose: undefined,
+      task_counts: { todo: 0, active: 0, done: 0, closed: 0 },
+    }),
     work_items: { items: [], groups: [], complete: true },
   });
   const { container } = mount();
@@ -141,15 +158,19 @@ test("a project with no purpose says whose it is, and whether anything is in it"
   cleanup();
 
   // WITH WORK IN IT, the second half is what would fill the missing sentence.
+  location.hash = "#/work/ENG?lens=about";
   serving({
     work_project: detail({ purpose: undefined }),
     work_items: { items: [], groups: [], complete: true },
   });
   const filled = mount();
   await waitFor(() => expect(filled.container.querySelector(".page-note")).toBeTruthy());
-  expect(filled.container.querySelector(".page-note")?.textContent).toMatch(
-    /^ENG is Platform's project\. A `purpose` on that unit/,
+  const lede = filled.container.querySelector(".page-note")?.textContent ?? "";
+  expect(lede).toBe(
+    "ENG is Platform's project. No purpose is set for it — add one to Platform in the company configuration and this line will say it.",
   );
+  // A SENTENCE, not a configuration key in backticks.
+  expect(lede).not.toContain("`");
 });
 
 // A PROJECT WITH NOTHING FILED IN IT IS ITS OWN STATE, drawn from the
@@ -158,7 +179,7 @@ test("a project with no purpose says whose it is, and whether anything is in it"
 // whose own "Nothing matches" is a claim about filters nobody set.
 test("an empty project says so instead of running the list", async () => {
   const query = serving({
-    work_project: detail({ task_counts: { open: 0, done: 0, closed: 0 } }),
+    work_project: detail({ task_counts: { todo: 0, active: 0, done: 0, closed: 0 } }),
     work_items: { items: [], groups: [], complete: true },
   });
   mount();
@@ -166,10 +187,14 @@ test("an empty project says so instead of running the list", async () => {
     expect(screen.getByText("No work has been filed in Engineering yet")).toBeTruthy(),
   );
   expect(screen.getByText(/create_work_item/)).toBeTruthy();
-  // AND THE WAY OUT, in the state itself rather than only in the page's own
-  // actions: a reader who opened the wrong key is one click from the company's.
-  const state = screen.getByText("No work has been filed in Engineering yet").closest("div");
-  expect(state?.querySelector("a")?.textContent).toBe("All work →");
+  // AND THE WAY IN, in the state itself rather than only in the page bar: a
+  // reader looking at an empty project is looking for how to file into it.
+  const state = screen
+    .getByText("No work has been filed in Engineering yet")
+    .closest(".crewlet-empty-state, div") as HTMLElement;
+  expect(
+    within(state.parentElement ?? state).getByRole("button", { name: "New task" }),
+  ).toBeTruthy();
   expect(listRan(query)).toBe(false);
 });
 
@@ -180,7 +205,7 @@ test("an empty project says so instead of running the list", async () => {
 test("a project whose work was all removed still opens its trash", async () => {
   location.hash = "#/work/ENG?removed=true";
   const query = serving({
-    work_project: detail({ task_counts: { open: 0, done: 0, closed: 0 } }),
+    work_project: detail({ task_counts: { todo: 0, active: 0, done: 0, closed: 0 } }),
     work_items: { items: [], groups: [], complete: true },
     work_activity: { records: [], complete: true },
   });
@@ -190,10 +215,10 @@ test("a project whose work was all removed still opens its trash", async () => {
 });
 
 // THE LENS SAYS HOW MUCH IS BEHIND IT, from the count the header already
-// holds. Overview is a description rather than a collection and History is
-// paged, so neither takes one — a count of a loaded page would read as a count
-// of the lens.
-test("the Items lens carries the open count, and the other two carry none", async () => {
+// holds — waiting and started together, 9 + 3. About is a description
+// rather than a collection and History is paged, so neither takes one — a
+// count of a loaded page would read as a count of the lens.
+test("the Items lens carries the unfinished count, and the other two carry none", async () => {
   serving({ work_project: detail(), work_items: { items: [], groups: [], complete: true } });
   mount();
   // THE LENS ROW BY NAME. The Items lens draws the list's own view strip
@@ -202,27 +227,49 @@ test("the Items lens carries the open count, and the other two carry none", asyn
   await waitFor(() => expect(screen.getByRole("tablist", { name: "Lens" })).toBeTruthy());
   const tabs = within(screen.getByRole("tablist", { name: "Lens" })).getAllByRole("tab");
   expect(tabs.length).toBe(3);
-  expect(tabs[0]?.textContent).toBe("Items12");
-  expect(tabs[1]?.textContent).toBe("Overview");
+  // SAID AS WHAT IT COUNTS — open tasks — to a pointer and a screen reader,
+  // because the bar a row below counts its own scope ("… in Recent").
+  expect(tabs[0]?.textContent).toMatch(/^Items12/);
+  expect(tabs[0]?.textContent).toContain("12 open");
+  expect(within(tabs[0]!).getByTitle("12 open")).toBeTruthy();
+  expect(tabs[1]?.textContent).toBe("About");
   expect(tabs[2]?.textContent).toBe("History");
 });
 
-// A PROJECT'S CENSUS IS A SHAPE AS WELL AS THREE NUMBERS, and the bar carries
-// its own legend: an unlabelled stack of three colours is three colours.
-test("the census is a bar with its legend, and only where there is work", async () => {
-  serving({ work_project: detail(), work_items: { items: [], groups: [], complete: true } });
+// A PROJECT'S CENSUS IS A SHAPE AS WELL AS THREE NUMBERS — its work split
+// into done, active and still to do — and THE SPLIT IS THE CENSUS: the bar's
+// accessible name is its parts and its remainder over the whole they make,
+// 40 + 3 + 9 = 52, with the three closed left out (they left the question
+// rather than answering it). And it carries its own legend.
+test("the census is the split of the work, and only where there is work", async () => {
+  location.hash = "#/work/ENG?lens=about";
+  serving({ work_project: detail(), work_activity: { records: [], complete: true } });
   const { container } = mount();
-  await waitFor(() => expect(container.querySelector(".crewlet-stacked-bar")).toBeTruthy());
+  await waitFor(() =>
+    expect(screen.getByRole("img", { name: "40 done, 3 active, 9 to do of 52" })).toBeTruthy(),
+  );
   expect(container.querySelector(".crewlet-legend")).toBeTruthy();
   cleanup();
 
+  location.hash = "#/work/ENG?lens=about";
   serving({
-    work_project: detail({ task_counts: { open: 0, done: 0, closed: 0 } }),
-    work_items: { items: [], groups: [], complete: true },
+    work_project: detail({ task_counts: { todo: 0, active: 0, done: 0, closed: 0 } }),
+    work_activity: { records: [], complete: true },
   });
-  const fresh = mount();
+  mount();
   await waitFor(() => expect(screen.getByText("Engineering")).toBeTruthy());
-  expect(fresh.container.querySelector(".crewlet-stacked-bar")).toBeNull();
+  expect(screen.queryByRole("img", { name: /of \d+$/ })).toBeNull();
+});
+
+// THE WORK IS THE FIRST SCREENFUL, as the approved Board draws a project: the
+// Items lens is the list straight under the lens strip, with no header about
+// the container above it — that header is the About lens.
+test("the Items lens draws no container header above the work", async () => {
+  serving({ work_project: detail(), work_items: { items: [], groups: [], complete: true } });
+  const { container } = mount();
+  await waitFor(() => expect(screen.getByRole("tablist", { name: "Lens" })).toBeTruthy());
+  expect(container.querySelector(".object-head")).toBeNull();
+  expect(screen.queryByText("Build and ship the product")).toBeNull();
 });
 
 // ITEMS IS THE DEFAULT, because the work is what somebody opening a project
@@ -235,24 +282,24 @@ test("the work is the lens a project opens on, scoped to this project", async ()
   });
   mount();
   await waitFor(() => expect(asked(query).container).toBe("project:ENG"));
-  // THE LENS ROW BY NAME, because the Items lens brings a tab row of its own:
+  // THE LENS ROW BY NAME, because the Items lens brings a row of its own:
   // the list's view strip is drawn whether or not anybody has saved a view, and
-  // its first tab is this container's own list. Read as "every tab on the
-  // screen" this case would fail the day either row gains a member, which is
-  // not what it is about.
+  // its first button is this container's own list, pressed while no saved view
+  // runs. Read as "every tab on the screen" this case would fail the day either
+  // row gains a member, which is not what it is about.
   const lenses = screen.getByRole("tablist", { name: "Lens" });
   expect(
     within(lenses)
       .getAllByRole("tab")
       .map((el) => el.textContent),
-  ).toEqual(["Items12", "Overview", "History"]);
-  expect(screen.getByRole("tab", { name: "All in this project" })).toBeTruthy();
+  ).toEqual(["Items1212 open", "About", "History"]);
+  expect(screen.getByRole("button", { name: "All in this project", pressed: true })).toBeTruthy();
 });
 
-// A LENS IS A SECTION, so it is in the URL: a reader who walked to the
-// Overview can send it to somebody, and Back means the lens they came from.
+// A LENS IS A SECTION, so it is in the URL: a reader who walked to
+// About can send it to somebody, and Back means the lens they came from.
 test("a lens is an address rather than a state nobody can link to", async () => {
-  location.hash = "#/work/ENG?lens=overview";
+  location.hash = "#/work/ENG?lens=about";
   serving({
     work_project: detail({
       statuses: [{ status: "todo", label: "Backlog", group: "not_started", description: "" }],
@@ -273,7 +320,7 @@ test("a lens is an address rather than a state nobody can link to", async () => 
 // A PROJECT THAT DECLARES NO LABELS SAYS SO. An empty row under a heading is a
 // project whose labels failed to load, which is a different fact.
 test("a vocabulary a project does not declare is a sentence, not a gap", async () => {
-  location.hash = "#/work/ENG?lens=overview";
+  location.hash = "#/work/ENG?lens=about";
   serving({
     work_project: detail(),
     work_items: { items: [], groups: [], complete: true },
@@ -334,9 +381,11 @@ test("the rail draws the page's own facts, in the page's own order", async () =>
     work_activity: { records: [], complete: true },
   });
   const { container } = render(
-    <Router>
-      <ProjectPeek projectKey="ENG" />
-    </Router>,
+    <ViewerProvider>
+      <Router>
+        <ProjectPeek projectKey="ENG" />
+      </Router>
+    </ViewerProvider>,
   );
   await waitFor(() => expect(screen.getByText("Engineering")).toBeTruthy());
   expect(screen.getByText("Ada Okonkwo")).toBeTruthy();
@@ -353,13 +402,15 @@ test("the rail draws the page's own facts, in the page's own order", async () =>
 // rail has no lens under it to carry the sentence.
 test("the rail says an empty project is empty, where the page's list does", async () => {
   serving({
-    work_project: detail({ task_counts: { open: 0, done: 0, closed: 0 } }),
+    work_project: detail({ task_counts: { todo: 0, active: 0, done: 0, closed: 0 } }),
     work_activity: { records: [], complete: true },
   });
   const { container } = render(
-    <Router>
-      <ProjectPeek projectKey="ENG" />
-    </Router>,
+    <ViewerProvider>
+      <Router>
+        <ProjectPeek projectKey="ENG" />
+      </Router>
+    </ViewerProvider>,
   );
   await waitFor(() => expect(screen.getByText("No work has been filed here yet.")).toBeTruthy());
   expect(container.querySelector(".work-census")).toBeNull();
@@ -429,8 +480,8 @@ test("switching lens drops neither the shape, its columns nor the order", async 
   await waitFor(() => expect(asked(query).sort).toBe("-due"));
 
   const lenses = () => screen.getByRole("tablist", { name: "Lens" });
-  fireEvent.click(within(lenses()).getByRole("tab", { name: "Overview" }));
-  await waitFor(() => expect(location.hash).toContain("lens=overview"));
+  fireEvent.click(within(lenses()).getByRole("tab", { name: "About" }));
+  await waitFor(() => expect(location.hash).toContain("lens=about"));
   expect(location.hash).toContain("shape=table");
   expect(location.hash).toContain("cols.table=key%2Ctitle");
   expect(location.hash).toContain("sort=-due");
@@ -444,6 +495,23 @@ test("switching lens drops neither the shape, its columns nor the order", async 
   expect(location.hash).toContain("cols.table=key%2Ctitle");
 });
 
+// "OPEN WORK ONLY" IS WHAT IS ASKED. The About lens's breakdown took the
+// list's default, under which a root's subtree rides along unfiltered — so a
+// finished sub-task of an open epic drew a Done line under a caption saying
+// done work was not in it. Every task on its own, in the open groups.
+test("About's breakdown of the open work asks for open work", async () => {
+  location.hash = "#/work/ENG?lens=about";
+  const query = serving({
+    work_project: detail(),
+    work_items: { items: [], groups: [], complete: true },
+    work_activity: { records: [], complete: true },
+  });
+  mount();
+  await waitFor(() => expect(asked(query).group_by).toBe("status"));
+  expect(asked(query).status_group).toBe("not_started,active");
+  expect(asked(query).subtasks).toBe("separate");
+});
+
 // THE LATEST CHANGES LEAD TO THE TASK EACH IS ABOUT.
 //
 // A change is drawn under its task's key, and a key two tasks hold opens the
@@ -451,7 +519,7 @@ test("switching lens drops neither the shape, its columns nor the order", async 
 // The engine says beside the key when it opens another task, and that row goes
 // by the task's id.
 test("the latest changes to two tasks under one key link each to itself", async () => {
-  location.hash = "#/work/ENG?lens=overview";
+  location.hash = "#/work/ENG?lens=about";
   const change = (id: string, subject: string, collision?: boolean) => ({
     id,
     log_seq: 1,

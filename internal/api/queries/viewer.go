@@ -8,6 +8,7 @@ import (
 	"fmt"
 
 	"github.com/crewlet/crewlet/internal/authz"
+	"github.com/crewlet/crewlet/internal/engine"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/org"
 )
@@ -75,8 +76,39 @@ func (s Sources) viewer(ctx context.Context, _ Params) (any, error) {
 		// while their assistant wrote it under this. See
 		// [iam.RecordOwner].
 		"owner": iam.RecordOwner(principal),
+		// WHAT THIS CALLER MAY DO on the act transport: the tools that
+		// write which the authority table can admit them to before any
+		// object is named — see [Sources.Acts]. A screen disables a
+		// control nothing here names, with the reason, rather than
+		// offering a press the engine refuses. ALWAYS AN ARRAY, never
+		// null, so "may do nothing" is a value a reader can test rather
+		// than an absence.
+		"acts": []string{},
+		// WHERE THIS CALLER'S CREATE LANDS when it names no project — the
+		// project `create_work_item` defaults a bound person's create to,
+		// from the same derivation. "" is a real answer: a caller bound to
+		// no seat, and a seat whose team, and every team above it, owns no
+		// project, whose create is refused until one is named.
+		"project": "",
 	}
-	seat := s.seatOf(principal)
+	if s.Acts != nil {
+		acts, err := s.Acts(ctx, principal)
+		if err != nil {
+			// THE TABLE COULD NOT DECIDE, which is not "may do nothing":
+			// answered as an empty list, a screen would lock every
+			// control a person holds the authority for while this node
+			// is behind its chart.
+			return nil, fmt.Errorf("%w: this node cannot yet say what this "+
+				"credential may do: %w", ErrUnavailable, err)
+		}
+		if acts != nil {
+			out["acts"] = acts
+		}
+	}
+	// ONE CHART READING for the seat and the project it defaults to, so the
+	// two cannot describe two charts a rename landed between.
+	organization := s.organization()
+	seat := seatOf(organization, principal)
 	if seat == nil {
 		return out, nil
 	}
@@ -89,6 +121,10 @@ func (s Sources) viewer(ctx context.Context, _ Params) (any, error) {
 	} else {
 		out["kind"] = string(org.KindAgent)
 	}
+	// THROUGH THE ONE DERIVATION the operator surface's create applies
+	// (`engine.ProjectOfSeat`), so the project promised here is the project
+	// the create files into.
+	out["project"] = engine.ProjectOfSeat(organization, seat.Handle())
 	return out, nil
 }
 
@@ -101,18 +137,14 @@ func grantNames(p iam.Principal) []string {
 	return out
 }
 
-// seatOf resolves the caller's own seat, or nil.
-func (s Sources) seatOf(p iam.Principal) *org.Role {
-	if p.Seat == "" || s.Company == nil {
-		return nil
-	}
-	company, roster := s.Company()
-	if company == nil || roster == nil {
+// seatOf resolves the caller's own seat on one chart reading, or nil.
+func seatOf(organization *org.Organization, p iam.Principal) *org.Role {
+	if p.Seat == "" || organization == nil {
 		return nil
 	}
 	// EVERY SEAT AND NOT ONLY THE AGENTS: a person holds a HUMAN seat,
 	// which is the whole case this resolves.
-	return roster.SeatByHandle(p.Seat)
+	return organization.SeatByHandle(p.Seat)
 }
 
 // recordHandle is the handle a question about somebody's PERSONAL RECORD —
@@ -147,10 +179,10 @@ func (s Sources) seatOf(p iam.Principal) *org.Role {
 //
 // THE SCOPE RULE IS THE AUTHORITY TABLE'S, asked with the question's OWN verb:
 // `work_inbox` asks [authz.ActionInboxRead], `work_my_work`
-// [authz.ActionMyWork], `work_person` [authz.ActionPersonRead] — somebody's
-// queue, which is theirs, their lead's, or the deployment's admin grant's —
-// and `conversations` asks [authz.ActionSeatTrailRead], a seat's trail, which
-// is the audit read. It used to decide every one of them as a person's record,
+// [authz.ActionMyWork], `work_person` and `decisions` [authz.ActionPersonRead]
+// — somebody's queue, which is theirs, their lead's, or the deployment's admin
+// grant's — and a seat's trail ([Sources.trailSeat]) asks
+// [authz.ActionSeatTrailRead], which is the audit read. It used to decide every one of them as a person's record,
 // so an auditor holding `audit:read` was refused the one seat's threads while
 // reading every phase record it had ever written; and before that it was "any
 // operator credential for anybody else's", which made every token in Tier A a
@@ -214,38 +246,6 @@ func (s Sources) mayLook(principal iam.Principal, action authz.Action) iam.MayLo
 		}
 		return refused(string(action)+" of somebody else's record", d)
 	}
-}
-
-// seatHandle is [Sources.recordHandle] for a question about a SEAT's own
-// trail — its threads — rather than about a person's record.
-//
-// THE CALLER'S OWN IS THEIR SEAT and nothing else, because a seat's trail is
-// what the seat said on the company's surfaces: an unbound caller has none,
-// and a login is not a seat the ledger could hold threads for.
-func (s Sources) seatHandle(ctx context.Context, action authz.Action,
-	asked string) (string, error) {
-
-	principal, how := iam.From(ctx)
-	if how == iam.Unknown {
-		return "", unresolved(ctx, "viewer")
-	}
-	own := principal.Seat
-	if asked == "" {
-		if own == "" {
-			// NOT AN AUTHORIZATION FAILURE. Nobody was refused: there is
-			// no seat to answer about, and the remedy is a binding in
-			// the identity directory rather than a different credential.
-			return "", errNoSeat
-		}
-		return own, nil
-	}
-	if asked == own {
-		return asked, nil
-	}
-	if err := s.mayRead(ctx, principal, action, asked); err != nil {
-		return "", err
-	}
-	return asked, nil
 }
 
 // mayRead decides whether principal may take action on the record one seat

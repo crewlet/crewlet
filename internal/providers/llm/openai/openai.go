@@ -5,7 +5,7 @@
 // not a protocol. That is also why the params it sends stay conservative: an
 // aggregator, a gateway or a local vLLM has to understand every field.
 //
-// Three details are worth checking against the vendor rather than intuition:
+// Four details are worth checking against the vendor rather than intuition:
 //
 //   - MAX RETRIES IS ZERO, for the reason llm.go gives. The SDK's two default
 //     retries fire on 408, 409, 429, every 5xx and every connection error
@@ -18,6 +18,11 @@
 //     same invariant: the contract wants the full prompt count, and the two
 //     vendors report it differently. Adding the cache figures here would
 //     double-bill every cached round.
+//   - NOTHING IS READ FROM THE PROCESS ENVIRONMENT. The SDK loads seven
+//     OPENAI_* variables at construction — an admin key and organization and
+//     project headers among them — and sends them to whatever endpoint an
+//     entry names; [WithoutAmbientEnvironment] undoes each, and the
+//     embeddings provider builds its client with the same options.
 //   - A REASONING TRACE HAS NO AGREED FIELD NAME. DeepSeek and several MiniMax
 //     hosts send reasoning_content, some send a bare reasoning, and OpenAI's
 //     own o-series sends neither through this endpoint. Both names are read
@@ -30,7 +35,6 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
-	"os"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -47,9 +51,6 @@ import (
 )
 
 var log = logging.Get("llm.openai")
-
-// KeyEnv is the conventional variable consulted when a config names no key.
-const KeyEnv = "OPENAI_API_KEY"
 
 // Defaults. The timeout matches the config layer's defaultLLMTimeoutSeconds.
 const (
@@ -69,6 +70,10 @@ type Config struct {
 	Name string
 
 	// APIKeys are the credentials, in declaration order. Several rotate.
+	// They are THE WHOLE BAG: nothing here reads a variable. Which key an
+	// entry that names none runs on is a configuration rule
+	// (config.LLMProvider.Keys), decided where the document and the secret
+	// store are both in reach.
 	APIKeys []string
 
 	// BaseURL is the endpoint. Empty takes DefaultBaseURL, and it is
@@ -106,9 +111,6 @@ type Config struct {
 
 	// Clock is the pool's monotonic time source. Nil takes the default.
 	Clock credential.Clock
-
-	// LookupEnv resolves KeyEnv. Nil takes os.Getenv.
-	LookupEnv func(string) string
 }
 
 // Provider is an OpenAI-wire-format backend.
@@ -137,15 +139,6 @@ func New(cfg Config) (*Provider, error) {
 	}
 
 	keys := cfg.APIKeys
-	if len(keys) == 0 {
-		lookup := cfg.LookupEnv
-		if lookup == nil {
-			lookup = os.Getenv
-		}
-		if key := strings.TrimSpace(lookup(KeyEnv)); key != "" {
-			keys = []string{key}
-		}
-	}
 
 	baseURL := cfg.BaseURL
 	if strings.TrimSpace(baseURL) == "" {
@@ -164,12 +157,14 @@ func New(cfg Config) (*Provider, error) {
 		temperature = DefaultTemperature
 	}
 
-	opts := []option.RequestOption{
+	// NOTHING FROM THE PROCESS ENVIRONMENT, first — see
+	// [WithoutAmbientEnvironment]. The key is set per request, after these.
+	opts := append(WithoutAmbientEnvironment(),
 		option.WithBaseURL(baseURL),
 		option.WithRequestTimeout(timeout),
 		// See the package doc. Not negotiable.
 		option.WithMaxRetries(0),
-	}
+	)
 	// A transport the caller supplied is used as given; otherwise the
 	// engine's shared one. NOTHING HERE OWNS IT — see [httpapi.NewHTTPClient]
 	// for why this provider has no Close.

@@ -14,7 +14,7 @@ One interface serves all inter-component communication:
 
 | Where the broker runs | What that is |
 |---|---|
-| **In this process** — `stream.type: embedded`, the default | A NATS JetStream server started in the engine's own process. No listener, no port, no service to operate: in the solo case it binds no socket at all, so the broker cannot be reached from outside the process. `stream.store_dir` makes its streams file-backed and restart-surviving, and it is **required**: left empty they live in memory, and the engine refuses to boot rather than lose them at the first restart. That holds on every node whatever its `node.roles` and whether or not it has a company yet, because every node runs the engine's core from boot — the **org chart** and the **identity estate** on state logs whose records live on that stream — and the native tracker and knowledge base put their items and pages there too (see [Configuration](../getting-started/configuration.md#stream)). |
+| **In this process** — `stream.type: embedded`, the default | A NATS JetStream server started in the engine's own process. No listener, no port, no service to operate: in the solo case it binds no socket at all, so the broker cannot be reached from outside the process. `stream.store_dir` makes its streams file-backed and restart-surviving, and it is **required**: left empty they live in memory, and the engine refuses to boot rather than lose them at the first restart. That holds on every node whatever its `node.roles` and whether or not it has a company yet, because every node runs the engine's core from boot — the **org chart** and the **identity estate** on state logs whose records live on that stream — and the native tracker and knowledge base put their items and pages there too (see [Configuration](../getting-started/configuration.md#tier-a)). |
 | **Somewhere else** — `stream.type: nats` | The same client code against a NATS server or cluster somebody else runs, dialled through `stream.url`. That sameness is what lets a laptop run the whole company with no services and a fleet run the same binary against a cluster. One thing the operator's server has to promise that the embedded one is built with: messages of 8 MiB, the largest the engine sends — a server that holds the engine's connection to a smaller `max_payload` is refused when the node starts rather than at its first large write (see [Deployment](../guides/deployment.md#an-external-nats-server)). |
 | **Nowhere — the in-memory twin** (`internal/queue/memory`) | The test twin: a real broker object plus N clients rather than one fused thing, so a test can stop a node and still inspect what its subscription retained. |
 
@@ -176,7 +176,7 @@ On the wire of an inbound notification the partition key rides the payload field
 
 > **Known gap: the sandbox park spins.** Nothing takes a pause hold for the sandbox park, so its requeued copies land back on a topic the seat is still consuming and are re-parked immediately: a seat parked on a long run republishes and acks in a loop for the length of the run. Nothing loses work (the same-id dedupe and the completion ledger hold), but the loop is real. The fix is the shape the no-provider park already has: a pause taken at the park, and a release driven by the condition clearing, here the run settling. The two halves have to land together, because a pause without a release leaves a seat deaf until the process restarts.
 
-**Letting go of a subscription: four verbs, not one.** "Unsubscribe" never said *which* kind of letting go it meant, so the contract spells all four out by destructiveness: `Quiesce` stops taking new work while staying attached, `Unquiesce` undoes it, `Detach` closes this process's consumers and leaves the durable subscription (its cursor and its retained mail survive, which is what makes a seat handoff cheap and an unowned seat safe), and `DeleteSubscription` destroys the subscription and the mail it retains. The last one deliberately does not require a local attachment, because decommissioning a role must not depend on which node happened to be running the seat. Creating an inbox subscription is idempotent per agent handle: the node's own start and every config apply both walk the company's seats (`node.EnsureMailboxes`), and only the first call per seat creates a consumer.
+**Letting go of a subscription: four verbs, not one.** "Unsubscribe" never said *which* kind of letting go it meant, so the contract spells all four out by destructiveness: `Quiesce` stops taking new work while staying attached, `Unquiesce` undoes it, `Detach` closes this process's consumers and leaves the durable subscription (its cursor and its retained mail survive, which is what makes a seat handoff cheap and an unowned seat safe), and `DeleteSubscription` destroys the subscription and the mail it retains. The last one deliberately does not require a local attachment, because decommissioning a role must not depend on which node happened to be running the seat. Creating an inbox subscription is idempotent per seat — keyed by the seat's id, which a rename does not move: the node's own start and every published company, an apply or a chart write, both walk the company's seats (`node.EnsureMailboxes`), and only the first call per seat creates a consumer.
 
 **A removed seat's subscriptions are retired, not kept.** `DeleteSubscription`'s caller is the maintenance duty: once a seat has been absent from the active revision for 24 hours, its coding runs are ended and its inbox and its sandbox control subscription are deleted together with the mail they still hold. The walk that creates inboxes records each seat in the coordination store first, because a removed handle is gone from the org the names are derived from and the retirement's stamps have to live somewhere; each sweep also lists the seat mailboxes the broker holds, so one that escaped that record is still found. See [Seat Ownership § The removed seat](seat-ownership.md#the-removed-seat).
 
@@ -193,7 +193,7 @@ With the window at `0`, an idle-agent burst worst-cases at **two** turns (the fi
 
 **Relation to the rate limiter.** `notification_rate_limit` (the notification service's valve, default off) *drops* notifications above N per seat per second. It remains purely a safety valve against pathological webhook storms and notification loops. Burst handling is coalescing's job: a coalesced comment is context preserved, a dropped one is context lost.
 
-DACI decisions are conducted in **Slack threads** — the driver opens a thread in the team channel with its own Slack MCP tools and all contributions, proposals, and approvals are thread replies; there is no engine-side decision machinery. See [Decision Framework](decision-framework.md) for details.
+DACI discussion happens in the team channel on the company's chat surface (Mattermost or Slack), with each agent's own chat MCP tools. The decision itself, when somebody has to choose, is a **structured ask** on a work item — a tracker comment carrying the options, answered by a `choice` — so it arrives as an ordinary tracker wake (`asked`, then `answered`) rather than as an event type of its own. The engine runs no workflow over it. See [Decision Framework](decision-framework.md) for details.
 
 ---
 
@@ -207,11 +207,44 @@ authoritative list, checked against the engine's own map by a test, is
 this is the shape of it, with the notes that need a sentence.
 
 ```text
-# lifecycle: the org coming and going, plus the config changes an operator
-#            goes looking for after the fact
+# lifecycle: the org coming and going, plus the config changes and the
+#            runtime writes an operator goes looking for after the fact
 org_started, org_stopped
 config_revision_activated  # a new revision is the one to serve
 config_revision_applied    # one node's outcome, and how far it got
+# the runtime audit: source "operator", and the caller exactly as every
+# record the call wrote names it — `actor` and `actor_kind` from
+# iam.ActorFor (a person bound to a seat is the seat, kind human; anybody
+# else is their login, kind operator) and the credential it came through in
+# `operator_id` (pat:<id>, session:<lineage>, or the login). One per call,
+# whatever became of it; never the arguments. Written by the node the call
+# reached. The event store keeps the actor as the row's own column and
+# promotes actor_kind, operator_id, tool and dir to tags (beside every row's
+# `node`), so a listing — which carries no payload — can still say who,
+# through what, which tool, where
+operator_acted             # an operator tool call that is not a proven read,
+                           # on any of three transports — the dashboard's act
+                           # route (act), a person's assistant over MCP (mcp)
+                           # and the human write surface's routes under /work
+                           # and /pages (work), whose own refusals and
+                           # tool-less verbs are recorded too: tool,
+                           # transport, request_id (the operation the call's
+                           # key became, scoped to the caller, so a retry
+                           # carries the same one), outcome, position or
+                           # refusal
+backup_requested           # a POST /backup that began copying: dir, whether
+                           # it finished, and how many streams. Which node's
+                           # disk holds it is the envelope's `node`
+seat_paused                # a person paused a seat (paused_by,
+                           # paused_by_kind and operator_id from
+                           # iam.ActorFor, reason, stop_running, paused_at).
+                           # Published once per CHANGE by the caller whose
+                           # compare-and-set won, so a second pause of a
+                           # paused seat is none; re-announced when a pause
+                           # is amended to stop the running turn
+seat_resumed               # the pause was lifted (resumed_by,
+                           # resumed_by_kind, operator_id, and the paused_by,
+                           # paused_by_kind and paused_at it ended)
 
 # not stored: a seat acquired or released by this node. Live-only, because
 # placement moves seats on every rebalance; they drive the live projection
@@ -223,16 +256,24 @@ agent_spawned, agent_terminated
 task_assigned              # published to the seat's inbox by the scheduler
 sandbox_run_started, sandbox_clarification_requested
 sandbox_run_completed, sandbox_run_failed
+sandbox_run_answered       # what an answer to a parked run's question became
+                           # (resumed | not_awaiting | gone), by which route
+                           # (chat | operator) and from whom. The operator
+                           # route travels as an inbox wake
+                           # (sandbox_answer_given), which is not stored and
+                           # is never a turn
 scheduled_task_fired
 
 # a2a: one ask, one answer, then closed. The ask and the answer also travel
 #      as inbox wakes (a2a_request, a2a_message), which are not stored
 a2a_channel_opened, a2a_message_sent, a2a_channel_closed
 
-# decision: DACI is behavioural guidance on the org's own chat surfaces, so
-#           NOTHING in Crewlet publishes these four. They stay mapped as the
-#           seam an extension that does model decisions writes through, and
-#           they are why the category exists to filter on at all
+# decision: NOTHING in Crewlet publishes these four. DACI discussion is
+#           behavioural guidance on the org's own chat surfaces, and a
+#           decision somebody must make is a structured ask on a work item —
+#           a tracker record, woken as `asked`/`answered`, not an event here.
+#           They stay mapped as the seam an extension writes through, and they
+#           are why the category exists to filter on at all
 decision_requested, decision_resolved
 contribution_requested, contribution_received
 
@@ -248,19 +289,76 @@ turn_trigger_skipped       # a redelivery the completion ledger had already
 #           dashboard can include or exclude all of it with one toggle
 turn_completed, episode_written, persist_decider_completed
 counterparty_profile_updated, reflection_completed
-skill_synthesized, skill_refined, skill_promoted, skill_used
+skill_synthesized, skill_refined, skill_promoted
+skill_used                 # a seat loaded a skill; a company-published tool
+                           # skill names the page it was read from
+                           # (`source_page_id`, `source_container`), absent on
+                           # a skill the seat synthesized for itself
 skill_staled, skill_archived, skill_revived
 prefetch_summary
+knowledge_read             # a seat read from the knowledge base: ONE row per
+                           # act, listing the pages it reached
+                           # (`pages[{id, container, title, rank}]`, rank on
+                           # a ranked answer only), the `backend` their ids
+                           # are addresses in, the `phase` it happened in and
+                           # `via` — get_page, search, prefetch (the
+                           # turn-start block, no phase), skill_loaded, or
+                           # skill_injected (the pages behind a phase's
+                           # tool-skill catalogue). A search's `query` is
+                           # clipped to 200 bytes. A read that reached no
+                           # page, and a read with no seat (the operator
+                           # surface), publish nothing
 compaction_requested, compaction_completed
 
 # system: the engine talking about itself
-agent_turn_completed       # full LLM reasoning cycle with tokens and tools
+agent_turn_started         # a turn, or a resumed segment of one, beginning —
+                           # before its context is assembled, so a turn that
+                           # died gathering it still left a row. Names the
+                           # work item the turn is charged to (`work_item`
+                           # {backend, id, key, project}, absent when nothing
+                           # named one) and the rule that named it
+                           # (`work_item_basis`: trigger, asked_by, resume,
+                           # sole_write), what woke it, and `resumed` — a
+                           # parked coding run's resumed segment publishes
+                           # its own under the same turn_id. Its depth is
+                           # the envelope's delegation_depth. Every start is
+                           # paired with the turn's agent_turn_completed,
+                           # unless the turn died in its own frames — then a
+                           # turn.guard_breach under its turn_id says so, or
+                           # its process died under it
+agent_turn_completed       # full LLM reasoning cycle with tokens and tools;
+                           # names the work item the turn was charged to —
+                           # including by `sole_write`, which only a
+                           # completion can conclude — and carries
+                           # `suspended` on a segment that parked on a
+                           # coding run rather than ended, and `stopped`
+                           # (never with `failed`) on a turn a person ended
+agent_turn_stopped         # a pause with stop_running ended this turn at its
+                           # next round: stopped_by, stopped_by_kind and
+                           # operator_id (the pauser, from iam.ActorFor),
+                           # reason. Its trigger is recorded as worked, not
+                           # retried
+agent_turn_steered         # what became of a person's note to this running
+                           # turn, published by the node that ran it:
+                           # `delivered` with the phase, iteration and round
+                           # that first read it, or `expired` — the turn ended
+                           # or parked before its next round. Carries the
+                           # note, note_id (the request's id), steered_by,
+                           # steered_by_kind, operator_id and sent_at: the
+                           # note itself crossed an ephemeral scatter, so
+                           # this row is its only durable record
 agent_phase_started, agent_phase_completed
-budget_exhausted
+budget_exhausted           # a charge the token budget refused ended a turn;
+                           # names the scope and the refusing window —
+                           # period, window label, resets_at — with its
+                           # spend and ceiling. Recorded as the seat's
+                           # `last_error`; the seat's `stopped`/`budget` is
+                           # read from the refusing window itself
 turn.guard_breach          # runtime invariant fired (stall, max_iter,
-                           # depth_cap, scheduled_timeout). Drives the
-                           # dashboard `afk` state
-llm_unavailable            # the fallback chain is exhausted. Drives `afk` too
+                           # depth_cap, scheduled_timeout). A failed turn:
+                           # the seat's `last_error`, never a stop
+llm_unavailable            # the fallback chain is exhausted. The seat reads
+                           # `stopped`/`provider` until it works again
 provider_fallback          # the chain moved to its next provider. One per
                            # provider CALL, not per phase (a benched member
                            # is a hand-off on every round), addressed to
@@ -327,10 +425,12 @@ statelog_record_tampered        # a record whose signature fails under a key
 **Categorised, and published by nothing in this build.** The category map also
 files four types no code path publishes, so a filter on them matches no rows:
 `decision_requested`, `decision_resolved`, `contribution_requested` and
-`contribution_received`. DACI is behavioural guidance on the org's own chat
-surfaces, so they stay mapped as the seam an extension that does model
-decisions writes through, which is why the `decision` category exists to filter
-on at all.
+`contribution_received`. DACI discussion is behavioural guidance on the org's
+own chat surfaces, and a decision somebody has to make is a structured ask on a
+work item — a tracker record whose wakes are the tracker's own (`asked`,
+`answered`), not one of these types. They stay mapped as the seam an extension
+writes through, which is why the `decision` category exists to filter on at
+all.
 
 They are what is left of a longer list. The eleven types that described an
 engine-owned task object, a role edited in place, a message the engine sent
@@ -345,14 +445,21 @@ long as retention keeps them; none may be registered or categorised again.
 
 **Excluded from the store**, each with a stated CAUSE as well as a reason:
 `agent_turn_progress` (an intermediate state whose finished record is
-`agent_phase_completed`), `budget_reported` (a periodic snapshot of the fleet's
-shared token counter, published by every node on a fixed tick, which the next
-report supersedes; the live projection reads it), `raw_webhook` (the delivery is
-already a row), and the two A2A inbox wakes `a2a_request` and `a2a_message` (the
-ask and the answer are already rows as `a2a_channel_opened` and
-`a2a_message_sent`). The cause is a value rather than a sentence, because the
-admission rule below is checked by a walk and no walk can read intent out of
-prose. See the exclusions table in the Deployment page above.
+`agent_phase_completed`), `agent_spawned` and `agent_terminated` (placement —
+a fact about scheduling rather than about the company, which the live seat
+state answers), `budget_meters` (a periodic snapshot of the fleet's shared
+token counters, every capped calendar window with its engine-computed state,
+published by every node on a fixed tick, which the next report supersedes; the
+live projection reads it), `raw_webhook` (the delivery is already a row), the
+two A2A inbox wakes `a2a_request` and `a2a_message` (the ask and the answer are
+already rows as `a2a_channel_opened` and `a2a_message_sent`),
+`sandbox_answer_given` (the wake an answer by turn puts on the seat's inbox:
+what the answer became is `sandbox_run_answered`, and that a person gave it is
+their `operator_acted` row) and `tool_skill_page_changed` (a nudge between
+nodes about an edit the webhook receiver already recorded). The cause is a
+value rather than a sentence, because the admission rule below is checked by a
+walk and no walk can read intent out of prose. See the exclusions table in the
+Deployment page above.
 
 ### What may reach the node estate
 
@@ -408,7 +515,7 @@ while declaring no rate author at all, both fail the suite in
 
 ## Event Schema
 
-Every event carries a common set of fields: a unique ID (UUID), a type string, a UTC timestamp, an optional source identifier, and a free-form `payload` map. A registered event type (for example `types.TaskAssigned`) adds its own fields, marshalled flat beside the envelope's.
+Every event carries a common set of fields: a unique ID (UUID), a type string, a UTC timestamp, an optional source identifier, the node that first published it, and a free-form `payload` map. A registered event type (for example `types.TaskAssigned`) adds its own fields, marshalled flat beside the envelope's.
 
 Events also carry **OpenTelemetry trace context** and self-describing properties:
 
@@ -432,11 +539,41 @@ type Event struct {
     ParentTurnID    string
     DelegationChain []string
 
+    // The node that first published the event, stamped by the queue.
+    Node string
+
     // Data is the typed body, non-nil when Type is registered in this
     // build. Marshalled flat into the same JSON object as the envelope.
     Data Payload
 }
 ```
+
+**`node` is the event's origin, and the queue writes it — never the
+publisher.** Every node's queue client is built with the node's resolved id
+(`node.id`, then `CREWLET_NODE_ID`, then the default — the same name its
+presence, leases and broker identity carry), and `Publish` stamps it on any
+event that names no node yet, before a publish listener or a consumer sees it.
+An event that already names one keeps it: a node handing another node's event
+back to the broker — a delivery it parked, a dead letter — relays the origin
+rather than claiming the event. The caller's own event is never written to;
+the queue stamps a copy.
+
+It is on the envelope because it is the **store-routing fact**. The event store
+is written by a publish listener inline on the publishing node (see
+[Publish Listeners](#publish-listeners)), so each node's database holds what
+that node published and nothing else — and a reader holding one row or one live
+frame has only `node` to find the node whose store holds the rest of that
+node's record, and to say where the work it describes ran. That is also why the
+backup audit record names no node of its own: the route publishes from the node
+that took the copy, so the envelope already says whose disk it is on.
+
+`node` is absent on an event from a build predating the field, and on one
+published through a queue client built without a node, which only a test
+harness builds. Like every envelope field it is additive:
+an older node decodes it as an unknown key, keeps it verbatim and writes it back
+out, so the origin survives a round trip through the half of a rolling upgrade
+that has never heard of it. No payload may declare a field named `node` — the
+envelope owns the key and drops a colliding one.
 
 `Data` is the typed half: each registered event type is a Go type with its
 own fields and its own `Summary()` ("who did what", in a person's words) and
@@ -445,6 +582,83 @@ this build does not know decodes into the envelope with `Data` nil and its
 fields kept verbatim in `Extra`, and re-publishes losslessly.
 
 Changes are additive-only — new fields get defaults, existing fields are never removed, and an event type this build does not know round-trips through it losslessly rather than being dropped: a rolling upgrade puts unknown types on the wire in both directions. Every backend retains each subscription's undelivered backlog until it is consumed, so a restart resumes cleanly; durable, replayable event history is the [event store](../guides/deployment.md#the-event-store), not the queue. The queue keeps no ledger of everything ever published, and that is the mailbox semantic rather than a gap: on the work-queue streams an acked message is gone at once, and what a subscription retains is what nobody has acked yet. The one stream that keeps history is `CREWLET_EVENTS`, and it keeps it by **age** (`stream.event_retention_hours`, 30 days by default) rather than until someone reads it.
+
+---
+
+## Reading the fleet's history
+
+Each node's event store holds what **that node** published and nothing else
+(see [Publish Listeners](#publish-listeners)), so no one store is the
+company's history. A read of turn-level detail — `events`, `event`,
+`event_series`, `trace`, `turn`, `turns`, `phases`, a seat's `llm_history`,
+and the integrations' delivery counts — is answered by **every live node at
+query time** (`internal/eventfan`, ADR-0021). The same scatter seeds the live
+projection when a node starts: its feed, its 24-hour spend window (the
+`phase_tokens` question, cut to the asker's window so every node answers the
+same one) and each seat's last turn, so a restarted node's screens show the
+company rather than the part of it this node published:
+
+```mermaid
+sequenceDiagram
+    participant D as Dashboard
+    participant A as node-a (serving)
+    participant B as node-b
+    participant C as node-c
+    D->>A: GET /turns
+    par this node's own store
+        A->>A: read its share
+    and every live peer, on crewlet.observe.read
+        A->>B: the same question
+        A->>C: the same question
+    end
+    B-->>A: its share
+    Note over C: no answer inside 2s
+    A->>D: merged turns + coverage{nodes, complete: false}
+```
+
+- **The question travels, not the data.** The asker reads its own store
+  directly and scatters the same question over the broker's ephemeral
+  request/reply — no stream, no consumer, no stored record, because a read of
+  the event log that wrote an event would grow the log every time somebody
+  looked at it. The roster is the fleet's live node leases.
+- **Every answer says who answered.** `coverage` is
+  `{nodes: [{id, answered, error}], complete}` on every one of these answers.
+  `complete` is true only when every live node answered; a node that did not
+  is named with the reason — no answer inside the **2-second** fleet read
+  budget, a build speaking another protocol version, a reply it could not
+  read, or its own read failing. A short answer that did not say so would
+  read exactly like a quiet company.
+- **A question is asked in the lowest protocol version that answers it.**
+  An older build ignores a filter it does not know and would answer a wider
+  question than was asked, merged in as though it matched; so a listing
+  narrowed by a newer filter (`channel_id`, `seat`, `suspended`, `failed`), a
+  page of turns in a window of two instants (an older build reads only whole
+  days back from its own clock), the company's `phases` and a window's phase
+  spend narrowed to one seat — by the seat's id, where an older build narrowed
+  by a role name two unit seats can share and would answer every seat's — and
+  the event axis, whose failed split an older build never sends — goes out in
+  the version that introduced it, and a node on the older build refuses by
+  version and is named. Everything else is still answered by the whole fleet
+  during a rolling upgrade.
+- **The merges are exact.** A page is merged on `(timestamp, id)` and stops
+  at the newest point any node's page stopped at, so paging with the cursor
+  visits every row once; a histogram's window is pinned to the asker's clock
+  so every node cuts the same bars before they are summed; and a list of
+  turns is two scatters — every node's page, then every node's share of
+  exactly the turns listed — so a turn resumed on another node after a
+  restart is one row folded from both halves, not two half-turns.
+- **A departed node's detail is gone.** Nothing replicates it: a node that has
+  left the fleet cannot be asked, and its turns, phases and events leave with
+  it. The **aggregates** do not — spend, turn counts and page reads are the
+  replicated `usage` domain precisely so they survive a node's departure. Keep
+  a node's detail past its life by exporting to an OTLP sink.
+- **A reply too large for the transport is cut, not lost.** A node gives up
+  rows from the least important end — a long turn's middle before its ending —
+  and says it holds more, which the merge already handles.
+
+The `history_partial` [alarm](../reference/alarms.md) fires on the fraction
+of a node's history reads that came back without every node, at the fleet
+read budget it borrows rather than a threshold of its own.
 
 ---
 
@@ -502,7 +716,7 @@ The dashboard groups events by `trace_id` into collapsible trace trees. See [Dep
 
 The `EventQueue` supports **publish listeners** — callbacks `AddPublishListener` registers, invoked inline during every `Publish`. Listeners receive the topic and the event and run on the publishing goroutine, after the broker has acknowledged the message. A listener that fails, or panics, is logged and never propagates: telemetry must not be able to fail a publish.
 
-This is used by the **event store writer** to persist events directly at publish time, inline on the node that published — no subscription, and therefore no consumer group that could let two nodes write one row or lose one in a rebalance. See [Deployment — The event store](../guides/deployment.md#the-event-store) for details.
+This is used by the **event store writer** to persist events directly at publish time, inline on the node that published — no subscription, and therefore no consumer group that could let two nodes write one row or lose one in a rebalance. A listener is handed the event as the queue stamped it, so the row carries the same `node` the wire copy does. See [Deployment — The event store](../guides/deployment.md#the-event-store) for details.
 
 ---
 
@@ -526,9 +740,9 @@ Two communication systems:
 
 Org-wide announcements, department coordination, and team discussions happen in the company's own chat (Slack or Mattermost channels). Agents post with their own MCP tools, and the **notification service** routes what arrives, a Slack webhook or a Mattermost socket event, to agent inboxes.
 
-- **Org-wide** — announcements (via Slack `#announcements` channel)
-- **Department** — leads-only coordination (via Slack department channel)
-- **Team** — team coordination, DACI decisions (via Slack team channel)
+- **Org-wide** — announcements (via an `#announcements` channel)
+- **Department** — leads-only coordination (via the department's `channel`)
+- **Team** — team coordination and DACI discussion (via the unit's `channel`)
 
 ### Ephemeral A2A channels (`internal/a2a`)
 

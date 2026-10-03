@@ -187,7 +187,7 @@ func TestAnExcerptNamesAKeysDuplicateByItsID(t *testing.T) {
 	named := "t-2 (its key ENG-1 opens another task)"
 	lead := r.writer.As("bob", tracker.AuthorHuman, tracker.Provenance{})
 	if _, err := lead.WritePriorities(t.Context(), "op-prio", "cy", []string{"t-2"},
-		tracker.PersonAuthority{Authorized: true}); err != nil {
+		nil, tracker.PersonAuthority{Authorized: true}); err != nil {
 		t.Fatalf("write cy's priorities: %v", err)
 	}
 	r.drain()

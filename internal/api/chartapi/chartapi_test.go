@@ -454,7 +454,7 @@ func TestTheUnheldFilterIsADirectoryRead(t *testing.T) {
 
 // THE UNHELD FILTER ASKS A RENAMED SEAT BY ITS IDENTITY.
 //
-// A binding names the seat by the handle it was created under (ADR-0020), so
+// A binding names the seat by the handle it was created under (ADR-0027), so
 // the directory holds `cto` for a seat now called `chief-tech`. The report
 // asked by that identity; the filter asked by the current handle, so a renamed
 // seat somebody holds was listed as one nobody does — an operator sent to

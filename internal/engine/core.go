@@ -233,15 +233,22 @@ func (e *Engine) startCore(ctx context.Context, boot *config.Bootstrap) error {
 	return nil
 }
 
-// startCoreDuties arms the core runtime's fleet-singleton duties: the log's
+// startCoreDuties arms the core runtime's fleet-singleton duties — the log's
 // trim, without which every domain's log only grows to its ceiling, and the
 // identity estate's, without which a removal's failed key delete lives for
 // ever, the trail is never swept and a duplicate a restore made is never
-// named.
+// named — and this node's own usage publisher ([Engine.startUsage]).
 //
 // ON EVERY NODE THAT PUBLISHES, company or not: a fleet nobody has configured
 // yet still writes its identity log — the first person's invitation and
 // sign-in — and its chart log, and without the trim those logs only grow.
+//
+// THE USAGE PUBLISHER IS THE CORE'S TOO, and not a native duty, although it
+// is no singleton: every node publishes its own days, from its own event log,
+// whether or not its company keeps a native tracker or wiki. Armed with the
+// native half it used to be, a company on Jira and Confluence never
+// replicated a day of its spend, and a node handed its first company by an
+// apply published none until it restarted.
 func (e *Engine) startCoreDuties(ctx context.Context) {
 	c := e.core.Load()
 	if c == nil {
@@ -249,6 +256,7 @@ func (e *Engine) startCoreDuties(ctx context.Context) {
 	}
 	e.startRetention(ctx, e.boot, c.log)
 	e.startIdentityDuties(ctx, e.boot)
+	e.startUsage(ctx, c.log)
 }
 
 // stopViewTriggers ends the core's view triggers — the chart view's two and the

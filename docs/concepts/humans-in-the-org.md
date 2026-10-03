@@ -197,8 +197,8 @@ exactly one wins.
 
 What the binding buys:
 
-- **The work the chart hands a seat reaches you.** `#/inbox` — the
-  dashboard's landing screen — shows your notices, the one reason of eighteen
+- **The work the chart hands a seat reaches you.** `#/inbox` — one click
+  from the dashboard's landing screen — shows your notices, the one reason of eighteen
   that routed each one, and what is waiting on a decision; `#/me` is your own
   work. Both ask the engine who is looking, and your own record is kept under
   the seat the directory binds you to — which is where an assignment, a
@@ -228,10 +228,14 @@ and the name every personal read answers for — so what its assistant arranges
 is what its screens show. What it lacks is the work the chart addresses to a
 seat, and the screens say so, naming `crewlet iam bind`.
 
-Read and snooze marks are written through `PUT /work/people/{handle}/inbox` or
-your assistant's `mark_inbox`, never by the screen: the dashboard writes no
-work item, page or inbox record of its own, so what it shows is what the engine
-recorded, and every write behind it is attributed to somebody.
+Read and snooze marks are the `mark_inbox` tool wherever they are made — the
+dashboard's buttons through `/operator/act`, a script through
+`PUT /work/people/{handle}/inbox`, your assistant over `/operator/mcp` — and
+each is written as the principal who made it, under the same record name. The
+dashboard writes no work item, page or inbox record as itself: a button in a
+browser writes as the person signed in behind it, never as "the dashboard",
+which is nobody, so what it shows is what the engine recorded and every write
+behind it is attributed to somebody.
 
 **The binding lives in the directory**, not on the token and not in the
 company document. Tier A is the root of trust and may never read Tier B — it
@@ -358,8 +362,8 @@ on where the work lives:
 - **The engine's own inbox.** Every change to the
   [native tracker](task-engine.md) writes a notice to each person it concerns,
   under the one reason that routed it to them (`assignee`, `mention`,
-  `blocking`, …). It is the `work_inbox` question, and the dashboard's landing
-  screen.
+  `blocking`, …). It is the `work_inbox` question, and the dashboard's
+  Inbox.
 - **The dashboard, the moment that inbox moves.** For somebody with no Slack or
   Jira account — a person who works in Crewlet only — this is the delivery
   surface.
@@ -405,6 +409,34 @@ sequenceDiagram
 A person who is not bound to a seat watches the record kept under their login
 — what they follow, and what names them. See [Acting as your
 seat](#acting-as-your-seat-on-the-dashboard-and-the-api).
+
+**The queue is whoever signed in.** `#/inbox`, one click from the landing
+screen (Home), is the queue of the principal the request resolved to — a person
+signed in with a session, or a token the identity directory binds — read under
+that principal's own record name (`iam.RecordOwner`): the seat the directory
+binds them to, or their login when it binds none. First comes what is waiting
+on their decision — the questions agents put to them, the coding runs parked on
+a question to them, a seat stopped on its budget — then their notices by the
+company's day, each with the one reason of eighteen that routed it, and the row
+they open fills the pane beside the list with the answer to it right there.
+Nothing on the screen names whose queue to read: there is no way to ask for
+somebody else's from it, and a lead reading a report's queue does so by name,
+decided by the [authority table](identity-and-access.md#the-authority-table-one-function-decides).
+`#/me` is the same principal's own work.
+
+**Answering an agent's decision.** When an agent asks you to choose, the
+question arrives with its options, the one it recommends and why, and the
+evidence it cites. Each option is a card; pressing one sends it as your
+answer, and "Reply with instructions" answers in your own words instead. The
+pane tells you what happens next: *"&lt;asker&gt; is
+woken with your answer and posts it to #&lt;channel&gt;"* when the agent
+promised to report the outcome in a channel, or *"&lt;asker&gt; continues from
+your answer"* when it did not. The first is enforced, not hoped for: the
+agent's turn is held open until it has posted on that chat surface. It is also
+why **your own** asks cannot carry that promise — the engine keeps it by
+holding the asker's turn, and a person has none, so an ask you put through the
+dashboard or your assistant with an `inform` is refused; post the outcome
+yourself.
 
 ---
 

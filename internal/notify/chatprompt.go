@@ -154,8 +154,9 @@ func (p ChatPrompt) PartitionKey(metadata map[string]string, _ string) string {
 	return channel + ":" + anchor
 }
 
-// ConversationIdentity implements [Prompt]. THIS IS THE ONE SOURCE WHERE THE
-// TWO ANSWERS DIFFER, and the invariant is what decides how.
+// ConversationIdentity implements [Prompt]. THIS IS ONE OF THE TWO SOURCES
+// WHERE THE TWO ANSWERS DIFFER — the native tracker's is the other — and the
+// invariant is what decides how.
 //
 // A DIRECT CONVERSATION IS ONE CONVERSATION, thread or no thread: the whole
 // DM channel, regardless of thread_ts. What forces that is

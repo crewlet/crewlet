@@ -414,7 +414,12 @@ func openNATS(ctx context.Context, b *config.Bootstrap) (*Backends, error) {
 	if b.Stream.EventRetentionHours > 0 {
 		cfg.EventRetention = b.Stream.EventRetention()
 	}
-	out, conn, err := openStream(ctx, b, cfg)
+	// THE SAME RESOLVED ID NAMES WHAT THIS NODE PUBLISHES. Every event
+	// leaves carrying it as its origin (queue.WithNode), because the event
+	// store is written inline on the publishing node and a reader holding
+	// any one row or frame has only that to find the node whose store holds
+	// the rest — see events.Event.Node.
+	out, conn, err := openStream(ctx, b, cfg, queue.WithNode(nodeID))
 	if err != nil {
 		return nil, err
 	}
@@ -443,7 +448,13 @@ func openNATS(ctx context.Context, b *config.Bootstrap) (*Backends, error) {
 // WATCHED ([jetstream.Queue.DialWatched]): NATS closing either connection for
 // good stops the node ([Engine.Fatal]), and the split lasts no longer than a
 // reconnect.
-func openStream(ctx context.Context, b *config.Bootstrap, cfg jetstream.Config) (*Backends, *nats.Conn, error) {
+//
+// EVERY QUEUE THIS OPENS CARRIES THE CALLER'S OPTIONS — the node every event
+// it publishes is stamped with ([queue.WithNode]) — on both branches, so an
+// event's origin names this node whichever broker topology it rode.
+func openStream(ctx context.Context, b *config.Bootstrap, cfg jetstream.Config,
+	opts ...queue.Option,
+) (*Backends, *nats.Conn, error) {
 	// A URL IS A BROKER SOMEBODY ELSE RUNS, and this branch is what makes
 	// `stream.type: nats` mean anything. Without it every path here
 	// started an in-process member and connected to THAT: an operator who
@@ -454,7 +465,7 @@ func openStream(ctx context.Context, b *config.Bootstrap, cfg jetstream.Config) 
 	// a seat claimed by everyone, a trigger worked twice, a token counter
 	// per node.
 	if b.Stream.URL != "" {
-		q, err := jetstream.Open(ctx, cfg)
+		q, err := jetstream.Open(ctx, cfg, opts...)
 		if err != nil {
 			return nil, nil, fmt.Errorf("engine: stream: %w", err)
 		}
@@ -469,7 +480,7 @@ func openStream(ctx context.Context, b *config.Bootstrap, cfg jetstream.Config) 
 	if err != nil {
 		return nil, nil, fmt.Errorf("engine: stream: %w", err)
 	}
-	q, err := server.Client(ctx)
+	q, err := server.Client(ctx, opts...)
 	if err != nil {
 		server.Shutdown()
 		return nil, nil, fmt.Errorf("engine: stream client: %w", err)
@@ -512,16 +523,15 @@ func openStream(ctx context.Context, b *config.Bootstrap, cfg jetstream.Config) 
 // and every one of those has to outlive the PROCESS, on one node as much as
 // on four.
 //
-// It did not, and the consequences were silent: a company's token spend reset
-// to zero on every restart although its bucket is documented as having no
-// retention at all ("a cap is a ceiling for the life of a deployment"), a
-// redelivered trigger after a restart was worked twice, and a detached
+// It did not, and the consequences were silent: a company's token spend for
+// the current window reset to zero on every restart, a redelivered trigger after a restart was worked twice, and a detached
 // sandbox run — a BILLED box — was forgotten by the process that launched it.
 // What persistence the records get is the same choice as the event log's:
 // stream.store_dir.
 func attachCoordination(ctx context.Context, b *config.Bootstrap, out *Backends, conn *nats.Conn) error {
 	// ONE CEILING OVER THE WHOLE BRING-UP, because this is where the
-	// sequence actually is: eighteen replicated buckets across two calls,
+	// sequence actually is: nineteen replicated buckets across two calls —
+	// the fleet store's sixteen and the lease store's three —
 	// each of which would otherwise discover a wedged cluster on its own
 	// budget. Without it the real bound is the PRODUCT rather than the
 	// term — a number nobody declared, which is the shape of a limit that
@@ -569,6 +579,7 @@ func openFleet(ctx context.Context, conn *nats.Conn, replicas int, clustered boo
 		FireRetention:      coord.FireRetention,
 		FollowRetention:    coord.FollowRetention,
 		CooldownMax:        coord.CooldownMax,
+		BudgetRetention:    coord.BudgetRetention,
 		StatusFreshness:    coord.StatusFreshness,
 		Replicas:           replicas,
 		Clustered:          clustered,

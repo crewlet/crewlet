@@ -76,7 +76,9 @@ make test-solo   # ... and those, at -p 1, with a runner to themselves
 CGO_ENABLED=0 GOOS=$OS GOARCH=$ARCH go build ./...            # test-cross
 # and the dashboard, whose build output is committed:
 cd dashboard && npm run format:check                          # dashboard-lint
-cd dashboard && npm run build && git diff --exit-code -- ../static/dashboard
+cd dashboard && npm run build                                 # dashboard-check:
+git diff --exit-code -- static/dashboard                      #   no tracked file moved
+test -z "$(git ls-files --others -- static/dashboard)"        #   and none is untracked
 cd dashboard && npm run typecheck && npm test                 # dashboard-test
 ```
 
@@ -86,6 +88,16 @@ is the form to copy into a hook or a script. The inline
 fails: the shell discards a command substitution's exit status, and gofmt
 handed no paths formats its standard input, finds nothing wrong and exits 0.
 Run from anywhere but the module root, the listing fails every time.
+
+Run the dashboard's suites through `npm test` (or `npm test -- <file>` for
+one file, `npm run test:watch` for the watch loop), never a bare
+`npx vitest`. Vitest's forks pool writes every transformed module into a
+fresh directory under the system temp directory and never removes it — 16 to
+48 MB a run, which over a day of gate runs filled the volume the engine's
+embedded broker sizes its storage from. Both scripts run Vitest through
+`dashboard/scripts/owned-tmpdir.mjs`, which points `TMPDIR` at a directory it
+creates and removes; `src/test/ownedTmpdir.test.ts` fails a run that was
+started without it.
 
 The race detector is not optional here: the engine's concurrency model is
 real parallelism, and every "atomic because it is single-threaded" assumption
@@ -119,7 +131,23 @@ dashboard's build output is committed — `go build ./...` and
 `go install …@latest` must work on a clean checkout with no Node, and an embed
 directive cannot run a bundler — so a bundle that has drifted from its source
 compiles, embeds, serves and passes every Go test while running code nobody
-wrote. Rebuilding and diffing is the only thing that can tell you.
+wrote. Rebuilding and judging the tree is the only thing that can tell you.
+
+Judging it takes TWO questions, because `git diff` sees only the paths the
+index already has. Every emitted name is content-hashed, so a changed chunk is
+a new path, and `git commit -a` stages modified and deleted files but never a
+new one: a commit made that way carries the `index.html` that imports the new
+chunk and not the chunk, the diff is clean, and the binary serves a shell
+asking for a module it does not embed. So the gate also fails on any file under
+`static/dashboard` the index does not hold (`git ls-files --others`), and it
+prints each drifted path — `??` for one git does not track, `!!` for one
+`.gitignore` hides, which `git add -A` will not stage and the `all:dashboard`
+embed ships anyway. It judges against the INDEX rather than `HEAD`, so the
+repair it prints turns it green before you commit:
+
+```bash
+make dashboard && git add -A -- static/dashboard
+```
 
 **And when two branches have both rebuilt it, REBUILD — never merge.** The
 emitted names are content-hashed, so each side writes a different path for the
@@ -197,7 +225,9 @@ What follows are the prerequisites that legitimately vary by machine.
   gate asks "does the client understand what the server sent" rather than "did
   the server send something", and it is the only place both halves of the wire
   protocol are checked against each other. Without node it SKIPS, so the
-  `make` targets that run it refuse to start without one, and CI installs it.
+  `make` targets that run it refuse to start without one, CI installs it, and
+  the skip has no entry in `internal/skipgate/allowed.go` — a run that got past
+  `require-node` fails on it rather than reporting a pass.
 
   It needs no npm and no build: `static/dashboard/protocol.js` is committed
   along with the rest of the built tree.
@@ -209,11 +239,44 @@ What follows are the prerequisites that legitimately vary by machine.
   in most of the places it appears.
 
 - **`npm`** builds and tests the dashboard itself. Its assertions — the
-  wire protocol, the router's history rules, the ordering comparators, and the
-  MEASURED contrast of every colour token over every surface it can land on,
-  in both themes and for protan and deutan vision — run under Vitest:
-  `make dashboard-test`. None of that is checkable by looking at the
-  stylesheet, which is why it is computed from the file that actually ships.
+  wire protocol, the router's history rules, the ordering comparators, the
+  purity of `src/contract/`, and the MEASURED contrast of every colour token
+  over every surface it can land on, in both themes and for protan and deutan
+  vision — run under Vitest: `make dashboard-test`. None of that is checkable
+  by looking at the stylesheet, which is why it is computed from the file that
+  actually ships.
+
+  **A set the engine owns is declared in `dashboard/src/contract/`**, one
+  module per concern, and held against the engine by one Go test that reads
+  it through `internal/clientsource`. Adding one means three things in one
+  change: the declaration in a contract module, a row in
+  `internal/clientsource/contract.go` naming its reader and its gate, and the
+  gate itself. The Go side holds that directory both ways — every row is
+  declared there, every name it exports is a row — and
+  `contract/contract.test.ts` holds what a module there may be: data and
+  shapes, importing only its siblings, every export read outside it.
+  `protocol/` imports it by a relative path, because `protocol.js` is built
+  without the `~` alias.
+
+  **Nothing on a screen is money.** The dashboard draws spend in tokens and
+  never in a currency (rule 19 in `docs/reference/dashboard-design.md`), and
+  the client declares no price field for a screen to reach for. Three gates
+  hold it: `src/money.test.tsx` parses every shipped module and renders the
+  screens that draw spend over wire fixtures carrying a price, and
+  `TestTheDashboardRendersNoPrice` in `internal/api` scans every module the
+  engine serves from the committed bundle.
+
+  **The dashboard reaches the engine through `src/protocol/` and nowhere
+  else**, and three suites hold it from the parsed source:
+  `protocol/transport.test.ts` refuses a module outside that directory that
+  reads `fetch` or any other network primitive itself; `app/source.test.ts`
+  requires the query kind a `useQuery(` or `query(` call asks — bare or as a
+  method — to be a string literal, because the engine's registry gates read
+  the kinds there and cannot read a variable; and `protocol/proxy.test.ts`
+  holds the dev server's proxy table in `vite.config.ts` to exactly the paths
+  the source reaches, calls and markup alike, both ways. A new REST route the
+  dashboard calls is a new proxy entry in the same change, and a route it
+  stops calling takes its entry with it.
 
   **A dashboard suite waits for the work, never for the clock.** `findBy*`
   and `waitFor` poll the page against a one-second deadline, so a case that
@@ -324,8 +387,10 @@ What follows are the prerequisites that legitimately vary by machine.
 
   **The built dashboard is committed**, so building the ENGINE needs neither
   node nor npm. Changing the dashboard does: run `make dashboard` and commit
-  `static/dashboard` with your source change. CI rebuilds and diffs it
-  (`make dashboard-check`), because a bundle that has drifted from its source
+  `static/dashboard` with your source change — `git add -A`, so the new
+  content-hashed chunks go in with it. CI rebuilds it and fails on any
+  difference, an untracked file included (`make dashboard-check`), because a
+  bundle that has drifted from its source
   compiles, embeds, serves and passes every Go test while running code nobody
   wrote — the same failure mode `go mod tidy -diff` and the generated
   `schema/` are gated against.
@@ -523,8 +588,8 @@ a comment at the pin, as the Compose stack's Postgres image already does.
 
 The configuration is [`.github/dependabot.yml`](.github/dependabot.yml): one
 entry per surface on a weekly schedule, plus the commit prefix that surface's
-bumps carry, plus two grouping rules on the npm entry. CI runs on each pull
-request, and — as below — CI is what decides whether it lands. Seven things are
+bumps carry, plus three grouping rules on the npm entry. CI runs on each pull
+request, and — as below — CI is what decides whether it lands. Eight things are
 worth knowing:
 
 - **The React family is grouped.** `react`, `react-dom`, `@types/react` and
@@ -552,6 +617,15 @@ worth knowing:
   buys all of it. It costs something in the meantime, and the cost is real: a
   `vitest`-only bump now arrives titled for the group, with the packages it
   actually moved in the body rather than the subject.
+- **The design system's three packages are grouped, because they pin each
+  other.** `@crewlethq/ui` depends on `@crewlethq/tokens` and `@crewlethq/icons`
+  at an *exact* version, and the three are released together. So a lone bump
+  of one installs cleanly and wrongly: a newer `ui` beside the direct `tokens`
+  nests a second copy of the tokens under `ui`, and the components paint from
+  one palette while the dashboard's own stylesheets read the other — a split
+  no install error reports and no test reading the installed package can see.
+  The group's pattern is `@crewlethq/*`, because the pinning is the scope's
+  convention rather than a fact about three names.
 - **Nothing else is grouped, and that is the rule rather than today's state.**
   The only other *required* edges a bump there could split are
   `@testing-library/react`'s — on react and react-dom at `^18.0.0 || ^19.0.0`,
@@ -715,6 +789,16 @@ The pages under `docs/` are the source of truth and are published to
 `.md` links between pages, figures in `docs/assets/`, one `# Heading` per page.
 The site derives its navigation from `docs/index.md`, so **a new page must be
 linked there** — the site build fails on a page nothing links to.
+
+Links are checked, not trusted. `internal/docsgate` fails the suite on a
+relative link to a file that does not exist, on an `#anchor` that names no
+heading of its target (by GitHub's slug: rename a heading and every anchor to
+it goes red), and on a page under `docs/` that `docs/index.md` does not list.
+The dashboard's own addresses — `#/work/ENG-42` in a guide, a tool skill or a
+string the engine composes — are held by `dashboard/src/app/links.test.ts`
+against the dashboard's route resolver, along with every pointer at a
+`dashboard-design.md` heading. A link to a page that moved is fixed by pointing
+it at where the subject lives now, never by deleting the gate's view of it.
 
 `docs/` is written for people *running* Crewlet. Reasoning aimed at people
 *changing* it goes in a package doc, where `go doc` surfaces it beside the

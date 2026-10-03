@@ -256,7 +256,7 @@ func TestSeatBindingsIsEveryBindingAndNothingElse(t *testing.T) {
 	}
 }
 
-// A SEAT IS BOUND BY THE HANDLE IT WAS CREATED UNDER (ADR-0020).
+// A SEAT IS BOUND BY THE HANDLE IT WAS CREATED UNDER (ADR-0027).
 //
 // Whatever address an administrator types — the handle a seat answers to now,
 // one it used to, the one it was created under — the binding names the seat's

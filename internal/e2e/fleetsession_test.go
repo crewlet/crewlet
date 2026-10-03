@@ -326,7 +326,7 @@ func socketOpens(t *testing.T, n *node, b *browser) {
 			t.Fatalf("the socket opened and never delivered its snapshot: %v", err)
 		}
 		var frame struct {
-			Kind string `json:"kind"`
+			Kind stream.Kind `json:"kind"`
 		}
 		if json.Unmarshal(raw, &frame) == nil && frame.Kind == stream.KindSnapshot {
 			break
@@ -438,6 +438,14 @@ func (b *browser) send(n *node, method, path string, body any) (int, map[string]
 // retried write the same write.
 func (b *browser) sendKeyed(n *node, method, path, key string, body any) (int, map[string]any) {
 	b.t.Helper()
+	status, raw := b.sendRaw(n, method, path, key, body)
+	return status, decoded(b.t, bytes.NewReader(raw))
+}
+
+// sendRaw is [browser.sendKeyed] answering the body byte for byte, for a case
+// that has to hand the engine's own bytes to the dashboard's client.
+func (b *browser) sendRaw(n *node, method, path, key string, body any) (int, []byte) {
+	b.t.Helper()
 	var payload io.Reader
 	if body != nil {
 		raw, err := json.Marshal(body)
@@ -468,7 +476,11 @@ func (b *browser) sendKeyed(n *node, method, path, key string, body any) (int, m
 	}
 	defer res.Body.Close()
 	b.keep(res.Cookies())
-	return res.StatusCode, decoded(b.t, res.Body)
+	raw, err := io.ReadAll(res.Body)
+	if err != nil {
+		b.t.Fatalf("%s %s on member %s: read the answer: %v", method, path, n.id, err)
+	}
+	return res.StatusCode, raw
 }
 
 // dial opens the live socket on one member, presenting this browser's cookies

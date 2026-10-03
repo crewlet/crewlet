@@ -11,22 +11,51 @@
  */
 
 import { describe, expect, test } from "vitest";
-import { attentionQueue, SUBJECTS, WATCHED, type AttentionInput } from "./attention.ts";
+import type { BudgetWindow, OrgBudget } from "~/protocol/index.ts";
+import {
+  attentionQueue,
+  conditionsToDecide,
+  SUBJECTS,
+  WHERE_OF,
+  watchedIn,
+  type AttentionInput,
+  type Subject,
+  type Where,
+} from "./attention.ts";
 
 const now = Date.parse("2026-01-01T12:00:00Z");
 
 function input(over: Partial<AttentionInput> = {}): AttentionInput {
   return {
     agents: [],
-    sandboxes: [],
     runs: [],
-    budget: {},
+    budget: null,
     engine: { status: "ok", configured: true },
     connected: true,
     authRejected: false,
     now,
+    nameOf: (key) => key,
     ...over,
   };
+}
+
+/** One capped window of a live meter, on 1 January's day. */
+function win(over: Partial<BudgetWindow> = {}): BudgetWindow {
+  return {
+    period: "day",
+    window: "2026-01-01",
+    starts_at: "2026-01-01T00:00:00Z",
+    resets_at: "2026-01-02T00:00:00Z",
+    used: 10,
+    limit: 100,
+    state: "ok",
+    ...over,
+  };
+}
+
+/** The company's live meter over the given windows. */
+function meter(...windows: BudgetWindow[]): OrgBudget {
+  return { meter_id: "m-1", seq: 1, timezone: "UTC", org: { windows } };
 }
 
 describe("what it surfaces", () => {
@@ -65,11 +94,10 @@ describe("what it surfaces", () => {
   // `reseed` — so the condition it was guarding never fired on a real run and
   // the test passed against a fixture no engine produces.
   //
-  // AND FROM THE DURABLE ROW, not the projection. The live push sweeps a
-  // sandbox entry after twelve hours, so a run parked on a question — the
-  // longest-lived item this list can hold, since it is waiting for a person —
-  // used to leave the queue exactly when it had been ignored long enough to
-  // matter, and the dashboard reported a quiet company.
+  // AND FROM THE DURABLE ROW, not the projection: the row carries the pause
+  // window the detail counts down, which the live entry does not. A run parked
+  // on a question is the longest-lived item this list can hold, since it is
+  // waiting for a person, and it has to stay here for as long as it waits.
   const parked = (status: string, over: Record<string, unknown> = {}) =>
     ({
       turn_id: "t1",
@@ -81,6 +109,8 @@ describe("what it surfaces", () => {
       task_description: "",
       question: "Which branch should I target?",
       audience: "",
+      audience_handles: [],
+      audience_fallback: false,
       branch: "",
       trace_id: "",
       owner: "",
@@ -96,9 +126,9 @@ describe("what it surfaces", () => {
   test("a run paused on a question carries the question", () => {
     const items = attentionQueue(input({ runs: [parked("awaiting_clarification")] }));
     expect(items[0]?.detail).toBe("Which branch should I target?");
-    // THE RUN'S OWN ADDRESS. It was `#/activity/runs?run=`, a query key the
+    // THE RUN'S OWN ADDRESS. It was `#/live/runs?run=`, a query key the
     // runs screen stopped reading when a run became an object.
-    expect(items[0]?.path).toEqual(["activity", "runs", "t1"]);
+    expect(items[0]?.path).toEqual(["live", "runs", "t1"]);
   });
 
   // WHEN IT PARKED, never when it started: this row is about how long
@@ -158,31 +188,6 @@ describe("what it surfaces", () => {
     expect(attentionQueue(input({ runs: [parked("running")] }))).toEqual([]);
   });
 
-  // THE PROJECTION IS NOT A SOURCE FOR THIS. A parked entry on the live push
-  // and nothing on the durable rows means the sweep already dropped it — and
-  // the queue must read the rows, so this produces nothing.
-  test("a parked entry on the live push alone raises nothing", () => {
-    const items = attentionQueue(
-      input({
-        sandboxes: [
-          {
-            turn_id: "t1",
-            role: "Dev A",
-            agent_handle: "dev-a",
-            agent_id: "",
-            coding_agent: "claude-code",
-            sandbox_id: "s1",
-            task: "",
-            status: "awaiting_clarification",
-            started_at: "2026-01-01T11:00:00Z",
-            question: "Which branch should I target?",
-          },
-        ],
-      }),
-    );
-    expect(items.filter((i) => i.subject === "run")).toEqual([]);
-  });
-
   test("a live round that stopped moving is surfaced, and escalates", () => {
     // A spinning row hides exactly this: the animation is identical whether
     // the round started two seconds or eleven minutes ago.
@@ -205,7 +210,7 @@ describe("what it surfaces", () => {
         total_tokens: 0,
         tool_executions: null,
         round_num: 3,
-        rounds: 3,
+        rounds_used: 3,
         in_progress: true,
         updated_at: updated,
       },
@@ -230,13 +235,13 @@ describe("what it surfaces", () => {
             live_call: {
               ...call(new Date(now - 900_000).toISOString()).live_call,
               round_num: -1,
-              rounds: 0,
+              rounds_used: 0,
             },
           },
         ],
       }),
     );
-    expect(opening[0]?.detail).toContain("starting");
+    expect(opening[0]?.detail).toContain("round 1");
     expect(opening[0]?.detail).not.toContain("?");
 
     const stalled = attentionQueue(
@@ -245,29 +250,87 @@ describe("what it surfaces", () => {
     expect(stalled[0]?.severity).toBe("critical");
   });
 
-  // A SPENT BUDGET OUTRANKS ONE MERELY NEAR ITS CAP, and both are read off
-  // the shared counter.
+  // THE ENGINE'S STATE, NOT A THRESHOLD OF OURS. A refusing window outranks a
+  // near one, and a healthy one raises nothing — whatever the arithmetic says,
+  // since the engine judged the window beside the counter.
   //
-  // They used to key on a `refused_at` the engine never wrote, so the critical
-  // branch was unreachable on every company — the exact case an operator needs
-  // it for. At or past the cap is what a fleet-wide counter can honestly say:
-  // sufficient, and not necessary, which is what the 90% rung below it is for.
-  test("a spent budget outranks one merely near its cap", () => {
-    const spent = attentionQueue(input({ budget: { org: { used: 100, max: 100 } } }));
-    expect(spent[0]?.severity).toBe("critical");
+  // The refusal used to ride a `refused_at` the live push dropped, so the
+  // critical branch was unreachable on every company — the exact case an
+  // operator needs it for.
+  test("a refusing window outranks one merely near its ceiling", () => {
+    const refusing = attentionQueue(input({ budget: meter(win({ state: "refusing", used: 97 })) }));
+    expect(refusing[0]?.severity).toBe("critical");
+    expect(refusing[0]?.title).toContain("daily");
 
-    const near = attentionQueue(input({ budget: { org: { used: 95, max: 100 } } }));
+    const near = attentionQueue(input({ budget: meter(win({ state: "near", used: 95 })) }));
     expect(near[0]?.severity).toBe("caution");
 
-    // AND A HEALTHY METER RAISES NOTHING, which is what stops the first
-    // two being a check that anything at all is pushed.
-    expect(attentionQueue(input({ budget: { org: { used: 10, max: 100 } } }))).toEqual([]);
+    // AND A HEALTHY METER RAISES NOTHING — even at 99%, because the engine
+    // said ok. That is what stops the first two being a check that anything
+    // at all is pushed, and what proves no threshold of ours is consulted.
+    expect(attentionQueue(input({ budget: meter(win({ state: "ok", used: 99 })) }))).toEqual([]);
+  });
+
+  // THE WINDOW NAMED IS THE ONE A COMPANY WAITS ON. Refused in its day and its
+  // month, a company has room again only when the month turns over.
+  test("a refusal names the window that turns over last", () => {
+    const [item] = attentionQueue(
+      input({
+        budget: meter(
+          win({ state: "refusing", refused_at: "2026-01-01T11:00:00Z" }),
+          win({
+            period: "month",
+            window: "2026-01",
+            resets_at: "2026-02-01T00:00:00Z",
+            state: "refusing",
+            refused_at: "2026-01-01T11:59:00Z",
+          }),
+        ),
+      }),
+    );
+    expect(item?.title).toContain("monthly");
+    expect(item?.detail).toContain("2026-02-01T00:00:00Z");
+    expect(item?.at).toBe("2026-01-01T11:59:00Z");
+  });
+
+  test("a seat refusing its own ceiling is raised against the seat", () => {
+    const items = attentionQueue(
+      input({
+        agents: [
+          {
+            id: "a",
+            agent_id: "id-dev-a",
+            role: "Dev A",
+            handle: "dev-a",
+            budget: { windows: [win({ state: "refusing", refused_at: "2026-01-01T11:59:00Z" })] },
+          },
+        ],
+      }),
+    );
+    expect(items[0]?.id).toBe("seat-budget-id-dev-a");
+    expect(items[0]?.detail).toContain("11:59");
+  });
+
+  // THE ADVICE IS ONE AN OPERATOR CAN TAKE. The counters are windowed and
+  // there is no reset: room comes from raising the ceiling or from the window
+  // turning over, so an item that sent somebody looking for a reset would
+  // send them to a command that no longer exists.
+  test("a budget item advises raising the ceiling or waiting, never a reset", () => {
+    for (const w of [
+      win({ state: "refusing", used: 99, refused_at: "2026-01-01T11:59:00Z" }),
+      win({ state: "near", used: 95 }),
+    ]) {
+      const [item] = attentionQueue(input({ budget: meter(w) }));
+      expect(item?.detail).toContain("token_budget.day");
+      expect(item?.detail).toContain("turn over");
+      expect(item?.detail).not.toMatch(/reset/i);
+    }
   });
 
   // WHAT THE QUIET BAND DRAWS IS TWO-SIDED, and only one side is a type error.
   //
   // TypeScript refuses a condition that names no subject. Nothing but this
-  // refuses a SUBJECT no condition can raise — a phrase on the landing screen
+  // refuses a SUBJECT no condition can raise — a phrase on the Inbox and Home
   // claiming something is checked when nothing checks it, which is the exact
   // shape of the sentence it replaced: "No seat is stopped, no run is parked on
   // a question, and no budget is refusing", three of the twelve conditions
@@ -276,7 +339,7 @@ describe("what it surfaces", () => {
     const items = attentionQueue(
       input({
         engine: { status: "ok", configured: false },
-        budget: { org: { used: 100, max: 100 } },
+        budget: meter(win({ state: "refusing", used: 100 })),
         runs: [parked("awaiting_clarification")],
         agents: [
           {
@@ -292,16 +355,111 @@ describe("what it surfaces", () => {
               event_id: "e1",
             },
           },
+          {
+            id: "b",
+            agent_id: "id-dev-b",
+            role: "Dev B",
+            handle: "dev-b",
+            live_call: {
+              turn_id: "t2",
+              phase: "execute",
+              iteration: 1,
+              model: "",
+              trigger: null,
+              prompt: "",
+              prompt_messages: null,
+              response: "",
+              input_tokens: 0,
+              output_tokens: 0,
+              total_tokens: 0,
+              tool_executions: null,
+              round_num: 3,
+              rounds_used: 3,
+              in_progress: true,
+              updated_at: new Date(now - 900_000).toISOString(),
+            },
+          },
         ],
       }),
     );
     expect(new Set(items.map((i) => i.subject))).toEqual(new Set(Object.keys(SUBJECTS)));
   });
 
-  // AND THE CLAUSE CARRIES ALL OF THEM. The band drops one string in, so a join
-  // that lost its last item would read as a complete sentence.
-  test("the clause the screen drops in carries every subject", () => {
-    for (const phrase of Object.values(SUBJECTS)) expect(WATCHED).toContain(phrase);
+  // AND EACH PLACE'S CLAUSE CARRIES ITS OWN SUBJECTS AND NO OTHER. A quiet
+  // Inbox drops one string in, so a join that lost its last item would read
+  // as a complete sentence — and one that carried Live's subjects would claim
+  // the Inbox checked what it does not list.
+  test("each place's clause carries exactly the subjects shown there", () => {
+    for (const where of ["seat", "engine", "live"] as Where[]) {
+      const clause = watchedIn(where);
+      for (const [subject, phrase] of Object.entries(SUBJECTS) as [Subject, string][]) {
+        if (WHERE_OF[subject] === where) expect(clause, subject).toContain(phrase);
+        else expect(clause, subject).not.toContain(phrase);
+      }
+    }
+  });
+});
+
+// ONE HOME PER SUBJECT. A condition drawn in two places is two places to keep
+// agreeing about it, and one drawn in none is a condition nobody sees: the
+// stalled round that used to be a "seat" row went to the Inbox, which is not
+// where a round that has stopped moving is decided.
+describe("where a condition is shown", () => {
+  test("every subject has exactly one home, and every home holds one", () => {
+    const homes = new Set<Where>(["seat", "engine", "live"]);
+    for (const subject of Object.keys(SUBJECTS) as Subject[]) {
+      expect(homes.has(WHERE_OF[subject]), subject).toBe(true);
+    }
+    expect(new Set(Object.values(WHERE_OF))).toEqual(homes);
+    expect(Object.keys(WHERE_OF).sort()).toEqual(Object.keys(SUBJECTS).sort());
+  });
+
+  test("a stalled round is Live's, and a person decides only the seat's", () => {
+    const items = attentionQueue(
+      input({
+        engine: { status: "ok", configured: false },
+        agents: [
+          {
+            id: "b",
+            agent_id: "id-dev-b",
+            role: "Dev B",
+            handle: "dev-b",
+            live_call: {
+              turn_id: "t2",
+              phase: "execute",
+              iteration: 1,
+              model: "",
+              trigger: null,
+              prompt: "",
+              prompt_messages: null,
+              response: "",
+              input_tokens: 0,
+              output_tokens: 0,
+              total_tokens: 0,
+              tool_executions: null,
+              round_num: 3,
+              rounds_used: 3,
+              in_progress: true,
+              updated_at: new Date(now - 900_000).toISOString(),
+            },
+          },
+          {
+            id: "c",
+            agent_id: "id-dev-c",
+            role: "Dev C",
+            handle: "dev-c",
+            activity: "stopped",
+            stopped_reason: "paused",
+          },
+        ],
+      }),
+    );
+    const stalled = items.find((i) => i.id.startsWith("stale-"));
+    expect(stalled?.subject).toBe("round");
+    expect(WHERE_OF[stalled!.subject]).toBe("live");
+    // THE INBOX'S ROWS: the stopped seat, and neither the engine's own
+    // condition nor the round.
+    expect(conditionsToDecide(items).map((i) => i.id)).toEqual(["stopped-id-dev-c"]);
   });
 });
 
@@ -310,7 +468,7 @@ describe("ordering", () => {
     const items = attentionQueue(
       input({
         connected: false,
-        budget: { org: { used: 95, max: 100 } },
+        budget: meter(win({ state: "near", used: 95 })),
         agents: [
           {
             id: "a",
@@ -342,8 +500,20 @@ describe("ordering", () => {
         engine: { status: "ok", configured: false },
         agents: [
           // TWO SEATS SHARING A NAME: keyed by the name, their rows were one id.
-          { id: "a", agent_id: "id-a", role: "Engineer", state: "afk", afk_reason: "stall" },
-          { id: "b", agent_id: "id-b", role: "Engineer", state: "afk", afk_reason: "stall" },
+          {
+            id: "a",
+            agent_id: "id-a",
+            role: "Engineer",
+            activity: "stopped",
+            stopped_reason: "provider",
+          },
+          {
+            id: "b",
+            agent_id: "id-b",
+            role: "Engineer",
+            activity: "stopped",
+            stopped_reason: "provider",
+          },
         ],
       }),
     );
@@ -358,5 +528,38 @@ describe("ordering", () => {
       expect(item.title.length, item.id).toBeGreaterThan(8);
       expect(item.detail.length, item.id).toBeGreaterThan(20);
     }
+  });
+});
+
+// WHO PAUSED A SEAT IS SAID BY NAME. The engine names the pauser as it records
+// every author — a person bound to a seat by that seat's handle — and the row
+// read "paused by jane-founder" on Home and in the Inbox — an address where a
+// person is meant.
+describe("a stopped seat's row", () => {
+  test("names the person who paused it, off the chart", () => {
+    const items = attentionQueue(
+      input({
+        agents: [
+          {
+            id: "devrel",
+            agent_id: "id-agent-devrel",
+            role: "Agent DevRel",
+            handle: "agent-devrel",
+            activity: "stopped",
+            stopped_reason: "paused",
+            paused: {
+              by: "jane-founder",
+              by_kind: "human",
+              at: "2026-01-01T11:00:00Z",
+              stop_running: false,
+            },
+          },
+        ],
+        nameOf: (key) => (key === "jane-founder" ? "Jane Founder" : key),
+      }),
+    );
+    expect(items.find((i) => i.id === "stopped-id-agent-devrel")?.detail).toBe(
+      "The seat cannot take work: paused by Jane Founder.",
+    );
   });
 });

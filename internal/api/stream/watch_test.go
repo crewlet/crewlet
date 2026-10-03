@@ -67,7 +67,7 @@ func TestAWatchIsDecidedLikeTheInboxQuestion(t *testing.T) {
 				return
 			}
 			refusal := next(t, conn)
-			if refusal["kind"] != stream.KindError || refusal["what"] != "watch" ||
+			if kindOf(refusal) != stream.KindError || refusal["what"] != "watch" ||
 				refusal["error"] != stream.CodeUnauthorized {
 				t.Fatalf("a stranger's watch was answered %v, want a watch "+
 					"refusal frame", refusal)
@@ -95,7 +95,7 @@ func TestAWatchThisNodeCannotDecideIsNotInstalled(t *testing.T) {
 
 	write(t, conn, map[string]any{"kind": "watch", "seat": "sarah-chen"})
 	refusal := next(t, conn)
-	if refusal["kind"] != stream.KindError || refusal["what"] != "watch" ||
+	if kindOf(refusal) != stream.KindError || refusal["what"] != "watch" ||
 		refusal["error"] != stream.CodeUnavailable {
 		t.Fatalf("an undecidable watch was answered %v, want unavailable", refusal)
 	}
@@ -183,7 +183,7 @@ func TestAnUndecidableWatchSaysWhenToAskAgain(t *testing.T) {
 // equal to want, and carrying neither the refusal's code nor its words.
 func assertWatchHint(t *testing.T, frame map[string]any, want float64) {
 	t.Helper()
-	if frame["kind"] != stream.KindError || frame["what"] != "watch" ||
+	if kindOf(frame) != stream.KindError || frame["what"] != "watch" ||
 		frame["error"] != stream.CodeUnavailable {
 		t.Fatalf("an undecidable watch was answered %v, want unavailable", frame)
 	}
@@ -291,7 +291,7 @@ func (f *watchFixture) open(t *testing.T, token string) *websocket.Conn {
 		t.Fatalf("dial: %v", err)
 	}
 	t.Cleanup(func() { _ = conn.Close(websocket.StatusNormalClosure, "") })
-	if first := next(t, conn); first["kind"] != stream.KindSnapshot {
+	if first := next(t, conn); kindOf(first) != stream.KindSnapshot {
 		t.Fatalf("first frame = %v, want the snapshot", first["kind"])
 	}
 	return conn
@@ -306,7 +306,7 @@ func (f *watchFixture) watchers(*websocket.Conn) int {
 func (f *watchFixture) assertOpen(t *testing.T, conn *websocket.Conn) {
 	t.Helper()
 	write(t, conn, map[string]any{"kind": "ping"})
-	if got := next(t, conn); got["kind"] != stream.KindPong {
+	if got := next(t, conn); kindOf(got) != stream.KindPong {
 		t.Fatalf("after a refused watch the socket answered %v, want a pong: a "+
 			"refusal of one seat's frames closed the whole live channel", got)
 	}
@@ -420,7 +420,7 @@ func TestAWatchOfSomebodysLoginIsInstalledOnTheirRecord(t *testing.T) {
 		// grant is told — and waiting will not change it.
 		write(t, conn, map[string]any{"kind": "watch", "seat": "ghost.person"})
 		refusal := next(t, conn)
-		if refusal["kind"] != stream.KindError || refusal["what"] != "watch" ||
+		if kindOf(refusal) != stream.KindError || refusal["what"] != "watch" ||
 			refusal["error"] != stream.CodeNotFound {
 			t.Fatalf("a watch of a login nobody holds was answered %v, want "+
 				"not_found", refusal)
@@ -441,7 +441,7 @@ func TestAWatchOfSomebodysLoginIsInstalledOnTheirRecord(t *testing.T) {
 			for _, login := range []string{"sarah.chen", "ghost.person"} {
 				write(t, conn, map[string]any{"kind": "watch", "seat": login})
 				refusal := next(t, conn)
-				if refusal["kind"] != stream.KindError ||
+				if kindOf(refusal) != stream.KindError ||
 					refusal["error"] != stream.CodeUnauthorized {
 					t.Fatalf("a stranger's watch of %s was answered %v, want the "+
 						"refusal a seat they do not lead gets", login, refusal)

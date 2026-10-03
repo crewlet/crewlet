@@ -38,7 +38,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { Button, Callout, EmptyState, FormField, Input, Skeleton, Text } from "@crewlethq/ui";
-import { ExploreGlyph, KeyGlyph } from "@crewlethq/icons/glyphs";
+import { CompassGlyph, KeyGlyph } from "@crewlethq/icons/glyphs";
 import { useNavigator } from "~/app/router.tsx";
 import { refusalText } from "~/lib/refusal.ts";
 import { LANDING, useSignedIn } from "~/lib/session.ts";
@@ -73,7 +73,7 @@ export function Invite({ link }: { link: string }) {
     return (
       <SignInPage title="This invitation link is incomplete">
         <EmptyState
-          icon={<ExploreGlyph size={32} />}
+          icon={<CompassGlyph size={32} />}
           title="Part of the link is missing."
           description="An invitation link ends in two parts joined by a dot. Copy the whole link from the message it came in, or ask whoever sent it for a new one."
           headingLevel="none"

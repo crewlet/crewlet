@@ -137,7 +137,7 @@ func TestAWriteNamesEverySeatFromOneReadingOfTheChart(t *testing.T) {
 		}},
 		{"a lead's order of somebody's queue", func() error {
 			_, err := ada.WritePriorities(ctx, "op-prio", "bob", []string{"held"},
-				tracker.PersonAuthority{Authorized: true})
+				nil, tracker.PersonAuthority{Authorized: true})
 			return err
 		}},
 		{"an edit of one's own remark", func() error {
@@ -172,7 +172,7 @@ func TestAWriteNamesEverySeatFromOneReadingOfTheChart(t *testing.T) {
 // from `cto` to `chief` opened an empty day: its assignment, the notice that
 // told it so, its own priority list and its pinned views all sat under an
 // address nobody asked for, and its own comment was no longer its own to edit.
-// A seat's identity is the handle it was CREATED under (ADR-0019), and that is
+// A seat's identity is the handle it was CREATED under (ADR-0026), and that is
 // what every one of those is written and read by now, and shown as the handle
 // the seat answers to.
 //
@@ -201,11 +201,12 @@ func TestARenamedSeatKeepsItsWorkInboxQueueAndPins(t *testing.T) {
 	// comment of its own, and a task it watches without holding.
 	routeTo(t, r, "held", "ENG-1", "cto")
 	if _, err := cto.WritePriorities(ctx, "op-prio", "cto", []string{"held"},
-		tracker.PersonAuthority{}); err != nil {
+		nil, tracker.PersonAuthority{}); err != nil {
 		t.Fatalf("cto's own priorities: %v", err)
 	}
-	if _, err := cto.WritePins(ctx, "op-pins", "cto", []string{"v-board"}, nil,
-		tracker.PersonAuthority{}); err != nil {
+	if _, err := cto.WritePins(ctx, "op-pins", "cto", tracker.PinGesture{
+		Views: tracker.SetChange[string]{Set: &[]string{"v-board"}},
+	}, tracker.PersonAuthority{}); err != nil {
 		t.Fatalf("cto's own pins: %v", err)
 	}
 	if _, err := cto.UpdateTask(ctx, "op-remark", "held", "ENG", tracker.NoIfMatch,
@@ -273,8 +274,9 @@ func TestARenamedSeatKeepsItsWorkInboxQueueAndPins(t *testing.T) {
 	// ONE PERSON RECORD, whichever handle a write named it by: a pin set
 	// as chief replaces the pins set as cto rather than starting a second
 	// record nobody reads.
-	if _, err := chief.WritePins(ctx, "op-pins-after", "chief",
-		[]string{"v-board", "v-mine"}, nil, tracker.PersonAuthority{}); err != nil {
+	if _, err := chief.WritePins(ctx, "op-pins-after", "chief", tracker.PinGesture{
+		Views: tracker.SetChange[string]{Set: &[]string{"v-board", "v-mine"}},
+	}, tracker.PersonAuthority{}); err != nil {
 		t.Fatalf("chief's own pins: %v", err)
 	}
 	r.drain()

@@ -2,25 +2,22 @@ package queries_test
 
 import (
 	"context"
-	"os"
-	"path/filepath"
-	"regexp"
 	"slices"
 	"strings"
 	"testing"
 	"time"
 
-	"github.com/crewlet/crewlet/internal/agent/ledger"
-	"github.com/crewlet/crewlet/internal/agent/ledger/ledgerstore"
+	"github.com/crewlet/crewlet/internal/agent/phase"
 	"github.com/crewlet/crewlet/internal/api/livestate"
 	"github.com/crewlet/crewlet/internal/api/queries"
 	"github.com/crewlet/crewlet/internal/clientsource"
 	"github.com/crewlet/crewlet/internal/coord"
 	coordmemory "github.com/crewlet/crewlet/internal/coord/memory"
-	"github.com/crewlet/crewlet/internal/learning"
+	"github.com/crewlet/crewlet/internal/engine"
+	"github.com/crewlet/crewlet/internal/eventfan"
+	"github.com/crewlet/crewlet/internal/learning/memread"
 	"github.com/crewlet/crewlet/internal/pages"
 	"github.com/crewlet/crewlet/internal/sandbox"
-	"github.com/crewlet/crewlet/internal/sourcetree"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/store"
 	"github.com/crewlet/crewlet/internal/tokens"
@@ -35,55 +32,42 @@ func (memorySandbox) ListActive(context.Context) ([]sandbox.PendingRun, error) {
 	return nil, nil
 }
 
-// roomQueries scans the dashboard for every query kind a room asks for.
+// roomQueries is every query kind a room asks for, mapped to the files that
+// ask — found in the rooms' own source, never a list kept here: a
+// hand-maintained one is exactly what drifts, and it would drift towards
+// claiming the server answers more than it does.
 //
-// FROM THE ROOMS' OWN SOURCE, never a list kept here: a hand-maintained one
-// is exactly what drifts, and it would drift towards claiming the server
-// answers more than it does.
+// BOTH CALL SHAPES: the `useQuery` hook a screen renders from, and the direct
+// `socket.query` a pager or an action uses. Read by [clientsource.Calls], so a
+// call a formatter wrapped across lines, one with type arguments and one
+// inside markup are the calls they are. The sweep this replaced was a regular
+// expression whose name class once could not match `a2a_channels` and whose
+// paren once could not be followed by a line break — a sweep whose whole job
+// is to notice a missing name, twice silently narrowed by the shape of a
+// pattern — and it keyed each hit on the file's BASE name, so two rooms named
+// alike collapsed into one.
+//
+// A kind handed over in anything but a string literal is invisible here —
+// [clientsource.Calls] can read nothing else — and that is safe only because
+// the dashboard refuses one: `app/source.test.ts`'s "every read names its
+// question" requires a literal at every `useQuery(` and `query(` call, bare or
+// as a method, which is every call Calls is asked for below.
 func roomQueries(t *testing.T) map[string][]string {
 	t.Helper()
-	// Both call shapes: the `useQuery` hook a screen renders from, and the
-	// direct `socket.query` a pager or an action uses.
-	//
-	// DIGITS IN THE NAME. The class was `[a-z_]+`, which cannot match
-	// `a2a_channels` — so the one kind whose name carries a number was
-	// invisible to a sweep whose whole job is to notice a missing name.
-	// `\s*` after the paren: a formatter wraps a call whose arguments do not
-	// fit, and `useQuery(\n  "config_diff",` is the same call as the one that
-	// fits on a line. Without it the sweep reported a live reader as missing.
-	calls := regexp.MustCompile(`\b(?:useQuery|query)\(\s*"([a-z0-9_]+)"`)
-	tree := clientsource.Tree(t)
-	out := map[string][]string{}
-	err := sourcetree.Walk(tree, func(path string, d os.DirEntry, err error) error {
-		if err != nil || d.IsDir() ||
-			(!strings.HasSuffix(path, ".ts") && !strings.HasSuffix(path, ".tsx")) ||
-			strings.HasSuffix(path, ".test.ts") || strings.HasSuffix(path, ".test.tsx") {
-			return err
-		}
-		source, err := os.ReadFile(path)
-		if err != nil {
-			return err
-		}
-		for _, m := range calls.FindAllStringSubmatch(string(source), -1) {
-			room := filepath.Base(path)
-			if !slices.Contains(out[m[1]], room) {
-				out[m[1]] = append(out[m[1]], room)
-			}
-		}
-		return nil
-	})
+	calls, err := clientsource.Calls(clientsource.Tree(t), "useQuery", "query")
 	if err != nil {
 		// FAILS rather than skips. The dashboard source is committed, so it
 		// is always in a checkout — and a skip here is indistinguishable
 		// from a pass, which is how this gate went quiet the last time the
-		// tree moved.
-		t.Fatalf("the dashboard source at %s could not be read, so this gate "+
-			"certifies nothing: %v", tree, err)
+		// tree moved: it pointed at `static/dashboard/js`, the hand-written
+		// bundle the React rewrite deleted, and certified nothing for the
+		// whole of that rewrite.
+		t.Fatal(err)
 	}
-	if len(out) == 0 {
+	if len(calls) == 0 {
 		t.Fatal("the sweep found no query calls at all, so it certifies nothing")
 	}
-	return out
+	return calls
 }
 
 // everySeam is a Sources with every seam present, which is what makes the
@@ -98,31 +82,34 @@ func everySeam(t *testing.T) queries.Sources {
 	cfg := company(t)
 	return queries.Sources{
 		State:    &livestate.LiveState{},
-		Events:   &store.EventLog{},
-		Health:   func(context.Context) any { return nil },
+		Events:   eventfan.Solo("node-a", &store.EventLog{}),
+		Usage:    &store.DB{},
 		Company:  companySource(t, cfg),
 		Coord:    coordmemory.New(),
 		Plane:    coordmemory.NewFleet(),
 		Runs:     &fakeRuns{},
-		Diary:    &learning.Diary{},
-		Episodes: &learning.Episodes{},
-		Skills:   &learning.Skills{},
+		Memory:   &memread.Reader{},
 		Channels: fakeChannels{},
 		Budget:   coordmemory.NewFleet(),
 		Sandbox:  memorySandbox{},
-		Config:   surface,
-		Work:     emptyWork{},
-		Pages:    emptyPages{},
+		// A RUNNING RUN'S LIVE OUTPUT: the real reader over an empty
+		// fleet record, which answers every run `not_running`.
+		SandboxTail: &sandbox.TailReader{Pending: sandbox.NewCoordStore(coordmemory.NewFleet())},
+		Config:      surface,
+		Work:        emptyWork{},
+		Pages:       emptyPages{},
 		// THE SEARCH INDEX IS ITS OWN SEAM, so a node with a board and
 		// no index is a real shape this sweep can describe.
-		WorkSearch:     emptyWork{},
-		Conversations:  emptyConversations{},
-		Counterparties: emptyCounterparties{},
-		// THE RETENTION DOCUMENT, which the Fleet screen's replication
+		WorkSearch: emptyWork{},
+		// THE RETENTION DOCUMENT, which Settings › Nodes' replication
 		// panels read. A pass-through on the real surface, so the seam is
 		// a function rather than a reader — and this sweep is about which
 		// names exist, so what it answers is nothing.
 		Retention: func(context.Context) any { return nil },
+		// EVERY MODEL'S KEY BAG, which the engine always supplies.
+		CredentialPools: func() []engine.CredentialPool { return nil },
+		// THE FLEET'S BACKUP REGISTER, which every node opens.
+		Backups: register{},
 	}
 }
 
@@ -138,6 +125,16 @@ func (emptyWork) Task(context.Context, string, tracker.DetailWants,
 	statelog.Freshness) (tracker.TaskDetail, error) {
 
 	return tracker.TaskDetail{}, nil
+}
+
+func (emptyWork) TurnsOf(context.Context, string, string, int,
+	statelog.Freshness) (tracker.TaskTurns, error) {
+
+	return tracker.TaskTurns{Turns: []tracker.TaskTurn{}}, nil
+}
+
+func (emptyWork) EveryView(context.Context, tracker.EveryViewQuery) (tracker.ViewListing, error) {
+	return tracker.ViewListing{}, nil
 }
 
 func (emptyWork) Views(context.Context, tracker.ViewQuery) (tracker.ViewListing, error) {
@@ -166,8 +163,8 @@ func (emptyWork) Project(context.Context, tracker.ProjectDetailQuery) (
 	return tracker.ProjectDetail{}, nil
 }
 
-func (emptyWork) Workload(context.Context, tracker.WorkloadQuery, time.Time) (
-	tracker.WorkloadAnswer, error) {
+func (emptyWork) Workload(context.Context, tracker.WorkloadQuery, time.Time,
+	*time.Location) (tracker.WorkloadAnswer, error) {
 
 	return tracker.WorkloadAnswer{}, nil
 }
@@ -178,8 +175,8 @@ func (emptyWork) Activity(context.Context, tracker.ActivityQuery, time.Time) (
 	return tracker.ActivityAnswer{}, nil
 }
 
-func (emptyWork) MyWork(context.Context, tracker.MyWorkQuery, time.Time) (
-	tracker.MyWork, error) {
+func (emptyWork) MyWork(context.Context, tracker.MyWorkQuery, time.Time,
+	*time.Location) (tracker.MyWork, error) {
 
 	return tracker.MyWork{}, nil
 }
@@ -198,26 +195,27 @@ func (emptyWork) Routing(context.Context, tracker.RoutingQuery, time.Time) (
 	return tracker.RoutingAnswer{}, nil
 }
 
-func (emptyWork) Search(context.Context, string, int) ([]tracker.Ranked, error) {
-	return nil, nil
+func (emptyWork) Flow(context.Context, tracker.FlowQuery, time.Time, *time.Location) (
+	tracker.FlowAnswer, error) {
+	return tracker.FlowAnswer{Points: []tracker.FlowPoint{}}, nil
 }
 
-// emptyConversations and emptyCounterparties are the two per-seat stores with
-// nothing in them, on emptyWork's terms.
-type emptyConversations struct{}
-
-func (emptyConversations) Threads(context.Context, string, int) ([]ledgerstore.Thread, error) {
-	return nil, nil
+func (emptyWork) CompanyFeed(context.Context, tracker.FeedQuery) (tracker.FeedPage, error) {
+	return tracker.FeedPage{Rows: []tracker.FeedRow{}}, nil
 }
 
-func (emptyConversations) History(context.Context, string, string, int) ([]ledger.Session, error) {
-	return nil, nil
+func (emptyWork) Decisions(context.Context, tracker.DecisionsQuery, time.Time, *time.Location) (
+	tracker.DecisionsAnswer, error) {
+	return tracker.DecisionsAnswer{Asks: []tracker.AskRow{}}, nil
 }
 
-type emptyCounterparties struct{}
+func (emptyWork) TurnPlaces(context.Context, []string, statelog.Freshness) (
+	map[string]tracker.TurnPlace, error) {
+	return map[string]tracker.TurnPlace{}, nil
+}
 
-func (emptyCounterparties) List(context.Context, string) ([]learning.Profile, error) {
-	return nil, nil
+func (emptyWork) Search(context.Context, tracker.SearchQuery) (tracker.SearchAnswer, error) {
+	return tracker.SearchAnswer{}, nil
 }
 
 type emptyPages struct{}
@@ -297,39 +295,31 @@ func registeredKinds(t *testing.T) []string {
 //
 // The other direction, and the one that goes quiet rather than breaking: an
 // answer nobody calls is code with tests, no readers, and no way to notice
-// it stopped being right. The exceptions are named rather than assumed.
+// it stopped being right.
+//
+// NO EXCEPTIONS. This carried a map of kinds "read by name from somewhere that
+// is not a room" — `stream` through a header poll in a file the React rewrite
+// deleted, `config_entities` through a guide — and both had long since gained
+// a room that reads them, so the map was consulted for nothing and excused
+// nothing. An exemption nobody reaches is how the next unread answer gets
+// waved through with a reason that stopped being true; a kind that genuinely
+// has no room reader is a decision this gate should make someone take in the
+// open.
 func TestEveryQueryThisServerAnswersHasAReader(t *testing.T) {
 	t.Parallel()
-	// Read by name from somewhere that is not a room's query() call.
-	nonRoom := map[string]string{
-		"stream": "the header's health poll reads it through api.js, not a room",
-		// A documented PUBLIC read: docs/guides/configure-via-api.md drives
-		// it as GET /query/config_entities?kind=roles, and configapi's own
-		// comment points at it as the fetch a config loop makes. The
-		// dashboard's Config screen is a viewer of the whole document rather
-		// than an entity browser, so no room asks — which is not the same as
-		// nobody reading it.
-		"config_entities": "docs/guides/configure-via-api.md reads it over REST, not a room",
-	}
-
 	asked := roomQueries(t)
 	for _, kind := range registeredKinds(t) {
-		if _, ok := asked[kind]; ok {
-			continue
+		if _, ok := asked[kind]; !ok {
+			t.Errorf("this build answers %q and no room asks for it — either a "+
+				"reader was lost, or the answer should go with whatever used to "+
+				"call it", kind)
 		}
-		if why, exempt := nonRoom[kind]; exempt {
-			t.Logf("%s: %s", kind, why)
-			continue
-		}
-		t.Errorf("this build answers %q and no room asks for it — either a "+
-			"reader was lost, or the answer should go with whatever used to "+
-			"call it", kind)
 	}
 }
 
 // AND EVERY WAKE REASON HAS ENGLISH ON THE OTHER SIDE.
 //
-// The applier records, per change and per recipient, the ONE reason of twenty
+// The applier records, per change and per recipient, the ONE reason of eighteen
 // under which that person heard about it — the fact no commercial tracker
 // keeps. It reaches a screen through `work_inbox`, and a reason the client has
 // no phrase for renders as its own snake_case value: a log line where a
@@ -342,20 +332,24 @@ func TestEveryQueryThisServerAnswersHasAReader(t *testing.T) {
 // behind and a live one missing.
 func TestEveryWakeReasonReadsAsEnglishOnTheClient(t *testing.T) {
 	t.Parallel()
-	// FOUND RATHER THAN ADDRESSED — see [clientsource.Declaration]. This
-	// table has not moved, but a gate that names a path is one more thing a
-	// reorganisation breaks, and it breaks by reporting a drift that did not
-	// happen.
-	table, err := clientsource.Declaration(clientsource.Tree(t),
-		`(?s)const PHRASES: Record<[^>]*> = \{(.*?)\n\};`)
+	// FOUND RATHER THAN ADDRESSED, and read by its syntax: the table's KEYS
+	// are the reasons it phrases, whatever the layout. The pattern this
+	// replaced wanted each key at exactly two spaces of indent, so a key a
+	// formatter moved, or one that had to be quoted, was a reason read as
+	// unphrased; and the private walk it went through matched once per FILE,
+	// so a second PHRASES table beside the first — the one a screen might
+	// actually render — passed unseen.
+	table, err := clientsource.Literal(clientsource.Tree(t), "PHRASES")
 	if err != nil {
 		t.Fatal(err)
 	}
-	// The table is `key: { short: …, why: … }`, one per line.
-	entry := regexp.MustCompile(`(?m)^\s{2}([a-z_]+):\s*\{`)
+	keys, err := clientsource.Keys(table)
+	if err != nil {
+		t.Fatal(err)
+	}
 	phrased := map[string]bool{}
-	for _, m := range entry.FindAllStringSubmatch(table, -1) {
-		phrased[m[1]] = true
+	for _, key := range keys {
+		phrased[key] = true
 	}
 	if len(phrased) == 0 {
 		t.Fatal("no phrases were found at all, so this gate certifies nothing")
@@ -397,15 +391,13 @@ func TestEveryCostDimensionTheScreenOffersIsOneTheEngineAccepts(t *testing.T) {
 	// workspace, reporting a drift between two lists that had not changed.
 	// A gate over a constant is a gate over the constant, and the file it
 	// happens to sit in is not the subject.
-	block, err := clientsource.Declaration(clientsource.Tree(t),
-		`(?s)const GROUPS = \[(.*?)\] as const;`)
+	block, err := clientsource.Literal(clientsource.Tree(t), "GROUPS")
 	if err != nil {
 		t.Fatal(err)
 	}
-	entry := regexp.MustCompile(`value: "([a-z_]+)"`)
 	offered := map[string]bool{}
-	for _, m := range entry.FindAllStringSubmatch(block, -1) {
-		offered[m[1]] = true
+	for _, value := range clientsource.Field(block, "value") {
+		offered[value] = true
 	}
 	if len(offered) == 0 {
 		t.Fatal("no dimensions were found at all, so this gate certifies nothing")
@@ -421,5 +413,70 @@ func TestEveryCostDimensionTheScreenOffersIsOneTheEngineAccepts(t *testing.T) {
 		t.Errorf("the screen offers %q and the engine refuses it, so picking it "+
 			"draws no chart at all — a renamed group leaves exactly this behind",
 			leftover)
+	}
+}
+
+// AND THE CHART DRAWS EXACTLY THE ENGINE'S PHASE BANDS, IN ITS ORDER.
+//
+// `group=phase` answers four bands the engine folds every phase into ONCE
+// (tokens.PhaseBand), and the dashboard's `BANDS` gives each its hue and its
+// place in the stack. A band the engine answers and the table lacks is drawn in
+// no colour; a band the table carries and the engine dropped is a legend entry
+// for spend that can never appear; and a table in another ORDER stacks the
+// columns differently from the engine's own legend.
+func TestTheSpendChartDrawsExactlyTheEnginesPhaseBands(t *testing.T) {
+	t.Parallel()
+	block, err := clientsource.Literal(clientsource.Tree(t), "BANDS")
+	if err != nil {
+		t.Fatal(err)
+	}
+	drawn := clientsource.Field(block, "value")
+	if len(drawn) == 0 {
+		t.Fatal("no bands were found at all, so this gate certifies nothing")
+	}
+	var folded []string
+	for _, band := range tokens.Bands {
+		folded = append(folded, string(band))
+	}
+	if !slices.Equal(drawn, folded) {
+		t.Errorf("the dashboard draws the bands %v and the engine folds into %v — "+
+			"one set, in one stacking order", drawn, folded)
+	}
+}
+
+// AND A PHASE IS DRAWN IN THE BAND THE ENGINE FOLDS IT INTO.
+//
+// The design system has no phase hues: inside a figure a phase is a series,
+// and the dashboard draws it in its BAND's (`PHASE_BANDS`, read by
+// `phaseColor`), so a phase is one colour on every chart. That table is
+// tokens.PhaseBand written out by phase, and it can drift two ways, both
+// silent: an entry the engine folds elsewhere is a coding run drawn as Review
+// in one chart and counted as Execute in the next, and a phase the table does
+// not name falls to Auxiliary's hue whatever the engine does with it.
+func TestEveryPhaseIsDrawnInTheBandTheEngineFoldsItInto(t *testing.T) {
+	t.Parallel()
+	block, err := clientsource.Literal(clientsource.Tree(t), "PHASE_BANDS")
+	if err != nil {
+		t.Fatal(err)
+	}
+	keys, err := clientsource.Keys(block)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(keys) == 0 {
+		t.Fatal("no phases were found at all, so this gate certifies nothing")
+	}
+	for _, key := range keys {
+		drawn := clientsource.Field(block, key)
+		if want := string(tokens.PhaseBand(key)); len(drawn) != 1 || drawn[0] != want {
+			t.Errorf("the dashboard draws phase %q in band %v and the engine folds it into %q",
+				key, drawn, want)
+		}
+	}
+	for _, p := range phase.All {
+		if !slices.Contains(keys, string(p)) {
+			t.Errorf("phase %q is not in PHASE_BANDS, so it is drawn in Auxiliary's hue "+
+				"whatever band the engine counts it in", p)
+		}
 	}
 }

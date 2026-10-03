@@ -2,6 +2,12 @@ package topics_test
 
 import (
 	"fmt"
+	"go/ast"
+	"go/parser"
+	"go/token"
+	"io/fs"
+	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -9,6 +15,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/queue/topics"
+	"github.com/crewlet/crewlet/internal/sourcetree"
 )
 
 // separators is what a seat token must never contribute to a subject: the
@@ -22,7 +29,7 @@ const separators = ".*>"
 // what made that safe lived entirely on the other side of the tree:
 // org.ValidHandle enforces ^[a-z0-9][a-z0-9-]*$, which happens to exclude
 // every character the subject grammar treats as syntax. The subject carries
-// the seat's ID now (ADR-0019), so that particular dependency is gone — and
+// the seat's ID now (ADR-0026), so that particular dependency is gone — and
 // the invariant it protected is not. It simply moved: what has to be a safe,
 // single, canonical token is whatever [org.Organization.AgentIDFor] derives.
 //
@@ -291,4 +298,234 @@ func TestDistinctSeatsNeverShareAName(t *testing.T) {
 		t.Fatalf("minted %d distinct names for %d seats; the corpus or the walk is wrong",
 			len(seen), 2*len(ids))
 	}
+}
+
+// topicsImport is this package's import path, which the walk below resolves a
+// file's local name for.
+const topicsImport = "github.com/crewlet/crewlet/internal/queue/topics"
+
+// seatGrammar is the pieces a SEAT's mailbox names are composed of: the inbox
+// and control subjects, and their two consumer groups.
+var seatGrammar = map[string]bool{
+	"AgentInboxPrefix":        true,
+	"AgentInboxSuffix":        true,
+	"AgentControlSuffix":      true,
+	"AgentGroupPrefix":        true,
+	"AgentControlGroupSuffix": true,
+}
+
+// suffixReaders are the strings functions that READ a name against a piece of
+// the grammar rather than build one — asking whether a subject is an inbox at
+// all is not composing somebody's.
+var suffixReaders = map[string]bool{
+	"HasPrefix": true, "HasSuffix": true, "CutPrefix": true,
+	"CutSuffix": true, "TrimPrefix": true, "TrimSuffix": true,
+}
+
+// TestNoPackageBuildsASeatsMailboxFromAString fails the build when a package
+// outside this one composes a seat's inbox or control subject, or either of
+// their consumer groups, out of the grammar's pieces — `AgentInboxPrefix + x +
+// AgentInboxSuffix`, a Sprintf over them, a piece held in a variable to be
+// joined later.
+//
+// THE TYPE ALREADY REFUSES A HANDLE: [topics.AgentInbox] takes a uuid, so the
+// call a rename breaks does not compile (ADR-0026). This is the other door.
+// The grammar's pieces are exported — the stream topology and the mailbox
+// sweep need the all-seats wildcard — and a site handed a handle where the
+// type wants an id could reach past the constructor and concatenate the
+// subject itself. That compiles, routes by an address a rename moves, and
+// fails silently: the publish lands on a subject nobody is attached to, and
+// [TestNoPackageBuildsASubjectByHand] cannot see it, because no literal in it
+// names a subject.
+//
+// TWO USES ARE READINGS AND STAY LEGAL: the inbox prefix followed by `>` and
+// nothing else — the wildcard over every seat's inbox the stream is created
+// over and the sweep lists — and a piece handed to a strings function that
+// asks whether a name has it. Every other reference to a piece is a name being
+// built, and the constructor is where names are built.
+func TestNoPackageBuildsASeatsMailboxFromAString(t *testing.T) {
+	t.Parallel()
+
+	// THE CONTROLS, because a guard asserting an absence passes the same
+	// way when the tree is clean and when the matcher has gone inert.
+	for name, tc := range map[string]struct {
+		src  string
+		want int
+	}{
+		"a handle between the inbox pieces": {`h := "alice"; _ = topics.AgentInboxPrefix + h + topics.AgentInboxSuffix`, 2},
+		"a control subject":                 {`_ = topics.AgentInboxPrefix + "alice" + topics.AgentControlSuffix`, 2},
+		"a group by Sprintf":                {`_ = fmt.Sprintf("%s%s", topics.AgentGroupPrefix, "alice")`, 1},
+		"a piece held for later":            {`p := topics.AgentInboxPrefix; _ = p`, 1},
+		"a control group":                   {`_ = topics.AgentGroupPrefix + "alice" + topics.AgentControlGroupSuffix`, 2},
+		"the wildcard, extended":            {`_ = topics.AgentInboxPrefix + ">" + "x"`, 1},
+		"the wildcard over every inbox":     {`_ = []string{topics.AgentInboxPrefix + ">"}`, 0},
+		"a parenthesised wildcard":          {`_ = (topics.AgentInboxPrefix + ">")`, 0},
+		"asking whether it is an inbox":     {`_ = strings.HasSuffix("t", topics.AgentInboxSuffix)`, 0},
+		"the constructor":                   {`_ = topics.AgentInbox(uuid.Nil)`, 0},
+	} {
+		src := "package p\n\nimport (\n\t\"fmt\"\n\t\"strings\"\n\n\t\"github.com/google/uuid\"\n\n\t\"" +
+			topicsImport + "\"\n)\n\nvar _ = fmt.Sprint\nvar _ = strings.HasSuffix\nvar _ = uuid.Nil\n\nfunc f() {\n\t" + tc.src + "\n}\n"
+		fset := token.NewFileSet()
+		file, err := parser.ParseFile(fset, name+".go", src, 0)
+		if err != nil {
+			t.Fatalf("control %q does not parse: %v", name, err)
+		}
+		got, _ := seatGrammarBuilds(fset, file)
+		if len(got) != tc.want {
+			t.Errorf("control %q: the walk flagged %d references %v, want %d", name, len(got), got, tc.want)
+		}
+	}
+	// AN ALIASED IMPORT IS THE SAME PACKAGE, and a walk keyed on the word
+	// "topics" would read it as somebody else's.
+	aliased := "package p\n\nimport q \"" + topicsImport + "\"\n\nfunc f(h string) string { return q.AgentInboxPrefix + h + q.AgentInboxSuffix }\n"
+	fset := token.NewFileSet()
+	file, err := parser.ParseFile(fset, "aliased.go", aliased, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := seatGrammarBuilds(fset, file); len(got) != 2 {
+		t.Errorf("an aliased import built an inbox by hand and the walk flagged %v", got)
+	}
+
+	root := sourcetree.Root(t)
+	topicsDir := filepath.Join(root, "internal", "queue", "topics")
+	var files, readings int
+	var builds []string
+	for _, tree := range []string{"internal", "cmd"} {
+		err := sourcetree.Walk(filepath.Join(root, tree), func(path string, d fs.DirEntry, err error) error {
+			if err != nil {
+				return err
+			}
+			if d.IsDir() {
+				// The grammar's own package composes its names; test
+				// code and the *test support packages build malformed
+				// ones on purpose — the boundary
+				// [TestNoPackageBuildsASubjectByHand] draws, and for
+				// its reason.
+				if path == topicsDir || filepath.Base(path) == "testdata" || isSupportPackage(filepath.Base(path)) {
+					return fs.SkipDir
+				}
+				return nil
+			}
+			if !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
+				return nil
+			}
+			fset := token.NewFileSet()
+			file, err := parser.ParseFile(fset, path, nil, 0)
+			if err != nil {
+				t.Errorf("parse %s: %v", path, err)
+				return nil
+			}
+			files++
+			found, read := seatGrammarBuilds(fset, file)
+			readings += read
+			for _, at := range found {
+				builds = append(builds, shortPos(root, at))
+			}
+			return nil
+		})
+		if err != nil {
+			t.Fatalf("walking %s: %v", tree, err)
+		}
+	}
+	if files == 0 {
+		t.Fatal("parsed no source files — this guard certified nothing")
+	}
+	// THE LIVENESS HALF: the stream topology and the mailbox sweep read the
+	// all-inboxes wildcard, so a walk that saw no legal reading either lost
+	// its reach or stopped resolving the import.
+	if readings == 0 {
+		t.Fatal("saw no legal reading of the seat grammar anywhere; the walk stopped " +
+			"recognising references to this package and would pass any tree")
+	}
+	for _, at := range builds {
+		t.Errorf("%s: builds a seat's mailbox name out of the grammar's pieces.\n"+
+			"\tcall topics.AgentInbox / AgentInboxGroup / AgentControl / "+
+			"AgentControlGroup with the seat's id — a name composed from an "+
+			"address a rename moves is a mailbox nobody is attached to", at)
+	}
+	t.Logf("scanned %d files: %d legal readings of the seat grammar, %d builds",
+		files, readings, len(builds))
+}
+
+// seatGrammarBuilds reports the positions in one file where a piece of the
+// seat grammar is used to BUILD a name, and how many references were legal
+// readings ([TestNoPackageBuildsASeatsMailboxFromAString] says which).
+func seatGrammarBuilds(fset *token.FileSet, file *ast.File) ([]string, int) {
+	local, strs := "", "strings"
+	for _, spec := range file.Imports {
+		path, err := strconv.Unquote(spec.Path.Value)
+		if err != nil {
+			continue
+		}
+		switch path {
+		case topicsImport:
+			local = "topics"
+			if spec.Name != nil {
+				local = spec.Name.Name
+			}
+		case "strings":
+			if spec.Name != nil {
+				strs = spec.Name.Name
+			}
+		}
+	}
+	if local == "" || local == "_" {
+		return nil, 0
+	}
+	var builds []string
+	var readings int
+	var stack []ast.Node
+	ast.Inspect(file, func(n ast.Node) bool {
+		if n == nil {
+			stack = stack[:len(stack)-1]
+			return true
+		}
+		if sel, ok := n.(*ast.SelectorExpr); ok && seatGrammar[sel.Sel.Name] {
+			if id, ok := sel.X.(*ast.Ident); ok && id.Name == local {
+				if seatGrammarReading(sel, stack, strs) {
+					readings++
+				} else {
+					builds = append(builds, fset.Position(sel.Pos()).String())
+				}
+			}
+		}
+		stack = append(stack, n)
+		return true
+	})
+	return builds, readings
+}
+
+// seatGrammarReading reports whether one reference to a piece of the seat
+// grammar, under the nodes that enclose it, is one of the two legal readings.
+func seatGrammarReading(sel *ast.SelectorExpr, stack []ast.Node, strs string) bool {
+	if len(stack) == 0 {
+		return false
+	}
+	parent := stack[len(stack)-1]
+	switch p := parent.(type) {
+	case *ast.BinaryExpr:
+		// The all-inboxes wildcard: the prefix, `>`, and nothing more —
+		// a concatenation that carried on past the wildcard is building
+		// something.
+		lit, isLit := p.Y.(*ast.BasicLit)
+		if sel.Sel.Name != "AgentInboxPrefix" || p.Op != token.ADD || p.X != sel ||
+			!isLit || lit.Kind != token.STRING || lit.Value != `">"` {
+			return false
+		}
+		if len(stack) > 1 {
+			if outer, ok := stack[len(stack)-2].(*ast.BinaryExpr); ok && outer.Op == token.ADD {
+				return false
+			}
+		}
+		return true
+	case *ast.CallExpr:
+		fn, ok := p.Fun.(*ast.SelectorExpr)
+		if !ok {
+			return false
+		}
+		pkg, ok := fn.X.(*ast.Ident)
+		return ok && pkg.Name == strs && suffixReaders[fn.Sel.Name]
+	}
+	return false
 }

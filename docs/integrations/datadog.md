@@ -6,7 +6,7 @@ The engine registers that webhook itself and keeps its address current, so the o
 
 ## Setting it up from the dashboard
 
-The Integrations screen connects Datadog without a shell: it takes an API key
+Settings › Integrations connects Datadog without a shell: it takes an API key
 and an application key, asks for the monitor tag key and the fallback seat,
 generates the shared token, seals it, points the config at it and activates.
 The next reconcile pass registers the webhook at Datadog. Everything below
@@ -68,7 +68,7 @@ The role is **refused rather than defaulted** if the organization does not have
 it: creating accounts under whatever role happened to match would grant an
 agent access nobody asked for.
 
-It is shown on each agent's row on the Integrations screen, as the tag a code
+It is shown on each agent's row in Settings › Integrations, as the tag a code
 host's tier gets, because it is the same question: how much this agent may do
 there. Datadog's own three are shortened, since "Datadog Standard Role" on a
 row that has already said which app it is about is noise, and mapped onto the
@@ -158,7 +158,7 @@ integrations:
 
 **Renaming `webhook_name` is a two-step change, and the engine does the first step and then tells you about the second.** The name is also the handle your monitors write, so every monitor still saying `@webhook-crewlet` keeps delivering through the old definition — same address, same token, still working. The engine therefore does not delete it: doing so would silence exactly those monitors. Nor could anything find it for you afterwards, because Datadog answers a `GET` on the webhooks collection with `405` and there is no listing to enumerate.
 
-So the engine **remembers the name it registered under**, and the first pass after a rename reports the definition left behind: the Integrations screen carries it as a note on a **Connected** integration, naming both the old definition and the new one. Nothing is broken, which is why it is an advisory rather than a fault. Repoint the monitors to the new handle, then delete the old definition at Datadog and the note clears itself. A disconnect withdraws only the name the field currently holds.
+So the engine **remembers the name it registered under**, and the first pass after a rename reports the definition left behind: Settings › Integrations carries it as a note on a **Connected** integration, naming both the old definition and the new one. Nothing is broken, which is why it is an advisory rather than a fault. Repoint the monitors to the new handle, then delete the old definition at Datadog and the note clears itself. A disconnect withdraws only the name the field currently holds.
 
 A disconnect also **reads before it deletes**: a definition under your `webhook_name` that posts somewhere other than this deployment's own `/webhooks/datadog` address is not this engine's, so it is reported and left alone rather than removed.
 

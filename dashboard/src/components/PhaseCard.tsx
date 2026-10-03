@@ -65,9 +65,9 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { Callout, CodeBlock, cx, Disclosure, EmptyValue, Tag } from "@crewlethq/ui";
 import {
   ChevronRightGlyph,
-  KeyboardArrowDownGlyph,
-  TerminalGlyph,
-  WarningGlyph,
+  ChevronDownGlyph,
+  SquareTerminalGlyph,
+  TriangleAlertGlyph,
 } from "@crewlethq/icons/glyphs";
 // STILL OURS. `PhaseTag` HAS a peer — uilet's `Tag` carries `phase-onboarding`,
 // `phase-execute` and `phase-review` — but it is a primitive in `~/ui`, and
@@ -88,6 +88,7 @@ import { staleness } from "~/lib/seats.ts";
 import { useClockReading } from "~/lib/clock.ts";
 import { ClockText } from "~/app/frame/cells.tsx";
 import { href, useIsCurrent } from "~/app/router.tsx";
+import { pathOf } from "~/app/frame/objects.ts";
 import { RECORD_MAX_HEIGHT } from "~/components/common.tsx";
 import { PromptRecord } from "~/components/PromptDoc.tsx";
 
@@ -308,7 +309,7 @@ function RoundBlock({ round, live }: { round: Round; live: boolean }) {
         {round.abandoned.map((a, i) => (
           <div key={i} className="abandoned">
             <div className="t-caption">
-              <WarningGlyph size="xs" /> this attempt was abandoned mid-answer and retried
+              <TriangleAlertGlyph size="xs" /> this attempt was abandoned mid-answer and retried
             </div>
             {a.reasoning.trim() && <p className="prose muted">{a.reasoning.trim()}</p>}
             {a.content.trim() && <p className="prose muted">{a.content.trim()}</p>}
@@ -375,15 +376,32 @@ export function PhaseCard({
   // completing is not a reason to hide it.
   const [open, setOpen] = useState(!!defaultOpen);
   const { ledger, legacy } = ledgerOf(record);
+  // A CODING RUN IS NOT A MODEL CALL. Its record has no rounds because the
+  // engine drove none — the run's own loop happened in a box — so what the
+  // legacy fallback would label "recorded before rounds were kept apart" is
+  // the report the run wrote back, and it carries an activity log instead.
+  const codingRun = record.phase === "sandbox";
   const streaming = ledger.some((r) => r.streaming);
+  // A PARKED TURN'S CALL IS SILENT ON PURPOSE: the executor suspended into a
+  // detached coding run and its round will not move until the run comes
+  // back, so the stage is passed and the alarm stays down for as long as the
+  // run takes.
+  const parked = record.live && record.stage === "parked";
   // WHETHER A LIVE PHASE HAS GONE QUIET, read as the word: it changes at two
   // minutes and at ten, so the card renders on those two ticks. The stopwatch
   // beside it moves every second and reads the clock in the element that
   // shows it (below) — read here, it drew the whole card once a second, every
   // round, tool call and prompt document of a running phase included.
-  const stale = useClockReading((now) => (record.live ? staleness(record.at, now) : ""));
+  const stale = useClockReading((now) =>
+    record.live ? staleness(record.at, now, record.stage) : "",
+  );
   const took = phaseDuration(record);
-  const onOwnEventPage = useIsCurrent(["events", record.eventId]);
+  // THE EVENT'S ADDRESS, FROM THE ONE MAP, for the link and for the guard
+  // alike. The guard spelled the address itself and kept the old one when the
+  // event log moved under Live — so it never matched, and the card drew
+  // "event →" to the page it was already on.
+  const eventPath = pathOf({ kind: "event", id: record.eventId });
+  const onOwnEventPage = useIsCurrent(eventPath);
   // The last round is the live one while the phase runs: rounds only append,
   // so "newest" and "last" are the same row and stay the same row.
   const tailRef = useTail(open && record.live);
@@ -398,7 +416,7 @@ export function PhaseCard({
       )}
     >
       <header className="phase-head" onClick={() => setOpen((v) => !v)}>
-        {open ? <KeyboardArrowDownGlyph size="xs" /> : <ChevronRightGlyph size="xs" />}
+        {open ? <ChevronDownGlyph size="xs" /> : <ChevronRightGlyph size="xs" />}
         <PhaseTag phase={record.phase} />
         {record.iteration > 1 && (
           <span className="t-caption" title="self-iterate round">
@@ -467,14 +485,20 @@ export function PhaseCard({
           </Tag>
         )}
         {record.backend === "sandbox" && (
-          <Tag variant="info" leadingIcon={<TerminalGlyph />}>
+          <Tag variant="info" leadingIcon={<SquareTerminalGlyph />}>
             {record.codingAgent || "sandbox"}
           </Tag>
         )}
         {record.failed && <Tag variant="danger">{record.errorKind || "failed"}</Tag>}
         {record.live && (
           <Tag variant={stale === "stalled" ? "danger" : stale ? "warning" : "info"} dot>
-            {stale === "stalled" ? "no update in 10m" : stale ? "no update in 2m" : "running"}
+            {parked
+              ? "parked on its coding run"
+              : stale === "stalled"
+                ? "no update in 10m"
+                : stale
+                  ? "no update in 2m"
+                  : "running"}
           </Tag>
         )}
 
@@ -648,7 +672,28 @@ export function PhaseCard({
           {/* A phase recorded before the engine sent per-round narration. The
               join cannot be undone, so it is shown whole rather than guessed
               apart — see `ledgerOf`. */}
-          {legacy && (
+          {codingRun && record.response.trim() && (
+            <section className="col gap-1">
+              <div className="t-label">
+                Report
+                <span className="muted"> · what the coding run wrote back</span>
+              </div>
+              <p className="prose">{record.response.trim()}</p>
+            </section>
+          )}
+          {codingRun && record.transcript && (
+            // LAZY and closed: the engine caps it at 256 KiB, which is a
+            // long log to mount for a reader who came for the report.
+            <Disclosure
+              title="Activity"
+              count={`${record.transcript.split("\n").length} lines`}
+              lazy
+            >
+              <p className="prose mono">{record.transcript}</p>
+            </Disclosure>
+          )}
+
+          {legacy && !codingRun && (
             <>
               {legacy.thinking && (
                 <Disclosure
@@ -727,7 +772,7 @@ export function PhaseCard({
             {record.eventId && !onOwnEventPage && (
               <a
                 className="t-link"
-                href={href(["activity", "events", record.eventId])}
+                href={href(eventPath)}
                 title="this phase's own event, in the log"
               >
                 event →

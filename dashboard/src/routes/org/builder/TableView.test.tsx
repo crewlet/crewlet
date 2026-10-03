@@ -32,6 +32,7 @@ import { drawnClasses, drawnPart, insidePart, menuEntryLabel, orgTableParts } fr
 import { Tag } from "@crewlethq/ui";
 import { checkedEdit } from "./testState.ts";
 import { TableView } from "./TableView.tsx";
+import { NodeGlyph } from "./nodeMarks.tsx";
 import { builderSpies, BuilderHarness, harnessProbe } from "./viewTestkit.tsx";
 
 afterEach(() => {
@@ -40,7 +41,7 @@ afterEach(() => {
 });
 
 beforeEach(() => {
-  location.hash = "#/company?lens=builder&view=table";
+  location.hash = "#/agents/edit?view=table";
 });
 
 function mount(options: { readOnly?: boolean } = {}) {
@@ -131,11 +132,23 @@ const strip = (name: string): string[] =>
     .getAllByRole("button")
     .map((control) => control.getAttribute("aria-label") ?? control.textContent ?? "");
 
+/** An element's text with a seat badge's initials left out: the name is printed beside them. */
+const said = (el: Element): string =>
+  [...el.childNodes]
+    .map((node) =>
+      node.nodeType === Node.TEXT_NODE
+        ? (node.textContent ?? "")
+        : node instanceof Element && !node.classList.contains("crewlet-avatar")
+          ? said(node)
+          : "",
+    )
+    .join("");
+
 /** Every cell of a row, as words. A treegrid's cells are `gridcell`s. */
 const cells = (name: string) =>
   within(row(name))
     .getAllByRole("gridcell")
-    .map((cell) => cell.textContent?.replace(/\s+/g, " ").trim() ?? "");
+    .map((cell) => said(cell).replace(/\s+/g, " ").trim());
 
 describe("the rows", () => {
   /*
@@ -239,11 +252,35 @@ describe("the rows", () => {
     // The control: a seat with no wiring wears no mark.
     expect(drawnPart(row("Dev"), PART.caption)!.querySelector(".bnode-mark")).toBeNull();
   });
+
+  /*
+   * COLOUR IS NOT IDENTITY, IN THE TABLE AS ON THE CHART. Each row's name, its
+   * mark and the wire arriving at it took one of six hues hashed from an agent
+   * seat's key — a legend a reader had to learn and could never decode, and
+   * the same seat was neutral on the org chart one screen away. The design
+   * system tints a row only when asked (`data-tone` on its name group and on
+   * its wire), so nothing on this table may carry one.
+   */
+  test("no row, name or wire of the table is tinted, an agent seat's included", () => {
+    const { container } = mount();
+    // The table really drew agent seats hanging below the company, so an empty
+    // list below is a statement about them rather than about an empty table.
+    const agents = screen
+      .getAllByRole("row")
+      .filter(
+        (r) => Number(r.getAttribute("aria-level")) > 1 && within(r).queryByText("Agent seat"),
+      );
+    expect(agents.length).toBeGreaterThan(0);
+    const tinted = [...container.querySelectorAll("[data-tone]")].map(
+      (el) => `${el.getAttribute("data-tone")}: ${el.closest("[role='row']")?.textContent ?? ""}`,
+    );
+    expect(tinted).toEqual([]);
+  });
 });
 
 describe("opening and closing the hierarchy", () => {
   /*
-   * THE PAIR IS THE LENS TOOLBAR'S, ON BOTH VIEWS, so this table draws none of
+   * THE PAIR IS THE BUILDER TOOLBAR'S, ON BOTH VIEWS, so this table draws none of
    * its own (`controls={false}`): the design system's pair over the table and
    * the toolbar's pair above it were one action with two implementations, each
    * hidden on the view where the other was drawn, so the control moved 800px
@@ -369,16 +406,22 @@ describe("acting on a row", () => {
    * ONE LIST, ONE SET OF MARKS. The pill drew a folder and a robot from an
    * array of its own while the chart drew a tree and the Crewlet mark for the
    * same two actions, so "Add agent seat" wore one drawing on the row and
-   * another everywhere else. Read from what is rendered: the pill's agent
-   * section carries the mark every agent seat on this table already wears.
+   * another everywhere else. Read from what is rendered: the pill's agent and
+   * unit entries carry `NodeGlyph`'s marks — the Crewlet figure and the tree a
+   * unit row on this table already wears.
    */
   test("the pill's marks are the chart's own, from the one add list", () => {
     mount();
     fireEvent.click(within(row("Engineering")).getByRole("button", { name: "Add to Engineering" }));
     const agent = screen.getByRole("button", { name: "Add agent seat to Engineering" });
     const drawing = (element: Element) => element.querySelector("svg")?.innerHTML ?? "";
+    const figure = render(<NodeGlyph kind="agent" />);
     expect(drawing(agent)).not.toBe("");
-    expect(drawing(agent)).toBe(drawing(drawnPart(row("Dev"), PART.icon)!));
+    expect(drawing(agent)).toBe(drawing(figure.container));
+    figure.unmount();
+    const unit = screen.getByRole("button", { name: "Add unit to Engineering" });
+    expect(drawing(unit)).not.toBe("");
+    expect(drawing(unit)).toBe(drawing(drawnPart(row("Engineering"), PART.icon)!));
   });
 
   /*

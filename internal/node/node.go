@@ -29,6 +29,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/logging"
@@ -92,6 +94,24 @@ type Config struct {
 	// can deliver, or the first message starts a second turn beside a
 	// coding job that is still going.
 	SeatReady func(ctx context.Context, seat placement.Seat, lease coord.Lease) error
+
+	// AttachHolds names the pause holds a seat's mailbox must already carry
+	// when it is attached — the reasons [queue.EventQueue.PauseTopic] is
+	// given for it, taken after SeatReady and BEFORE the attach. Nil takes
+	// none.
+	//
+	// BEFORE, for the reason the attach is last: a hold taken after the
+	// consumer starts is taken after the first delivery can arrive. A seat
+	// a person paused that placement moves here is the case — the node
+	// that released it held its mail, the release dropped that hold with
+	// the attachment, and the mail waiting on the inbox would be the first
+	// thing this node's consumer ran. A hold is keyed on the subscription
+	// rather than on an attachment, which is what lets it be taken first.
+	//
+	// ASKED BY THE SEAT'S ID, the name the held mailbox is built from and
+	// the key every hold is kept under (ADR-0026): asked by handle, a seat
+	// renamed while paused was attached without its hold.
+	AttachHolds func(seat uuid.UUID) []string
 
 	// SeatsAdmitted reports whether this node may take on NEW seats right
 	// now. Nil always admits. It gates the CLAIM only — see
@@ -185,8 +205,15 @@ type Node struct {
 	// attached records which seats this node currently consumes, so a
 	// release detaches exactly what an acquire attached. Guarded because
 	// the seat host calls hooks from its own goroutines.
+	//
+	// KEYED ON THE SEAT'S ID, with the handle it was attached under beside
+	// it for the diagnostics: the release names the seat by whatever handle
+	// it answers to by then, and keyed on the handle a seat renamed while
+	// attached was never forgotten — still listed as consumed after its
+	// release, which every reader of [Node.AttachedSeats] would take as
+	// this node's current copy of its memory.
 	mu       sync.Mutex
-	attached map[string]struct{}
+	attached map[uuid.UUID]string
 
 	// mail is what this node knows about the company's mailboxes, and the
 	// convergence loop's own lifetime. See mailboxes.go.
@@ -212,7 +239,7 @@ func New(cfg Config) (*Node, error) {
 	n := &Node{
 		cfg:      cfg,
 		log:      logging.Get("node").With("node_id", cfg.NodeID),
-		attached: map[string]struct{}{},
+		attached: map[uuid.UUID]string{},
 		mail:     newMailboxes(),
 		turns:    newGate(cfg.MaxConcurrent),
 		cut:      make(chan struct{}),
@@ -516,6 +543,18 @@ func (n *Node) OnAcquire(ctx context.Context, s placement.Seat, lease coord.Leas
 		}
 	}
 
+	if n.cfg.AttachHolds != nil {
+		for _, hold := range n.cfg.AttachHolds(s.ID) {
+			if err := n.cfg.Queue.PauseTopic(ctx, inbox, group, hold); err != nil {
+				// REFUSED rather than attached without it: a seat whose
+				// hold could not be taken would run the mail it exists to
+				// keep. A pause fails only on a client that has stopped.
+				return fmt.Errorf("node: hold seat %q under %q before attaching it: %w",
+					handle, hold, err)
+			}
+		}
+	}
+
 	opts := n.cfg.BatchOptions
 	if opts == nil {
 		opts = queue.DefaultBatchOptions()
@@ -532,7 +571,7 @@ func (n *Node) OnAcquire(ctx context.Context, s placement.Seat, lease coord.Leas
 	}
 
 	n.mu.Lock()
-	n.attached[handle] = struct{}{}
+	n.attached[s.ID] = handle
 	n.mu.Unlock()
 	n.log.Info("seat_attached", "handle", handle, "epoch", lease.Epoch)
 	return nil
@@ -608,7 +647,7 @@ func (n *Node) OnRelease(ctx context.Context, s placement.Seat, _ coord.Lease, r
 	}
 
 	n.mu.Lock()
-	delete(n.attached, handle)
+	delete(n.attached, s.ID)
 	n.mu.Unlock()
 	if n.cfg.SeatDone != nil {
 		n.cfg.SeatDone(ctx, s)
@@ -688,13 +727,22 @@ func (n *Node) acksGone() bool {
 	}
 }
 
-// Attached reports the seats this node currently consumes. Diagnostics and
-// the fleet suite's "attached to exactly what I own" assertion read it.
+// Attached reports the seats this node currently consumes, by the handle each
+// was attached under. Diagnostics and the fleet suite's "attached to exactly
+// what I own" assertion read it.
 func (n *Node) Attached() []string {
 	n.mu.Lock()
 	defer n.mu.Unlock()
-	out := slices.Collect(maps.Keys(n.attached))
-	return out
+	return slices.Collect(maps.Values(n.attached))
+}
+
+// AttachedSeats reports the seats this node currently consumes, by id — the
+// question a reader of a seat's state asks ("is this node's copy current?"),
+// which must not depend on the handle the seat answered to when it arrived.
+func (n *Node) AttachedSeats() []uuid.UUID {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	return slices.Collect(maps.Keys(n.attached))
 }
 
 // partitionKey groups a seat's inbox into the batches one turn is given.

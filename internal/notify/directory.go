@@ -52,7 +52,7 @@ import (
 // rule ([Standing]), stated once beside the registry it governs.
 type Holder struct {
 	// Seat is the seat's IDENTITY — the handle it was CREATED under, which
-	// no rename moves and the chart never issues twice (ADR-0020) — and never
+	// no rename moves and the chart never issues twice (ADR-0027) — and never
 	// the handle it answers to now. A [Standing] finds the seat by it in the
 	// organization it is applied to ([org.Role.Origin]), exactly as the
 	// request path finds the same binding's seat, rather than comparing it
@@ -179,7 +179,7 @@ func withholding(h Holder) (Withholding, bool) {
 //
 // # Keyed on the BINDING, found in an organization by IDENTITY
 //
-// A binding names its seat by the handle the seat was CREATED under (ADR-0020),
+// A binding names its seat by the handle the seat was CREATED under (ADR-0027),
 // which is the one name a rename never moves. So a reading states what each
 // binding says, and [Standing.Seats] is what turns that into seats: it finds
 // every binding's seat in the organization a registry is being built from by

@@ -3,6 +3,7 @@ package chart_test
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"testing"
 	"time"
 
@@ -49,14 +50,83 @@ func TestTheChartDomainIsACertifiedDomain(t *testing.T) {
 			// would be a schema the suite proved and the migration did
 			// not.
 			Encode: encodeSuiteRecord,
-			Kinds:  suiteKinds(),
-			Rows:   chart.NewRows,
-			Write:  suiteWrite,
+			// THE VERSIONED-FIELD TABLE, and a record carrying each of
+			// its fields — which is what certifies the path the table
+			// names is where the encoder actually writes the field.
+			Fields:   chart.VersionedFields(),
+			Carrying: carryingSuiteField,
+			Kinds:    suiteKinds(),
+			Rows:     chart.NewRows,
+			Write:    suiteWrite,
 			// THE GATE RECORD, which this domain had an applier, a fence
 			// and a table for and no writer — so the trim never learned
 			// an evicted node had left this log.
 			EncodeGate: encodeSuiteGate,
 		}
+	})
+}
+
+// carryingSuiteField builds a valid record carrying exactly one versioned
+// field, with its version left for the encoder to stamp.
+//
+// EVERY FIELD THE TABLE NAMES HAS A CASE, and a field without one fails here
+// rather than passing unexamined: the suite reads the version this returns,
+// and a record that did not carry the field would be stamped at 1 and reported
+// as the path being wrong, which is a fixture fault dressed as a domain one.
+func carryingSuiteField(field statelog.VersionedField) ([]byte, error) {
+	unit := chart.ObjectRef{Kind: chart.KindUnit, ID: "engineering"}
+	seat := chart.ObjectRef{Kind: chart.KindSeat, ID: "sarah-chen"}
+	placing := func(edge chart.Edge) ([]byte, error) {
+		return carryingSuiteRecord(chart.TreeSubject(), chart.OpPlace,
+			chart.BatchScope([]chart.ScopeTerm{
+				{Kind: chart.TermUnit, ID: "engineering"},
+				{Kind: chart.TermSeat, Unit: "engineering", ID: "sarah-chen"},
+			}),
+			chart.PlacementPayload{V: chart.DocumentVersion, Edges: []chart.Edge{edge}},
+			false)
+	}
+	switch field.Name {
+	case "Edge.Op":
+		return placing(chart.Edge{Object: unit, Op: chart.OpCreateUnit})
+	case "Edge.From":
+		// A RENAME'S SOURCE, and nothing else versioned beside it: the
+		// verb that would accompany it in a writer's record is a field of
+		// its own row.
+		return placing(chart.Edge{Object: unit, From: "eng"})
+	case "Edge.Kind":
+		return placing(chart.Edge{Object: seat, Parent: "engineering", Kind: chart.SeatAgent})
+	case "Edge.Manages":
+		return placing(chart.Edge{Object: seat, Parent: "engineering",
+			Manages: []string{"omar"}})
+	case "MutationRecord.ManagesStructural":
+		// A SEAT'S CONTENT, the record the marker exists for: it states no
+		// `manages:` list, and nothing else on it could say why.
+		return carryingSuiteRecord(chart.Subject{Kind: chart.KindSeat, ID: seat.ID},
+			chart.OpUpsert, chart.ScopeSet{Subject: true, Unit: "engineering"},
+			chart.SeatPayload{V: chart.DocumentVersion, Handle: seat.ID,
+				Name: "Suite Seat", Goal: "certify the stamp"},
+			true)
+	}
+	return nil, fmt.Errorf("no suite record carries %s — add a case that sets it "+
+		"and nothing else versioned", field.Name)
+}
+
+// carryingSuiteRecord is one record with its version left to the encoder.
+func carryingSuiteRecord(subject chart.Subject, op chart.OpKind, scope chart.ScopeSet,
+	payload any, structural bool) ([]byte, error) {
+
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return nil, err
+	}
+	return chart.Encode(chart.MutationRecord{
+		RecordEnvelope: chart.RecordEnvelope{
+			OpID: "suite-carrying", Subject: subject, Op: op,
+			CreatedAt: time.Unix(1_700_000_000, 0).UTC(), Gen: 1,
+			Writer: "suite-node", Scope: scope,
+		},
+		Mutation: body, Actor: "suite", ActorKind: chart.AuthorOperator,
+		ManagesStructural: structural,
 	})
 }
 

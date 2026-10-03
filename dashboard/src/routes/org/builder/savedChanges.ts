@@ -6,14 +6,15 @@
  * reconcile tick, and may refuse it. The chart answers once its records are
  * durable, and each node applies them from the log — this one before it
  * answered `200`, or not yet when it answered `202`. Until both have been
- * applied here, the org projection every read lens draws from can still
- * describe the company before the save, and the lens the operator switches to
- * right after saving has to say so. The Builder is unmounted by that switch,
- * so what it saved is kept here, outside any one screen, rather than in the
- * Builder's own state.
+ * applied here, the org projection every read screen draws from can still
+ * describe the company before the save, and the screen the operator switches
+ * to right after saving has to say so. The Builder is unmounted by that
+ * switch, so what it saved is kept here, outside any one screen, rather than
+ * in the Builder's own state.
  *
- * In memory only: a reload starts without it, and the Fleet and Retention
- * screens remain the places to read where every node stands.
+ * In memory only: a reload starts without it, and Settings › Nodes and
+ * Settings › Backups & retention remain the places to read where every node
+ * stands.
  */
 
 import { useSyncExternalStore } from "react";

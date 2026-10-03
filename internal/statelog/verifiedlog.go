@@ -13,7 +13,7 @@ import (
 //
 // # Why it exists
 //
-// Every record on a state log is a signed FRAME (ADR-0018), and the applier
+// Every record on a state log is a signed FRAME (ADR-0025), and the applier
 // opens it with [Verifier.Open] before any domain decodes a byte. A reader
 // that reads the log by position — whether a node was evicted, which node
 // opened a generation, which records past a restore these rows do not hold —

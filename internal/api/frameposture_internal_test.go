@@ -24,7 +24,7 @@ import (
 func TestTheSocketDegradesOnTheSameSetReadyRefusesOn(t *testing.T) {
 	t.Parallel()
 	for _, status := range []string{"shed", "stuck"} {
-		if got := framePosture(stream.Health{Status: status}); got != stream.FrameDegraded {
+		if got := framePosture(Health{Status: status}); got != stream.FrameDegraded {
 			t.Errorf("a %q node serves its sockets %q, want degraded", status, got)
 		}
 		if _, diverged := divergedPostures[status]; !diverged {
@@ -33,7 +33,7 @@ func TestTheSocketDegradesOnTheSameSetReadyRefusesOn(t *testing.T) {
 		}
 	}
 	for _, status := range []string{StatusOK, "wait", "isolated", StatusUnconfigured, StatusShuttingDown} {
-		if got := framePosture(stream.Health{Status: status}); got != stream.FrameLive {
+		if got := framePosture(Health{Status: status}); got != stream.FrameLive {
 			t.Errorf("a %q node serves its sockets %q, want live: it is not "+
 				"a posture /ready leaves rotation for either", status, got)
 		}
@@ -41,7 +41,7 @@ func TestTheSocketDegradesOnTheSameSetReadyRefusesOn(t *testing.T) {
 	// Whatever it answers is a posture the fan-out will take. The zero
 	// FramePosture is invalid by construction, and a client set to one is
 	// served nothing at all.
-	if !framePosture(stream.Health{Status: "something-new"}).Valid() {
+	if !framePosture(Health{Status: "something-new"}).Valid() {
 		t.Error("framePosture answered an invalid posture for an unknown status")
 	}
 }

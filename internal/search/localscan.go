@@ -47,7 +47,30 @@ func (n NodeScanner) Scan(ctx context.Context, q FanQuery, shards Assignment) (S
 		return Slice{Shards: shards, Building: true}, nil
 	}
 	out := Slice{Shards: shards}
+	if q.runs(MethodLexical) {
+		if err := n.lexical(ctx, q, shards, &out); err != nil {
+			// THE LEXICAL HALF IS THE ONE THAT MAY FAIL THE SCAN. It
+			// reads this node's own database, so its failure is the
+			// store under the caller's feet rather than a degradation
+			// to report.
+			return Slice{}, err
+		}
+	}
+	if !q.runs(MethodSemantic) || len(q.Vector) == 0 || q.Model == "" || q.Dim == 0 {
+		// A LEXICAL QUERY IS NOT A DEGRADED ONE. The caller asked for
+		// one half, so the other did not fail — and reporting a skip
+		// here would fire [statelog.KindSearchDegraded] on every search
+		// a company without an embeddings provider ever runs, which is
+		// an alarm that is red for the life of the deployment and
+		// therefore an alarm nobody reads.
+		return out, nil
+	}
+	n.semantic(ctx, q, shards, &out)
+	return out, nil
+}
 
+// lexical runs the BM25 half over one bucket range into out.
+func (n NodeScanner) lexical(ctx context.Context, q FanQuery, shards Assignment, out *Slice) error {
 	hits, err := n.Index.Search(ctx, LexicalQuery{
 		Text:       q.Text,
 		Containers: q.Containers,
@@ -60,26 +83,19 @@ func (n NodeScanner) Scan(ctx context.Context, q FanQuery, shards Assignment) (S
 		Shards: shards,
 	})
 	if err != nil {
-		// THE LEXICAL HALF IS THE ONE THAT MAY FAIL THE SCAN. It reads
-		// this node's own database, so its failure is the store under
-		// the caller's feet rather than a degradation to report.
-		return Slice{}, err
+		return err
 	}
 	for _, hit := range hits {
 		out.Lexical = append(out.Lexical, Scored{
 			Key: Key(Source(hit.Source), hit.ID), Score: hit.Score,
 		})
 	}
+	return nil
+}
 
-	if len(q.Vector) == 0 || q.Model == "" || q.Dim == 0 {
-		// A LEXICAL QUERY IS NOT A DEGRADED ONE. The caller asked for
-		// one half, so the other did not fail — and reporting a skip
-		// here would fire [statelog.KindSearchDegraded] on every search
-		// a company without an embeddings provider ever runs, which is
-		// an alarm that is red for the life of the deployment and
-		// therefore an alarm nobody reads.
-		return out, nil
-	}
+// semantic runs the vector half over one bucket range into out. Best effort:
+// a failure marks the slice rather than failing it.
+func (n NodeScanner) semantic(ctx context.Context, q FanQuery, shards Assignment, out *Slice) {
 	var vectors []SemanticHit
 	if err := n.Index.db.Replicated().Read(ctx, func(tx *sql.Tx) error {
 		var err error
@@ -97,19 +113,19 @@ func (n NodeScanner) Scan(ctx context.Context, q FanQuery, shards Assignment) (S
 		// design — a turn must not die because the replicated store was
 		// slow — but never silent, because what was lost is exactly the
 		// class the semantic half exists for.
+		//
+		// The FLAG is the report, and it is the contract [NodeScanner.Scan]
+		// states: the semantic half is best effort, so its failure degrades
+		// the slice — [Answer.SemanticSkipped], the `semantic=skipped`
+		// metric — rather than failing a search the lexical half answered.
 		out.SemanticSkipped = true
-		//nolint:nilerr // The FLAG is the report, and it is the contract this
-		// method's doc states: the semantic half is best effort, so its failure
-		// degrades the slice — [Answer.SemanticSkipped], the `semantic=skipped`
-		// metric — rather than failing a search the lexical half just answered.
-		return out, nil
+		return
 	}
 	for _, hit := range vectors {
 		out.Semantic = append(out.Semantic, Scored{
 			Key: Key(hit.Source, hit.ID), Score: ScoreOfDistance(hit.Distance),
 		})
 	}
-	return out, nil
 }
 
 // sourcesOf converts the wire form of a source filter to the typed one.

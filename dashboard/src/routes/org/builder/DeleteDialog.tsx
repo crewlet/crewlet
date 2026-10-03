@@ -31,6 +31,7 @@
 
 import { useState, type ReactNode } from "react";
 import { plural } from "~/lib/format.ts";
+import { handleLabel } from "~/lib/seats.ts";
 import { ConfigField } from "~/components/ConfigField.tsx";
 import { useBuilder } from "./BuilderContext.tsx";
 import {
@@ -51,7 +52,7 @@ import { recordIntent, type BuilderState } from "./model/reducer.ts";
 import { datadogFallback } from "./chartModel.ts";
 import { isWorking, referenceNames, savedHandleOf, vendorIdentities } from "./nodeFacts.ts";
 import { massRemoval, newlyStranded, removedSeats, removedUnits, simulate } from "./preflight.ts";
-import { DeleteGlyph } from "@crewlethq/icons/glyphs";
+import { TrashGlyph } from "@crewlethq/icons/glyphs";
 import { Button, Callout, Checkbox, Modal } from "@crewlethq/ui";
 
 export function DeleteDialog({ nodeKey, onClose }: { nodeKey: NodeKey; onClose: () => void }) {
@@ -144,7 +145,7 @@ export function DeleteDialog({ nodeKey, onClose }: { nodeKey: NodeKey; onClose: 
       open
       stackBody
       title={`Delete ${name}`}
-      icon={<DeleteGlyph />}
+      icon={<TrashGlyph />}
       size="md"
       /*
        * AN ALERT, NOT A DIALOG. This interrupts to ask something consequential
@@ -166,7 +167,7 @@ export function DeleteDialog({ nodeKey, onClose }: { nodeKey: NodeKey; onClose: 
       onSubmit={remove}
       footer={
         <>
-          <Button variant="tertiary" onClick={onClose}>
+          <Button variant="ghost" onClick={onClose}>
             Cancel
           </Button>
           <Button variant="danger" type="submit" disabled={blocked}>
@@ -206,8 +207,8 @@ export function DeleteDialog({ nodeKey, onClose }: { nodeKey: NodeKey; onClose: 
         replacements={replacements.map((seat) => ({
           value: seat.data.handle,
           label: seat.data.name
-            ? `${seat.data.name} (@${seat.data.handle})`
-            : `@${seat.data.handle}`,
+            ? `${seat.data.name} (${handleLabel(seat.data.handle)})`
+            : handleLabel(seat.data.handle),
         }))}
         routeTo={replacement}
         onRouteTo={setRouteTo}
@@ -237,7 +238,7 @@ function holderName(state: BuilderState, key: NodeKey): string {
   const found = locate(state.draft, key);
   if (!found) return key;
   return found.kind === "seat"
-    ? found.node.data.name || `@${found.node.data.handle}`
+    ? found.node.data.name || handleLabel(found.node.data.handle)
     : found.node.data.name || found.node.data.key;
 }
 
@@ -253,7 +254,7 @@ function ClearedReferences({
     const holder = holderName(state, effect.holder);
     switch (effect.kind) {
       case "lead":
-        return `${holder} no longer has @${effect.from} as its lead.`;
+        return `${holder} no longer has ${handleLabel(effect.from)} as its lead.`;
       case "manages":
         return `${holder} no longer manages ${effect.from}.`;
       default:
@@ -290,7 +291,7 @@ function OutsideTheChart({
   const identities: LeftBehind[] = saved
     .map((seat) => ({
       key: seat.key,
-      name: seat.data.name || `@${seat.data.handle}`,
+      name: seat.data.name || handleLabel(seat.data.handle),
       made: vendorIdentities(state, seat),
       references: referenceNames(seat.data.runtime),
     }))
@@ -329,7 +330,7 @@ function OutsideTheChart({
         key="gitlab"
         names={accessLevels.map(
           (level) =>
-            `The GitLab access level for @${level.handle}${level.before ? ` (${level.before})` : ""} is removed with the seat.`,
+            `The GitLab access level for ${handleLabel(level.handle)}${level.before ? ` (${level.before})` : ""} is removed with the seat.`,
         )}
       />,
     );

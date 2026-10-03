@@ -122,16 +122,34 @@ func TestAKeySentWithAnotherRequestIsAnotherOperation(t *testing.T) {
 			t.Parallel()
 			r := serve(t, nil, operator(), leads())
 			key := statelog.NewOpID(time.Now(), "")
-			for _, body := range []string{c.first, c.first, c.second} {
-				if status, answer, _ := send(r, c.method, c.path, body, key); status != http.StatusOK ||
-					answer["op_id"] != key {
-					t.Fatalf("answered %d %v, want 200 handing back the key", status,
-						answer)
+			// THE KEY AS SCOPED BY THE CALLER ([opkey.Key]) is what every
+			// answer hands back and what a retry sends: the same for every
+			// request this caller makes under the key, and taken as it is
+			// when it is sent back.
+			var scoped string
+			for i, body := range []string{c.first, c.first, c.second, c.first} {
+				sent := key
+				if i == 3 {
+					sent = scoped
+				}
+				status, answer, _ := send(r, c.method, c.path, body, sent)
+				got, _ := answer["op_id"].(string)
+				if scoped == "" {
+					scoped = got
+				}
+				if status != http.StatusOK || got == "" || got != scoped {
+					t.Fatalf("answered %d %v, want 200 handing back the scoped key %q",
+						status, answer, scoped)
 				}
 			}
 			ops := r.writer.opIDs
-			if len(ops) != 3 {
-				t.Fatalf("published %v, want three writes", ops)
+			if len(ops) != 4 {
+				t.Fatalf("published %v, want four writes", ops)
+			}
+			if ops[3] != ops[0] {
+				t.Errorf("the same request under the key its answer handed back "+
+					"was %q, not %q: the retry an unknown asks for would land twice",
+					ops[3], ops[0])
 			}
 			if ops[1] != ops[0] {
 				t.Errorf("the same request under the same key was two operations, "+
@@ -143,7 +161,7 @@ func TestAKeySentWithAnotherRequestIsAnotherOperation(t *testing.T) {
 					"nothing of it", ops[0])
 			}
 			for _, op := range ops {
-				derivedFrom(t, op, key)
+				derivedFrom(t, op, scoped)
 			}
 		})
 	}
@@ -185,12 +203,16 @@ func TestAKeyOutsideTheGrammarIsRefusedBeforeAnyWrite(t *testing.T) {
 			r := serve(t, nil, operator(), leads())
 			key := statelog.NewOpID(time.Now(), "chart-retry")
 			status, body, _ := send(r, c.method, c.path, c.body, key)
+			scoped, _ := body["op_id"].(string)
+			scopedAt, _ := statelog.OpMintedAt(scoped)
+			keyAt, _ := statelog.OpMintedAt(key)
 			if status != http.StatusOK || len(r.writer.opIDs) != 1 ||
-				body["op_id"] != key {
+				!scopedAt.Equal(keyAt) {
 				t.Fatalf("a key the engine minted answered %d %v, published "+
-					"under %v", status, body, r.writer.opIDs)
+					"under %v, want the key scoped by the caller at its own "+
+					"instant", status, body, r.writer.opIDs)
 			}
-			derivedFrom(t, r.writer.opIDs[0], key)
+			derivedFrom(t, r.writer.opIDs[0], scoped)
 		})
 	}
 }
@@ -303,8 +325,13 @@ func TestAKeyNamingAnotherWriteIsAConflict(t *testing.T) {
 	key := statelog.NewOpID(time.Now(), "chart-unit")
 	status, body, _ := send(r, http.MethodPatch, "/chart/units/engineering",
 		`{"name":"E"}`, key)
+	// THE OP ID ANSWERED IS THE KEY AS SCOPED BY THE CALLER ([opkey.Key]):
+	// a step of nothing, at the key's own instant.
+	answered, _ := body["op_id"].(string)
+	answeredAt, _ := statelog.OpMintedAt(answered)
+	keyAt, _ := statelog.OpMintedAt(key)
 	if status != http.StatusConflict || body["field"] != opkey.Header ||
-		body["op_id"] != key {
+		answered == "" || !answeredAt.Equal(keyAt) {
 		t.Errorf("answered %d %v, want 409 naming %s", status, body,
 			opkey.Header)
 	}

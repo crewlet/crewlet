@@ -71,9 +71,9 @@ describe("keeping a shortcut", () => {
   it("keeps them in the order they were kept, newest LAST", () => {
     // Unlike recents. A star's order is the order somebody chose, and a list
     // that reshuffled on every visit would be a recents list wearing a star.
-    star("first", "work", "a");
-    star("second", "work", "b");
-    star("third", "work", "c");
+    star("first", "work", "ENG-3");
+    star("second", "work", "ENG-1");
+    star("third", "work", "ENG-2");
     expect(stored().map((s) => s.label)).toEqual(["first", "second", "third"]);
   });
 
@@ -123,6 +123,30 @@ describe("a store that will not cooperate", () => {
     expect(isStarred(["work", "ENG-1"])).toBe(true);
     star("ENG-2", "work", "ENG-2");
     expect(stored().map((s) => s.label)).toEqual(["ENG-1", "ENG-2"]);
+  });
+
+  // A STAR ON AN ADDRESS THIS BUILD DOES NOT HAVE IS DROPPED ON READ. The
+  // routes moved — `#/company` is `#/agents`, `#/pages/…` is
+  // `#/knowledge/pages/…` — and a star kept before the move would be a
+  // sidebar row leading to Not Found for ever.
+  it("drops a star whose route this build does not have", () => {
+    localStorage.setItem(
+      starsKey("p-1"),
+      JSON.stringify([
+        { path: ["company"], label: "Company", at: 1 },
+        { path: ["pages", "ENG", "Runbook"], label: "Runbook", at: 2 },
+        {
+          path: ["knowledge", "pages", "0f0f0f0f-1111-4222-8333-444455556666"],
+          label: "Runbook",
+          at: 3,
+        },
+      ]),
+    );
+    resetForTest();
+    expect(isStarred(["company"])).toBe(false);
+    expect(isStarred(["knowledge", "pages", "0f0f0f0f-1111-4222-8333-444455556666"])).toBe(true);
+    star("ENG-2", "work", "ENG-2");
+    expect(stored().map((s) => s.label)).toEqual(["Runbook", "ENG-2"]);
   });
 
   it("carries on when storage throws", () => {

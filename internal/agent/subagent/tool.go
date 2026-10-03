@@ -236,7 +236,7 @@ func (t *Tool) Call(ctx context.Context, args map[string]any) (tools.Result, err
 	// because dropped it ran the task at once on input it was told to wait
 	// for. The copy that lived here dropped it.
 	if err := structured.Remarshal(args, &parsed); err != nil {
-		return failed(fmt.Sprintf("%s: %v", ToolName, err)), nil
+		return failed(err, fmt.Sprintf("%s: %v", ToolName, err)), nil
 	}
 
 	req := Request{Tasks: make([]Task, 0, len(parsed.Tasks))}
@@ -257,7 +257,15 @@ func (t *Tool) Call(ctx context.Context, args map[string]any) (tools.Result, err
 		// names the task and says what to write instead, and the model is
 		// the one that can act on it. An engine error would end the round
 		// with the executor never seeing why.
-		return failed(err.Error()), nil
+		//
+		// ONLY a plan error is the model's to fix, though, and only it is
+		// classed as an argument: a wiring failure reaches the model too
+		// (it is still the only reader that can route around it) but as
+		// this deployment's condition, which no rewrite of the plan clears.
+		if _, planned := AsPlanError(err); !planned {
+			return refused(tools.RefusalUnavailable, err, err.Error()), nil
+		}
+		return failed(err, err.Error()), nil
 	}
 	if cancelled(results) {
 		// The turn is being torn down. Reporting this to the model is
@@ -339,8 +347,19 @@ func renderResults(results []Result) string {
 	return string(blob)
 }
 
-// failed is a tool refusal the model reads and can act on.
-func failed(msg string) tools.Result { return tools.Result{Output: msg, Failed: true} }
+// refused is a tool refusal the model reads and can act on, its class stated
+// as the result's cause beneath the error that decided it ([tools.Classify]),
+// so a reader that is not a model reads the class and the error out of one
+// value rather than a class field beside it. A nil err states the class alone.
+func refused(code tools.Refusal, err error, msg string) tools.Result {
+	return tools.Result{Output: msg, Failed: true, Cause: tools.Classify(code, err)}
+}
+
+// failed is the argument refusal, [tools.RefusalInvalid]: the plan or its
+// arguments are what the model has to change.
+func failed(err error, msg string) tools.Result {
+	return refused(tools.RefusalInvalid, err, msg)
+}
 
 // AsPlanError reports whether an error from [Run] is a refusal the model can
 // fix, rather than a wiring failure.

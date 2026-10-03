@@ -975,7 +975,7 @@ func TestTheSearchRosterIsWhoIsAliveRatherThanWhoHeldTheLogBack(t *testing.T) {
 		t.Fatalf("register the dead node: %v", err)
 	}
 
-	roster, err := e.searchRoster(t.Context())
+	roster, err := e.liveNodes(t.Context())
 	if err != nil {
 		t.Fatalf("roster: %v", err)
 	}
@@ -1113,6 +1113,44 @@ func TestANodeWithNoBackupReportsTheAbsenceRatherThanAnAge(t *testing.T) {
 	}
 	if got := statelog.Evaluate(taken); len(got) != 0 {
 		t.Errorf("a node inside its backup policy raised %v", got)
+	}
+}
+
+// THE ALARM AGES THE BACKUP THE TRIM COUNTS, under the operator's own policy.
+//
+// Under `backup_floor: operator` the trim waits on the operator's
+// acknowledgement and ignores the nodes' own copies. The report aged the newest
+// point of ANY owner, so a fleet whose nodes backed up an hour ago and whose
+// operator had never acknowledged one reported a green backup alarm one line
+// below a trim that could not move — the one state the alarm exists to name.
+func TestTheBackupAlarmAgesThePointThePolicyCounts(t *testing.T) {
+	t.Parallel()
+	fleet := coordmem.NewFleet()
+	taken := time.Now().UTC().Add(-time.Hour)
+	if err := fleet.PutBackupPoint(t.Context(), coord.BackupPoint{
+		Owner: "node-a", At: taken, Verified: true,
+		Streams: map[string]coord.Position{
+			"CREWLET_TRACKER_LOG": {Stream: "CREWLET_TRACKER_LOG", Seq: 900},
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range []struct {
+		floor config.BackupFloor
+		fires bool
+	}{
+		// The node's own copy an hour ago is inside the default day.
+		{config.BackupFloorEngine, false},
+		// Nobody acknowledged anything, so there is no counted backup.
+		{config.BackupFloorOperator, true},
+	} {
+		r := &retention{state: &stateLog{}, fleet: fleet, nodeID: "node-a",
+			cfg: config.TrackerRetention{BackupFloor: c.floor}}
+		report := r.Report(t.Context())
+		if got := firedKind(report.Alarms, statelog.KindBackupAge); got != c.fires {
+			t.Errorf("backup_floor %s: backup_age fired=%v, want %v — the alarm "+
+				"must age the point the trim counts", c.floor, got, c.fires)
+		}
 	}
 }
 

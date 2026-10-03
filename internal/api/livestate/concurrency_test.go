@@ -4,8 +4,10 @@ import (
 	"fmt"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/crewlet/crewlet/internal/api/livestate"
+	"github.com/crewlet/crewlet/internal/store"
 )
 
 func TestTheProjectionIsSafeToReadWhileItIsWritten(t *testing.T) {
@@ -13,9 +15,10 @@ func TestTheProjectionIsSafeToReadWhileItIsWritten(t *testing.T) {
 	// A projection like this is often written lock-free, on the grounds
 	// that a single-threaded scheduler makes every mutation atomic. That
 	// reasoning does not hold here: the stream feeds the projection from
-	// its own goroutine while HTTP handlers and WebSocket sends read it. Under -race this fails immediately without the lock;
-	// without -race it fails as a torn read on a loaded box, which is
-	// worse because it is rare.
+	// its own goroutine while HTTP handlers and WebSocket sends read it.
+	// Under -race this fails immediately without the lock; without -race it
+	// fails as a torn read on a loaded box, which is worse because it is
+	// rare.
 	s := livestate.New()
 	var wg sync.WaitGroup
 
@@ -26,6 +29,7 @@ func TestTheProjectionIsSafeToReadWhileItIsWritten(t *testing.T) {
 				"agent_id": seat, "turn_id": "tn-1", "phase": "plan", "iteration": 0,
 			}
 			for i := range 50 {
+				s.Apply(env("agent_turn_started", base, id(fmt.Sprint("s", w, i))))
 				s.Apply(env("agent_phase_started", base, id(fmt.Sprint(w, i))))
 				s.Apply(env("agent_turn_progress",
 					with(base, map[string]any{"round_num": i, "response": "r"}),
@@ -34,7 +38,16 @@ func TestTheProjectionIsSafeToReadWhileItIsWritten(t *testing.T) {
 					with(base, map[string]any{"total_tokens": 1}), id(fmt.Sprint("t", w, i))))
 				s.Apply(env("sandbox_run_started",
 					map[string]any{"turn_id": fmt.Sprint("sb", w, i), "agent_id": seat}))
-				s.Apply(env("budget_reported",
+				s.Apply(env("sandbox_run_failed",
+					map[string]any{"turn_id": fmt.Sprint("sb", w, i), "agent_id": seat}))
+				s.ReconcileSandboxes([]livestate.SandboxRecord{{Entry: livestate.SandboxEntry{
+					TurnID: fmt.Sprint("rec", w, i), AgentID: seat, Status: livestate.SandboxRunning,
+				}}}, time.Now())
+				s.Seed(livestate.History{Turns: []store.Turn{{
+					TurnID: fmt.Sprint("seed", w, i), AgentID: seat, Complete: true,
+				}}})
+				s.SetPlacement(map[string]bool{seat: i%2 == 0})
+				s.Apply(env("budget_meters",
 					meterReport("m-1", w*100+i, seatMeter(seat, i, 100)), streamOnly))
 			}
 		})
@@ -48,6 +61,8 @@ func TestTheProjectionIsSafeToReadWhileItIsWritten(t *testing.T) {
 				s.SpendRecords()
 				s.Budget()
 				s.AgentOverlay("Seat-0")
+				s.SeededFrom()
+				s.OverlayRows([]string{"Seat-0", "Seat-1"})
 				s.MergeAgents([]map[string]any{{"agent_id": "Seat-2"}, {"agent_id": "Seat-3"}})
 			}
 		})

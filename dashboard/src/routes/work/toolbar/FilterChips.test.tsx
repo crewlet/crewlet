@@ -20,6 +20,7 @@ import { afterEach, expect, test, vi } from "vitest";
 import { FilterChips } from "./FilterChips.tsx";
 import { ItemsView, type ItemsHost } from "../ItemsView.tsx";
 import { Router } from "~/app/router.tsx";
+import { ViewerProvider } from "~/lib/viewer.ts";
 import { useClient, useConnection, useOrg } from "~/lib/store-hooks.ts";
 import { filterChips, NO_FILTERS, URL_HOMES, type TrackerFilters } from "~/lib/work.ts";
 import type { QueryName, WorkSummary } from "~/protocol/index.ts";
@@ -27,7 +28,15 @@ import type { QueryName, WorkSummary } from "~/protocol/index.ts";
 vi.mock("~/lib/store-hooks.ts", async () => {
   const actual =
     await vi.importActual<typeof import("~/lib/store-hooks.ts")>("~/lib/store-hooks.ts");
-  return { ...actual, useClient: vi.fn(), useConnection: vi.fn(), useOrg: vi.fn() };
+  // THE AGENTS PUSH, which the list reads for the turn running on each card:
+  // no seat is working in these cases, so the push is empty.
+  return {
+    ...actual,
+    useClient: vi.fn(),
+    useConnection: vi.fn(),
+    useOrg: vi.fn(),
+    useAgents: () => [],
+  };
 });
 
 afterEach(() => {
@@ -134,12 +143,24 @@ test("a unit the answer could not name says its own key", () => {
   expect(screen.getByText("eng")).toBeTruthy();
 });
 
-// DRAWN ONLY WHERE SOMETHING IS ON: an unfiltered list has no chip row at all,
+// DRAWN ONLY WHERE SOMETHING IS ON: an unfiltered list has no chip at all,
 // which is the whole difference from a bar of controls drawn whether or not
 // they were set.
 test("nothing narrowing draws no row, not an empty one", () => {
   const { container } = drawChips({});
   expect(container.innerHTML).toBe("");
+  expect(screen.queryByText("Clear")).toBeNull();
+});
+
+// "+ FILTER" ENDS THE ROW, and with nothing on it is the row: the place a
+// narrowing is read is the place one is added, as the approved board draws it.
+// There is no Clear beside it, because there is nothing to clear.
+test("with nothing narrowing, the row is the control that adds a narrowing", () => {
+  render(
+    <FilterChips chips={[]} onRemove={vi.fn()} onClear={vi.fn()} add={<button>Filter</button>} />,
+  );
+  const row = screen.getByRole("group", { name: "Filters" });
+  expect(row.textContent).toBe("Filter");
   expect(screen.queryByText("Clear")).toBeNull();
 });
 
@@ -225,9 +246,9 @@ const task: WorkSummary = {
 
 const answered = { items: [task], groups: [], total_hint: 1, complete: true };
 
-/** A host screen's narrowing: what `#/me`'s Assigned tab hands down. */
+/** A host screen's narrowing: what `#/me`'s Queue hands down. */
 const HOST: ItemsHost = {
-  assignee: "rui",
+  lock: { assignee: "rui" },
   opens: {},
   empty: () => ({ title: "Nothing here", description: "Nothing is assigned." }),
 };
@@ -235,7 +256,9 @@ const HOST: ItemsHost = {
 const mountList = (host?: ItemsHost) =>
   render(
     <Router>
-      <ItemsView host={host} />
+      <ViewerProvider>
+        <ItemsView host={host} />
+      </ViewerProvider>
     </Router>,
   );
 
@@ -249,13 +272,35 @@ test("the locked assignee draws no chip, and an assignee key on the address draw
   const query = serving({ work_items: answered });
   mountList(HOST);
   await waitFor(() => expect(screen.getByText("Ship the thing")).toBeTruthy());
-  expect(document.querySelector(".work-chips")).toBeNull();
+  expect(document.querySelector(".work-chip-field")).toBeNull();
   // AND THE LOCK IS WHAT REACHED THE WIRE, not the key somebody typed.
   const items = query.mock.calls.filter((c) => c[0] === "work_items");
   expect(items.length).toBeGreaterThan(0);
   for (const call of items) {
     expect((call[1] as Record<string, unknown>).assignee).toBe("rui");
   }
+});
+
+// A LIST HELD TO WHAT SOMEBODY ASKED IS HELD TO THE PERSON, by the ONE name
+// their questions are recorded under (`iam.ActorFor`) — whatever the address
+// says — with no `viewer=` beside it, which the engine refuses on every
+// question; and it leaves the ASSIGNEE the reader's to narrow by, since who
+// holds the work a question waits on is an ordinary thing to ask.
+test("an asked-by lock reaches the wire as the person, and keeps the assignee a filter", async () => {
+  location.hash = "#/me/asked-by-me?assignee=ada&asked_by=bo";
+  const query = serving({ work_items: answered });
+  mountList({ ...HOST, lock: { asked_by: "rui" } });
+  await waitFor(() => expect(screen.getByText("Ship the thing")).toBeTruthy());
+  const items = query.mock.calls.filter((c) => c[0] === "work_items");
+  expect(items.length).toBeGreaterThan(0);
+  for (const call of items) {
+    const params = call[1] as Record<string, unknown>;
+    expect(params.asked_by).toBe("rui");
+    expect(params).not.toHaveProperty("viewer");
+    expect(params.assignee).toBe("ada");
+  }
+  // THE ASSIGNEE IS A CHIP HERE, because it is the reader's own narrowing.
+  expect(document.querySelector(".work-chips")?.textContent).toContain("Assignee");
 });
 
 /** Every key on the address at once: the filters, and the arrangement. */

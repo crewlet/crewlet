@@ -199,7 +199,7 @@ type runningDomain struct {
 // BODY, opened under this domain's verifier, beside the log's own per-subject
 // probe.
 //
-// NEVER THE RAW LOG, which answers signed frames (ADR-0018): a standing read
+// NEVER THE RAW LOG, which answers signed frames (ADR-0025): a standing read
 // decodes the domain's envelope from what it reads, and handed the frame it
 // decoded the signature — every eviction on the log read as unreadable.
 func (d *runningDomain) standing() statelog.StandingLog {
@@ -1046,7 +1046,7 @@ func (s *stateLog) start(ctx, provisionCtx context.Context, host domainHost, dom
 		//
 		// THE LOG IS READ THROUGH ITS VERIFIER, because the standing on it
 		// is decoded from a record's body and the log holds signed frames
-		// (ADR-0018): handed the raw log, the probe would decode the
+		// (ADR-0025): handed the raw log, the probe would decode the
 		// signature and read every eviction as unreadable.
 		NodeID: s.nodeID,
 		Evicted: func(ctx context.Context, node string) (bool, error) {
@@ -1202,7 +1202,7 @@ func (s *stateLog) publisherFrom(entry registration, publishTo statelog.Appender
 		return nil, nil, err
 	}
 	deps := statelog.Deps{
-		// EVERY APPEND IS SIGNED (ADR-0018): the publisher frames what its
+		// EVERY APPEND IS SIGNED (ADR-0025): the publisher frames what its
 		// decision encoded, and every applier refuses a record that is not
 		// a frame this deployment's keyring opens.
 		Domain: domain, Log: publishTo, Signer: signer, Waiter: runner, NodeID: s.nodeID,
@@ -1700,7 +1700,7 @@ func (s *stateLog) Established(ctx context.Context, strict bool) (bool, statelog
 // says and a lag does not is that the node is not applying its way out.
 //
 // Until this had a caller the `deferred_old` alarm told an operator "its seats
-// move at 30m0s" and its remedy said "its seats have already moved", and
+// move at 30m" and its remedy said "its seats have already moved", and
 // neither was true — [seat.Host] sheds only on a lost lease, a drain and a
 // rebalance, and its own log line says a node that is not ready "keeps what it
 // holds". The alarm was reporting a mitigation the engine did not perform.
@@ -3003,7 +3003,7 @@ func (e *Engine) snapshotLoop(s *stateLog, snap snapshotTaker,
 	// THE REASON LAST REPORTED is the other half: a state that has not
 	// changed is not news, and the loop retries every thirty seconds for as
 	// long as it holds. A tick that changes nothing says nothing; the
-	// register is still stamped, so the fleet screen and the trim see every
+	// register is still stamped, so Settings › Nodes and the trim see every
 	// tick whether or not the log does.
 	var reported statelog.SkipReason
 	for {
@@ -3759,7 +3759,14 @@ func (s *stateLog) opsLedgers() map[string]maintenance.OpsHorizon {
 			continue
 		}
 		entry, found := registrationFor(name)
-		if !found {
+		// A DOMAIN THAT KEEPS NO LEDGER HAS NOTHING TO SWEEP. The compacted
+		// domains declare none, and handing their runners over anyway put a
+		// `vectors_ops` job on every node's sweep — named after a table that
+		// does not exist, purging nothing every tick, and listed beside the
+		// real sweeps as though it were one. [checkRegister] refuses an
+		// OpsRetention on such a domain, so this is the same rule read from
+		// the declaration's side.
+		if !found || entry.Domain.OpsTable() == "" {
 			continue
 		}
 		out[name] = maintenance.OpsHorizon{

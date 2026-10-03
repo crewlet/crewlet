@@ -34,6 +34,23 @@ func assertMintedWith(t *testing.T, opID, key string) {
 	}
 }
 
+// assertOperationOf holds the `op_id` an answer names to the key its request
+// was sent under: the caller's key SCOPED by who sent it (internal/api/opkey),
+// so it is a different id — another principal's copy of the key names another
+// operation — that carries the key's own instant, and that names itself again
+// when it is sent back, which is what a retry sends.
+func assertOperationOf(t *testing.T, got answered, key string) {
+	t.Helper()
+	op, _ := got.body["op_id"].(string)
+	if err := statelog.CheckCallerOpID(op); err != nil {
+		t.Fatalf("the answer names op_id %q, which cannot be sent back: %v", op, err)
+	}
+	if op == key {
+		t.Errorf("the answer names the key %q as sent, unscoped by who sent it", key)
+	}
+	assertMintedWith(t, op, key)
+}
+
 // A KEY OUTSIDE THE OPERATION-ID GRAMMAR IS REFUSED BEFORE ANYTHING IS WRITTEN.
 //
 // Every id a request's writes derive from its key carries the key's instant,
@@ -57,7 +74,7 @@ func TestAKeyOutsideTheGrammarIsRefusedBeforeAnyWrite(t *testing.T) {
 		{"somebody's record", http.MethodPut, "/work/people/ana/pins",
 			map[string]any{"items": []string{}}},
 		{"a rank move", http.MethodPost, "/work/items/ENG-1/rank",
-			map[string]any{"after": "ENG-2"}},
+			map[string]any{"after": "ENG-2", "if_match": 3}},
 		{"a purge", http.MethodPost,
 			"/work/items/t-1/purge?confirm=ENG-1&reason=why", nil},
 		{"a page's trash", http.MethodDelete, "/pages/p-1", nil},
@@ -117,10 +134,12 @@ func TestEveryWriteCarriesItsKeysInstant(t *testing.T) {
 				map[string]any{"title": "rotate the key", "project": "ENG"},
 				headers...)
 			answeredKey, _ := created.body["op_id"].(string)
-			if created.status != http.StatusOK || answeredKey == "" ||
-				(key != "" && answeredKey != key) {
+			if created.status != http.StatusOK || answeredKey == "" {
 				t.Fatalf("the create answered %d with op_id %q: %v",
 					created.status, answeredKey, created.body)
+			}
+			if key != "" {
+				assertOperationOf(t, created, key)
 			}
 			if err := statelog.CheckCallerOpID(answeredKey); err != nil {
 				t.Errorf("the key handed back cannot be sent back: %v", err)
@@ -131,7 +150,7 @@ func TestEveryWriteCarriesItsKeysInstant(t *testing.T) {
 			}
 
 			ranked := r.do(as(admin("ana")), http.MethodPost,
-				"/work/items/ENG-1/rank", map[string]any{"after": "ENG-2"}, headers...)
+				"/work/items/ENG-1/rank", map[string]any{"after": "ENG-2", "if_match": 3}, headers...)
 			rankKey, _ := ranked.body["op_id"].(string)
 			if ranked.status != http.StatusOK {
 				t.Fatalf("the rank move answered %d: %v", ranked.status, ranked.body)
@@ -183,8 +202,8 @@ func TestAnUnvouchedUnknownSaysAnotherNodeCanAnswer(t *testing.T) {
 	}{
 		{"a tool-backed route", http.MethodPost, "/work/items",
 			map[string]any{"title": "rotate the key", "project": "ENG"}},
-		{"a write this surface makes", http.MethodPost, "/work/items/ENG-1/rank",
-			map[string]any{"after": "ENG-2"}},
+		{"a write this surface makes", http.MethodPost,
+			"/work/items/t-1/purge?confirm=ENG-1&reason=why", nil},
 	} {
 		for _, unvouched := range []bool{false, true} {
 			name := c.name + "/a lost acknowledgement"
@@ -199,11 +218,12 @@ func TestAnUnvouchedUnknownSaysAnotherNodeCanAnswer(t *testing.T) {
 				key := statelog.NewOpID(time.Now(), "")
 				got := r.do(as(admin("ana")), c.method, c.target, c.body,
 					opkey.Header, key)
-				if got.status != http.StatusServiceUnavailable || got.body["op_id"] != key ||
+				if got.status != http.StatusServiceUnavailable ||
 					got.body["outcome"] != httpjson.OutcomeUnknown {
 					t.Fatalf("answered %d %v, want 503 carrying the key and "+
 						"saying its outcome is unknown", got.status, got.body)
 				}
+				assertOperationOf(t, got, key)
 				switch retry := got.header.Get("Retry-After"); {
 				case unvouched && (retry != "" || got.body["unvouched"] != true):
 					t.Errorf("an unvouched unknown answered Retry-After %q and "+
@@ -234,8 +254,8 @@ func TestAWriteOnWhatAPurgeDestroyedIsNotFound(t *testing.T) {
 	}{
 		{"a tool-backed route", http.MethodPatch, "/work/items/ENG-1",
 			map[string]any{"status": "done"}},
-		{"a write this surface makes", http.MethodPost, "/work/items/ENG-1/rank",
-			map[string]any{"after": "ENG-2"}},
+		{"a write this surface makes", http.MethodPost,
+			"/work/items/t-1/purge?confirm=ENG-1&reason=why", nil},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			t.Parallel()
@@ -424,8 +444,8 @@ func TestAKeyNamingAnotherWriteIsAConflict(t *testing.T) {
 	}{
 		{"a tool-backed route", http.MethodPatch, "/work/items/ENG-1",
 			map[string]any{"status": "done"}},
-		{"a write this surface makes", http.MethodPost, "/work/items/ENG-1/rank",
-			map[string]any{"after": "ENG-2"}},
+		{"a write this surface makes", http.MethodPost,
+			"/work/items/t-1/purge?confirm=ENG-1&reason=why", nil},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			t.Parallel()
@@ -435,11 +455,11 @@ func TestAKeyNamingAnotherWriteIsAConflict(t *testing.T) {
 			key := statelog.NewOpID(time.Now(), "")
 			got := r.do(as(admin("ana")), c.method, c.target, c.body,
 				opkey.Header, key)
-			if got.status != http.StatusConflict ||
-				got.body["field"] != opkey.Header || got.body["op_id"] != key {
+			if got.status != http.StatusConflict || got.body["field"] != opkey.Header {
 				t.Errorf("answered %d %v, want 409 naming %s", got.status, got.body,
 					opkey.Header)
 			}
+			assertOperationOf(t, got, key)
 		})
 	}
 }
@@ -457,7 +477,7 @@ func TestAnUnknownStillSaysWhatItWasAbout(t *testing.T) {
 	r := newRig(t, chart{})
 	r.writes.result = statelog.Result{Outcome: statelog.OutcomeUnknown}
 	got := r.do(as(admin("ana")), http.MethodPost, "/work/items/ENG-1/rank",
-		map[string]any{"after": "ENG-2"})
+		map[string]any{"after": "ENG-2", "if_match": 3})
 	if got.status != http.StatusServiceUnavailable || got.body["item"] != "ENG-1" ||
 		got.body["error"] != string(httpjson.CodeUnavailable) {
 		t.Errorf("answered %d %v, want 503 naming ENG-1", got.status, got.body)
@@ -490,8 +510,8 @@ func TestAKeySentWithAnotherRequestIsAnotherOperation(t *testing.T) {
 	}{
 		{name: "a rank move", method: http.MethodPost,
 			target: "/work/items/ENG-1/rank",
-			first:  map[string]any{"after": "ENG-2"},
-			second: map[string]any{"before": "ENG-2"},
+			first:  map[string]any{"after": "ENG-2", "if_match": 3},
+			second: map[string]any{"before": "ENG-2", "if_match": 3},
 			op:     func(r *rig) []string { return r.writes.opIDs }},
 		{name: "a remark's edit", method: http.MethodPatch,
 			target: "/work/items/ENG-1/comments/c-1",
@@ -545,18 +565,20 @@ func TestAKeySentWithAnotherRequestIsAnotherOperation(t *testing.T) {
 	}
 }
 
-// THE KNOWLEDGE BASE IS HANDED THE REQUEST'S KEY AS SENT.
+// THE KNOWLEDGE BASE IS HANDED THE REQUEST'S OPERATION: the caller's key,
+// scoped by who sent it, and nothing derived from the request beside that.
 //
 // It binds every operation it derives to what the write says — the title, the
 // body, the reason — so the same key sent with another request is another
 // operation there (internal/pages' own suite holds that). Bound here as well,
 // through the request's arguments, it was a second binding of one rule that
 // could only drift from the first, over a key the store then dated and
-// derived from: this surface's job is to hand over the caller's key, which is
-// also what lets the trail find every write by the key the caller holds.
+// derived from: this surface's job is to hand over the request's operation —
+// the same one the answer names as `op_id`, which is what lets the trail find
+// every write by the key the caller holds.
 //
 // Mutation: bind the key to the request here again and every row goes red.
-func TestTheKnowledgeBaseIsHandedTheKeyAsSent(t *testing.T) {
+func TestTheKnowledgeBaseIsHandedTheRequestsOperation(t *testing.T) {
 	t.Parallel()
 	for _, c := range []struct {
 		name, method, target string
@@ -575,18 +597,19 @@ func TestTheKnowledgeBaseIsHandedTheKeyAsSent(t *testing.T) {
 			r := newRig(t, chart{})
 			key := statelog.NewOpID(time.Now(), "")
 			headers := append([]string{opkey.Header, key}, c.headers...)
-			if got := r.do(as(admin("ana")), c.method, c.target, c.body,
-				headers...); got.status != http.StatusOK {
+			got := r.do(as(admin("ana")), c.method, c.target, c.body, headers...)
+			if got.status != http.StatusOK {
 				t.Fatalf("answered %d: %v", got.status, got.body)
 			}
+			assertOperationOf(t, got, key)
 			keys := pageKeys(r)
 			if len(keys) == 0 {
 				t.Fatal("no page write was made")
 			}
 			for _, handed := range keys {
-				if handed != key {
-					t.Errorf("the knowledge base was handed %q for the key %q",
-						handed, key)
+				if handed != got.body["op_id"] {
+					t.Errorf("the knowledge base was handed %q where the answer "+
+						"names the operation %v", handed, got.body["op_id"])
 				}
 			}
 		})

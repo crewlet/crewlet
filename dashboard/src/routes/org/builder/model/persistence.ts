@@ -48,7 +48,7 @@
  *
  * A SAVE WHOSE OUTCOME IS NOT KNOWN IS KEPT WITH ITS LOG, AND WITH WHAT IT
  * CREATES. A save is a sequence of writes, any of which can land without its
- * answer, and the lens that sent it may be gone by then. Replayed onto a
+ * answer, and the builder that sent it may be gone by then. Replayed onto a
  * company that holds part of it, the log meets its own writes: a value the
  * company already holds is recognised as already there (`history.rebase`),
  * but a seat the save created is, to a replay, an add over an address
@@ -72,9 +72,10 @@ import type { Log } from "./history.ts";
 import type { Creation } from "./save.ts";
 import type { BuilderMode } from "./transport.ts";
 import { isWriteId } from "./writes.ts";
+import { STORAGE_KEYS } from "~/lib/storage.ts";
 
 /** The storage key. */
-export const DRAFT_STORAGE_KEY = "crewlet_org_draft";
+export const DRAFT_STORAGE_KEY = STORAGE_KEYS.orgDraft;
 
 /**
  * The most operations (applied and undone together) a kept draft may hold.

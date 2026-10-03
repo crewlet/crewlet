@@ -78,13 +78,15 @@ const (
 	ActionProjectPolicy  Action = "work.project.policy"
 	ActionProjectArchive Action = "work.project.archive"
 
-	// --- a gesture no tool makes ------------------------------------ //
+	// --- a person's arrangement of a board --------------------------- //
 	//
-	// DOTTED for the same reason, and it is the HTTP write surface's
-	// alone: a rank move places one card between two neighbours on a
-	// board a PERSON is looking at, and no seat reorders a board it
-	// cannot see.
-	ActionWorkRank Action = "work.rank"
+	// A PLACE MOVES ONE CARD between two neighbours, and into another
+	// lane, on a board a PERSON is looking at — the operator catalogue's
+	// tool and the HTTP rank route, which is an adapter over it. No seat
+	// is given it: a seat moves work between lanes with update_work_item
+	// and does not reorder a board it cannot see, which is why its row is
+	// human-only as well as the colleague write.
+	ActionWorkPlace Action = "place_work_item"
 
 	// --- a container's own policy ----------------------------------- //
 	ActionProjectWrite   Action = "write_project"
@@ -157,6 +159,30 @@ const (
 	// [ActionChartStructure] because it asks for the deployment's grant as
 	// well as the company's ([rule.also]): see its row.
 	ActionChartRemove Action = "chart.remove"
+
+	// --- whether a seat works, and what its turn is doing ------------ //
+	//
+	// A PERSON'S DECISION ABOUT A SEAT, and never a seat's: pausing one,
+	// resuming one, sending a note to the turn it is running, answering
+	// the question a coding run it launched parked on. Each is decided on
+	// the SEAT the gesture is about, by the owner-or-lead class — the
+	// seat's holder, whoever leads it, or the deployment's grant — and
+	// each is decided INSIDE its tool, because the seat is never simply
+	// what the arguments state: a typed handle resolves through the chart
+	// (a retired alias, an origin), a turn names the seat only the node
+	// running it can say, and a run names the seat its row recorded.
+	ActionSeatPause  Action = "pause_seat"
+	ActionSeatResume Action = "resume_seat"
+	ActionTurnSteer  Action = "steer_turn"
+	ActionRunAnswer  Action = "answer_run"
+
+	// ActionKnowledgeAnswer is a person's question answered from what the
+	// company has written down, by a model, at the company's expense. A
+	// READ in what it discloses — the board and the pages the reader
+	// already holds `state:read` over — and a person's alone, because it
+	// runs on the auxiliary model of the seat the asker is bound to and a
+	// seat has search_knowledge and a model of its own.
+	ActionKnowledgeAnswer Action = "answer_knowledge"
 
 	// --- the company's own controls --------------------------------- //
 	ActionConfigRead   Action = "config.read"
@@ -325,6 +351,13 @@ var rules = map[Action]rule{
 	ActionPageList:      {class: ClassRead, recency: iam.RecencyAny},
 	ActionKnowledgeRead: {class: ClassRead, recency: iam.RecencyAny},
 	ActionColleagueRead: {class: ClassRead, recency: iam.RecencyAny},
+	// THE READ GRANT, AND A PERSON: what an answer discloses is what the
+	// pages and the board already show a `state:read` holder, and what it
+	// costs is one auxiliary model call on the asker's own seat — which a
+	// seat would be spending on its own behalf, beside the search and the
+	// model it already has. The tool refuses a person no seat binds
+	// itself, naming why: there is no seat whose model to run on.
+	ActionKnowledgeAnswer: {class: ClassRead, humanOnly: true, recency: iam.RecencyAny},
 
 	ActionSkillUse:      {class: ClassSelf, recency: iam.RecencyAny},
 	ActionSkillLoad:     {class: ClassSelf, recency: iam.RecencyAny},
@@ -345,11 +378,12 @@ var rules = map[Action]rule{
 	ActionWorkUpdate:  {class: ClassColleagueWrite, recency: iam.RecencyAny},
 	ActionWorkComment: {class: ClassColleagueWrite, recency: iam.RecencyAny},
 	ActionWorkMerge:   {class: ClassColleagueWrite, recency: iam.RecencyAny},
-	// A RANK MOVE IS A COLLEAGUE WRITE ON THE TASK, although the record
+	// A PLACE IS A COLLEAGUE WRITE ON THE TASK, although the record
 	// arbitrates on the project's ORDER rather than on the task: the order
 	// is an object nobody owns, so the only relation to ask about is none,
-	// and the capability that files work is the one that arranges it.
-	ActionWorkRank:    {class: ClassColleagueWrite, recency: iam.RecencyAny},
+	// and the capability that files work is the one that arranges it. A
+	// person's gesture — see [ActionWorkPlace].
+	ActionWorkPlace:   {class: ClassColleagueWrite, humanOnly: true, recency: iam.RecencyAny},
 	ActionPageCreate:  {class: ClassColleagueWrite, recency: iam.RecencyAny},
 	ActionPageSave:    {class: ClassColleagueWrite, recency: iam.RecencyAny},
 	ActionPageComment: {class: ClassColleagueWrite, recency: iam.RecencyAny},
@@ -364,6 +398,24 @@ var rules = map[Action]rule{
 	ActionPrioritiesSet: {class: ClassOwnOrLead, recency: iam.RecencyAny},
 	ActionInboxMark:     {class: ClassOwnRecord, recency: iam.RecencyAny},
 	ActionPinsSet:       {class: ClassOwnRecord, recency: iam.RecencyAny},
+
+	// WHETHER A SEAT WORKS IS ITS LEAD'S TO DECIDE, or the deployment's,
+	// exactly as what it works on is ([ActionPrioritiesSet]) — and never
+	// any reader's. Everybody signed in holds a credential, so "any
+	// operator" would let every reader of the board stop any seat in the
+	// company, end the turn it is on, or put words in it. HUMAN-ONLY on
+	// top: a seat that could pause a colleague, resume itself, steer
+	// another's turn or answer its own run's question would be overruling
+	// the people who run it. No proof window, as no tool row asks one.
+	ActionSeatPause:  {class: ClassOwnOrLead, humanOnly: true, recency: iam.RecencyAny},
+	ActionSeatResume: {class: ClassOwnOrLead, humanOnly: true, recency: iam.RecencyAny},
+	ActionTurnSteer:  {class: ClassOwnOrLead, humanOnly: true, recency: iam.RecencyAny},
+	// A RUN'S QUESTION IS ITS REQUESTER'S TO ANSWER, or the run's seat's
+	// lead's: the tool asks this row about the REQUESTER's seat when the
+	// caller is that requester (the self arm), and about the run's seat
+	// otherwise — so the person who asked for the work answers what it
+	// asks them, and nobody who merely leads them does.
+	ActionRunAnswer: {class: ClassOwnOrLead, humanOnly: true, recency: iam.RecencyAny},
 
 	// A VIEW IS NOT A RECORD, because half of them are not personal at
 	// all: omitting the owner SHARES it, which is a tab on somebody's

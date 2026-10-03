@@ -463,7 +463,7 @@ describe("editing", () => {
         { path: ["goal"], value: "Ship" },
         { path: ["backstory"], value: "Joined early." },
         { path: ["runtime", "llm"], value: "fast" },
-        { path: ["runtime", "token_budget"], value: 5000 },
+        { path: ["runtime", "token_budget"], value: { day: 5000 } },
       ],
     });
     expect(op).toEqual({
@@ -472,7 +472,7 @@ describe("editing", () => {
       changes: [
         { path: ["goal"], before: "Build", after: "Ship" },
         { path: ["backstory"], after: "Joined early." },
-        { path: ["runtime", "token_budget"], after: 5000 },
+        { path: ["runtime", "token_budget"], after: { day: 5000 } },
       ],
       accessLevels: [],
     });
@@ -481,7 +481,7 @@ describe("editing", () => {
     expect(seat(next, "seat:dev").runtime).toEqual({
       llm: "fast",
       future_runtime_key: 7,
-      token_budget: 5000,
+      token_budget: { day: 5000 },
     });
   });
 

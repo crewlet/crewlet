@@ -242,7 +242,8 @@ func companyJSON(t *testing.T, doc string) []byte {
 func (s *surface) seedPayload(t *testing.T, payload []byte) string {
 	t.Helper()
 	id, err := s.configs.InsertActive(t.Context(), store.Revision{
-		Source: "test", CreatedBy: "operator", Summary: "seed",
+		CreatedByKind: iam.ActorOperator,
+		Source:        "test", CreatedBy: "operator", Summary: "seed",
 		Payload: payload, CreatedAt: pinned,
 	})
 	if err != nil {
@@ -1346,7 +1347,7 @@ func TestARevisionNamesItsAuthorBesideTheCredential(t *testing.T) {
 				t.Fatalf("Active: %v", err)
 			}
 			if got := (iam.Actor{Name: active.CreatedBy,
-				Kind:       iam.ActorKind(active.CreatedByKind),
+				Kind:       active.CreatedByKind,
 				OperatorID: active.OperatorID}); got != tc.want {
 				t.Errorf("the revision records %+v, want %+v", got, tc.want)
 			}
@@ -1366,12 +1367,13 @@ func TestARevisionNamesItsAuthorBesideTheCredential(t *testing.T) {
 			if err != nil {
 				t.Fatalf("Target: %v", err)
 			}
-			if target.CreatedBy != tc.want.Name ||
-				target.CreatedByKind != string(tc.want.Kind) ||
-				target.OperatorID != tc.want.OperatorID {
-				t.Errorf("the fleet's pointer carries %q/%q/%q, want %+v — every "+
-					"other node records the revision from it", target.CreatedBy,
-					target.CreatedByKind, target.OperatorID, tc.want)
+			if origin := target.Origin; origin.Author != tc.want.Name ||
+				origin.AuthorKind != tc.want.Kind ||
+				origin.OperatorID != tc.want.OperatorID ||
+				origin.Source != "api" || !origin.CreatedAt.Equal(pinned) {
+				t.Errorf("the fleet's pointer carries origin %+v, want %+v from "+
+					"api at %v — every other node records the revision from it",
+					origin, tc.want, pinned)
 			}
 
 			if len(pub.sent) != 1 {
@@ -1536,7 +1538,7 @@ func TestAnUnsupportedPatchFormatIsRefusedWithAcceptPatch(t *testing.T) {
 		t.Errorf("Accept-Patch = %q, which does not name what would have worked", got)
 	}
 	// AND THE HINT NAMES A ROUTE THAT TAKES THE WRITE. It named
-	// PUT /config/roles/{handle}, which answers chart_not_writable_here, so a
+	// PUT /config/roles/{handle}, a route this surface does not serve, so a
 	// caller following it met a second refusal.
 	if body := res.Body.String(); !strings.Contains(body, "PATCH /chart/seats/{handle}") ||
 		strings.Contains(body, "/config/roles") {

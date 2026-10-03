@@ -27,7 +27,7 @@ import (
 
 // A RENAMED SEAT KEEPS WHAT IT LEARNED.
 //
-// A seat's identity is the handle it was CREATED under (ADR-0019), and its
+// A seat's identity is the handle it was CREATED under (ADR-0026), and its
 // mailbox, lease, diary and onboarding marker already followed it through a
 // rename. Five tables did not: episodes, counterparty profiles, the two skill
 // tables and the conversation ledger named the seat by the handle it answered

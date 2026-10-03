@@ -31,11 +31,12 @@ import {
   share,
   unavailableRetryMs,
   type LogRefusal,
-  type QueryErrorCode,
   type QueryMap,
   type QueryName,
   type QueryRefusal,
 } from "~/protocol/index.ts";
+import type { QueryErrorCode } from "~/contract/errors.ts";
+import { tabFloors, SessionFloors } from "~/protocol/floors.ts";
 
 export interface QueryResult<T> {
   data: T | null;
@@ -44,7 +45,7 @@ export interface QueryResult<T> {
    *  how a polled screen becomes unreadable. */
   loading: boolean;
   /** The engine's machine-readable code (`unauthorized`, `unavailable`,
-   *  `timeout`, …), or null. Typed as the protocol's own union, so a screen
+   *  `timeout`, …), or null. Typed as the contract's own union, so a screen
    *  comparing it against a code the engine does not send fails the
    *  typecheck. */
   error: QueryErrorCode | null;
@@ -57,6 +58,14 @@ export interface QueryResult<T> {
    * only that there was one.
    */
   refusal: QueryRefusal | LogRefusal | null;
+  /**
+   * The engine's own sentence on a `bad_params` refusal — which parameter to
+   * change, and what it accepts — and null on every other answer. The one
+   * refusal written for the reader: a window past the spend history is the
+   * READER's choice to change, and "the engine refused this request" with no
+   * word of why left them nothing to change it to.
+   */
+  detail: string | null;
   /**
    * The window a question with a `window` was LAST ASKED over, and the two
    * instants that ask computed from it — null before its first ask, and
@@ -216,8 +225,9 @@ export function useQuery<K extends QueryName>(
     loading: boolean;
     error: QueryErrorCode | null;
     refusal: QueryRefusal | LogRefusal | null;
+    detail: string | null;
     asked: AskedWindow | null;
-  }>({ data: null, loading: enabled, error: null, refusal: null, asked: null });
+  }>({ data: null, loading: enabled, error: null, refusal: null, detail: null, asked: null });
 
   // The params object is a fresh literal on every render, so it cannot be a
   // dependency. Its serialisation can.
@@ -239,7 +249,14 @@ export function useQuery<K extends QueryName>(
 
   useEffect(() => {
     if (!enabled) {
-      setState({ data: null, loading: false, error: null, refusal: null, asked: null });
+      setState({
+        data: null,
+        loading: false,
+        error: null,
+        refusal: null,
+        detail: null,
+        asked: null,
+      });
       return;
     }
     const mine = ++generation.current;
@@ -249,7 +266,10 @@ export function useQuery<K extends QueryName>(
       // When this answer is asked again: the screen's own poll, unless the
       // engine said otherwise. `null` is never on a timer.
       let next: number | null = pollMs !== undefined && pollMs > 0 ? pollMs : null;
-      const asking = JSON.parse(key) as Record<string, unknown>;
+      // THIS TAB'S READ FLOOR for the question's domain, where it wrote one
+      // ([withFloor]) — on every ask, the poll's and the refetch a write
+      // fired alike.
+      const asking = withFloor(what, key);
       if (windowKey !== "") {
         // THE EDGES OF THIS ASK, read off the clock now — on the first ask and
         // on every poll alike, which is what makes a minute's poll ask over
@@ -276,14 +296,21 @@ export function useQuery<K extends QueryName>(
           // this hook already holds, which renders nothing.
           const kept = share(prev.data, data);
           if (kept === prev.data && !prev.loading && prev.error === null) return prev;
-          return { data: kept, loading: false, error: null, refusal: null, asked: prev.asked };
+          return {
+            data: kept,
+            loading: false,
+            error: null,
+            refusal: null,
+            detail: null,
+            asked: prev.asked,
+          };
         });
       } catch (err) {
         if (generation.current !== mine) return;
         // A socket rejection always carries a code; anything else that
         // threw is a failure nobody explained, which is `query_failed`.
         const code = queryErrorCode(err instanceof Error ? err.message : null) ?? "query_failed";
-        const { refusal } = queryFailure(err);
+        const { refusal, detail } = queryFailure(err);
         // AN `unavailable` ANSWER IS ASKED AGAIN WHEN THE ENGINE SAID, and
         // that replaces the poll's next tick in both directions. Sooner,
         // because a minute-long poll would leave a recovered node looking
@@ -303,6 +330,7 @@ export function useQuery<K extends QueryName>(
           loading: false,
           error: code,
           refusal,
+          detail,
           asked: prev.asked,
         }));
       } finally {
@@ -326,6 +354,17 @@ export function useQuery<K extends QueryName>(
     // socket blip.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [socket, what, key, windowKey, enabled, pollMs, refetches, refetchOnReconnect && connected]);
+
+  // A WRITE FROM THIS TAB ASKS AGAIN — at the floor it raised, which
+  // `withFloor` reads on the very next ask. The screen that pressed a button
+  // is redrawn from an answer that includes the press, never from the one it
+  // held before it, and never from a guess about what the press did.
+  useEffect(() => {
+    if (!enabled) return;
+    return tabFloors.onWritten((domain, refreshes) => {
+      if (SessionFloors.moves(what, domain, refreshes)) refetch();
+    });
+  }, [enabled, what, refetch]);
 
   // A TAB COMING BACK ASKS AGAIN.
   //
@@ -374,4 +413,24 @@ export function useQuery<K extends QueryName>(
   }, [store, enabled, refetchOnInboxOf, refetch]);
 
   return { ...state, refetch };
+}
+
+/** The keys that already say how fresh an answer must be. */
+const FRESHNESS_KEYS = ["read_level", "min_position", "max_lag_seq", "max_lag_seconds"];
+
+/**
+ * A question's parameters, with this tab's read floor for its domain named
+ * where it has one (`protocol/floors.ts`).
+ *
+ * EVERY ASK, NOT ONLY THE REFETCH A WRITE FIRES: a poll that came round a
+ * second after the write, on a node that had not applied it yet, would
+ * otherwise redraw the row as it was before the press. A caller that named
+ * its own freshness keeps it — it asked for something specific, and a
+ * staleness bound beside `read_level=session` is a request the engine refuses.
+ */
+export function withFloor(what: string, key: string): Record<string, unknown> {
+  const params = JSON.parse(key) as Record<string, unknown>;
+  const floor = tabFloors.freshness(what);
+  if (floor === null || FRESHNESS_KEYS.some((k) => k in params)) return params;
+  return { ...params, ...floor };
 }

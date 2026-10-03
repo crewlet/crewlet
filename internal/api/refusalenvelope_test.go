@@ -26,7 +26,10 @@ import (
 // space in it, and `{"status": "unavailable", "reason": …}` — so it is walked
 // too: a vendor reads only the status and the Retry-After, and the operator
 // reading the body in a delivery log reads the same vocabulary as everywhere
-// else.
+// else. The operator surface is walked beside them, because its one refusal
+// mapping is what the act route, the human write surface and every tool-less
+// verb answer through: a status it chose by hand would be every write
+// surface's.
 //
 // Each of those shapes is visible in the SOURCE and nowhere else — a route
 // that builds its own body answers correctly on every case somebody thought
@@ -41,7 +44,8 @@ import (
 //     header and the envelope together.
 func TestTheSettingsSurfacesRefuseInTheEnvelope(t *testing.T) {
 	t.Parallel()
-	surfaces := []string{"configapi", "secretsapi", "chartapi", "setupapi", "workapi", "webhooks"}
+	surfaces := []string{"configapi", "secretsapi", "chartapi", "setupapi", "workapi",
+		"operator", "webhooks"}
 	walked := 0
 	for _, dir := range surfaces {
 		entries, err := os.ReadDir(dir)

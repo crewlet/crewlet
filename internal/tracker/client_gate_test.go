@@ -2,6 +2,7 @@ package tracker_test
 
 import (
 	"slices"
+	"strconv"
 	"testing"
 	"time"
 
@@ -9,14 +10,15 @@ import (
 	"github.com/crewlet/crewlet/internal/tracker"
 )
 
-// The three lists the dashboard has to keep its own copy of, held against the
+// The lists the dashboard has to keep its own copy of, held against the
 // engine's.
 //
-// All three are closed sets the engine owns and the dashboard cannot import:
+// Every one is a closed set the engine owns and the dashboard cannot import:
 // it is a separate build in a separate language, so `WorkViewShape`, the
-// grid's sort keys and the change kinds are copies. Every copy in this tree has drifted at least once —
-// see `internal/clientsource`'s own doc — and these two drift silently in
-// opposite directions, which is why each is checked in both.
+// grid's and the directory's sort keys, the change kinds and the grouping axes
+// are copies. Every copy in this tree has drifted at least once — see
+// `internal/clientsource`'s own doc — and each drifts silently, so each gate
+// below says which direction it holds and why.
 
 // EVERY SHAPE THE ENGINE MINTS HAS A RENDERER, AND EVERY RENDERER HAS A SHAPE.
 //
@@ -34,12 +36,10 @@ func TestEveryViewShapeTheEngineMintsHasARenderer(t *testing.T) {
 	t.Parallel()
 	engine := tracker.ViewTypeNames()
 
-	body, err := clientsource.Declaration(clientsource.Tree(t),
-		`export type WorkViewShape = ([^;]*);`)
+	client, err := clientsource.Union(clientsource.Tree(t), "WorkViewShape")
 	if err != nil {
 		t.Fatal(err)
 	}
-	client := clientsource.Strings(body)
 	if len(client) == 0 {
 		t.Fatal("the dashboard names no view shapes at all, so this gate certifies nothing")
 	}
@@ -79,15 +79,14 @@ func TestEveryViewShapeTheEngineMintsHasARenderer(t *testing.T) {
 // need a gate, and a sort key is the only one a column mints.
 //
 // One direction only, deliberately. The engine has sort keys the grid has no
-// column for — `rank` is a board's manual order and `spend` and
+// column for — `rank` is a board's manual order and `spend_tokens` and
 // `status_entered` are not on the row at all — and a column for every key
 // would be a grid nobody asked for. What must never happen is a head that
 // names a key the grammar has never heard of.
 func TestEveryGridSortKeyIsOneTheGrammarTakes(t *testing.T) {
 	t.Parallel()
 
-	body, err := clientsource.Declaration(clientsource.Tree(t),
-		`(?s)const COLUMN_SORT_KEYS = \[(.*?)\] as const`)
+	body, err := clientsource.Literal(clientsource.Tree(t), "COLUMN_SORT_KEYS")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -128,8 +127,7 @@ func TestEveryGridSortKeyIsOneTheGrammarTakes(t *testing.T) {
 func TestTheProjectsDirectorySortsOnExactlyTheOrderingsTheEngineTakes(t *testing.T) {
 	t.Parallel()
 
-	body, err := clientsource.Declaration(clientsource.Tree(t),
-		`(?s)const PROJECT_SORT_KEYS = \[(.*?)\] as const`)
+	body, err := clientsource.Literal(clientsource.Tree(t), "PROJECT_SORT_KEYS")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -174,8 +172,7 @@ func TestTheProjectsDirectorySortsOnExactlyTheOrderingsTheEngineTakes(t *testing
 // reach. Both are silent, which is why this is a test.
 func TestEveryChangeKindTheEngineWritesHasAMarkAndAPhrase(t *testing.T) {
 	t.Parallel()
-	body, err := clientsource.Declaration(clientsource.Tree(t),
-		`(?s)export const CHANGES: \{[^}]*\}\[\] = \[(.*?)\n\];`)
+	body, err := clientsource.Literal(clientsource.Tree(t), "CHANGES")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -223,8 +220,7 @@ func TestEveryChangeKindTheEngineWritesHasAMarkAndAPhrase(t *testing.T) {
 func TestEveryGroupingTheDashboardOffersIsOneTheGrammarTakes(t *testing.T) {
 	t.Parallel()
 
-	body, err := clientsource.Declaration(clientsource.Tree(t),
-		`(?s)export const GROUP_AXES[^=]*= \[(.*?)\];`)
+	body, err := clientsource.Literal(clientsource.Tree(t), "GROUP_AXES")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -265,6 +261,35 @@ func TestEveryGroupingTheDashboardOffersIsOneTheGrammarTakes(t *testing.T) {
 	for key := range unlisted {
 		if !slices.Contains(tracker.GroupKeys(), key) {
 			t.Errorf("this gate excuses group_by=%q, which the grammar no longer takes", key)
+		}
+	}
+}
+
+// THE SHEET BOUNDS A TASK'S TEXT WHERE THE ENGINE DOES.
+//
+// The New task sheet refuses a title or a description past the engine's cap
+// before the press — the field is marked and says by how much — because the
+// engine refuses such a value rather than cutting it, and a refusal that
+// arrives after the press lands on no field at all. That only works while the
+// two figures agree: a dashboard cap above the engine's lets through a title
+// the engine refuses, and one below it refuses a title the engine would file.
+func TestTheDashboardBoundsATasksTextAtTheEnginesCaps(t *testing.T) {
+	t.Parallel()
+	for name, engine := range map[string]int{
+		"TASK_TITLE_MAX_BYTES": tracker.MaxTitle,
+		"TASK_BODY_MAX_BYTES":  tracker.MaxBody,
+	} {
+		raw, err := clientsource.Scalar(clientsource.Tree(t), name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		client, err := strconv.Atoi(raw)
+		if err != nil {
+			t.Fatalf("%s is %q, which is not an integer: %v", name, raw, err)
+		}
+		if client != engine {
+			t.Errorf("the dashboard bounds %s at %d bytes and the engine at %d — "+
+				"change it in contract/work.ts to the engine's figure", name, client, engine)
 		}
 	}
 }

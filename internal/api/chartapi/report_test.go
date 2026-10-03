@@ -15,6 +15,7 @@ import (
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/org"
+	"github.com/crewlet/crewlet/internal/period"
 )
 
 // company is one running company: a chart view and the settings epoch it is
@@ -53,7 +54,7 @@ func running() (*org.Organization, *config.Company) {
 // the split made reachable and nothing had a producer for.
 //
 // A revision that drops a provider key is a perfectly valid revision, and
-// every seat whose chain names it now resolves to no model at all. Neither
+// every seat whose chain names it now runs on a fallback model nobody chose. Neither
 // half can refuse the other — they are written by different people at
 // different times — so the only honest answer is a report over the pair.
 func TestASettingsRevisionRemovingAReferencedProviderIsReported(t *testing.T) {
@@ -77,7 +78,7 @@ func TestASettingsRevisionRemovingAReferencedProviderIsReported(t *testing.T) {
 	case one.Kind != chartapi.KindProviderUnknown:
 		t.Errorf("kind = %q, want %q", one.Kind, chartapi.KindProviderUnknown)
 	case one.Severity != chartapi.SeverityError:
-		t.Errorf("severity = %q — a seat with no model at all is not a warning",
+		t.Errorf("severity = %q — a seat running on a model nobody chose is not a warning",
 			one.Severity)
 	case one.Object != "sre":
 		t.Errorf("object = %q, want the seat that names it", one.Object)
@@ -448,7 +449,7 @@ func TestAnUnheldSeatIsTheDirectorysAnswerAndNotTheContactBlocks(t *testing.T) {
 
 // A RENAMED SEAT IS ASKED ABOUT BY ITS IDENTITY.
 //
-// A binding names the seat by the handle it was created under (ADR-0020), so
+// A binding names the seat by the handle it was created under (ADR-0027), so
 // the directory holds `cto` for a seat now called `chief-tech`. Asked by the
 // current handle, the person holding it was invisible and the seat reported
 // unheld — an operator sent to invite somebody who is already signed in.
@@ -598,5 +599,62 @@ func TestASharedAddressOrContactIsReportedOnTheSeatItDoesNotReach(t *testing.T) 
 	want := []string{"cto:confluence, jira", "cto:slack", "sre:email"}
 	if !slices.Equal(shared, want) {
 		t.Errorf("shared identities = %v, want %v", shared, want)
+	}
+}
+
+// A SEAT CEILING THE COMPANY'S CEILING IDLES IS REPORTED, IN THE FILE'S OWN
+// WORDS. The two ceilings live in two halves — a seat's in its chart runtime,
+// the company's in its settings — so no write to a running company sees both,
+// while `crewlet validate` over a company file does and warns. The report asks
+// the file's own judgement ([config.TokenBudget.IdleUnder]) of the running
+// pair, so the same seat and company ceilings read the same sentence in both
+// places. Mutation: judge the pair here with a copy that compares `>=`, or
+// build the detail from anything but the file's sentence, and this fails.
+func TestAnIdleSeatCeilingIsReportedInTheFilesOwnWords(t *testing.T) {
+	t.Parallel()
+	file, err := config.ParseCompany([]byte("name: Nimbus\n" +
+		"token_budget: {month: 1000}\n" +
+		"roles:\n  - name: Dev\n    token_budget: {day: 5000, week: 30000}\n"))
+	if err != nil {
+		t.Fatalf("parse the file: %v", err)
+	}
+	var sentences []string
+	for _, w := range file.AdvisoryWarnings() {
+		if w.Seat == "dev" && strings.Contains(w.Path, "token_budget") {
+			sentences = append(sentences, w.Message)
+		}
+	}
+	if len(sentences) != 1 {
+		t.Fatalf("the file warns %q, want the one idle day", sentences)
+	}
+
+	month := 1000
+	settings := &config.Company{Name: "Nimbus", TokenBudget: config.TokenBudget{Month: &month}}
+	view := &org.Organization{Name: "Nimbus", Roles: []*org.Role{{
+		Name: "Dev", DeclaredHandle: "dev",
+		TokenBudget: org.TokenCeilings{period.Day: 5000, period.Week: 30000},
+	}}}
+	view.Normalize()
+	got := chartapi.Evaluate(t.Context(), view, settings, nil, nil)
+	if len(got.Findings) != 1 {
+		t.Fatalf("findings = %+v, want exactly the idle day", got.Findings)
+	}
+	one := got.Findings[0]
+	if one.Kind != chartapi.KindBudgetIdle || one.Severity != chartapi.SeverityWarning ||
+		one.Object != "dev" || one.Names != "day" {
+		t.Errorf("finding = %+v, want a budget_idle warning on dev's day", one)
+	}
+	if one.Detail != sentences[0] {
+		t.Errorf("the report says\n  %q\nand the file says\n  %q", one.Detail, sentences[0])
+	}
+	if got.Counts[chartapi.KindBudgetIdle] != 1 {
+		t.Errorf("counts = %v, want one budget_idle", got.Counts)
+	}
+
+	// THE CONTROL: one token under the company's own window is a ceiling
+	// that can refuse, and is not reported.
+	view.Roles[0].TokenBudget = org.TokenCeilings{period.Month: 999}
+	if got := chartapi.Evaluate(t.Context(), view, settings, nil, nil); len(got.Findings) != 0 {
+		t.Errorf("a ceiling one token under the company's is reported: %+v", got.Findings)
 	}
 }

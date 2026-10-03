@@ -8,15 +8,15 @@ import (
 	"github.com/crewlet/crewlet/internal/clientsource"
 )
 
-// TestEntityKindsMatchTheClient holds the names the Configuration screen offers
+// TestEntityKindsMatchTheClient holds the names Settings › Configuration offers
 // against the collections `config_entities` will actually answer for.
 //
 // THE FAILURE IS A SCREEN THAT ASKS FOR NOTHING. A kind the client spells its
-// own way — `seats` for `roles`, `mcp_servers` for `mcp-servers` — is a
-// bad-params refusal on every read, rendered as "the query failed" under a tab
-// a reader opened on purpose. Nothing else in the tree compares the two, and
-// the query went un-asked for long enough that the drift would have been
-// invisible either way.
+// own way — `providers` for `llm-providers`, `mcp_servers` for `mcp-servers`
+// — is a bad-params refusal on every read, rendered as "the query failed"
+// under a tab a reader opened on purpose. Nothing else in the tree compares
+// the two, and the query went un-asked for long enough that the drift would
+// have been invisible either way.
 //
 // The client list may be a SUBSET: a collection it chooses not to offer is a
 // product decision. What it may never contain is a name the engine does not
@@ -24,8 +24,7 @@ import (
 func TestEntityKindsMatchTheClient(t *testing.T) {
 	engine := configapi.EntityKinds()
 
-	body, err := clientsource.Declaration(clientsource.Tree(t),
-		`(?s)const ENTITY_KINDS = \[(.*?)\] as const`)
+	body, err := clientsource.Literal(clientsource.Tree(t), "ENTITY_KINDS")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -37,7 +36,7 @@ func TestEntityKindsMatchTheClient(t *testing.T) {
 
 	for _, kind := range client {
 		if !slices.Contains(engine, kind) {
-			t.Errorf("the Configuration screen offers %q, which config_entities refuses: "+
+			t.Errorf("Settings › Configuration offers %q, which config_entities refuses: "+
 				"the engine serves %v", kind, engine)
 		}
 	}
@@ -48,7 +47,7 @@ func TestEntityKindsMatchTheClient(t *testing.T) {
 		}
 	}
 	if len(missing) > 0 {
-		t.Logf("the engine serves %v, which the Configuration screen does not offer — "+
+		t.Logf("the engine serves %v, which Settings › Configuration does not offer — "+
 			"a product decision rather than a failure, but a collection nobody can reach",
 			missing)
 	}

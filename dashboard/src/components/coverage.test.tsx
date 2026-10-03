@@ -15,13 +15,8 @@ import { cleanup, render } from "~/test/inCase.ts";
 import { afterEach, expect, test } from "vitest";
 
 import { StateBar } from "~/app/frame/StateBar.tsx";
-import {
-  Coverage,
-  GENERATION_STRIDE,
-  appliedThrough,
-  positionWords,
-  type CoverageFacts,
-} from "./work.tsx";
+import { GENERATION_STRIDE } from "~/contract/positions.ts";
+import { Coverage, appliedThrough, positionWords, type CoverageFacts } from "./work.tsx";
 
 afterEach(cleanup);
 

@@ -12,9 +12,9 @@ import (
 //
 // # What changed, and what deliberately did not
 //
-// A company used to be ONE document with twenty top-level fields, of which two
-// — `roles` and `units` — were the org chart. Those two are a log now, and the
-// eighteen that are left are settings: which integrations this company runs,
+// A company used to be ONE document with twenty-one top-level fields, of which
+// two — `roles` and `units` — were the org chart. Those two are a log now, and
+// the nineteen that are left are settings: which integrations this company runs,
 // which models, how its turn engine behaves, what its scheduling defaults are.
 //
 // The difference is not tidiness. A settings document is edited by an operator
@@ -24,7 +24,7 @@ import (
 // token were the same kind of write, colliding on the same version, and a
 // document that lost the race was refused in full.
 //
-// THE FILE KEEPS BOTH. [Company] is unchanged and still carries all twenty
+// THE FILE KEEPS BOTH. [Company] is unchanged and still carries all twenty-one
 // fields, because that is what an operator authors and what
 // `crewlet config import` reads: a founder writes one file describing a
 // company, and splitting the authoring surface would be a change to the
@@ -34,8 +34,8 @@ import (
 // # Who reads one, and who deliberately does not
 //
 // EVERY PATH THAT APPLIES a revision, and there are two: the node's own boot,
-// and the control plane's reconcile. Those are where a revision still carrying
-// a chart must be refused — a node that applied one would run a company whose
+// and the control plane's reconcile. Those are where a revision carrying a
+// chart must be refused — a node that applied one would run a company whose
 // seats come from a document no other node reads.
 //
 // EVERYTHING ELSE STILL DECODES A [Company], and that is not an oversight.
@@ -52,6 +52,13 @@ type Settings struct {
 	// COMPANY rather than anything in the hierarchy — and because a seat's
 	// id is derived from it, a rename is a migration rather than an edit.
 	Name string `yaml:"name" json:"name"`
+
+	// Timezone is the company's one clock ([Company.Timezone]). A SETTING,
+	// because it is a fact about the whole company rather than about the
+	// hierarchy: absent here, `timezone` would be a key only the chart's
+	// half of a file carries, and a `PUT /config` setting the company's
+	// clock would be refused as a write to the chart.
+	Timezone string `yaml:"timezone,omitempty" json:"timezone,omitempty"`
 
 	Mission  string   `yaml:"mission,omitempty" json:"mission,omitempty"`
 	Vision   string   `yaml:"vision,omitempty" json:"vision,omitempty"`
@@ -70,7 +77,7 @@ type Settings struct {
 
 	MCPServers []MCPServer `yaml:"mcp_servers,omitempty" json:"mcp_servers,omitempty"`
 
-	TokenBudget int `yaml:"token_budget,omitempty" json:"token_budget,omitempty"`
+	TokenBudget TokenBudget `yaml:"token_budget,omitempty" json:"token_budget,omitzero"`
 
 	NotificationRateLimit             int     `yaml:"notification_rate_limit,omitempty" json:"notification_rate_limit,omitempty"`
 	NotificationCoalesceWindowSeconds float64 `yaml:"notification_coalesce_window_seconds,omitempty" json:"notification_coalesce_window_seconds,omitempty"`
@@ -79,24 +86,30 @@ type Settings struct {
 	Workers map[string]Worker `yaml:"workers,omitempty" json:"workers,omitempty"`
 }
 
-// ErrRevisionCarriesAChart reports a stored revision written before the split.
+// ErrRevisionCarriesAChart reports a stored revision that carries the org
+// chart's keys — a shape no settings revision has.
 //
-// A SENTINEL because the caller's response is a PROCEDURE rather than a retry:
-// the revision is valid, it is just the wrong shape for this build, and the
-// operator has to import it once so its chart reaches the log. A caller that
-// treated it as a decode failure would report a corrupt configuration for one
-// that is merely older.
-var ErrRevisionCarriesAChart = fmt.Errorf("config: this revision still carries an org chart")
+// A SENTINEL because the bytes are not CORRUPT, and a caller has to be able to
+// say so: they are a well-formed company document stored where only its
+// settings half belongs. Every door that writes a revision keeps the chart
+// out — `PUT` and `PATCH /config` refuse a body naming it, and
+// `crewlet config import` divides a company file between the settings and
+// the chart's log — so this refusal is the guarantee those doors make, held
+// once more on the path that would RUN the revision. A caller that folded it
+// into a decode failure would report a corrupt configuration for one that is
+// only the wrong shape.
+var ErrRevisionCarriesAChart = fmt.Errorf("config: this revision carries an org chart")
 
 // DecodeSettings reads a STORED revision as settings.
 //
-// # It refuses a revision that still carries a chart
+// # It refuses a revision that carries a chart
 //
-// And the refusal names the procedure rather than the field. Silently dropping
-// `roles:` and `units:` would be the worst available outcome: the node would
-// boot, serve, and run a company with no seats in it — every mailbox gone,
-// every routing decision answering nobody — and nothing would say why, because
-// from the engine's point of view the configuration decoded cleanly.
+// And the refusal names where the chart lives rather than the field. Silently
+// dropping `roles:` and `units:` would be the worst available outcome: the
+// node would boot, serve, and run a company with no seats in it — every
+// mailbox gone, every routing decision answering nobody — and nothing would
+// say why, because from the engine's point of view the configuration decoded
+// cleanly.
 //
 // # Everything else about it is [DecodeCompany]'s, and has to be
 //
@@ -166,16 +179,10 @@ func refuseChart(top map[string]json.RawMessage) error {
 		return nil
 	}
 	return fmt.Errorf("%w: it holds %s.\n"+
-		"A revision written before the org chart moved onto its own log still "+
-		"carries the chart inside it, and this build reads the two "+
-		"separately. The chart is NOT dropped and this revision is NOT run: "+
-		"until it is replaced, this node keeps serving whatever it already "+
-		"applied.\n"+
-		"To replace it, store the settings half from the company file — "+
-		"`crewlet config import <company.yaml>`, which writes the settings "+
-		"and leaves the chart alone. A deployment whose chart is still empty "+
-		"gets one from `crewlet run -company <company.yaml>`, which seeds it "+
-		"once",
+		"A settings revision carries no org chart: the chart is a log of its "+
+		"own, written through /chart, and `crewlet config import` divides a "+
+		"company file between the two. This revision is NOT run; this node "+
+		"keeps serving whatever it already applied",
 		ErrRevisionCarriesAChart, strings.Join(held, " and "))
 }
 
@@ -235,7 +242,8 @@ func SettingsOf(c *Company) *Settings {
 		return nil
 	}
 	return &Settings{
-		Name: c.Name, Mission: c.Mission, Vision: c.Vision,
+		Name: c.Name, Timezone: c.Timezone,
+		Mission: c.Mission, Vision: c.Vision,
 		Policies:       append([]string(nil), c.Policies...),
 		Integrations:   c.Integrations,
 		Tracker:        c.Tracker,
@@ -246,7 +254,7 @@ func SettingsOf(c *Company) *Settings {
 		Learning:       c.Learning,
 		Scheduling:     c.Scheduling,
 		MCPServers:     append([]MCPServer(nil), c.MCPServers...),
-		TokenBudget:    c.TokenBudget,
+		TokenBudget:    c.TokenBudget.Clone(),
 
 		NotificationRateLimit:             c.NotificationRateLimit,
 		NotificationCoalesceWindowSeconds: c.NotificationCoalesceWindowSeconds,
@@ -262,7 +270,7 @@ func SettingsOf(c *Company) *Settings {
 //
 // Nothing below this layer was re-typed when the chart left. An epoch is built
 // from a [Company], a validator reads one, a provider chain is constructed from
-// one — and every one of those reads the eighteen fields that STAYED. Re-typing
+// one — and every one of those reads the nineteen fields that STAYED. Re-typing
 // them to take a [Settings] would be a rename across the engine buying nothing:
 // the two types carry the same values, and the difference between them is which
 // half of a stored revision they came from.
@@ -281,7 +289,8 @@ func (s *Settings) Company() *Company {
 		return nil
 	}
 	return &Company{
-		Name: s.Name, Mission: s.Mission, Vision: s.Vision,
+		Name: s.Name, Timezone: s.Timezone,
+		Mission: s.Mission, Vision: s.Vision,
 		Policies:       append([]string(nil), s.Policies...),
 		Integrations:   s.Integrations,
 		Tracker:        s.Tracker,
@@ -292,7 +301,7 @@ func (s *Settings) Company() *Company {
 		Learning:       s.Learning,
 		Scheduling:     s.Scheduling,
 		MCPServers:     append([]MCPServer(nil), s.MCPServers...),
-		TokenBudget:    s.TokenBudget,
+		TokenBudget:    s.TokenBudget.Clone(),
 
 		NotificationRateLimit:             s.NotificationRateLimit,
 		NotificationCoalesceWindowSeconds: s.NotificationCoalesceWindowSeconds,

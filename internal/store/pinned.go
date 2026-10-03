@@ -134,7 +134,7 @@ func (d *DB) Writer(ctx context.Context) (*Writer, error) {
 // ONCE, so anything with an effect outside the transaction belongs after Tx
 // returns rather than inside it.
 func (w *Writer) Tx(ctx context.Context, fn func(*sql.Tx) error) error {
-	return retryTransient(ctx, budget(w.db.busy), func() (err error) {
+	return retryTransient(ctx, budget(w.db.busy, w.db.pool), func() (err error) {
 		conn, err := w.pinned(ctx)
 		if err != nil {
 			return err
@@ -280,8 +280,9 @@ func (w *Writer) Close() error {
 // dashboard would be reporting the store's internals as the answer.
 func (d *DB) Read(ctx context.Context, fn func(*sql.Tx) error) error {
 	// BEFORE `d.busy`, which is the whole of this bug. The guard lived in
-	// [DB.txOpts] alone, and `budget(d.busy)` below is an argument — evaluated
-	// first, dereferencing the nil handle the guard was put there to refuse.
+	// [DB.txOpts] alone, and `budget(d.busy, d.pool)` below is an argument —
+	// evaluated first, dereferencing the nil handle the guard was put there
+	// to refuse.
 	// See [ErrNoEstate]: this is the second time a maintenance tick racing a
 	// shutdown has taken the engine down through this exact path.
 	if d == nil || d.sql == nil {
@@ -299,7 +300,7 @@ func (d *DB) Read(ctx context.Context, fn func(*sql.Tx) error) error {
 		// where those reads were before the reserve existed, and it is
 		// better than refusing a question this handle can answer.
 	}
-	return retryTransient(ctx, budget(d.busy), func() (err error) {
+	return retryTransient(ctx, budget(d.busy, d.pool), func() (err error) {
 		conn, err := d.sql.Conn(ctx)
 		if err != nil {
 			return fmt.Errorf("store: begin: %w", err)
@@ -346,7 +347,7 @@ var errNoReserve = errors.New("store: this handle holds no identity reserve")
 func (d *DB) readReserved(ctx context.Context, fn func(*sql.Tx) error) error {
 	d.reserve.mu.Lock()
 	defer d.reserve.mu.Unlock()
-	return retryTransient(ctx, budget(d.busy), func() (err error) {
+	return retryTransient(ctx, budget(d.busy, d.pool), func() (err error) {
 		conn := d.identityConn(ctx)
 		if conn == nil {
 			return errNoReserve

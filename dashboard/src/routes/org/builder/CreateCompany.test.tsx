@@ -12,7 +12,7 @@ import { clearSavedChanges } from "./savedChanges.ts";
 import {
   company,
   Engine,
-  lensToolbar,
+  builderToolbar,
   mountBuilder,
   type Settle,
   pressInToolbar,
@@ -53,7 +53,7 @@ function createdElsewhere(engine: Engine) {
 const isWrite = (r: SentRequest) =>
   r.path === "/config" && r.method === "PUT" && !r.query.has("dry_run");
 
-/** The dialog that says a company exists, once the lens has settled on finding it. */
+/** The dialog that says a company exists, once the builder has settled on finding it. */
 const companyExists = () =>
   screen.getByRole("dialog", { name: "A company already exists on this engine" });
 
@@ -70,7 +70,7 @@ async function save(settle: Settle) {
  *
  * Its controls are asked for INSIDE it. A role query by name computes the
  * accessible name of every candidate in its container, and across the whole
- * lens that made this form's own presses the costliest lines of these cases.
+ * builder that made this form's own presses the costliest lines of these cases.
  */
 function createForm(): HTMLElement {
   const form = screen.getByLabelText("Company name").closest<HTMLElement>("section");
@@ -171,7 +171,7 @@ test("the create form carries no builder toolbar until a template is recorded", 
   expect(document.querySelector(".org-builder-toolbar")).toBeNull();
   await startCompany(settle);
   await settle();
-  expect(lensToolbar()).toBeDefined();
+  expect(builderToolbar()).toBeDefined();
 });
 
 test("a company with no name is refused by the form, not by the engine", async () => {
@@ -220,7 +220,7 @@ test("the save creates the settings create-only, then the chart, and says what i
   // that has no screen at all.
   expect(screen.getByText("The company is created")).toBeDefined();
   expect(screen.getByRole("link", { name: "Open Integrations" }).getAttribute("href")).toBe(
-    "#/admin/integrations",
+    "#/settings/integrations",
   );
   // A MERGE PATCH OF THE PROVIDERS, which changes nothing else: an import of
   // a company file would write that file's org chart over the one just made.
@@ -233,7 +233,7 @@ test("the save creates the settings create-only, then the chart, and says what i
   // configuration itself rather than an empty diff.
   expect(screen.queryByRole("link", { name: "View changes" })).toBeNull();
   expect(screen.getByRole("link", { name: "View the configuration" }).getAttribute("href")).toBe(
-    "#/admin/config",
+    "#/settings/config",
   );
 });
 
@@ -304,7 +304,7 @@ test("a settings revision created meanwhile refuses the create before the chart 
   expect(engine.chartWrites()).toHaveLength(0);
 });
 
-// KEEPING THE DRAFT IS NOT A DEAD END. It can never be saved, and the lens is
+// KEEPING THE DRAFT IS NOT A DEAD END. It can never be saved, and the builder is
 // read-only over it, so what it offers instead has to stay on screen after
 // the dialog is closed: without it the only way out was a reload.
 test("a create draft kept after a company appeared still offers the company", async () => {

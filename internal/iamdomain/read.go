@@ -1089,7 +1089,7 @@ func readInvalidated(ctx context.Context, tx *sql.Tx) (uint64, error) {
 }
 
 // HeldSeats is every seat an ACTIVE person in this estate is bound to, each
-// named by its IDENTITY — the handle it was created under (ADR-0020) — read
+// named by its IDENTITY — the handle it was created under (ADR-0027) — read
 // in ONE snapshot.
 //
 // # One snapshot, because it answers a whole report
@@ -1137,7 +1137,7 @@ func (r *Reader) HeldSeats(ctx context.Context) (map[string]bool, error) {
 }
 
 // HolderOf names the person bound to a seat — by its IDENTITY, the handle it
-// was created under, which is what a binding names (ADR-0020) — read INSIDE a
+// was created under, which is what a binding names (ADR-0027) — read INSIDE a
 // transaction the caller supplies.
 //
 // # The transaction is the caller's, and that is the point
@@ -1195,7 +1195,7 @@ func (r *Reader) HolderOf(ctx context.Context, tx *sql.Tx, seat string) (string,
 // and nothing about what that means for a Slack mention.
 type SeatHolder struct {
 	// Seat is the seat's IDENTITY — the handle it was created under, which
-	// no rename moves and the chart never issues twice (ADR-0020) — and
+	// no rename moves and the chart never issues twice (ADR-0027) — and
 	// never the handle it answers to now. A reader turns it into a seat by
 	// the chart's identity lookup ([chart.Reader.SeatByIdentity], or
 	// [org.Role.Origin] over a built tree), never by comparing it to a

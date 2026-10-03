@@ -21,7 +21,9 @@ vi.mock("~/app/frame/DataGrid.tsx", async (importOriginal) => {
 import { drawnRows } from "~/test/rowsDrawn.tsx";
 import { Work } from "./Work.tsx";
 import { Router } from "~/app/router.tsx";
+import { FrameReadings } from "~/app/Shell.tsx";
 import { ClientContext } from "~/lib/store-hooks.ts";
+import { LayerHost, ToastProvider } from "@crewlethq/ui";
 import { LiveSocket, Store } from "~/protocol/index.ts";
 import type { WorkSummary } from "~/protocol/index.ts";
 
@@ -79,12 +81,20 @@ async function mount() {
       ),
     ) as unknown;
   store.applyOrg({ name: "Acme", roles: [{ name: "Ada Okonkwo", handle: "ada", kind: "agent" }] });
+  // INSIDE THE FRAME'S READINGS — who the viewer is and their own counts —
+  // which the list reads as every screen does.
   render(
-    <ClientContext.Provider value={{ store, socket }}>
-      <Router>
-        <Work />
-      </Router>
-    </ClientContext.Provider>,
+    <ToastProvider>
+      <LayerHost>
+        <ClientContext.Provider value={{ store, socket }}>
+          <FrameReadings>
+            <Router>
+              <Work />
+            </Router>
+          </FrameReadings>
+        </ClientContext.Provider>
+      </LayerHost>
+    </ToastProvider>,
   );
   await poll(0);
   return store;

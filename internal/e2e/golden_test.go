@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -14,6 +16,7 @@ import (
 	"time"
 
 	"github.com/coder/websocket"
+	"github.com/google/uuid"
 
 	"github.com/crewlet/crewlet/internal/agent/builtin"
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
@@ -21,9 +24,11 @@ import (
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/notify"
+	"github.com/crewlet/crewlet/internal/period"
 	"github.com/crewlet/crewlet/internal/sourcetree"
 	"github.com/crewlet/crewlet/internal/store"
 	"github.com/crewlet/crewlet/internal/tools"
+	"github.com/crewlet/crewlet/internal/tracker"
 )
 
 // GATE G5, third leg — "a golden company runs end-to-end with the UI showing
@@ -123,8 +128,61 @@ func (c *capture) liveCalls(t *testing.T) []map[string]any {
 	return out
 }
 
-// seatStates reports every state an `agents` push put a seat in, by the agent
-// id the client merges the row onto its roster by.
+// agentRows reports every seat row an `agents` push carried, in order.
+func (c *capture) agentRows(t *testing.T) []map[string]any {
+	t.Helper()
+	var out []map[string]any
+	for _, raw := range c.all() {
+		var env struct {
+			Kind string           `json:"kind"`
+			Data []map[string]any `json:"data"`
+		}
+		if json.Unmarshal(raw, &env) != nil || env.Kind != "agents" {
+			continue
+		}
+		out = append(out, env.Data...)
+	}
+	return out
+}
+
+// turnStages reports the stage of every turn an `agents` push put a seat on.
+func (c *capture) turnStages(t *testing.T) []string {
+	t.Helper()
+	var out []string
+	for _, row := range c.agentRows(t) {
+		if turn, _ := row["turn"].(map[string]any); turn != nil {
+			if stage, _ := turn["stage"].(string); stage != "" {
+				out = append(out, stage)
+			}
+		}
+	}
+	return out
+}
+
+// sawRefusal reports whether a seat's pushed meter carried a refused window:
+// stamped, and judged `refusing` by the engine. By the seat's AGENT ID, the
+// one key an `agents` push carries its changed rows under and the client
+// merges them on.
+func (c *capture) sawRefusal(t *testing.T, agentID string) bool {
+	t.Helper()
+	for _, row := range c.agentRows(t) {
+		if row["agent_id"] != agentID {
+			continue
+		}
+		meter, _ := row["budget"].(map[string]any)
+		windows, _ := meter["windows"].([]any)
+		for _, raw := range windows {
+			w, _ := raw.(map[string]any)
+			if at, _ := w["refused_at"].(string); at != "" && w["state"] == "refusing" {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// seatStates reports every activity an `agents` push put a seat in, by the
+// agent id the client merges the row onto its roster by.
 func (c *capture) seatStates(t *testing.T) map[string][]string {
 	t.Helper()
 	out := map[string][]string{}
@@ -138,9 +196,9 @@ func (c *capture) seatStates(t *testing.T) map[string][]string {
 		}
 		for _, row := range env.Data {
 			id, _ := row["agent_id"].(string)
-			state, _ := row["state"].(string)
-			if id != "" && state != "" {
-				out[id] = append(out[id], state)
+			activity, _ := row["activity"].(string)
+			if id != "" && activity != "" {
+				out[id] = append(out[id], activity)
 			}
 		}
 	}
@@ -195,6 +253,31 @@ func (c *capture) lastRollup(t *testing.T) map[string]any {
 			Data map[string]any `json:"data"`
 		}
 		if json.Unmarshal(raw, &env) == nil && env.Kind == "tokens" {
+			out = env.Data
+		}
+	}
+	return out
+}
+
+// lastHealth reports the newest health body the socket carried — a snapshot's
+// or a tick's, since both carry the whole envelope.
+func (c *capture) lastHealth(t *testing.T) map[string]any {
+	t.Helper()
+	var out map[string]any
+	for _, raw := range c.all() {
+		var env struct {
+			Kind string         `json:"kind"`
+			Data map[string]any `json:"data"`
+		}
+		if json.Unmarshal(raw, &env) != nil {
+			continue
+		}
+		switch env.Kind {
+		case "snapshot":
+			if health, ok := env.Data["health"].(map[string]any); ok {
+				out = health
+			}
+		case "health":
 			out = env.Data
 		}
 	}
@@ -460,6 +543,82 @@ func TestAGoldenCompanyRunsATurnOntoTheDashboard(t *testing.T) {
 		t.Errorf("the live call names model %q, not the one that served it", model)
 	}
 
+	// --- THE ENGINE'S OWN HEALTH, WHOLE ----------------------------------- //
+	// The push carries the envelope GET /health answers, so a screen reads
+	// the applied epoch, the posture and the fleet's size off the socket
+	// rather than polling for them. It carried three fields once, and every
+	// other fact on the body was a second request at a cadence of its own.
+	health := frames.lastHealth(t)
+	if health == nil {
+		t.Fatal("no health body reached the dashboard")
+	}
+	// PRESENT rather than positive: this harness seeds its company from a
+	// file, which is active before the control plane has minted an epoch,
+	// and the body says 0 for exactly that. What must never happen is the
+	// field missing, which is the push narrowed back to a few fields.
+	if _, present := health["applied_epoch"].(float64); !present {
+		t.Errorf("the pushed health carries no applied epoch: %v", health)
+	}
+	if health["configured"] != true {
+		t.Errorf("the pushed health says configured = %v on a configured node",
+			health["configured"])
+	}
+	if health["posture"] != "serve" {
+		t.Errorf("the pushed health's posture is %v, want serve", health["posture"])
+	}
+	if nodes, _ := health["nodes"].(float64); nodes != 1 {
+		t.Errorf("the pushed health counts %v nodes on a one-node company, want 1",
+			health["nodes"])
+	}
+	// THE ALARM COUNT THROUGH THE REAL RUNTIME, not a fake one. The API's
+	// own tests hand the envelope a runtime that states its alarms, which
+	// proves the body and nothing about whether the engine's evaluation
+	// reaches it. This company has never taken a backup, so the retention
+	// loop's first evaluation — which runs at boot, before any turn — has
+	// `backup_age` standing, and a count of zero or an absent field is the
+	// wiring between the two dropped.
+	alarms, _ := health["alarms"].(map[string]any)
+	if alarms == nil {
+		t.Errorf("the pushed health carries no alarm count on a node whose "+
+			"alarm table has been evaluated: %v", health)
+	} else if count, _ := alarms["count"].(float64); count < 1 {
+		t.Errorf("the pushed health counts %v alarms on a company that has "+
+			"never taken a backup, want backup_age among them", alarms["count"])
+	} else if worst, _ := alarms["worst"].(string); worst == "" {
+		t.Errorf("the pushed health counts %v alarms and names none of them "+
+			"worst: %v", count, alarms)
+	}
+	for _, floor := range []string{"event_history_seconds", "spend_history_seconds"} {
+		if seconds, _ := health[floor].(float64); seconds <= 0 {
+			t.Errorf("the pushed health's %s is %v", floor, health[floor])
+		}
+	}
+	// THE BOOT SEED'S COVERAGE THROUGH THE REAL ENGINE. The API's test seeds
+	// a LiveState by hand, which proves the field is rendered and nothing
+	// about whether `crewlet run`'s seed reaches it: absent here is the seed
+	// never running (a live screen booted empty) or its coverage dropped on
+	// the way to the envelope, and this node missing from it, or unanswered,
+	// is a seed that read its own store over the fan-out and failed.
+	self, _ := health["node"].(string)
+	seeded, _ := health["seeded_from"].(map[string]any)
+	if seeded == nil {
+		t.Errorf("the pushed health carries no seeded_from on a node whose live "+
+			"state was seeded at boot: %v", health)
+	} else {
+		answered := false
+		nodes, _ := seeded["nodes"].([]any)
+		for _, raw := range nodes {
+			node, _ := raw.(map[string]any)
+			if node["id"] == self && node["answered"] == true {
+				answered = true
+			}
+		}
+		if self == "" || !answered {
+			t.Errorf("the boot seed's coverage %v does not name this node (%q) as "+
+				"answered", seeded, self)
+		}
+	}
+
 	// --- and what the turn cost ---------------------------------------- //
 	rollup := frames.lastRollup(t)
 	if rollup == nil {
@@ -525,6 +684,94 @@ func TestAGoldenCompanyRunsATurnOntoTheDashboard(t *testing.T) {
 				rec["phase"], ms)
 		}
 	}
+
+	// --- and its timeline -------------------------------------------- //
+	// Every round the phase ran and every call it made carries its OWN
+	// start and duration, measured by the tool loop — the same survival
+	// question as the phase's duration above, for the figures a waterfall
+	// is drawn from. A round list shorter than rounds_used is a timeline
+	// with a hole in it, and a call with no start cannot be placed at all.
+	for _, rec := range records {
+		used, _ := rec["rounds_used"].(float64)
+		if used == 0 {
+			continue
+		}
+		rounds, _ := rec["rounds"].([]any)
+		if len(rounds) != int(used) {
+			t.Errorf("the %v phase ran %v rounds and timed %d", rec["phase"], used, len(rounds))
+		}
+		for _, raw := range rounds {
+			round, _ := raw.(map[string]any)
+			if at, _ := round["started_at"].(string); at == "" {
+				t.Errorf("a %v round carries no start: %v", rec["phase"], round)
+			}
+			if _, ok := round["duration_ms"].(float64); !ok {
+				t.Errorf("a %v round carries no duration: %v", rec["phase"], round)
+			}
+		}
+		if limit, _ := rec["max_rounds"].(float64); limit < used {
+			t.Errorf("the %v phase ran %v rounds under a stated cap of %v", rec["phase"], used, limit)
+		}
+		calls, _ := rec["tool_executions"].([]any)
+		for _, raw := range calls {
+			call, _ := raw.(map[string]any)
+			if at, _ := call["started_at"].(string); at == "" {
+				t.Errorf("the %v call %v carries no start", rec["phase"], call["name"])
+			}
+			if origin, _ := call["origin"].(string); origin == "" {
+				t.Errorf("the %v call %v names no origin", rec["phase"], call["name"])
+			}
+		}
+	}
+
+	// --- and what the prompt cache served ----------------------------- //
+	// The provider reports a cached prefix on every round, so every phase
+	// record carries cache counts — and the rollup is folded from TWO
+	// producers that must both carry them: the live projection (the
+	// `tokens` frame above) and the event store's promoted columns
+	// (schema/0032). Either one dropping them reads, on every screen, as a
+	// cache that never hit.
+	var cacheRead, cacheWrite float64
+	keys := map[string]bool{}
+	for _, rec := range records {
+		r, _ := rec["cache_read_tokens"].(float64)
+		w, _ := rec["cache_write_tokens"].(float64)
+		cacheRead += r
+		cacheWrite += w
+		if key, _ := rec["provider_key"].(string); key != "" {
+			keys[key] = true
+		}
+	}
+	if cacheRead <= 0 || cacheWrite <= 0 {
+		t.Fatalf("the phase records carry %v cached / %v written tokens; the "+
+			"provider reported both on every round", cacheRead, cacheWrite)
+	}
+	if got, _ := totals["cache_read_tokens"].(float64); got != cacheRead {
+		t.Errorf("the live rollup counts %v cached tokens, want the records' %v",
+			got, cacheRead)
+	}
+	if got, _ := totals["cache_write_tokens"].(float64); got != cacheWrite {
+		t.Errorf("the live rollup counts %v cache-written tokens, want the "+
+			"records' %v", got, cacheWrite)
+	}
+	stored, err := n.engine.Backends().Store.Events().PhaseTokens(t.Context(),
+		store.PhaseTokenQuery{SinceDays: 1}, time.Now())
+	if err != nil {
+		t.Fatalf("phase tokens: %v", err)
+	}
+	var storedRead, storedWrite int
+	for _, r := range stored {
+		storedRead += r.CacheReadTokens
+		storedWrite += r.CacheWriteTokens
+		if !keys[r.ProviderKey] {
+			t.Errorf("a stored phase names provider key %q; the records named %v",
+				r.ProviderKey, keys)
+		}
+	}
+	if float64(storedRead) != cacheRead || float64(storedWrite) != cacheWrite {
+		t.Errorf("the store holds %d cached / %d written tokens, want the "+
+			"records' %v / %v", storedRead, storedWrite, cacheRead, cacheWrite)
+	}
 }
 
 // --- the client's half ----------------------------------------------------- //
@@ -537,6 +784,112 @@ const (
 	dashboardEnv  = "CREWLET_DASHBOARD_ROOT"
 	replayTimeout = 60 * time.Second
 )
+
+// actCapture is one `/operator/act` exchange as the replay receives it: the
+// tool and arguments the dashboard would send, the operation key it would send
+// them under in the `Idempotency-Key` header, and the engine's answer, status
+// and body byte for byte.
+type actCapture struct {
+	Tool   string         `json:"tool"`
+	Args   map[string]any `json:"args"`
+	OpID   string         `json:"op_id"`
+	Status int            `json:"status"`
+	Body   string         `json:"body"`
+}
+
+// captureAct makes one real write as a person signed in to the identity
+// estate, through the route the dashboard writes through, and returns the
+// exchange for the replay.
+//
+// AS THE PERSON THE SESSION RESOLVES TO, and nothing else: the browser holds
+// the cookie a password sign-in minted, presents the deployment's Origin, and
+// sends its own operation key — exactly what the dashboard's `act` sends. No
+// seat is bound to a credential in the company document; the person is bound
+// to their seat in the identity directory, which is what makes the write
+// theirs.
+//
+// THE SERVER'S HALF OF THE SESSION FLOOR, held here before the client reads
+// it: the answer names a position in the grammar a read accepts back, and a
+// read of the person's own state AT that position is served at `session` and
+// already holds the write. A position the engine then refused as
+// `min_position`, or one it served from before the write landed, is a floor
+// the dashboard would wait on for ever or wait on for nothing — and nothing
+// else in the tree holds the answer and the read to one another.
+//
+// A PIN, because it wakes nobody: the capture has already ended, and a write
+// that routed a notice would start a turn the test then tears down under.
+func captureAct(t *testing.T, n *node, b *browser) []byte {
+	t.Helper()
+	// WHO THE SESSION IS, and that the node offers them the write: the
+	// viewer names the act transport's verbs from the same surface that
+	// serves it.
+	status, viewer := b.send(n, http.MethodGet, "/viewer", nil)
+	handle, _ := viewer["handle"].(string)
+	acts, _ := viewer["acts"].([]any)
+	if status != http.StatusOK || handle != janeSeat {
+		t.Fatalf("the session reads as %d %v, want %s at seat %s", status, viewer,
+			janeLogin, janeSeat)
+	}
+	exchange := actCapture{
+		Tool: "set_pins",
+		Args: map[string]any{"favorites": map[string]any{
+			"add": []any{map[string]any{"kind": "project", "id": "ENG"}},
+		}},
+		// A UUIDv7, which is what the dashboard's `act` mints: the key
+		// carries the instant its operation began, which is what a node
+		// judges a retry by.
+		OpID: uuid.Must(uuid.NewV7()).String(),
+	}
+	if !slices.Contains(acts, any(exchange.Tool)) {
+		t.Fatalf("the viewer does not offer %s to %s (acts %v)", exchange.Tool,
+			janeLogin, acts)
+	}
+
+	var raw []byte
+	exchange.Status, raw = b.sendRaw(n, http.MethodPost, "/operator/act/"+exchange.Tool,
+		exchange.OpID, map[string]any{"args": exchange.Args})
+	exchange.Body = string(raw)
+	var answer struct {
+		Outcome  string `json:"outcome"`
+		Position string `json:"position"`
+	}
+	if exchange.Status != http.StatusOK || json.Unmarshal(raw, &answer) != nil {
+		t.Fatalf("%s's %s was not answered: %d %s", janeLogin, exchange.Tool,
+			exchange.Status, raw)
+	}
+	if answer.Outcome != "applied" && answer.Outcome != "pending" {
+		t.Fatalf("%s's %s came to %q, want applied or pending: %s", janeLogin,
+			exchange.Tool, answer.Outcome, raw)
+	}
+	if _, err := tracker.ParseLogPosition(answer.Position); err != nil {
+		t.Fatalf("the act answer's position is not one a read accepts back: %v", err)
+	}
+
+	// THE READ AT THE FLOOR: served at `session`, and holding the write.
+	query := url.Values{"read_level": {"session"}, "min_position": {answer.Position}}
+	status, raw = b.sendRaw(n, http.MethodGet,
+		"/work/people/"+url.PathEscape(handle)+"?"+query.Encode(), "", nil)
+	var person struct {
+		Level     string             `json:"read_level"`
+		Favorites []tracker.Favorite `json:"favorites"`
+	}
+	if status != http.StatusOK || json.Unmarshal(raw, &person) != nil {
+		t.Fatalf("a read at the act's floor was not served: %d %s", status, raw)
+	}
+	if person.Level != "session" {
+		t.Errorf("a read at the act's floor was served at %q, want session", person.Level)
+	}
+	if !slices.Contains(person.Favorites, tracker.Favorite{Kind: "project", ID: "ENG"}) {
+		t.Errorf("a read at the act's floor does not hold the write: favorites %v",
+			person.Favorites)
+	}
+
+	out, err := json.Marshal(exchange)
+	if err != nil {
+		t.Fatalf("encoding the act capture: %v", err)
+	}
+	return out
+}
 
 func TestTheDashboardClientCanReadWhatThisServerSends(t *testing.T) {
 	// THE OTHER HALF OF THE GATE. The test above asserts the frames say the
@@ -555,10 +908,42 @@ func TestTheDashboardClientCanReadWhatThisServerSends(t *testing.T) {
 	// The client is the compatibility reference and wins any disagreement
 	// — so a failure here is the SERVER's.
 	node := nodeBinary(t)
-	n := start(t)
+	// A CEILING the company's turn cannot reach, so the capture carries the
+	// live token meters as well: the `budget` push is a frame the client
+	// folds like any other, and one only a capped company is sent.
+	//
+	// AND A SECOND SEAT WHOSE OWN DAY IS SMALLER THAN ONE MODEL CALL, so the
+	// capture carries a window the gate has actually REFUSED. A meter that is
+	// only ever `ok` proves the happy half of the frame and nothing about
+	// `refused_at` — the field that was once dropped on its way from the
+	// counter to the push, which left every "refusing charges" row the
+	// dashboard draws unreachable. The refusal is the engine's own, made by
+	// the gate a real turn charges through; the seat is its own scope, so
+	// the company's turn beside it is charged against nothing it spent.
+	//
+	// Both ceilings are written where an operator writes them — the
+	// company's through `/config`, the seat's through its org chart runtime
+	// half — in the `{day: N}` form, before the socket opens.
+	//
+	// AND A PERSON WHO CAN WRITE: a password sign-in on this node, bound to
+	// the founder's seat by the invitation that enrolled her, so the capture
+	// can end with a real `/operator/act` answer — the one the dashboard's
+	// session floor is raised from.
+	n := startBooted(t, func(doc string) string {
+		return strings.Replace(doc, "roles:\n", "roles:\n"+
+			"  - name: CFO\n"+
+			"    handle: cfo\n"+
+			"    llm: scripted\n", 1)
+	}, withSignIn)
+	waitFor(t, "the native backends to hydrate", n.engine.StateLogHydrated)
+	setCompanyCeilings(t, n, map[period.Period]int{period.Day: 100_000_000})
+	setSeatCeilings(t, n, "cfo", map[period.Period]int{period.Day: 100})
+	jane := newBrowser(t)
+	signIn(t, n, jane)
 
-	waitFor(t, "the seat to be claimed", func() bool {
-		return slices.Contains(n.engine.Node().Host().Held(), "ceo")
+	waitFor(t, "the seats to be claimed", func() bool {
+		held := n.engine.Node().Host().Held()
+		return slices.Contains(held, "ceo") && slices.Contains(held, "cfo")
 	})
 	conn := n.dial(t)
 	frames := &capture{}
@@ -569,11 +954,112 @@ func TestTheDashboardClientCanReadWhatThisServerSends(t *testing.T) {
 		return slices.Contains(frames.kinds(t), "snapshot")
 	})
 
-	n.wake(t, "ceo", "How did the week go?")
-	waitFor(t, "the turn to complete", func() bool {
-		return slices.Contains(frames.eventTypes(t), "agent_turn_completed")
+	// THE REFUSAL FIRST, and settled on the counter's own stamp, so the
+	// budget push waited for below is one published after it.
+	n.wake(t, "cfo", "What did we spend this week?")
+	budgets := n.engine.Backends().Fleet
+	cfoID := seatAgentID(t, n, "cfo")
+	waitFor(t, "the seat's own ceiling to refuse a charge", func() bool {
+		got, err := budgets.Used(t.Context(), coord.AgentScope(cfoID),
+			coord.WindowsAt(time.Now(), time.UTC))
+		return err == nil && !got.In(period.Day).RefusedAt.IsZero()
+	})
+
+	// THE COMPANY'S TURN IS ON A WORK ITEM, woken the way a task wakes its
+	// assignee: filed to the tracker, applied, and routed by the change feed
+	// to the seat it names. A chat wake names no item, so every
+	// `live_call.work_item` this capture held was null and the client's
+	// reading of the field went untested — the one field every task page,
+	// turn row and live row now keys its link on.
+	task := newTask("ENG", "Summarise how the week went")
+	task.Assignee = "ceo"
+	// WITH ITS WAKE, built the way every create surface builds one: a
+	// record carrying no notification is a change nobody asked to hear about.
+	wake := tracker.Wake{Kind: tracker.ChangeCreated, After: task}.Notify(nil)
+	filed, err := operator(t, n).CreateTask(t.Context(), "e2e-replay-item", task, wake)
+	if err != nil {
+		t.Fatalf("file the task that wakes the seat: %v", err)
+	}
+	// BOTH TURNS, the refused seat's and the company's — counted rather than
+	// matched on the item, so a live call that stopped naming it fails the
+	// assertion below by name instead of timing this wait out.
+	waitFor(t, "both seats' turns to complete", func() bool {
+		ended := 0
+		for _, kind := range frames.eventTypes(t) {
+			if kind == "agent_turn_completed" {
+				ended++
+			}
+		}
+		return ended >= 2
+	}, func() string {
+		var items []any
+		for _, call := range frames.liveCalls(t) {
+			items = append(items, call["work_item"])
+		}
+		return fmt.Sprintf("events %v; live calls' items %v; filed %s (%s); model saw %v",
+			frames.eventTypes(t), items, filed.Key, filed.Outcome, n.model.seen())
+	})
+	// The meters are published on engine.BudgetReportInterval, so one
+	// carrying the refusal lands within an interval of it at the latest.
+	waitFor(t, "a budget push carrying the refusal", func() bool {
+		return frames.sawRefusal(t, cfoID)
 	})
 	cancel()
+
+	// --- what the frames say, before the client reads them ------------- //
+	// The server's half of each field the replay then holds the client to,
+	// so a red replay can be told apart from a server that never sent it.
+	calls := frames.liveCalls(t)
+	var onItem, capped int
+	for _, call := range calls {
+		if item, _ := call["work_item"].(map[string]any); item != nil {
+			onItem++
+			// READ AS A STRING, like the other two: a missing key decodes
+			// to nil, which is not "" and would pass an equality test.
+			id, _ := item["id"].(string)
+			if item["key"] != filed.Key || item["project"] != "ENG" || id == "" {
+				t.Errorf("a live call names work item %v, want %s in ENG", item, filed.Key)
+			}
+		}
+		if limit, _ := call["max_rounds"].(float64); limit > 0 {
+			capped++
+		}
+	}
+	if onItem == 0 {
+		t.Errorf("no live call named the work item %s its turn was woken for", filed.Key)
+	}
+	if capped == 0 {
+		t.Error("no live call stated its round cap, so no running phase can say " +
+			"how far through it is")
+	}
+	stages := frames.turnStages(t)
+	if !slices.Contains(stages, "phase") {
+		t.Errorf("no agents push put a seat's turn in the `phase` stage; saw %v", stages)
+	}
+	for _, stage := range stages {
+		if !slices.Contains([]string{"context", "phase", "parked"}, stage) {
+			t.Errorf("a turn's stage %q is not one the engine defines", stage)
+		}
+	}
+
+	// THE FLEET AND ITS ALARMS, the server's half of what the replay holds
+	// the health card to: a live node counted, and a standing alarm with its
+	// worst severity — the company has never taken a backup.
+	health := frames.lastHealth(t)
+	if nodes, _ := health["nodes"].(float64); nodes < 1 {
+		t.Errorf("the last health push counts %v live nodes, want at least this one",
+			health["nodes"])
+	}
+	alarms, _ := health["alarms"].(map[string]any)
+	count, _ := alarms["count"].(float64)
+	worst, _ := alarms["worst"].(string)
+	if count < 1 || worst == "" {
+		t.Errorf("the last health push carries no standing alarm with a worst "+
+			"severity (%v) on a company that has never taken a backup", alarms)
+	}
+
+	// --- a write, and the floor it raises ------------------------------- //
+	answer := captureAct(t, n, jane)
 
 	// The RAW bytes, as strings, in arrival order. Not re-encoded: the
 	// client must be fed what the server wrote, or the replay certifies
@@ -598,7 +1084,11 @@ func TestTheDashboardClientCanReadWhatThisServerSends(t *testing.T) {
 
 	runCtx, runCancel := context.WithTimeout(t.Context(), replayTimeout)
 	defer runCancel()
-	cmd := exec.CommandContext(runCtx, node, script, path)
+	actPath := filepath.Join(t.TempDir(), "act.json")
+	if err := os.WriteFile(actPath, answer, 0o600); err != nil {
+		t.Fatalf("writing the act answer: %v", err)
+	}
+	cmd := exec.CommandContext(runCtx, node, script, path, actPath)
 	cmd.Env = append(os.Environ(), dashboardEnv+"="+tree)
 	out, err := cmd.CombinedOutput()
 	if runCtx.Err() != nil {
@@ -613,10 +1103,13 @@ func TestTheDashboardClientCanReadWhatThisServerSends(t *testing.T) {
 
 // nodeBinary finds node, or explains its absence the right way for the run.
 //
-// Locally a missing node skips: the dashboard's half is somebody else's
-// problem and the rest of the gate still runs. In CI it is a red build — this
-// is the only place the two halves of the wire protocol are checked against
-// each other, so letting it go quiet retires the check behind a green tick.
+// In CI it is a red build — this is the only place the two halves of the wire
+// protocol are checked against each other, so letting it go quiet retires the
+// check behind a green tick. Elsewhere a missing node skips, and that skip is
+// deliberately NOT declared in `internal/skipgate/allowed.go`: `make test-solo`
+// refuses to start without node (`require-node`), and a run that got past it
+// anyway fails on the undeclared skip rather than reporting a pass. Only a
+// bare `go test ./internal/e2e/` — the fast loop, not a gate — skips quietly.
 func nodeBinary(t *testing.T) string {
 	t.Helper()
 	node, err := exec.LookPath("node")
@@ -712,49 +1205,96 @@ func TestAToolActsForTheSeatThatCalledIt(t *testing.T) {
 func TestATightBudgetRefusesTheTurnRatherThanSpendingPastIt(t *testing.T) {
 	t.Parallel()
 	// THE SEAM WAS NEVER SUPPLIED. runner.Config.Budget existed and every
-	// turn passed nil, so a company with `token_budget: 100000` spent
+	// turn passed nil, so a company with a `token_budget:` ceiling spent
 	// without limit and the number in its config was decoration. Money
 	// leaves the building for every token, so this is the one counter that
 	// fails CLOSED — a charge that cannot be made stops the round rather
 	// than silently un-capping the company.
-	n := startWith(t, func(doc string) string {
-		return doc + "\ntoken_budget: 200\n"
-	})
+	//
+	// THE CAP leaves room for the turn-start prefetch's knowledge query and
+	// ONE round of the turn's own loop, and not for a second — so the cap
+	// bites partway through the turn rather than before it starts, which is
+	// the case a pre-flight check would miss.
+	//
+	// THE CEILING IS WRITTEN WHERE AN OPERATOR WRITES IT, through `/config`
+	// once the node is running, and the case waits for the node to apply it
+	// before it wakes the seat: a ceiling seeded from the company file would
+	// prove the boot and nothing about a running gate picking up a cap moved
+	// under it.
+	aux, round := textReplyUsage.tokens(), toolUseUsage.tokens()
+	limit := aux + round + round/2
+	n := start(t)
+	setCompanyCeilings(t, n, map[period.Period]int{period.Day: limit})
 	waitFor(t, "the seat to be claimed", func() bool {
 		return slices.Contains(n.engine.Node().Host().Held(), "ceo")
 	})
 	n.wake(t, "ceo", "How did the week go?")
 
-	// The scripted model reports 150 tokens on its first call and 130 on
-	// the next, so the cap bites partway through the turn rather than
-	// before it starts — which is the case a pre-flight check would miss.
-	//
 	// SETTLED ON THE REFUSAL, which the gate records on the scope that
 	// made it. The second charge is attempted only after the first has
 	// returned, so once the company has refused one both counters are
 	// final. Waiting on the org's counter alone read it between the
 	// org's write and the seat's (a charge is two writes, org first), and
 	// failed a correct engine on a loaded machine with the seat at 0.
+	//
+	// Read against the company's day, which is UTC for a company that names
+	// no clock: the day the cap is written for.
 	budgets := n.engine.Backends().Fleet
+	today := func() coord.Windows { return coord.WindowsAt(time.Now(), time.UTC) }
 	waitFor(t, "the company cap to refuse a charge", func() bool {
-		rows, err := budgets.Usage(t.Context())
+		rows, err := budgets.Usage(t.Context(), today())
 		if err != nil {
 			return false
 		}
 		for _, row := range rows {
 			if row.Scope == coord.OrgScope {
-				return !row.RefusedAt.IsZero()
+				return !row.In(period.Day).RefusedAt.IsZero()
 			}
 		}
 		return false
 	})
 
-	used, err := budgets.Used(t.Context(), coord.OrgScope)
+	orgToday, err := budgets.Used(t.Context(), coord.OrgScope, today())
 	if err != nil {
 		t.Fatalf("used: %v", err)
 	}
-	if used > 200 {
-		t.Errorf("the company spent %d against a cap of 200", used)
+	used := orgToday.In(period.Day).Used
+	// THE CAP GOVERNS WHAT THE LOOP ADMITS, and only that. The counter also
+	// holds every AUXILIARY completion — the prefetch's knowledge query
+	// here, a reflection pass after a turn — and those are RECORDED whole
+	// after they return, past the ceiling included, because their size is
+	// known only from the answer and no refusal can un-spend them
+	// (coord.Budgets.PostCharge). So `used <= limit` is not the engine's
+	// promise, and it failed a correct engine the moment the prefetch was
+	// charged. The promise is that no charge the loop's gate ADMITTED took
+	// the company past its cap: what was recorded before the loop began
+	// counts against the room its rounds had, and only what was recorded
+	// after the loop's first call can stand above the cap.
+	//
+	// Ordered by what the model ANSWERED, read after the counter: the turn
+	// is sequential, so a completion answered before the loop's first call
+	// was recorded before any of its rounds, and an auxiliary call answered
+	// after it but not yet recorded only makes the bound looser, never one
+	// a correct engine fails.
+	calls := n.model.seen()
+	loopBegan, auxAfter := false, 0
+	for _, call := range calls {
+		switch {
+		case !strings.HasPrefix(call, "aux:"):
+			loopBegan = true
+		case loopBegan:
+			auxAfter++
+		}
+	}
+	if !loopBegan {
+		t.Fatalf("the cap refused a charge but the model answered no round of "+
+			"the turn's own loop: %v", calls)
+	}
+	if atLastAdmit := used - auxAfter*aux; atLastAdmit > limit {
+		t.Errorf("the turn loop admitted charges up to %d against a cap of %d a "+
+			"day (the counter reads %d, %d of it recorded by auxiliary calls "+
+			"after the loop began); model calls %v",
+			atLastAdmit, limit, used, auxAfter*aux, calls)
 	}
 	// And the SEAT's counter moved with it: one charge, both scopes.
 	//
@@ -770,19 +1310,28 @@ func TestATightBudgetRefusesTheTurnRatherThanSpendingPastIt(t *testing.T) {
 	// claim, and CI caught it: `seat spent 0 and the org 150`. The
 	// invariant is that the two agree once the charge is through, which is
 	// what this now says.
+	//
+	// BOTH READ ON EVERY POLL rather than the seat against the org figure
+	// read above: an auxiliary pass after the turn — a reflection — is
+	// recorded on both scopes too, and a seat chasing a frozen org figure
+	// would overshoot it and never catch it.
 	company := n.engine.Company()
 	id, _ := company.Org.AgentIDFor(company.Org.AgentSeatByHandle("ceo"))
-	var seatUsed int
+	var seatUsed, orgUsed int
 	waitFor(t, "the seat's counter to catch the org's", func() bool {
-		got, err := budgets.Used(t.Context(), coord.AgentScope(id.String()))
+		orgNow, err := budgets.Used(t.Context(), coord.OrgScope, today())
 		if err != nil {
 			return false
 		}
-		seatUsed = got
-		return got == used
+		got, err := budgets.Used(t.Context(), coord.AgentScope(id.String()), today())
+		if err != nil {
+			return false
+		}
+		orgUsed, seatUsed = orgNow.In(period.Day).Used, got.In(period.Day).Used
+		return seatUsed == orgUsed
 	}, func() string {
 		return fmt.Sprintf("seat spent %d and the org %d; one charge must "+
-			"move both", seatUsed, used)
+			"move both", seatUsed, orgUsed)
 	})
 }
 

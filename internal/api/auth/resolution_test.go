@@ -41,7 +41,7 @@ func TestNoCallSiteDiscardsTheUnknownArm(t *testing.T) {
 	// covering a package somebody moved, and the point of this gate is
 	// that it cannot stop covering anything quietly.
 	roots := []string{
-		"..", "../auth", "../chartapi", "../configapi", "../opsmcp",
+		"..", "../auth", "../chartapi", "../configapi", "../operator",
 		"../queries", "../secretsapi", "../setupapi", "../stream",
 		"../../e2e",
 	}

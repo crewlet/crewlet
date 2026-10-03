@@ -1,5 +1,6 @@
 /**
- * A FILTER IS A CHIP; AN ARRANGEMENT IS A MENU — walked over every key.
+ * A FILTER IS A CHIP; AN ARRANGEMENT IS A CONTROL THAT SAYS WHAT IT IS SET
+ * TO — walked over every key.
  *
  * The design states the rule once and `lib/work.ts` declares where each key
  * lives ([URL_HOMES]). This is the gate that holds the two against the SCREEN:
@@ -33,6 +34,7 @@ import { ItemsView } from "../ItemsView.tsx";
 import SOURCE from "../ItemsView.tsx?raw";
 import { colsParam, columnChoices, GRID_SHAPES } from "../shapes/Grid.tsx";
 import { Router } from "~/app/router.tsx";
+import { ViewerProvider } from "~/lib/viewer.ts";
 import { pick } from "~/testing.tsx";
 import { useClient, useConnection, useOrg } from "~/lib/store-hooks.ts";
 import { filterChips, NO_FILTERS, URL_HOMES, type TrackerFilters } from "~/lib/work.ts";
@@ -41,7 +43,15 @@ import type { QueryName, WorkSummary } from "~/protocol/index.ts";
 vi.mock("~/lib/store-hooks.ts", async () => {
   const actual =
     await vi.importActual<typeof import("~/lib/store-hooks.ts")>("~/lib/store-hooks.ts");
-  return { ...actual, useClient: vi.fn(), useConnection: vi.fn(), useOrg: vi.fn() };
+  // THE AGENTS PUSH, which the list reads for the turn running on each card:
+  // no seat is working in these cases, so the push is empty.
+  return {
+    ...actual,
+    useClient: vi.fn(),
+    useConnection: vi.fn(),
+    useOrg: vi.fn(),
+    useAgents: () => [],
+  };
 });
 
 afterEach(() => {
@@ -58,11 +68,13 @@ afterEach(() => {
  * Every URL key this screen reads or writes.
  *
  * `useParam` IS THE WHOLE GRAMMAR of it — a key nothing reads is a key nothing
- * can act on — plus the one family read off the whole query rather than one
- * key at a time, because the set of a company's own fields is the company's
- * and there is no key for a build to ask for. Both spellings of the column key
- * arrive through [colsParam], so they are recognised in that form rather than
- * as literals the screen does not contain.
+ * can act on — plus what is read off the whole query rather than one key at a
+ * time: the family of a company's own fields, because that set is the
+ * company's and there is no key for a build to ask for, and the column
+ * narrowing (`group`), because it is THREE-VALUED and `useParam` cannot say so
+ * (an absent key and a present empty one are different columns). Both
+ * spellings of the column key arrive through [colsParam], so they are
+ * recognised in that form rather than as literals the screen does not contain.
  */
 function screenKeys(): string[] {
   const out = new Set<string>();
@@ -74,6 +86,9 @@ function screenKeys(): string[] {
   }
   for (const [, prefix] of SOURCE.matchAll(/key\.startsWith\("([^"]+)"\)/g)) {
     if (prefix) out.add(prefix);
+  }
+  for (const [, key] of SOURCE.matchAll(/route\.query\.(?:has|get)\("([^"]+)"\)/g)) {
+    if (key) out.add(key);
   }
   return [...out];
 }
@@ -163,13 +178,13 @@ test("the filters with no chip are the segment and the arrangement", () => {
   // THE ADDRESS SPELLS TWO OF THEM DIFFERENTLY, which is why [URL_HOMES] is
   // keyed on the URL and this is the one place the two namings meet.
   expect(URL_HOMES.scope).toBe("bar");
-  expect(URL_HOMES.group_by).toBe("menu");
-  expect(URL_HOMES.group_by2).toBe("menu");
-  expect(URL_HOMES.sort).toBe("menu");
+  expect(URL_HOMES.group_by).toBe("arrangement");
+  expect(URL_HOMES.group_by2).toBe("arrangement");
+  expect(URL_HOMES.sort).toBe("arrangement");
 });
 
 // ---------------------------------------------------------------------------
-// The menu half, on the screen
+// The arrangement half, on the screen
 // ---------------------------------------------------------------------------
 
 /** One socket answering each question with a fixture. */
@@ -199,8 +214,10 @@ const task: WorkSummary = {
 const rows = { work_items: { items: [task], groups: [], total_hint: 1, complete: true } };
 
 /**
- * The list. A case lets the stubbed socket's answers land, and renders what
- * they leave, with [answered].
+ * The list, UNDER A VIEWER as the frame mounts every screen: a board card's
+ * drag and a row's inline status are writes, and they ask who is reading. A
+ * case lets the stubbed socket's answers land, and renders what they leave,
+ * with [answered].
  *
  * NOT A POLL. A `findBy` or a `waitFor` re-ran its query on every change to
  * the page and every fifty milliseconds against a one-second deadline, each
@@ -214,12 +231,24 @@ const rows = { work_items: { items: [task], groups: [], total_hint: 1, complete:
 function mountList(): void {
   render(
     <Router>
-      <ItemsView />
+      <ViewerProvider>
+        <ItemsView />
+      </ViewerProvider>
     </Router>,
   );
 }
 
-/** The list's own bar, where the Display menu's trigger is drawn. */
+/**
+ * The list's first row — what is drawn: the shape tabs and the Display menu's
+ * trigger.
+ */
+function shapeRow(): HTMLElement {
+  const row = document.querySelector<HTMLElement>(".work-tabs");
+  if (!row) throw new Error("the list draws no shape row");
+  return row;
+}
+
+/** The list's own bar — what cuts the answer: the filters, the scope and the arrangement. */
 function workBar(): HTMLElement {
   const bar = document.querySelector<HTMLElement>(".work-bar");
   if (!bar) throw new Error("the list draws no bar");
@@ -234,19 +263,20 @@ function workBar(): HTMLElement {
  * is not on the grid at all — where the toolbar these cases are about is drawn
  * whatever the answer holds.
  */
-async function listAt(hash: string): Promise<void> {
+async function listAt(
+  hash: string,
+  answers: Partial<Record<QueryName, unknown>> = rows,
+): Promise<void> {
   location.hash = hash;
-  serving(rows);
+  serving(answers);
   mountList();
   await answered();
   expect(workBar()).toBeTruthy();
 }
 
-/** The Display menu, opened from the list's own bar. */
+/** The Display menu, opened from the list's own first row. */
 async function openDisplay() {
-  fireEvent.click(
-    within(workBar()).getByRole("button", { name: /^(List|Board|Table|Calendar|Timeline)/ }),
-  );
+  fireEvent.click(within(shapeRow()).getByRole("button", { name: "Display" }));
   await answered();
 }
 
@@ -258,29 +288,35 @@ function optionalColumn(): string {
 }
 
 /**
- * How each menu-owned key is written, and what the address should then carry.
+ * How each arrangement key is written, and what the address should then carry.
  *
- * ONE ENTRY PER MENU KEY, held against [URL_HOMES] below in both directions:
- * a key that gains the Display menu as its home and has no way of being
+ * ONE ENTRY PER ARRANGEMENT KEY, held against [URL_HOMES] below in both
+ * directions: a key that gains an arrangement home and has no way of being
  * pressed here fails, rather than being claimed by a control nobody drove.
  */
-const MENU: Record<string, { at: string; press: () => Promise<void>; writes: string }> = {
+const ARRANGEMENT: Record<
+  string,
+  {
+    at: string;
+    answers?: Partial<Record<QueryName, unknown>>;
+    press: () => Promise<void>;
+    writes: string;
+  }
+> = {
   shape: {
     at: "#/work",
+    // THE FIRST ROW'S OWN TABS, never the Display menu: the shape is the one
+    // arrangement a team switches all day.
     press: async () => {
-      await openDisplay();
-      const board = [...document.querySelectorAll<HTMLElement>(".work-display-shape")].find(
-        (el) => el.textContent === "Board",
-      );
-      fireEvent.click(board as HTMLElement);
+      const shapes = within(shapeRow()).getByRole("group", { name: "Draw as" });
+      fireEvent.click(within(shapes).getByRole("button", { name: "Board" }));
     },
     writes: "shape=board",
   },
   group_by: {
     at: "#/work",
     press: async () => {
-      await openDisplay();
-      pick(screen.getByRole("combobox", { name: "Group by" }), "Assignee");
+      pick(within(workBar()).getByRole("combobox", { name: "Group by" }), "Assignee");
     },
     writes: "group_by=assignee",
   },
@@ -297,8 +333,7 @@ const MENU: Record<string, { at: string; press: () => Promise<void>; writes: str
   sort: {
     at: "#/work",
     press: async () => {
-      await openDisplay();
-      pick(screen.getByRole("combobox", { name: "Order by" }), "Recently updated");
+      pick(within(workBar()).getByRole("combobox", { name: "Sort" }), "Recently updated");
     },
     writes: "sort=-updated",
   },
@@ -311,28 +346,55 @@ const MENU: Record<string, { at: string; press: () => Promise<void>; writes: str
     // THE ACTIVE SHAPE'S OWN KEY, which is the family's whole point.
     writes: `${colsParam("list")}=`,
   },
+  hide: {
+    // A LANE'S OWN ⋯ MENU puts it away; the Display menu brings it back.
+    at: "#/work?shape=board",
+    answers: {
+      work_items: {
+        items: [],
+        groups: [{ key: "todo", count: 1, rows: [task] }],
+        total_hint: 1,
+        complete: true,
+      },
+    },
+    press: async () => {
+      fireEvent.click(screen.getByRole("button", { name: "To do lane options" }));
+      await answered();
+      fireEvent.click(screen.getByRole("menuitem", { name: "Hide this lane" }));
+    },
+    writes: "hide=todo",
+  },
+  card_hide: {
+    // THE BOARD'S DISPLAY MENU, which is where a card's facts are chosen.
+    at: "#/work?shape=board",
+    press: async () => {
+      await openDisplay();
+      fireEvent.click(screen.getByLabelText("Labels"));
+    },
+    writes: "card_hide=labels",
+  },
 };
 
-const MENU_HOMED = Object.entries(URL_HOMES)
-  .filter(([, home]) => home === "menu")
+const ARRANGEMENT_HOMED = Object.entries(URL_HOMES)
+  .filter(([, home]) => home === "arrangement")
   .map(([key]) => key);
 
-test("every key homed in the Display menu is one this suite presses", () => {
-  expect(Object.keys(MENU).sort()).toEqual([...MENU_HOMED].sort());
+test("every arrangement key is one this suite presses", () => {
+  expect(Object.keys(ARRANGEMENT).sort()).toEqual([...ARRANGEMENT_HOMED].sort());
 });
 
 // ONE CASE PER KEY, not one case pressing them all. Each press is a whole list
-// screen mounted and a menu opened — 100 to 380 ms a key, measured — and the
-// single case that pressed all five took 1.1 s alone and ran past the
-// five-second budget whenever the suite shared its cores: a budget that holds
-// one screen was being spent on every key the grammar homes there. Apart, each
-// case is one screen, and a key the menu stopped writing names itself.
-test.each(MENU_HOMED)("the Display menu writes %s", async (key) => {
-  const entry = MENU[key] as (typeof MENU)[string];
-  await listAt(entry.at);
+// screen mounted and a control driven — 100 to 380 ms a key, measured — and a
+// single case pressing every key ran past the five-second budget whenever the
+// suite shared its cores: a budget that holds one screen was being spent on
+// every key the grammar homes there. Apart, each case is one screen, and a key
+// whose control stopped writing it names itself.
+test.each(ARRANGEMENT_HOMED)("its arrangement control writes %s", async (key) => {
+  const entry = ARRANGEMENT[key] as (typeof ARRANGEMENT)[string];
+  await listAt(entry.at, entry.answers);
   await entry.press();
   await answered();
-  expect(location.hash, `${key} was not written by the Display menu`).toContain(entry.writes);
+  expect(location.hash, `${key} was not written by its control`).toContain(entry.writes);
   // AND NO CHIP SAYS SO, because an arrangement narrows nothing: a chip for
   // one would offer to remove a drawing.
   const chips = document.querySelector(".work-chips")?.textContent ?? "";
@@ -347,7 +409,7 @@ test("the column family covers every grid shape and nothing else", () => {
   for (const shape of GRID_SHAPES) {
     expect(family(colsParam(shape))).toBe("cols.");
   }
-  expect(URL_HOMES["cols."]).toBe("menu");
+  expect(URL_HOMES["cols."]).toBe("arrangement");
 });
 
 // ---------------------------------------------------------------------------
@@ -355,10 +417,12 @@ test("the column family covers every grid shape and nothing else", () => {
 // ---------------------------------------------------------------------------
 
 // THE EXCEPTIONS ARE A CLOSED SET, and it is the one the design names. A
-// fourth added quietly is how "a filter is a chip and an arrangement is a
-// menu" stops being true while every case above still passes.
-test("exactly three keys are neither a chip nor a menu", () => {
-  const others = Object.entries(URL_HOMES).filter(([, home]) => home !== "chip" && home !== "menu");
+// fourth added quietly is how "a filter is a chip and an arrangement says what
+// it is set to" stops being true while every case above still passes.
+test("exactly three keys are neither a chip nor an arrangement", () => {
+  const others = Object.entries(URL_HOMES).filter(
+    ([, home]) => home !== "chip" && home !== "arrangement",
+  );
   expect(others).toEqual([
     ["scope", "bar"],
     ["view", "strip"],
@@ -372,11 +436,11 @@ test("exactly three keys are neither a chip nor a menu", () => {
 // work is on screen at all.
 test("the scope is the bar's own switch, with no chip and no row in the Filter menu", async () => {
   await listAt("#/work");
-  fireEvent.click(screen.getByText("Closed"));
+  pick(screen.getByRole("combobox", { name: "Which work" }), /^Closed/);
   await answered();
   expect(location.hash).toContain("scope=closed");
   // NO CHIP FOR IT, on a list where it is the only thing that moved.
-  expect(document.querySelector(".work-chips")).toBeNull();
+  expect(document.querySelector(".work-chip-field")).toBeNull();
   // AND NO SECOND CONTROL FOR IT in the menu that owns the narrowings.
   fireEvent.click(within(workBar()).getByRole("button", { name: "Filter" }));
   await answered();
@@ -384,7 +448,7 @@ test("the scope is the bar's own switch, with no chip and no row in the Filter m
   expect(screen.queryByText("scope=")).toBeNull();
 });
 
-// A SAVED VIEW IS A TAB IN THE STRIP: it is a query somebody arranged and put
+// A SAVED VIEW IS A TAB IN THE STRIP — a pressed button, pinned by this reader: it is a query somebody arranged and put
 // somewhere, which is neither a narrowing the reader added nor a way of
 // drawing one.
 test("the saved view is a tab rather than a chip or a menu row", async () => {
@@ -400,6 +464,7 @@ test("the saved view is a tab rather than a chip or a menu row", async () => {
           type: "list",
           container: { kind: "workspace", id: "" },
           builtin: false,
+          pinned: true,
           params: {},
         },
       ],
@@ -408,10 +473,10 @@ test("the saved view is a tab rather than a chip or a menu row", async () => {
   });
   mountList();
   await answered();
-  fireEvent.click(screen.getByRole("tab", { name: "Arranged" }));
+  fireEvent.click(screen.getByRole("button", { name: "Arranged" }));
   await answered();
   expect(location.hash).toContain("view=arranged");
-  expect(document.querySelector(".work-chips")).toBeNull();
+  expect(document.querySelector(".work-chip-field")).toBeNull();
 });
 
 // AND THE CALENDAR'S WINDOW IS THAT SHAPE'S OWN AXIS, stepped in its own
@@ -423,5 +488,5 @@ test("the month is the calendar's own control", async () => {
   fireEvent.click(screen.getByRole("button", { name: "The month after" }));
   await answered();
   expect(location.hash).toContain("month=");
-  expect(document.querySelector(".work-chips")).toBeNull();
+  expect(document.querySelector(".work-chip-field")).toBeNull();
 });

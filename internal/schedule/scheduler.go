@@ -49,10 +49,13 @@ import (
 	"sync"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/logging"
 	"github.com/crewlet/crewlet/internal/org"
+	"github.com/crewlet/crewlet/internal/period"
 	"github.com/crewlet/crewlet/internal/queue/topics"
 	"github.com/crewlet/crewlet/internal/tracing"
 )
@@ -61,10 +64,6 @@ var log = logging.Get("schedule.scheduler")
 
 // Defaults, and the argument for each.
 const (
-	// DefaultTimezone is the zone a schedule that names none is evaluated
-	// in, and what a Scheduler built without one uses.
-	DefaultTimezone = "UTC"
-
 	// DefaultTick is the poll interval.
 	//
 	// Cron fires at minute granularity, so any interval under a minute
@@ -139,8 +138,14 @@ type Options struct {
 	// ends up firing every schedule once per node.
 	Ledger Claimer
 
-	// DefaultTimezone applies to any schedule that names none.
-	DefaultTimezone string
+	// Zone is the company's clock (ADR-0018), which a schedule that names
+	// no zone of its own is evaluated in. Nil is UTC.
+	//
+	// A function rather than a value for the reason [Options.Org] is one:
+	// an apply can move the company's clock, and a zone captured when the
+	// loop was armed kept firing the standups on the old one until the
+	// loop happened to be re-armed.
+	Zone func() *time.Location
 
 	// Tick is the poll interval; zero takes [DefaultTick] and anything at
 	// or above [MaxTick] is refused.
@@ -178,6 +183,25 @@ type Options struct {
 	// [DutyFunc] and [ClaimDuty].
 	Duty DutyFunc
 
+	// Paused reports whether a person has paused a runner seat, named by
+	// its derived agent id, so its fire is recorded [OutcomeSkippedPaused]
+	// instead of dispatched. Nil pauses nothing.
+	//
+	// BY THE SEAT'S ID and never its handle, because a pause is kept on the
+	// seat's identity (ADR-0026): asked by handle, a rename read as a resume
+	// and a hire on the freed handle inherited somebody else's pause.
+	//
+	// SKIPPED, not dispatched into the held inbox, because a fire parked
+	// behind a pause is a standup that runs whenever somebody resumes the
+	// seat — days late, and one per day it was paused.
+	//
+	// An ERROR IS UNKNOWN and the fire is DISPATCHED, the opposite of the
+	// duty's polarity and for a reason: the paused seat's inbox is held by
+	// the node that runs it, so a fire that reaches a paused seat waits
+	// there rather than running, while a fire skipped on a read that
+	// failed is a standup lost for a seat nobody paused.
+	Paused func(seat uuid.UUID) (bool, error)
+
 	// Trace mints the trace context each fire runs under; nil uses a
 	// built-in W3C-shaped random minter.
 	//
@@ -189,18 +213,19 @@ type Options struct {
 
 // Scheduler dispatches role- and unit-scoped recurring work.
 type Scheduler struct {
-	pub       Publisher
-	org       func() *org.Organization
-	ledger    Claimer
-	defaultTZ string
-	tick      time.Duration
-	jitter    time.Duration
+	pub    Publisher
+	org    func() *org.Organization
+	ledger Claimer
+	zone   func() *time.Location
+	tick   time.Duration
+	jitter time.Duration
 
 	catchupMin time.Duration
 	catchupMax time.Duration
 
 	admits func() bool
 	duty   DutyFunc
+	paused func(seat uuid.UUID) (bool, error)
 	trace  func(context.Context) events.TraceContext
 
 	// mu serialises ticks and guards lastTick.
@@ -248,13 +273,14 @@ func New(opts Options) (*Scheduler, error) {
 		pub:        opts.Publisher,
 		org:        opts.Org,
 		ledger:     opts.Ledger,
-		defaultTZ:  cmpOr(opts.DefaultTimezone, DefaultTimezone),
+		zone:       opts.Zone,
 		tick:       durOr(opts.Tick, DefaultTick),
 		jitter:     max(opts.Jitter, 0),
 		catchupMin: durOr(opts.CatchupMin, DefaultCatchupMin),
 		catchupMax: durOr(opts.CatchupMax, DefaultCatchupMax),
 		admits:     opts.Admits,
 		duty:       opts.Duty,
+		paused:     opts.Paused,
 		trace:      cmpOrFunc(opts.Trace, newTrace),
 	}
 	// A max below the min is a config the operator did not mean; taking the
@@ -278,7 +304,7 @@ func New(opts Options) (*Scheduler, error) {
 func (s *Scheduler) Run(ctx context.Context) {
 	log.InfoContext(ctx, "scheduler_started",
 		"tick_seconds", s.tick.Seconds(),
-		"default_timezone", s.defaultTZ,
+		"company_timezone", s.companyZone().String(),
 		"jitter_seconds", s.jitter.Seconds(),
 		"fleet_singleton", s.duty != nil)
 	ticker := time.NewTicker(s.tick)
@@ -342,10 +368,15 @@ func (s *Scheduler) Tick(ctx context.Context, at time.Time) int {
 	first := s.lastTick.IsZero()
 	windowStart := s.lastTick
 	company := s.org()
+	// THE CLOCK IS READ ONCE PER TICK, beside the org: every schedule one
+	// tick evaluates is evaluated against the same company, so an apply
+	// landing mid-tick cannot put half of them on one clock and half on
+	// the next.
+	clock := s.companyZone()
 
 	fired := 0
 	for _, entry := range Entries(company) {
-		fired += s.evaluate(ctx, company, entry, at, windowStart, first)
+		fired += s.evaluate(ctx, company, clock, entry, at, windowStart, first)
 	}
 
 	s.lastTick = at
@@ -356,16 +387,16 @@ func (s *Scheduler) Tick(ctx context.Context, at time.Time) int {
 // published. Every failure inside it is logged and swallowed: a tick evaluates
 // every schedule, and one that gave up on the first bad cron would let a typo
 // stop a company's whole ritual calendar.
-func (s *Scheduler) evaluate(ctx context.Context, company *org.Organization, e Entry, at, windowStart time.Time, first bool) int {
+func (s *Scheduler) evaluate(ctx context.Context, company *org.Organization, clock *time.Location,
+	e Entry, at, windowStart time.Time, first bool) int {
 	sch := e.Schedule
 	if !sch.IsEnabled() {
 		return 0
 	}
-	zone := cmpOr(sch.Timezone, s.defaultTZ)
-	loc, err := time.LoadLocation(zone)
+	loc, err := ZoneOf(sch, clock)
 	if err != nil {
 		log.ErrorContext(ctx, "schedule_parse_failed", "schedule", sch.Name, "scope_type", e.Scope,
-			"scope", e.ScopeName, "scope_id", e.ScopeID, "timezone", zone, "error", err)
+			"scope", e.ScopeName, "scope_id", e.ScopeID, "timezone", sch.Timezone, "error", err)
 		return 0
 	}
 	cron, err := Parse(sch.Cron)
@@ -502,6 +533,10 @@ func (s *Scheduler) fire(ctx context.Context, company *org.Organization, e Entry
 	}
 
 	label := FireLabel(fireUTC, loc)
+	if s.pausedSeat(ctx, agentID, handle, e) {
+		s.recordPaused(ctx, e, handle, fireUTC, label)
+		return false
+	}
 	// Each dispatched run gets its OWN trace, detached from the tick, so the
 	// ledger row and exactly this turn's calls are linked. The TaskAssigned
 	// carries it and the agent's turn restores it.
@@ -604,6 +639,56 @@ func (s *Scheduler) recordSkip(ctx context.Context, e Entry, fireUTC time.Time, 
 		"scope", e.ScopeName, "scope_id", e.ScopeID, "scheduled_at", fireUTC.Format(time.RFC3339))
 }
 
+// pausedSeat reports whether a person has the runner seat paused, asked by its
+// agent id and dispatching on an unknown — see [Options.Paused] for why that
+// is the safe direction here. The handle is for the log line only.
+func (s *Scheduler) pausedSeat(ctx context.Context, seat uuid.UUID, handle string, e Entry) bool {
+	if s.paused == nil {
+		return false
+	}
+	paused, err := s.paused(seat)
+	if err != nil {
+		log.WarnContext(ctx, "schedule_pause_unknown", "schedule", e.Schedule.Name,
+			"handle", handle, "agent_id", seat.String(), "error", err,
+			"detail", "whether the seat is paused could not be read, so the fire is "+
+				"dispatched; a paused seat's inbox holds it rather than running it")
+		return false
+	}
+	return paused
+}
+
+// recordPaused claims a fire that came due on a paused seat without
+// dispatching it, so the resume does not replay it.
+//
+// UNDER THE FIRE'S OWN IDENTITY, runner handle included, which is what makes
+// it at-most-once on both sides: a peer's tick that reaches the same minute
+// finds the claim and does not fire it either, and the ledger answers "why did
+// this not run" for exactly the seat that was paused.
+func (s *Scheduler) recordPaused(ctx context.Context, e Entry, handle string, fireUTC time.Time, label string) {
+	claimed, err := s.ledger.Claim(ctx, Run{
+		FireKey: FireKey{
+			Scope:        e.Scope,
+			ScopeID:      e.ScopeID,
+			ScheduleName: e.Schedule.Name,
+			FireLabel:    label,
+			TargetHandle: handle,
+		},
+		ScheduledAt: fireUTC,
+		Outcome:     OutcomeSkippedPaused,
+	})
+	if err != nil {
+		log.ErrorContext(ctx, "schedule_skip_record_failed", "schedule", e.Schedule.Name,
+			"handle", handle, "fire_label", label, "error", err)
+		return
+	}
+	if claimed {
+		log.InfoContext(ctx, "schedule_skipped_paused", "schedule", e.Schedule.Name,
+			"scope_type", e.Scope, "scope_id", e.ScopeID, "handle", handle,
+			"scheduled_at", fireUTC.Format(time.RFC3339),
+			"detail", "a person has this seat paused, so the fire was recorded and not sent")
+	}
+}
+
 // holdsDuty asks whether this node runs the tick, failing closed on unknown.
 func (s *Scheduler) holdsDuty(ctx context.Context) bool {
 	if s.duty == nil {
@@ -647,12 +732,33 @@ func newTrace(ctx context.Context) events.TraceContext {
 	return tracing.TraceOf(spanCtx)
 }
 
-// cmpOr returns v unless it is the zero string.
-func cmpOr(v, def string) string {
-	if v == "" {
-		return def
+// companyZone is the company's clock as this tick reads it, or UTC.
+func (s *Scheduler) companyZone() *time.Location {
+	if s.zone == nil {
+		return time.UTC
 	}
-	return v
+	if loc := s.zone(); loc != nil {
+		return loc
+	}
+	return time.UTC
+}
+
+// ZoneOf is the clock one schedule fires on: its own `timezone` when it
+// names one, and the company's otherwise (ADR-0018). A nil company clock is
+// UTC.
+//
+// ONE implementation for the tick and for [Describe], so the zone the
+// dashboard says a schedule runs in is the zone it fires in — and read
+// through [period.LoadZone], the reader config validation admits a name
+// through, so a name the validator refused can never be one this fires on.
+func ZoneOf(sch org.Schedule, company *time.Location) (*time.Location, error) {
+	if sch.Timezone == "" {
+		if company == nil {
+			return time.UTC, nil
+		}
+		return company, nil
+	}
+	return period.LoadZone(sch.Timezone)
 }
 
 // durOr returns d unless it is zero or negative.

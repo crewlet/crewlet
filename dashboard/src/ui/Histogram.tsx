@@ -35,7 +35,15 @@
 import type { CSSProperties } from "react";
 
 import { useClockReading } from "~/lib/clock.ts";
-import { currentYear, fmtDate, fmtDateCompactIn, fmtMinute, plural, toWall } from "~/lib/format.ts";
+import {
+  currentYear,
+  fmtDate,
+  fmtDateCompactIn,
+  fmtExact,
+  fmtMinute,
+  plural,
+  toWall,
+} from "~/lib/format.ts";
 import type { FacetScope } from "~/ui/FacetRail.tsx";
 import type { Interval } from "~/lib/range.ts";
 
@@ -44,6 +52,13 @@ export interface Bar {
   /** The bucket's START, RFC3339. */
   at: string;
   count: number;
+  /**
+   * How many of `count` failed, where the engine split them — `event_series`
+   * sends it on every bar. Drawn as the danger-toned foot of the fill and
+   * said in the bar's title; absent draws the plain fill, because a split the
+   * answer did not carry is not a split of zero.
+   */
+  failed?: number;
 }
 
 /**
@@ -114,11 +129,36 @@ export function Histogram({
       <div className="histogram" style={{ height }} role="group" aria-label={label}>
         {bars.map((b) => {
           const at = Date.parse(b.at);
-          const title = `${when(b.at, bucket)} — ${plural(b.count, noun)}`;
+          const failed = Math.min(b.count, b.failed ?? 0);
+          const title =
+            `${when(b.at, bucket)} — ${plural(b.count, noun)}` +
+            (failed > 0 ? `, ${fmtExact(failed)} failed` : "");
           const size = {
             height: `${(b.count / peak) * 100}%`,
             minHeight: b.count === 0 ? EMPTY_PX : MIN_PX,
           };
+          // THE FAILED SHARE IS THE FOOT OF THE SAME FILL, not a second bar
+          // beside it: the column's height is still the bucket's whole count,
+          // so a reader compares totals as before and reads the failures as a
+          // part of each rather than as a series of their own.
+          const fill = (
+            <span className="histogram-fill" style={size}>
+              {failed > 0 && (
+                <span
+                  className="histogram-failed"
+                  style={{ height: `${(failed / b.count) * 100}%` }}
+                />
+              )}
+            </span>
+          );
+          // THE CONTROL IS THE SLOT AND THE BAR IS A FILL INSIDE IT. Drawn as
+          // the slot itself, a seven-day window holding one busy day painted a
+          // solid block a seventh of the card wide — a panel rather than a
+          // quantity — which is the defect the spend chart's columns already
+          // had fixed. The fill takes the kit's column proportion (see
+          // `.histogram-fill`), while the click target stays the whole slot,
+          // because a narrower bar is no reason for a smaller control.
+          //
           // A BUTTON WHEN IT DOES SOMETHING AND A DIV WHEN IT DOES NOT, rather
           // than a button that ignores the click: a keyboard reader tabbing
           // through eighty inert controls is worse served than one that is
@@ -131,17 +171,19 @@ export function Histogram({
               title={title}
               aria-label={title}
               data-empty={b.count === 0 ? "" : undefined}
-              style={size}
               onClick={() => onPick({ from: at, to: at + step })}
-            />
+            >
+              {fill}
+            </button>
           ) : (
             <div
               key={b.at}
               className="histogram-bar"
               title={title}
               data-empty={b.count === 0 ? "" : undefined}
-              style={size}
-            />
+            >
+              {fill}
+            </div>
           );
         })}
         {/* THE TOTAL IS THE CALLER'S, stated rather than summed by the reader
@@ -195,7 +237,16 @@ const STEP_MS: Record<"minute" | "hour" | "day", number> = {
 const MAX_TICKS = 5;
 
 /**
- * Which bars get a label: the first, the last, and an even spread between.
+ * Which bars get a label: the first, the last, and an EVEN STRIDE between.
+ *
+ * ONE WHOLE STRIDE, never a rounded fraction. Rounding `i * (n - 1) / 4`
+ * spread five labels over a seven-day window as Sep 22, 24, 25, 27, 28 — gaps
+ * of two, one, two and one days, which reads as days missing from the data.
+ * So the stride is the smallest whole number of bars that keeps the labels at
+ * or under [MAX_TICKS], preferring one that lands exactly on the last bar
+ * (seven days: every other day, four labels); where none does, the stride
+ * holds between the interior labels and a label that would crowd the last one
+ * — nearer than half a stride — gives way to it.
  *
  * EVENLY OVER THE BARS rather than on the calendar. `lib/timeline.ts` rules its
  * axis on weeks because a roadmap's columns are days and a reader navigates it
@@ -210,9 +261,23 @@ const MAX_TICKS = 5;
  */
 export function ticksFor(bars: number): number[] {
   if (bars <= 0) return [];
-  const count = Math.min(MAX_TICKS, bars);
-  if (count === 1) return [0];
-  return Array.from({ length: count }, (_, i) => Math.round((i * (bars - 1)) / (count - 1)));
+  if (bars <= MAX_TICKS) return Array.from({ length: bars }, (_, i) => i);
+  const span = bars - 1;
+  const least = Math.ceil(span / (MAX_TICKS - 1));
+  // AN EXACT STRIDE WHERE ONE IS NEAR: up to half again the least one, so a
+  // prime span does not fall back to its two ends alone.
+  let stride = least;
+  for (let s = least; s <= Math.ceil(least * 1.5); s++) {
+    if (span % s === 0) {
+      stride = s;
+      break;
+    }
+  }
+  const out: number[] = [];
+  for (let at = 0; at < span; at += stride) out.push(at);
+  if (span - out[out.length - 1]! < stride / 2) out.pop();
+  out.push(span);
+  return out;
 }
 
 /**

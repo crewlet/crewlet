@@ -10,6 +10,7 @@ import (
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/queue/jetstream"
+	"github.com/crewlet/crewlet/internal/queue/topics"
 	"github.com/crewlet/crewlet/internal/search"
 )
 
@@ -70,10 +71,13 @@ roles:
 // its peers' search fan-out, and a registration is a claim on buckets a
 // coordinator counts as answered. One left behind by a node whose boot failed
 // is not a leak somebody notices as memory — it is a peer's search silently
-// returning a sixty-fourth of the corpus as a complete answer. The same would
-// hold for any other answerer the native start registers, so the counts are
-// PER SUBJECT: one total would read a second answerer as a boot that started
-// twice.
+// returning a sixty-fourth of the corpus as a complete answer.
+//
+// PER SUBJECT, because a node registers more than one answerer — the search
+// fan-out's, the fleet history's (internal/eventfan), the steer desk's — and
+// each is a claim a peer relies on: a history answerer left behind by a failed
+// boot answers peers from a store its caller is free to close. One total would
+// read a second answerer as a boot that started twice.
 type servedQueue struct {
 	*jetstream.Queue
 
@@ -152,6 +156,14 @@ func TestAFailedBootStopsEverythingItAlreadyStarted(t *testing.T) {
 		t.Fatalf("this node registered %d search answerers, want 1 — the boot "+
 			"failed before the native half was up, so this case is no "+
 			"longer testing what it says", got)
+	}
+	// THE HISTORY ANSWERER TOO, which is armed before the native start on
+	// every node: a case that saw only the search answerer could pass with
+	// the history one never registered at all.
+	if got := served[topics.ObserveRead]; got != 1 {
+		t.Fatalf("this node registered %d history answerers, want 1 — the "+
+			"history answerer is armed before the native start, so this case "+
+			"expects exactly one", got)
 	}
 	for subject, n := range served {
 		if withdrawn[subject] != n {

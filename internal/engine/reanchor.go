@@ -230,7 +230,7 @@ func generationEncoder(domain statelog.Domain) (statelog.GenerationEncoder, erro
 //
 // # Both halves of the frame, because the transition does both
 //
-// Every record on every log is a signed frame (ADR-0018) and every applier
+// Every record on every log is a signed frame (ADR-0025) and every applier
 // refuses one that is not. The transition's own append — the generation
 // record — is the one record on the log no write authority publishes, so an
 // append here that passed the body through unsigned opened a generation every

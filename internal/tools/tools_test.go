@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"slices"
 	"strings"
 	"testing"
@@ -19,8 +20,11 @@ type fakeTool struct {
 	params map[string]any
 	out    string
 	failed bool
-	err    error
-	seen   []map[string]any
+	// cause is why a failed call failed, as a first-party tool states it —
+	// its class outright, or beneath the error that decided it.
+	cause error
+	err   error
+	seen  []map[string]any
 }
 
 func (f *fakeTool) Name() string               { return f.name }
@@ -31,7 +35,7 @@ func (f *fakeTool) Call(_ context.Context, args map[string]any) (tools.Result, e
 	if f.err != nil {
 		return tools.Result{}, f.err
 	}
-	return tools.Result{Output: f.out, Failed: f.failed}, nil
+	return tools.Result{Output: f.out, Failed: f.failed, Cause: f.cause}, nil
 }
 
 func tool(name string) *fakeTool { return &fakeTool{name: name, out: "ok"} }
@@ -433,6 +437,66 @@ func TestAnUnofferedToolAndAnUnknownOneReadDifferently(t *testing.T) {
 	}
 }
 
+// denyAll is a guard that refuses every call, the way the skills guard refuses
+// a tool whose skill has not been loaded.
+type denyAll struct{}
+
+func (denyAll) Check(string, string) string    { return "load the skill first" }
+func (denyAll) Observe(string, map[string]any) {}
+
+func TestTheSurfaceClassesItsOwnRefusalsAndPassesAToolsThrough(t *testing.T) {
+	t.Parallel()
+	// A CALLER THAT IS NOT A MODEL reads the class, and the surface refuses
+	// some calls before any tool runs — an unknown name, one not offered
+	// here, a guard's refusal. Unclassified, those reached such a caller as
+	// a failure it could only render with a status it made up. Each class
+	// has to arrive on BOTH records: the result the caller acts on and the
+	// call the ledger keeps — and both READ it out of the one cause, so an
+	// unknown outcome a tool stated is unknown on both as well.
+	r := tools.NewRegistry()
+	refuses := tool("refuses")
+	refuses.failed, refuses.out, refuses.cause = true, "no such item", tools.RefusalNotFound
+	mustRegister(t, r, refuses, tools.OriginBuiltin)
+	lost := tool("lost")
+	lost.failed, lost.out = true, "whether it landed is unknown"
+	lost.cause = fmt.Errorf("operation 0190: %w", tools.ErrOutcomeUnknown)
+	mustRegister(t, r, lost, tools.OriginBuiltin)
+	mustRegister(t, r, tool("registered"), tools.OriginBuiltin)
+	mustRegister(t, r, tool("guarded"), tools.OriginBuiltin)
+	open := tools.NewSurface("execute", r.Snapshot(), []string{"refuses", "lost"})
+	guarded := tools.NewSurface("execute", r.Snapshot(), []string{"guarded"}).WithGuard(denyAll{})
+
+	for _, c := range []struct {
+		name    string
+		surface *tools.Surface
+		call    string
+		want    tools.Refusal
+		unknown bool
+	}{
+		{"a name nothing registered", open, "ghost", tools.RefusalNotFound, false},
+		{"a registered tool not offered here", open, "registered", tools.RefusalForbidden, false},
+		{"a call the guard refuses", guarded, "guarded", tools.RefusalForbidden, false},
+		{"a first-party tool's own class", open, "refuses", tools.RefusalNotFound, false},
+		{"a write nobody can vouch for", open, "lost", tools.RefusalUnavailable, true},
+	} {
+		res, err := c.surface.Execute(context.Background(), llm.ToolCall{Name: c.call})
+		if err != nil {
+			t.Fatalf("%s: Execute: %v", c.name, err)
+		}
+		if !res.Failed || res.Refusal() != c.want || res.Unknown() != c.unknown {
+			t.Errorf("%s: result failed %v class %q unknown %v, want %q unknown %v",
+				c.name, res.Failed, res.Refusal(), res.Unknown(), c.want, c.unknown)
+		}
+		calls := c.surface.Calls()
+		last := calls[len(calls)-1]
+		if last.Name != c.call || !last.Failed || last.Refusal() != c.want ||
+			last.Unknown() != c.unknown {
+			t.Errorf("%s: recorded %+v, want a failed call classed %q unknown %v",
+				c.name, last, c.want, c.unknown)
+		}
+	}
+}
+
 func TestAHallucinatedToolIsAFailedResultNotAnError(t *testing.T) {
 	t.Parallel()
 	// A Go error here tears down the turn. The model asked for something it
@@ -543,4 +607,105 @@ func entryNames(es []tools.Entry) []string {
 		out = append(out, e.Name())
 	}
 	return out
+}
+
+func TestSurfaceStampsTheMCPServerOnItsResult(t *testing.T) {
+	t.Parallel()
+	// WHO ANSWERED, off the registration — the one fact the loop cannot see,
+	// since an MCP-served tool and a builtin are the same name and the same
+	// call signature. A tool that FAILED still answered, so it is attributed
+	// too: a server returning errors is exactly the one a reader is hunting.
+	r := tools.NewRegistry()
+	mustRegister(t, r, tool("create_issue"), tools.Origin("github"))
+	broken := tool("search_logs")
+	broken.failed, broken.out = true, "upstream timed out"
+	mustRegister(t, r, broken, tools.Origin("datadog"))
+	mustRegister(t, r, tool("remember"), tools.OriginBuiltin)
+	s := tools.NewSurface("execute", r.Snapshot(), []string{"create_issue", "search_logs", "remember"})
+
+	for _, c := range []struct{ call, origin, server string }{
+		{"create_issue", "mcp:github", "github"},
+		{"search_logs", "mcp:datadog", "datadog"},
+		{"remember", tools.OriginBuiltin, ""},
+	} {
+		res, err := s.Execute(context.Background(), llm.ToolCall{Name: c.call})
+		if err != nil {
+			t.Fatalf("%s: Execute: %v", c.call, err)
+		}
+		if res.Origin != c.origin || res.Server != c.server {
+			t.Errorf("%s answered as origin %q server %q, want %q / %q",
+				c.call, res.Origin, res.Server, c.origin, c.server)
+		}
+	}
+}
+
+func TestARefusedCallHasNoOrigin(t *testing.T) {
+	t.Parallel()
+	// The surface refused these before any tool ran, so nobody answered
+	// them: an origin would attribute the refusal to a server that never
+	// saw the request — and it is a registered MCP tool in two of the three
+	// cases, so a surface that stamped the entry it looked up would.
+	r := tools.NewRegistry()
+	mustRegister(t, r, tool("create_issue"), tools.Origin("github"))
+	mustRegister(t, r, tool("close_issue"), tools.Origin("github"))
+	notOffered := tools.NewSurface("execute", r.Snapshot(), []string{"create_issue"})
+	guarded := tools.NewSurface("execute", r.Snapshot(), []string{"close_issue"}).WithGuard(denyAll{})
+
+	for _, c := range []struct {
+		name    string
+		surface *tools.Surface
+		call    string
+	}{
+		{"a name nothing registered", notOffered, "ghost"},
+		{"a registered tool not offered here", notOffered, "close_issue"},
+		{"a call the guard refuses", guarded, "close_issue"},
+	} {
+		res, err := c.surface.Execute(context.Background(), llm.ToolCall{Name: c.call})
+		if err != nil {
+			t.Fatalf("%s: Execute: %v", c.name, err)
+		}
+		if !res.Failed {
+			t.Fatalf("%s: the call was not refused", c.name)
+		}
+		if res.Origin != "" || res.Server != "" {
+			t.Errorf("%s: a refused call names origin %q server %q, want none",
+				c.name, res.Origin, res.Server)
+		}
+	}
+}
+
+// recordingGuard admits every call and remembers the server each was checked
+// under.
+type recordingGuard struct{ servers []string }
+
+func (g *recordingGuard) Check(_, server string) string {
+	g.servers = append(g.servers, server)
+	return ""
+}
+func (g *recordingGuard) Observe(string, map[string]any) {}
+
+func TestABuiltinHasNoServer(t *testing.T) {
+	t.Parallel()
+	// A builtin's server is "", which is what a skill trigger naming an MCP
+	// server relies on to cover no builtin. The name used to be read without
+	// its flag, and the prefix cut hands back its whole input on a miss — so
+	// every builtin reached the guard as the server `builtin`.
+	r := tools.NewRegistry()
+	mustRegister(t, r, tool("remember"), tools.OriginBuiltin)
+	mustRegister(t, r, tool("create_issue"), tools.Origin("github"))
+	entry, _ := r.Snapshot().Lookup("remember")
+	if server, ok := entry.FromMCP(); ok || server != "" {
+		t.Errorf("a builtin reports server %q (from MCP %v), want none", server, ok)
+	}
+
+	guard := &recordingGuard{}
+	s := tools.NewSurface("execute", r.Snapshot(), []string{"remember", "create_issue"}).WithGuard(guard)
+	for _, name := range []string{"remember", "create_issue"} {
+		if _, err := s.Execute(context.Background(), llm.ToolCall{Name: name}); err != nil {
+			t.Fatalf("Execute %s: %v", name, err)
+		}
+	}
+	if len(guard.servers) != 2 || guard.servers[0] != "" || guard.servers[1] != "github" {
+		t.Errorf("the guard was asked about servers %q, want [\"\" \"github\"]", guard.servers)
+	}
 }

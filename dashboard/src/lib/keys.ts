@@ -17,6 +17,10 @@
  *
  * # The binding
  *
+ * THIS IS THE MECHANISM, NOT THE TABLE. Which key does what is
+ * `app/keymap.ts`, the one place a key is spelled; its `useKeymap` is the only
+ * caller here, so the legend and the collision check see every binding.
+ *
  * ONE LISTENER PER HOOK, not per chord: a component with four shortcuts adds
  * one `keydown` handler rather than four, and the set it matches is a value
  * rather than a chain of ifs. The `g`-prefix grammar is here too, because a
@@ -25,7 +29,7 @@
  */
 
 import { useEffect, useRef } from "react";
-import { isModalLayerOpen } from "@crewlethq/ui";
+import { isComposing, isModalLayerOpen } from "@crewlethq/ui";
 
 /**
  * Whether the keyboard currently belongs to something the reader is typing in.
@@ -55,6 +59,20 @@ export function isTyping(): boolean {
   // to receive a click is common and handles nothing — so it is the pair,
   // which is what an interactive role means.
   return el.hasAttribute("tabindex") && el.hasAttribute("role");
+}
+
+/**
+ * Whether the focused element is a control the platform activates on Enter:
+ * a button, a link, a disclosure summary, or an element that says it is one
+ * of those. See the Enter rule in [useKeyChords].
+ */
+export function isActivatable(): boolean {
+  const el = document.activeElement;
+  if (!(el instanceof HTMLElement)) return false;
+  if (el instanceof HTMLButtonElement || el.tagName === "SUMMARY") return true;
+  if (el instanceof HTMLAnchorElement) return el.hasAttribute("href");
+  const role = el.getAttribute("role");
+  return role === "button" || role === "link";
 }
 
 /** One chord and what it does. */
@@ -144,9 +162,29 @@ export function useKeyChords(chords: (Chord | Sequence)[]): void {
       // event.
       if (isModalLayerOpen()) return;
 
+      // NOR A PRESS SOMEBODY ALREADY ANSWERED, and nor one an input method is
+      // still composing. The first is the same fault one level down: the
+      // chart claims `+`, `-` and `0` for its zoom and a list claims its own
+      // arrows, and a page chord acting on the same press does a second thing
+      // with it. The second is somebody typing Japanese, Chinese or Korean,
+      // whose Enter and Escape choose and dismiss a candidate and still
+      // arrive here as key presses — Enter on a grid row opened it, from a
+      // keystroke that was part of a word. `isComposing` is the kit's, which
+      // also knows Safari's `keyCode` 229 for the Enter that ends one.
+      if (e.defaultPrevented || isComposing(e)) return;
+
       const key = e.key.toLowerCase();
       const meta = e.metaKey || e.ctrlKey;
       const typing = isTyping();
+
+      // A BARE ENTER OR SPACE ON A CONTROL IS THAT CONTROL'S. The platform
+      // presses a focused button or follows a focused link on exactly these
+      // keys, and a page chord on the same key called `preventDefault` first:
+      // Enter on a button inside a grid row — Restore in the trash, the
+      // ceiling editor on Budgets — opened the ROW in the peek and never
+      // pressed the button, so the one control a keyboard reader had reached
+      // was the one thing the key did not do.
+      if (!meta && (key === "enter" || key === " ") && isActivatable()) return;
 
       // A PREFIX IN FLIGHT CONSUMES THE NEXT KEY, matched or not. Half a
       // sequence that fell through to the plain chords would make `g` then

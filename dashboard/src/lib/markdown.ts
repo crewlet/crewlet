@@ -536,6 +536,13 @@ function trimBlankLines(lines: Line[]): Line[] {
 // --- inline parsing --------------------------------------------------------
 
 /**
+ * The longest code span kept on one line. Thirty-two monospace characters at
+ * the body's size are about 250px — inside the narrowest column a document is
+ * drawn in (a 390px phone less its gutters), so a whole span never overflows.
+ */
+export const UnbrokenCode = 32;
+
+/**
  * The inline grammar, as one alternation.
  *
  * ORDER MATTERS AND CODE COMES FIRST: a backtick span is opaque, so
@@ -565,8 +572,18 @@ export function renderInline(text: string, keyPrefix = "i"): ReactNode[] {
     if (m[1] !== undefined) {
       // A code span loses ONE leading and trailing space, which is how
       // CommonMark lets a span start with a backtick of its own.
+      const code = (m[2] ?? "").replace(/^ | $/g, "");
+      // A SHORT SPAN IS ONE TOKEN to a reader: `nimbus jobs wait --node <n>`
+      // split at a space reads as two commands, and the break always lands on
+      // the flag. Up to [UnbrokenCode] characters it is kept on one line; a
+      // longer one (a URL, a whole config line) still wraps, since holding it
+      // whole would overflow a phone's column.
       out.push(
-        createElement("code", { key, className: "inline" }, (m[2] ?? "").replace(/^ | $/g, "")),
+        createElement(
+          "code",
+          { key, className: code.length <= UnbrokenCode ? "inline is-whole" : "inline" },
+          code,
+        ),
       );
     } else if (m[3] !== undefined || m[4] !== undefined) {
       const src = safeHref(m[4] ?? "");
@@ -641,7 +658,7 @@ function soften(text: string): string {
 
 // --- block rendering -------------------------------------------------------
 
-function renderBlock(block: Block, key: string): ReactNode {
+function renderBlock(block: Block, key: string, anchor?: string): ReactNode {
   switch (block.kind) {
     case "heading":
       // CLAMPED TO h2–h6. A page's own title is the h1 on the screen around
@@ -649,7 +666,7 @@ function renderBlock(block: Block, key: string): ReactNode {
       // same level to a screen reader.
       return createElement(
         `h${Math.min(6, block.level + 1)}`,
-        { key },
+        anchor ? { key, id: anchor } : { key },
         renderInline(block.text, key),
       );
     case "paragraph":
@@ -773,8 +790,65 @@ function renderBlock(block: Block, key: string): ReactNode {
  * `dangerouslySetInnerHTML` on this path, so no input can introduce an
  * element this file did not construct.
  */
-export function renderMarkdown(source: string): ReactNode[] {
-  return parseBlocks(source ?? "").map((block, i) => renderBlock(block, `b${i}`));
+export function renderMarkdown(source: string, options?: { anchors?: boolean }): ReactNode[] {
+  const blocks = parseBlocks(source ?? "");
+  if (!options?.anchors) return blocks.map((block, i) => renderBlock(block, `b${i}`));
+  // THE SAME WALK [outline] TAKES, so a heading's id and the entry pointing at
+  // it are one computation and cannot disagree.
+  const ids = anchorIds(blocks);
+  return blocks.map((block, i) => renderBlock(block, `b${i}`, ids.get(i)));
+}
+
+/** One heading of a document, as an "On this page" entry points at it. */
+export interface Heading {
+  /** The markdown level, 1 for `#`. */
+  level: number;
+  /** The heading as the prose it renders to. */
+  text: string;
+  /** The id [renderMarkdown] gives it with `anchors`. */
+  id: string;
+}
+
+/**
+ * The document's TOP-LEVEL headings, in order — the "On this page" outline.
+ *
+ * TOP-LEVEL ONLY: a heading inside a quote or a list item is part of that
+ * block rather than a section of the document, and it gets no anchor.
+ */
+export function outline(source: string): Heading[] {
+  const blocks = parseBlocks(source ?? "");
+  const ids = anchorIds(blocks);
+  const out: Heading[] = [];
+  blocks.forEach((block, i) => {
+    const id = ids.get(i);
+    if (block.kind === "heading" && id) {
+      out.push({ level: block.level, text: inlineText(block.text).trim(), id });
+    }
+  });
+  return out;
+}
+
+/**
+ * An id per top-level heading: `h-` and the words of its text, a repeat
+ * suffixed `-2`, `-3` in order — so two "Escalation" sections are two
+ * addresses, and an anchor never collides with an id the frame itself uses.
+ */
+function anchorIds(blocks: Block[]): Map<number, string> {
+  const ids = new Map<number, string>();
+  const seen = new Map<string, number>();
+  blocks.forEach((block, i) => {
+    if (block.kind !== "heading") return;
+    const words = inlineText(block.text)
+      .toLowerCase()
+      .normalize("NFKD")
+      .replace(/[^\p{L}\p{N}]+/gu, "-")
+      .replace(/^-+|-+$/g, "");
+    const base = `h-${words || "section"}`;
+    const n = (seen.get(base) ?? 0) + 1;
+    seen.set(base, n);
+    ids.set(i, n === 1 ? base : `${base}-${n}`);
+  });
+  return ids;
 }
 
 // --- flattening ------------------------------------------------------------

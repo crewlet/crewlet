@@ -313,6 +313,15 @@ func (stubWorkReader) Task(context.Context, string, tracker.DetailWants,
 	return tracker.TaskDetail{}, tracker.ErrNoTask
 }
 
+func (stubWorkReader) TurnsOf(context.Context, string, string, int,
+	statelog.Freshness) (tracker.TaskTurns, error) {
+	return tracker.TaskTurns{}, tracker.ErrNoTask
+}
+
+func (stubWorkReader) EveryView(context.Context, tracker.EveryViewQuery) (tracker.ViewListing, error) {
+	return tracker.ViewListing{}, nil
+}
+
 func (stubWorkReader) Views(context.Context, tracker.ViewQuery) (tracker.ViewListing, error) {
 	return tracker.ViewListing{}, nil
 }
@@ -337,8 +346,8 @@ func (stubWorkReader) Project(context.Context, tracker.ProjectDetailQuery) (
 	return tracker.ProjectDetail{}, nil
 }
 
-func (stubWorkReader) Workload(_ context.Context, q tracker.WorkloadQuery, _ time.Time) (
-	tracker.WorkloadAnswer, error) {
+func (stubWorkReader) Workload(_ context.Context, q tracker.WorkloadQuery, _ time.Time,
+	_ *time.Location) (tracker.WorkloadAnswer, error) {
 	return tracker.WorkloadAnswer{
 		Rows: []tracker.WorkloadRow{{Handle: q.Unit, Open: 1}},
 	}, nil
@@ -349,14 +358,38 @@ func (stubWorkReader) Activity(context.Context, tracker.ActivityQuery, time.Time
 	return tracker.ActivityAnswer{}, nil
 }
 
-func (stubWorkReader) MyWork(context.Context, tracker.MyWorkQuery, time.Time) (
-	tracker.MyWork, error) {
+func (stubWorkReader) MyWork(context.Context, tracker.MyWorkQuery, time.Time,
+	*time.Location) (tracker.MyWork, error) {
 	return tracker.MyWork{}, nil
 }
 
 func (stubWorkReader) Person(context.Context, tracker.PersonQuery, time.Time) (
 	tracker.PersonState, error) {
 	return tracker.PersonState{}, nil
+}
+
+func (stubWorkReader) Flow(context.Context, tracker.FlowQuery, time.Time,
+	*time.Location) (tracker.FlowAnswer, error) {
+	return tracker.FlowAnswer{}, nil
+}
+
+func (stubWorkReader) CompanyFeed(context.Context, tracker.FeedQuery) (tracker.FeedPage, error) {
+	return tracker.FeedPage{}, nil
+}
+
+func (stubWorkReader) Decisions(context.Context, tracker.DecisionsQuery, time.Time,
+	*time.Location) (tracker.DecisionsAnswer, error) {
+	return tracker.DecisionsAnswer{}, nil
+}
+
+func (stubWorkReader) TurnPlaces(context.Context, []string,
+	statelog.Freshness) (map[string]tracker.TurnPlace, error) {
+	return map[string]tracker.TurnPlace{}, nil
+}
+
+func (stubWorkReader) Thread(context.Context, tracker.ThreadQuery,
+	statelog.Freshness) (tracker.ResolvedThread, error) {
+	return tracker.ResolvedThread{}, nil
 }
 
 // THE INBOX IS A LITERAL SEGMENT, not a task called "inbox".

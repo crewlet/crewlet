@@ -55,7 +55,7 @@ func TestTheRelatedFilterIsOneAgentsNeverItsNamesakes(t *testing.T) {
 		}
 	}
 
-	r := registryOver(t, queries.Sources{State: livestate.New(), Events: log,
+	r := registryOver(t, queries.Sources{State: livestate.New(), Events: fleetOf(log),
 		Company: roster})
 	got := ask(t, r, "events", map[string]any{"agent": "ada"})
 	rows, _ := got["events"].([]store.EventRecord)

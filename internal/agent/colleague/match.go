@@ -66,6 +66,48 @@ const (
 	MethodFuzzy        Method = "fuzzy"
 )
 
+// Methods is every tier [Resolve] answers with, strongest first.
+var Methods = []Method{
+	MethodExactHandle, MethodExternalID, MethodExactRole,
+	MethodCaseInsensitive, MethodSubstring, MethodFuzzy,
+}
+
+// Valid reports whether m is a tier this package answers with, so an unknown
+// value off the wire is a value rather than a panic.
+func (m Method) Valid() bool {
+	for _, known := range Methods {
+		if m == known {
+			return true
+		}
+	}
+	return false
+}
+
+// Why is the reason a PERSON is shown beside a candidate.
+//
+// Not [Method.Label], which is phrased for a model and blank on the exact
+// tiers because a model is only ever shown an ambiguity. A screen shows every
+// candidate beside why it is one — the exact tiers most of all, since they are
+// what makes a row the answer rather than a possibility — so every tier has
+// words here, and `TestEveryTierSaysWhyToAPerson` holds [Methods] to them.
+func (m Method) Why() string {
+	switch m {
+	case MethodExactHandle:
+		return "handle matches exactly"
+	case MethodExternalID:
+		return "chat id matches exactly"
+	case MethodExactRole:
+		return "role name matches exactly"
+	case MethodCaseInsensitive:
+		return "name matches, ignoring case and separators"
+	case MethodSubstring:
+		return "part of the name matches"
+	case MethodFuzzy:
+		return "close spelling"
+	}
+	return ""
+}
+
 // Label is the phrase shown to a model beside an ambiguous candidate.
 func (m Method) Label() string {
 	switch m {

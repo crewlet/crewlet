@@ -78,7 +78,7 @@ type LexicalSource interface {
 	Live(ctx context.Context, tx *sql.Tx, ids []string) (map[string]bool, error)
 
 	// Count is how many documents this source offers, for the reporting
-	// number a fleet screen renders.
+	// number a nodes page renders.
 	Count(ctx context.Context, tx *sql.Tx) (int, error)
 }
 

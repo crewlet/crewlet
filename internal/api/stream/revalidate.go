@@ -9,6 +9,7 @@ import (
 	"github.com/coder/websocket"
 
 	"github.com/crewlet/crewlet/internal/api/auth"
+	"github.com/crewlet/crewlet/internal/api/httpjson"
 	"github.com/crewlet/crewlet/internal/iam"
 )
 
@@ -70,8 +71,11 @@ const RevalidateEvery = 60 * time.Second
 type identityState struct {
 	// State is `verified` or `unverifiable`.
 	State string `json:"state"`
-	// RetryAfterSeconds is when the next check runs, on `unverifiable`.
-	RetryAfterSeconds int `json:"retry_after_seconds,omitempty"`
+	// RetryAfter is how many whole seconds until the next check, on
+	// `unverifiable`, under the one key every frame on this socket says when
+	// to look again with ([Unavailable.RetryAfter]): a second spelling of the
+	// same hint on the same socket is a second thing a client has to know.
+	RetryAfter int `json:"retry_after,omitempty"`
 }
 
 // The two identity states a socket reports.
@@ -183,8 +187,8 @@ func revalidate(ctx context.Context, conn *websocket.Conn, client *Client,
 						"checked again on the next interval")
 			}
 			client.Reply(Push(KindIdentity, identityState{
-				State:             identityUnverifiable,
-				RetryAfterSeconds: int(every / time.Second),
+				State:      identityUnverifiable,
+				RetryAfter: httpjson.RetrySeconds(every),
 			}, now()))
 		case how != iam.Resolved:
 			log.InfoContext(ctx, "stream_closed_credential_ended")

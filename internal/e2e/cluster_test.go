@@ -404,7 +404,7 @@ func buildMember(ctx context.Context, t *testing.T, relays *jetstreamtest.Relays
 
 	return &node{
 		engine: e, app: app, server: srv, model: model,
-		id:          boot.Node.ID,
+		id:          e.Node().ID(),
 		snapshotDir: boot.Store.SnapshotDirFor(),
 	}, stops, nil
 }

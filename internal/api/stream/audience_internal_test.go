@@ -3,6 +3,7 @@ package stream
 import (
 	"maps"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -64,13 +65,13 @@ func TestAnEventReachesOnlyAReaderHoldingAuditRead(t *testing.T) {
 	for _, tc := range []struct {
 		name   string
 		client *Client
-		want   []string
+		want   []Kind
 	}{
-		{"state:read alone", stateOnly, []string{KindAgents}},
-		{"state:read and audit:read", auditor, []string{KindEvent, KindAgents}},
+		{"state:read alone", stateOnly, []Kind{KindAgents}},
+		{"state:read and audit:read", auditor, []Kind{KindEvent, KindAgents}},
 		{"the zero audience", nobody, nil},
 	} {
-		var got []string
+		var got []Kind
 		for _, f := range drainClient(tc.client) {
 			got = append(got, f.kind)
 		}
@@ -87,13 +88,14 @@ func TestAnEventReachesOnlyAReaderHoldingAuditRead(t *testing.T) {
 func TestTheSnapshotCarriesOnlyWhatItsAudienceMayRead(t *testing.T) {
 	t.Parallel()
 	svc, err := NewService(livestate.New(), Options{
-		Health:    func() Health { return Health{Status: "ok"} },
+		Health:    func() Health { return nodeHealth{Status: "ok"} },
 		Posture:   func(Health) FramePosture { return FrameLive },
 		Seats:     func() tokens.Seats { return tokens.Seats{} },
 		Roster:    func() []map[string]any { return nil },
 		Org:       func() any { return map[string]any{} },
 		Tools:     func() []map[string]any { return nil },
 		Schedules: func() any { return []any{} },
+		Placement: func() (map[string]bool, error) { return map[string]bool{}, nil },
 		Chart:     authz.NoChart{},
 		Holders:   blindHolders{},
 	})
@@ -127,6 +129,14 @@ func TestTheSnapshotCarriesOnlyWhatItsAudienceMayRead(t *testing.T) {
 	}
 }
 
+// nodeHealth stands in for `api.Health`: the one field a socket's posture is
+// decided from, and nothing else this package reads.
+type nodeHealth struct {
+	Status string `json:"status"`
+}
+
+func (h nodeHealth) NodeStatus() string { return h.Status }
+
 // drainClient reads everything currently queued for a client.
 func drainClient(c *Client) []*Frame {
 	var out []*Frame
@@ -151,11 +161,69 @@ func TestAReplyNeverCarriesAFactItsClientMayNotRead(t *testing.T) {
 	c := NewClient(AudienceOf([]iam.Grant{iam.GrantStateRead}))
 	c.Reply(Push(KindEvent, map[string]any{"type": "x"}, time.Now()))
 	c.Reply(Envelope{Kind: KindResult, ID: 1, What: "anything"})
-	var got []string
+	var got []Kind
 	for _, f := range drainClient(c) {
 		got = append(got, f.kind)
 	}
-	if !slices.Equal(got, []string{KindResult}) {
+	if !slices.Equal(got, []Kind{KindResult}) {
 		t.Fatalf("a state:read-only client was replied %v, want only its own answer", got)
+	}
+}
+
+// shapedOrg answers a `config:read` audience a field nobody else may read, and
+// every other audience the narrow shape.
+type shapedOrg struct{}
+
+func (shapedOrg) For(a Audience) (string, any) {
+	if a.Holds(iam.GrantConfigRead) {
+		return "config", map[string]any{"runs_on": "a provider key"}
+	}
+	return "reader", map[string]any{}
+}
+
+// A SHAPED PAYLOAD REACHES EACH AUDIENCE IN THE SHAPE ITS GRANTS DESCRIBE — on
+// the broadcast and on the direct path alike, and encoded once per shape
+// rather than once per client.
+//
+// The grant table decides whether a reader receives a kind at all; one kind can
+// still carry a field its readers may not all see — a seat's resolved model
+// chain on the `state:read` org tree is derived from the chart's runtime half,
+// which only `config:read` reads. Handed the payload whole, every reader of
+// the tree would read it.
+//
+// Mutation: encode the broadcast once per posture, ignoring the variant, and
+// the reader is handed the config reader's field.
+func TestAShapedPayloadReachesEachAudienceInItsOwnShape(t *testing.T) {
+	t.Parallel()
+	h := NewHub()
+	reader := NewClient(AudienceOf([]iam.Grant{iam.GrantStateRead}))
+	configured := NewClient(AudienceOf([]iam.Grant{iam.GrantStateRead, iam.GrantConfigRead}))
+	// The config reader registers FIRST, so a cache keyed on the posture
+	// alone would hand the reader the config reader's encoding.
+	h.Register(configured)
+	h.Register(reader)
+	at := time.Date(2026, 6, 14, 12, 0, 0, 0, time.UTC)
+
+	h.Broadcast(Push(KindOrg, shapedOrg{}, at))
+	reader.Reply(Push(KindOrg, shapedOrg{}, at))
+	configured.Reply(Push(KindOrg, shapedOrg{}, at))
+
+	for name, tc := range map[string]struct {
+		client *Client
+		holds  bool
+	}{
+		"state:read alone": {reader, false},
+		"config:read":      {configured, true},
+	} {
+		frames := drainClient(tc.client)
+		if len(frames) != 2 {
+			t.Fatalf("%s received %d frames, want the broadcast and the reply", name, len(frames))
+		}
+		for _, f := range frames {
+			if got := strings.Contains(string(f.Raw()), "a provider key"); got != tc.holds {
+				t.Errorf("%s received %s: carries the config reader's field = %v, want %v",
+					name, f.Raw(), got, tc.holds)
+			}
+		}
 	}
 }

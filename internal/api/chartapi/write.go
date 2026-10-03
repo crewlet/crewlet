@@ -466,7 +466,7 @@ func (s *Service) operation(w http.ResponseWriter, r *http.Request, name string,
 //
 // # The author is the REQUEST's, never the body's
 //
-// internal/api/opsmcp states the rule this follows: a tracker whose author
+// internal/api/operator states the rule this follows: a tracker whose author
 // field is chosen by the writer is not an audit trail. So the actor comes
 // from the resolved principal and there is deliberately no way for a caller
 // to name somebody to act as — not a field, not a header.

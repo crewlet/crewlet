@@ -71,7 +71,7 @@ func TestANodeWithNoCompanySignsInAndServesWorkAfterItsFirstApply(t *testing.T) 
 		t.Fatal("the premise: this node has no company")
 	}
 	app, srv := serveAPI(t, e, &boot, nil)
-	n := &node{engine: e, app: app, server: srv, model: model, id: boot.Node.ID}
+	n := &node{engine: e, app: app, server: srv, model: model, id: e.Node().ID()}
 
 	jane := newBrowser(t)
 	file := map[string]any{"title": "the first thing we do", "project": "ENG"}

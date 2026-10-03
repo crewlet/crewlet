@@ -194,7 +194,7 @@ type Invitation struct {
 	Verifier string `json:"verifier,omitempty"`
 
 	// Seat is the IDENTITY of the seat redeeming this BINDS — the handle
-	// the seat was created under (ADR-0020) — or empty for an invitation
+	// the seat was created under (ADR-0027) — or empty for an invitation
 	// that binds none. Decided once by whoever issued it, on a seat the
 	// chart held as a human seat nobody was bound to, and claimed as one
 	// more step of the redemption's own sequence.

@@ -204,6 +204,14 @@ type Options struct {
 	// config refuses an absent one on a node that serves.
 	Ceiling []iam.Grant
 
+	// TokenIDs is THIS NODE's Tier A token labels — never their values —
+	// which `GET /iam/node-tokens` joins to the directory rows holding
+	// their logins. REQUIRED: every node that serves this surface holds at
+	// least one Tier A token (config refuses a serving node without), so a
+	// surface handed none would answer an empty list that reads as a node
+	// with nothing to bind, which no serving node is.
+	TokenIDs func() []string
+
 	// Audit records what this surface changed. REQUIRED: the directory is
 	// where credentials are minted and sessions ended by somebody else,
 	// and a surface that announced none of it would leave the live feed
@@ -222,6 +230,7 @@ type Service struct {
 	external  string
 	bindings  Bindings
 	ceiling   []iam.Grant
+	tokens    func() []string
 	audit     Audit
 	now       func() time.Time
 }
@@ -245,13 +254,19 @@ func New(opts Options) (*Service, error) {
 			"mints and revokes credentials and ends other people's sessions, " +
 			"and a directory that announced none of it would leave the live " +
 			"feed silent about exactly those writes")
+	case opts.TokenIDs == nil:
+		return nil, errors.New("iamapi: this surface needs this node's Tier A " +
+			"token labels — /iam/node-tokens answers which directory row each " +
+			"one acts through, and an empty list would read as a node with no " +
+			"token to bind")
 	}
 	s := &Service{
 		directory: opts.Directory, authority: opts.Authority,
 		opener:   opts.Opener,
 		external: opts.ExternalBase, bindings: opts.Bindings,
-		ceiling: slices.Clone(opts.Ceiling), audit: opts.Audit,
-		now: opts.Now,
+		ceiling: slices.Clone(opts.Ceiling), tokens: opts.TokenIDs,
+		audit: opts.Audit,
+		now:   opts.Now,
 	}
 	if s.now == nil {
 		s.now = func() time.Time { return time.Now().UTC() }

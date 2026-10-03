@@ -10,6 +10,8 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/colleague"
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
 	"github.com/crewlet/crewlet/internal/authz"
+	coordmem "github.com/crewlet/crewlet/internal/coord/memory"
+	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/tools"
 	"github.com/crewlet/crewlet/internal/tracker"
 )
@@ -105,6 +107,10 @@ func operatorDeps(t *testing.T) builtin.OperatorDeps {
 	t.Helper()
 	trk := newFakeTracker()
 	person := &personSpy{}
+	full := fullDeps(t)
+	company := &org.Organization{Name: "Acme"}
+	orgOf := func() *org.Organization { return company }
+	answers := newAnswerRig()
 	return builtin.OperatorDeps{
 		Work: builtin.WorkDeps{
 			Reader: trk, Writer: trk.as, Search: trk, Inbox: trk,
@@ -112,6 +118,7 @@ func operatorDeps(t *testing.T) builtin.OperatorDeps {
 			Moves:         trk.moves,
 			PersonWriter:  func(builtin.Actor) builtin.PersonWriter { return person },
 			ProjectWriter: func(builtin.Actor) builtin.ProjectWriter { return trk },
+			Placer:        func(builtin.Actor) builtin.WorkPlacer { return nil },
 			// A CONSTRUCTOR THAT ANSWERS NIL still registers the tool,
 			// because OperatorTools gates on whether the SEAM is wired
 			// rather than on what it yields. That is what this walk
@@ -125,6 +132,19 @@ func operatorDeps(t *testing.T) builtin.OperatorDeps {
 				return builtin.Actor{Handle: "ops", Kind: tracker.AuthorOperator}, nil
 			},
 		},
+		Pages:     full.Pages,
+		Knowledge: full.Knowledge,
+		Org:       orgOf,
+		// The operator-only verbs: a parked run's answer, a seat's pause
+		// and resume, a note to a running turn and an answer from the
+		// company's knowledge. Each is a seam of its own, and each left
+		// nil is a verb no seat holds and this walk would never see.
+		Runs: builtin.RunDeps{Desk: &deskFake{}, Actor: builtin.PrincipalActor},
+		Pauses: builtin.SeatPauseDeps{Pauses: coordmem.NewFleet(), Announce: &announced{},
+			Org: orgOf, Actor: builtin.PrincipalActor},
+		Steer: builtin.SteerDeps{Asker: &fleetAsker{}, Actor: builtin.PrincipalActor},
+		Answer: builtin.AnswerDeps{Models: answers.model, Budget: answers.budget,
+			Actor: builtin.PrincipalActor},
 		Authorize: builtin.Decide(chartLeads),
 	}
 }

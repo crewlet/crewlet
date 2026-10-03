@@ -49,9 +49,9 @@
  * # Why it is in the protocol layer
  *
  * Every way an answer reaches a screen goes through it: a question
- * (`lib/useQuery.ts`), a REST read (`lib/restRead.ts`), the engine-health poll
- * (`lib/engineHealth.ts`) and every push the store replaces a slice with
- * (`./store.ts`). The store is here, and nothing here may import React — the
+ * (`lib/useQuery.ts`), a REST read (`lib/restRead.ts`) and every push the
+ * store replaces a slice with (`./store.ts`) — the engine's health among them,
+ * which is pushed whole rather than polled. The store is here, and nothing here may import React — the
  * hook that shares a value a SCREEN derives is `lib/share.ts`.
  */
 

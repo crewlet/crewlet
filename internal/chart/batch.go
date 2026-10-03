@@ -458,7 +458,7 @@ type Holders interface {
 	// holds, and an ERROR for rows this node could not read.
 	//
 	// THE SEAT IS NAMED BY ITS IDENTITY — the handle it was created under,
-	// [Seat.Origin] — because that is what a binding names (ADR-0020). Asked
+	// [Seat.Origin] — because that is what a binding names (ADR-0027). Asked
 	// by the handle the seat answers to now, a renamed seat read as held by
 	// nobody, and its holder's removal went through without a word.
 	HolderOf(ctx context.Context, tx *sql.Tx, seat string) (string, error)
@@ -490,7 +490,7 @@ func heldGesture(op Operation, before wnode, known bool) string {
 // checkHeld refuses a gesture on a seat the directory says somebody holds.
 //
 // THE SEAT IS ASKED ABOUT BY ITS IDENTITY — the address it was created under,
-// off the replay — because that is what a binding names (ADR-0020). A seat
+// off the replay — because that is what a binding names (ADR-0027). A seat
 // renamed earlier in the same batch answers to an address the rows do not hold
 // yet, and one the batch created has no row at all; the replay has both.
 func checkHeld(ctx context.Context, tx *sql.Tx, index int, op Operation,

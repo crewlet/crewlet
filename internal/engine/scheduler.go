@@ -125,13 +125,21 @@ func (e *Engine) armSchedulerLocked(ctx context.Context, c *Company) {
 		// current epoch must not fire the previous company's crons — and
 		// unlike a delivery there is no queued copy to fall back on, so a
 		// shedding tick skips whole rather than firing something stale.
-		Admits:          e.admits,
-		Duty:            e.workerDuty(schedule.DutyName, schedule.DutyTTL(tick)),
-		DefaultTimezone: cfg.DefaultTimezone,
-		Tick:            tick,
-		Jitter:          time.Duration(cfg.JitterSeconds) * time.Second,
-		CatchupMin:      time.Duration(cfg.CatchupMinSeconds) * time.Second,
-		CatchupMax:      cfg.CatchupMax(),
+		Admits: e.admits,
+		Duty:   e.workerDuty(schedule.DutyName, schedule.DutyTTL(tick)),
+		// A PERSON'S PAUSE, off this node's watched copy: a paused seat's
+		// fire is recorded skipped rather than sent into its held inbox.
+		// The duty moves between nodes, and every node keeps the copy.
+		Paused: e.seatPaused,
+		// THE COMPANY'S CLOCK, read per tick for the reason the org is:
+		// the loop outlives the apply that armed it, and a zone captured
+		// here fired every zone-less schedule on the clock the loop was
+		// armed under until something happened to re-arm it.
+		Zone:       e.Zone,
+		Tick:       tick,
+		Jitter:     time.Duration(cfg.JitterSeconds) * time.Second,
+		CatchupMin: time.Duration(cfg.CatchupMinSeconds) * time.Second,
+		CatchupMax: cfg.CatchupMax(),
 	})
 	if err != nil {
 		// Not fatal, and said loudly. Every New error names a wiring

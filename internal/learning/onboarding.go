@@ -27,7 +27,7 @@ import (
 // the seat's own business to re-read, and hashing page content would re-run a
 // full pass every time somebody fixed a typo.
 //
-// IDENTITIES AND NOT DISPLAY NAMES, which is ADR-0019 reaching one more thing
+// IDENTITIES AND NOT DISPLAY NAMES, which is ADR-0026 reaching one more thing
 // a rename used to cost. Hashing the names meant relabelling a division put
 // every seat under it through a full onboarding turn, and renaming one person
 // put that person through one, although nobody had moved and nothing about

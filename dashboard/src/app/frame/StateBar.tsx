@@ -21,7 +21,12 @@
 
 import type { ReactNode } from "react";
 import { Button, Callout } from "@crewlethq/ui";
-import { KeyGlyph, RefreshGlyph, TuneGlyph, WarningGlyph } from "@crewlethq/icons/glyphs";
+import {
+  KeyGlyph,
+  RotateCwGlyph,
+  SlidersVerticalGlyph,
+  TriangleAlertGlyph,
+} from "@crewlethq/icons/glyphs";
 import {
   CoverageTags,
   INCOMPLETE,
@@ -42,7 +47,7 @@ export interface Degradation {
    *
    * It was a name out of our own icon set, chosen from a three-value union, and
    * the union was the whole type system this had: a fourth degradation would
-   * have added a name here and a path in `~/ui/Icon.tsx`. A component is the
+   * have added a name here and a drawing of our own. A component is the
    * value uilet's `Callout` takes, and `degradationOf` below is the only thing
    * that ever builds one.
    */
@@ -121,14 +126,14 @@ export function degradationOf({
   if (!connected) {
     return {
       variant: "warning",
-      icon: <RefreshGlyph size="md" />,
+      icon: <RotateCwGlyph size="md" />,
       message: "Reconnecting to the engine — showing the last state received, polling meanwhile.",
     };
   }
   if (identityUnverifiable) {
     return {
       variant: "warning",
-      icon: <RefreshGlyph size="md" />,
+      icon: <RotateCwGlyph size="md" />,
       message:
         "The engine cannot verify your session right now, so live updates are paused and questions wait. It checks again every minute — nothing to do.",
     };
@@ -136,7 +141,7 @@ export function degradationOf({
   if (configured === false) {
     return {
       variant: "warning",
-      icon: <TuneGlyph size="md" />,
+      icon: <SlidersVerticalGlyph size="md" />,
       message:
         "No company configuration is active: no seats are running, and inbound webhooks are refused with a 503 their sender will retry.",
       action: { label: "Configuration", onClick: onConfig },
@@ -181,7 +186,7 @@ export function StateBar({
             (degraded.action || degraded.secondary) && (
               <span className="row gap-2">
                 {degraded.secondary && (
-                  <Button size="small" variant="tertiary" onClick={degraded.secondary.onClick}>
+                  <Button size="small" variant="ghost" onClick={degraded.secondary.onClick}>
                     {degraded.secondary.label}
                   </Button>
                 )}
@@ -202,7 +207,7 @@ export function StateBar({
           may be missing, rows that should have gone may still be here, and
           every total on this screen was computed over the incomplete set. */}
       {incomplete && (
-        <Callout variant="warning" icon={<WarningGlyph size="md" />} layout="banner">
+        <Callout variant="warning" icon={<TriangleAlertGlyph size="md" />} layout="banner">
           <span>
             {/* THE BOLD STAYS IN THE SENTENCE rather than becoming Callout's
                 `title`. Its title is a lead-in label with its own trailing

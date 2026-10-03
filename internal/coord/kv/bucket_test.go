@@ -138,9 +138,9 @@ func passOf(ctx context.Context, t *testing.T, b *leaderBucket) []jetstream.KeyV
 // The pass is an ordered consumer, and on a replicated bucket the server
 // places it on any member of the stream, so it can be served by a follower
 // that has not applied the newest acknowledged writes. Read alone, that pass
-// was the listing: a budget reset missed the counter just charged, so the next
-// charges counted from where it should have been cleared, and the trim floor —
-// a minimum over the position rows — rises over a row it cannot see.
+// was the listing: the listing a seat-pause watch starts from misses the pause
+// just taken, so every node reads that seat as free to work, and the trim
+// floor — a minimum over the position rows — rises over a row it cannot see.
 //
 // Every way the copy can be behind is staged against one snapshot: a key that
 // was rewritten since (the old value must not be listed), one removed by a

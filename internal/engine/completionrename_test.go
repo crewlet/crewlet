@@ -14,7 +14,7 @@ import (
 
 // A TRIGGER WORKED BEFORE A RENAME IS NOT WORKED AGAIN AFTER IT.
 //
-// A seat's identity is the handle it was CREATED under (ADR-0019), and its
+// A seat's identity is the handle it was CREATED under (ADR-0026), and its
 // mailbox follows it through a rename — so a trigger it worked as `cto` is
 // redelivered, after the chart renames it `chief`, under the new address. The
 // completion ledger was keyed on the address the delivery came in on, found

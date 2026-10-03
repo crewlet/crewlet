@@ -10,6 +10,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/store"
 )
 
@@ -36,7 +37,7 @@ func write(t *testing.T, c *store.Configs, parent, body string, age time.Duratio
 	t.Helper()
 	rev := store.Revision{
 		ParentID: parent, CreatedAt: time.Now().UTC().Add(-age),
-		CreatedBy: "test", Source: "test", Summary: body,
+		CreatedBy: "test", CreatedByKind: iam.ActorSystem, Source: "test", Summary: body,
 		Payload: json.RawMessage(fmt.Sprintf(`{"name":%q}`, body)),
 	}
 	var id string
@@ -290,10 +291,12 @@ func TestARevisionKeepsItsAuthorAndTheCredentialApart(t *testing.T) {
 		t.Fatalf("adopt: %v", err)
 	}
 	for _, want := range []struct {
-		id, by, kind, operator string
+		id, by   string
+		kind     iam.ActorKind
+		operator string
 	}{
-		{id, "jane.doe", "operator", pat},
-		{adopted, "sam", "human", "session:0192f00d-0000-7000-8000-0000000000b0"},
+		{id, "jane.doe", iam.ActorOperator, pat},
+		{adopted, "sam", iam.ActorHuman, "session:0192f00d-0000-7000-8000-0000000000b0"},
 	} {
 		got, found, err := c.Get(t.Context(), want.id)
 		if err != nil || !found {

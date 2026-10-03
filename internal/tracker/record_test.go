@@ -372,6 +372,11 @@ func TestEncodeRefusesARecordThatCannotBeApplied(t *testing.T) {
 // row per linearizable read for the length of a rolling upgrade.
 func TestTheBarrierRecordIsItsMeasuredLiteral(t *testing.T) {
 	t.Parallel()
+	// THROUGH THE ENCODER THE READ INDEX CALLS, so the literal is what is
+	// actually appended — version stamp included. A barrier is pinned at
+	// the base version whatever version this build reads, and the encoder
+	// refuses one carrying a versioned field, so every build there is can
+	// apply it.
 	body, err := tracker.EncodeBarrier(statelog.Envelope{
 		Kind: statelog.BarrierKind, Gen: 3,
 	})

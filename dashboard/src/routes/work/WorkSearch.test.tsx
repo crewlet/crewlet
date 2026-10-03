@@ -14,7 +14,7 @@
  * alone would still be a fact nobody can name.
  */
 
-import { cleanup, fireEvent, render, screen, waitFor, within } from "~/test/inCase.ts";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "~/test/inCase.ts";
 import { afterAll, afterEach, beforeAll, beforeEach, expect, test, vi } from "vitest";
 
 import { WorkSearch } from "./WorkSearch.tsx";
@@ -22,7 +22,7 @@ import { PeekHost, PeekNeighbours } from "~/app/frame/PeekHost.tsx";
 import { Router } from "~/app/router.tsx";
 import { ClientContext } from "~/lib/store-hooks.ts";
 import { LiveSocket, Store, type WorkRanked } from "~/protocol/index.ts";
-import { LOCAL_DRAWINGS } from "~/ui/glyph.tsx";
+import { BugGlyph } from "@crewlethq/icons/glyphs";
 import {
   CLAIMANT_HREF,
   CLAIMANT_TITLE,
@@ -86,6 +86,7 @@ const hit = (over: Partial<WorkRanked>): WorkRanked => ({
   project: "ENG",
   type: "bug",
   status: "in_progress",
+  priority: "normal",
   rank: 1,
   snippet: "",
   ...over,
@@ -95,21 +96,37 @@ const hit = (over: Partial<WorkRanked>): WorkRanked => ({
 type Answer = WorkRanked[] | ((q: string) => WorkRanked[]);
 
 /**
- * The screen over a socket answering `answer`. With `rail`, it is mounted the
- * way the frame mounts it — beside the peek rail, inside the provider the
- * screen publishes its `[`/`]` order to — so a case can step the rail.
+ * The screen over a socket answering `answer`, with `outcome` beside the hits
+ * (what mode was served, and why) and every question it was asked pushed onto
+ * `asked`. With `rail`, it is mounted the way the frame mounts it — beside the
+ * peek rail, inside the provider the screen publishes its `[`/`]` order to —
+ * so a case can step the rail.
  */
-function mount(answer: Answer, { rail = false }: { rail?: boolean } = {}) {
+function mount(
+  answer: Answer,
+  {
+    rail = false,
+    outcome = {},
+    asked = [],
+  }: {
+    rail?: boolean;
+    outcome?: Record<string, unknown>;
+    asked?: Record<string, unknown>[];
+  } = {},
+) {
   const store = new Store();
   const socket = new LiveSocket(store);
-  (socket as unknown as { query: (what: string, p: { q: string }) => Promise<unknown> }).query = (
-    _what,
-    p,
-  ) =>
-    Promise.resolve({
-      hits: typeof answer === "function" ? answer(p.q) : answer,
+  (
+    socket as unknown as { query: (w: string, p: Record<string, unknown>) => Promise<unknown> }
+  ).query = (_what, params) => {
+    asked.push(params);
+    return Promise.resolve({
+      hits: typeof answer === "function" ? answer(String(params.q ?? "")) : answer,
       available: true,
+      mode: params.mode ?? "hybrid",
+      ...outcome,
     });
+  };
   return render(
     <ClientContext.Provider value={{ store, socket }}>
       <Router>
@@ -148,9 +165,10 @@ test("a hit wears its own type's mark, and says which type that is", async () =>
   // THE VISIBLE DEFECT: the DRAWING varies per row. A component that named the
   // type correctly but drew one mark for all of them passes the two above.
   expect(pathOf(bug)).not.toBe(pathOf(task));
-  // AND IT IS THE SAME GLYPH THE BOARD AND THE LIST GIVE IT. `TypeIcon` passes
-  // `size="sm"` = 14px, and `glyphOpticalSize` only returns 24 above 20.
-  expect(pathOf(bug)).toBe(LOCAL_DRAWINGS["bug_report"]?.[20]);
+  // AND IT IS THE SAME GLYPH THE BOARD AND THE LIST GIVE IT: the design
+  // system's own bug, one Lucide drawing at every size.
+  const { container: reference } = render(<BugGlyph />);
+  expect(pathOf(bug)).toBe(reference.querySelector("path")?.getAttribute("d"));
 });
 
 // TWO ANSWERS ON ONE ROW. A tick is the completion mark, so a hit the engine
@@ -247,14 +265,64 @@ test("[ and ] step the rail between two hits under one key", async () => {
   await waitFor(() => expect(screen.getByText(DUPLICATE_TITLE)).toBeTruthy());
 
   const link = (title: string) => rowOf(title).querySelector<HTMLAnchorElement>("a.row-link")!;
-  fireEvent.click(link(CLAIMANT_TITLE));
+  // IN AN ASYNC ACT: the item's peek body is a lazy chunk, and the click that
+  // opens it suspends the rail until the chunk has loaded.
+  await act(async () => {
+    fireEvent.click(link(CLAIMANT_TITLE));
+  });
   await waitFor(() => expect(peekNow()).toBe(`item:${SHARED_KEY}`));
   await waitFor(() => expect(screen.getByLabelText("Next")).toBeTruthy());
 
-  fireEvent.keyDown(window, { key: "]" });
+  await act(async () => {
+    fireEvent.keyDown(window, { key: "]" });
+  });
   await waitFor(() => expect(peekNow()).toBe(`item:${DUPLICATE}`));
 
   await waitFor(() => expect(screen.getByLabelText("Previous")).toBeTruthy());
-  fireEvent.keyDown(window, { key: "[" });
+  await act(async () => {
+    fireEvent.keyDown(window, { key: "[" });
+  });
   await waitFor(() => expect(peekNow()).toBe(`item:${SHARED_KEY}`));
+});
+
+// THE MODE REACHES THE WIRE. Hybrid, Keyword and Meaning are the engine's
+// three rankings (`hybrid`, `keyword`, `semantic`); the segment writes `mode=`
+// into the address and the question carries it — Meaning is the word on the
+// control and never on the wire.
+test("the mode a reader picks is the mode the engine is asked for", async () => {
+  const asked: Record<string, unknown>[] = [];
+  mount([hit({})], { asked });
+  await waitFor(() => expect(asked.at(-1)?.mode).toBe("hybrid"));
+  fireEvent.click(screen.getByRole("radio", { name: "Meaning" }));
+  await waitFor(() => expect(asked.at(-1)?.mode).toBe("semantic"));
+  expect(location.hash).toContain("mode=semantic");
+});
+
+// WHAT WAS SERVED IS SAID when it is not what was asked: a company with no
+// embeddings provider that asked for Hybrid is answered Keyword, and a keyword
+// ranking passed off as a hybrid one is a claim nobody made.
+test("an answer served in another mode says so, and why", async () => {
+  mount([hit({})], { outcome: { served_mode: "keyword", degraded: "no_embeddings" } });
+  await waitFor(() => expect(screen.getByText(/Asked for Hybrid, served Keyword/)).toBeTruthy());
+  expect(screen.getByText(/no embeddings provider/)).toBeTruthy();
+});
+
+// AND A MODE THIS BUILD DOES NOT DRAW falls back to the default rather than
+// meeting a refusal over the whole screen because of one stale address key.
+test("an unknown mode off the address asks for the default", async () => {
+  location.hash = "#/work/search?q=auth&mode=vibes";
+  const asked: Record<string, unknown>[] = [];
+  mount([hit({})], { asked });
+  await waitFor(() => expect(asked.at(-1)?.mode).toBe("hybrid"));
+});
+
+// A SNIPPET IS A CUT OF A MARKDOWN BODY, and it is read as the prose it
+// renders to: `**Repro:**` on a ranked row is two pairs of asterisks nobody
+// wrote to be seen.
+test("a hit's snippet is drawn as prose, without its markdown marks", async () => {
+  mount([hit({ snippet: "**Repro:** run `make soak` on a #cold node" })]);
+  await waitFor(() => expect(screen.getByText("Authentication rework")).toBeTruthy());
+  const row = rowOf("Authentication rework");
+  expect(row.textContent).toContain("Repro: run make soak on a #cold node");
+  expect(row.textContent).not.toContain("**");
 });

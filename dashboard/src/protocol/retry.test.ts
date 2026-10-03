@@ -1,18 +1,17 @@
 /**
  * The one reading of the engine's retry hint, which every retry path in the
- * dashboard takes — the socket's queries and watch, the shared health read,
- * the org builder's check and the REST reads a screen asks again on its own.
+ * dashboard takes — the socket's queries and watch, the org builder's check
+ * and the REST reads a screen asks again on its own.
  */
 
 import { describe, expect, test } from "vitest";
+import { RETRY_AFTER_MAX_MS, UNAVAILABLE_RETRY_MS } from "../contract/retry.ts";
 import { REQUEST_TIMEOUT_MS, RestError, restFailure, restRetryMs } from "./rest.ts";
 import {
-  RETRY_AFTER_MAX_MS,
   retryAfterMs,
   UNANSWERED_RETRY_BASE_MS,
   UNANSWERED_RETRY_MAX_MS,
   unansweredRetryMs,
-  UNAVAILABLE_RETRY_MS,
 } from "./retry.ts";
 import { unavailableRetryMs } from "./socket.ts";
 

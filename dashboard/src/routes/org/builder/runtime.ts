@@ -10,7 +10,10 @@
  *   requires, and rejects only when the caller aborted. `protocol/rest.ts`
  *   throws on a refusal; a thrown refusal is turned back into the status and
  *   body the engine sent, and anything else that never reached the engine is
- *   status 0.
+ *   status 0. It reaches the org chart (`/chart`) as well as the settings
+ *   (`/config`), because a save is a sequence over both surfaces — which is
+ *   why it is the builder's own rather than `protocol/configWrite.ts`'s,
+ *   whose requests are the settings' alone.
  * - The CLOCK is monotonic (`performance.now`), because the check's debounce
  *   and backoff are durations and a wall clock moved by NTP or a suspended
  *   laptop would fire them early or never.
@@ -61,16 +64,25 @@ export async function answerOf(call: Promise<RestResponse>): Promise<HttpAnswer>
 
 /** The settings and the org chart, over the dashboard's one REST path. */
 export const restTransport: EngineTransport = {
-  send: (request, signal) =>
-    answerOf(
-      rest.request(request.method, request.path, {
-        query: request.query,
-        contentType: request.contentType,
-        headers: request.headers,
-        body: request.body,
-        signal,
-      }),
-    ),
+  send: (request, signal) => {
+    const options = {
+      query: request.query,
+      contentType: request.contentType,
+      headers: request.headers,
+      body: request.body,
+      signal,
+    };
+    // EACH SURFACE DIALLED BY ITS OWN LITERAL, never the model's path handed
+    // on whole: a write reaches the settings or the org chart and nothing
+    // else (`EngineRequest.path`'s type says so), and a call that starts with
+    // the surface's own path is one `protocol/proxy.test.ts` can hold the dev
+    // server's proxy to.
+    return answerOf(
+      request.path === "/config"
+        ? rest.request(request.method, "/config", options)
+        : rest.request(request.method, `/chart/${request.path.slice("/chart/".length)}`, options),
+    );
+  },
   settings: (signal) => answerOf(rest.request("GET", "/config", { signal })),
   revision: (id, signal) =>
     answerOf(rest.request("GET", `/config/revisions/${encodeURIComponent(id)}`, { signal })),

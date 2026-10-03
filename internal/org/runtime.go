@@ -3,6 +3,7 @@ package org
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"reflect"
 	"sync"
@@ -197,8 +198,8 @@ var emptyUnitRuntime = sync.OnceValues(func() ([]byte, error) {
 	return json.Marshal(clearedUnit(Unit{}))
 })
 
-// RuntimeShape is where a runtime half keeps its credentials: [chart.Runtime],
-// answered from this package's own types.
+// RuntimeShape is where a runtime half keeps its credentials, and which rules
+// it is held to: [chart.Runtime], answered from this package's own types.
 //
 // THE TAGS ARE THE ANSWER. Every field of [Role] and [Unit] that holds a
 // credential carries `secret:"true"` — the same tag the authored config's
@@ -227,6 +228,38 @@ func (RuntimeShape) Credentials(kind chart.ObjectKind, runtime json.RawMessage,
 		return secrets.Walk(unitRuntimeType, runtime, visit)
 	}
 	return nil, fmt.Errorf("org: a %s carries no runtime half", kind)
+}
+
+// Check implements [chart.Runtime]: the half decoded onto the object it is
+// written for and held to every rule this package states about the fields it
+// carries ([Role.ValidateRuntime], and a unit's schedules).
+//
+// DECODED ONTO A ROW-SHAPED OBJECT, and nothing more: the chart owns the
+// row's fields, so the object carries the name and the seat's kind the row
+// does — what the rules are worded by and judged against — and nothing the
+// half could have restated about either.
+func (RuntimeShape) Check(owner chart.RuntimeOwner, runtime json.RawMessage) error {
+	switch owner.Kind {
+	case chart.KindSeat:
+		var r Role
+		if err := ApplySeatRuntime(&r, runtime); err != nil {
+			return err
+		}
+		r.Name, r.Kind = owner.Name, RoleKind(owner.Seat)
+		return r.ValidateRuntime()
+	case chart.KindUnit:
+		var u Unit
+		if err := ApplyUnitRuntime(&u, runtime); err != nil {
+			return err
+		}
+		u.Name = owner.Name
+		var errs []error
+		for _, f := range validateSchedules(fmt.Sprintf("unit %q", owner.Name), u.Schedules) {
+			errs = append(errs, &UnitError{Unit: &u, Field: f.field, Err: f.err})
+		}
+		return errors.Join(errs...)
+	}
+	return fmt.Errorf("org: a %s carries no runtime half", owner.Kind)
 }
 
 // ApplyUnitRuntime is [ApplySeatRuntime] for a unit.

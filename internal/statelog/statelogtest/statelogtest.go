@@ -10,12 +10,14 @@
 // documentation: the table that must carry a class, the stream whose settings
 // must agree with its replay protocol, the apply that must produce the same
 // rows twice, the envelope that must not fail on a version this build cannot
-// read, the record that must name the node that wrote it and the generation it
-// was decided in, the evictions a domain that claims identity must be able to
-// list — because the trim counts nodes per log, and a log whose evictions
-// nothing reads counts an evicted node for ever — and the node gate that is
-// the domain's own eviction and nothing else, because a write flagged one is
-// excused the fences and the reserve every other write is held to.
+// read, the version a record is stamped at — the lowest that reads what it
+// carries, because an older build decides by it — the record that must name
+// the node that wrote it and the generation it was decided in,
+// the evictions a domain that claims identity must be able to list — because
+// the trim counts nodes per log, and a log whose evictions nothing reads
+// counts an evicted node for ever — and the node gate that is the domain's
+// own eviction and nothing else, because a write flagged one is excused the
+// fences and the reserve every other write is held to.
 //
 // # Bringing up a new domain: if a case fails, suspect the case
 //
@@ -90,7 +92,23 @@ type Candidate struct {
 	// suite varies the version to reach the deferral contract, so a
 	// version above the domain's own must still ENCODE — it is what a
 	// later build publishes and this one has to retain.
+	//
+	// A VERSION OF ZERO is the writer's own path: the record goes out with
+	// whatever version the domain's encoder stamps, which is what the
+	// versions case ([Stamping]) reads back. It carries no versioned field.
 	Encode func(kind, id, opID string, version int) ([]byte, error)
+
+	// Fields is the domain's versioned-field table — every field its
+	// records gained since the base format — or nil when there is none.
+	Fields statelog.RecordFields
+
+	// Carrying builds a valid record carrying exactly the named field
+	// and no other versioned field, with its version left for the
+	// domain's encoder to stamp. Required whenever Fields is not empty:
+	// it is what proves each field's path is where the encoder actually
+	// writes it, since a path that misses stamps nothing and fails
+	// nowhere else.
+	Carrying func(field statelog.VersionedField) ([]byte, error)
 
 	// Kinds are the subject kinds the suite may publish. The first is
 	// used wherever one is needed.
@@ -124,6 +142,7 @@ func Run(t *testing.T, new Factory) {
 	t.Run("tables", func(t *testing.T) { runTables(t, new) })
 	t.Run("envelope", func(t *testing.T) { runEnvelope(t, new) })
 	t.Run("apply", func(t *testing.T) { runApply(t, new) })
+	t.Run("versions", func(t *testing.T) { runVersions(t, new) })
 	t.Run("stamp", func(t *testing.T) { runStamp(t, new) })
 	t.Run("evictions", func(t *testing.T) { runEvictions(t, new) })
 	t.Run("node gates", func(t *testing.T) { runNodeGates(t, new) })

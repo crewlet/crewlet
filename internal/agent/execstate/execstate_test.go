@@ -38,6 +38,7 @@ func suspended() execstate.State {
 		},
 		Iterations: []ledger.Iteration{{Iteration: 1, Intent: "fix it"}},
 		Task:       "fix the flake",
+		Uncharged:  &execstate.Uncharged{Turns: 1, Input: 900, Output: 120, Workers: 1},
 	}
 }
 
@@ -81,6 +82,12 @@ func TestAStateRoundTripsThroughTheRow(t *testing.T) {
 	}
 	if got.Task != "fix the flake" {
 		t.Fatalf("task = %q", got.Task)
+	}
+	// WHAT NO ITEM HAS BEEN CHARGED FOR YET. The segment that finishes the
+	// turn pays it, and it is often another process on another node, so a
+	// row that loses it loses the first half of the turn from its task.
+	if got.Uncharged == nil || *got.Uncharged != *want.Uncharged {
+		t.Fatalf("the uncharged spend did not survive: %+v", got.Uncharged)
 	}
 }
 

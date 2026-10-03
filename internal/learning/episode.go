@@ -16,7 +16,7 @@
 // ([org.Role.Handle]). A handle is prose a founder retypes; keyed on it, a
 // renamed seat read none of the episodes, skills, profiles or thread history
 // it had before the rename, while its diary and onboarding marker — keyed on
-// the id derived from the same origin (ADR-0019) — followed it. So every
+// the id derived from the same origin (ADR-0026) — followed it. So every
 // writer and every reader passes the origin, which the chart never issues to
 // another seat, and a surface that DISPLAYS a stored value (a memory view, an
 // event, a drafted page) resolves it back to the seat's current handle
@@ -62,9 +62,18 @@ type Episode struct {
 
 	// Handle is the seat's ORIGIN — the handle it was created under — and
 	// not the address it answers to now. See the package doc.
-	Handle    string
-	Role      string
-	TaskID    string
+	Handle string
+	Role   string
+	// WorkItem is the work item the turn was charged to, as its
+	// backend-qualified ref (`native:<id>`, `jira:<id>`) — the one identity
+	// that is unique across trackers — and empty for a turn on nothing and
+	// for a compacted row, whose cluster spans items by construction.
+	//
+	// The `work_item` column since node migration 0033, which renamed the
+	// `task_id` it had been declared as: that column never held anything,
+	// because the turn event it was copied from declared a task id and never
+	// set one — and `task_id` means a delegated worker's task elsewhere.
+	WorkItem  string
 	TurnID    string
 	StartedAt time.Time
 	EndedAt   time.Time
@@ -115,7 +124,7 @@ func NewEpisodes(db *store.DB) *Episodes { return &Episodes{db: db} }
 
 const episodeInsertSQL = `
 INSERT INTO episodes (
-	id, agent_handle, agent_role, task_id, turn_id, started_at, ended_at,
+	id, agent_handle, agent_role, work_item, turn_id, started_at, ended_at,
 	plan_summary, task_summary, tool_sequence, skills_used, review_outcome,
 	duration_ms, embedding, kind, count, exemplar_turn_ids,
 	consolidated_into_skill_id, common_task_pattern, common_outcome,
@@ -162,7 +171,7 @@ func (e *Episodes) Append(ctx context.Context, ep Episode) (bool, error) {
 		return false, err
 	}
 	res, err := e.db.SQL().ExecContext(ctx, episodeInsertSQL,
-		ep.ID, ep.Handle, ep.Role, ep.TaskID, ep.TurnID,
+		ep.ID, ep.Handle, ep.Role, ep.WorkItem, ep.TurnID,
 		store.EncodeTime(ep.StartedAt), store.EncodeTime(ep.EndedAt),
 		ep.PlanSummary, ep.TaskSummary, jsonList(ep.ToolSequence), jsonList(ep.SkillsUsed),
 		ep.ReviewOutcome, ep.Duration.Milliseconds(), blob,
@@ -211,7 +220,7 @@ func (e *Episodes) encodeEmbedding(v []float32) (any, error) {
 	return blob, nil
 }
 
-const episodeColumns = `id, agent_handle, agent_role, task_id, turn_id,
+const episodeColumns = `id, agent_handle, agent_role, work_item, turn_id,
 	started_at, ended_at, plan_summary, task_summary, tool_sequence,
 	skills_used, review_outcome, duration_ms, embedding, kind, count,
 	exemplar_turn_ids, consolidated_into_skill_id, common_task_pattern,
@@ -228,7 +237,7 @@ func scanEpisode(rows interface{ Scan(...any) error }) (Episode, error) {
 		consolidated, workKey, conversationKey sql.NullString
 	)
 	if err := rows.Scan(
-		&ep.ID, &ep.Handle, &ep.Role, &ep.TaskID, &ep.TurnID,
+		&ep.ID, &ep.Handle, &ep.Role, &ep.WorkItem, &ep.TurnID,
 		&started, &ended, &ep.PlanSummary, &ep.TaskSummary, &toolSeq,
 		&skills, &ep.ReviewOutcome, &durationMS, &embedding, &kind, &ep.Count,
 		&exemplars, &consolidated, &ep.CommonTaskPattern,
@@ -289,6 +298,20 @@ func (e *Episodes) Recent(ctx context.Context, handle string, limit int) ([]Epis
 		return nil, fmt.Errorf("learning: recent episodes for %s: %w", handle, err)
 	}
 	return collectEpisodes(rows)
+}
+
+// Count is how many episode ROWS a seat has — the set [Episodes.Recent] pages
+// through. A compacted row stands for a cluster of turns and counts once
+// here, as it is listed once; how many turns it stands for is its own
+// `Count`.
+func (e *Episodes) Count(ctx context.Context, handle string) (int, error) {
+	var n int
+	err := e.db.SQL().QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM episodes WHERE agent_handle = ?`, handle).Scan(&n)
+	if err != nil {
+		return 0, fmt.Errorf("learning: count episodes for %s: %w", handle, err)
+	}
+	return n, nil
 }
 
 // ForConversation returns a seat's episodes on one conversation, newest first

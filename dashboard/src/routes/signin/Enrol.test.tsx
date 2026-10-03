@@ -9,7 +9,8 @@
  */
 
 import { cleanup, fireEvent, render, screen, waitFor } from "~/test/inCase.ts";
-import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, test, vi } from "vitest";
+import { CHUNKS, loadChunk } from "~/app/lazyScreen.ts";
 import { App } from "~/app/App.tsx";
 import { Router } from "~/app/router.tsx";
 import { ClientContext } from "~/lib/store-hooks.ts";
@@ -115,6 +116,14 @@ async function confirmCode(code: string) {
   fireEvent.change(await screen.findByLabelText(/six-digit code/i), { target: { value: code } });
   fireEvent.click(screen.getByRole("button", { name: "Confirm" }));
 }
+
+// THE SIGN-IN SCREENS ARE A CHUNK OF THEIR OWN (`app/lazyScreen.ts`), and so is
+// every workspace a finished sign-in lands on. This suite asserts what is drawn
+// and where a reader is sent, not how long a cold `import()` takes under a
+// test transformer — so every chunk is in before a case starts.
+beforeAll(async () => {
+  await Promise.all([...CHUNKS, "signin" as const].map((chunk) => loadChunk(chunk)));
+});
 
 beforeEach(() => {
   Object.defineProperty(globalThis, "WebSocket", { writable: true, value: InertWebSocket });

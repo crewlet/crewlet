@@ -2,11 +2,13 @@ package org_test
 
 import (
 	"fmt"
+	"maps"
 	"slices"
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/chart"
 	"github.com/crewlet/crewlet/internal/org"
+	"github.com/crewlet/crewlet/internal/period"
 )
 
 // THE VIEW'S OWN PROPERTIES, as distinct from its equivalence with the
@@ -93,6 +95,70 @@ func TestASeatNoContentHasFilledIsInTheViewAndIncomplete(t *testing.T) {
 	}
 }
 
+// A VIEW SHARES NOTHING WITH THE ROWS IT WAS BUILT FROM.
+//
+// The engine keeps the rows it applied and builds a view from them on every
+// apply, and the tree is NORMALISED IN PLACE — a contact trimmed and folded, a
+// `manages:` list rewritten. A seat holding the row's own slices would hand
+// every later build whatever the last one, or any reader of it, wrote through
+// them; and two builds at once would race on one backing array.
+func TestAViewSharesNothingWithTheRowsItWasBuiltFrom(t *testing.T) {
+	t.Parallel()
+
+	runtime, err := org.SeatRuntime(&org.Role{
+		Kind:    org.KindHuman,
+		Contact: &org.HumanContact{GitHubLogin: " SarahDev "},
+	})
+	if err != nil {
+		t.Fatalf("encode the runtime half: %v", err)
+	}
+	rows := chart.Authored{
+		Units: []chart.AuthoredUnit{{Key: "eng", Name: "Engineering",
+			Goals: []string{"ship"}, KnowledgeRefs: []string{"ENG"}}},
+		Seats: []chart.AuthoredSeat{{
+			Handle: "sarah", Unit: "eng", Kind: chart.SeatHuman, Name: "Sarah",
+			Responsibilities:     []string{"review"},
+			BehavioralGuidelines: []string{"be kind"},
+			Runtime:              runtime,
+		}},
+	}.Rows()
+	settings := org.Settings{Name: "Acme", Policies: []string{"no surprises"},
+		TokenBudget: org.TokenCeilings{period.Day: 10}, KnowledgeScope: []string{"ENG"}}
+
+	first := org.FromRows(rows, settings)
+	seat, unit := first.Org.Role("sarah"), first.Org.Unit("eng")
+	if seat == nil || unit == nil {
+		t.Fatalf("the view is missing its seat or unit: %+v", first.Org)
+	}
+	if seat.Contact == nil || seat.Contact.GitHubLogin != "sarahdev" {
+		t.Fatalf("the view's contact = %+v, want it normalised", seat.Contact)
+	}
+	seat.Responsibilities[0], seat.BehavioralGuidelines[0] = "written", "written"
+	unit.Goals[0], unit.KnowledgeRefs[0] = "written", "written"
+	first.Org.Policies[0], first.Org.KnowledgeScope[0] = "written", "written"
+	first.Org.TokenBudget[period.Day] = 99
+
+	again := org.FromRows(rows, settings)
+	seat, unit = again.Org.Role("sarah"), again.Org.Unit("eng")
+	for what, got := range map[string]string{
+		"responsibilities":      seat.Responsibilities[0],
+		"behavioral guidelines": seat.BehavioralGuidelines[0],
+		"unit goals":            unit.Goals[0],
+		"knowledge refs":        unit.KnowledgeRefs[0],
+		"policies":              again.Org.Policies[0],
+		"knowledge scope":       again.Org.KnowledgeScope[0],
+	} {
+		if got == "written" {
+			t.Errorf("the second view's %s carry what a reader of the first "+
+				"wrote: the two shared the rows' backing array", what)
+		}
+	}
+	if again.Org.TokenBudget[period.Day] != 10 {
+		t.Errorf("the second view's day ceiling is %d, written through the "+
+			"first view's map", again.Org.TokenBudget[period.Day])
+	}
+}
+
 // A SEAT UNDER A UNIT NOTHING DECLARES STAYS AT THE ROOT.
 //
 // The same answer the document path gives for a `unit:` reference that
@@ -153,7 +219,7 @@ func TestTheSettingsReachTheViewWithoutTouchingTheChart(t *testing.T) {
 
 	settings := org.Settings{
 		Name: "Acme", Mission: "ship it", Vision: "everywhere",
-		Policies: []string{"be kind"}, TokenBudget: 1000,
+		Policies: []string{"be kind"}, TokenBudget: org.TokenCeilings{period.Day: 1000},
 		KnowledgeScope: []string{"ENG"},
 	}
 	view := org.FromRows(chart.Authored{}.Rows(), settings)
@@ -161,8 +227,8 @@ func TestTheSettingsReachTheViewWithoutTouchingTheChart(t *testing.T) {
 	if view.Org.Name != "Acme" || view.Org.Mission != "ship it" {
 		t.Errorf("the settings did not reach the view: %+v", view.Org)
 	}
-	if view.Org.TokenBudget != 1000 {
-		t.Errorf("the token budget is %d, want 1000", view.Org.TokenBudget)
+	if want := (org.TokenCeilings{period.Day: 1000}); !maps.Equal(view.Org.TokenBudget, want) {
+		t.Errorf("the token budget is %v, want %v", view.Org.TokenBudget, want)
 	}
 	if !slices.Equal(view.Org.KnowledgeScope, []string{"ENG"}) {
 		t.Errorf("the knowledge scope is %v", view.Org.KnowledgeScope)

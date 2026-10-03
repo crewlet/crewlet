@@ -241,7 +241,10 @@ func runtimeObjects() []runtimeObject {
 		},
 	}, {
 		name: "a unit",
-		seed: json.RawMessage(`{"mcp_env":{"gl":{"T":"${T}"}},"token_budget":9007199254740993}`),
+		// A CEILING PAST 2^53, in the object form a budget takes — one
+		// key per capped window — so a comparison that decodes to floats
+		// reads one below it as the same number.
+		seed: json.RawMessage(`{"mcp_env":{"gl":{"T":"${T}"}},"token_budget":{"day":9007199254740993}}`),
 		place: func(r *writeRig) {
 			r.batch("op-unit", op(chart.OpCreateUnit, chart.KindUnit, "eng", ""))
 		},

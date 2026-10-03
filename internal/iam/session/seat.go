@@ -43,7 +43,7 @@ type Chart interface {
 	// was created under — to the seat as it is known now.
 	//
 	// AN IDENTITY RATHER THAN AN ADDRESS, because a binding names one
-	// (ADR-0020): a rename moves a handle and the chart may later give a
+	// (ADR-0027): a rename moves a handle and the chart may later give a
 	// retired one to another seat, so an implementation that resolved the
 	// binding as an ADDRESS — the handle column, or the rename trail —
 	// reported a renamed seat as gone, or signed its holder in as whichever

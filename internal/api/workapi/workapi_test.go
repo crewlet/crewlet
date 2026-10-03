@@ -2,6 +2,7 @@ package workapi_test
 
 import (
 	"errors"
+	"fmt"
 	"net/http"
 	"slices"
 	"strconv"
@@ -10,9 +11,11 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/api/auth"
+	"github.com/crewlet/crewlet/internal/api/httpjson"
 	"github.com/crewlet/crewlet/internal/api/opkey"
 	"github.com/crewlet/crewlet/internal/api/workapi"
 	"github.com/crewlet/crewlet/internal/authz"
+	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tracker"
@@ -119,13 +122,13 @@ func TestARefusalWaitingCannotClearSaysNothingAboutComingBack(t *testing.T) {
 				r.reader.err = &statelog.Refused{Code: statelog.RefuseDeferred,
 					Level: statelog.ReadSession}
 			}, http.MethodPost, "/work/items/ENG-1/rank",
-			map[string]any{"after": "ENG-2"}, ""},
+			map[string]any{"after": "ENG-2", "if_match": 3}, ""},
 		{"a read refused by a node behind its log, from its own backlog",
 			func(r *rig) {
 				r.reader.err = &statelog.Refused{Code: statelog.RefuseBehind,
 					Level: statelog.ReadSession, RetryAfter: 9 * time.Second}
 			}, http.MethodPost, "/work/items/ENG-1/rank",
-			map[string]any{"after": "ENG-2"}, "9"},
+			map[string]any{"after": "ENG-2", "if_match": 3}, "9"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			t.Parallel()
@@ -149,20 +152,53 @@ func TestARefusalWaitingCannotClearSaysNothingAboutComingBack(t *testing.T) {
 // seconds, and handed it a database path while it waited. A fault is `500
 // internal_error` with its words in the log; the refusals above keep their
 // `503` — the control.
+//
+// And the same holds wherever the fault is met: a read a TOOL takes before it
+// decides (the rank route reads through `place_work_item`), a write a tool
+// makes, and a write this surface makes without one (the purge) — the last
+// of which handed the writer's error to the client as its `detail`.
 func TestAReadBeforeADecisionThatFaultedIsAFault(t *testing.T) {
 	t.Parallel()
-	r := newRig(t, chart{})
-	r.reader.err = errors.New("open /var/lib/crewlet/replicated.db: disk I/O error")
-	got := r.do(as(admin("ana")), http.MethodPost, "/work/items/ENG-1/rank",
-		map[string]any{"after": "ENG-2"})
-	if got.status != http.StatusInternalServerError {
-		t.Fatalf("answered %d, want 500: %v", got.status, got.body)
-	}
-	if after := got.header.Get("Retry-After"); after != "" {
-		t.Errorf("a fault told the client to come back in %s seconds", after)
-	}
-	if detail, _ := got.body["detail"].(string); strings.Contains(detail, "/var/lib") {
-		t.Errorf("the fault's own words reached the caller: %v", got.body)
+	disk := errors.New("open /var/lib/crewlet/replicated.db: disk I/O error")
+	for _, c := range []struct {
+		name   string
+		setup  func(*rig)
+		method string
+		target string
+		body   any
+	}{
+		{"a read this surface takes before it decides",
+			func(r *rig) { r.reader.err = disk }, http.MethodPost,
+			"/work/items/ENG-1/purge?confirm=ENG-1&reason=why", nil},
+		{"a read a tool takes before it decides",
+			func(r *rig) { r.reader.err = disk }, http.MethodPost,
+			"/work/items/ENG-1/rank", map[string]any{"after": "ENG-2", "if_match": 3}},
+		{"a write a tool makes",
+			func(r *rig) { r.writes.err = disk }, http.MethodPost, "/work/items",
+			map[string]any{"title": "rotate the key", "project": "ENG"}},
+		{"a write this surface makes without a tool",
+			func(r *rig) { r.writes.err = disk }, http.MethodPost,
+			"/work/items/ENG-1/purge?confirm=ENG-1&reason=why", nil},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			r := newRig(t, chart{})
+			c.setup(r)
+			got := r.do(as(admin("ana")), c.method, c.target, c.body)
+			if got.status != http.StatusInternalServerError ||
+				got.body["error"] != string(httpjson.CodeInternalError) {
+				t.Fatalf("answered %d, want 500 internal_error: %v", got.status, got.body)
+			}
+			if after := got.header.Get("Retry-After"); after != "" {
+				t.Errorf("a fault told the client to come back in %s seconds", after)
+			}
+			for k, v := range got.body {
+				if text, _ := v.(string); strings.Contains(text, "/var/lib") {
+					t.Errorf("the fault's own words reached the caller as %q: %v",
+						k, got.body)
+				}
+			}
+		})
 	}
 }
 
@@ -355,8 +391,14 @@ func TestSomebodyElsesInboxIsTheAdministratorsAlone(t *testing.T) {
 			t.Run(c.name+"/"+route, func(t *testing.T) {
 				t.Parallel()
 				r := newRig(t, chart{})
+				// A GESTURE EACH WRITE TAKES: an inbox mark names what it
+				// marks, and an empty pin set is a set.
+				body := map[string]any{}
+				if route == "inbox" {
+					body["read"] = []any{"rec-1"}
+				}
 				got := r.do(as(c.who), http.MethodPut,
-					"/work/people/"+c.handle+"/"+route, map[string]any{})
+					"/work/people/"+c.handle+"/"+route, body)
 				if got.status != c.want {
 					t.Fatalf("answered %d, want %d: %v", got.status, c.want, got.body)
 				}
@@ -440,28 +482,44 @@ func TestAPriorityRouteNeverTurnsALoginIntoASeat(t *testing.T) {
 	}
 }
 
-// ---- the gestures no tool makes ---------------------------------------- //
-
-// A CARD IS PLACED AMONG ITS OWN PROJECT'S CARDS, between the neighbours
-// named.
-func TestARankMovePlacesAnItemBetweenItsNeighbours(t *testing.T) {
+// A CARD IS PLACED BESIDE THE NEIGHBOUR NAMED, THROUGH THE BOARD DRAG'S OWN
+// TOOL: the route resolves nothing and mints nothing — `place_work_item`
+// resolves the neighbour to its id and the tracker mints the place between
+// the neighbours as the board stands when the write lands. The version the
+// board read rides the `If-Match` header into the tool's `if_match`.
+func TestARankMovePlacesAnItemBesideItsNeighbour(t *testing.T) {
 	t.Parallel()
 	r := newRig(t, chart{})
 	got := r.do(as(colleague("ana")), http.MethodPost, "/work/items/ENG-1/rank",
-		map[string]any{"after": "ENG-2"})
-	if got.status != http.StatusOK || len(r.writes.moved) != 1 ||
-		r.writes.moved[0] != [2]tracker.Rank{"a5", ""} {
-		t.Fatalf("answered %d and moved %v", got.status, r.writes.moved)
+		map[string]any{"after": "ENG-2"}, "If-Match", "3")
+	if got.status != http.StatusOK || len(r.writes.placed) != 1 {
+		t.Fatalf("answered %d %v and placed %v", got.status, got.body, r.writes.placed)
 	}
+	if p := r.writes.placed[0]; p.Task != "t-1" || p.Project != "ENG" ||
+		p.After != "t-2" || p.Before != "" || p.IfMatch != 3 {
+		t.Errorf("the tracker was asked to place %+v, want ENG-1 after ENG-2 at "+
+			"version 3", p)
+	}
+	// A DROP WITH NO VERSION IS REFUSED, so a card somebody changed since
+	// the board was read is never placed as though it had not moved.
 	if got := r.do(as(colleague("ana")), http.MethodPost, "/work/items/ENG-1/rank",
-		map[string]any{"before": "OPS-1"}); got.status != http.StatusUnprocessableEntity {
+		map[string]any{"after": "ENG-2"}); got.status != http.StatusUnprocessableEntity {
+		t.Errorf("a drop naming no version answered %d %v", got.status, got.body)
+	}
+	// THE TRACKER'S OWN REFUSAL — a neighbour on another project's board —
+	// reaches the caller as the domain's.
+	r.writes.err = fmt.Errorf("%w: OPS-1 is on another board", tracker.ErrInvalid)
+	if got := r.do(as(colleague("ana")), http.MethodPost, "/work/items/ENG-1/rank",
+		map[string]any{"before": "OPS-1"}, "If-Match", "3"); got.status != http.StatusUnprocessableEntity {
 		t.Errorf("a card placed on another project's board answered %d", got.status)
 	}
 	if got := r.do(as(person("ana", iam.GrantStateRead)), http.MethodPost,
-		"/work/items/ENG-1/rank", map[string]any{"after": "ENG-2"}); got.status != http.StatusForbidden {
+		"/work/items/ENG-1/rank", map[string]any{"after": "ENG-2"}, "If-Match", "3"); got.status != http.StatusForbidden {
 		t.Errorf("a reader moved a card: %d", got.status)
 	}
 }
+
+// ---- the gestures no tool makes ---------------------------------------- //
 
 // A REMARK ON A WORK ITEM IS REWRITTEN BY ITS AUTHOR.
 //
@@ -619,12 +677,13 @@ func TestEveryRouteThatChangesAToolSkillNeedsConfigWrite(t *testing.T) {
 		t.Run(c.method+" "+c.target, func(t *testing.T) {
 			t.Parallel()
 			r := &rig{t: t, mux: http.NewServeMux(), reader: newReader(),
-				writes: &writes{}, kb: newKB()}
+				writes: &writes{}, kb: newKB(), audit: &auditLog{}}
 			r.kb.page.Page.Container = "TS"
 			halves := r.halves()
 			halves.Pages.SkillsContainer = func() string { return "ts" }
 			svc, err := workapi.New(workapi.Options{
-				Halves: serving(halves), Chart: chart{}})
+				Halves: serving(halves), Chart: chart{},
+				Operator: r.operator(chart{}, serving(halves)), Audit: r.audit})
 			if err != nil || svc == nil {
 				t.Fatalf("New: %v (%v)", err, svc)
 			}
@@ -747,4 +806,62 @@ type patternMux struct{ patterns []string }
 
 func (m *patternMux) Handle(pattern string, _ http.Handler) {
 	m.patterns = append(m.patterns, pattern)
+}
+
+// ---- the runtime audit -------------------------------------------------- //
+
+// EVERY WRITE THIS SURFACE SERVES IS AUDITED, a tool's and a verb with no tool
+// alike, and a refusal the route took itself too — under the transport `work`,
+// the principal that made it and the operation the request was made under.
+//
+// A tool-backed route is audited by the operator dispatch it calls, so a
+// person's script, their assistant and their press are recorded the same way;
+// a purge, a rename or a take-down makes its write without a tool and records
+// the same event through the same constructor. Before it, those verbs were
+// the one place a person could change the company with no runtime record of
+// the call at all.
+//
+// Mutation: drop the AuditGesture after the purge, or the AuditRefusal in the
+// router's refusal, and its row goes missing.
+func TestEveryWriteThisSurfaceServesIsAudited(t *testing.T) {
+	t.Parallel()
+	r := newRig(t, chart{})
+	ana := admin("ana")
+	created := r.do(as(ana), http.MethodPost, "/work/items",
+		map[string]any{"title": "rotate the key", "project": "ENG"})
+	purged := r.do(as(ana), http.MethodPost,
+		"/work/items/ENG-1/purge?confirm=ENG-1&reason=why", nil)
+	refused := r.do(as(colleague("bo")), http.MethodPost,
+		"/work/items/ENG-1/purge?confirm=ENG-1&reason=why", nil)
+	if created.status != http.StatusOK || purged.status != http.StatusOK ||
+		refused.status != http.StatusForbidden {
+		t.Fatalf("answered %d, %d and %d", created.status, purged.status,
+			refused.status)
+	}
+	acted := r.audit.acted()
+	if len(acted) != 3 {
+		t.Fatalf("three writes left %d audit records: %+v", len(acted), acted)
+	}
+	want := []struct {
+		tool    string
+		outcome types.AuditOutcome
+		op      any
+		actor   string
+	}{
+		{tracker.CreateWorkItemTool, types.AuditApplied, created.body["op_id"], "ana"},
+		{string(authz.ActionWorkPurge), types.AuditApplied, purged.body["op_id"], "ana"},
+		{string(authz.ActionWorkPurge), types.AuditRefused, nil, "bo"},
+	}
+	for i, w := range want {
+		got := acted[i]
+		if got.Transport != types.TransportWork || got.Tool != w.tool ||
+			got.Outcome != w.outcome || got.ActorName != w.actor {
+			t.Errorf("record %d is %+v, want %s %s by %s over %s", i, got, w.tool,
+				w.outcome, w.actor, types.TransportWork)
+		}
+		if w.op != nil && got.RequestID != w.op {
+			t.Errorf("record %d names request %q, the answer named %v", i,
+				got.RequestID, w.op)
+		}
+	}
 }

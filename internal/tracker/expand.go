@@ -90,10 +90,13 @@ var Presets = []string{
 // `min_position` because how fresh an answer must be is a property of the
 // SURFACE asking, and a saved row that carried one would let a board silently
 // downgrade a seat's own read — or, for the floor, pin every later reader to
-// a position from the day the view was saved.
+// a position from the day the view was saved. `around` for the reason
+// `cursor` is: which task a caller is standing on is the caller's own, and a
+// view that carried one would answer every reader's "3 of 18" about a task
+// they never opened.
 var expansionRefused = []string{
-	"view", "preset", "cursor", "read_level", "max_lag_seconds", "max_lag_seq",
-	"min_position",
+	"view", "preset", "cursor", "around", "read_level", "max_lag_seconds",
+	"max_lag_seq", "min_position",
 }
 
 // Viewer is who is asking, as much as an expansion needs to know.
@@ -118,44 +121,81 @@ type Viewer struct {
 // THE CALLER'S OWN KEYS WIN, every one of them: the expansion is a set of
 // defaults. A preset expands first and a view over it, because a view is the
 // more specific thing — somebody saved it — and both lose to what was typed.
+// [mergeExpansion] is what does the merging, and the one other reader of a
+// view's parameters — a pinned view's count in [Reader.Views] — goes through
+// it too.
 func (r *Reader) Expand(ctx context.Context, params map[string]any,
 	viewer Viewer) (MapParams, error) {
 
-	// `me` IS RESOLVED FIRST AND ALWAYS, before the early return: a
-	// `f.<slug>=me` on a query that names no view and no preset is still
-	// a query about the reader, and returning the parameters untouched
-	// would hand the compiler a literal "me".
-	params, err := resolveViewerKeys(params, viewer.Handle)
-	if err != nil {
-		return nil, err
-	}
-
-	view := strings.TrimSpace(stringOf(params["view"]))
-	preset := strings.TrimSpace(stringOf(params["preset"]))
-	if view == "" && preset == "" {
-		return MapParams(params), nil
-	}
-
-	merged := MapParams{}
-	if preset != "" {
+	var presetDefaults, viewDefaults MapParams
+	if preset := strings.TrimSpace(stringOf(params["preset"])); preset != "" {
 		defaults, err := expandPreset(preset, viewer)
 		if err != nil {
 			return nil, err
 		}
-		maps.Copy(merged, defaults)
+		presetDefaults = defaults
 	}
-	if view != "" {
+	if view := strings.TrimSpace(stringOf(params["view"])); view != "" {
 		defaults, err := r.expandView(ctx, view)
 		if err != nil {
 			return nil, err
 		}
-		maps.Copy(merged, defaults)
+		viewDefaults = defaults
 	}
+	return mergeExpansion(params, presetDefaults, viewDefaults, viewer.Handle)
+}
+
+// mergeExpansion is the whole of what a read's parameters mean once a preset
+// and a saved view have been read: the preset's defaults, the view's over
+// them, the caller's over both — and then `me` resolved to the viewer over the
+// RESULT.
+//
+// OVER THE RESULT, because a `me` means the reader wherever it was written.
+// Resolved over the caller's keys alone, a view SAVED with `f.reviewers=me`
+// reached the compiler as a literal "me" and was refused as unresolved — so
+// the one thing [resolveViewerKeys] says a saved `me` is for, a view that
+// means whoever opens it, could not be opened at all.
+//
+// ONE FUNCTION FOR BOTH READERS of a view — the board that runs it
+// ([Reader.Expand]) and the count beside its pin ([countView]) — because the
+// count is only the board's total while the two expand alike, and a second
+// merge is how a sidebar number stops being the number on the board it opens.
+func mergeExpansion(caller map[string]any, preset, view MapParams,
+	viewer string) (MapParams, error) {
+
+	merged := make(MapParams, len(preset)+len(view)+len(caller))
+	maps.Copy(merged, preset)
+	maps.Copy(merged, view)
 	// THE CALLER'S LAST, so every explicit key overrides — and `view` and
 	// `preset` themselves survive into the parsed query, where they are
 	// what an answer can say it came from.
-	maps.Copy(merged, MapParams(params))
-	return merged, nil
+	maps.Copy(merged, MapParams(caller))
+	// `me` IS RESOLVED ALWAYS, with or without a view or a preset: a
+	// `f.<slug>=me` on a query that names neither is still a query about
+	// the reader, and returning the parameters untouched would hand the
+	// compiler a literal "me".
+	resolved, err := resolveViewerKeys(merged, viewer)
+	if err != nil {
+		return nil, err
+	}
+	return MapParams(resolved), nil
+}
+
+// savedDefaults is what a saved view's own parameters contribute to an
+// expansion: every key but the ones [expansionRefused] names.
+//
+// A ROW AN OLDER BUILD WROTE may carry one, since the save refuses these —
+// dropped rather than honoured, because a saved cursor would resume a page
+// nobody asked for.
+func savedDefaults(params map[string]string) MapParams {
+	out := make(MapParams, len(params))
+	for key, value := range params {
+		if slices.Contains(expansionRefused, key) {
+			continue
+		}
+		out[key] = value
+	}
+	return out
 }
 
 // resolveViewerKeys substitutes the reader for every `me` a query names.
@@ -313,16 +353,7 @@ func (r *Reader) expandView(ctx context.Context, id string) (MapParams, error) {
 				"deleted, or this copy has not caught up: %w",
 				id, statelog.ErrUnavailable)
 		}
-		out = make(MapParams, len(view.Params))
-		for key, value := range view.Params {
-			if slices.Contains(expansionRefused, key) {
-				// A ROW AN OLDER BUILD WROTE, since the save refuses
-				// these — dropped rather than honoured, because a
-				// saved cursor would resume a page nobody asked for.
-				continue
-			}
-			out[key] = value
-		}
+		out = savedDefaults(view.Params)
 		return nil
 	}); err != nil {
 		return nil, err

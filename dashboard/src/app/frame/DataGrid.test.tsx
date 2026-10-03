@@ -18,9 +18,9 @@
 
 import { Profiler, useState } from "react";
 import { act, cleanup, fireEvent, render, screen } from "~/test/inCase.ts";
-import { afterEach, beforeAll, expect, test } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, test, vi } from "vitest";
 
-import { DataGrid } from "./DataGrid.tsx";
+import { DataGrid, fitColumns } from "./DataGrid.tsx";
 import { Router } from "~/app/router.tsx";
 
 afterEach(cleanup);
@@ -44,11 +44,12 @@ const ROWS: Row[] = [
 ];
 
 /**
- * A mark that draws nothing for the ordinary case, in the shape every one of
- * them takes: a COMPONENT that returns null, so the grid holds an element and
- * the DOM holds no child. `PriorityMark` is the real one — see
- * `components/work.tsx` — and this stands in for it so the case says what it
- * is about rather than importing a tracker into the frame's own suite.
+ * A mark that draws nothing for a value it has no mark for, in the shape every
+ * one of them takes: a COMPONENT that returns null, so the grid holds an
+ * element and the DOM holds no child. `PriorityMark` is the real one (null for
+ * `none` and an absent priority — see `components/work.tsx`), and this stands
+ * in for it so the case says what it is about rather than importing a tracker
+ * into the frame's own suite.
  */
 function Nothing() {
   return null;
@@ -63,7 +64,7 @@ function grid(onRowActivate?: (row: Row) => void) {
       <DataGrid<Row>
         rows={ROWS}
         rowKey={(r) => r.id}
-        rowHref={(r) => `#/activity/turns/${r.id}`}
+        rowHref={(r) => `#/live/turns/${r.id}`}
         onRowActivate={onRowActivate}
         columns={[
           { key: "id", header: "Id", cell: (r) => r.id },
@@ -71,7 +72,7 @@ function grid(onRowActivate?: (row: Row) => void) {
             key: "who",
             header: "Who",
             // The shape every linking cell has.
-            cell: (r) => <a href={`#/company/people/${r.who}`}>{r.who}</a>,
+            cell: (r) => <a href={`#/agents/seats/${r.who}`}>{r.who}</a>,
           },
         ]}
       />
@@ -87,7 +88,7 @@ test("a row's link never contains a cell's link", () => {
   // address" with it.
   const links = container.querySelectorAll<HTMLAnchorElement>("a.row-link");
   expect(links).toHaveLength(ROWS.length);
-  expect(links[0]?.getAttribute("href")).toBe("#/activity/turns/one");
+  expect(links[0]?.getAttribute("href")).toBe("#/live/turns/one");
 });
 
 test("the row's link is named by the row, not left unnamed", () => {
@@ -110,6 +111,43 @@ test("a plain click on the row still activates it", () => {
   const link = container.querySelector<HTMLAnchorElement>("a.row-link");
   if (link) fireEvent.click(link);
   expect(seen).toEqual(["one"]);
+});
+
+// THE ROW THE RAIL IS OPEN ON IS MARKED, in every grid, by comparing the row's
+// link with the peek's page. Four screens spelled the mark for themselves and
+// the rest never did, so beside a peek on Nodes, Secrets, a seat's turns or a
+// spend table nothing said which row the rail described. The mark is said as
+// well as painted: the row's link carries `aria-current`.
+describe("the peeked row", () => {
+  afterEach(() => {
+    location.hash = "#/";
+  });
+
+  const marked = (container: HTMLElement) =>
+    [...container.querySelectorAll(".grid-row.selected")].map((row) =>
+      row.querySelector("a.row-link")?.getAttribute("href"),
+    );
+
+  test("is the row whose link is the peek's page, and it is announced as current", () => {
+    location.hash = "#/live/turns?peek=turn:two";
+    const { container } = grid();
+    expect(marked(container)).toEqual(["#/live/turns/two"]);
+    const links = [...container.querySelectorAll("a.row-link")];
+    expect(links.map((a) => a.getAttribute("aria-current"))).toEqual([null, "true"]);
+  });
+
+  test("is no row when the peek is an object no row links to", () => {
+    location.hash = "#/live/turns?peek=seat:two";
+    const { container } = grid();
+    expect(marked(container)).toEqual([]);
+    expect(container.querySelector("[aria-current]")).toBeNull();
+  });
+
+  test("is no row when no peek is open", () => {
+    location.hash = "#/live/turns";
+    const { container } = grid();
+    expect(marked(container)).toEqual([]);
+  });
 });
 
 test("a grid with no row link renders no overlay at all", () => {
@@ -243,12 +281,12 @@ test("a cell carries its column's name, and only when that name is a word", () =
 // A CELL WITH NO VALUE HAS NO CHILD NODES, WHICH IS WHAT THE CARD DROPS IT ON.
 //
 // A column draws no value on a row that has none — `PriorityMark` renders null
-// for `normal`, which nearly every task is, and every mark whose rule is
-// "nothing is drawn for the default" does the same. In the table that is an
+// for `none`, which a task nobody prioritised carries, and every mark whose
+// rule is "nothing is drawn for no value" does the same. In the table that is an
 // empty track under a head, which is correct and is what keeps the row's
 // columns lined up. Below 860px the head is gone and the label is the CELL's
 // own, so the card opened with `PRIORITY` on a line by itself, on every
-// ordinary row.
+// row that had none.
 //
 // `.grid-cell:empty { display: none }` in frame.css is the fix, because a
 // container cannot ask a child that drew nothing whether it did and the
@@ -826,4 +864,264 @@ test("a row standing in two bands is two stops for the cursor, each with its own
   fireEvent.keyDown(window, { key: "Enter" });
   expect(opened).toEqual(["t-1"]);
   expect(new Set(drawn().map((row) => row.id)).size).toBe(4);
+});
+
+// ---------------------------------------------------------------------------
+// A grid narrower than its columns
+// ---------------------------------------------------------------------------
+//
+// THE WRAP CLIPS, so a grid that did not fit either lost its last columns at
+// the edge or — with every flexible track floored at zero — drew its one
+// flexible column at nothing: a work list beside a peek at 1280 showed titles
+// 70px wide. A column that is the point of the list takes a floor, and the
+// columns that can go go in their declared order, and the grid says which.
+
+test("a flexible column takes its floor into its track", () => {
+  const { container } = render(
+    <Router>
+      <DataGrid<Row>
+        rows={ROWS}
+        rowKey={(r) => r.id}
+        columns={[
+          { key: "id", header: "Id", shrink: true, cell: (r) => r.id },
+          { key: "title", header: "Title", floor: "12rem", cell: (r) => r.id },
+        ]}
+      />
+    </Router>,
+  );
+  expect(container.querySelector<HTMLElement>(".grid-wrap")?.style.gridTemplateColumns).toContain(
+    "minmax(12rem, 1fr)",
+  );
+});
+
+describe("fitColumns", () => {
+  const visible = [{ key: "title" }, { key: "due", drop: 2 }, { key: "updated", drop: 1 }];
+  const fit = { set: "title,due,updated", width: 500, dropped: [] as string[] };
+
+  test("an overrun drops the column that goes first, and only that one", () => {
+    expect(fitColumns({ fit, width: 500, overflows: true, visible })?.dropped).toEqual(["updated"]);
+  });
+
+  test("a column with no place in the order never goes", () => {
+    const next = fitColumns({ fit, width: 500, overflows: true, visible: [{ key: "title" }] });
+    expect(next).toBeNull();
+  });
+
+  test("a box that grew gives every column another chance", () => {
+    const narrowed = { ...fit, dropped: ["updated", "due"] };
+    expect(fitColumns({ fit: narrowed, width: 800, overflows: false, visible })?.dropped).toEqual(
+      [],
+    );
+  });
+
+  test("a fit that stands is left alone", () => {
+    expect(fitColumns({ fit, width: 500, overflows: false, visible })).toBeNull();
+  });
+});
+
+describe("the grid, laid out", () => {
+  const COL = 120;
+  let boxWidth = 500;
+  let observed: (() => void) | null = null;
+  const real = globalThis.ResizeObserver;
+
+  beforeEach(() => {
+    boxWidth = 500;
+    globalThis.ResizeObserver = class {
+      constructor(private readonly report: () => void) {}
+      observe(): void {
+        observed = () => this.report();
+      }
+      unobserve(): void {}
+      disconnect(): void {}
+    } as unknown as typeof ResizeObserver;
+    vi.spyOn(HTMLElement.prototype, "clientWidth", "get").mockImplementation(function (
+      this: HTMLElement,
+    ) {
+      return this.classList.contains("grid-wrap") ? boxWidth : 0;
+    });
+    // Every head cell is 120px, laid end to end from the wrap's left edge.
+    vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (
+      this: HTMLElement,
+    ) {
+      const at = this.classList.contains("grid-th")
+        ? [...this.parentElement!.children].indexOf(this)
+        : -1;
+      const right = at >= 0 ? (at + 1) * COL : this.classList.contains("grid-wrap") ? boxWidth : 0;
+      return { left: 0, right, top: 0, bottom: 0, width: right, height: 0, x: 0, y: 0 } as DOMRect;
+    });
+  });
+  afterEach(() => {
+    vi.restoreAllMocks();
+    globalThis.ResizeObserver = real;
+    observed = null;
+  });
+
+  const columns = [
+    { key: "key", header: "Key", shrink: true, cell: (r: Row) => r.id },
+    { key: "title", header: "Title", floor: "12rem", cell: (r: Row) => r.id },
+    { key: "who", header: "Who", shrink: true, drop: 3, cell: (r: Row) => r.who },
+    { key: "due", header: "Due", shrink: true, drop: 2, cell: (r: Row) => r.id },
+    { key: "updated", header: "Updated", shrink: true, drop: 1, cell: (r: Row) => r.id },
+  ];
+  const heads = (container: HTMLElement) =>
+    [...container.querySelectorAll(".grid-th")].map((h) => h.textContent);
+
+  test("columns that do not fit give way in order, and the grid names them", () => {
+    // Five 120px heads in a 500px box: one has to go, and Updated goes first.
+    const { container } = render(
+      <Router>
+        <DataGrid<Row> rows={ROWS} rowKey={(r) => r.id} columns={columns} />
+      </Router>,
+    );
+    expect(heads(container)).toEqual(["Key", "Title", "Who", "Due"]);
+    expect(container.querySelector(".grid-foot")?.textContent).toContain("Hidden to fit: Updated");
+    // The cells follow the heads: a dropped column is gone from every row.
+    expect(container.querySelector(".grid-row")?.children.length).toBe(4);
+  });
+
+  // THE QUIET FAILURE: nothing overruns, but a content column is squeezed
+  // below its cap while the columns that could have gone stay on screen.
+  test("a content column cut short below its cap counts as not fitting", () => {
+    boxWidth = 1000;
+    vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (
+      this: HTMLElement,
+    ) {
+      // Every head 60px — well inside a 1000px box, and under its 200px cap.
+      const at = this.classList.contains("grid-th")
+        ? [...this.parentElement!.children].indexOf(this)
+        : -1;
+      const right = at >= 0 ? (at + 1) * 60 : this.classList.contains("grid-wrap") ? boxWidth : 0;
+      return { left: 0, right, top: 0, bottom: 0, width: at >= 0 ? 60 : right } as DOMRect;
+    });
+    // The Who column's value is cut short: its box is narrower than its text.
+    vi.spyOn(HTMLElement.prototype, "scrollWidth", "get").mockImplementation(function (
+      this: HTMLElement,
+    ) {
+      return this.dataset.value === "cut" ? 90 : 0;
+    });
+    vi.spyOn(HTMLElement.prototype, "clientWidth", "get").mockImplementation(function (
+      this: HTMLElement,
+    ) {
+      if (this.classList.contains("grid-wrap")) return boxWidth;
+      return this.dataset.value === "cut" ? 40 : 0;
+    });
+    const cut = columns.map((c) =>
+      c.key === "who" ? { ...c, cell: (r: Row) => <span data-value="cut">{r.who}</span> } : c,
+    );
+    const { container } = render(
+      <Router>
+        <DataGrid<Row> rows={ROWS} rowKey={(r) => r.id} columns={cut} />
+      </Router>,
+    );
+    // Updated and Due go first, in their order; Who, still cut, goes last.
+    expect(heads(container)).toEqual(["Key", "Title"]);
+    expect(container.querySelector(".grid-foot")?.textContent).toContain(
+      "Hidden to fit: Updated, Due and Who",
+    );
+  });
+
+  // A SCREEN-READER-ONLY BOX IS ONE PIXEL WIDE ON PURPOSE. Read as a value cut
+  // short, the "Unassigned" beside an empty avatar dropped four columns from a
+  // work list with nothing squeezed at all.
+  test("text for a screen reader alone is not a value cut short", () => {
+    boxWidth = 1000;
+    vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (
+      this: HTMLElement,
+    ) {
+      const at = this.classList.contains("grid-th")
+        ? [...this.parentElement!.children].indexOf(this)
+        : -1;
+      const right = at >= 0 ? (at + 1) * 60 : this.classList.contains("grid-wrap") ? boxWidth : 0;
+      return { left: 0, right, top: 0, bottom: 0, width: at >= 0 ? 60 : right } as DOMRect;
+    });
+    vi.spyOn(HTMLElement.prototype, "scrollWidth", "get").mockImplementation(function (
+      this: HTMLElement,
+    ) {
+      return this.classList.contains("sr-only") ? 70 : 0;
+    });
+    vi.spyOn(HTMLElement.prototype, "clientWidth", "get").mockImplementation(function (
+      this: HTMLElement,
+    ) {
+      if (this.classList.contains("grid-wrap")) return boxWidth;
+      return this.classList.contains("sr-only") ? 1 : 0;
+    });
+    const spoken = columns.map((c) =>
+      c.key === "who"
+        ? { ...c, cell: (r: Row) => <span className="sr-only">{`Unassigned ${r.who}`}</span> }
+        : c,
+    );
+    const { container } = render(
+      <Router>
+        <DataGrid<Row> rows={ROWS} rowKey={(r) => r.id} columns={spoken} />
+      </Router>,
+    );
+    expect(heads(container)).toEqual(["Key", "Title", "Who", "Due", "Updated"]);
+  });
+
+  test("a box that narrows drops more, and one that grows gets them back", () => {
+    const { container } = render(
+      <Router>
+        <DataGrid<Row> rows={ROWS} rowKey={(r) => r.id} columns={columns} />
+      </Router>,
+    );
+    boxWidth = 300;
+    act(() => observed?.());
+    expect(heads(container)).toEqual(["Key", "Title"]);
+    expect(container.querySelector(".grid-foot")?.textContent).toContain(
+      "Hidden to fit: Updated, Due and Who",
+    );
+    boxWidth = 800;
+    act(() => observed?.());
+    expect(heads(container)).toEqual(["Key", "Title", "Who", "Due", "Updated"]);
+    expect(container.querySelector(".grid-foot")).toBeNull();
+  });
+});
+
+// A COMPACT GRID SAYS SO, AND SAYS WHICH CELLS LEAD. The sheet draws a phone row
+// from these two attributes and nothing else (styles/frame.test.ts), so the DOM
+// half is that the wrap carries the choice and only the lead columns' cells are
+// marked — and that the default, which every other grid takes, carries neither.
+test("a compact grid marks its wrap and its lead cells", () => {
+  const columns = [
+    { key: "id", header: "Id", phoneLead: true, cell: (r: Row) => r.id },
+    { key: "mark", header: "Mark", cell: () => <span>·</span> },
+  ];
+  const compact = render(
+    <Router>
+      <DataGrid<Row> rows={ROWS} rowKey={(r) => r.id} columns={columns} phoneRows="compact" />
+    </Router>,
+  );
+  const wrap = compact.container.querySelector(".grid-wrap")!;
+  expect(wrap.getAttribute("data-phone-rows")).toBe("compact");
+  const cells = [...wrap.querySelectorAll(".grid-row > .grid-cell")];
+  expect(cells.map((c) => c.hasAttribute("data-lead"))).toEqual(ROWS.flatMap(() => [true, false]));
+  cleanup();
+  const labelled = render(
+    <Router>
+      <DataGrid<Row> rows={ROWS} rowKey={(r) => r.id} columns={columns} />
+    </Router>,
+  );
+  expect(labelled.container.querySelector(".grid-wrap")!.hasAttribute("data-phone-rows")).toBe(
+    false,
+  );
+});
+
+// A FLUSH GRID SAYS SO ON ITS WRAP, and the default carries nothing: the sheet
+// draws the card-body form from that attribute alone (styles/frame.test.ts).
+test("a flush grid marks its wrap, and the default does not", () => {
+  const columns = [{ key: "id", header: "Id", cell: (r: Row) => r.id }];
+  const flush = render(
+    <Router>
+      <DataGrid<Row> rows={ROWS} rowKey={(r) => r.id} columns={columns} flush />
+    </Router>,
+  );
+  expect(flush.container.querySelector(".grid-wrap")!.hasAttribute("data-flush")).toBe(true);
+  cleanup();
+  const framed = render(
+    <Router>
+      <DataGrid<Row> rows={ROWS} rowKey={(r) => r.id} columns={columns} />
+    </Router>,
+  );
+  expect(framed.container.querySelector(".grid-wrap")!.hasAttribute("data-flush")).toBe(false);
 });

@@ -152,7 +152,7 @@ var (
 		"Assignee", "Reporter", "Watchers", "Watcher", "Collaborators",
 		"Collaborator", "Muted", "Author", "Actor", "Owner", "Handle", "Person",
 		"Mentions", "Ask", "Asked", "Viewer", "Participants", "RoutedTo",
-		"CommentAsk", "PriorityListOf", "AskedOf",
+		"CommentAsk", "PriorityListOf", "AskedOf", "Seat",
 	}
 	namedBy = []string{"By", "Lead", "Assignee", "Assignees", "Author", "Watchers"}
 
@@ -188,7 +188,9 @@ func TestEveryFieldThatNamesSomebodyIsTagged(t *testing.T) {
 		ProjectListing{}, ProjectDetail{}, RoutingAnswer{}, ViewListing{},
 		WorkloadAnswer{}, ActivityAnswer{}, CatalogueAnswer{},
 		ResolvedThread{}, ErrAmbiguousAnswer{}, Ranked{}, Eviction{},
-		Generation{},
+		Generation{}, FeedQuery{}, FeedPage{}, DecisionsQuery{},
+		DecisionsAnswer{}, EveryViewQuery{}, FlowAnswer{}, SearchAnswer{},
+		TaskTurns{}, TurnPlace{}, TurnRecord{},
 	}
 	seen := map[reflect.Type]bool{}
 	excuses := map[string]bool{}

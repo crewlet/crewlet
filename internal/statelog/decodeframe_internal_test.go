@@ -10,7 +10,7 @@ import (
 
 // THE APPLIER IS HANDED THE BODY AND THE DEFERRED TABLE KEEPS THE FRAME.
 //
-// This is ADR-0018 at the one field every applier reads, and it is the case
+// This is ADR-0025 at the one field every applier reads, and it is the case
 // the suite above it structurally cannot provide: [statelogtest] builds a
 // [Record] by hand and hands it straight to an applier, so it certifies what a
 // domain does with a record and never what the framework puts in one.

@@ -174,7 +174,7 @@ const (
 // share of those losers with a refusal the client wrapped in neither of its
 // sentinels, and every create that matched a sentinel read it as an outage: a
 // delivery claim racing another to one just released answered "unknown" and
-// was processed twice, a charge to a counter just reset failed. That refusal
+// was processed twice, a charge to a counter just cleared failed. That refusal
 // turned out to be the leader saying a write to the record was still IN
 // PROCESS, which decides nothing — read instead as a lost race, it refused a
 // removal at the version its caller had just read and left the race after it
@@ -183,7 +183,10 @@ const (
 //
 // EVERY VERB WHOSE RECORD CAN BE REMOVED, because the refusal is the
 // broker's and not any one verb's: the fix is one classifier every create
-// asks, and a verb left out of the check is the one that stops asking it.
+// asks, and a verb left out of the check is the one that stops asking it. And
+// the token counters beside them, which have no removal at all — see
+// [raceBudgets] — but whose losers are refused by the same broker answer, on
+// the hottest key a company writes.
 func CheckCreatesOverARemovedRecordAreRaces(ctx context.Context, f coord.Fleet,
 	at time.Time) []error {
 
@@ -228,9 +231,9 @@ func race(write func() (bool, error)) (won int, errs []error) {
 func raced(verb string, errs []error) []error {
 	out := make([]error, 0, len(errs))
 	for _, err := range errs {
-		out = append(out, fmt.Errorf("%s racing %d callers over a record just "+
-			"removed answered an error — a caller that lost to a first writer, "+
-			"told the store is down: %w", verb, Racers, err))
+		out = append(out, fmt.Errorf("%s racing %d callers to create one record "+
+			"answered an error — a caller that lost to a first writer, told the "+
+			"store is down: %w", verb, Racers, err))
 	}
 	return out
 }
@@ -293,37 +296,34 @@ func raceClaims(ctx context.Context, f coord.Fleet, round int, at time.Time) []e
 	return nil
 }
 
-func raceBudgets(ctx context.Context, f coord.Fleet, round int, _ time.Time) []error {
-	scope := fmt.Sprintf("agent:raced-%d", round)
-	if _, err := f.Charge(ctx, scope, 1, 0, 0); err != nil {
-		return []error{fmt.Errorf("the first Charge: %w", err)}
-	}
-	// EVERY SCOPE, so the org's counter is a removed record too: both
-	// halves of every charge below are a create over a marker.
-	if _, err := f.Reset(ctx, ""); err != nil {
-		return []error{fmt.Errorf("the reset: %w", err)}
-	}
-	// AND IT WAS: a reset whose listing missed this counter leaves it at
-	// one, and the race below would count from there and be reported as a
-	// charge counted twice.
-	if used, err := f.Used(ctx, scope); err != nil || used != 0 {
-		return []error{fmt.Errorf("the counter just reset reads back as (%d, %v), "+
-			"want 0: the reset's listing did not reach it", used, err)}
-	}
+// raceBudgets races charges to a counter NOTHING HAS WRITTEN.
+//
+// The windowed counters have no removal verb: a window's allowance comes back
+// by the roll inside the charge that crosses its boundary, and a record leaves
+// only with its bucket's age (coord.BudgetRetention). So the create every
+// racer but the first loses is a create at zero rather than one over a marker
+// — and the leader answers it the same two ways, a decided refusal and a write
+// still in process, which is why it is in this check. Every charge is
+// uncapped, so a correct backend admits and counts every one of them; a
+// backend that read a lost create as an outage fails a round that had room,
+// which is a company's turn stopped by its own concurrency.
+func raceBudgets(ctx context.Context, f coord.Fleet, round int, at time.Time) []error {
+	seat := coord.AgentScope(fmt.Sprintf("raced-%d", round))
+	windows := coord.WindowsAt(at, time.UTC)
 	won, errs := race(func() (bool, error) {
-		spend, err := f.Charge(ctx, scope, 1, 0, 0)
+		spend, err := f.Charge(ctx, coord.ChargeRequest{Seat: seat, Tokens: 1, Windows: windows})
 		return spend.OK, err
 	})
 	if len(errs) > 0 {
 		return raced("Charge", errs)
 	}
-	used, err := f.Used(ctx, scope)
+	used, err := f.Used(ctx, seat, windows)
 	if err != nil {
 		return []error{fmt.Errorf("reading the counter back: %w", err)}
 	}
-	if won != Racers || used != Racers {
-		return []error{fmt.Errorf("%d unlimited charges racing to a reset counter: "+
-			"%d admitted and %d counted, want every one", Racers, won, used)}
+	if counted := used.Windows[0].Used; won != Racers || counted != Racers {
+		return []error{fmt.Errorf("%d uncapped charges racing to a counter nothing "+
+			"had written: %d admitted and %d counted, want every one", Racers, won, counted)}
 	}
 	return nil
 }

@@ -637,9 +637,9 @@ func TestAHeldRecordAndAnUnreadableFloorAreEachLogsOwnAlarm(t *testing.T) {
 			"holding a record past the grace, on its own", held)
 	}
 	for log, want := range map[string][]string{
-		"tracker": {"CREWLET_TRACKER@1:640", "held for 40m0s",
+		"tracker": {"CREWLET_TRACKER@1:640", "held for 40m,",
 			"at which this node's seats move to a peer"},
-		"iam": {"CREWLET_IAM@1:88", "held for 2h0m0s",
+		"iam": {"CREWLET_IAM@1:88", "held for 2h,",
 			"this log does not gate seat admission, so it moves no seats"},
 	} {
 		for _, says := range want {

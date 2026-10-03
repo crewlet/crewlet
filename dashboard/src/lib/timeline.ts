@@ -13,47 +13,41 @@
  * three-day task inside one, and the first thing anybody does with a timeline
  * is look at this week.
  *
- * DAYS ARE LOCAL, through `lib/format.ts`'s [browserDay] — the SAME function
- * `lib/work.ts`'s calendar keys its cells with, rather than a second copy of
- * it, so a bar and a calendar cell cannot come to disagree about which day a
- * task is due. The engine resolves a bare date in the COMPANY's zone and this
- * buckets in the READER's; the screen says so, exactly as the calendar does.
+ * DAYS ARE THE READER'S, through `lib/format.ts`'s [readerDay] — the SAME
+ * function `lib/work.ts`'s calendar keys its cells with, rather than a second
+ * copy of it, so a bar and a calendar cell cannot come to disagree about which
+ * day a task is due. The engine resolves a bare date in the COMPANY's zone and
+ * this buckets in the READER's; the screen says so, exactly as the calendar
+ * does. Arithmetic over a day key is civil and zone-free ([civilAt]).
  */
 
-import { browserDay, dateFormatter } from "./format.ts";
+import { civilAt, civilKey, dateFormatter, readerDay } from "./format.ts";
 import type { WorkSummary } from "~/protocol/index.ts";
 
-/** A local day key back to a `Date` at local midnight, or null. */
-function dayAt(key: string): Date | null {
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(key)) return null;
-  const at = new Date(`${key}T00:00:00`);
-  return Number.isNaN(at.getTime()) ? null : at;
-}
-
-/** The local day an instant falls on, or empty when it is unreadable. */
+/** The reader's day an instant falls on, or empty when it is unreadable. */
 export function dayOf(ts: string | undefined): string {
   if (!ts) return "";
   const at = new Date(ts);
-  return Number.isNaN(at.getTime()) ? "" : browserDay(at);
+  return Number.isNaN(at.getTime()) ? "" : readerDay(at);
 }
 
-/** Whole days from `from` to `to`, negative when `to` is earlier. */
+/**
+ * Whole days from `from` to `to`, negative when `to` is earlier.
+ *
+ * EXACT, because both ends are UTC midnights: no day between them is 23 or 25
+ * hours long, which is what a count over local midnights had to round away.
+ */
 export function daysBetween(from: string, to: string): number {
-  const a = dayAt(from);
-  const b = dayAt(to);
-  if (!a || !b) return 0;
-  // ROUNDED, not truncated: a DST boundary inside the span makes the
-  // millisecond difference 23 or 25 hours per day, and a truncating divide
-  // turns that into an off-by-one on every bar crossing the change.
-  return Math.round((b.getTime() - a.getTime()) / 86_400_000);
+  const a = civilAt(from);
+  const b = civilAt(to);
+  if (a === null || b === null) return 0;
+  return (b - a) / 86_400_000;
 }
 
 /** `key` shifted by whole days. */
 export function shiftDay(key: string, by: number): string {
-  const at = dayAt(key);
-  if (!at) return key;
-  at.setDate(at.getDate() + by);
-  return browserDay(at);
+  const at = civilAt(key);
+  return at === null ? key : civilKey(at + by * 86_400_000);
 }
 
 /**
@@ -141,7 +135,8 @@ export const MinTimelineDays = 14;
 /** What `timelineOf` is given beyond the rows. */
 export interface TimelineOptions {
   /**
-   * The reader's today, as the browser's calendar names it (`2026-06-15`).
+   * The reader's today, as [readerDay] names it (`2026-06-15`) — the day key
+   * every bar is placed by.
    * Passed rather than read, so the layout is a pure function and "today" is
    * testable — and a DAY rather than an instant, because a day is all of the
    * clock the layout reads: handed the second, the screen re-laid every band
@@ -319,9 +314,9 @@ export function weekTicks(line: Timeline): TimelineTick[] {
   const out: TimelineTick[] = [];
   for (let i = 0; i < line.days; i++) {
     const day = shiftDay(line.from, i);
-    const at = dayAt(day);
-    if (!at) continue;
-    if (i !== 0 && at.getDay() !== 1) continue;
+    const at = civilAt(day);
+    if (at === null) continue;
+    if (i !== 0 && new Date(at).getUTCDay() !== 1) continue;
     if (i !== 0 && out[0]?.at === 0 && i < MinTickGap) out.shift();
     out.push({ at: i, day, label: monthDay(day) });
   }
@@ -341,9 +336,11 @@ const MinTickGap = 3;
 
 /** `2026-06-15` as `15 Jun`, in the reader's own locale. */
 export function monthDay(day: string): string {
-  const at = dayAt(day);
-  if (!at) return day;
-  return dateFormatter(undefined, { day: "numeric", month: "short" }).format(at);
+  const at = civilAt(day);
+  if (at === null) return day;
+  // A CIVIL DATE, spelled in UTC so no zone west of Greenwich names the day
+  // before — see `lib/format.ts`'s [civilAt].
+  return dateFormatter(undefined, { day: "numeric", month: "short", timeZone: "UTC" }).format(at);
 }
 
 /**

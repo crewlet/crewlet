@@ -295,3 +295,45 @@ describe("the listener's lifetime", () => {
     expect(second).toHaveBeenCalledOnce();
   });
 });
+
+describe("a control keeps the key that activates it", () => {
+  // THE BUTTON IS PRESSED, NOT THE ROW. A grid binds a bare Enter to open its
+  // cursor row, and the chord's `preventDefault` used to cancel the platform's
+  // own activation of the button the reader had focused — Restore in the
+  // trash, the ceiling editor on Budgets — so Enter opened the peek instead.
+  it("leaves Enter and Space on a focused button or link to the control", () => {
+    const run = vi.fn();
+    bind([
+      { key: "enter", run },
+      { key: " ", run },
+    ]);
+    for (const make of [
+      () => document.createElement("button"),
+      () => Object.assign(document.createElement("a"), { href: "#/x" }),
+    ]) {
+      const el = make();
+      document.body.append(el);
+      el.focus();
+      expect(press("Enter").defaultPrevented).toBe(false);
+      expect(press(" ").defaultPrevented).toBe(false);
+      el.remove();
+    }
+    expect(run).not.toHaveBeenCalled();
+  });
+
+  it("still runs the chord where nothing on the page claims the key", () => {
+    const run = vi.fn();
+    bind([{ key: "enter", run }]);
+    (document.activeElement as HTMLElement | null)?.blur();
+    press("Enter");
+    expect(run).toHaveBeenCalledTimes(1);
+    // An anchor with no href is not a link, and activates nothing.
+    const bare = document.createElement("a");
+    bare.tabIndex = 0;
+    document.body.append(bare);
+    bare.focus();
+    press("Enter");
+    expect(run).toHaveBeenCalledTimes(2);
+    bare.remove();
+  });
+});

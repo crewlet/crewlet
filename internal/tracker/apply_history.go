@@ -154,6 +154,20 @@ func (a *Applier) writeHistory(ctx context.Context, tx *sql.Tx, c applyContext,
 		return 0, nil
 	}
 
+	// THE REOPEN COUNTER, off the delta this row has just stored — see
+	// [countReopen] for why the row rather than the documents.
+	reopens, err := countReopen(ctx, tx, subject, fields)
+	if err != nil {
+		return 0, err
+	}
+	// AND THE HAND-OFF COUNT this commit left, from the history rather than
+	// the task row — see apply_handoffs.go for why.
+	handOffs := 0
+	if subject.Kind == KindTask {
+		if handOffs, err = deriveHandOffs(ctx, tx, subject.ID, c.packed); err != nil {
+			return 0, err
+		}
+	}
 	successors, err := a.raiseSuccessors(ctx, tx, subject.ID, c)
 	if err != nil {
 		return 0, err
@@ -166,7 +180,7 @@ func (a *Applier) writeHistory(ctx context.Context, tx *sql.Tx, c applyContext,
 	if err != nil {
 		return 0, err
 	}
-	return rows + successors + stamped + inbox, nil
+	return rows + reopens + handOffs + successors + stamped + inbox, nil
 }
 
 // stampProjectChange records that this commit changed the project's work, and
@@ -403,6 +417,22 @@ func inboxSubjectKey(fromRow string, notify *Notify) string {
 // which is a decision the routing filter makes, later, with a registry this
 // applier deliberately does not have.
 //
+// # BUT NEVER THE PERSON WHO MADE THE CHANGE
+//
+// Except under the one reason that is news to them ([Reason.WakesActor]):
+// the same step [Route] takes, over the record's actor — the seat's identity
+// whenever a person writes as their seat ([iam.ActorFor]), the spelling a
+// candidate is in. It needs no registry — who wrote the record is on the
+// record — so it belongs here rather than only in the routing, and here is
+// the only place it can be kept: this table is what `work_inbox` reads, and a
+// row written for the actor is a notice in their own inbox about what they
+// just did. A founder who commented on her own task through her assistant
+// found it in her inbox, unread, as "assigned to you", and every such row
+// inflated her unread count. It is also what
+// `work_routing`'s `nobody` has always claimed of this table: "every
+// candidate was the actor" — which was true of the wake and false of the
+// rows. Rows written before this rule are removed by [rederiveOwnNotices].
+//
 // The retention horizon is applied AROUND the candidate computation rather
 // than inside it, which is what keeps that function free of a clock: a record
 // older than the horizon writes no inbox rows at all, so a whole-log replay
@@ -438,6 +468,15 @@ func (a *Applier) writeInbox(ctx context.Context, tx *sql.Tx, c applyContext,
 	task := notify.Snapshot.TaskID(c.subject())
 	written := 0
 	for _, candidate := range candidates {
+		// THE CHANGE'S OWN AUTHOR GETS NO NOTICE OF IT, unless the reason
+		// is one that wakes the actor too ([Reason.WakesActor]). The actor
+		// is the seat's identity whenever a person writes AS their seat
+		// ([iam.ActorFor]), which is the same spelling a candidate's
+		// handle is in, so one comparison covers a seat, a person at the
+		// dashboard and their own assistant alike.
+		if candidate.Handle == c.record.Actor && !candidate.Reason.WakesActor() {
+			continue
+		}
 		res, err := tx.ExecContext(ctx, `
 			INSERT INTO tracker_notifications
 				(record_id, recipient, subject_id, subject_key, task_id, kind,

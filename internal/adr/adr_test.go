@@ -1,6 +1,7 @@
 package adr_test
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -21,14 +22,7 @@ func TestEveryRecordCarriesItsFields(t *testing.T) {
 	t.Parallel()
 	records := load(t)
 
-	seen := map[int]string{}
 	for _, r := range records {
-		if prior, dup := seen[r.Number]; dup {
-			t.Errorf("%s and %s are both numbered %04d — a citation of "+
-				"ADR-%04d reaches two different decisions", prior, r.File, r.Number, r.Number)
-		}
-		seen[r.Number] = r.File
-
 		for _, field := range adr.Required {
 			if strings.TrimSpace(r.Fields[field]) == "" {
 				t.Errorf("%s has no %s.\n\t%s", r.File, field, whyRequired[field])
@@ -55,6 +49,66 @@ func TestEveryRecordCarriesItsFields(t *testing.T) {
 			"passing over an empty list")
 	}
 	t.Logf("%d record(s)", len(records))
+}
+
+// TWO RECORDS WITH ONE NUMBER ARE REFUSED BY THE READER, not noticed beside it.
+//
+// [adr.Load] is what every check in this file reads through, and each of them
+// keys the records by id — so a duplicate a test merely logged still reached
+// them as ONE record, and the anchor and citation checks certified whichever
+// of the two the map kept. The control loads the same two records under two
+// numbers, so the refusal is shown to be about the number and nothing else.
+func TestTwoRecordsWithOneNumberAreRefused(t *testing.T) {
+	t.Parallel()
+	record := func(n int, title string) string {
+		return "# ADR-" + fmt.Sprintf("%04d", n) + " — " + title + "\n\n" +
+			"- **Status:** accepted\n" +
+			"- **Authority:** `internal/adr`\n" +
+			"- **Enforced-by:** nothing\n" +
+			"- **Tag-status:** unreleased\n\n" +
+			"## The decision\n\nA body.\n"
+	}
+	tree := func(t *testing.T, files map[string]string) string {
+		t.Helper()
+		root := t.TempDir()
+		dir := filepath.Join(root, adr.Dir)
+		if err := os.MkdirAll(dir, 0o750); err != nil {
+			t.Fatal(err)
+		}
+		for name, body := range files {
+			if err := os.WriteFile(filepath.Join(dir, name), []byte(body), 0o600); err != nil {
+				t.Fatal(err)
+			}
+		}
+		return root
+	}
+
+	control := tree(t, map[string]string{
+		"0001-one-decision.md":     record(1, "One decision"),
+		"0002-another-decision.md": record(2, "Another decision"),
+	})
+	records, err := adr.Load(control)
+	if err != nil || len(records) != 2 {
+		t.Fatalf("control: two records under two numbers loaded %d record(s), "+
+			"err %v — the refusal below would prove nothing", len(records), err)
+	}
+
+	duplicated := tree(t, map[string]string{
+		"0001-one-decision.md":     record(1, "One decision"),
+		"0001-another-decision.md": record(1, "Another decision"),
+	})
+	records, err = adr.Load(duplicated)
+	if err == nil {
+		t.Fatalf("two records numbered 0001 loaded as %d record(s) with no "+
+			"error; a citation of ADR-0001 would reach two decisions while "+
+			"every check read one of them", len(records))
+	}
+	for _, name := range []string{"0001-one-decision.md", "0001-another-decision.md"} {
+		if !strings.Contains(err.Error(), name) {
+			t.Errorf("the refusal %q does not name %s, so the reader cannot "+
+				"tell which two records collided", err, name)
+		}
+	}
 }
 
 // whyRequired is what a missing field actually costs, for the failure message.

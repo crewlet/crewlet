@@ -13,10 +13,10 @@
  *
  * # The id is opaque to the frame
  *
- * A work item is a key or a uuid, a seat is a handle, a page is
- * `{CONTAINER}/{Title}`. The frame parses only the FIRST colon, so every one
- * of those survives being carried in a query value — and each kind's own
- * `pathOf` is what turns it back into a route.
+ * A work item is a key or a uuid, a seat is a handle, a page is its uuid and a
+ * schedule is `{scope_type}/{scope_id}/{name}`. The frame parses only the
+ * FIRST colon, so every one of those survives being carried in a query value
+ * — and each kind's own `pathOf` is what turns it back into a route.
  */
 
 export type ObjectKind =
@@ -86,35 +86,37 @@ export interface KindSpec {
 export const KINDS: Record<ObjectKind, KindSpec> = {
   item: { label: "Item", pathOf: (id) => ["work", id], mono: true },
   project: { label: "Project", pathOf: (id) => ["work", id], mono: true },
-  seat: { label: "Seat", pathOf: (id) => ["company", "people", id], mono: true },
+  seat: { label: "Seat", pathOf: (id) => ["agents", "seats", id], mono: true },
   // A unit's id is its KEY (`lib/seats.ts`'s `unitPath`), never its name.
-  unit: { label: "Unit", pathOf: (id) => ["company", "units", id], mono: true },
+  unit: { label: "Unit", pathOf: (id) => ["agents", "teams", id], mono: true },
   page: {
-    // `ENG/Deploy runbook` → `#/knowledge/ENG/Deploy runbook`, each segment
-    // encoded by the router.
+    // ONE ADDRESS, THE PAGE'S ID. It was `CONTAINER/Title`, and a title
+    // changes on rename: every copied link died the day somebody fixed a
+    // heading. The engine's `page` read takes either, so an id is always
+    // enough to open one.
     label: "Page",
-    pathOf: (id) => {
-      const cut = id.indexOf("/");
-      if (cut < 0) return ["knowledge", id];
-      return ["knowledge", id.slice(0, cut), id.slice(cut + 1)];
-    },
+    pathOf: (id) => ["knowledge", "pages", id],
   },
   container: { label: "Container", pathOf: (id) => ["knowledge", id], mono: true },
-  turn: { label: "Turn", pathOf: (id) => ["activity", "turns", id], mono: true },
-  run: { label: "Coding run", pathOf: (id) => ["activity", "runs", id], mono: true },
-  event: { label: "Event", pathOf: (id) => ["activity", "events", id], mono: true },
-  node: { label: "Node", pathOf: (id) => ["admin", "fleet", id], mono: true },
+  turn: { label: "Turn", pathOf: (id) => ["live", "turns", id], mono: true },
+  run: { label: "Coding run", pathOf: (id) => ["live", "runs", id], mono: true },
+  event: { label: "Event", pathOf: (id) => ["live", "events", id], mono: true },
+  node: { label: "Node", pathOf: (id) => ["settings", "nodes", id], mono: true },
   schedule: {
     // `role/ceo/standup` — three segments, and the name may contain none of
     // them because the engine slugs it.
     label: "Schedule",
-    pathOf: (id) => ["activity", "schedules", ...id.split("/")],
+    pathOf: (id) => ["agents", "schedules", ...id.split("/")],
   },
-  channel: { label: "Channel", pathOf: (id) => ["activity", "a2a", id], mono: true },
-  tool: { label: "Tool", pathOf: (id) => ["admin", "tools", id], mono: true },
-  integration: { label: "Integration", pathOf: (id) => ["admin", "integrations", id] },
-  credential: { label: "Credential", pathOf: (id) => ["admin", "credentials", id], mono: true },
-  revision: { label: "Revision", pathOf: (id) => ["admin", "config", "revisions", id], mono: true },
+  channel: { label: "Channel", pathOf: (id) => ["live", "a2a", id], mono: true },
+  tool: { label: "Tool", pathOf: (id) => ["settings", "tools", id], mono: true },
+  integration: { label: "Integration", pathOf: (id) => ["settings", "integrations", id] },
+  credential: { label: "Credential", pathOf: (id) => ["settings", "secrets", id], mono: true },
+  revision: {
+    label: "Revision",
+    pathOf: (id) => ["settings", "config", "revisions", id],
+    mono: true,
+  },
   // A NOTICE HAS NO PAGE OF ITS OWN, AND NO PEEK EITHER. It is a row in
   // somebody's inbox naming a change to something else, so its "page" is the
   // inbox that holds it — and that is where it is read in place and marked,

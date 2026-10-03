@@ -40,7 +40,7 @@ import (
 // functions because a DRY RUN is the first without the second. [Service.prepare]
 // reads the active revision, checks what the caller said it was building on,
 // opens the stored document, builds the proposed one from it, validates it
-// and derives what an answer reports: its warnings and its hierarchy.
+// and derives what an answer reports: its warnings.
 // Nothing is stored. [Service.commit] seals, stores and activates exactly the
 // bytes prepare produced. A check that ran a copy of the first half would
 // validate a different write from the one a save sends, which is the one
@@ -285,8 +285,6 @@ func (s *Service) prepare(ctx context.Context, d draft) (*prepared, error) {
 	if err != nil {
 		return nil, err
 	}
-	// DERIVED BEFORE IT IS JUDGED, because a refusal carries it too: a
-	// document with problems still has a hierarchy.
 	if invalid := d.rules(company); invalid != nil {
 		return nil, &ValidationError{Err: invalid}
 	}
@@ -327,8 +325,8 @@ func (s *Service) commit(ctx context.Context, p *prepared, summary string,
 	}
 	at := s.now()
 	id, err := s.configs.Insert(ctx, store.Revision{
-		ParentID: p.base, Source: "api", CreatedBy: by.Name,
-		CreatedByKind: string(by.Kind), OperatorID: by.OperatorID,
+		ParentID: p.base, Source: revisionSource, CreatedBy: by.Name,
+		CreatedByKind: by.Kind, OperatorID: by.OperatorID,
 		Summary: summary, Payload: payload, CreatedAt: at,
 	})
 	if err != nil {
@@ -336,10 +334,14 @@ func (s *Service) commit(ctx context.Context, p *prepared, summary string,
 	}
 	published, err := s.plane.Activate(ctx, coord.ActivationRequest{
 		RevisionID: id, Summary: summary, Payload: payload, At: at, Expect: p.base,
-		// THE AUTHOR RIDES THE POINTER, so every node that adopts this
-		// revision records who wrote it rather than `peer`.
-		CreatedBy: by.Name, CreatedByKind: string(by.Kind),
-		OperatorID: by.OperatorID,
+		// THE ORIGIN RIDES THE POINTER, so every node that adopts this
+		// revision records who wrote it, through which credential, from
+		// where and when — rather than itself, from `fleet`, at the
+		// instant it happened to apply it.
+		Origin: coord.RevisionOrigin{
+			Author: by.Name, AuthorKind: by.Kind, OperatorID: by.OperatorID,
+			Source: revisionSource, CreatedAt: at,
+		},
 		// A WRITE BUILT ON NOTHING SAYS SO. Every write here names what it
 		// was built on as the activation's expectation, and a write with no
 		// base was built on an empty store: on a node that has not caught up
@@ -533,9 +535,9 @@ func readPatched(patch []byte, sent *yaml.Node, merged []byte) (*config.Company,
 	// document to NO rule. Validation happens exactly once, in prepare,
 	// after the masks are restored. This line used to validate here as
 	// well, before the restore, so on a document a newer peer had extended
-	// every PATCH that carried a masked credential (any roles or units
-	// array read from GET /config) was refused as an invalid patch naming
-	// the masks.
+	// every PATCH that carried a masked credential (any mcp_servers list
+	// read from GET /config) was refused as an invalid patch naming the
+	// masks.
 	return config.DecodeCompany(merged)
 }
 

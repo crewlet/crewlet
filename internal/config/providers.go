@@ -8,6 +8,8 @@ import (
 	"strings"
 
 	"gopkg.in/yaml.v3"
+
+	"github.com/crewlet/crewlet/internal/envref"
 )
 
 // Providers is the Tier B model surface: which LLMs a seat can be pointed
@@ -19,8 +21,11 @@ import (
 // address is live-editable.
 type Providers struct {
 	// LLM is the named provider chain seats select from by key. A seat
-	// naming a key that is not here has no model at all, so the keys are
-	// the company's model vocabulary.
+	// naming a key that is not here falls back to `default`, else the first
+	// provider declared — a model nobody chose for it — so the keys are the
+	// company's model vocabulary: a company file naming one is refused at
+	// Validate, and a running company's chart naming one is reported by
+	// /chart/check (provider_unknown).
 	LLM map[string]LLMProvider `yaml:"llm,omitempty" json:"llm,omitempty" desc:"Named LLM providers; seats select one by key."`
 
 	// LLMOrder is the order the providers were DECLARED in, preserved
@@ -317,7 +322,9 @@ type LLMProvider struct {
 	//
 	// An empty list falls back to the provider's conventional variable
 	// (OPENAI_API_KEY, ANTHROPIC_API_KEY) at construction time, so a
-	// credential already exported in the shell works with no YAML change.
+	// credential already exported in the shell works with no YAML change —
+	// on the vendor's own types only, and only when the list is EMPTY
+	// rather than unresolved. See [LLMProvider.Keys].
 	APIKeys []string `secret:"true" yaml:"api_keys,omitempty" json:"api_keys,omitempty" desc:"API keys, ${VAR} supported. Several rotate on rate-limit/auth errors."`
 
 	// Cooldowns is the TTL policy applied per error class when a key is
@@ -366,22 +373,103 @@ func (l *LLMProvider) Timeout() float64 {
 	return l.TimeoutSeconds
 }
 
-// ResolvedKeys is the configured keys, de-duplicated and with empties
-// dropped, in declaration order. References are expanded through r, which
-// is the only place a key value ever exists in this process.
+// The conventional variables an entry that names no api_keys reads its one key
+// from: the variable each vendor's own SDK documents, so a credential already
+// exported in the shell works with no YAML change.
+const (
+	AnthropicKeyVar = "ANTHROPIC_API_KEY"
+	OpenAIKeyVar    = "OPENAI_API_KEY"
+)
+
+// ConventionalKeyVar is the variable this entry reads its key from when it
+// names none, or "" for a type that has none: a `cli-agent` entry holds a
+// login rather than a key bag. An `openai-compatible` entry reads
+// OPENAI_API_KEY like an `openai` one, which is what lets an OpenAI-shaped
+// gateway run on the credential already exported; an entry pointing at a
+// third party that must not see that key names its own.
+func (l *LLMProvider) ConventionalKeyVar() string {
+	switch l.Type {
+	case LLMAnthropic:
+		return AnthropicKeyVar
+	case LLMOpenAI, LLMOpenAICompatible, "":
+		return OpenAIKeyVar
+	default:
+		return ""
+	}
+}
+
+// APIKey is one credential an entry declares, as this process resolved it.
+//
+// It is the ONE reading of `api_keys`, and it says where each key came from as
+// well as what it is, because the two have different readers: the provider
+// needs the value and nothing else, while an operator surface needs the
+// provenance and must never be handed the value. [LLMProvider.ResolvedKeys] is
+// the values; the provenance is what `credential_pool` reports.
+type APIKey struct {
+	// Ref is the variable a whole `${VAR}` names, or the conventional
+	// variable for a [APIKey.Default] key. Empty for an [APIKey.Inline] one.
+	Ref string
+	// Inline is a value written into the document rather than referenced:
+	// a literal, or a literal with a reference embedded in it. It has no
+	// name an operator surface could show, only a position.
+	Inline bool
+	// Default is the conventional variable, read because the entry names
+	// no api_keys at all.
+	Default bool
+	// Value is the credential, trimmed, "" when the reference resolved to
+	// nothing. It is a SECRET: never logged, never serialised.
+	Value string `json:"-" yaml:"-"`
+}
+
+// Keys is every credential the entry declares, in declaration order, resolved
+// through r — duplicates and unresolved ones included, because a surface that
+// reports on them has to be able to say "this one resolves to nothing" and
+// "this one is the same key as the first".
+//
+// An entry that names NO api_keys reads its type's conventional variable
+// ([LLMProvider.ConventionalKeyVar]). One that names some reads exactly those,
+// even when every one of them resolves to nothing: an entry that says "use
+// ACME_KEY" and silently ran on the company's ANTHROPIC_API_KEY when ACME_KEY
+// was unset would bill another account for its traffic with nothing on any
+// surface saying so. It builds with no key instead, and every call is a clean
+// 401 naming the provider.
+func (l *LLMProvider) Keys(r *Resolver) []APIKey {
+	if len(l.APIKeys) == 0 {
+		name := l.ConventionalKeyVar()
+		if name == "" {
+			return nil
+		}
+		return []APIKey{{Ref: name, Default: true, Value: strings.TrimSpace(r.Lookup(name))}}
+	}
+	out := make([]APIKey, 0, len(l.APIKeys))
+	for _, raw := range l.APIKeys {
+		key := APIKey{Value: strings.TrimSpace(r.Value(raw))}
+		if name, whole := envref.Whole(raw); whole {
+			key.Ref = name
+		} else {
+			key.Inline = true
+		}
+		out = append(out, key)
+	}
+	return out
+}
+
+// ResolvedKeys is the values of [LLMProvider.Keys], de-duplicated and with
+// empties dropped, in declaration order — the bag a provider's pool rotates
+// through. References are expanded through r, which is the only place a key
+// value ever exists in this process.
 func (l *LLMProvider) ResolvedKeys(r *Resolver) []string {
 	var out []string
 	seen := map[string]struct{}{}
-	for _, raw := range l.APIKeys {
-		value := strings.TrimSpace(r.Value(raw))
-		if value == "" {
+	for _, key := range l.Keys(r) {
+		if key.Value == "" {
 			continue
 		}
-		if _, dup := seen[value]; dup {
+		if _, dup := seen[key.Value]; dup {
 			continue
 		}
-		seen[value] = struct{}{}
-		out = append(out, value)
+		seen[key.Value] = struct{}{}
+		out = append(out, key.Value)
 	}
 	return out
 }
@@ -931,6 +1019,20 @@ func (e *EmbeddingProvider) Width() int {
 		return e.Dimensions
 	}
 	return ModelWidths[strings.TrimSpace(e.Model)]
+}
+
+// ResolvedKey is the embedder's credential, resolved through r and trimmed.
+//
+// The rule [LLMProvider.Keys] states for a chat entry: a field left EMPTY
+// reads OPENAI_API_KEY, the key the chat backend shares, and a reference that
+// resolves to nothing stays nothing. An embedder told to use EMBED_KEY that
+// quietly ran on the chat account's key when EMBED_KEY was unset would bill
+// the wrong account with nothing on any surface to say so.
+func (e *EmbeddingProvider) ResolvedKey(r *Resolver) string {
+	if strings.TrimSpace(e.APIKey) == "" {
+		return strings.TrimSpace(r.Lookup(OpenAIKeyVar))
+	}
+	return strings.TrimSpace(r.Value(e.APIKey))
 }
 
 func (e *EmbeddingProvider) validate(path Path) error {

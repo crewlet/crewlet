@@ -44,12 +44,19 @@ func (a ActorKind) Valid() bool { return slices.Contains(ActorKinds, a) }
 
 // AnonymousActor is the name recorded for an actor this build cannot name.
 //
-// internal/config REFUSES IT AS A TOKEN ID, which is what makes it
-// unclaimable: a write made with nobody identified can then never be confused
-// in an audit row with a real credential's, and a reader filtering on the name
-// gets one of the two rather than both. It is spelled out here rather than
-// imported, for the leaf property's sake — config imports this package, not
-// the other way round — and the two must stay the same string.
+// NO CREDENTIAL IS EVER RECORDED UNDER IT, which is what keeps a write made
+// with nobody identified apart from a real credential's in an audit row — and
+// the reason is the name grammars, not a refusal anywhere. Every login a
+// principal can hold carries a separator ([ValidLogin] a dot,
+// [ValidMachineHandle] a colon) and this name has neither; and [ActorFor]
+// records a Tier A token under its WHOLE login, `token:<id>` ([TokenLogin]),
+// so even a token whose id is `anonymous` — which [ValidTokenID] accepts, and
+// internal/config therefore admits — writes as `token:anonymous`. A SEAT
+// handle is one segment and may be spelled this way, which is why the name is
+// never read alone: the [Actor.Kind] beside it says whether a seat wrote it.
+//
+// ONE COPY, here: there is no second spelling of it in config, the chart or
+// the API to keep in step, and this leaf is what each of them imports.
 const AnonymousActor = "anonymous"
 
 // Actor is how a principal is recorded on a row it authors.

@@ -2,19 +2,23 @@
 // is doing right now.
 //
 // It consumes the engine event stream — the same feed the WebSocket fan-out
-// reads — and maintains, per seat: the seat's live state, its current task,
-// phase and iteration, its live token meter, and the IN-FLIGHT LLM call. What a
-// seat has SPENT is not held per seat: it is the per-agent row of the spend
-// rollup, folded from the same records by internal/tokens, so a seat card and
-// the Spend screen cannot disagree about one seat.
+// reads — and maintains, per seat: the seat's live state, the TURN it is on and
+// the stage of it (context, a phase, or parked on a coding run), the last turn
+// it ended, its current phase and iteration, its live token meter, and the
+// IN-FLIGHT LLM call. Beside the seats it keeps the coding runs in flight,
+// reconciled against their durable record (sandbox.go). What a seat has SPENT
+// is not held per seat: it is the per-agent row of the spend rollup, folded
+// from the same records by internal/tokens, so a seat card and the Spend
+// screen cannot disagree about one seat.
 //
 // KEYED BY THE SEAT'S AGENT ID, the `agent_id` every seat-level event carries
-// and the one the roster row it is merged onto carries too. It was the ROLE
-// NAME, which is prose: two seats may share one, so two "Engineer"s shared one
+// and the one the roster row it is merged onto carries too — and the one the
+// seat's lease, its runs and its meters are named by. It was the ROLE NAME,
+// which is prose: two seats may share one, so two "Engineer"s shared one
 // overlay and each rendered whatever the other was last doing. The handle is
 // not the answer either, because a rename moves it — events already in flight
 // would land under an address the roster no longer carries. The id is derived
-// from the handle the seat was CREATED under (ADR-0019), so it is unique and a
+// from the handle the seat was CREATED under (ADR-0026), so it is unique and a
 // rename does not move it.
 //
 // It solves two problems, and both are worth stating because they are why this
@@ -45,17 +49,13 @@
 package livestate
 
 import (
-	"slices"
 	"strconv"
-	"strings"
 	"sync"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/eventfan"
 	"github.com/crewlet/crewlet/internal/events/types"
-	"github.com/crewlet/crewlet/internal/logging"
 )
-
-var log = logging.Get("api.livestate")
 
 const (
 	// EventFeedLimit is how many persisted-category events the projection
@@ -65,7 +65,9 @@ const (
 	// derive from it. They used to be three (400 retained, 150 sent, 250 kept
 	// client-side), so a tab streamed its feed up to 250 rows and then a
 	// refresh visibly snapped it back to 150, while 250 of the server's
-	// rows could never be delivered at all.
+	// rows could never be delivered at all. The dashboard's own copy is
+	// `MAX_EVENTS` in `contract/wire.ts`, held to this one by
+	// TestTheDashboardKeepsTheFeedTheEngineKeeps.
 	EventFeedLimit = 400
 
 	// dedupeLimit caps the finished-call guard, whose keys are phase
@@ -92,69 +94,51 @@ const (
 	// store: a record past the cap would be dropped on arrival, so reading
 	// it costs the seed's time budget and buys nothing.
 	SpendRecordLimit = 8000
-
-	// sandboxEntryMaxAge is how long an in-flight sandbox entry survives
-	// without a completion.
-	//
-	// Every other structure here is explicitly bounded and this one was
-	// not, while its input stream is lossy in both directions — the
-	// insert already accounts for a MISSED start, and a missed completion
-	// has the mirror-image effect with nothing to compensate it. The cost
-	// is not the memory: it is a ghost entry in the Running Sandboxes
-	// panel, a false report of work in flight that no operator can clear
-	// and no restart of the engine fixes.
-	//
-	// Twelve hours, against a detached run whose own ceiling is the turn's
-	// token budget plus a buffer, and a clarification pause bounded by its
-	// own TTL. Long enough that a genuinely long job is never swept from
-	// under an operator watching it; short enough that a lost run does not
-	// outlive the working day it started in. Eviction is a display
-	// correction, never a control action.
-	sandboxEntryMaxAge = 12 * time.Hour
 )
 
-// eventState maps an event type to the coarse seat state it implies.
+// stateEvents are the events the seat's state machine below reads.
 //
-// agent_turn_progress is deliberately ABSENT even though it plainly implies
-// "working": Apply handles that type on its own branch and returns before
+// agent_turn_progress is deliberately ABSENT even though it plainly moves a
+// seat: Apply handles that type on its own branch and returns before
 // applyState is ever reached, so an entry here would be read by nothing.
-// applyProgress sets the state itself, after its discard guards.
-var eventState = map[string]string{
-	"agent_spawned":         "idle",
-	"agent_terminated":      "terminated",
-	"agent_phase_started":   "working",
-	"agent_phase_completed": "working",
-	// THE END OF THE WORK, and reflection_completed is only the end of what
-	// FOLLOWS it. Reflection is the trailing sentinel for the auxiliary phases
-	// a learning pass emits, and it was the only entry here that anything
-	// publishes AND that returns a seat to idle — but the reflector returns
-	// without publishing it on five paths (no workers configured, an unknown
-	// role, a per-role `learning_enabled: false`, a spent token budget, a
-	// redelivery it has already marked). A company running with learning off
-	// takes the first of those on every turn, so every one of its seats went
-	// to `working` on its first turn and stayed there for the life of the
-	// process — mid-phase, in a phase that had ended.
-	"agent_turn_completed": "idle",
-	"reflection_completed": "idle",
-	"llm_unavailable":      "afk",
-	"turn.guard_breach":    "afk",
-	"budget_exhausted":     "afk",
+//
+// agent_turn_completed ENDS THE WORK, and reflection_completed only the
+// learning pass that follows it. Reflection is the trailing sentinel for the
+// auxiliary phases, and the reflector returns without publishing it on five
+// paths (no workers configured, an unknown role, a per-role
+// `learning_enabled: false`, a spent token budget, a redelivery it has already
+// marked) — so a seat whose turn end was read only off reflection stayed
+// mid-phase, in a phase that had ended, for the life of the process.
+var stateEvents = map[string]struct{}{
+	"agent_spawned":         {},
+	"agent_terminated":      {},
+	"agent_phase_started":   {},
+	"agent_phase_completed": {},
+	"agent_turn_completed":  {},
+	"reflection_completed":  {},
+	"llm_unavailable":       {},
+	"turn.guard_breach":     {},
+	"budget_exhausted":      {},
 }
 
-// afkEvents are the engine-detected failures that flip a seat to afk and carry
-// a cause the dashboard renders as a status quip.
-var afkEvents = map[string]struct{}{
+// failureEvents are the engine-detected failures that end a seat's work and
+// are HELD on it until it works again: the seat's frozen call and its
+// `last_error` outlive the turn's own completion. Only one of them stops the
+// seat — [providerFailure]; the budget's stop is read from the meters, which
+// say when it lifts, and a breached guard is a failed turn, not a stop.
+var failureEvents = map[string]struct{}{
 	"llm_unavailable":   {},
 	"turn.guard_breach": {},
 	"budget_exhausted":  {},
 }
 
 // sandboxEvents feed the running-sandboxes panel: started → tracked;
-// clarification → awaiting input; completed → dropped.
+// clarification → awaiting a person; completed or failed → dropped.
 var sandboxEvents = map[string]struct{}{
 	"sandbox_run_started":             {},
 	"sandbox_clarification_requested": {},
 	"sandbox_run_completed":           {},
+	"sandbox_run_failed":              {},
 }
 
 // agentLive is the incrementally-maintained state of one seat.
@@ -162,31 +146,68 @@ type agentLive struct {
 	// agentID is the seat's derived agent id, and the key it is held
 	// under — see the package doc.
 	agentID string
-	state   string
 
 	currentPhase     string
 	currentIteration int
 
-	afkReason string
+	// failure is the engine-detected failure event HELD on the seat — see
+	// [failureEvents] — and empty once it works again.
+	failure string
+
+	// terminated is whether the seat's instance on the publishing node
+	// ended and nothing has run on it since. It says nothing about whether
+	// the seat is placed — placement is the lease table's to say — only
+	// that a spawn after it is a NEW instance, whose state is not the old
+	// one's.
+	terminated bool
+
 	lastError *ErrorInfo
 	liveCall  *LiveCall
-	budget    *Meter
+	budget    *BudgetMeter
 
 	// stateTS is the instant of the last state-affecting event applied —
 	// the reorder guard. Internal bookkeeping, never re-emitted.
 	stateTS stamp
+
+	// turn is the turn the seat is on, and turnAt the instant of the
+	// event that last moved it — the turn's own reorder guard, apart from
+	// stateTS because a turn's events are ordered against each other and
+	// not against a meter report or a failure hold. See turn.go.
+	turn   *LiveTurn
+	turnAt stamp
+
+	// lastTurn is the newest turn the seat ended, and lastTurnAt when.
+	lastTurn   *LastTurn
+	lastTurnAt stamp
+
+	// paused is the seat's pause, nil when it has none, and pausedAt the
+	// instant of the event that last moved it — its own reorder guard. See
+	// pause.go.
+	paused   *Paused
+	pausedAt stamp
 }
 
+// overlay renders the seat's own fields. Its state is the projection's to
+// compute — it reads the runs, the placement and the company's budget as well
+// as the seat — so [LiveState.overlayOf] adds it.
 func (a *agentLive) overlay() Overlay {
 	return Overlay{
-		State:            a.state,
 		CurrentPhase:     optional(a.currentPhase),
 		CurrentIteration: a.currentIteration,
 		LiveCall:         a.liveCall.clone(),
 		LastError:        a.lastError.clone(),
 		Budget:           a.budget.clone(),
-		AFKReason:        a.afkReason,
+		Turn:             a.turn.clone(),
+		LastTurn:         a.lastTurn.clone(),
+		Paused:           a.paused.clone(),
 	}
+}
+
+// working records that the seat did real work: whatever failure was held on it
+// is history, and an instance that did work is not a terminated one.
+func (a *agentLive) working() {
+	a.failure = ""
+	a.terminated = false
 }
 
 // optional renders "" as JSON null, which is what the dashboard reads as "no
@@ -205,7 +226,20 @@ type LiveState struct {
 	agents map[string]*agentLive
 
 	// sandboxes are in-flight detached jobs, keyed by kick-off turn id.
-	sandboxes map[string]*SandboxEntry
+	sandboxes map[string]*heldSandbox
+
+	// endedRuns remembers how each run the events ended did, so a
+	// reconcile that read the durable record before it caught up does not
+	// put the run back. Pruned by every reconcile to the runs the record
+	// still holds; bounded besides, for a process that never reconciles.
+	endedRuns *boundedSet[runEnd]
+
+	// endedTurns maps a turn that ENDED to the instant it did, so a
+	// straggler from it — a phase or a progress round that lost a
+	// cross-topic race to the completion — cannot put it back on its seat.
+	// Bounded like finishedCalls, and for its reason: the window it covers
+	// is seconds.
+	endedTurns *boundedSet[stamp]
 
 	// feed is a chronological ring of persisted-category events.
 	feed      []FeedRow
@@ -254,13 +288,29 @@ type LiveState struct {
 	// whatever a reconnect left behind.
 	spend []spendEntry
 
-	budget OrgBudget
+	// budget is the company's meter as the last report stated it, and NIL
+	// UNTIL ONE HAS. Three facts, not two: before a report nobody has read
+	// the counter, which is not the same as a report stating that nothing is
+	// capped — and a zero value held here went out as the second, so for the
+	// first seconds after every engine start a capped company was drawn as
+	// having no budget and an operator was pointed at setting one.
+	budget *OrgBudget
+
+	// placement is which of the company's agent seats some node holds,
+	// keyed by role, as the last read of the seat leases found it — nil
+	// until one lands. See [LiveState.SetPlacement].
+	placement map[string]bool
+
 	// budgetAt is when the held report was read, the guard against a
 	// delayed report from another node. Internal, never re-emitted.
 	budgetAt stamp
 
-	// now is injectable so a test can pin the clock the sandbox sweep
-	// reads. Nil takes the wall clock.
+	// seededFrom is which nodes the startup seed read, nil until a seed
+	// ran. See [LiveState.SeededFrom].
+	seededFrom *eventfan.Coverage
+
+	// now is injectable so a test can pin the clock the spend window and
+	// the sandbox reconcile read. Nil takes the wall clock.
 	now func() time.Time
 }
 
@@ -268,7 +318,9 @@ type LiveState struct {
 func New(opts ...Option) *LiveState {
 	s := &LiveState{
 		agents:        map[string]*agentLive{},
-		sandboxes:     map[string]*SandboxEntry{},
+		sandboxes:     map[string]*heldSandbox{},
+		endedRuns:     newBoundedSet[runEnd](dedupeLimit),
+		endedTurns:    newBoundedSet[stamp](dedupeLimit),
 		feedLimit:     EventFeedLimit,
 		feedIDs:       map[string]struct{}{},
 		spendIDs:      map[string]struct{}{},
@@ -292,7 +344,7 @@ func WithFeedLimit(n int) Option {
 	}
 }
 
-// WithClock pins the clock the sandbox sweep reads.
+// WithClock pins the clock the spend window and the sandbox reconcile read.
 func WithClock(now func() time.Time) Option {
 	return func(s *LiveState) { s.now = now }
 }
@@ -309,8 +361,12 @@ func (s *LiveState) clock() time.Time {
 // MergeAgents overlays live state onto each static config row, matched on the
 // row's `agent_id`.
 //
-// Seats with no live entry are returned as-is, which the dashboard renders
-// offline. Order follows the input.
+// EVERY SEAT ROW CARRIES A STATE, a seat the events never mentioned included:
+// its placement, its runs and the company's budget are enough to say whether it
+// is idle or stopped, and a row with none was drawn as offline — which, for a
+// seat a peer node was serving, was simply false. A row with no `agent_id`
+// names no seat this projection can state, and is returned as-is. Order
+// follows the input.
 func (s *LiveState) MergeAgents(static []map[string]any) []map[string]any {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -321,9 +377,8 @@ func (s *LiveState) MergeAgents(static []map[string]any) []map[string]any {
 		for k, v := range row {
 			merged[k] = v
 		}
-		id, _ := row["agent_id"].(string)
-		if live := s.agents[id]; id != "" && live != nil {
-			mergeOverlay(merged, live.overlay())
+		if id, _ := row["agent_id"].(string); id != "" {
+			mergeOverlay(merged, s.overlayOf(id))
 		}
 		out = append(out, merged)
 	}
@@ -358,12 +413,11 @@ func (s *LiveState) OverlayRows(agentIDs []string) []map[string]any {
 
 	out := make([]map[string]any, 0, len(agentIDs))
 	for _, id := range agentIDs {
-		live := s.agents[id]
-		if live == nil {
+		if s.agents[id] == nil {
 			continue
 		}
 		row := map[string]any{"agent_id": id}
-		mergeOverlay(row, live.overlay())
+		mergeOverlay(row, s.overlayOf(id))
 		out = append(out, row)
 	}
 	return out
@@ -374,12 +428,27 @@ func (s *LiveState) OverlayRows(agentIDs []string) []map[string]any {
 func (s *LiveState) AgentOverlay(agentID string) *Overlay {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	live := s.agents[agentID]
-	if live == nil {
+	if s.agents[agentID] == nil {
 		return nil
 	}
-	o := live.overlay()
+	o := s.overlayOf(agentID)
 	return &o
+}
+
+// overlayOf is one seat's whole overlay: its own fields and the state computed
+// over them. A seat with no live entry has zero fields and a state all the same.
+//
+// Called under s.mu.
+func (s *LiveState) overlayOf(agentID string) Overlay {
+	agent := s.agents[agentID]
+	var o Overlay
+	if agent != nil {
+		o = agent.overlay()
+	}
+	st := s.stateOf(agentID, agent)
+	o.Activity = st.activity
+	o.StoppedReason = st.stoppedReason()
+	return o
 }
 
 // RecentEvents returns feed rows newest-first, capped at limit.
@@ -396,60 +465,19 @@ func (s *LiveState) RecentEvents(limit int) []FeedRow {
 	return out
 }
 
-// ActiveSandboxes returns in-flight detached jobs, oldest-first.
-//
-// Oldest-first so the longest-running job — the one most likely to need
-// attention, such as one blocked on a clarification — sorts to the top of the
-// panel.
-//
-// Entries past sandboxEntryMaxAge are dropped on the way out. The set is
-// cleared by a completion event, and an event stream that can miss a start can
-// miss a completion too. Swept on READ rather than on a timer because this is a
-// display projection: the correction is only ever observed here, and a
-// projection does not need a loop of its own to stop lying.
-func (s *LiveState) ActiveSandboxes() []SandboxEntry {
+// Budget returns the org-wide meter as the last report stated it, or nil when
+// no report has arrived — which the wire states as `null`, "nobody has read
+// the counter yet", rather than an empty meter, which says "nothing is
+// capped". A copy of the held value: a report REPLACES the windows list
+// rather than editing it, so sharing the list with the copy is safe.
+func (s *LiveState) Budget() *OrgBudget {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.sweepStaleSandboxes()
-
-	out := make([]SandboxEntry, 0, len(s.sandboxes))
-	for _, entry := range s.sandboxes {
-		out = append(out, *entry)
+	if s.budget == nil {
+		return nil
 	}
-	slices.SortFunc(out, func(a, b SandboxEntry) int {
-		return strings.Compare(a.StartedAt, b.StartedAt)
-	})
-	return out
-}
-
-func (s *LiveState) sweepStaleSandboxes() {
-	if len(s.sandboxes) == 0 {
-		return
-	}
-	now := s.clock()
-	var stale []string
-	for turnID, entry := range s.sandboxes {
-		if newStamp(entry.StartedAt).olderThan(now, sandboxEntryMaxAge) {
-			stale = append(stale, turnID)
-		}
-	}
-	for _, turnID := range stale {
-		delete(s.sandboxes, turnID)
-	}
-	if len(stale) > 0 {
-		log.Info("sandbox_projection_entries_expired",
-			"count", len(stale),
-			"max_age", sandboxEntryMaxAge,
-			"hint", "no sandbox_run_completed arrived for these runs; the "+
-				"dashboard was showing them as still in flight")
-	}
-}
-
-// Budget returns the org-wide meter. Zero-valued when none is reporting.
-func (s *LiveState) Budget() OrgBudget {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.budget
+	held := *s.budget
+	return &held
 }
 
 // --- write side --------------------------------------------------------- //
@@ -457,7 +485,10 @@ func (s *LiveState) Budget() OrgBudget {
 // Apply updates the projection from one serialized envelope, reporting what
 // moved so the stream service can push the RESULT of applying it rather than
 // the raw event.
-func (s *LiveState) Apply(env *Envelope) Change {
+//
+// The result is NAMED because the seat's state is compared after everything
+// else has moved, in a deferred check that has to be able to add to it.
+func (s *LiveState) Apply(env *Envelope) (change Change) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -465,7 +496,6 @@ func (s *LiveState) Apply(env *Envelope) Change {
 	if payload == nil {
 		payload = map[string]any{}
 	}
-	var change Change
 
 	// STAMPED HERE, so the frame the client is handed carries it and the
 	// snapshot's own rows cannot disagree. It is the same derivation
@@ -481,7 +511,7 @@ func (s *LiveState) Apply(env *Envelope) Change {
 	// The live token meters. Stream-only: a report is a snapshot of a counter
 	// that moves every round, so a copy replayed from history would show
 	// figures the counter left behind long ago as the current ones.
-	if env.Type == "budget_reported" {
+	if env.Type == "budget_meters" {
 		return s.applyBudget(*env, payload)
 	}
 
@@ -507,10 +537,19 @@ func (s *LiveState) Apply(env *Envelope) Change {
 	}
 
 	// Detached sandbox lifecycle, then stop: these do not drive the seat
-	// state machine below.
+	// state machine below. A LOST run is the one exception that reaches a
+	// seat: it settles the parked turn that was waiting for it.
 	if _, ok := sandboxEvents[env.Type]; ok {
+		// A RUN MOVES ITS SEAT'S STATE: one that starts makes it working,
+		// one that asks a question makes it need somebody, one that ends
+		// returns it to whatever else is true of it.
+		before := s.states()
 		s.applySandbox(*env, payload)
 		change.Sandboxes = true
+		if env.Type == "sandbox_run_failed" && s.endLostRun(*env, payload) {
+			change.agentMoved(str(payload, "agent_id"))
+		}
+		s.noteMoved(before, &change)
 		return change
 	}
 
@@ -526,23 +565,110 @@ func (s *LiveState) Apply(env *Envelope) Change {
 	if id == "" {
 		return change
 	}
-	if s.applyState(id, *env, payload) {
+	agent := s.agents[id]
+	if agent == nil {
+		// THE ENTRY IS MADE ONLY FOR AN EVENT THAT CAN MOVE THE SEAT: one
+		// named by a prompt measurement or a skill load has nothing to
+		// say about it, and an entry made for it would be pushed as a
+		// row the next time anything moved, claiming the projection
+		// knows a seat it was only ever told the id of.
+		if !movesSeat(env.Type) {
+			return change
+		}
+		agent = s.ensureAgent(id)
+	}
+	// THE SEAT'S STATE IS A PUSH OF ITS OWN: an event can move it without
+	// moving any field it is derived from that the checks below compare —
+	// a failure hold that lifts, a turn that starts.
+	before := s.stateOf(id, agent)
+	defer func() {
+		if s.stateOf(id, agent) != before {
+			change.agentMoved(id)
+		}
+	}()
+
+	// A PERSON'S PAUSE, on its own guard: it moves nothing else about the
+	// seat, and nothing else moves it.
+	if s.applyPause(agent, *env, payload) {
+		change.agentMoved(id)
+		return change
+	}
+
+	// THE TURN FIRST, and on its own guards: an event the state machine
+	// below discards as older than the seat's newest (a completion that
+	// lost a race to the next turn's first phase) still ended its turn.
+	if s.applyTurnEvent(agent, *env, payload) {
+		change.agentMoved(id)
+	}
+	if s.applyState(agent, *env, payload) {
 		change.agentMoved(id)
 	}
 	return change
 }
 
-// applyState applies a state-affecting event to the seat with this agent id,
-// gated on the reorder guard, and reports whether the seat moved.
-//
-// The entry is made only for an event that can move it: a seat named by a
-// prompt measurement or a skill load has no state to report, and an entry made
-// for it would claim the projection knows something about the seat.
-func (s *LiveState) applyState(agentID string, env Envelope, payload map[string]any) bool {
-	if _, ok := eventState[env.Type]; !ok {
+// movesSeat reports whether an event of this type can move a seat: the state
+// machine's own events, the start that opens a turn, and a person's pause or
+// resume. Every other event that names a seat moves one only through a turn it
+// already holds — see [LiveState.applyTurnEvent]'s failure arm — which needs
+// no new entry.
+func movesSeat(eventType string) bool {
+	if _, ok := stateEvents[eventType]; ok {
+		return true
+	}
+	switch eventType {
+	case "agent_turn_started", "seat_paused", "seat_resumed":
+		return true
+	}
+	return false
+}
+
+// applyTurnEvent moves the seat's turn for one event, reporting whether it did.
+func (s *LiveState) applyTurnEvent(agent *agentLive, env Envelope, payload map[string]any) bool {
+	if env.Type == "agent_turn_started" {
+		return s.applyTurnStarted(agent, env, payload)
+	}
+	before := agent.overlay()
+	turnID := str(payload, "turn_id")
+	switch env.Type {
+	case "agent_phase_started", "agent_phase_completed":
+		s.touchTurn(agent, env, payload, StagePhase)
+	case "agent_turn_completed":
+		if flag(payload, "suspended") {
+			// A SUSPENSION IS NOT AN END. The segment parked on a
+			// detached coding run and the same turn completes again
+			// when the run is collected.
+			s.touchTurn(agent, env, payload, StageParked)
+		} else {
+			s.endTurnRecord(agent, env, turnID, env.Failed)
+		}
+	case "reflection_completed":
+		s.extendLastTurn(agent, env, turnID)
+	case "agent_spawned", "agent_terminated":
+		// A NEW INSTANCE, or none: a turn the old one was running died
+		// with it. A PARKED turn outlives both — it is a record in the
+		// coordination store and a box, not a goroutine — and a spawn
+		// older than the turn's newest event is the spawn that turn ran
+		// under.
+		at := newStamp(env.Timestamp)
+		if agent.turn != nil && agent.turn.Stage != StageParked &&
+			(env.Type == "agent_terminated" || agent.turnAt.empty() || at.empty() ||
+				!at.before(agent.turnAt)) {
+			agent.turn = nil
+		}
+	default:
+		if env.Failed && agent.turn != nil && turnID != "" && agent.turn.TurnID == turnID {
+			agent.turn.failed = true
+		}
+	}
+	return !sameTurnOverlay(before, agent.overlay())
+}
+
+// applyState applies a state-affecting event, gated on the reorder guard, and
+// reports whether the seat moved.
+func (s *LiveState) applyState(agent *agentLive, env Envelope, payload map[string]any) bool {
+	if _, ok := stateEvents[env.Type]; !ok {
 		return false
 	}
-	agent := s.ensureAgent(agentID)
 	ts := newStamp(env.Timestamp)
 
 	// Reorder guard: a strictly-older event must not clobber newer state.
@@ -559,20 +685,27 @@ func (s *LiveState) applyState(agentID string, env Envelope, payload map[string]
 	switch {
 	case env.Type == "agent_spawned":
 		// A spawn is a NEW instance of the seat, so whatever stopped the
-		// last one is not this one's state. Without this the sticky-AFK
-		// hold outlives an engine restart and a healthy seat renders as
-		// broken until it happens to do some work. A seat the projection
-		// knew nothing about is idle from here too.
-		if agent.state == "" || agent.state == "terminated" || agent.state == "afk" {
-			agent.state = "idle"
-			agent.afkReason = ""
+		// last one is not this one's state. Without this the failure hold
+		// outlives an engine restart and a healthy seat renders as
+		// stopped until it happens to do some work.
+		if agent.terminated || agent.failure != "" {
+			agent.terminated = false
+			agent.failure = ""
 			agent.lastError = nil
+			agent.liveCall = nil
+		}
+		// AND THE CALL OF A TURN THE SPAWN ENDED. The turn itself was
+		// taken off the seat above (applyTurnEvent) when the spawn is
+		// newer than it — the turn died with the instance that ran it —
+		// and a call left behind is a round nothing will ever finish,
+		// drawn on a seat that is idle. A spawn OLDER than the turn is one
+		// that lost a race to it, and the turn and its call stand.
+		if agent.turn == nil {
 			agent.liveCall = nil
 		}
 
 	case env.Type == "agent_phase_started":
-		agent.state = "working"
-		agent.afkReason = ""
+		agent.working()
 		// A new phase is real forward progress: whatever killed the last
 		// one is history now.
 		agent.lastError = nil
@@ -591,8 +724,7 @@ func (s *LiveState) applyState(agentID string, env Envelope, payload map[string]
 		}
 
 	case env.Type == "agent_phase_completed":
-		agent.state = "working"
-		agent.afkReason = ""
+		agent.working()
 		if flag(payload, "failed") {
 			s.recordPhaseFailure(agent, env, payload)
 		}
@@ -602,22 +734,17 @@ func (s *LiveState) applyState(agentID string, env Envelope, payload map[string]
 		endTurn(agent, str(payload, "turn_id"))
 
 	case env.Type == "agent_terminated":
-		agent.state = "terminated"
+		agent.terminated = true
 		agent.liveCall = nil
 
 	default:
-		if _, ok := afkEvents[env.Type]; !ok {
+		if _, ok := failureEvents[env.Type]; !ok {
 			return true
 		}
-		agent.state = "afk"
-		if kind := str(payload, "kind"); kind != "" {
-			agent.afkReason = kind
-		} else {
-			agent.afkReason = env.Type
-		}
+		agent.failure = env.Type
 		// A call already frozen as failed is the most informative thing
 		// on the seat's page — the prompt it died on, the tools that had
-		// run, the error. The AFK event that follows a failed phase would
+		// run, the error. The failure event that follows a failed phase would
 		// otherwise wipe it a moment later.
 		if agent.liveCall == nil || !agent.liveCall.Failed {
 			agent.liveCall = nil
@@ -638,7 +765,7 @@ func (s *LiveState) applyState(agentID string, env Envelope, payload map[string]
 	return true
 }
 
-// endTurn returns a seat to idle at the end of the turn `turnID`.
+// endTurn clears what a seat holds for the turn `turnID` when that turn ends.
 //
 // SCOPED TO THAT TURN, and it has to be: both events that end one arrive
 // asynchronously and neither is ordered against the next turn's work.
@@ -662,33 +789,36 @@ func endTurn(agent *agentLive, turnID string) {
 	}
 	agent.currentPhase = ""
 	agent.currentIteration = 0
-	// AN AFK SEAT STAYS AFK, and this is the one path that reaches it. An
-	// engine-detected failure publishes its AFK event and then the turn's
-	// own completion, microseconds apart and in that order — so forcing
-	// idle here erases the cause the instant it was set, and an agent
-	// whose provider died renders as a healthy idle seat on the screen and
-	// on every reload. The hold used to be written on the task_completed
+	// A HELD FAILURE STAYS HELD, and this is the one path that reaches it.
+	// An engine-detected failure publishes its event and then the turn's
+	// own completion, microseconds apart and in that order — so clearing
+	// here erases the cause the instant it was set, and an agent whose
+	// provider died renders as a healthy idle seat on the screen and on
+	// every reload. The hold used to be written on the task_completed
 	// branch, which nothing ever published: the guard was real and
 	// unreachable, and the reachable path had none.
 	//
-	// A seat leaves AFK only when it does real work again, which is
-	// agent_phase_started's business.
-	if agent.state == "afk" {
+	// A seat leaves the hold only when it does real work again, which is
+	// [agentLive.working]'s business.
+	if agent.failure != "" {
 		return
 	}
-	agent.state = "idle"
+	agent.terminated = false
 	agent.liveCall = nil
 }
 
-// ensureAgent returns the live entry for the seat with this agent id,
-// creating one that claims NO state.
+// ensureAgent returns the live entry for the seat with this agent id, creating
+// an empty one.
 //
-// UNKNOWN, not offline, is what a new entry knows. A meter report creates one
-// without saying anything about whether the seat is running — it names every
-// capped seat. The overlay used to start at "offline", and a merged overlay
-// OVERWRITES the roster's own state, so the first meter report after a boot
-// turned every capped seat this node was serving from idle to offline on every
-// open dashboard, and it stayed that way until the seat next took a turn.
+// AN EMPTY ENTRY CLAIMS NOTHING of its own. Several things create one without
+// saying anything about whether the seat is running — a meter report names
+// every capped seat, a placement read names every seat of the company — and
+// the seat's state is computed over the entry and everything else the
+// projection holds ([LiveState.stateOf]) rather than stored on it. The entry
+// used to start at "offline", and a merged overlay OVERWRITES the roster's
+// row, so the first meter report after a boot turned every capped seat this
+// node was serving from idle to offline on every open dashboard until the seat
+// next took a turn.
 func (s *LiveState) ensureAgent(agentID string) *agentLive {
 	agent := s.agents[agentID]
 	if agent == nil {
@@ -712,8 +842,9 @@ func (s *LiveState) recordEvent(env *Envelope) {
 		// Read off the envelope Apply just stamped, rather than derived a
 		// second time: one derivation is what keeps the live row and the
 		// seeded one agreeing about the same event.
-		Failed:  env.Failed,
-		AgentID: env.AgentID,
+		Failed:    env.Failed,
+		AgentID:   env.AgentID,
+		ChannelID: env.ChannelID,
 	}
 	s.feed = append(s.feed, row)
 	s.trimFeed()

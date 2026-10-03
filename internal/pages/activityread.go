@@ -135,6 +135,13 @@ type PageActivityQuery struct {
 	// and one audit surface reads both.
 	ActorKinds []AuthorKind
 
+	// Actor narrows to one writer's changes — the company feed's `actor=`.
+	// A SEAT is asked by the handle it answers to now and matched on its
+	// identity, which is what every change records ([identified]): matched
+	// on the handle as typed, a renamed seat's own changes — every one
+	// recorded under the handle it was created as — were not its own.
+	Actor string `person:"seat"`
+
 	// Since is a lower bound as a composed log position.
 	Since uint64
 
@@ -150,11 +157,15 @@ type PageActivityQuery struct {
 // Activity answers a page of what has happened to the company's pages.
 func (r *Reader) Activity(ctx context.Context, q PageActivityQuery) (PageActivity, error) {
 	call := r.pinned()
-	got, err := call.activity(ctx, q)
+	// TRIMMED BEFORE IT IS RESOLVED, or a padded handle would miss the seat
+	// and be matched as a name nobody answers to.
+	q.Actor = strings.TrimSpace(q.Actor)
+	got, err := call.activity(ctx, identified(call.chart, q))
 	return shown(call.chart, got), err
 }
 
-// activity is [Reader.Activity] as the rows hold it.
+// activity is [Reader.Activity] once the actor it filters on is their seat's
+// identity — see people.go.
 func (r *Reader) activity(ctx context.Context, q PageActivityQuery) (PageActivity, error) {
 	if q.Freshness.Level == "" {
 		return PageActivity{}, fmt.Errorf("pages: this activity read names no " +
@@ -241,6 +252,10 @@ func readPageActivity(ctx context.Context, tx *sql.Tx, q PageActivityQuery,
 			args = append(args, string(kind))
 		}
 		where = append(where, "h.actor_kind IN ("+strings.Join(marks, ",")+")")
+	}
+	if actor := strings.TrimSpace(q.Actor); actor != "" {
+		where = append(where, "h.actor = ?")
+		args = append(args, actor)
 	}
 	if q.Since > 0 {
 		where = append(where, "h.version > ?")

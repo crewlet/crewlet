@@ -342,7 +342,7 @@ func (r *writeRig) structureOf(kind chart.ObjectKind, key string) (parent, lead 
 //
 // [chart.Reader.SeatByIdentity] is the read a binding resolves through — the
 // seat a signed-in person is bound to, and every binding the dangling-binding
-// alarm classifies — and a binding names the seat's IDENTITY (ADR-0020). So it
+// alarm classifies — and a binding names the seat's IDENTITY (ADR-0027). So it
 // must find the renamed seat by the handle it was created under, and must NOT
 // answer for the seat's current handle: that is an address, and a lookup that
 // treated one as an identity is how a binding came to name a stranger.
@@ -429,8 +429,8 @@ func TestTheIdentityOutlivesTheAliasCap(t *testing.T) {
 //
 // A new seat's identity is the handle it is created under, so a seat created on
 // a renamed seat's origin is a second seat with the first one's identity: one
-// mailbox, one lease and one diary between two agents (ADR-0019), and every
-// person bound to the first seat bound to the second (ADR-0020). All three
+// mailbox, one lease and one diary between two agents (ADR-0026), and every
+// person bound to the first seat bound to the second (ADR-0027). All three
 // creation paths refuse or skip it — a batch at its decide, a lone content
 // write at its decide, and an import, which decides nothing, at its apply.
 //
@@ -621,7 +621,7 @@ func TestARenameThenRemovalRemovesTheObjectAndNotItsNewAddress(t *testing.T) {
 // A REMOVAL ASKS THE DIRECTORY ABOUT THE SEAT BY ITS IDENTITY.
 //
 // A binding names the seat it was made to by the handle the seat was created
-// under (ADR-0020), so a removal that asked about the handle the seat answers
+// under (ADR-0027), so a removal that asked about the handle the seat answers
 // to now read a renamed seat as held by nobody — and removed it out from under
 // the person holding it, which is the one mistake the check exists to catch.
 func TestARemovalAsksTheDirectoryByTheSeatsIdentity(t *testing.T) {

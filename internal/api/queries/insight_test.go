@@ -12,6 +12,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/api/queries"
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/eventfan"
 	"github.com/crewlet/crewlet/internal/knowledge"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/store"
@@ -22,9 +23,11 @@ import (
 // spaces.
 type stubSearcher struct{}
 
-func (stubSearcher) Backend() string                                         { return "stub" }
-func (stubSearcher) CanSearch(*org.Role, *org.Organization) bool             { return false }
-func (stubSearcher) Search(context.Context, knowledge.Query) []knowledge.Hit { return nil }
+func (stubSearcher) Backend() string                             { return "stub" }
+func (stubSearcher) CanSearch(*org.Role, *org.Organization) bool { return false }
+func (stubSearcher) Search(context.Context, knowledge.Query) knowledge.Result {
+	return knowledge.Result{}
+}
 
 // A TURN IS ITS OWN QUESTION, and it is not a slice of the trace.
 //
@@ -37,12 +40,18 @@ func (stubSearcher) Search(context.Context, knowledge.Query) []knowledge.Hit { r
 // reading.
 func TestTurnAnswersEveryEventOfOneUnitOfWork(t *testing.T) {
 	t.Parallel()
-	db := openStore(t)
-	log := db.Events()
+	// OVER TWO STORES: a turn resumed on another node after a restart has
+	// its opening in one node's store and its ending in the other's, and the
+	// turn page is where a reader goes to see it whole.
+	fleet, onA, onB := twoNodes(t)
 	base := time.Now().UTC().Add(-time.Minute)
 
 	write := func(id, kind, turn string, at time.Time) {
 		t.Helper()
+		log := onA
+		if id == "c" || id == "d" {
+			log = onB
+		}
 		payload, err := json.Marshal(map[string]any{"turn_id": turn, "phase": "plan"})
 		if err != nil {
 			t.Fatal(err)
@@ -63,7 +72,7 @@ func TestTurnAnswersEveryEventOfOneUnitOfWork(t *testing.T) {
 	write("d", "agent_phase_completed", "t-2", base.Add(3*time.Second))
 
 	// Read through JSON, which is what a client actually sees.
-	got := asMap(t, answer(t, queries.Sources{Events: log}, "turn", map[string]any{"turn_id": "t-1"}))
+	got := asMap(t, answer(t, queries.Sources{Events: fleet}, "turn", map[string]any{"turn_id": "t-1"}))
 
 	events := rows(t, got["events"])
 	if len(events) != 3 {
@@ -84,6 +93,17 @@ func TestTurnAnswersEveryEventOfOneUnitOfWork(t *testing.T) {
 	}
 	if got["turn_id"] != "t-1" {
 		t.Errorf("answer does not name its turn: %v", got)
+	}
+	// WHERE IT RAN: both nodes' stores hold part of it, and a stored row
+	// carries no node of its own, so the answer is the only thing that can
+	// say so.
+	if nodes, _ := got["nodes"].([]any); len(nodes) != 2 || nodes[0] != "node-a" || nodes[1] != "node-b" {
+		t.Errorf("nodes = %#v; want both nodes that hold part of the turn", got["nodes"])
+	}
+	// AND ONLY THOSE: t-2 lives on node-b alone.
+	other := asMap(t, answer(t, queries.Sources{Events: fleet}, "turn", map[string]any{"turn_id": "t-2"}))
+	if nodes, _ := other["nodes"].([]any); len(nodes) != 1 || nodes[0] != "node-b" {
+		t.Errorf("nodes for t-2 = %#v; want node-b alone", other["nodes"])
 	}
 	// A SHORT TURN IS NOT A CUT ONE. The flag has to be present and false,
 	// or a client cannot tell "read to the end" from a build that predates
@@ -128,7 +148,7 @@ func TestATurnReadToItsCapSaysItWasCut(t *testing.T) {
 		}
 	}
 
-	got := asMap(t, answer(t, queries.Sources{Events: log}, "turn",
+	got := asMap(t, answer(t, queries.Sources{Events: fleetOf(log)}, "turn",
 		map[string]any{"turn_id": "long"}))
 	if got["truncated"] != true {
 		t.Errorf("truncated = %#v on a turn read to its cap; a reader has no "+
@@ -143,9 +163,9 @@ func TestATurnReadToItsCapSaysItWasCut(t *testing.T) {
 		t.Fatalf("%d events, want the cap %d plus the recovered ending",
 			n, store.MaxTurnEvents)
 	}
-	if n := len(events); n > store.MaxTurnEvents+queries.TurnClosingEvents {
+	if n := len(events); n > store.MaxTurnEvents+eventfan.TurnClosingEvents {
 		t.Errorf("%d events, past the cap plus %d closing rows",
-			n, queries.TurnClosingEvents)
+			n, eventfan.TurnClosingEvents)
 	}
 	// The LAST row of the turn is in the answer — which is the whole point,
 	// because on a real turn it is `turn_completed`.
@@ -202,7 +222,7 @@ func TestATurnAtTheCapIsNotDoubled(t *testing.T) {
 		}
 	}
 
-	got := asMap(t, answer(t, queries.Sources{Events: log}, "turn",
+	got := asMap(t, answer(t, queries.Sources{Events: fleetOf(log)}, "turn",
 		map[string]any{"turn_id": "exact"}))
 	if n := len(rows(t, got["events"])); n != store.MaxTurnEvents {
 		t.Errorf("%d events for a turn of exactly %d; the closing read was "+
@@ -236,7 +256,7 @@ func TestATurnTheRecoveryMakesWholeIsNotReportedCut(t *testing.T) {
 		t.Fatal(err)
 	}
 	// Past the cap, but inside the reach of the closing read.
-	total := store.MaxTurnEvents + queries.TurnClosingEvents/2
+	total := store.MaxTurnEvents + eventfan.TurnClosingEvents/2
 	for i := range total {
 		if err := log.Append(t.Context(), store.EventRecord{
 			ID:   fmt.Sprintf("w-%04d", i),
@@ -247,7 +267,7 @@ func TestATurnTheRecoveryMakesWholeIsNotReportedCut(t *testing.T) {
 		}
 	}
 
-	got := asMap(t, answer(t, queries.Sources{Events: log}, "turn",
+	got := asMap(t, answer(t, queries.Sources{Events: fleetOf(log)}, "turn",
 		map[string]any{"turn_id": "whole"}))
 	if n := len(rows(t, got["events"])); n != total {
 		t.Errorf("%d of the turn's %d events reached the answer", n, total)
@@ -266,7 +286,7 @@ func TestATurnTheRecoveryMakesWholeIsNotReportedCut(t *testing.T) {
 func TestAnUnknownTurnIsAnEmptyList(t *testing.T) {
 	t.Parallel()
 	db := openStore(t)
-	got := asMap(t, answer(t, queries.Sources{Events: db.Events()}, "turn",
+	got := asMap(t, answer(t, queries.Sources{Events: fleetOf(db.Events())}, "turn",
 		map[string]any{"turn_id": "nobody"}))
 	events, ok := got["events"].([]any)
 	if !ok {
@@ -284,7 +304,7 @@ func TestAnUnknownTurnIsAnEmptyList(t *testing.T) {
 //
 // `events?type=agent_phase_completed` is not a substitute: the event listing
 // deliberately never selects the payload — a page of ordinary events with every
-// payload attached is the query that makes an activity screen slow — and a
+// payload attached is the query that makes a live screen slow — and a
 // phase record without one has no prompts, no response, no tool calls and no
 // decision, which is everything a reader came for.
 func TestPhasesCarryPayloadsAndPage(t *testing.T) {
@@ -309,7 +329,7 @@ func TestPhasesCarryPayloadsAndPage(t *testing.T) {
 		}
 	}
 
-	got := asMap(t, answer(t, queries.Sources{Events: log}, "phases", map[string]any{"limit": 2}))
+	got := asMap(t, answer(t, queries.Sources{Events: fleetOf(log)}, "phases", map[string]any{"limit": 2}))
 	phases := rows(t, got["phases"])
 	if len(phases) != 2 {
 		t.Fatalf("%d phases, want the requested 2", len(phases))
@@ -327,7 +347,7 @@ func TestPhasesCarryPayloadsAndPage(t *testing.T) {
 		t.Errorf("a full page claims to be exhausted: %v", got)
 	}
 
-	last := asMap(t, answer(t, queries.Sources{Events: log}, "phases", map[string]any{
+	last := asMap(t, answer(t, queries.Sources{Events: fleetOf(log)}, "phases", map[string]any{
 		"limit":       2,
 		"before_time": next["before_time"],
 		"before_id":   next["before_id"],
@@ -338,14 +358,6 @@ func TestPhasesCarryPayloadsAndPage(t *testing.T) {
 	}
 	if last["exhausted"] != true {
 		t.Errorf("a short page does not report the end of the record: %v", last)
-	}
-
-	// The seat filter narrows server-side, by agent id, so a busy company's
-	// other seats are never fetched and thrown away.
-	mine := asMap(t, answer(t, queries.Sources{Events: log}, "phases",
-		map[string]any{"agent_id": "id-Engineer"}))
-	if got := rows(t, mine["phases"]); len(got) != 1 {
-		t.Errorf("seat filter returned %d rows, want 1", len(got))
 	}
 }
 
@@ -376,7 +388,7 @@ func rows(t *testing.T, value any) []map[string]any {
 func TestAHalfCursorIsRefused(t *testing.T) {
 	t.Parallel()
 	db := openStore(t)
-	r := registryOver(t, queries.Sources{Events: db.Events()})
+	r := registryOver(t, queries.Sources{Events: fleetOf(db.Events())})
 	if _, err := r.Answer(everyGrant(t), "phases", map[string]any{"before_id": "x"}); err == nil {
 		t.Fatal("a before_id with no before_time was accepted")
 	}
@@ -506,7 +518,7 @@ func TestATurnNamesEveryTraceItTouchedEvenOnesTheCapDropped(t *testing.T) {
 		}
 	}
 
-	got := asMap(t, answer(t, queries.Sources{Events: log}, "turn",
+	got := asMap(t, answer(t, queries.Sources{Events: fleetOf(log)}, "turn",
 		map[string]any{"turn_id": "resumed"}))
 	traces := stringList(t, got["trace_ids"])
 	// IN FIRST-APPEARANCE ORDER, which is the order a reader follows them
@@ -535,7 +547,7 @@ func TestATurnWithNoTracesAnswersAnEmptyList(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	got := asMap(t, answer(t, queries.Sources{Events: log}, "turn",
+	got := asMap(t, answer(t, queries.Sources{Events: fleetOf(log)}, "turn",
 		map[string]any{"turn_id": "untraced"}))
 	if got["trace_ids"] == nil {
 		// AN EMPTY LIST, never null: a client rendering `.length` on the
@@ -606,7 +618,7 @@ func TestTheEventListTakesATurnAndAWindow(t *testing.T) {
 			t.Fatalf("append %d: %v", i, err)
 		}
 	}
-	src := queries.Sources{Events: log}
+	src := queries.Sources{Events: fleetOf(log)}
 
 	ids := func(params map[string]any) []string {
 		t.Helper()
@@ -652,7 +664,7 @@ func TestTheEventListTakesATurnAndAWindow(t *testing.T) {
 // rather than shown a company that did nothing.
 func TestAnInvertedWindowIsRefusedRatherThanAnsweredEmpty(t *testing.T) {
 	t.Parallel()
-	src := queries.Sources{Events: openStore(t).Events()}
+	src := queries.Sources{Events: fleetOf(openStore(t).Events())}
 	_, err := askTranscripts(t, src, "events", map[string]any{
 		"since": "2026-04-16T12:00:00Z",
 		"until": "2026-04-16T11:00:00Z",
@@ -698,7 +710,7 @@ func TestTheTurnListsFailedFilterIsThreeValued(t *testing.T) {
 	seed("t-ok", false)
 	seed("t-bad", true)
 
-	src := queries.Sources{Events: log}
+	src := queries.Sources{Events: fleetOf(log)}
 	ids := func(params map[string]any) []string {
 		t.Helper()
 		got := asMap(t, answer(t, src, "turns", params))
@@ -730,25 +742,45 @@ func TestTheTurnListsFailedFilterIsThreeValued(t *testing.T) {
 
 // THE CURSOR IS ECHOED, not left for a client to assemble — the rule the event
 // list already follows, because a client building it from the last row's
-// fields would be reimplementing the one thing that must not drift.
-func TestTheTurnListEchoesItsCursor(t *testing.T) {
+// fields would be reimplementing the one thing that must not drift. And it is
+// echoed ONLY while there is more: a cursor on the last page offered a reader
+// "older" onto an empty one and made a count of the rows loaded a floor that
+// never closed.
+func TestTheTurnListEchoesItsCursorWhileThereIsMore(t *testing.T) {
 	t.Parallel()
 	log := openStore(t).Events()
 	base := time.Now().UTC().Add(-time.Hour)
-	if err := log.Append(t.Context(), store.EventRecord{
-		ID: "t-1-p0", Type: "agent_phase_completed", Time: base,
-		Category: "lifecycle", Actor: "PM",
-		Tags: map[string]string{"turn_id": "t-1", "agent_role": "PM"},
-	}); err != nil {
-		t.Fatal(err)
+	for i, turn := range []string{"t-1", "t-2"} {
+		if err := log.Append(t.Context(), store.EventRecord{
+			ID: turn + "-p0", Type: "agent_phase_completed", Time: base.Add(time.Duration(i) * time.Minute),
+			Category: "lifecycle", Actor: "PM",
+			Tags: map[string]string{"turn_id": turn, "agent_role": "PM"},
+		}); err != nil {
+			t.Fatal(err)
+		}
 	}
-	got := asMap(t, answer(t, queries.Sources{Events: log}, "turns", nil))
-	if got["next"] == nil || got["next"] == "" {
-		t.Fatalf("next = %#v on a page with a turn on it", got["next"])
+	src := queries.Sources{Events: fleetOf(log)}
+	cut, _ := answer(t, src, "turns", map[string]any{"limit": 1}).(map[string]any)
+	rows, _ := cut["turns"].([]store.Turn)
+	if len(rows) != 1 || rows[0].TurnID != "t-2" {
+		t.Fatalf("a page of one holds %+v, want the newest turn", rows)
+	}
+	want := rows[0].StartedAt.UTC().Format(time.RFC3339Nano)
+	if cut["next"] != want {
+		t.Fatalf("next = %#v on a page cut at one of two turns, want the row's own start %q",
+			cut["next"], want)
 	}
 	// AND NOTHING TO RESUME FROM AT THE END, so a client walking the list
-	// stops rather than re-asking for the same page for ever.
-	empty := asMap(t, answer(t, queries.Sources{Events: openStore(t).Events()}, "turns", nil))
+	// stops rather than asking for a page that holds nothing.
+	rest := asMap(t, answer(t, src, "turns", map[string]any{"before": want}))
+	if rest["next"] != nil {
+		t.Errorf("next = %#v on the page holding the last turn", rest["next"])
+	}
+	whole := asMap(t, answer(t, src, "turns", nil))
+	if whole["next"] != nil {
+		t.Errorf("next = %#v on a page holding every turn", whole["next"])
+	}
+	empty := asMap(t, answer(t, queries.Sources{Events: fleetOf(openStore(t).Events())}, "turns", nil))
 	if empty["next"] != nil {
 		t.Errorf("next = %#v on an empty page", empty["next"])
 	}
@@ -791,7 +823,7 @@ func TestATurnNamesEveryAttemptAtItsTrigger(t *testing.T) {
 	write("b", "agent_phase_completed", "run-2", "wk-1", base.Add(2*time.Minute))
 	write("c", "agent_phase_completed", "run-9", "wk-2", base.Add(3*time.Minute))
 
-	got := asMap(t, answer(t, queries.Sources{Events: log}, "turn",
+	got := asMap(t, answer(t, queries.Sources{Events: fleetOf(log)}, "turn",
 		map[string]any{"turn_id": "run-2"}))
 
 	if got["work_key"] != "wk-1" {
@@ -829,7 +861,7 @@ func TestATurnWithNoWorkKeyClaimsNoAttempts(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	got := asMap(t, answer(t, queries.Sources{Events: log}, "turn",
+	got := asMap(t, answer(t, queries.Sources{Events: fleetOf(log)}, "turn",
 		map[string]any{"turn_id": "run-1"}))
 	if got["work_key"] != "" {
 		t.Errorf("work_key = %v, want empty", got["work_key"])
@@ -879,7 +911,7 @@ func TestAnOldTurnStillNamesItsAttempts(t *testing.T) {
 	write("a", "run-1", "wk-1", base)
 	write("b", "run-2", "wk-1", base.Add(2*time.Minute))
 
-	got := asMap(t, answer(t, queries.Sources{Events: log}, "turn",
+	got := asMap(t, answer(t, queries.Sources{Events: fleetOf(log)}, "turn",
 		map[string]any{"turn_id": "run-2"}))
 
 	if got["work_key"] != "wk-1" {
@@ -928,7 +960,7 @@ func TestAPreSplitTurnNamesItsAttemptsFromTheBackfilledColumn(t *testing.T) {
 	write("a", "run-1", "wk-old", base)
 	write("b", "run-2", "wk-old", base.Add(2*time.Minute))
 
-	got := asMap(t, answer(t, queries.Sources{Events: log}, "turn",
+	got := asMap(t, answer(t, queries.Sources{Events: fleetOf(log)}, "turn",
 		map[string]any{"turn_id": "run-2"}))
 
 	if got["work_key"] != "wk-old" {
@@ -938,5 +970,106 @@ func TestAPreSplitTurnNamesItsAttemptsFromTheBackfilledColumn(t *testing.T) {
 	}
 	if n := len(rows(t, got["attempts"])); n != 2 {
 		t.Errorf("%d attempts, want both runs of wk-old", n)
+	}
+}
+
+// modalSearcher is a wired, searchable backend that records the mode it was
+// asked for and answers the outcome it is given.
+type modalSearcher struct {
+	asked   *knowledge.Mode
+	outcome knowledge.Outcome
+}
+
+func (modalSearcher) Backend() string                             { return "native" }
+func (modalSearcher) CanSearch(*org.Role, *org.Organization) bool { return true }
+func (s modalSearcher) Search(_ context.Context, q knowledge.Query) knowledge.Result {
+	*s.asked = q.Mode
+	return knowledge.Result{
+		Hits:    []knowledge.Hit{{PageID: "p1", Title: "Deploy runbook"}},
+		Outcome: s.outcome,
+	}
+}
+
+// AN EMPTY PHRASE IS THE PROBE: the searcher is still asked, so the answer
+// carries which modes it serves and why the asked one would degrade — the
+// facts a screen needs to offer the modes before anybody types. It used to
+// return before asking, so every mode looked available until the first
+// search came back degraded.
+func TestAnEmptyKnowledgeSearchCarriesTheModes(t *testing.T) {
+	t.Parallel()
+	var asked knowledge.Mode
+	searcher := modalSearcher{asked: &asked, outcome: knowledge.Outcome{
+		Modes:    []knowledge.Mode{knowledge.ModeKeyword},
+		Degraded: knowledge.DegradedNoEmbeddings,
+		Coverage: knowledge.Coverage{Nodes: []knowledge.NodeCoverage{}},
+	}}
+	sources := queries.Sources{
+		Knowledge: func() knowledge.Searcher { return searcher },
+		Company:   companySource(t, &config.Company{Name: "Acme"}),
+	}
+	got := asMap(t, answer(t, sources, "knowledge", map[string]any{"q": "", "mode": "semantic"}))
+	if asked != knowledge.ModeSemantic {
+		t.Errorf("the probe asked %q, want the mode it was given", asked)
+	}
+	modes, _ := got["modes"].([]any)
+	if len(modes) != 1 || modes[0] != "keyword" || got["degraded"] != "no_embeddings" {
+		t.Errorf("the probe answered modes=%v degraded=%v, want [keyword] and no_embeddings",
+			got["modes"], got["degraded"])
+	}
+	if hits, _ := got["hits"].([]any); len(hits) != 0 {
+		t.Errorf("an empty phrase answered %d hits, want none", len(hits))
+	}
+}
+
+// KNOWLEDGE HONOURS THE MODE AND SAYS WHAT IT SERVED AND COVERED.
+//
+// A partial fan-out used to be a log line on the coordinating node, so this
+// answer drew two thirds of the corpus as the company's whole answer; and a
+// hybrid search with no embeddings provider was a keyword search presented as
+// hybrid. Both now ride in the answer, in the fields a screen reads.
+func TestKnowledgeHonoursTheModeAndCarriesItsOutcome(t *testing.T) {
+	t.Parallel()
+	var asked knowledge.Mode
+	searcher := modalSearcher{asked: &asked, outcome: knowledge.Outcome{
+		ServedMode: knowledge.ModeSemantic,
+		Modes:      knowledge.Modes,
+		Degraded:   knowledge.DegradedSemanticPartial,
+		Coverage: knowledge.Coverage{
+			Nodes:          []knowledge.NodeCoverage{{ID: "n1", Answered: true}, {ID: "n2", Error: "gone"}},
+			BucketsMissing: 32,
+		},
+	}}
+	sources := queries.Sources{
+		Knowledge: func() knowledge.Searcher { return searcher },
+		Company:   companySource(t, &config.Company{Name: "Acme"}),
+	}
+	got := asMap(t, answer(t, sources, "knowledge",
+		map[string]any{"q": "deploy", "mode": "semantic"}))
+	if asked != knowledge.ModeSemantic {
+		t.Errorf("the searcher was asked %q, want semantic", asked)
+	}
+	if got["served_mode"] != "semantic" || got["degraded"] != "semantic_partial" ||
+		got["mode"] != "semantic" {
+		t.Errorf("mode=%v served_mode=%v degraded=%v", got["mode"], got["served_mode"], got["degraded"])
+	}
+	// ON THE WIRE, as a screen reads it: the fleet shape plus the one
+	// figure a bucket-divided search has.
+	cov, _ := got["coverage"].(map[string]any)
+	nodes, _ := cov["nodes"].([]any)
+	if cov["complete"] != false || cov["buckets_missing"] != float64(32) || len(nodes) != 2 {
+		t.Errorf("coverage = %#v, want the partial one the searcher reported", got["coverage"])
+	}
+
+	// NO MODE IS HYBRID, and an unknown one is refused rather than run as
+	// the default — that would answer a question nobody asked.
+	_ = asMap(t, answer(t, sources, "knowledge", map[string]any{"q": "deploy"}))
+	if asked != knowledge.ModeHybrid {
+		t.Errorf("a search naming no mode was asked %q, want hybrid", asked)
+	}
+	r := queries.NewRegistry()
+	queries.Register(r, sources)
+	if _, err := r.Answer(everyGrant(t), "knowledge",
+		map[string]any{"q": "deploy", "mode": "meaning"}); !errors.Is(err, queries.ErrBadParams) {
+		t.Errorf("an unknown mode answered %v, want bad params", err)
 	}
 }

@@ -440,9 +440,13 @@ func backfillStatements(t *testing.T, name string) []string {
 	if err != nil {
 		t.Fatalf("read the migration: %v", err)
 	}
+	// COMMENTS FIRST, then statements: a migration's prose is free to
+	// contain a semicolon, and splitting before stripping cuts a comment in
+	// two and hands its tail to the statement that follows — which then no
+	// longer starts with UPDATE and is silently not run.
 	var out []string
-	for _, statement := range strings.Split(string(body), ";") {
-		trimmed := strings.TrimSpace(stripSQLComments(statement))
+	for _, statement := range strings.Split(stripSQLComments(string(body)), ";") {
+		trimmed := strings.TrimSpace(statement)
 		if strings.HasPrefix(trimmed, "UPDATE ") {
 			out = append(out, trimmed)
 		}

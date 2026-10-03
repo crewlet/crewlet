@@ -144,7 +144,7 @@ func NewRegistry(o *org.Organization, lookup org.EnvLookup) *Registry {
 		if !p.Human {
 			// THROUGH THE ORGANIZATION, never by hashing the handle in
 			// hand. The id is derived from the handle a seat was CREATED
-			// under (ADR-0019), which this loop cannot see and the free
+			// under (ADR-0026), which this loop cannot see and the free
 			// function cannot supply; built from the live handle, a
 			// renamed seat's party carried a uuid no mailbox, no lease
 			// and no ledger anywhere in the fleet is named after, so

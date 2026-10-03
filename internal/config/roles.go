@@ -88,8 +88,10 @@ type Role struct {
 	// there.
 	Workers []string `yaml:"workers,omitempty" json:"workers,omitempty" desc:"Delegate templates this seat may use; empty = every one."`
 
-	// TokenBudget is this seat's own ceiling; 0 is unlimited.
-	TokenBudget int `yaml:"token_budget,omitempty" json:"token_budget,omitempty" js:"min=0" desc:"Per-seat token ceiling; 0 = unlimited."`
+	// TokenBudget is this seat's own ceiling per calendar window, on top
+	// of the company's; a window it does not name is capped only by the
+	// company. See [TokenBudget].
+	TokenBudget TokenBudget `yaml:"token_budget,omitempty" json:"token_budget,omitzero" desc:"This seat's own token ceilings per calendar window on the company clock: day, week and month, each optional. Absent = only the company's ceilings apply."`
 
 	// LLM points the seat at providers.llm — one key, a fallback chain, or
 	// a per-phase mapping.
@@ -515,10 +517,9 @@ func (m *RoleMattermost) validate(path Path) error {
 
 func (r *Role) validate(path Path) error {
 	var p problems
-	// The SHAPE of a declared id, here beside the unit's, because both are
-	// the same key grammar and the published schema carries the same
-	// pattern. Optional, unlike a unit's: nothing mints one, and nothing in
-	// the engine resolves a seat by it.
+	// THE SEAT'S TOKEN BUDGET IS NOT CHECKED HERE: org.Role.Validate holds
+	// it to the one rule ([org.TokenCeilings.Faults]) and reports it at this
+	// seat's `token_budget.<window>` — see [TokenBudget.validate].
 	if g := r.Integrations.GitHub; g != nil {
 		p.wrap(g.validate(at(path, "integrations.github")))
 	}
@@ -557,7 +558,7 @@ func (r *Role) Seat() *org.Role {
 	seat := &org.Role{
 		Name:                 r.Name,
 		Kind:                 r.Kind,
-		Contact:              r.Contact,
+		Contact:              r.Contact.Clone(),
 		Availability:         r.Availability,
 		DeclaredHandle:       r.Handle,
 		Email:                r.Email,
@@ -567,7 +568,7 @@ func (r *Role) Seat() *org.Role {
 		Responsibilities:     append([]string(nil), r.Responsibilities...),
 		Manages:              append([]string(nil), r.Manages...),
 		BehavioralGuidelines: append([]string(nil), r.BehavioralGuidelines...),
-		TokenBudget:          r.TokenBudget,
+		TokenBudget:          r.TokenBudget.Ceilings(),
 		LLM:                  r.LLM.Default,
 		LLMReview:            pick(r.LLMReview, r.LLM.Review),
 		LLMSubagent:          pick(r.LLMSubagent, r.LLM.Subagent),
@@ -635,10 +636,9 @@ func (r *Role) Seat() *org.Role {
 }
 
 // IdentityKey is the seat's address inside its list — the derived handle, so
-// it is the same identity `/config/roles/{handle}` reads and
-// `PATCH /chart/seats/{handle}` writes. It is NOT what the agent id is built
-// from: that is the handle a seat was CREATED under (ADR-0019), which a
-// rename leaves behind and a file cannot state.
+// it is the same identity `PATCH /chart/seats/{handle}` writes. It is NOT what
+// the agent id is built from: that is the handle a seat was CREATED under
+// (ADR-0026), which a rename leaves behind and a file cannot state.
 //
 // A VALUE receiver, because the redaction walker holds the prior document by
 // value and cannot take an address inside it.

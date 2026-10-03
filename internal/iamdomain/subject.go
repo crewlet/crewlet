@@ -56,14 +56,14 @@
 // cannot read. The scope is the only thing that can connect the two, which is
 // why it is on the envelope and readable at every version.
 //
-// # A seat is bound by its IDENTITY, never by an address (ADR-0020)
+// # A seat is bound by its IDENTITY, never by an address (ADR-0027)
 //
 // A seat binding — the claim subject `iam.seat.<id>`, the row's `seat_id`, the
 // seat a removal's tombstone records, the successor's stamp on that tombstone,
 // and every reading of them ([Reader.SeatHolders], [Reader.SeatBindings], the
 // notify registry's standing, the request path's seat table, the
 // dangling-binding rule) — names the seat by the handle it was
-// CREATED under: `chart.Seat.Origin`, the same anchor ADR-0019 derives the
+// CREATED under: `chart.Seat.Origin`, the same anchor ADR-0026 derives the
 // agent id from, which no rename moves and the chart never issues twice.
 //
 // An administrator names a seat by any address it answers to; the bind

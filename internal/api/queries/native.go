@@ -103,7 +103,10 @@ type WorkReader interface {
 	Tasks(ctx context.Context, q tracker.Query, now time.Time) (tracker.Answer, error)
 	Task(ctx context.Context, idOrKey string, want tracker.DetailWants,
 		fresh statelog.Freshness) (tracker.TaskDetail, error)
+	TurnsOf(ctx context.Context, idOrKey, cursor string, limit int,
+		fresh statelog.Freshness) (tracker.TaskTurns, error)
 	Views(ctx context.Context, q tracker.ViewQuery) (tracker.ViewListing, error)
+	EveryView(ctx context.Context, q tracker.EveryViewQuery) (tracker.ViewListing, error)
 	ExpandedQuery(ctx context.Context, params map[string]any,
 		viewer tracker.Viewer, now time.Time, loc *time.Location) (tracker.Query, error)
 	Catalogue(ctx context.Context, q tracker.CatalogueQuery) (tracker.CatalogueAnswer, error)
@@ -111,16 +114,23 @@ type WorkReader interface {
 		tracker.ProjectListing, error)
 	Project(ctx context.Context, q tracker.ProjectDetailQuery) (
 		tracker.ProjectDetail, error)
-	Workload(ctx context.Context, q tracker.WorkloadQuery, now time.Time) (
-		tracker.WorkloadAnswer, error)
+	Workload(ctx context.Context, q tracker.WorkloadQuery, now time.Time,
+		loc *time.Location) (tracker.WorkloadAnswer, error)
 	Activity(ctx context.Context, q tracker.ActivityQuery, now time.Time) (
 		tracker.ActivityAnswer, error)
-	MyWork(ctx context.Context, q tracker.MyWorkQuery, now time.Time) (
-		tracker.MyWork, error)
+	MyWork(ctx context.Context, q tracker.MyWorkQuery, now time.Time,
+		loc *time.Location) (tracker.MyWork, error)
 	Person(ctx context.Context, q tracker.PersonQuery, now time.Time) (tracker.PersonState, error)
 	Inbox(ctx context.Context, q tracker.InboxQuery, now time.Time) (tracker.InboxAnswer, error)
 	Routing(ctx context.Context, q tracker.RoutingQuery, now time.Time) (
 		tracker.RoutingAnswer, error)
+	Flow(ctx context.Context, q tracker.FlowQuery, now time.Time,
+		loc *time.Location) (tracker.FlowAnswer, error)
+	CompanyFeed(ctx context.Context, q tracker.FeedQuery) (tracker.FeedPage, error)
+	Decisions(ctx context.Context, q tracker.DecisionsQuery, now time.Time,
+		loc *time.Location) (tracker.DecisionsAnswer, error)
+	TurnPlaces(ctx context.Context, runs []string,
+		fresh statelog.Freshness) (map[string]tracker.TurnPlace, error)
 }
 
 // PageReader is the knowledge read side this surface calls.
@@ -160,7 +170,12 @@ func (s Sources) workItems(ctx context.Context, p Params) (any, error) {
 	q, err := s.Work.ExpandedQuery(ctx, p.Values(), tracker.Viewer{
 		Handle:  viewer,
 		Project: s.projectOf(viewer),
-	}, now, time.UTC)
+		// THE COMPANY'S OWN CLOCK (ADR-0018), which every relative date
+		// in the grammar and the due bands and overdue marks on every row
+		// are cut on. This was UTC, so for the hours between the
+		// company's midnight and UTC's a board's "today" was a different
+		// day from the one a seat's own `list_work_items` resolved.
+	}, now, s.zone())
 	if err != nil {
 		return nil, fmt.Errorf("%w: %w", ErrBadParams, err)
 	}
@@ -239,6 +254,14 @@ func (s Sources) workItems(ctx context.Context, p Params) (any, error) {
 	if answer.Preset != "" {
 		out["preset"] = answer.Preset
 	}
+	if q.Around != "" {
+		// NULL RATHER THAN ABSENT when the task is not in this answer: the
+		// caller asked, and "not on this board" is the answer — a task
+		// page that just watched its task move off the board reads it and
+		// drops "3 of 18" rather than waiting for a field that will never
+		// come.
+		out["around"] = answer.Around
+	}
 	if answer.Incomplete != nil {
 		// WHAT THE ANSWER COULD NOT ACCOUNT FOR, rendered rather than
 		// dropped: "this company has no work" is a thing a person acts
@@ -274,9 +297,14 @@ func (s Sources) workItem(ctx context.Context, p Params) (any, error) {
 	// row holds `eng` — the same seam the board column and the project
 	// directory resolve through, so one screen cannot call a team two
 	// things. See [tracker.TaskDetail.Units].
+	//
+	// AND THE COMPANY'S CLOCK, so the rail's due date says how it stands on
+	// the calendar the board's overdue mark was cut on — see
+	// [tracker.DueStanding].
 	detail, err := s.Work.Task(ctx, ref, tracker.DetailWants{
 		Comments: true, History: true, Links: true, Fields: true,
 		Units: s.chartUnits(),
+		Clock: &tracker.DayClock{Now: s.clock(), Zone: s.zone()},
 	}, fresh)
 	switch {
 	case errors.Is(err, tracker.ErrNoTask):
@@ -285,6 +313,110 @@ func (s Sources) workItem(ctx context.Context, p Params) (any, error) {
 		return nil, err
 	}
 	return detail, nil
+}
+
+// workComments answers one page of a task's thread, walking back from the
+// newest.
+//
+// ITS OWN QUESTION BESIDE `work_item`, which returns the newest
+// [tracker.DetailComments] and a cursor — and nothing read that cursor: the
+// detail ignores it, so every comment older than the twentieth was
+// unreachable from every screen. A thread is also asked for far more often
+// than the rest of the detail (the Inbox's pane draws the conversation around
+// one notice and never the task's history, fields or links), so it is the
+// thread alone rather than the detail with a cursor bolted on.
+//
+// THE SAME READER AND THE SAME TRANSACTION as the detail, so a page and the
+// coverage it reports describe one instant, and a cursor from `work_item`'s
+// own `comments_cursor` continues exactly where that page stopped. `limit`
+// is held to [tracker.MaxCommentPage].
+func (s Sources) workComments(ctx context.Context, p Params) (any, error) {
+	ref := strings.TrimSpace(p.String("item"))
+	if ref == "" {
+		return nil, badParams("item", "", nil)
+	}
+	fresh, err := freshness(p)
+	if err != nil {
+		return nil, err
+	}
+	detail, err := s.Work.Task(ctx, ref, tracker.DetailWants{
+		Comments:      true,
+		CommentCursor: strings.TrimSpace(p.String("cursor")),
+		CommentLimit:  Clamp(p.Int("limit", 0), tracker.DetailComments, tracker.MaxCommentPage),
+	}, fresh)
+	switch {
+	case errors.Is(err, tracker.ErrNoTask):
+		return nil, ErrNotFound
+	case err != nil:
+		return nil, err
+	}
+	comments := detail.Comments
+	if comments == nil {
+		// AN EMPTY THREAD IS A LIST, never an absent key: a screen
+		// drawing "no comments yet" from a missing field cannot tell it
+		// from an older node that does not answer the question.
+		comments = []tracker.Comment{}
+	}
+	out := map[string]any{
+		"item": detail.Task.ID,
+		"key":  detail.Task.Key,
+		// THE TITLE, because the pane that walks a thread names what it
+		// is about, and a second read of the whole detail for one string
+		// would be the round trip this question exists to avoid.
+		"title":           detail.Task.Title,
+		"comments":        comments,
+		"read_level":      detail.Level,
+		"log_seq":         detail.LogSeq,
+		"applied_through": detail.AppliedThrough,
+		"complete":        detail.Complete,
+	}
+	if detail.KeyCollision {
+		// THE KEY IS NOT THIS TASK'S ADDRESS when another task claimed it
+		// first, so the pane that links back to the task links by its id —
+		// see [tracker.ItemAddress].
+		out["key_collision"] = true
+	}
+	if detail.CommentsCursor != "" {
+		out["next_cursor"] = detail.CommentsCursor
+	}
+	if detail.Incomplete != nil {
+		out["incomplete"] = detail.Incomplete
+	}
+	return out, nil
+}
+
+// workItemTurns answers one page of the turns charged to a task, newest first,
+// each numbered "Turn n" by the task — see [tracker.Reader.TurnsOf].
+//
+// ITS OWN QUESTION BESIDE `work_item`, for the reason `work_comments` is: the
+// list has no bound of its own, and the task page asks for it on its Agent
+// turns tab rather than on every poll of the detail.
+//
+// FROM THE TRACKER'S ROWS, NOT THE EVENT HISTORY. `turns{work_item=}` answers
+// a similar-looking question from each node's event store, which keeps thirty
+// days and is scattered across the fleet; this is the task's own durable
+// account — the same rows its `spend` sums — so a turn listed here is a turn
+// the cost panel counted, on any node, at any age.
+func (s Sources) workItemTurns(ctx context.Context, p Params) (any, error) {
+	ref := strings.TrimSpace(p.String("id"))
+	if ref == "" {
+		return nil, badParams("id", "", nil)
+	}
+	fresh, err := freshness(p)
+	if err != nil {
+		return nil, err
+	}
+	page, err := s.Work.TurnsOf(ctx, ref, strings.TrimSpace(p.String("cursor")),
+		Clamp(p.Int("limit", 0), tracker.DefaultTaskTurns, tracker.MaxTaskTurns), fresh)
+	switch {
+	case errors.Is(err, tracker.ErrNoTask):
+		return nil, ErrNotFound
+	case errors.Is(err, tracker.ErrInvalid):
+		return nil, fmt.Errorf("%w: %w", ErrBadParams, err)
+	case err != nil:
+		return nil, err
+	}
+	return page, nil
 }
 
 // workViews answers one container's view strip.
@@ -324,6 +456,14 @@ func (s Sources) workViews(ctx context.Context, p Params) (any, error) {
 		return nil, unresolved(ctx, "work_views")
 	}
 	viewer := iam.RecordOwner(principal)
+	// COUNTS ARE THE CALLER'S, because only a record has pins: `counts=true`
+	// asked by a credential the engine can name no record for is refused by
+	// name rather than answered with no counts, which would read as a
+	// person with nothing pinned.
+	counts := p.Bool("counts", false)
+	if counts && viewer == "" {
+		return nil, errNoPins
+	}
 	listing, err := s.Work.Views(ctx, tracker.ViewQuery{
 		Container: container,
 		Viewer:    viewer,
@@ -338,6 +478,67 @@ func (s Sources) workViews(ctx context.Context, p Params) (any, error) {
 		// poll. See [freshness] and [Sources.workItems].
 		Level: fresh.Level, MaxLag: fresh.MaxLag, MaxLagSeq: fresh.MaxLagSeq,
 		MinPosition: fresh.MinPosition,
+		// THE COUNT BESIDE A PIN IS THE BOARD IT OPENS: the view run on
+		// the company's own clock, which every relative date in it is
+		// cut on — the pair `work_items` parses with.
+		Counts: counts, Now: s.clock(), Zone: s.zone(),
+	})
+	if err != nil {
+		return nil, err
+	}
+	out := map[string]any{
+		"views": listing.Views, "read_level": listing.Level,
+		"log_seq": listing.LogSeq, "applied_through": listing.AppliedThrough,
+		"complete": listing.Complete,
+	}
+	if listing.LogLag != nil {
+		out["log_lag"] = *listing.LogLag
+	}
+	if listing.Incomplete != nil {
+		out["incomplete"] = listing.Incomplete
+	}
+	return out, nil
+}
+
+// errNoPins is `counts=true` asked by a credential the engine can name no
+// record for: the counts are of the views PINNED on the caller's own record,
+// and a caller with none has nothing pinned to count — which an answer with no
+// counts would state as a fact rather than as the refusal it is.
+var errNoPins = fmt.Errorf("%w: counts=true counts the views pinned on your "+
+	"own record, and this credential names nobody whose own record there is",
+	ErrBadParams)
+
+// workSavedViews answers every saved view the CALLER can see, in EVERY
+// container, each row carrying the container it lives in.
+//
+// A SIBLING OF [Sources.workViews] rather than a `container=` it accepts: a
+// strip is one container's tabs and this is one PERSON's views — the
+// inventory of what somebody saved and the sidebar's pinned group. Both used
+// to ask the workspace strip, so a view saved on a project board appeared in
+// neither and could be pinned from nowhere. Whose views and `counts=true` take
+// [Sources.workViews]' rules, for its reasons: the viewer is the caller's own
+// record ([iam.RecordOwner]) and never a name they typed, and only a record
+// has pins to count.
+func (s Sources) workSavedViews(ctx context.Context, p Params) (any, error) {
+	fresh, err := freshness(p)
+	if err != nil {
+		return nil, err
+	}
+	principal, how := iam.From(ctx)
+	if how == iam.Unknown {
+		return nil, unresolved(ctx, "work_saved_views")
+	}
+	viewer := iam.RecordOwner(principal)
+	counts := p.Bool("counts", false)
+	if counts && viewer == "" {
+		return nil, errNoPins
+	}
+	listing, err := s.Work.EveryView(ctx, tracker.EveryViewQuery{
+		Viewer: viewer,
+		Units:  s.chartUnits(),
+		Level:  fresh.Level, MaxLag: fresh.MaxLag, MaxLagSeq: fresh.MaxLagSeq,
+		MinPosition: fresh.MinPosition,
+		Counts:      counts, Now: s.clock(), Zone: s.zone(),
 	})
 	if err != nil {
 		return nil, err
@@ -465,8 +666,16 @@ func (s Sources) pageList(ctx context.Context, p Params) (any, error) {
 		Label:     strings.TrimSpace(p.String("label")),
 		Watcher:   strings.TrimSpace(p.String("watcher")),
 		Title:     strings.TrimSpace(p.String("title")),
-		Limit:     Clamp(p.Int("limit", 0), pages.DefaultLimit, pages.MaxLimit),
-		Offset:    p.Int("offset", 0),
+		// THE TOP OF A CONTAINER is its own key rather than an empty
+		// `parent`, which already means "under any parent" — a tree
+		// loading its first level asks the opposite question.
+		Roots: p.Bool("roots", false),
+		Limit: Clamp(p.Int("limit", 0), pages.DefaultLimit, pages.MaxLimit),
+		After: strings.TrimSpace(p.String("after")),
+	}
+	if f.Roots && f.ParentID != "" {
+		return nil, fmt.Errorf("%w: roots and parent ask opposite questions — "+
+			"name the parent whose children you want, or roots=true for the top of the container", ErrBadParams)
 	}
 	for _, name := range splitList(p.String("status")) {
 		status := pages.Status(name)
@@ -498,33 +707,34 @@ func (s Sources) pageList(ctx context.Context, p Params) (any, error) {
 		return nil, err
 	}
 	list, err := s.Pages.List(ctx, f, fresh)
+	if errors.Is(err, pages.ErrBadCursor) {
+		return nil, badParams("after", f.After, []string{"the after of a previous answer"})
+	}
 	if err != nil {
 		return nil, err
 	}
-	return map[string]any{
-		"pages": list.Pages, "limit": f.Limit, "offset": f.Offset,
+	out := map[string]any{
+		// THE TOTAL BESIDE THE WINDOW: a page of 50 and a container of 50
+		// were one answer, and every screen drew the first as the second.
+		"pages": list.Pages, "limit": f.Limit, "total": list.Total,
 		"read_level": list.Level, "complete": list.Complete,
 		"position": list.Position, "log_lag": list.LogLag,
-	}, nil
-}
-
-func (s Sources) page(ctx context.Context, p Params) (any, error) {
-	ref := strings.TrimSpace(p.String("id"))
-	if ref == "" {
-		return nil, badParams("id", "", nil)
 	}
-	fresh, err := freshness(p)
-	if err != nil {
-		return nil, err
+	if list.After != "" {
+		out["after"] = list.After
 	}
-	detail, err := s.Pages.Get(ctx, ref, fresh)
-	switch {
-	case errors.Is(err, pages.ErrNotFound):
-		return nil, ErrNotFound
-	case err != nil:
-		return nil, err
+	// THE SKILLS SCREEN'S "LOADED BY", for the whole window in one read:
+	// asked per row, a catalogue of fifty skills was fifty page answers,
+	// bodies included, to draw one column. Only on a listing of tool
+	// skills, which is the one listing whose rows are loaded as skills.
+	if f.Skills != nil && *f.Skills && s.Usage != nil && len(list.Pages) > 0 {
+		loads, err := s.skillLoads(ctx, list.Pages)
+		if err != nil {
+			return nil, err
+		}
+		out["skill_loaded_by"] = loads
 	}
-	return detail, nil
+	return out, nil
 }
 
 func (s Sources) containers(ctx context.Context, p Params) (any, error) {
@@ -640,6 +850,10 @@ func (s Sources) workProject(ctx context.Context, p Params) (any, error) {
 		// classification: the refusal names the nearest keys, which is
 		// what a caller who typed one wrong needs.
 		return nil, fmt.Errorf("%w: %w", ErrNotFound, err)
+	case errors.Is(err, tracker.ErrNoType):
+		// A BAD PARAMETER, not a missing record: the project is there
+		// and `for_type` is what to change. The refusal lists the types.
+		return nil, fmt.Errorf("%w: %w", ErrBadParams, err)
 	case err != nil:
 		return nil, err
 	}
@@ -666,7 +880,7 @@ func (s Sources) workWorkload(ctx context.Context, p Params) (any, error) {
 		Units: s.chartUnits(),
 		Level: fresh.Level, MaxLag: fresh.MaxLag, MaxLagSeq: fresh.MaxLagSeq,
 		MinPosition: fresh.MinPosition,
-	}, s.clock())
+	}, s.clock(), s.zone())
 	if err != nil {
 		return nil, err
 	}
@@ -829,7 +1043,7 @@ func (s Sources) workMyWork(ctx context.Context, p Params) (any, error) {
 		// see [freshness] and [Sources.workItems].
 		Level: fresh.Level, MaxLag: fresh.MaxLag, MaxLagSeq: fresh.MaxLagSeq,
 		MinPosition: fresh.MinPosition,
-	}, s.clock())
+	}, s.clock(), s.zone())
 	if err != nil {
 		return nil, err
 	}

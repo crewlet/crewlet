@@ -9,8 +9,10 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/api/queries"
+	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/coord/memory"
+	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/sandbox"
 )
 
@@ -119,9 +121,9 @@ func TestTheSuspendedConversationIsNotShipped(t *testing.T) {
 	// The write that carries the conversation is also the one that moves
 	// the run to running, so this leaves the row exactly as a suspended
 	// turn leaves it.
-	suspended, err := store.MarkSuspended(t.Context(), "t1", map[string]any{
+	suspended, err := store.MarkSuspended(t.Context(), "t1", sandbox.Suspension{State: map[string]any{
 		"messages": []any{map[string]any{"content": "a very long system prompt"}},
-	})
+	}})
 	if err != nil || !suspended {
 		t.Fatalf("MarkSuspended: suspended=%v err=%v", suspended, err)
 	}
@@ -299,6 +301,27 @@ func TestTheBoardSaysWhereEachRunIs(t *testing.T) {
 	}
 }
 
+// THE BOARD NAMES THE JOB EACH RUN HOLDS, which is what its live output is
+// asked by (`sandbox_tail{turn_id, launch_id}`). A turn can launch more than
+// one job, so the run's page could not poll a running run's output without it.
+//
+// Mutation: drop `launch_id` from the row, and the run page has nothing to ask.
+func TestTheBoardNamesTheJobEachRunHolds(t *testing.T) {
+	store := seedRuns(t, sandbox.PendingRun{TurnID: "t1", AgentHandle: "swe", Role: "SWE",
+		Status: sandbox.StatusRunning, CreatedAt: runBase})
+	held, ok, err := store.Get(t.Context(), "t1")
+	if err != nil || !ok {
+		t.Fatalf("the seeded run: ok=%v err=%v", ok, err)
+	}
+	rows := askRuns(t, store)
+	if len(rows) != 1 {
+		t.Fatalf("rows = %d, want one", len(rows))
+	}
+	if got := rows[0]["launch_id"]; held.LaunchID == "" || got != held.LaunchID {
+		t.Errorf("launch_id = %v, want the job the row holds (%q)", got, held.LaunchID)
+	}
+}
+
 // THE THREE FACTS A PARKED RUN HAS AND THE BOARD COULD NOT SHOW: who is
 // waiting on it, what it called through the bridge, and the identifiers that
 // find it in somebody else's system.
@@ -340,5 +363,107 @@ func TestAParkedRunSaysWhoIsWaitingAndWhatItCalled(t *testing.T) {
 	chain, ok := row["delegation_chain"].([]string)
 	if !ok || !slices.Equal(chain, []string{"agent-pm", "agent-swe"}) {
 		t.Fatalf("delegation_chain = %#v", row["delegation_chain"])
+	}
+}
+
+// ONE PERSON'S PARKED QUESTIONS, out of the whole board: `audience=` narrows
+// to the runs whose question the park put to that person, and every row says
+// whom it was put to and whether that was a fallback. A run nothing resolved an
+// audience for is nobody's — nothing recorded whom it asked.
+func TestSandboxRunsNarrowsToOnePersonsAudience(t *testing.T) {
+	t.Parallel()
+	store := seedRuns(t,
+		sandbox.PendingRun{TurnID: "to-ana", AgentHandle: "swe", CreatedAt: runBase},
+		sandbox.PendingRun{TurnID: "to-cy", AgentHandle: "swe", CreatedAt: runBase.Add(time.Minute)},
+		sandbox.PendingRun{TurnID: "to-nobody", AgentHandle: "swe", CreatedAt: runBase.Add(2 * time.Minute)},
+	)
+	for turnID, answerers := range map[string]sandbox.Audience{
+		"to-ana":    {Handles: []string{"bo", "ana"}},
+		"to-cy":     {Handles: []string{"cy"}, Fallback: true},
+		"to-nobody": {},
+	} {
+		if err := store.MarkAwaiting(t.Context(), turnID, sandbox.Clarification{
+			Question: "which branch?", Audience: "team", Answerers: answerers,
+		}); err != nil {
+			t.Fatalf("MarkAwaiting %s: %v", turnID, err)
+		}
+	}
+	cfg, err := config.ParseCompany([]byte(viewerCompany))
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	r := queries.NewRegistry()
+	queries.Register(r, queries.Sources{Sandbox: store, Company: companySource(t, cfg),
+		Holders: loginDirectory{}, Chart: flatChart{}})
+	ask := func(params map[string]any) map[string]map[string]any {
+		t.Helper()
+		got, err := r.Answer(everyGrant(t), "sandbox_runs", params)
+		if err != nil {
+			t.Fatalf("sandbox_runs %v: %v", params, err)
+		}
+		out := map[string]map[string]any{}
+		for _, row := range got.(map[string]any)["runs"].([]any) {
+			m := row.(map[string]any)
+			out[m["turn_id"].(string)] = m
+		}
+		return out
+	}
+
+	mine := ask(map[string]any{"audience": "ana"})
+	if len(mine) != 1 || mine["to-ana"] == nil {
+		t.Fatalf("audience=ana answered %v, want only the run put to ana", keysOf(mine))
+	}
+	if got := mine["to-ana"]["audience_handles"]; !slices.Equal(got.([]string), []string{"bo", "ana"}) {
+		t.Errorf("audience_handles = %v, want [bo ana]", got)
+	}
+
+	// A PERSON'S LOGIN NAMES THE SEAT THE DIRECTORY BINDS THEM TO, never a
+	// seat called that: `ana.diaz` holds `ana`, so her runs are the ones put
+	// to ana — and a login that holds no seat is put nothing.
+	if byLogin := ask(map[string]any{"audience": "ana.diaz"}); len(byLogin) != 1 ||
+		byLogin["to-ana"] == nil {
+		t.Errorf("audience=ana.diaz answered %v, want the run put to her seat", keysOf(byLogin))
+	}
+	if unseated := ask(map[string]any{"audience": "bo.smith"}); len(unseated) != 0 {
+		t.Errorf("audience=bo.smith, who holds no seat, answered %v", keysOf(unseated))
+	}
+
+	all := ask(nil)
+	if len(all) != 3 {
+		t.Fatalf("the unfiltered board answered %v, want all three", keysOf(all))
+	}
+	if all["to-cy"]["audience_fallback"] != true || all["to-ana"]["audience_fallback"] != false {
+		t.Errorf("audience_fallback is not carried: cy=%v ana=%v",
+			all["to-cy"]["audience_fallback"], all["to-ana"]["audience_fallback"])
+	}
+	if got, ok := all["to-nobody"]["audience_handles"].([]string); !ok || len(got) != 0 {
+		t.Errorf("an unresolved run's audience_handles = %#v, want an empty list", all["to-nobody"]["audience_handles"])
+	}
+}
+
+func keysOf(m map[string]map[string]any) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	slices.Sort(out)
+	return out
+}
+
+// A RUN SAYS WHICH ITEM IT IS ON. The row has carried the item the launching
+// turn was charged to since runs named one; the answer dropped it, so a parked
+// run's question reached a person with no task beside it.
+func TestARunNamesTheItemItIsOn(t *testing.T) {
+	store := seedRuns(t, sandbox.PendingRun{
+		TurnID: "t1", AgentHandle: "swe", Status: sandbox.StatusRunning, CreatedAt: runBase,
+		WorkItem: &types.WorkItem{Backend: "native", ID: "task-1", Key: "ENG-415", Project: "ENG"},
+	})
+	rows := askRuns(t, store)
+	if len(rows) != 1 {
+		t.Fatalf("the board holds %d runs, want 1", len(rows))
+	}
+	item, _ := rows[0]["work_item"].(*types.WorkItem)
+	if item == nil || item.Key != "ENG-415" {
+		t.Errorf("the run's work_item is %#v, want ENG-415", rows[0]["work_item"])
 	}
 }

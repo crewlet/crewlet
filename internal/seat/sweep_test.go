@@ -137,7 +137,7 @@ func TestATinyHeartbeatStillPublishesStatus(t *testing.T) {
 // what it holds and claims nothing until it is" — which is right for a copy
 // that is merely behind. It is wrong for a copy that is WRONG, and the engine
 // was telling operators otherwise: the `deferred_old` alarm reads "its seats
-// move at 30m0s" with the remedy "its seats have already moved", against a
+// move at 30m" with the remedy "its seats have already moved", against a
 // mechanism where nothing moved them.
 func TestAnUnserviceableNodeGivesBackEverySeat(t *testing.T) {
 	t.Parallel()

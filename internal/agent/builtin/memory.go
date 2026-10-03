@@ -9,6 +9,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/crewlet/crewlet/internal/agent/prefetch"
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/learning"
@@ -25,7 +26,7 @@ import (
 //
 // The seat is named by its IDENTITY, never its address: the diary and the
 // onboarding marker by the agent id derived from the handle the seat was
-// CREATED under (ADR-0019), and the episodes and skills by that handle itself
+// CREATED under (ADR-0026), and the episodes and skills by that handle itself
 // ([turnctx.Turn.Origin]). A rename therefore moves none of it, and the chart
 // never issues that handle to another seat, so nobody inherits it either.
 
@@ -132,10 +133,10 @@ func (t *useSkill) CallForTurn(ctx context.Context, turn *turnctx.Turn, args map
 	// answers to now, a renamed seat had no skills at all.
 	seat := turn.Origin()
 	if seat == "" {
-		return failed("use_skill can only be called during a turn, on behalf of a seat."), nil
+		return refused(tools.RefusalForbidden, "use_skill can only be called during a turn, on behalf of a seat."), nil
 	}
 	if t.skills == nil {
-		return failed("Skill synthesis is not configured on this deployment."), nil
+		return refused(tools.RefusalUnavailable, "Skill synthesis is not configured on this deployment."), nil
 	}
 	name := strings.TrimSpace(argString(args, "skill_name"))
 	if name == "" {
@@ -146,10 +147,10 @@ func (t *useSkill) CallForTurn(ctx context.Context, turn *turnctx.Turn, args map
 	// "you have no skill called that" rather than that agent's skill.
 	sk, found, err := t.skills.Get(ctx, seat, name)
 	if err != nil {
-		return failed(fmt.Sprintf("Could not load %q: %v", clip(name), err)), nil
+		return nodeFailure(ctx, UseSkillTool, err, fmt.Sprintf("Could not load %q", clip(name)), ""), nil
 	}
 	if !found {
-		return failed(t.suggest(ctx, seat, name)), nil
+		return refused(tools.RefusalNotFound, t.suggest(ctx, seat, name)), nil
 	}
 
 	// Recorded BEFORE the content goes out, and its failure ignored: the
@@ -163,8 +164,8 @@ func (t *useSkill) CallForTurn(ctx context.Context, turn *turnctx.Turn, args map
 	// a database column. Distinct from the per-OFFER stamp
 	// internal/learning deliberately keeps silent — that one fires for
 	// every skill the prompt merely listed.
-	note(ctx, t.events, turn, skillUsed(turn, sk.Name, sk.ID, "",
-		types.SkillSourceSynthesized))
+	note(ctx, t.events, turn, skillUsed(turn, sk.Name, sk.ID,
+		types.SkillSourceSynthesized, types.KnowledgeReadPage{}))
 
 	var b strings.Builder
 	fmt.Fprintf(&b, "# %s\n\n", sk.Name)
@@ -269,9 +270,14 @@ func (t *queryEpisodes) defaultLimit() int {
 // The REFUSAL is a message rather than an empty answer: "nothing resembles
 // this" and "this deployment cannot search by meaning" send a model to
 // opposite places, and the second one has a fallback it can still use.
+//
+// THE RECALLER'S OWN SENTINEL for a registry wired with no recaller, rather
+// than one of this package's: the two are one fact to the caller, and a second
+// sentinel is how the recaller's answer came to be read as a fault of the node
+// while the unwired one was not.
 func (t *queryEpisodes) similar(ctx context.Context, turn *turnctx.Turn, query string, limit int) ([]learning.Episode, error) {
 	if t.recall == nil {
-		return nil, errNoSimilarity
+		return nil, prefetch.ErrNoSimilarity
 	}
 	hits, err := t.recall.RecallEpisodes(ctx, turn.Seat, query, limit)
 	if err != nil {
@@ -294,10 +300,10 @@ func (t *queryEpisodes) CallForTurn(ctx context.Context, turn *turnctx.Turn, arg
 	// it did before the rename.
 	seat := turn.Origin()
 	if seat == "" {
-		return failed("query_episodes can only be called during a turn, on behalf of a seat."), nil
+		return refused(tools.RefusalForbidden, "query_episodes can only be called during a turn, on behalf of a seat."), nil
 	}
 	if t.episodes == nil {
-		return failed("Episode memory is not configured on this deployment."), nil
+		return refused(tools.RefusalUnavailable, "Episode memory is not configured on this deployment."), nil
 	}
 	limit := clampInt(argInt(args, "limit", t.defaultLimit()), 1, maxEpisodeLimit)
 	outcome := strings.TrimSpace(argString(args, "outcome_filter"))
@@ -327,8 +333,20 @@ func (t *queryEpisodes) CallForTurn(ctx context.Context, turn *turnctx.Turn, arg
 	default:
 		found, err = t.episodes.Recent(ctx, seat, limit)
 	}
-	if err != nil {
-		return failed(fmt.Sprintf("Could not recall your turns: %v", err)), nil
+	switch {
+	case errors.Is(err, prefetch.ErrNoSimilarity):
+		// WHAT THIS DEPLOYMENT RUNS, not a failure of it: said in words of
+		// its own, which name the fallback the model can still use. The
+		// recaller answers it for a company with no embeddings AND for an
+		// embedding provider that did not answer (it logs the second), so
+		// the sentence names both — and read as a fault of this node, the
+		// one fallback that works was hidden behind "do not try again".
+		return refusedBy(tools.RefusalUnavailable, err, "Could not recall your "+
+			"turns by meaning: this deployment has no embeddings configured, or "+
+			"its embedding provider did not answer. Ask without `query` for your "+
+			"most recent ones instead."), nil
+	case err != nil:
+		return nodeFailure(ctx, QueryEpisodesTool, err, "Could not recall your turns", ""), nil
 	}
 	if outcome != "" {
 		found = keepOutcome(found, outcome, limit)
@@ -413,10 +431,10 @@ func (t *refreshMemory) Call(ctx context.Context, args map[string]any) (tools.Re
 func (t *refreshMemory) CallForTurn(ctx context.Context, turn *turnctx.Turn, args map[string]any) (tools.Result, error) {
 	agentID, why := seatAgentID(turn)
 	if why != "" {
-		return failed("refresh_memory " + why), nil
+		return refused(tools.RefusalForbidden, "refresh_memory "+why), nil
 	}
 	if t.diary == nil {
-		return failed("Durable memory is not configured on this deployment."), nil
+		return refused(tools.RefusalUnavailable, "Durable memory is not configured on this deployment."), nil
 	}
 	limit := clampInt(argInt(args, "limit", noteLimit), 1, maxEpisodeLimit)
 
@@ -425,7 +443,7 @@ func (t *refreshMemory) CallForTurn(ctx context.Context, turn *turnctx.Turn, arg
 	}
 	entries, err := t.diary.Recent(ctx, agentID, time.Now().UTC(), limit)
 	if err != nil {
-		return failed(fmt.Sprintf("Could not read your notes: %v", err)), nil
+		return nodeFailure(ctx, RefreshMemoryTool, err, "Could not read your notes", ""), nil
 	}
 	if len(entries) == 0 {
 		return tools.Result{Output: "You have no durable notes yet."}, nil
@@ -448,8 +466,8 @@ func (t *refreshMemory) filtered(ctx context.Context, turn *turnctx.Turn,
 	agentID, hint string, limit int,
 ) (tools.Result, error) {
 	if t.recall == nil {
-		return failed("This deployment cannot re-filter your notes by " +
-			"relevance — call refresh_memory without `context_hint` for your " +
+		return refused(tools.RefusalUnavailable, "This deployment cannot re-filter your notes by "+
+			"relevance — call refresh_memory without `context_hint` for your "+
 			"most recent ones instead."), nil
 	}
 	take := t.hints.take(turn.RunID, hint, t.hintBudget())
@@ -472,7 +490,7 @@ func (t *refreshMemory) filtered(ctx context.Context, turn *turnctx.Turn,
 
 	entries, err := t.recall.RecallMemories(ctx, turn.Seat, agentID, hint)
 	if err != nil {
-		return failed(fmt.Sprintf("Could not re-filter your notes: %v", err)), nil
+		return nodeFailure(ctx, RefreshMemoryTool, err, "Could not re-filter your notes", ""), nil
 	}
 	// Kept even when the filter found nothing: "nothing bears on this" is
 	// an answer, and a repeat of the hint would otherwise cost another
@@ -550,10 +568,10 @@ func (t *reflectAndPersist) Call(ctx context.Context, args map[string]any) (tool
 func (t *reflectAndPersist) CallForTurn(ctx context.Context, turn *turnctx.Turn, args map[string]any) (tools.Result, error) {
 	agentID, why := seatAgentID(turn)
 	if why != "" {
-		return failed("reflect_and_persist " + why), nil
+		return refused(tools.RefusalForbidden, "reflect_and_persist "+why), nil
 	}
 	if t.diary == nil {
-		return failed("Durable memory is not configured on this deployment."), nil
+		return refused(tools.RefusalUnavailable, "Durable memory is not configured on this deployment."), nil
 	}
 	content := strings.TrimSpace(argString(args, "content"))
 	switch {
@@ -581,7 +599,7 @@ func (t *reflectAndPersist) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		TurnID: turn.RunID, CreatedAt: time.Now().UTC(),
 	}
 	if err := t.diary.Write(ctx, entry); err != nil {
-		return failed(fmt.Sprintf("Could not keep that note: %v", err)), nil
+		return nodeFailure(ctx, ReflectAndPersistTool, err, "Could not keep that note", ""), nil
 	}
 	return tools.Result{Output: "Kept. You will see it in later turns."}, nil
 }
@@ -622,10 +640,10 @@ func (t *markOnboarded) Call(ctx context.Context, args map[string]any) (tools.Re
 func (t *markOnboarded) CallForTurn(ctx context.Context, turn *turnctx.Turn, args map[string]any) (tools.Result, error) {
 	agentID, why := seatAgentID(turn)
 	if why != "" {
-		return failed("mark_onboarded " + why), nil
+		return refused(tools.RefusalForbidden, "mark_onboarded "+why), nil
 	}
 	if t.onboarding == nil {
-		return failed("Onboarding is not configured on this deployment."), nil
+		return refused(tools.RefusalUnavailable, "Onboarding is not configured on this deployment."), nil
 	}
 	// REFUSED, not clipped — the same bound reflect_and_persist enforces on
 	// the same store, by the same rule. This used to clip silently, so the
@@ -649,7 +667,7 @@ func (t *markOnboarded) CallForTurn(ctx context.Context, turn *turnctx.Turn, arg
 		Summary:   notes,
 	}, time.Now().UTC())
 	if err != nil {
-		return failed(fmt.Sprintf("Could not record that: %v", err)), nil
+		return nodeFailure(ctx, MarkOnboardedTool, err, "Could not record that", ""), nil
 	}
 	return tools.Result{Output: "Recorded. The onboarding block will not appear again."}, nil
 }
@@ -657,7 +675,7 @@ func (t *markOnboarded) CallForTurn(ctx context.Context, turn *turnctx.Turn, arg
 // seatAgentID resolves the DERIVED agent id for the acting seat.
 //
 // The derived id, never the handle: the diary keys on it, and it is derived
-// from the handle the seat was CREATED under (ADR-0019), so a rename leaves the
+// from the handle the seat was CREATED under (ADR-0026), so a rename leaves the
 // seat reading every entry it wrote before it — and a later seat given the
 // retired handle derives a different id, so it inherits none of them.
 func seatAgentID(turn *turnctx.Turn) (string, string) {
@@ -693,11 +711,6 @@ func clampInt(v, lo, hi int) int { //nolint:unparam // see the doc comment
 // filter matching a quarter of a seat's turns still fills the answer, bounded
 // so one that matches none costs a single wider search rather than a scan.
 const outcomeOverfetch = 4
-
-// errNoSimilarity is what a deployment with no embeddings answers a `query`
-// with. Its own sentinel so the tool can say which of two very different
-// things happened.
-var errNoSimilarity = errors.New("no embeddings are configured on this deployment")
 
 // keepOutcome filters recalled turns by how they ended, preserving order.
 //

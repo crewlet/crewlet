@@ -64,7 +64,7 @@ var errNoChartDomain = errors.New("engine: this engine holds no org chart, so " 
 // under — to the seat as it is known now.
 //
 // AN IDENTITY LOOKUP AND NOT AN ADDRESS ONE ([chart.Reader.SeatByIdentity]),
-// because a binding names the seat by its identity (ADR-0020). Resolved as an
+// because a binding names the seat by its identity (ADR-0027). Resolved as an
 // address — the live handle first, a retired one after — a person bound before
 // a rename signed in as whichever seat later took the old handle, and a
 // suspended one's standing landed on that stranger. The ROW and nothing else:

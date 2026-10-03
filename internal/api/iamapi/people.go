@@ -58,7 +58,7 @@ type personView struct {
 	Reserved bool `json:"reserved,omitempty"`
 
 	// Seat is the bound seat's IDENTITY — the handle it was created under,
-	// which is what a binding records (ADR-0020) and which always resolves to
+	// which is what a binding records (ADR-0027) and which always resolves to
 	// the seat however it has been renamed — and SeatAt the chart position
 	// the bind was decided at.
 	Seat   string `json:"seat,omitempty"`
@@ -185,11 +185,11 @@ func (s *Service) PostPeople(w http.ResponseWriter, r *http.Request) {
 	// THE PERSON IS THE OPERATION'S, derived from its key, so a retry
 	// under the key an unknown answer handed back names the person its
 	// first attempt claimed for — see [Service.createKey].
-	opID, ok := s.createKey(w, r)
+	opID, seed, ok := s.createKey(w, r)
 	if !ok {
 		return
 	}
-	person, err := iamdomain.CreatedPersonID(opID)
+	person, err := iamdomain.CreatedPersonID(seed)
 	if err != nil {
 		httpjson.FailWith(w, http.StatusBadRequest, httpjson.CodeBadParams,
 			map[string]string{"detail": err.Error()})

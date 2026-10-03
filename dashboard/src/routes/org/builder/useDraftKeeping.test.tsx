@@ -17,7 +17,7 @@ import {
   company,
   Engine,
   json,
-  lensToolbar,
+  builderToolbar,
   mountBuilder,
   pressInView,
   pressOnBanner,
@@ -75,7 +75,7 @@ const kept = () => sessionStorage.getItem(DRAFT_STORAGE_KEY);
 
 /** Whether the draft on screen holds changes: Review and save opens only then. */
 const holdsChanges = () =>
-  !(within(lensToolbar()).getByRole("button", { name: "Review and save" }) as HTMLButtonElement)
+  !(within(builderToolbar()).getByRole("button", { name: "Review and save" }) as HTMLButtonElement)
     .disabled;
 
 /** The Builder's one polite live region. */
@@ -127,7 +127,7 @@ test("a kept draft of the same revision waits for Keep or Discard, and Keep rest
 
 // A NEWER REVISION WHILE THE OFFER STANDS. The offer was made against the
 // base on screen, so the base is not moved under it, and keeping the draft
-// then leads into the update flow rather than a lens that is paused with no
+// then leads into the update flow rather than a builder that is paused with no
 // way forward.
 test("a kept draft offered as a colleague saves is kept, then offered as an update", async () => {
   keep({});
@@ -139,11 +139,11 @@ test("a kept draft offered as a colleague saves is kept, then offered as an upda
   const reads = engine.chartReads().length;
   act(() => store.applyOrg(engine.orgPush()));
   await settle();
-  expect(within(lensToolbar()).getByText("The company changed")).toBeDefined();
+  expect(within(builderToolbar()).getByText("The company changed")).toBeDefined();
   // The base under the offer is not read again — only the check's read went
   // out: a Keep pressed while a newer base waited for its first check would be
   // refused, and the kept draft cleared with the refusal. Counted once the
-  // lens has settled, so a read it was going to make has been made.
+  // builder has settled, so a read it was going to make has been made.
   expect(engine.chartReads()).toHaveLength(reads + 1);
 
   answerTheOffer("Keep the draft");
@@ -283,7 +283,7 @@ test("a refused read forgets a kept draft rather than offering it to the next re
   const { settle } = mountBuilder({ engine });
   // SETTLED, NOT READ ON THE SPOT. The refusal is rendered from state and the
   // draft is dropped by the EFFECT that state schedules, so the message is in
-  // the DOM one commit before the storage is cleared; a settled lens has run
+  // the DOM one commit before the storage is cleared; a settled builder has run
   // both. The claim is that the draft is forgotten, and it still fails if it
   // never is.
   await settle();
@@ -350,10 +350,10 @@ test("a draft with changes asks before the tab goes, and one without does not", 
   expect(unload()).toBe(true);
 });
 
-// WHERE NOTHING KEEPS THE DRAFT, leaving the lens loses it like a reload, so
-// that move is asked about first; a move within the lens keeps the Builder
+// WHERE NOTHING KEEPS THE DRAFT, leaving the builder loses it like a reload, so
+// that move is asked about first; a move within the builder keeps the Builder
 // and the draft, and is not.
-test("a draft this browser cannot keep asks before the lens is left, not before a view changes", async () => {
+test("a draft this browser cannot keep asks before the builder is left, not before a view changes", async () => {
   const refusing: DraftStorage = {
     getItem: () => null,
     setItem: () => {
@@ -370,7 +370,7 @@ test("a draft this browser cannot keep asks before the lens is left, not before 
   await settle();
   expect(screen.getByText(/This browser refuses to keep a draft/)).toBeDefined();
   const start = location.hash;
-  const onTable = "#/company?lens=builder&view=table";
+  const onTable = "#/agents/edit?view=table";
 
   await navigate(() => {
     location.hash = onTable;
@@ -379,24 +379,24 @@ test("a draft this browser cannot keep asks before the lens is left, not before 
 
   // Held, so the browser is put back on the table once it has gone.
   await navigate(() => {
-    location.hash = "#/people";
+    location.hash = "#/agents/roster";
   }, onTable);
   const asked = screen.getByRole("dialog", { name: "Leave the builder?" });
   fireEvent.click(within(asked).getByRole("button", { name: "Stay" }));
   expect(screen.queryByRole("dialog", { name: "Leave the builder?" })).toBeNull();
 
   await navigate(() => {
-    location.hash = "#/people";
+    location.hash = "#/agents/roster";
   }, onTable);
   const again = screen.getByRole("dialog", { name: "Leave the builder?" });
   await navigate(
     () => fireEvent.click(within(again).getByRole("button", { name: "Leave without the draft" })),
-    "#/people",
+    "#/agents/roster",
   );
-  expect(start).toContain("lens=builder");
+  expect(start.startsWith("#/agents/edit")).toBe(true);
 });
 
-test("coming back to the lens restores this page's own draft without asking", async () => {
+test("coming back to the builder restores this page's own draft without asking", async () => {
   const engine = new Engine(company());
   const first = mountBuilder({ engine });
   await first.checked();

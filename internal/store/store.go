@@ -74,8 +74,15 @@
 // times beside it. Every write transaction this process begins therefore takes
 // its place in one FIFO line per file, handed from each holder to the writer
 // that asked next. A writer's wait is then bounded by the work in front of it
-// rather than by how its polls line up, which is what lets three domains'
+// rather than by how its polls line up, which is what lets six domains'
 // appliers share the replicated estate and each still drain.
+//
+// A writer whose line never reached the front — the holders ahead of it kept
+// the lock through every attempt its budget allows — gives up with [ErrBusy],
+// the one failure here a caller clears by trying again a moment later, and
+// the reason it is marked rather than left as the driver's words: unmarked, a
+// tool read lock contention as a fault of the node and told its caller that
+// trying again would not help.
 //
 // # One driver
 //
@@ -420,6 +427,13 @@ type DB struct {
 	// timeout that no longer exists.
 	busy time.Duration
 
+	// pool is this handle's connection bound — [Options.poolSize], the
+	// readers, the identity reserve and the pins together — kept for the
+	// same reason busy is: [dirtyAttempts] is a function of it, and a
+	// retry budget sized for a pool other than the one the handle opened
+	// is a number nobody can re-derive.
+	pool int
+
 	// lock is this process's exclusive claim on path, held for the life of
 	// the handle and released by Close — or by the kernel, if this process
 	// does not get to run Close. Nil for an in-memory database, which has
@@ -509,6 +523,28 @@ var ErrOneFile = errors.New("store: the node and replicated estates cannot be th
 // panicked the engine, where every other late read in the same shutdown logged
 // "sql: database is closed" and moved on.
 var ErrNoEstate = errors.New("store: this estate is not open")
+
+// ErrBusy is a write transaction that gave up because this node's store never
+// granted it the file's write lock: the other writers queued ahead of it held
+// the lock through every attempt [lockAttempts] allows — two busy timeouts,
+// ten seconds at the default.
+//
+// A CONDITION, NOT A FAULT, and that is the whole reason it is a sentinel: the
+// lock is released when the writers ahead of it commit, so the same write made
+// again a moment later lands, and a caller answers it as it answers any wait
+// that clears. Unmarked, the driver's "database is locked" reached a tool as a
+// fault of the node — `internal_error`, "trying again does not fix it" — on
+// the one failure here that trying again exists for.
+//
+// ONLY THE LOCK THAT WAS NEVER TAKEN. Nothing the attempt wrote survives it:
+// the lock is taken at BEGIN ([beginModeDriver]), so a transaction that never
+// held it never ran its body. A statement that failed with the lock held — a
+// constraint, a malformed query, a disk that refused a write — is not busy and
+// is never marked, however its message reads, because no wait changes it.
+//
+// Wrapped beside the driver's own error ("%w: %w"), so a log still reads what
+// the driver said.
+var ErrBusy = errors.New("store: this node's store could not take its write lock in time")
 
 // Open opens (creating if absent) a node's TWO databases, applies any pending
 // schema to each, and probes the driver's capabilities.
@@ -643,7 +679,7 @@ func openEstate(ctx context.Context, estate Estate, path string, opts Options,
 	}
 
 	db := &DB{sql: pool, path: path, lock: lock, estate: estate,
-		busy: opts.busyTimeout(), writes: lock.queue()}
+		busy: opts.busyTimeout(), pool: opts.poolSize(), writes: lock.queue()}
 	// THE PINS ARE THE REPLICATED ESTATE'S. A pinned connection is an
 	// applier's, and an applier writes there — so the node estate keeps
 	// its readers and the pool that grows is the one the writers are
@@ -1079,13 +1115,14 @@ func (d *DB) Tx(ctx context.Context, fn func(*sql.Tx) error) (err error) {
 	// dirty. internal/learning carried a private copy of this loop for one
 	// of its twelve callers; the other eleven had none.
 	// THE NIL GUARD IS HERE AND NOT ONLY IN [DB.txOpts], which is where it
-	// was and where it could never run: `budget(d.busy)` is an ARGUMENT,
-	// evaluated before the call it guards, so a nil handle dereferenced on the
-	// way in and the guard three frames down never saw it. See [ErrNoEstate].
+	// was and where it could never run: `budget(d.busy, d.pool)` is an
+	// ARGUMENT, evaluated before the call it guards, so a nil handle
+	// dereferenced on the way in and the guard three frames down never saw
+	// it. See [ErrNoEstate].
 	if d == nil || d.sql == nil {
 		return ErrNoEstate
 	}
-	return retryTransient(ctx, budget(d.busy), func() error { return d.tx(ctx, fn) })
+	return retryTransient(ctx, budget(d.busy, d.pool), func() error { return d.tx(ctx, fn) })
 }
 
 // txBudget is how many attempts each cause gets, and how long to wait between
@@ -1102,11 +1139,20 @@ type txBudget struct {
 // [DB.Read] and [Writer.Tx] all need it, and a second copy is how one of them
 // comes to classify an error the other retries — which is exactly what the
 // eleven callers without internal/learning's private copy paid for.
+//
+// A LOCK IT NEVER TOOK IS ANSWERED AS [ErrBusy] once its budget is spent,
+// because that is the one cause whose exhaustion is still a wait that clears.
+// The other two are not: a dirty connection that survived every attempt is a
+// pool that cannot hand out a clean one, and a stale snapshot is never retried
+// at all — both stay the driver's error.
 func retryTransient(ctx context.Context, b txBudget, once func() error) error {
 	for attempt := 0; ; attempt++ {
 		err := once()
 		cause := classify(err)
 		if err == nil || cause == causeFatal || attempt+1 >= b.attempts(cause) {
+			if cause == causeLockTimeout {
+				return fmt.Errorf("%w: %w", ErrBusy, err)
+			}
 			return err
 		}
 		log.WarnContext(ctx, "store_tx_retry", "attempt", attempt+1,
@@ -1138,12 +1184,12 @@ func causeName(c txCause) string {
 // fresh one in its place (see [Writer.replace]) — so the next attempt draws a
 // different connection on both paths and a second budget would be a policy
 // with nothing left to justify it.
-func budget(busy time.Duration) txBudget {
+func budget(busy time.Duration, pool int) txBudget {
 	return txBudget{
 		attempts: func(c txCause) int {
 			switch c {
 			case causeDirtyConn:
-				return txAttempts
+				return dirtyAttempts(pool)
 			case causeLockTimeout:
 				return lockAttempts
 			default:
@@ -1176,7 +1222,8 @@ func budget(busy time.Duration) txBudget {
 // released in ten seconds is not "another writer holds it and will not for
 // long", it is a stuck batch, and the honest answer is the error.
 //
-// It was [txAttempts] — eight — until the begin mode moved contention from
+// It was eight — what the dirty-connection budget then was — until the begin
+// mode moved contention from
 // the first write to the BEGIN and made this cause common. Eight attempts of
 // a five-second wait is forty seconds of stall with eight full replays of a
 // four-thousand-row apply, which is the fleet-wide stall the applier's
@@ -1198,27 +1245,37 @@ func lockRetryBeat(busy time.Duration) time.Duration {
 	return time.Duration(rand.N(int64(busy / 10)))
 }
 
-// txAttempts is how many times a transaction that drew a dirty connection is
-// retried.
+// dirtyAttempts is how many times a transaction that drew a dirty connection
+// is tried, on a handle whose pool holds pool connections.
 //
-// Eight, and the anchor moved with the reason. It was measured against four
-// goroutines each incrementing one row twelve times — the sharpest contention
-// this store sees — which still lost an update at three attempts even with a
-// jittered pause. That race cannot happen now: a write transaction takes the
-// lock at BEGIN and queues for it, so the four serialise and each body runs
-// once (TestWriterAndTxShareOneWritePath asserts exactly that), and a number
-// justified by a measurement of something that no longer occurs is a number
-// nobody can re-derive.
+// THE BOUND IS THE POOL, and so it is DERIVED from the pool rather than
+// written down. What it governs is [causeDirtyConn], and each attempt RETIRES
+// the connection it drew, so the worst case is drawing every dirty connection
+// the pool can be holding before reaching a clean one: one attempt per
+// connection the handle may hold, and one more for the fresh connection the
+// pool opens once every held one has been retired.
 //
-// What it governs is [causeDirtyConn], and the bound is the POOL: each
-// attempt RETIRES the connection it drew, so the worst case is drawing every
-// dirty connection the pool can be holding before reaching a clean one. That
-// is [defaultReaderConns] plus the pins a node declares — four plus three
-// state-log domains today — and eight is the first round number above it.
-// Every attempt of it costs a reconnect and no wait, so the budget is spent
-// in milliseconds rather than in seconds; it is [lockAttempts] that bounds
-// the seconds.
-const txAttempts = 8
+// It was the literal eight, justified as "[defaultReaderConns] plus the pins
+// a node declares — four plus three state-log domains today". Both terms had
+// moved under it: the reader budget is max(8, GOMAXPROCS) now, the identity
+// reserve sits beside it, and six domains each pin a writer, so a replicated
+// estate on an ordinary host holds fifteen connections and more on a large one
+// — and a constant justified by a count is wrong the day the count changes,
+// with nothing to say so. (An earlier anchor was a measurement of four
+// goroutines racing one row, which the begin mode made impossible: a write
+// transaction takes the lock at BEGIN and queues for it, so the four
+// serialise and each body runs once — TestWriterAndTxShareOneWritePath
+// asserts exactly that.)
+//
+// Every attempt of it costs a reconnect and a pause from [txRetryBeat], which
+// stops widening at 33 ms, so even a large pool's budget is spent in well
+// under a second rather than in seconds; it is [lockAttempts] that bounds the
+// seconds. A handle opened at an explicit bound of 1 — a backup's, an
+// adoption's — gets two attempts, which is its one connection and the
+// replacement it opens.
+func dirtyAttempts(pool int) int {
+	return max(pool, 1) + 1
+}
 
 // txRetryBeat is the jittered, WIDENING pause between attempts.
 //

@@ -262,7 +262,7 @@ describe("a settings dry run's findings", () => {
         problem(["name"]),
         problem(["policies", 0]),
         problem(["integrations", "datadog", "route_to"]),
-        problem(["scheduling", "timezone"]),
+        problem(["scheduling", "tick_seconds"]),
         problem(["providers", "llm"]),
         problem(null),
       ],

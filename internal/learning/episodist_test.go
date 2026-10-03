@@ -41,7 +41,7 @@ func epTurn() learning.Turn {
 			Agent: "agent-uuid", AgentHandle: "dev", RoleName: "Dev",
 			// TWO IDENTITIES, as a post-split turn carries them: the run
 			// that produced the record, and the unit of work it did.
-			TurnID: "run-1", WorkKey: "work-1", TaskID: "task-9",
+			TurnID: "run-1", WorkKey: "work-1",
 			StartedAt: base, EndedAt: base.Add(3 * time.Second), DurationMS: 3000,
 			TaskSummary:   "the staging deploy keeps failing",
 			PlanSummary:   "read the pipeline, then reply",
@@ -92,6 +92,40 @@ func TestACompletedTurnBecomesAnEpisode(t *testing.T) {
 		t.Errorf("duration = %s", ep.Duration)
 	case ep.Kind != learning.KindRaw:
 		t.Errorf("kind = %q, want a raw row", ep.Kind)
+	}
+}
+
+// AN EPISODE IS FILED AGAINST THE ITEM ITS TURN WAS CHARGED TO, as the
+// backend-qualified ref — a native task id and a Jira issue id are drawn from
+// different spaces, so the bare id would make two items one — and a turn on
+// nothing files against nothing rather than against an empty ref.
+func TestAnEpisodeRecordsTheTurnsItem(t *testing.T) {
+	t.Parallel()
+	for name, tc := range map[string]struct {
+		item *types.WorkItem
+		want string
+	}{
+		"a charged turn": {&types.WorkItem{Backend: types.WorkJira, ID: "10042",
+			Key: "ENG-7", Project: "ENG"}, "jira:10042"},
+		"a turn on nothing": {nil, ""},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			store := episodes(t)
+			turn := epTurn()
+			turn.Event.WorkItem = tc.item
+			if tc.item != nil {
+				turn.Event.WorkItemBasis = types.BasisTrigger
+			}
+			reflectEpisode(t, episodist(t, store), turn)
+			got, err := store.Recent(context.Background(), "dev", 10)
+			if err != nil || len(got) != 1 {
+				t.Fatalf("Recent = %d episodes, %v", len(got), err)
+			}
+			if got[0].WorkItem != tc.want {
+				t.Fatalf("episode item = %q, want %q", got[0].WorkItem, tc.want)
+			}
+		})
 	}
 }
 

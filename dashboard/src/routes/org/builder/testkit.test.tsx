@@ -13,7 +13,7 @@
  *
  * Each pair below is a case that ENDS WITH A WAIT STILL OUT — started and not
  * awaited, which is where a timeout leaves a case, without the deadline — and
- * the case after it, which reads what that wait came to and mounts a lens of
+ * the case after it, which reads what that wait came to and mounts a builder of
  * its own.
  */
 
@@ -40,15 +40,16 @@ function outcome(wait: Promise<void>): Promise<string> {
 const left: Record<string, Promise<string>> = {};
 
 /** The refusal a wait out past its case's end comes to. */
-const ended = (what: string) => new RegExp(`^${what}: the case that mounted this lens has ended`);
+const ended = (what: string) =>
+  new RegExp(`^${what}: the case that mounted this builder has ended`);
 
-/** Mounts a fresh lens, and holds it to drawing and settling. */
-async function nextLensDraws(hash?: string): Promise<void> {
+/** Mounts a fresh builder, and holds it to drawing and settling. */
+async function nextBuilderDraws(hash?: string): Promise<void> {
   const { checked } = mountBuilder({ engine: new Engine(company()), ...(hash ? { hash } : {}) });
   await checked();
 }
 
-// A READ NOBODY ANSWERS. The lens gives it up when it unmounts, so the scope
+// A READ NOBODY ANSWERS. The builder gives it up when it unmounts, so the scope
 // closes on its own — and the settle went on, returning into a test body that
 // would have acted on the next case's page.
 test("a case that ends while it settles on a read", () => {
@@ -58,12 +59,12 @@ test("a case that ends while it settles on a read", () => {
   left.read = outcome(settle());
 });
 
-test("stops at that settle, and the next case's lens draws", async () => {
+test("stops at that settle, and the next case's builder draws", async () => {
   expect(await left.read).toMatch(ended("settle"));
-  await nextLensDraws();
+  await nextBuilderDraws();
 });
 
-// A WRITE NOBODY ANSWERS. A save is never abandoned when the lens unmounts,
+// A WRITE NOBODY ANSWERS. A save is never abandoned when the builder unmounts,
 // so nothing but the case's end can close the act scope that waits for it.
 test("a case that ends while it settles on a save", async () => {
   const engine = new Engine(company());
@@ -82,15 +83,15 @@ test("a case that ends while it settles on a save", async () => {
 
 test("stops at that settle too", async () => {
   expect(await left.write).toMatch(ended("settle"));
-  await nextLensDraws();
+  await nextBuilderDraws();
 });
 
-/** A lens address the default mount is not on: the landing below never reached. */
-const ON_THE_TABLE = "#/company?lens=builder&view=table";
+/** A builder address the default mount is not on: the landing below never reached. */
+const ON_THE_TABLE = "#/agents/edit?view=table";
 
 // A MOVE THAT NEVER LANDS. The next mount writes a hash of its own, which a
 // wait still out would take for the landing it wanted and settle the next
-// case's lens.
+// case's builder.
 test("a case that ends while it waits for a move to land", async () => {
   const { checked, navigate } = mountBuilder({ engine: new Engine(company()) });
   await checked();
@@ -99,7 +100,7 @@ test("a case that ends while it waits for a move to land", async () => {
 
 test("stops at that move, whatever the next mount writes", async () => {
   expect(await left.move).toMatch(ended("navigate"));
-  await nextLensDraws(ON_THE_TABLE);
+  await nextBuilderDraws(ON_THE_TABLE);
 });
 
 // A REQUEST THAT NEVER ARRIVES. The wrapper that waits for it turns React's
@@ -113,13 +114,13 @@ test("a case that ends while it waits for a request", async () => {
 
 test("stops at that wait for a request", async () => {
   expect(await left.request).toMatch(ended("reached"));
-  await nextLensDraws();
+  await nextBuilderDraws();
 });
 
 // A WAIT OF THE CASE'S OWN, and then a settle. The harness cannot wake a wait
 // it does not own, so a case that timed out inside one resumes whenever that
 // wait ends — after the next case has mounted — and its next settle has to be
-// refused there rather than settle whichever lens is mounted by then.
+// refused there rather than settle whichever builder is mounted by then.
 let release: () => void = () => {};
 
 test("a case that ends while it waits for something of its own", async () => {
@@ -136,19 +137,19 @@ test("a case that ends while it waits for something of its own", async () => {
   );
 });
 
-test("stops at its next settle, and never settles the next case's lens", async () => {
-  // THE NEXT CASE'S LENS IS MOUNTED FIRST: this is the lens a settle that
-  // found its lens anywhere but in its own case would take.
+test("stops at its next settle, and never settles the next case's builder", async () => {
+  // THE NEXT CASE'S BUILDER IS MOUNTED FIRST: this is the builder a settle that
+  // found its builder anywhere but in its own case would take.
   const { checked } = mountBuilder({ engine: new Engine(company()) });
   release();
   expect(await left.own).toMatch(ended("settle"));
   await checked();
 });
 
-// A WAIT OUTSIDE THE LENS. A suite that mounts no lens through this harness —
-// the company screen's, the node editor's — waits for the page with
-// [waitInCase], and the same holds: the next case's page does what such a
-// wait listens for (a mount writes a hash, a lens draws its toolbar), so one
+// A WAIT OUTSIDE THE BUILDER. A suite that mounts no builder through this
+// harness — the company screen's, the node editor's — waits for the page with
+// [waitInCase], and the same holds: the next case's page does what such a wait
+// listens for (a mount writes a hash, a builder draws its toolbar), so one
 // still listening takes it and hands the next case's page to a case that
 // already failed.
 let stoppedListening = false;
@@ -171,7 +172,7 @@ test("a case that ends while it waits for something the page does", () => {
 test("stops at that wait and stops listening, whatever the next mount writes", async () => {
   // Mounted FIRST, so the hash this mount writes is the landing that wait
   // would take if it were still listening.
-  await nextLensDraws(ON_THE_TABLE);
+  await nextBuilderDraws(ON_THE_TABLE);
   expect(await left.event).toMatch(/^the landing: the case that waited for it has ended/);
   expect(stoppedListening).toBe(true);
 });

@@ -65,21 +65,25 @@ type record struct {
 	owner     string
 	epoch     int64
 	expiresAt time.Time
-	preferred string
-	protocol  int
-	meta      map[string]any
+	// acquiredAt is when the current epoch was minted; see
+	// coord.Lease.AcquiredAt.
+	acquiredAt time.Time
+	preferred  string
+	protocol   int
+	meta       map[string]any
 }
 
 func (r *record) live(now time.Time) bool { return r.expiresAt.After(now) }
 
 func (r *record) lease() coord.Lease {
 	return coord.Lease{
-		Resource:  r.resource,
-		Owner:     r.owner,
-		Epoch:     r.epoch,
-		ExpiresAt: r.expiresAt,
-		Preferred: r.preferred,
-		Protocol:  r.protocol,
+		Resource:   r.resource,
+		Owner:      r.owner,
+		Epoch:      r.epoch,
+		ExpiresAt:  r.expiresAt,
+		AcquiredAt: r.acquiredAt,
+		Preferred:  r.preferred,
+		Protocol:   r.protocol,
 		// Copied on the way out for the same reason it is copied on the
 		// way in: an out-of-process store cannot hand a caller a
 		// reference into its own state, and a twin that did would let a
@@ -156,7 +160,7 @@ func (b *Backend) acquire(resource string, opts coord.AcquireOptions) *coord.Lea
 	row := b.rows[resource]
 	switch {
 	case row == nil:
-		row = &record{resource: resource, epoch: 1}
+		row = &record{resource: resource, epoch: 1, acquiredAt: now}
 		b.rows[resource] = row
 	case row.live(now) && row.owner != opts.Owner:
 		return nil
@@ -168,8 +172,9 @@ func (b *Backend) acquire(resource string, opts coord.AcquireOptions) *coord.Lea
 		// Takeover, or this same owner re-claiming after its own lease
 		// lapsed. Both mint a new token, because during the gap the work
 		// was covered by nothing and must be fenced against its own past
-		// self.
+		// self. A new token is a new tenure, so it gets its own start.
 		row.epoch++
+		row.acquiredAt = now
 	}
 
 	row.owner = opts.Owner

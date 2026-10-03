@@ -57,8 +57,8 @@
 // before that write — measured: up to 3 of every 100 passes hosted on a
 // follower missed the newest write, and none hosted on the leader did. That is
 // the first reason above arriving through the transport that replaced the
-// batched read: the trim floor reads one row too few, and a budget reset misses
-// the counter it was asked to clear.
+// batched read: the trim floor reads one row too few, and the listing a seat
+// pause watch starts from misses the pause just taken.
 //
 // So a pass is CLOSED by the leader. Its messages arrive in stream order, so
 // the highest sequence it delivered says how far its copy reached, and
@@ -114,8 +114,8 @@ func eachEntry(ctx context.Context, b *leaderBucket,
 // THE BROKER DOES THE FILTERING, which is the whole point. A key is a subject
 // token path under its bucket (coord/keys.go), so a class of keys written by
 // [coord.DocumentKey] is a subject wildcard the broker can match — and the
-// shared positions register holds SEVEN classes, so a walk that read the whole
-// bucket moved all seven to use one. That read is not an edge case: the
+// shared positions register holds EIGHT classes, so a walk that read the whole
+// bucket moved all eight to use one. That read is not an edge case: the
 // state-log write fence takes it, for the floors, on every write at an
 // expectation of zero.
 //
@@ -124,11 +124,11 @@ func eachEntry(ctx context.Context, b *leaderBucket,
 // what the watcher takes. Each walk composes its own, and there is
 // deliberately no default: an empty filter read as "everything" would turn a
 // caller that lost its class value into one that walks the whole register and
-// decodes seven classes as one.
+// decodes eight classes as one.
 //
 // `what` names the listing a failure could not complete — the bare name, which
 // every message composes into "read <what>" — and a filtered walk names its
-// LISTING rather than its bucket. Seven classes share the positions register,
+// LISTING rather than its bucket. Eight classes share the positions register,
 // so "read crewlet_positions" is the same sentence for all of them: it names
 // the file an operator would inspect and never the duty that stalled.
 func eachEntryUnder(ctx context.Context, b *leaderBucket,

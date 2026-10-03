@@ -63,12 +63,32 @@ export function useReread(): Reread {
  * A TRANSITION, not a state: only a socket that was down and is back asks,
  * never one that was connected all along, and a change of `read` asks
  * nothing on its own.
+ *
+ * AND A RE-CONNECT, NOT THE FIRST CONNECT. A page's socket opens a moment
+ * after its screens' first REST reads went out over HTTP, which needs no
+ * socket — so a socket first coming up under a mounted read is no news about
+ * the engine, and asking on it asked every guarded read twice per page load.
+ * The one exception is a read that never REACHED the engine (`unreached`,
+ * asked when the socket comes up): the socket arriving is then the first sign
+ * that it can.
  */
-export function useRereadOnReconnect(read: () => void, enabled = true): void {
+export function useRereadOnReconnect(
+  read: () => void,
+  enabled = true,
+  unreached: () => boolean = () => false,
+): void {
   const { connected } = useConnection();
   const was = useRef(connected);
+  // WHETHER THIS MOUNT HAS SEEN THE SOCKET UP, which is what tells a
+  // reconnect from the first connect.
+  const seen = useRef(connected);
+  const unreachedRef = useRef(unreached);
   useEffect(() => {
-    if (enabled && connected && !was.current) read();
+    unreachedRef.current = unreached;
+  });
+  useEffect(() => {
+    if (enabled && connected && !was.current && (seen.current || unreachedRef.current())) read();
     was.current = connected;
+    if (connected) seen.current = true;
   }, [connected, enabled, read]);
 }

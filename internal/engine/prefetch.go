@@ -3,10 +3,12 @@ package engine
 import (
 	"context"
 	"strings"
+	"time"
 
 	"github.com/crewlet/crewlet/internal/agent/prefetch"
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
+	"github.com/crewlet/crewlet/internal/knowledge"
 	"github.com/crewlet/crewlet/internal/learning"
 	"github.com/crewlet/crewlet/internal/notify"
 	"github.com/crewlet/crewlet/internal/org"
@@ -31,9 +33,20 @@ import (
 // assembling a handful of interface values — cheaper than the mutex a cached
 // one would need.
 func (e *Engine) prefetcher(company *Company) *prefetch.Fetcher {
+	return prefetch.New(e.prefetchSources(company))
+}
+
+// prefetchSources assembles what [Engine.prefetcher] builds its fetcher from.
+func (e *Engine) prefetchSources(company *Company) prefetch.Sources {
 	src := prefetch.Sources{
 		Knowledge: e.Knowledge(),
-		Models:    company.Models,
+		// METERED, like every other completion made on a seat's behalf.
+		// The memory filter, the knowledge query and the episode summary
+		// each send a full prompt on EVERY turn, and resolved off the bare
+		// registry that spend reached no counter: a seat at its ceiling
+		// kept paying for its turn-start context and the window an
+		// operator reads understated it. See learningbudget.go.
+		Models: e.meteredModelsFor(company),
 		// The chat surfaces' READ half, which is how a seat woken in a
 		// thread is handed the thread. Empty on a node running no chat
 		// transport, which renders the unreadable hint rather than
@@ -64,7 +77,7 @@ func (e *Engine) prefetcher(company *Company) *prefetch.Fetcher {
 	// recall to an empty block — both first-class states in the prefetch
 	// rather than failures.
 	src.Embed = e.embedder()
-	return prefetch.New(src)
+	return src
 }
 
 // prefetchFor renders one turn's context blocks.
@@ -110,9 +123,53 @@ func (e *Engine) prefetchFor(ctx context.Context, company *Company, req Request,
 		// about which thread a turn is in.
 		Thread: threadOf(req.Ask()),
 	}
+	// TIMED where it runs: the context assembly is the stretch between a
+	// turn announcing itself and its first phase opening, and nothing else
+	// on the record can say how long it was.
+	began := time.Now()
 	blocks := e.prefetcher(company).Fetch(ctx, r)
-	e.publishPrefetchSummary(ctx, seat, agentID.String(), req.RunID, req.WorkKey, r, blocks)
+	took := time.Since(began)
+	e.publishPrefetchSummary(ctx, seat, agentID.String(), req.RunID, req.WorkKey, r, blocks,
+		began.UTC(), took)
+	e.publishPrefetchRead(ctx, seat, agentID.String(), req.RunID, req.WorkKey, blocks)
 	return blocks
+}
+
+// publishPrefetchRead records the pages the turn-start knowledge block put in
+// front of the seat, as a `knowledge_read` with `via: prefetch`.
+//
+// A SECOND EVENT rather than a list on prefetch_summary, because the two answer
+// different questions for different readers: the summary is one row per turn
+// about the PIPELINE (did each block fire, how large was it), and this is one
+// row per read about the PAGES, which is what every other way a seat reads the
+// knowledge base records too — so "which pages does this company's staff read"
+// is one event type to count however the page arrived.
+//
+// NAMES NO PHASE: the prefetch runs before the first one opens. Nothing is
+// published when the block surfaced no page, a hint included — a read of
+// nothing is not a read. Best effort, like the summary beside it.
+func (e *Engine) publishPrefetchRead(ctx context.Context, seat *org.Role,
+	agentID, runID, workKey string, b prefetch.Blocks,
+) {
+	if e.backends == nil || e.backends.Queue == nil || len(b.RelevantKnowledgePages) == 0 {
+		return
+	}
+	read := knowledge.ReadPages(b.RelevantKnowledgePages)
+	if len(read) == 0 {
+		return
+	}
+	ev := events.NewFrom(types.KnowledgeRead{
+		Agent: agentID, AgentHandle: seat.Handle(), RoleName: seat.Name,
+		TurnID: runID, WorkKey: workKey,
+		Via:     types.ReadViaPrefetch,
+		Backend: b.RelevantKnowledgePages[0].Backend,
+		Query:   types.KnowledgeReadQuery(b.RelevantKnowledgeQuery),
+		Pages:   read,
+	}, tracing.TraceOf(ctx))
+	if ev == nil {
+		return
+	}
+	e.publishEvent(ctx, ev, seat.Name)
 }
 
 // publishPrefetchSummary reports what each block actually surfaced.
@@ -128,6 +185,7 @@ func (e *Engine) prefetchFor(ctx context.Context, company *Company, req Request,
 // fail because its telemetry could not be published.
 func (e *Engine) publishPrefetchSummary(ctx context.Context, seat *org.Role,
 	agentID, runID, workKey string, r prefetch.Request, b prefetch.Blocks,
+	startedAt time.Time, took time.Duration,
 ) {
 	if e.backends == nil || e.backends.Queue == nil {
 		return
@@ -136,6 +194,8 @@ func (e *Engine) publishPrefetchSummary(ctx context.Context, seat *org.Role,
 		Agent: agentID, AgentHandle: seat.Handle(), RoleName: seat.Name,
 		TurnID:                 runID,
 		WorkKey:                workKey,
+		StartedAt:              startedAt,
+		DurationMS:             int(took / time.Millisecond),
 		CounterpartyHit:        b.CounterpartyProfile != "",
 		CounterpartyBytes:      len(b.CounterpartyProfile),
 		SynthesizedSkillsHit:   b.SynthesizedSkills != "",
@@ -151,7 +211,7 @@ func (e *Engine) publishPrefetchSummary(ctx context.Context, seat *org.Role,
 		// The count the block cannot carry: an empty search still
 		// renders the hint, so hit=true with count=0 is "it ran and
 		// found nothing" rather than "it surfaced pages".
-		RelevantKnowledgeSelectionCount: b.RelevantKnowledgeHits,
+		RelevantKnowledgeSelectionCount: len(b.RelevantKnowledgePages),
 		ThreadContextHit:                b.ThreadContext != "",
 		ThreadContextBytes:              len(b.ThreadContext),
 		ThreadContextPosts:              b.ThreadContextPosts,

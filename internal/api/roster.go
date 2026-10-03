@@ -2,8 +2,12 @@ package api
 
 import (
 	"context"
+	"fmt"
+
+	"github.com/google/uuid"
 
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/org"
 )
 
@@ -31,46 +35,21 @@ import (
 // roster limited to local seats would show a different company depending on
 // which node the browser reached.
 //
+// CONFIGURATION ONLY. What a seat is doing — `activity`, and why a stopped one
+// is stopped — is the projection's to say, over its turn, its runs, its pause,
+// its budget and its placement (livestate's activity.go); a state written here
+// as well is how a seat came to have two. The roster used to mark the seats
+// THIS node held as idle and leave every other seat stateless, which the client
+// drew as offline — so on a fleet, every seat a peer ran read as down.
+//
 // Human seats are left out. They have no turn, no phase and no spend, and the
 // agent screen is about what is running; the org tree below carries them, which
 // is where a reader looks for who to talk to.
-func roster(ctx context.Context, company func() (*config.Company, *org.Organization), runtime NodeRuntime) []map[string]any {
-	if company == nil {
+func roster(company func() (*config.Company, *org.Organization)) []map[string]any {
+	organization := agentOrganization(company)
+	if organization == nil {
 		return nil
 	}
-	c, roster := company()
-	if c == nil {
-		return nil
-	}
-	// THE COMPANY'S OWN ORG, derived from this node's chart rows rather
-	// than re-resolved from the document: a stored revision carries no
-	// seats at all, so the derivation this replaced answered an EMPTY
-	// roster for every running company.
-	if roster == nil {
-		// A node with no chart view has no seats to report. An empty
-		// roster is the honest answer and the screen says so.
-		return nil
-	}
-	organization := roster
-	// WHICH SEATS THIS NODE IS ACTUALLY SERVING. A held seat is attached,
-	// its mailbox is open and it is waiting for work — which is "idle",
-	// not "offline", and the difference is the whole first impression a
-	// booted company gives.
-	//
-	// Only this node's, because that is all a process can answer about
-	// which seats it is RUNNING. On a fleet a peer's seat therefore reads
-	// as offline here; the fleet view answers "who holds what" from the
-	// lease table, which is the one place that knows.
-	//
-	// Snapshot does reach the coordination plane — for the posture, which
-	// this caller does not use — so it takes a context and the read is
-	// bounded. The claim that it made no coordination read was already
-	// untrue when it was written.
-	held := map[string]bool{}
-	for _, handle := range runtime.Snapshot(ctx).Seats {
-		held[handle] = true
-	}
-
 	var out []map[string]any
 	for role := range organization.AllRoles() {
 		// ONE CHECK, and it is the id lookup. AgentIDFor refuses a
@@ -84,7 +63,7 @@ func roster(ctx context.Context, company func() (*config.Company, *org.Organizat
 			continue
 		}
 		handle := role.Handle()
-		row := map[string]any{
+		out = append(out, map[string]any{
 			// THE HANDLE IS THE CLIENT'S ONE IDENTIFIER FOR A SEAT. Every
 			// screen that addresses one sends `row.id`, and both answers
 			// behind it resolve from a handle: the diary is keyed by the
@@ -94,23 +73,84 @@ func roster(ctx context.Context, company func() (*config.Company, *org.Organizat
 			// links to the right page and answers nothing on it.
 			//
 			// The agent id rides along under its own name for the callers
-			// that genuinely need it — a budget scope is keyed by it.
+			// that genuinely need it: the live overlay is merged onto the
+			// row by it (a handle moves with a rename, a name is shared),
+			// and a budget scope is keyed by it.
 			"id":       handle,
 			"agent_id": id.String(),
 			"role":     role.Name,
 			"handle":   handle,
-		}
-		// SET ONLY WHERE IT IS KNOWN. The client already reads a missing
-		// state as offline (state.js, effectiveAgentState), so a seat
-		// this node does not hold needs no claim from here — and writing
-		// one would be this process asserting something about a seat it
-		// has never seen.
-		if held[handle] {
-			row["state"] = "idle"
-		}
-		out = append(out, row)
+		})
 	}
 	return out
+}
+
+// agentOrganization is the active company's org, or nil when there is none to
+// read seats from.
+//
+// THE COMPANY'S OWN ORG, composed from this node's chart rows rather than
+// re-resolved from the document: a stored revision carries no seats at all,
+// so a derivation from the document answered an EMPTY roster for every
+// running company. Both halves come from ONE read of the epoch, so a node with
+// no company and a node with no chart view are the same answer — no seats —
+// and the screen says so.
+func agentOrganization(company func() (*config.Company, *org.Organization)) *org.Organization {
+	if company == nil {
+		return nil
+	}
+	c, organization := company()
+	if c == nil {
+		return nil
+	}
+	return organization
+}
+
+// placement reads which of the company's agent seats some node in the fleet
+// holds, keyed by AGENT ID — the input the seat-state vocabulary's
+// `stopped`/`unplaced` is computed from.
+//
+// FROM THE SEAT LEASES, which every node reads alike, rather than from which
+// seats THIS node runs: a seat a peer holds is placed. A seat's lease is named
+// by its agent id (coord.SeatResource), which is the key the projection holds
+// the seat under too, so the two meet without a name between them — keyed by
+// role name, two seats sharing a name read as one, and either one's lease
+// placed both. This node's own seats are added to what the listing returns,
+// because a prefix listing is free to lag a claim (coord's own contract) and a
+// seat this process is serving right now must never read as held by nobody on
+// its own dashboard; the runtime names those by handle, which the composed org
+// resolves to the seat they address.
+//
+// An unreadable lease table is an error, never an empty answer: "no node holds
+// any seat" would stop every seat on every screen over a store blip.
+func placement(ctx context.Context, company func() (*config.Company, *org.Organization),
+	leases coord.Backend, runtime NodeRuntime,
+) (map[string]bool, error) {
+	organization := agentOrganization(company)
+	if organization == nil {
+		return map[string]bool{}, nil
+	}
+	live, err := leases.ListLive(ctx, coord.ClassSeat)
+	if err != nil {
+		return nil, fmt.Errorf("list the seat leases: %w", err)
+	}
+	held := map[uuid.UUID]bool{}
+	for _, lease := range live {
+		if id, ok := coord.SeatID(lease.Resource); ok {
+			held[id] = true
+		}
+	}
+	for _, handle := range runtime.Snapshot(ctx).Seats {
+		if id, ok := organization.AgentIDFor(organization.AgentSeatByHandle(handle)); ok {
+			held[id] = true
+		}
+	}
+	out := map[string]bool{}
+	for role := range organization.AllRoles() {
+		if id, ok := organization.AgentIDFor(role); ok {
+			out[id.String()] = held[id]
+		}
+	}
+	return out, nil
 }
 
 // toolRows renders the engine's catalogue for the wire.
@@ -150,21 +190,23 @@ func toolRows(runtime NodeRuntime) []map[string]any {
 	return out
 }
 
-// rosterTick reads the roster for a push tick.
+// placementTick reads the placement for the live channel.
 //
-// A CONTEXT OF ITS OWN, like [App.streamHealth]'s and for the same reason:
-// the roster push is a timer, not a request, so there is nothing to inherit —
-// see [tickReadBudget], whose own doc names this caller. Bounded rather than
-// Background alone, because the read underneath reaches the coordination
-// plane and a push tick must not outlive the interval that will fire the next
-// one.
+// A CONTEXT OF ITS OWN, like [App.streamHealth]'s and for the same reason: the
+// read is made on the shared tick and on a socket's snapshot, neither of which
+// is a request with a context to inherit — see [tickReadBudget], whose own doc
+// names this caller. Bounded rather than Background alone, because the read
+// reaches the coordination plane and a push tick must not outlive the interval
+// that will fire the next one.
 //
 // A NAMED FUNCTION rather than a closure inside [New]: the two are identical
 // to run, but a closure built inside a constructor reads to contextcheck as
 // the constructor's own body — a background context created where the caller
 // had one to pass. streamHealth is a method for the same reason.
-func rosterTick(company func() (*config.Company, *org.Organization), runtime NodeRuntime) []map[string]any {
+func placementTick(company func() (*config.Company, *org.Organization), leases coord.Backend,
+	runtime NodeRuntime,
+) (map[string]bool, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), tickReadBudget)
 	defer cancel()
-	return roster(ctx, company, runtime)
+	return placement(ctx, company, leases, runtime)
 }

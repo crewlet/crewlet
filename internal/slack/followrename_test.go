@@ -14,7 +14,7 @@ import (
 // a bot's behalf. Keyed on the handle a delivery came in on, the chart
 // renaming `swe` to `platform-swe` made it deaf to every thread it had been
 // following. A follow is keyed on the handle the seat was CREATED under now
-// (ADR-0019), whatever it answers to.
+// (ADR-0026), whatever it answers to.
 //
 // Mutation: key the parser's follows on the delivery's handle again and the
 // reply after the rename is dropped.

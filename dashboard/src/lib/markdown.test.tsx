@@ -2,11 +2,13 @@ import { describe, expect, it } from "vitest";
 import { render } from "~/test/inCase.ts";
 import {
   nestSections,
+  outline,
   parseBlocks,
   plainText,
   renderMarkdown,
   safeHref,
   splitSections,
+  UnbrokenCode,
 } from "./markdown.ts";
 // THE FIXTURES ARE REAL FILES, imported verbatim rather than inlined as
 // template literals: a document written in a `.md` file is a document
@@ -470,5 +472,46 @@ describe("plain text", () => {
   it("answers an empty document with an empty string rather than throwing", () => {
     expect(plainText("")).toBe("");
     expect(plainText("   \n\n  ")).toBe("");
+  });
+});
+
+// AN OUTLINE AND ITS ANCHORS ARE ONE WALK: every entry "On this page" draws
+// points at an id the rendered body actually carries, a repeated heading gets
+// an address of its own, and a heading inside a quote is part of the quote.
+describe("the outline", () => {
+  const doc = "# Top\n\n## Steps\n\nx\n\n## Steps\n\n> ## quoted\n\n## `code` *and* [link](#/x)";
+
+  it("names each top-level heading, a repeat suffixed", () => {
+    expect(outline(doc)).toEqual([
+      { level: 1, text: "Top", id: "h-top" },
+      { level: 2, text: "Steps", id: "h-steps" },
+      { level: 2, text: "Steps", id: "h-steps-2" },
+      { level: 2, text: "code and link", id: "h-code-and-link" },
+    ]);
+  });
+
+  it("the rendered body carries every id the outline points at", () => {
+    const { container } = render(<div>{renderMarkdown(doc, { anchors: true })}</div>);
+    for (const h of outline(doc)) expect(container.querySelector(`#${h.id}`)).toBeTruthy();
+    // And nothing inside the quote is an anchor.
+    expect(container.querySelectorAll("[id]")).toHaveLength(outline(doc).length);
+  });
+
+  it("a body rendered without anchors carries no ids", () => {
+    const { container } = render(<div>{renderMarkdown(doc)}</div>);
+    expect(container.querySelectorAll("[id]")).toHaveLength(0);
+  });
+});
+
+describe("inline code", () => {
+  // A SHORT COMMAND IS ONE TOKEN: split at a space it reads as two commands
+  // (`nimbus jobs wait --` / `node <n>` at 1280). A long span may still wrap,
+  // or it would overflow a phone's column.
+  it("keeps a short span whole and lets a long one wrap", () => {
+    const el = draw("Wait (`nimbus jobs wait --node <n>`) or read `" + "x".repeat(40) + "`.");
+    const [short, long] = Array.from(el.querySelectorAll("code.inline"));
+    expect(short?.classList.contains("is-whole")).toBe(true);
+    expect(long?.classList.contains("is-whole")).toBe(false);
+    expect("nimbus jobs wait --node <n>".length).toBeLessThanOrEqual(UnbrokenCode);
   });
 });

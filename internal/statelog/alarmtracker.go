@@ -36,8 +36,9 @@ const alarmGauge = metrics.AlarmActive
 // from a node that stopped reporting.
 //
 // A Tracker is safe for concurrent use: the heartbeat evaluates every
-// [AlarmInterval], and the trim tick evaluates again the moment its own
-// measurements land, on a different goroutine.
+// [AlarmInterval], the trim tick evaluates again the moment its own
+// measurements land, on a different goroutine, and the health envelope reads
+// [Tracker.Standing] from every request and push tick.
 type Tracker struct {
 	rec *metrics.Recorder
 	now func() time.Time
@@ -48,6 +49,12 @@ type Tracker struct {
 
 	mu     sync.Mutex
 	firing map[instance]firing
+
+	// order is the alarms the latest evaluation reported, in the order it
+	// reported them — the table's own — and observed whether any
+	// evaluation has run at all. Both are for [Tracker.Standing].
+	order    []instance
+	observed bool
 }
 
 // instance is ONE alarm: its kind, and the log it is about when it is a
@@ -108,6 +115,11 @@ func (t *Tracker) Observe(ctx context.Context, alarms []Alarm) []Alarm {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 
+	t.observed = true
+	t.order = t.order[:0]
+	for _, a := range alarms {
+		t.order = append(t.order, instance{kind: a.Kind, domain: a.Domain})
+	}
 	for _, a := range alarms {
 		key := instance{kind: a.Kind, domain: a.Domain}
 		if was, already := t.firing[key]; already {
@@ -127,7 +139,7 @@ func (t *Tracker) Observe(ctx context.Context, alarms []Alarm) []Alarm {
 		was := t.firing[key]
 		delete(t.firing, key)
 		t.logger.WarnContext(ctx, "alarm_cleared", key.attrs(
-			"for", round(now.Sub(was.since)).String(), "detail", was.detail)...)
+			"for", spoken(now.Sub(was.since)), "detail", was.detail)...)
 	}
 
 	if t.rec != nil {
@@ -159,6 +171,55 @@ func compareInstances(a, b instance) int {
 		return c
 	}
 	return cmp.Compare(a.domain, b.domain)
+}
+
+// StandingAlarm is one alarm the latest evaluation found up, named the way a
+// surface that cannot carry the whole table names it: its kind, and the log it
+// is about when it is a per-log condition ([Alarm.Domain]).
+//
+// BOTH HALVES, for the reason [instance] has both: `trim_blocked` standing on
+// the tracker's log and on the knowledge base's is two alarms with two
+// remedies, and a name that dropped the log would send an operator to the
+// wrong one — or count two alarms and name one.
+type StandingAlarm struct {
+	Kind   Kind   `json:"kind"`
+	Domain string `json:"domain,omitempty"`
+}
+
+// Standing reports the alarms the latest evaluation found firing, the
+// LONGEST-STANDING first, and false before any evaluation has run.
+//
+// For the fourth surface, the health envelope every node pushes to every tab,
+// which carries a count and ONE name rather than the table: the name a health
+// card can afford is the condition that has gone unanswered longest. Not the
+// table's order, which is the order the reference reads in and asserts no
+// ranking — a table sorted by severity would be a second opinion about each
+// alarm beside the threshold that already decides it. How long something has
+// been wrong is a fact this tracker holds and nothing else does, and the
+// table's order breaks a tie only between alarms raised by one evaluation.
+//
+// ONE ENTRY PER ALARM, which is per LOG for a per-log kind: the count is how
+// many things an operator has to look at, and a kind standing on two logs is
+// two of them.
+//
+// FALSE IS NOT "NONE FIRING": a node whose alarm table has not been evaluated
+// yet — mid-boot, or running no state log at all — cannot say, and an empty
+// list here would tell a health card it is healthy.
+func (t *Tracker) Standing() ([]StandingAlarm, bool) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if !t.observed {
+		return nil, false
+	}
+	order := slices.Clone(t.order)
+	slices.SortStableFunc(order, func(a, b instance) int {
+		return t.firing[a].since.Compare(t.firing[b].since)
+	})
+	out := make([]StandingAlarm, 0, len(order))
+	for _, key := range order {
+		out = append(out, StandingAlarm{Kind: key.kind, Domain: key.domain})
+	}
+	return out, true
 }
 
 // Firing reports how long each kind currently up has been up: the longest of

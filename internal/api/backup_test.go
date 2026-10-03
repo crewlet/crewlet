@@ -2,13 +2,46 @@ package api_test
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"net/http"
+	"net/http/httptest"
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/api"
 	"github.com/crewlet/crewlet/internal/backup"
+	"github.com/crewlet/crewlet/internal/config"
 )
+
+// post runs one POST and returns the status and decoded body.
+func post(t *testing.T, a *api.App, path, token string) (int, map[string]any) {
+	t.Helper()
+	req := httptest.NewRequest(http.MethodPost, path, nil)
+	if token != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
+	}
+	rec := httptest.NewRecorder()
+	a.ServeHTTP(rec, req)
+	res := rec.Result()
+	var body map[string]any
+	if err := json.NewDecoder(res.Body).Decode(&body); err != nil {
+		t.Fatalf("decode %s: %v", path, err)
+	}
+	return res.StatusCode, body
+}
+
+// guarded is a bootstrap carrying one credential, and the authority behind it.
+//
+// IT CARRIED NO GRANTS, and every case over it passed: the deployment's own
+// controls asked only whether somebody resolved, so a token declaring nothing
+// under a ceiling of nothing took backups. They take `fleet:operate` now, so
+// the fixture states the authority its cases are about — and
+// TestThePostureMatrix states what a narrower one is refused.
+func guarded() *config.Bootstrap {
+	b := config.DefaultBootstrap()
+	authorize(&b, config.APIToken{ID: "ops", Token: "t0ken"})
+	return &b
+}
 
 // fakeBackup records what the route asked it for.
 type fakeBackup struct {
@@ -26,8 +59,8 @@ func (f *fakeBackup) Take(_ context.Context, dir string) (backup.Manifest, error
 }
 
 // A backup copies every credential the company holds and every seat's memory
-// to a path the caller names. It is a write, so the anonymous-read posture —
-// which is ON by default — must never open it.
+// to a path the caller names, so a caller presenting no credential is refused
+// before the backup subsystem is reached.
 func TestABackupIsRefusedWithoutAToken(t *testing.T) {
 	t.Parallel()
 	taker := &fakeBackup{}

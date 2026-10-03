@@ -37,7 +37,21 @@ test("a failed query is its code and the refusal behind it", () => {
   expect(queryFailure(new QueryRefusedError("unauthorized", refusal))).toEqual({
     error: "unauthorized",
     refusal,
+    detail: null,
   });
-  expect(queryFailure(new Error("timeout"))).toEqual({ error: "timeout", refusal: null });
-  expect(queryFailure("not an error")).toEqual({ error: "query_failed", refusal: null });
+  expect(queryFailure(new QueryRefusedError("bad_params", null, "days: at most 90"))).toEqual({
+    error: "bad_params",
+    refusal: null,
+    detail: "days: at most 90",
+  });
+  expect(queryFailure(new Error("timeout"))).toEqual({
+    error: "timeout",
+    refusal: null,
+    detail: null,
+  });
+  expect(queryFailure("not an error")).toEqual({
+    error: "query_failed",
+    refusal: null,
+    detail: null,
+  });
 });

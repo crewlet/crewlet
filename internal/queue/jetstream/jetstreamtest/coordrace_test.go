@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/coord/coordtest"
 	coordkv "github.com/crewlet/crewlet/internal/coord/kv"
 	js "github.com/crewlet/crewlet/internal/queue/jetstream"
@@ -15,15 +16,13 @@ import (
 //
 // The same check [coordtest.RunFleet] runs against one server, carried to the
 // one substrate where it can fail. Every round stands on a set-up — a record
-// written, read back and removed at the version read, a counter charged and
-// reset — and on three members every step of that has a way to go wrong that
-// one server never shows, each of which this case has met:
+// written, read back and removed at the version read, or a token counter
+// nothing has written yet — and on three members every step of that has a way
+// to go wrong that one server never shows, each of which this case has met:
 //
 //   - A READ SERVED BY A REPLICA behind an acknowledged write: a run just
-//     created read back as absent, a charge was counted short, and a reset
-//     whose listing missed the counter it was clearing left the race after it
-//     counting from one. coord/kv reads every key from the stream leader and
-//     closes every listing on it.
+//     created read back as absent, and a charge was counted short. coord/kv
+//     reads every key from the stream leader and closes every listing on it.
 //   - A LEADER'S "ANOTHER WRITE IS IN FLIGHT", read as a lost race: a removal
 //     at the version its caller had just read was refused while the leader
 //     still had that caller's own create in flight, and the race over a record
@@ -42,12 +41,15 @@ import (
 //
 // Mutation, measured with eight CPU burners on four cores: the build before
 // coord/kv read through the leader failed 9 runs of 12 ("a run just created
-// read back as absent", "8 admitted and 7 counted"); make
-// leaderBucket.closeOnLeader return without asking and 6 of 12 fail ("the
-// counter just reset reads back as (1, <nil>)"). Handing back the leader's
-// first answer from leaderBucket.settle failed 0 of 12 at that load — the
-// in-flight answer is rarer than a stale replica — which is why that
-// mechanism's guard is the staged case, not this one.
+// read back as absent", "8 admitted and 7 counted"). Handing back the
+// leader's first answer from leaderBucket.settle failed 0 of 12 at that load —
+// the in-flight answer is rarer than a stale replica — which is why that
+// mechanism's guard is the staged case, not this one. And no round here lists
+// any more: making leaderBucket.closeOnLeader return without asking once
+// failed 6 of 12, through a budget round that reset its counter by a listing
+// first, and a windowed counter is rolled inside the charge that counts it and
+// never reset (ADR-0019), so the staged walk case is that mechanism's only
+// guard.
 func TestCreatesOverARemovedRecordAreRacesOnAReplicatedFleet(t *testing.T) {
 	t.Parallel()
 	c := StartCluster(t, 3, js.Config{})
@@ -57,7 +59,7 @@ func TestCreatesOverARemovedRecordAreRacesOnAReplicatedFleet(t *testing.T) {
 			RateWindow: time.Minute, ClaimTTL: 10 * time.Minute, SetupOnceRetention: 10 * time.Minute,
 			LedgerRetention: 10 * time.Minute, FireRetention: 10 * time.Minute,
 			FollowRetention: 10 * time.Minute, CooldownMax: time.Hour,
-			StatusFreshness: 10 * time.Minute,
+			BudgetRetention: coord.BudgetRetention, StatusFreshness: 10 * time.Minute,
 		})
 	if err != nil {
 		t.Fatalf("open a replicated fleet store: %v", err)

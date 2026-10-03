@@ -18,20 +18,29 @@
 
 import { describe, expect, test } from "vitest";
 import {
+  activityOf,
+  activityWord,
+  handleLabel,
   indexOrg,
+  labelOf,
+  leadsInLine,
+  liveOnItems,
   liveRowFor,
   llmChain,
   mcpEnvOf,
-  runState,
+  ringOf,
+  roundLabel,
+  roundOf,
   sandboxFor,
   seatAddress,
   seatByAddress,
   seatFilter,
   seatPath,
   seatReading,
-  seatTone,
-  statusLine,
+  stateLine,
+  stoppedLine,
   staleness,
+  toneOf,
   STALE_MS,
   STALLED_MS,
   unitByKey,
@@ -45,15 +54,27 @@ import {
 } from "./seats.ts";
 import type { ChartReading } from "./chartReads.ts";
 import type {
+  AgentRow,
   ChartAnswer,
   ChartSeat,
   ChartSeatRead,
   ChartUnit,
   ChartUnitRead,
   DerivedSeat,
+  LiveCall,
   OrgProjection,
   SandboxEntry,
 } from "~/protocol/index.ts";
+import {
+  type Lang,
+  type Node,
+  lineOf,
+  memberName,
+  modules,
+  parse,
+  stringValue,
+  walk,
+} from "~/test/source.ts";
 
 const seat = (over: Partial<DerivedSeat> & Pick<DerivedSeat, "handle" | "name">): DerivedSeat => ({
   kind: "agent",
@@ -154,6 +175,54 @@ const named = (i: OrgIndex, name: string): Seat | undefined => i.seats.find((s) 
 const { derived: _omitted, ...older } = org;
 const authored = indexOrg(older);
 
+// A LEAD IS ANYBODY ABOVE IN THE CHART, as the engine reads "somebody in
+// their line" (`leadsOf` walks every ancestor): a founder leads everybody. And
+// WITHOUT THE ENGINE'S HIERARCHY THE ANSWER IS UNKNOWN, never "no" — a screen
+// that turned an undescribed chart into a refusal would tell a founder they do
+// not lead their own company.
+describe("who leads whom", () => {
+  test("a direct manager and every manager above are in the line", () => {
+    expect(leadsInLine(index, "ceo", "dev-a")).toBe(true);
+    expect(leadsInLine(index, "jane-founder", "dev-a")).toBe(true);
+    expect(leadsInLine(index, "jane-founder", "designer")).toBe(true);
+  });
+
+  test("a peer, a report and the person themselves are not", () => {
+    expect(leadsInLine(index, "dev-a", "dev-b")).toBe(false);
+    expect(leadsInLine(index, "dev-a", "ceo")).toBe(false);
+    expect(leadsInLine(index, "ceo", "ceo")).toBe(false);
+  });
+
+  test("a chart the engine did not derive answers unknown, not no", () => {
+    expect(leadsInLine(authored, "jane-founder", "dev-a")).toBeNull();
+  });
+
+  // A CONFIG CAN EXPRESS A CYCLE, which the engine's own walk ends; so does
+  // this one, rather than hanging the tab.
+  test("a management cycle ends the walk", () => {
+    const loop = indexOrg({
+      name: "Loop",
+      roles: [
+        { name: "A", handle: "a" },
+        { name: "B", handle: "b" },
+        { name: "C", handle: "c" },
+      ],
+      units: [],
+      derived: {
+        units: [],
+        seats: [
+          seat({ handle: "a", name: "A", managers: ["b"], reports: ["b"] }),
+          seat({ handle: "b", name: "B", managers: ["a"], reports: ["a"] }),
+          seat({ handle: "c", name: "C" }),
+        ],
+      },
+    });
+    expect(loop.hierarchy).toBe(true);
+    expect(leadsInLine(loop, "c", "a")).toBe(false);
+    expect(leadsInLine(loop, "b", "a")).toBe(true);
+  });
+});
+
 describe("the engine's hierarchy", () => {
   test("every role becomes a seat, wherever the document wrote it", () => {
     expect(index.seats.map((s) => s.name).sort()).toEqual([
@@ -183,8 +252,8 @@ describe("the engine's hierarchy", () => {
   // A LINK STILL REACHES A SEAT WITH NO REPORTED HANDLE: the seat screen
   // resolves a name as well as a handle, and the rule lives in one place.
   test("a seat with no reported handle is addressed by name", () => {
-    expect(seatPath(named(index, "Dev A")!)).toEqual(["company", "people", "dev-a"]);
-    expect(seatPath(named(authored, "Dev A")!)).toEqual(["company", "people", "Dev A"]);
+    expect(seatPath(named(index, "Dev A")!)).toEqual(["agents", "seats", "dev-a"]);
+    expect(seatPath(named(authored, "Dev A")!)).toEqual(["agents", "seats", "Dev A"]);
   });
 
   // ONLY THE ENGINE KNOWS WHERE A ROOT SEAT SITS. The document wrote Designer
@@ -319,7 +388,10 @@ const devA: ChartSeat = {
   handle: "dev-a",
   name: "Dev A",
   unit: "backend",
-  runtime: { token_budget: 250000, mcp_env: { github: { GITHUB_TOKEN: "${DEV_A_TOKEN}" } } },
+  runtime: {
+    token_budget: { week: 250000 },
+    mcp_env: { github: { GITHUB_TOKEN: "${DEV_A_TOKEN}" } },
+  },
 };
 const ceo: ChartSeat = { handle: "ceo", name: "CEO", runtime: { llm: "fast" } };
 
@@ -377,8 +449,8 @@ describe("addressing a unit", () => {
   test("each unit's path carries its own key", () => {
     expect(twinIndex.hierarchy).toBe(true);
     expect(twinIndex.units.map(unitPath)).toEqual([
-      ["company", "units", "platform"],
-      ["company", "units", "infra"],
+      ["agents", "teams", "platform"],
+      ["agents", "teams", "infra"],
     ]);
   });
 
@@ -468,7 +540,9 @@ describe("what only the org chart's own read says", () => {
   test("a seat read with its runtime half is read, together with its home unit", () => {
     const reading = seatReading(seatRead(devA), unitRead(backend));
     expect(reading.state).toBe("read");
-    expect(reading.state === "read" && reading.seat.runtime?.token_budget).toBe(250000);
+    expect(reading.state === "read" && reading.seat.runtime?.token_budget).toEqual({
+      week: 250000,
+    });
     expect(reading.state === "read" && reading.unit?.key).toBe("backend");
   });
 
@@ -563,21 +637,12 @@ describe("what a seat is doing", () => {
     started_at: "",
   };
 
-  test("an in-flight sandbox run keeps a seat busy", () => {
-    // Its kick-off turn already completed, which the projection reads as
-    // idle — so without folding the live sandbox set in, a seat writing code
-    // for ten minutes renders as idle.
-    expect(runState({ id: "a", agent_id: "id-a", role: "Dev A", state: "idle" }, [box])).toBe(
-      "awaiting_sandbox",
-    );
-    expect(runState({ id: "a", agent_id: "id-a", role: "Dev A", state: "idle" }, [])).toBe("idle");
-  });
+  const now = Date.parse("2026-01-01T12:00:00Z");
 
   test("a run belongs to its seat by agent id, never to a namesake", () => {
     // Two seats may share a name. Paired by the run's role name, the second
     // "Dev A" read as coding whenever the first one was.
-    const namesake = { id: "b", agent_id: "id-b", role: "Dev A", state: "idle" };
-    expect(runState(namesake, [box])).toBe("idle");
+    const namesake = { id: "b", agent_id: "id-b", role: "Dev A", activity: "idle" as const };
     expect(sandboxFor([box], namesake)).toBeNull();
     expect(sandboxFor([box], { agent_id: "id-a" })).toBe(box);
     // An empty id pairs with nothing, not with every run that carries none.
@@ -585,14 +650,20 @@ describe("what a seat is doing", () => {
   });
 
   test("a seat pairs with its live row by handle, never by name", () => {
-    const ada = {
+    const ada: AgentRow = {
       id: "ada",
       agent_id: "id-ada",
       role: "Engineer",
       handle: "ada",
-      state: "working",
+      activity: "working",
     };
-    const bob = { id: "bob", agent_id: "id-bob", role: "Engineer", handle: "bob", state: "idle" };
+    const bob: AgentRow = {
+      id: "bob",
+      agent_id: "id-bob",
+      role: "Engineer",
+      handle: "bob",
+      activity: "idle",
+    };
     expect(liveRowFor([ada, bob], { handle: "bob" })).toBe(bob);
     expect(liveRowFor([ada, bob], { handle: "ada" })).toBe(ada);
     // A seat whose handle nobody reported pairs with nothing rather than with
@@ -627,65 +698,375 @@ describe("what a seat is doing", () => {
     expect(human.agentId).toBe("");
   });
 
-  test("colour is STATE and an idle seat gets none", () => {
-    // An idle seat used to draw a tinted, glowing tile that read as activity.
-    // The fix for that is not a duller hue, it is none.
-    expect(seatTone({ id: "a", agent_id: "id-a", role: "Dev A", state: "idle" }, [])).toBe("quiet");
-    expect(seatTone({ id: "a", agent_id: "id-a", role: "Dev A", state: "working" }, [])).toBe(
+  test("a seat's state is the ENGINE'S word, and nothing is folded in here", () => {
+    // The client used to fold the running-runs panel into the seat's state
+    // itself, three different ways on three screens. The engine now serves
+    // one word per seat — its runs included — and this reads it unchanged.
+    expect(activityOf({ id: "a", agent_id: "id-a", role: "Dev A", activity: "working" })).toBe(
       "working",
     );
+    expect(activityOf({ id: "a", agent_id: "id-a", role: "Dev A", activity: "needs" })).toBe(
+      "needs",
+    );
+    expect(activityOf({ id: "a", agent_id: "id-a", role: "Dev A", activity: "idle" })).toBe("idle");
+    // No row from the engine yet is its own answer, never a guess.
+    expect(activityOf(undefined)).toBe("offline");
+    expect(activityOf({ id: "a", agent_id: "id-a", role: "Dev A" })).toBe("offline");
   });
 
-  test("waiting on a person and having fallen over are DIFFERENT tones", () => {
-    // Both stopped, and only one is a failure. Red is reserved for failure.
-    //
-    // THE ENGINE'S OWN WORD. This asserted `awaiting_input`, which
-    // `sandbox.PendingRun` cannot write, so the case passed against a fixture
-    // no engine produces while the real state reached no tone at all.
+  test("colour is STATE and an idle seat gets none", () => {
+    // An idle seat drawn as a green pill read as activity. The fix for that
+    // is not a duller hue, it is none.
+    expect(ringOf("idle")).toBeUndefined();
+    expect(ringOf("offline")).toBeUndefined();
+    expect(toneOf("idle")).toBe("neutral");
+    expect(ringOf("working")).toBe("info");
+    expect(toneOf("working")).toBe("info");
+  });
+
+  test("waiting on a person and being stopped are DIFFERENT tones", () => {
+    // Both have stopped, and only one is a failure of the seat. Red is
+    // reserved for a stop, amber for the one state that asks for a person.
+    expect(ringOf("needs")).toBe("warning");
+    expect(ringOf("stopped")).toBe("danger");
+    expect(activityWord("needs")).toBe("needs you");
+  });
+
+  test("a label is the engine's words, with the reason and the pauser", () => {
+    expect(labelOf({ id: "a", agent_id: "id-a", role: "Dev A", activity: "working" }, now)).toBe(
+      "Working",
+    );
+    expect(labelOf({ id: "a", agent_id: "id-a", role: "Dev A", activity: "idle" }, now)).toBe(
+      "Idle",
+    );
+    expect(labelOf(undefined, now)).toBe("No state from the engine yet");
     expect(
-      seatTone({ id: "a", agent_id: "id-a", role: "Dev A" }, [
-        { ...box, status: "awaiting_clarification" },
-      ]),
-    ).toBe("needs");
-    // A box reaped past its pause TTL is the same fact one step worse.
+      labelOf(
+        { id: "a", agent_id: "id-a", role: "Dev A", activity: "stopped", stopped_reason: "budget" },
+        now,
+      ),
+    ).toBe("Stopped · budget");
     expect(
-      seatTone({ id: "a", agent_id: "id-a", role: "Dev A" }, [{ ...box, status: "reseed" }]),
-    ).toBe("needs");
-    // And a running one is not waiting on anybody — without this the rule
-    // could be "any sandbox at all" and still pass.
-    expect(
-      seatTone({ id: "a", agent_id: "id-a", role: "Dev A", state: "idle" }, [
-        { ...box, status: "running" },
-      ]),
-    ).toBe("working");
-    expect(
-      seatTone(
+      labelOf(
         {
           id: "a",
           agent_id: "id-a",
           role: "Dev A",
-          last_error: { kind: "x", message: "", phase: "", turn_id: "", at: "", event_id: "" },
+          activity: "stopped",
+          stopped_reason: "paused",
+          paused: { by: "jane", by_kind: "human", at: "2026-01-01T11:48:00Z", stop_running: false },
         },
-        [],
+        now,
       ),
-    ).toBe("broken");
+    ).toBe("Paused by jane · 12m");
+    // THE PAUSER BY NAME where the chart knows them: `paused.by` is the name
+    // the engine records them under — a bound person's seat handle — and
+    // "Paused by jane-founder" names an address where a person is meant. A
+    // key the chart does not hold — the login of somebody bound to no seat —
+    // is drawn as it came.
+    const paused = {
+      id: "a",
+      agent_id: "id-a",
+      role: "Dev A",
+      activity: "stopped" as const,
+      stopped_reason: "paused" as const,
+      paused: {
+        by: "jane-founder",
+        by_kind: "human",
+        at: "2026-01-01T11:48:00Z",
+        stop_running: false,
+      },
+    };
+    const nameOf = (key: string) => (key === "jane-founder" ? "Jane Founder" : key);
+    expect(labelOf(paused, now, nameOf)).toBe("Paused by Jane Founder · 12m");
+    expect(stoppedLine(paused, nameOf)).toBe("paused by Jane Founder");
+    expect(stateLine(paused, { now, nameOf })).toBe("Paused by Jane Founder · 12m");
+    expect(
+      labelOf(
+        { ...paused, paused: { ...paused.paused, by: "ops.lead", by_kind: "operator" } },
+        now,
+        nameOf,
+      ),
+    ).toBe("Paused by ops.lead · 12m");
+    // A reason this build does not know draws the word, never a guess.
+    expect(
+      labelOf(
+        {
+          id: "a",
+          agent_id: "id-a",
+          role: "Dev A",
+          activity: "stopped",
+          stopped_reason: "later" as never,
+        },
+        now,
+      ),
+    ).toBe("Stopped");
   });
 
-  test("a status line describes live state and never invents one", () => {
+  test("a state line describes the engine's state and never invents one", () => {
     expect(
-      statusLine({
-        id: "a",
-        agent_id: "id-a",
-        role: "Dev A",
-        state: "working",
-        current_phase: "execute",
-      }),
-    ).toContain("working on the task");
+      stateLine(
+        {
+          id: "a",
+          agent_id: "id-a",
+          role: "Dev A",
+          activity: "working",
+          current_phase: "execute",
+          turn: { stage: "running", work_item: { id: "t", key: "ENG-412" } } as never,
+        },
+        { now },
+      ),
+    ).toBe("Executing ENG-412");
+    // A FAN-OUT IN FLIGHT is the call the seat is waiting on: a `delegate`
+    // with three tasks is three workers, on the turn's own item.
+    const delegating = (args: string, name = "delegate") =>
+      stateLine(
+        {
+          id: "a",
+          agent_id: "id-a",
+          role: "Dev A",
+          activity: "working",
+          current_phase: "execute",
+          live_call: {
+            phase: "execute",
+            work_item: { backend: "native", id: "t", key: "ENG-405", project: "ENG" },
+            running_call: { round: 2, name, arguments: args, started_at: "" },
+          } as never,
+        },
+        { now },
+      );
+    const three = JSON.stringify({ tasks: [{ id: "a" }, { id: "b" }, { id: "c" }] });
+    expect(delegating(three)).toBe("3 workers on ENG-405");
+    // Any other call is the phase; arguments that are not the schema count
+    // nothing rather than a guess.
+    expect(delegating(three, "search_work_items")).toBe("Executing ENG-405");
+    expect(delegating("not json")).toBe("Executing ENG-405");
+    expect(delegating('{"tasks": "three"}')).toBe("Executing ENG-405");
     expect(
-      statusLine({ id: "a", agent_id: "id-a", role: "Dev A", state: "afk", afk_reason: "stall" }),
-    ).toContain("no forward progress");
-    expect(statusLine(undefined)).toBe("not running on this node");
-    expect(statusLine(null, { seat: named(index, "Jane Founder")! })).toContain("human");
+      stateLine(
+        {
+          id: "a",
+          agent_id: "id-a",
+          role: "Dev A",
+          activity: "stopped",
+          stopped_reason: "unplaced",
+        },
+        { now },
+      ),
+    ).toBe("Not placed on any node");
+    expect(
+      stateLine(
+        {
+          id: "a",
+          agent_id: "id-a",
+          role: "Dev A",
+          activity: "idle",
+          last_turn: { ended_at: "2026-01-01T11:36:00Z" } as never,
+        },
+        { now },
+      ),
+    ).toBe("Idle · last turn 24m ago");
+    expect(stateLine(undefined, { now })).toBe("No state from the engine yet");
+    expect(stateLine(null, { now, seat: named(index, "Jane Founder")! })).toMatch(/human|Human/);
+  });
+
+  test("a parked run is a coding run while working, and says so", () => {
+    // A detached run parks the turn while the box works: no model call is in
+    // flight, so the phase has nothing to say and the line names the run.
+    expect(
+      stateLine(
+        {
+          id: "a",
+          agent_id: "id-a",
+          role: "Dev A",
+          activity: "working",
+          current_phase: "execute",
+          turn: { stage: "parked", work_item: { id: "t", key: "ENG-9" } } as never,
+        },
+        { now },
+      ),
+    ).toBe("Coding run on ENG-9");
+    expect(
+      labelOf(
+        {
+          id: "a",
+          agent_id: "id-a",
+          role: "Dev A",
+          activity: "needs",
+          turn: { stage: "parked" } as never,
+        },
+        now,
+      ),
+    ).toBe("Needs you · run parked");
+  });
+
+  test("a seat with no handle prints none, rather than a bare @", () => {
+    expect(handleLabel("pm")).toBe("@pm");
+    expect(handleLabel("")).toBe("");
+    expect(handleLabel(undefined)).toBe("");
+    expect(handleLabel("  ")).toBe("");
+  });
+});
+
+/**
+ * THE MAPPER IS THE ONLY READER, held over the whole tree.
+ *
+ * A screen that decides a seat is working because a live call is in flight,
+ * or a run is attached, is the fold `activity` replaced — and it drifts from
+ * the engine's own word on exactly the cases that matter (a parked run, a
+ * run past its age-out). So no module but this one may turn a live call's or
+ * a run's fields into one of the state words.
+ */
+describe("no screen derives a seat's state", () => {
+  const WORDS = new Set(["working", "idle", "needs", "stopped", "offline"]);
+  const SOURCES = /^(in_progress|live_call|sandboxes|runs|running_call|stage)$/;
+
+  /** Whether an expression reads one of the fields a state could be folded from. */
+  const reads = (node: Node | null | undefined): boolean => {
+    if (!node) return false;
+    let found = false;
+    walk(node, (n) => {
+      if (found) return false;
+      const name = memberName(n) ?? (n.type === "Identifier" ? String(n.name) : null);
+      if (name !== null && SOURCES.test(name)) found = true;
+    });
+    return found;
+  };
+
+  /** The expression under a type assertion: `{…} as const` is still `{…}`. */
+  const bare = (node: Node | null | undefined): Node | null => {
+    let n = node ?? null;
+    while (n && /^TS(As|Satisfies|NonNull)Expression$|^TSTypeAssertion$/.test(n.type)) {
+      n = n.expression as Node;
+    }
+    return n;
+  };
+
+  /** Whether an object literal maps anything to a state word. */
+  const mapsToWord = (node: Node | null | undefined): boolean => {
+    const obj = bare(node);
+    if (obj?.type !== "ObjectExpression") return false;
+    return (obj.properties as Node[]).some((p) => {
+      const word = p.type === "Property" ? stringValue(bare(p.value as Node) ?? undefined) : null;
+      return word !== null && WORDS.has(word);
+    });
+  };
+
+  /**
+   * Whether a branch HANDS BACK a state word: is one, returns one, or assigns
+   * one — in any statement under it, but not inside a function it declares,
+   * whose returns are that function's own.
+   */
+  const yieldsWord = (node: Node | null | undefined): boolean => {
+    if (!node) return false;
+    const direct = stringValue(bare(node) ?? undefined);
+    if (direct !== null) return WORDS.has(direct);
+    let found = false;
+    walk(node, (n) => {
+      if (found) return false;
+      if (n !== node && /Function/.test(n.type)) return false;
+      const value =
+        n.type === "ReturnStatement"
+          ? (n.argument as Node | null)
+          : n.type === "AssignmentExpression"
+            ? (n.right as Node)
+            : n.type === "VariableDeclarator"
+              ? (n.init as Node | null)
+              : null;
+      const word = value ? stringValue(bare(value) ?? undefined) : null;
+      if (word !== null && WORDS.has(word)) found = true;
+    });
+    return found;
+  };
+
+  /**
+   * Every place in one module's text that decides a state word from a call's
+   * or a run's fields — in each shape a decision is written in: a ternary, an
+   * `if`, a `switch`, a `&&`/`||`/`??`, and a LOOKUP (an object literal mapping
+   * to a word, indexed by such a field, written inline or declared once and
+   * indexed later).
+   *
+   * THE TERNARY WAS THE ONLY ONE THIS READ, which is the gate claiming more than
+   * it held: `if (call.in_progress) return "working"` is the same fold in a
+   * different spelling, and so is `STATE[run.status]`.
+   */
+  const offences = (text: string, lang: Lang): number[] => {
+    const tree = parse(text, lang);
+    const wordMaps = new Set<string>();
+    walk(tree, (n) => {
+      if (n.type !== "VariableDeclarator") return;
+      const id = n.id as Node;
+      if (id.type === "Identifier" && mapsToWord(n.init as Node)) wordMaps.add(String(id.name));
+    });
+    const at: number[] = [];
+    walk(tree, (n) => {
+      switch (n.type) {
+        case "ConditionalExpression":
+        case "IfStatement":
+          if (
+            reads(n.test as Node) &&
+            (yieldsWord(n.consequent as Node) || yieldsWord(n.alternate as Node))
+          ) {
+            at.push(n.start);
+          }
+          return;
+        case "SwitchStatement":
+          if (
+            reads(n.discriminant as Node) &&
+            (n.cases as Node[]).some((c) => (c.consequent as Node[]).some(yieldsWord))
+          ) {
+            at.push(n.start);
+          }
+          return;
+        case "LogicalExpression":
+          if (reads(n.left as Node) && yieldsWord(n.right as Node)) at.push(n.start);
+          return;
+        case "MemberExpression": {
+          if (!n.computed || !reads(n.property as Node)) return;
+          const object = bare(n.object as Node);
+          const named = object?.type === "Identifier" && wordMaps.has(String(object.name));
+          if (named || mapsToWord(object)) at.push(n.start);
+          return;
+        }
+      }
+    });
+    return at;
+  };
+
+  test("nothing but the mapper turns a call's or a run's fields into a state word", () => {
+    const offenders: string[] = [];
+    for (const mod of modules()) {
+      if (mod.path === "lib/seats.ts" || mod.lang === "dts") continue;
+      const line = lineOf(mod.text);
+      for (const start of offences(mod.text, mod.lang))
+        offenders.push(`${mod.path}:${line(start)}`);
+    }
+    expect(offenders, "a seat's state is `activity`, read through lib/seats.ts").toEqual([]);
+  });
+
+  // EVERY SHAPE IS CAUGHT, and the ordinary reads are not: a gate that goes
+  // quiet on a spelling is one that certifies less than it says.
+  test("the rule can tell, in every spelling a decision is written in", () => {
+    const caught = (text: string) => offences(text, "ts").length > 0;
+    expect(caught('const s = agent.live_call?.in_progress ? "working" : "idle";')).toBe(true);
+    expect(caught('function f(c) { if (c.in_progress) return "working"; return "x"; }')).toBe(true);
+    expect(
+      caught('function f(c) { let s = "x"; if (c.live_call) { s = "working"; } return s; }'),
+    ).toBe(true);
+    expect(caught('function f(t) { switch (t.stage) { case "parked": return "needs"; } }')).toBe(
+      true,
+    );
+    expect(caught('const s = agent.live_call && "working";')).toBe(true);
+    expect(caught('const s = { parked: "needs", phase: "working" }[turn.stage];')).toBe(true);
+    expect(caught('const BY = { parked: "needs" } as const; const s = BY[agent.turn.stage];')).toBe(
+      true,
+    );
+    // …and the reads that are not a state at all.
+    expect(caught('const s = agent.activity === "working" ? "Working" : "";')).toBe(false);
+    expect(caught('const n = call.in_progress ? "running" : "done";')).toBe(false);
+    expect(
+      caught('function f(c) { if (c.in_progress) { const g = () => "idle"; return g; } }'),
+    ).toBe(false);
   });
 });
 
@@ -702,6 +1083,14 @@ describe("staleness", () => {
 
   test("a missing stamp makes no claim", () => {
     expect(staleness(undefined, now)).toBe("");
+  });
+
+  test("a parked turn is silent on purpose, and is never called stalled", () => {
+    // A detached coding run stops the round by design for as long as the run
+    // takes; the alarm keyed on "no update" fired on every one of them.
+    const old = new Date(now - STALLED_MS - 1).toISOString();
+    expect(staleness(old, now, "parked")).toBe("");
+    expect(staleness(old, now, "running")).toBe("stalled");
   });
 });
 
@@ -790,9 +1179,86 @@ describe("a unit's headcount", () => {
   });
 
   // AND THE HEADLINE NUMBER CARRIES ITS OWN SENTENCE. A bare number beside a
-  // name is read as "how many there are"; this is what the rail's badge and
+  // name is read as "how many there are"; this is what the sidebar's badge and
   // the unit page's fact both hand a reader instead.
   test("the total's hint names what it counted", () => {
     expect(UNIT_TOTAL_HINT).toContain("everything under it");
   });
+});
+
+// A TASK CARD'S STRIP NAMES THE ROUND THE STEPPER NAMES. It read the engine's
+// zero-based `round_num` raw — "round 6 of 25" on a card beside "round 7 of
+// 25" on the seat's own profile — and read the first round, 0, as no round.
+test("a working seat's strip on a task counts its round from one", () => {
+  const working = (round_num: number, rounds_used: number): AgentRow =>
+    ({
+      role: "SWE",
+      handle: "swe",
+      activity: "working",
+      live_call: {
+        phase: "execute",
+        round_num,
+        rounds_used,
+        max_rounds: 25,
+        work_item: { backend: "native", id: "i", key: "ENG-412", project: "ENG" },
+      },
+    }) as unknown as AgentRow;
+  expect(liveOnItems([working(6, 6)]).get("i")?.doing).toMatch(/round 7 of 25$/);
+  expect(liveOnItems([working(0, 0)]).get("i")?.doing).toMatch(/round 1 of 25$/);
+});
+
+// A TURN IS ON ONE TASK, AND A KEY CAN BE TWO. A key another task claimed
+// first is flagged `key_collision` and stays on the task that did not claim
+// it, so two cards can carry one key — and a map keyed on it drew the working
+// seat's strip on both of them. Keyed on the task's id, only the task the turn
+// is charged to finds one.
+test("of two tasks sharing a key, only the one being worked on draws the strip", () => {
+  const row = {
+    role: "SWE",
+    handle: "swe",
+    activity: "working",
+    live_call: {
+      phase: "execute",
+      round_num: 2,
+      rounds_used: 2,
+      max_rounds: 25,
+      work_item: { backend: "native", id: "t-duplicate", key: "ENG-7", project: "ENG" },
+    },
+  } as unknown as AgentRow;
+  const live = liveOnItems([row]);
+  expect(live.get("t-duplicate")?.handle).toBe("swe");
+  expect(live.has("t-claimant")).toBe(false);
+  expect(live.has("ENG-7")).toBe(false);
+});
+
+// ONE READING OF THE ROUND, on the roster's card and in the attention queue
+// too. `roundLabel` decoded `round_num` itself — a second reading beside the
+// one the stepper, the peek and a task's strips share — so a call whose
+// counters disagreed was "starting" on the card and "round 3" on the profile.
+test("the roster's round label names the round the rest of the product names", () => {
+  const calls = [
+    { round_num: -1, rounds_used: 0 },
+    { round_num: 0, rounds_used: 0 },
+    { round_num: 6, rounds_used: 6 },
+    { round_num: -1, rounds_used: 3 },
+  ] as LiveCall[];
+  for (const call of calls) {
+    expect(roundLabel(call).text).toBe(`round ${roundOf(call)}`);
+  }
+  expect(roundLabel({ round_num: -1, rounds_used: 3 } as LiveCall).text).toBe("round 3");
+  expect(roundLabel(null).text).toBe("starting");
+});
+
+// THE OPENING FRAME IS ROUND ONE. It is published immediately before the
+// phase's first provider call and carries the cap so a row can say "round 1 of
+// 24" before the model answers; read as round zero, a slow first answer drew
+// Execute with no round at all while the task strip said "round 1".
+test("a call whose first round has not come back is on round one", () => {
+  const opening = { round_num: -1, rounds_used: 0, max_rounds: 24 } as LiveCall;
+  expect(roundOf(opening)).toBe(1);
+  expect(roundLabel(opening)).toEqual({
+    text: "round 1",
+    hint: "the first model round is in flight and has not come back",
+  });
+  expect(roundOf(null)).toBe(0);
 });

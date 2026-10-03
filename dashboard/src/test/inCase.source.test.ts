@@ -29,29 +29,38 @@
  * with its case.
  *
  * READ WITH A PARSER, NOT A PATTERN. There is no ESLint in this tree, and
- * this gate first read the source the way `app/source.test.ts` does: comments
- * blanked by a regular expression, imports matched by another. That blanker
- * cannot tell a comment from a string, so a string holding a slash and a star
- * — any glob, `"./symbols/*\/*.svg"` — opened a "comment" that ran to the
- * next star and slash and blanked the real code between, an import included;
- * and the import pattern could not see a re-export, a `{ default as X }` or a
- * dynamic `import()`, and took an `act` from any file named `inCase.ts` for
- * the binding's. Vite's own parser (`parseAst`, the one the build runs)
- * reads the file as the compiler does, so a comment is never code and a
- * string is never a comment, and every shape below is a node rather than a
- * spelling. Each shape the reading must see is held by a case of its own
- * ([SHAPES]), so the reading cannot go blind to one and still pass the walk.
+ * this gate first read the source with comments blanked by a regular
+ * expression and imports matched by another. That blanker cannot tell a
+ * comment from a string, so a string holding a slash and a star — any glob,
+ * `"./symbols/*\/*.svg"` — opened a "comment" that ran to the next star and
+ * slash and blanked the real code between, an import included; and the import
+ * pattern could not see a re-export, a `{ default as X }` or a dynamic
+ * `import()`, and took an `act` from any file named `inCase.ts` for the
+ * binding's. The tree's ONE reading (`./source.ts`: Vite's own parser over
+ * the one walk every source gate shares) reads each file as the compiler
+ * does, so a comment is never code and a string is never a comment, and every
+ * shape below is a node rather than a spelling. Each shape the reading must
+ * see is held by a case of its own ([SHAPES]), so the reading cannot go blind
+ * to one and still pass the walk. The walk is that file's too — every suite
+ * and helper, which is exactly this gate's subject — so what this gate calls
+ * the tree is what every other source gate calls it.
  */
 
-import { readdirSync, readFileSync, statSync } from "node:fs";
-import { dirname, join, relative } from "node:path";
-import { fileURLToPath } from "node:url";
-import { parseAst } from "vite";
+import { dirname, join } from "node:path";
 import { expect, test } from "vitest";
 
-const SRC = fileURLToPath(new URL("..", import.meta.url));
+import { everyModule, isNode, langOf, type Node, parse, SRC } from "./source.ts";
+
 /** The one file that may take a value from the testing library. */
-const BINDING = join("test", "inCase.ts");
+const BINDING = "test/inCase.ts";
+
+/**
+ * The WRITE SURFACE's `act` — the protocol's entry every change to the company's
+ * work goes through, and the modules a caller takes it from. A different
+ * function that shares the spelling: it names a tool, moves no page and has no
+ * case to end with, so a file calling it is not calling an unbound React act.
+ */
+const WRITE_ACT = new Set(["protocol/act.ts", "protocol/index.ts"]);
 
 /** The testing library: every entry a suite could take it from. */
 const LIBRARY = new Set([
@@ -66,17 +75,6 @@ const POLLS = new Map([
   ["vi", new Set(["waitFor", "waitUntil"])],
   ["expect", new Set(["poll"])],
 ]);
-
-/** One node of the parsed tree: a `type`, and whatever that type carries. */
-type Node = { type: string; [key: string]: unknown };
-
-function isNode(value: unknown): value is Node {
-  return (
-    typeof value === "object" &&
-    value !== null &&
-    typeof (value as { type?: unknown }).type === "string"
-  );
-}
 
 /** Every node under `root`, itself included. */
 function* nodes(root: Node): Generator<Node> {
@@ -145,7 +143,11 @@ interface Reading {
    * own `act` — or that nothing may: Vitest's polls.
    */
   reaches: string[];
-  /** Whether it calls an identifier named `act`. */
+  /**
+   * Whether it calls an identifier named `act` — other than the write
+   * surface's ([WRITE_ACT]), imported under its own name and bound nowhere
+   * else in the file.
+   */
   callsAct: boolean;
   /**
    * Whether that `act` is the binding's: imported from it under its own name,
@@ -155,21 +157,31 @@ interface Reading {
   actIsBinding: boolean;
 }
 
-/** Whether a module specifier written in `file` names the binding. */
-function namesBinding(from: string, file: string): boolean {
-  const target = from.startsWith("~/")
+/** The file under `src/` a module specifier written in `file` names, or null for a package. */
+function targetOf(from: string, file: string): string | null {
+  return from.startsWith("~/")
     ? join(SRC, from.slice(2))
     : from.startsWith(".")
       ? join(dirname(join(SRC, file)), from)
       : null;
-  return target === join(SRC, BINDING);
+}
+
+/** Whether a module specifier written in `file` names the binding. */
+function namesBinding(from: string, file: string): boolean {
+  return targetOf(from, file) === join(SRC, BINDING);
+}
+
+/** Whether a module specifier written in `file` names the write surface ([WRITE_ACT]). */
+function namesWriteAct(from: string, file: string): boolean {
+  const target = targetOf(from, file);
+  return target !== null && [...WRITE_ACT].some((module) => target === join(SRC, module));
 }
 
 /** Reads `text`, the source of `file` (a path under `src/`). */
 function read(file: string, text: string): Reading {
   let program: Node;
   try {
-    program = parseAst(text, { lang: file.endsWith(".tsx") ? "tsx" : "ts" }) as unknown as Node;
+    program = parse(text, langOf(file));
   } catch (cause) {
     throw new Error(`${file} does not parse`, { cause });
   }
@@ -182,6 +194,7 @@ function read(file: string, text: string): Reading {
   const bindings = new Map<string, number>();
   const bind = (name: string) => bindings.set(name, (bindings.get(name) ?? 0) + 1);
   let importsBindingAct = false;
+  let importsWriteAct = false;
   let callsAct = false;
 
   /**
@@ -227,6 +240,9 @@ function read(file: string, text: string): Reading {
       const imported = spec.type === "ImportSpecifier" ? nameOf(spec.imported) : "default";
       if (imported === "act" && local === "act" && namesBinding(from, file)) {
         importsBindingAct = true;
+      }
+      if (imported === "act" && local === "act" && namesWriteAct(from, file)) {
+        importsWriteAct = true;
       }
       if (spec.type !== "ImportSpecifier" || imported === "default") {
         wholes.set(local, from);
@@ -326,7 +342,14 @@ function read(file: string, text: string): Reading {
         break;
     }
   }
-  return { reaches, callsAct, actIsBinding: importsBindingAct && bindings.get("act") === 1 };
+  // THE WRITE SURFACE'S `act`, when it is the one `act` the file binds, is not
+  // the testing act this rule is about.
+  const writes = importsWriteAct && bindings.get("act") === 1;
+  return {
+    reaches,
+    callsAct: callsAct && !writes,
+    actIsBinding: importsBindingAct && bindings.get("act") === 1,
+  };
 }
 
 /**
@@ -466,6 +489,24 @@ const SHAPES: { shape: string; file?: string; source: string; reading: Partial<R
     reading: { callsAct: true, actIsBinding: false },
   },
   {
+    shape: "a call of the write surface's act, which is not the testing one",
+    file: join("lib", "useAct.ts"),
+    source: `import { act } from "~/protocol/act.ts"; await act(tool, { args });`,
+    reading: { reaches: [], callsAct: false },
+  },
+  {
+    shape: "a call of the write surface's act by a relative path, through its barrel",
+    file: join("protocol", "x.test.ts"),
+    source: `import { act } from "./index.ts"; await act("set_pins", { args: {} });`,
+    reading: { reaches: [], callsAct: false },
+  },
+  {
+    shape: "a call of a local act shadowing the write surface's",
+    file: join("lib", "x.ts"),
+    source: `import { act } from "~/protocol/act.ts"; function settle() { const act = (f: () => void) => f(); act(() => {}); }`,
+    reading: { callsAct: true, actIsBinding: false },
+  },
+  {
     shape: "Vitest's waitFor",
     source: `import { vi } from "vitest"; await vi.waitFor(() => {});`,
     reading: { reaches: ["vi.waitFor"] },
@@ -515,24 +556,7 @@ test.each(SHAPES)("the reading sees $shape", ({ file = "x.test.tsx", source, rea
 });
 
 /** Every TypeScript file under `src/`, suites and helpers alike, read. */
-function sources(): { path: string; reading: Reading }[] {
-  const out: { path: string; reading: Reading }[] = [];
-  (function walk(dir: string): void {
-    for (const entry of readdirSync(dir)) {
-      const full = join(dir, entry);
-      if (statSync(full).isDirectory()) {
-        walk(full);
-        continue;
-      }
-      if (!/\.tsx?$/.test(full)) continue;
-      const path = relative(SRC, full);
-      out.push({ path, reading: read(path, readFileSync(full, "utf8")) });
-    }
-  })(SRC);
-  return out;
-}
-
-const files = sources();
+const files = everyModule().map(({ path, text }) => ({ path, reading: read(path, text) }));
 
 test("the walk reads the suites, and finds the binding reaching the library itself", () => {
   // A walk rooted in the wrong place passes the rules below having checked

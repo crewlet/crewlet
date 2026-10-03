@@ -17,18 +17,22 @@ import {
   configValueKind,
   elapsedMs,
   eventHistoryLabel,
+  eventHistorySpan,
+  nodeCountLabel,
   fmtCount,
   fmtDate,
   fmtDuration,
   fmtPct,
   humanize,
   inTime,
+  inTimeExact,
   newestFirst,
   oldestFirst,
   parseUTC,
   plural,
   relTime,
   splitConversationKey,
+  conversationLabel,
   tsKey,
   fmtElapsed,
 } from "./format.ts";
@@ -124,6 +128,22 @@ describe("relative time", () => {
     expect(inTime("2026-01-31T11:00:00Z", now)).toBe("in 29d");
     expect(inTime("2026-01-31T12:00:00Z", now)).toBe(fmtDate("2026-01-31T12:00:00Z"));
   });
+
+  // A SERIES IS READ ROW AGAINST ROW. Rounded to one unit, a schedule every
+  // twenty minutes listed the fires at 13:20 and 13:40 both as "in 1h" — the
+  // one list whose point is the spacing between its rows.
+  test("an exact forward reading tells apart two instants twenty minutes apart", () => {
+    expect(inTime("2026-01-01T13:20:00Z", now)).toBe(inTime("2026-01-01T13:40:00Z", now));
+    expect(inTimeExact("2026-01-01T13:20:00Z", now)).toBe("in 1h 20m");
+    expect(inTimeExact("2026-01-01T13:40:00Z", now)).toBe("in 1h 40m");
+    // A whole hour says no minutes, and under an hour it is `inTime`'s own.
+    expect(inTimeExact("2026-01-01T14:00:00Z", now)).toBe("in 2h");
+    expect(inTimeExact("2026-01-01T12:30:00Z", now)).toBe(inTime("2026-01-01T12:30:00Z", now));
+    // Days carry their hours, and the terminus is the same thirty days.
+    expect(inTimeExact("2026-01-03T15:00:00Z", now)).toBe("in 2d 3h");
+    expect(inTimeExact("2026-01-31T12:00:00Z", now)).toBe(fmtDate("2026-01-31T12:00:00Z"));
+    expect(inTimeExact("", now)).toBe(EMPTY_VALUE);
+  });
 });
 
 describe("numbers", () => {
@@ -135,6 +155,17 @@ describe("numbers", () => {
     expect(fmtCount(1_240_000)).toBe("1.2M");
   });
 
+  // A WHOLE FIGURE CARRIES NO ZERO FRACTION: a founder writes a ceiling as a
+  // round number, and "60.0M/day and 900.0M/month" was a digit that said
+  // nothing on every read of it.
+  test("a shortened figure that is whole drops its zero fraction", () => {
+    expect(fmtCount(60_000_000)).toBe("60M");
+    expect(fmtCount(900_000_000)).toBe("900M");
+    expect(fmtCount(3_000_000_000)).toBe("3B");
+    expect(fmtCount(20_000)).toBe("20k");
+    expect(fmtCount(1_500_000_000)).toBe("1.50B");
+  });
+
   test("an absent number is an em dash rather than a zero", () => {
     // Zero is a measurement. "Nobody looked" is not.
     expect(fmtCount(null)).toBe(EMPTY_VALUE);
@@ -143,9 +174,19 @@ describe("numbers", () => {
   });
 
   test("durations pick the shortest honest unit", () => {
-    expect(fmtDuration(420)).toBe("420 ms");
-    expect(fmtDuration(4_200)).toBe("4.2 s");
+    expect(fmtDuration(420)).toBe("420ms");
+    expect(fmtDuration(4_200)).toBe("4.2s");
     expect(fmtDuration(95_000)).toBe("1m 35s");
+    // NO ZERO FIELD, and a carry at every grain boundary.
+    expect(fmtDuration(1_000)).toBe("1s");
+    expect(fmtDuration(999.6)).toBe("1s");
+    expect(fmtDuration(9_960)).toBe("10s");
+    expect(fmtDuration(11_390)).toBe("11s");
+    expect(fmtDuration(59_600)).toBe("1m");
+    expect(fmtDuration(30 * 60_000)).toBe("30m");
+    expect(fmtDuration(24 * 3_600_000)).toBe("24h");
+    expect(fmtDuration((85 * 60 + 58) * 60_000)).toBe("85h 58m");
+    expect(fmtDuration(2 * 3_600_000 - 15_000)).toBe("2h");
     expect(fmtDuration(null)).toBe(EMPTY_VALUE);
     expect(fmtDuration(-1)).toBe(EMPTY_VALUE);
   });
@@ -166,6 +207,17 @@ describe("text", () => {
     });
     expect(splitConversationKey("github:acme/api#42").local).toBe("acme/api#42");
     expect(splitConversationKey("bare")).toEqual({ source: "", local: "bare" });
+  });
+
+  // A ROW PRINTS A UUID'S HEAD — the way every narrow row names one — and
+  // nothing else in a key changes, so `work:ENG-32` stays whole.
+  test("a conversation key's uuids are cut to their heads, and nothing else is", () => {
+    expect(conversationLabel("work:task:4d631f6d-5107-46f0-8043-a1f9d7a74abc")).toBe(
+      "work:task:4d631f6d",
+    );
+    expect(conversationLabel("work:ENG-32")).toBe("work:ENG-32");
+    expect(conversationLabel("slack:C9:1718.001")).toBe("slack:C9:1718.001");
+    expect(conversationLabel("")).toBe("");
   });
 
   test("an engine identifier becomes a label", () => {
@@ -255,9 +307,28 @@ describe("a value read from the redacted document", () => {
   });
 });
 
+describe("how many nodes", () => {
+  test("a count the engine reported is said as one", () => {
+    expect(nodeCountLabel(1)).toBe("1 node");
+    expect(nodeCountLabel(3)).toBe("3 nodes");
+  });
+
+  // NEVER 0, and never a guessed 1: an absent count is a read that did not
+  // happen, or an older node that predates the field.
+  test("an absent count says it is unavailable", () => {
+    for (const absent of [undefined, null, 0, Number.NaN]) {
+      expect(nodeCountLabel(absent)).toBe("node count unavailable");
+    }
+  });
+});
+
 describe("how far back the log goes", () => {
   test("the floor is the engine's own, said in days", () => {
     expect(eventHistoryLabel(30 * 24 * 3600)).toBe("the store keeps 30 days");
+    // THE SPAN A READ COVERS names the same number, never a second rounding.
+    expect(eventHistorySpan(30 * 24 * 3600)).toBe("the last 30 days");
+    expect(eventHistorySpan(6 * 3600)).toBe("the last 6 hours");
+    expect(eventHistorySpan(undefined)).toBe("the event log's window");
     expect(eventHistoryLabel(24 * 3600)).toBe("the store keeps 1 day");
     expect(eventHistoryLabel(6 * 3600)).toBe("the store keeps 6 hours");
   });

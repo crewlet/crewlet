@@ -29,9 +29,11 @@ func init() {
 // envelope's Source instead.
 //
 // CreatedBy is the revision's AUTHOR, and CreatedByKind and OperatorID are the
-// two facts every other trail records beside one: what sort of author, and
-// the credential the write was made through — empty on a write no credential
-// made. Additive, so a peer that knows neither round-trips both.
+// two facts every other trail records beside one: what sort of author, in
+// iam.ActorKind's vocabulary (agent, human, operator, system), and the
+// credential the write was made through — empty on a write no credential
+// made. Additive, so a peer that knows neither round-trips both, and a kind
+// this build does not know is a value on the row rather than a refused event.
 type ConfigRevisionActivated struct {
 	RevisionID      string `json:"revision_id"`
 	RevisionSummary string `json:"revision_summary"`

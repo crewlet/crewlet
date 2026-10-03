@@ -1,17 +1,40 @@
 /**
- * The application frame: rail, workspace sidebar, page, detail rail.
+ * The application frame: the one sidebar, the page header, the screen and
+ * the peek — composed on the kit's `AppShell`.
  *
- * Four columns and ONE scroll container — which is what lets the router
- * restore a scroll position per history entry. The sidebar and the peek scroll
- * internally; the page is the one the router owns, and a page with three
- * independent scrollers has three positions and no way to name them.
+ * THE KIT OWNS THE FRAME'S GEOMETRY AND ITS NARROW SHAPE. The sidebar stands
+ * on the frame and the screen floats beside it on a sheet, inset by
+ * `--size-shell-inset` and rounded; below the kit's shell breakpoint the sheet
+ * is the window and the sidebar is a modal drawer that takes Escape, traps
+ * Tab, hands focus back to its toggle and closes on a navigation. The skip
+ * link precedes everything and lands on the one scroller. None of that is
+ * written here, because a second copy of it is how the two drift.
  *
- * The shell composes; it does not decide. Which workspace a route belongs to
- * is `nav.ts`, what the trail says is `workspaces/crumbs.ts`, what a
- * workspace's tree holds is `workspaces/sidebars.tsx`. This file wires them
- * together and owns exactly two things nothing else can: the palette, and
- * the one strip that reports a degraded connection. Who is signed in is the
- * identity menu's, and signing in is a screen outside the frame (`App.tsx`).
+ * The shell composes; it does not decide. Where a route goes is
+ * `routes.ts`, what the trail says is `crumbs.ts`, which workspaces and
+ * sections exist is `nav.ts`, and what the sidebar shows is `sidebar/`. This
+ * file wires them together and owns exactly the things nothing else can: the
+ * palette, the watch on the viewer's own inbox, the strip that reports a
+ * degraded connection, the page context a screen describes itself through,
+ * and the peek column. Who is signed in is the sidebar's user block
+ * (`sidebar/UserBlock.tsx`), and signing in is a screen outside the frame
+ * (`App.tsx`): the frame holds no credential and asks for none, because the
+ * browser's only credential is the session cookie the engine set.
+ *
+ * # The peek is a column of the sheet
+ *
+ * It is the kit's `footer` slot, the one place inside the sheet and outside
+ * `main`, and `frame.css` makes the sheet a grid while one is open at a width
+ * that can hold it. Below that width the peek is a drawer over the screen. It
+ * is not a child of the screen, because a peek mounted per screen is a peek
+ * only the screens that remembered to mount one have.
+ *
+ * THIS FILE DECIDES WHICH, because the width depends on two things only the
+ * frame knows: whether the screen draws Settings' section column beside its
+ * list, and the reader's density. `app/layout.ts` does the arithmetic and
+ * says why a media query in the stylesheet cannot; the result is one
+ * attribute, `data-peek="column" | "drawer"`, so the two shapes cannot both
+ * hold at one width, or neither.
  */
 
 import {
@@ -19,45 +42,46 @@ import {
   useCallback,
   useContext,
   useEffect,
+  useLayoutEffect,
   useMemo,
+  useRef,
   useState,
+  type CSSProperties,
   type ReactNode,
 } from "react";
-import { DESTINATIONS, RAIL, workspaceOf, type Workspace } from "./nav.ts";
+import { AppShell, useToast } from "@crewlethq/ui";
+import { DESTINATIONS, WORKSPACES, workspaceOf, workspaceRow } from "./nav.ts";
 import { samePath, useNavigator, useRoute } from "./router.tsx";
+import { crumbsFor, titleOf, type Labels } from "./crumbs.ts";
 import { remember } from "~/lib/recents.ts";
 import { SCREEN_SCROLL_ID } from "~/lib/scroller.ts";
-import { CommandPalette } from "./CommandPalette.tsx";
-import { AppRail, useRailCollapsed, useWorkspaceChords, type RailBadge } from "./frame/AppRail.tsx";
-import { WorkspaceSidebar, type SidebarSection } from "./frame/WorkspaceSidebar.tsx";
-import { PageBar, CopyLink, StarPage } from "./frame/PageBar.tsx";
+import { CommandPalette } from "./palette/Palette.tsx";
+import { ColumnBoundary, LayerBoundary } from "./boundaries.tsx";
+import { NewTaskOpener, type NewTaskPreset } from "./newTask.ts";
+import { lazyScreen } from "./lazyScreen.ts";
+import { Sidebar } from "./sidebar/Sidebar.tsx";
+import { useSettingsSidebar } from "./sidebar/settingsFigures.tsx";
+import { PageHeader, SectionColumn, type PageMenuEntry } from "./header/PageHeader.tsx";
 import { PeekHost, PeekNeighbours } from "./frame/PeekHost.tsx";
 import { usePeek } from "./frame/DetailRail.tsx";
-import { IdentityMenu } from "./frame/IdentityMenu.tsx";
 import { peekable } from "./frame/peeks.tsx";
 import { StateBar, degradationOf } from "./frame/StateBar.tsx";
-import { crumbsFor, titleOf, type Labels } from "./workspaces/crumbs.ts";
-import {
-  useActivitySidebar,
-  useAdminSidebar,
-  useCompanySidebar,
-  useCostSidebar,
-  useKnowledgeSidebar,
-  useKeptSections,
-  useWorkSidebar,
-} from "./workspaces/sidebars.tsx";
-import { SegmentedControl, StatusDot, useToast } from "@crewlethq/ui";
-import { ComputerGlyph, DarkModeGlyph, LightModeGlyph } from "@crewlethq/icons/glyphs";
-import { useAgents, useClient, useConnection } from "~/lib/store-hooks.ts";
-import { useEngineHealth } from "~/lib/engineHealth.ts";
-import { useQuery } from "~/lib/useQuery.ts";
-import { useViewer } from "~/lib/viewer.ts";
-import { useDensity, useTheme, type Density, type ThemeChoice } from "~/lib/prefs.ts";
+import { useClient, useConnection, useEngineHealth } from "~/lib/store-hooks.ts";
+import { ViewerProvider, useViewer } from "~/lib/viewer.ts";
+import { InboxCountsProvider } from "~/lib/useInboxCounts.ts";
+import { QueueCountProvider } from "~/lib/useQueueCount.ts";
+import { useViewerPrefs } from "~/lib/prefs.ts";
+import { useMediaQuery } from "~/lib/media.ts";
+import { PEEK_WIDTH, columnWidth, densityScale, listReserve, peekColumnMin } from "./layout.ts";
 import { goSignIn, signOut } from "~/lib/session.ts";
 import { refusalText } from "~/lib/refusal.ts";
 import type { CoverageFacts } from "~/components/work.tsx";
-import { useKeyChords } from "~/lib/keys.ts";
+import type { FleetAnswer } from "~/protocol/index.ts";
+import { useKeymap } from "./keymap.ts";
+import { focusSearchTarget } from "./searchTarget.ts";
+import { KeyLegend } from "./KeyLegend.tsx";
 import { FillRequest } from "./fill.tsx";
+import { PeekRestingWidth, PeekWidthRequest } from "./frame/peekWidth.ts";
 
 /**
  * What a screen tells the frame about itself.
@@ -76,11 +100,30 @@ import { FillRequest } from "./fill.tsx";
 export interface PageContext {
   setLabels: (labels: Labels) => void;
   setCoverage: (coverage: CoverageFacts | null) => void;
+  setCounts: (counts: Record<string, string>) => void;
+  setShowWorking: (show: boolean) => void;
+  setMenu: (entries: PageMenuEntry[]) => void;
+  setFleet: (fleet: PublishedFleet | null) => void;
+}
+
+/**
+ * The `fleet` answer a screen is already holding, handed to the frame — or
+ * null when no screen on the page reads it. `answer` is null while that
+ * screen's first answer is in flight: the screen OWNS the reading from the
+ * moment it mounts, so the column does not start a query of its own for the
+ * second or so before it lands.
+ */
+export interface PublishedFleet {
+  answer: FleetAnswer | null;
 }
 
 const noop: PageContext = {
   setLabels: () => {},
   setCoverage: () => {},
+  setCounts: () => {},
+  setShowWorking: () => {},
+  setMenu: () => {},
+  setFleet: () => {},
 };
 
 const PageContextValue = createContext<PageContext>(noop);
@@ -126,7 +169,7 @@ export function usePageLabels(labels: Labels): void {
  * inside it does — so without one the inbox's freshness badge and its "this
  * answer is incomplete" banner stayed in the state bar over every screen the
  * reader visited afterwards, as claims about data those screens never read.
- * On Admin > Credentials, which somebody opens precisely to judge whether what
+ * On Settings › Secrets, which somebody opens precisely to judge whether what
  * they are seeing is trustworthy, that is the worst possible stale value.
  *
  * A reset in the Shell keyed on the route would not do: React flushes a
@@ -148,222 +191,258 @@ export function usePageCoverage(coverage: CoverageFacts | null | undefined): voi
   }, [level, complete, applied, seq, setCoverage]);
 }
 
-/** Which sidebar a workspace has, or none for the two full-bleed screens. */
-function useSidebar(workspace: Workspace | ""): SidebarSection[] | null {
-  // EVERY HOOK RUNS, whatever the workspace. React's rules are not a style
-  // preference here: calling six hooks conditionally would change the hook
-  // order on every navigation between workspaces, which is the one thing that
-  // corrupts a component's state rather than merely re-rendering it.
-  const work = useWorkSidebar();
-  const company = useCompanySidebar();
-  const knowledge = useKnowledgeSidebar();
-  const activity = useActivitySidebar();
-  const cost = useCostSidebar();
-  const admin = useAdminSidebar(workspace === "admin");
-  // WHAT THIS READER KEPT AND OPENED, appended to whichever tree is shown, so
-  // every workspace has them and none of the six implements them.
-  const kept = useKeptSections(workspace);
-  // AND THE ANSWER KEEPS ITS IDENTITY. Every hook above already returns a
-  // memoised array, and the spread here made a fresh one on every render of
-  // the Shell — which is every socket push and every poll tick, several times
-  // a minute at idle. `WorkspaceSidebar` memoises its filtered copy and its
-  // current row on `sections`, so both were defeated by the one line that
-  // composes them and the whole tree re-walked for a list that had not moved.
-  return useMemo(() => {
-    switch (workspace) {
-      case "work":
-        return [...work, ...kept];
-      case "company":
-        return [...company, ...kept];
-      case "knowledge":
-        return [...knowledge, ...kept];
-      case "activity":
-        return [...activity, ...kept];
-      case "cost":
-        return [...cost, ...kept];
-      case "admin":
-        return [...admin, ...kept];
-      default:
-        // The Inbox and My work are two-pane screens whose scope lives in the
-        // page itself — a sidebar of filters would be the grammar's first
-        // casualty.
-        return null;
-    }
-  }, [workspace, work, company, knowledge, activity, cost, admin, kept]);
+/**
+ * Publish each section's figure, for the page header's section tabs.
+ *
+ * THE SCREEN OWNS THE NUMBER. Only the screen knows whether a count is a
+ * total, a floor the engine stopped counting at, or not answered yet — so it
+ * hands the header STRINGS it has already written ("12", "20+"), keyed on the
+ * section, and omits a section it has no figure for. Cleared when the screen
+ * goes, for the reason [usePageLabels] gives: the frame outlives it.
+ */
+export function useSectionCounts(counts: Record<string, string>): void {
+  const { setCounts } = usePageContext();
+  const key = JSON.stringify(counts);
+  useEffect(() => {
+    setCounts(counts);
+    return () => setCounts({});
+    // The dependency is the CONTENT, for the reason `usePageLabels` gives.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [key, setCounts]);
+}
+
+/**
+ * Hand the frame the `fleet` answer this screen polls, for the Settings
+ * column's Nodes figure.
+ *
+ * ONE READING, NOT TWO: the column says "n behind on config" as a mirror of
+ * the Nodes screen's own "Behind on config" tile, and with a poll of its own
+ * on a different clock the two disagreed for up to a poll interval while every
+ * tick sent the operator's engine the same question twice. While a screen has
+ * published here the column asks nothing and draws this answer. Cleared when
+ * the screen goes, for the reason [usePageLabels] gives: the frame outlives it.
+ */
+export function usePublishFleet(answer: FleetAnswer | null): void {
+  const { setFleet } = usePageContext();
+  useEffect(() => {
+    setFleet({ answer });
+  }, [answer, setFleet]);
+  useEffect(() => () => setFleet(null), [setFleet]);
+}
+
+/**
+ * Draw "who is working" in the page bar — Home's, and nobody else's.
+ *
+ * ONE PAGE ASKS FOR IT, the way the approved Main artboard draws it: the
+ * company's pulse belongs at the head of the page a reader opens to see how
+ * the company is. Everywhere else the sidebar's Agents badge already carries
+ * the count, and the chip drawn in every bar was a second copy of it — on a
+ * task page or a profile it sat between the trail and the page's own actions,
+ * and at a phone's width it pushed them past the edge. Cleared when the screen
+ * goes, for the reason [usePageLabels] gives: the frame outlives it.
+ */
+export function useWorkingNow(): void {
+  const { setShowWorking } = usePageContext();
+  useEffect(() => {
+    setShowWorking(true);
+    return () => setShowWorking(false);
+  }, [setShowWorking]);
+}
+
+/**
+ * Put a screen's SECONDARY actions in the page bar's "More" menu on a phone.
+ *
+ * ON A PHONE'S WIDTH THE BAR KEEPS ONE ACTION IN VIEW — the screen's primary
+ * one — and folds the rest into one menu at its end: the frame's own star and
+ * Copy link, and whatever a screen publishes here. A screen drawing a
+ * secondary control inline (Edit project) marks it `page-action-folds` so the
+ * bar hides it at that width, and publishes the same action here so it is
+ * still one press away. Laid out whole, a project's bar stood three rows tall
+ * on a 390px screen — the trail, the lenses, then four controls — about 105px
+ * of chrome above the work.
+ *
+ * A HOOK, where the controls themselves are a portal: a menu's items are
+ * values the kit's `Menu` lays out, not elements a screen could render into
+ * it. Every press goes through the entry the screen published LAST, so a
+ * callback that closes over newer state is the one that runs; what is laid
+ * out is re-published only when a label, a description or a disabled state
+ * moves. Cleared when the screen goes, for the reason [usePageLabels] gives.
+ */
+export function usePageMenu(entries: readonly PageMenuEntry[]): void {
+  const { setMenu } = usePageContext();
+  const latest = useRef(entries);
+  useLayoutEffect(() => {
+    latest.current = entries;
+  });
+  const key = JSON.stringify(
+    entries.map((e) => [e.key, e.label, e.disabled ?? false, e.description ?? ""]),
+  );
+  useEffect(() => {
+    setMenu(
+      latest.current.map((entry) => ({
+        ...entry,
+        onSelect: () => latest.current.find((e) => e.key === entry.key)?.onSelect(),
+      })),
+    );
+    return () => setMenu([]);
+    // The dependency is the CONTENT, for the reason `usePageLabels` gives.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [key, setMenu]);
+}
+
+/**
+ * What the frame reads ONCE for every surface in it: who this browser is,
+ * how much is waiting on them, and how much open work is on them.
+ *
+ * All three are standing reads, and the first two used to be made per caller
+ * — the viewer by the frame, the sidebar and the Inbox count, the count by the
+ * sidebar, Home and the Inbox — so one tab held up to six slots of the
+ * socket's four on two facts, and the badge and the screen beside it polled on
+ * separate minutes and could name two numbers. The third is the same case: the
+ * sidebar's My work figure and the Queue tab on the reader's own day are one
+ * number (`lib/useQueueCount.ts`). Mounted here, every caller reads one
+ * answer. A suite that mounts a screen without the frame mounts this around
+ * it, because a hook that fell back to its own read would bring the
+ * per-caller reads back without a sound.
+ */
+export function FrameReadings({ children }: { children: ReactNode }) {
+  return (
+    <ViewerProvider>
+      <InboxCountsProvider>
+        <QueueCountProvider>{children}</QueueCountProvider>
+      </InboxCountsProvider>
+    </ViewerProvider>
+  );
 }
 
 export function Shell({ children }: { children: ReactNode }) {
+  return (
+    <FrameReadings>
+      <Frame>{children}</Frame>
+    </FrameReadings>
+  );
+}
+
+function Frame({ children }: { children: ReactNode }) {
   const route = useRoute();
   const peek = usePeek();
   const nav = useNavigator();
   const { socket } = useClient();
   const toast = useToast();
-  const { connected, authRejected, accessRefused, identityUnverifiable, health } = useConnection();
-  const agents = useAgents();
+  const { connected, authRejected, accessRefused, identityUnverifiable } = useConnection();
   const viewer = useViewer();
-  const [theme, setTheme] = useTheme();
-  const [density, setDensity] = useDensity();
-  const [collapsed, toggleRail] = useRailCollapsed();
+  const engine = useEngineHealth();
+  // A ZONE OR A DATE FORMAT CHANGED IN THE PREFERENCES REPAINTS EVERY
+  // TIMESTAMP. The formatters read the preference when they are called, so
+  // the frame subscribes and re-renders; the screen is a child of this render
+  // and re-renders with it.
+  const prefs = useViewerPrefs();
 
+  // OPEN OR NOT: ⌘K opens it on All, and so does every other way in.
   const [paletteOpen, setPaletteOpen] = useState(false);
   // A SCREEN THAT ASKED FOR THE HEIGHT INSTEAD OF THE SCROLL — see
-  // `app/fill.tsx` for why this is a request and not a selector. One screen
-  // makes it (the org builder's canvas lens), and while it holds, the
-  // scroller stops being one and hands the column what is left of the window.
+  // `app/fill.tsx` for why this is a request and not a selector. The kit's
+  // `fill` is what honours it: the scroller stops scrolling and the content
+  // column takes the height that is left.
   const [filling, setFilling] = useState(false);
-  const [drawer, setDrawer] = useState(false);
+  // AND ONE THAT ASKED FOR A NARROWER PEEK — a canvas, which the rail shrinks
+  // rather than narrows. See `app/frame/peekWidth.ts`.
+  const [restingPeek, setRestingPeek] = useState<number | null>(null);
+  // THE NEW TASK SHEET, and what the door it was opened from knows. The frame
+  // holds it for the reason it holds the palette: four doors — the sidebar's
+  // head, the Projects group, a screen's page bar, a board lane — open ONE
+  // sheet, and a route change does not close it (the reader may have followed
+  // a link to check a name while filing).
+  const [newTask, setNewTask] = useState<NewTaskPreset | null>(null);
+  const openNewTask = useCallback((preset: NewTaskPreset = {}) => setNewTask(preset), []);
 
   const [labels, setLabels] = useState<Labels>({});
   const [coverage, setCoverage] = useState<CoverageFacts | null>(null);
-
-  // THE SHARED READ (`lib/engineHealth.ts`): one per tab, which every screen
-  // drawing the same facts is handed at the same moment.
-  const { data: engine } = useEngineHealth();
-  // THE VIEWER'S OWN INBOX IS PUSHED, and the poll is what remains when a push
-  // is not: a frame lost to backpressure or to a reconnect is never re-sent,
-  // and a node that cannot decide the watch sends none until it can.
-  //
-  // UNDER `owner`, the one name the viewer's own record is kept under — their
-  // seat when bound, their login when not — so an unbound reader's badge counts
-  // the notices their record actually holds rather than nothing.
-  const inbox = useQuery(
-    "work_inbox",
-    viewer.owner ? { handle: viewer.owner, limit: 50 } : undefined,
-    {
-      enabled: viewer.owner !== "",
-      pollMs: 60_000,
-      refetchOnInboxOf: viewer.owner,
-    },
-  );
+  const [counts, setCounts] = useState<Record<string, string>>({});
+  const [showWorking, setShowWorking] = useState(false);
+  const [menu, setMenu] = useState<PageMenuEntry[]>([]);
+  const [publishedFleet, setFleet] = useState<PublishedFleet | null>(null);
 
   // WATCH THE VIEWER'S OWN RECORD, which is what asks the engine for its
   // `inbox_changed` frames. The shell owns it because the shell outlives every
   // screen: a watch taken by the Inbox screen would end the moment the reader
-  // navigated away, and the rail's badge is what has to stay current. The
-  // socket re-sends it on every reconnect.
+  // navigated away, and the sidebar's badge (`lib/useInboxCounts.ts`) is what
+  // has to stay current. UNDER `owner` — the seat when bound, the login when
+  // not — because that is the record the engine pushes about. The socket
+  // re-sends it on every reconnect.
   useEffect(() => {
     if (viewer.owner === "") return;
     socket.watch(viewer.owner);
     return () => socket.watch("");
   }, [socket, viewer.owner]);
 
-  useKeyChords([
-    { key: "k", meta: true, run: () => setPaletteOpen((v) => !v), whileTyping: true },
-    // ESCAPE REACHES THE PALETTE FROM ITS OWN INPUT, which is the only field
-    // the reader can be in when they want it closed.
-    { key: "escape", run: () => setPaletteOpen(false), whileTyping: true },
-    // A bare "/" opens search the way every list-shaped tool does.
-    { key: "/", run: () => setPaletteOpen(true) },
-    // `[` collapses the rail, which is the one piece of chrome a reader
-    // trades for width on a narrow laptop — EXCEPT while a peek is open,
-    // where `[` steps it and the rail is not what the reader means.
-    { key: "[", run: toggleRail, when: !route.query.has("peek") },
-  ]);
+  // THE FRAME'S KEYS, by row — `keymap.ts` says which key each one is.
+  const [legendOpen, setLegendOpen] = useState(false);
+  useKeymap({
+    // IT OPENS, and closing is the palette's own: while it is up it is a
+    // modal layer, every page key stands aside, and it answers this row
+    // itself (see `palette/Palette.tsx`).
+    palette: () => setPaletteOpen(true),
+    // `/` IS "SEARCH WHAT I AM LOOKING AT": the screen's own box where it
+    // registered one, the palette where it did not. It opened the palette
+    // everywhere, so on the eight screens with a search box of their own the
+    // key a reader pressed to search the screen took them away from it.
+    search: () => {
+      if (!focusSearchTarget()) setPaletteOpen(true);
+    },
+    keys: () => setLegendOpen(true),
+    ...Object.fromEntries(WORKSPACES.map((ws) => [`go.${ws.key}`, () => nav.to(ws.path)])),
+  });
 
-  const goTo = useCallback((path: string[]) => nav.to(path), [nav]);
-  useWorkspaceChords(goTo);
-
-  // Close the drawer AND THE PALETTE whenever the route changes — either one
-  // left open over the screen you just navigated to is the classic mobile-nav
-  // bug, and the palette had it too.
-  //
-  // Picking a palette row closes it on the way out, so the case this covers is
-  // every OTHER way the route moves while it is open: the browser's Back and
-  // Forward buttons, a phone's back gesture, a restored history entry. The
-  // palette that survived one of those was still offering the objects it had
-  // ranked for the screen the reader had just left.
+  // THE PALETTE CLOSES whenever the route moves: picking a row closes it on
+  // the way out, and this covers every OTHER way — Back and Forward, a
+  // phone's back gesture, a restored history entry — where a palette left
+  // open would go on offering what it ranked for the screen just left. The
+  // drawer is the kit's, and `navigationKey` closes it the same way.
   useEffect(() => {
-    setDrawer(false);
     setPaletteOpen(false);
   }, [route.hash]);
 
   const workspace = workspaceOf(route.path);
-  const sections = useSidebar(workspace);
+  const row = workspaceRow(workspace);
+
+  // WHICH SHAPE THE PEEK TAKES — see the file's doc. The frame is described
+  // by what stands in front of the list, and the width asked is the one at
+  // which this frame, at this density, still leaves the list its floor.
+  const column = columnWidth(row?.renderer);
+  const frame = { column, scale: densityScale(prefs.density) };
+  const roomy = useMediaQuery(`(width >= ${peekColumnMin(frame)}px)`);
+  const peekShape = peekable(peek) ? (roomy ? "column" : "drawer") : undefined;
   const crumbs = useMemo(() => crumbsFor(route.path, labels), [route.path, labels]);
 
-  // THE TAB SAYS WHERE YOU ARE. It said "Crewlet" on every screen, so a reader
-  // with four tabs open had four identical ones.
+  // THE TAB SAYS WHERE YOU ARE, so a reader with four tabs open can tell
+  // them apart.
   const where = titleOf(crumbs);
   useEffect(() => {
     document.title = where === "Crewlet" ? "Crewlet" : `${where} · Crewlet`;
   }, [where]);
 
   // AND THE PALETTE REMEMBERS THE OBJECTS, so an empty palette has something
-  // to offer before the reader types.
-  //
-  // OBJECTS ONLY — anything the rail or a sidebar already lists is left out,
-  // because a recents list repeating the navigation beside it costs a reader
-  // a scan and tells them nothing. The label is the one the SCREEN resolved:
-  // it lands a render after the route, which is why this depends on the title
-  // rather than on the path.
+  // to offer before the reader types. OBJECTS ONLY — a fixed destination is in
+  // the palette already, and a recents list repeating the navigation beside
+  // it costs a reader a scan and tells them nothing. The label is the one the
+  // SCREEN resolved, so this depends on the title rather than on the path;
+  // `named` says whether a screen supplied it, asked of `labels` rather than
+  // of a flag each crumb branch would have to set.
   const path = route.path;
-  // WHETHER A SCREEN SUPPLIED THIS NAME, asked of `labels` rather than of a
-  // flag each crumb branch would have to set.
-  //
-  // `crumbsFor` falls back to the raw segment wherever `labels` has nothing,
-  // so "did a screen name this?" is exactly "is what the trail is showing one
-  // of the values a screen published?". Asked centrally it covers every branch
-  // including the ones that join a tail; asked as a per-branch boolean it
-  // would be fourteen places to keep in step with `mono`, and the four that
-  // nobody updated would go on downgrading a stored name in silence.
-  //
-  // A screen that publishes a label EQUAL to the segment — a project named by
-  // its key — answers yes, which is right: it named it, and the name is that
-  // string.
   const named = useMemo(() => Object.values(labels).includes(where), [labels, where]);
   useEffect(() => {
     if (path.length < 2) return;
     if (DESTINATIONS.some((d) => samePath(d.path, path))) return;
-    if (where === "Crewlet") return;
-    // A ROUTE NO WORKSPACE OWNS IS NOT REMEMBERED. The rail draws recents per
-    // workspace, so a row stored under `""` is one nothing can ever show —
-    // it would sit in the list consuming a slot and drawing nowhere.
-    const workspace = workspaceOf(path);
+    if (where === "Crewlet" || where === "Not found") return;
     if (!workspace) return;
     remember({ path, label: where, workspace }, named);
-  }, [path, where, named]);
+  }, [path, where, named, workspace]);
 
-  const page: PageContext = useMemo(() => ({ setLabels, setCoverage }), [setLabels, setCoverage]);
-
-  const working = agents.filter((a) => a.state === "working").length;
-
-  // WHAT THE READER CAN ACTUALLY DRIVE DOWN, which is the whole of why this
-  // badge is not `answer.unread`.
-  //
-  // `unread` counts every notice on the page, and most of a busy company's
-  // notices are things it merely told you: a task you watch moved, a project
-  // you own was updated. Nobody answers those, so a badge built on them never
-  // reaches zero however diligent the reader is — and a number that cannot go
-  // down is read, correctly, as a broken counter. The PRIMARY half is the set
-  // a person is on the hook for (a mention, a question, work assigned to
-  // them), it is small by construction, and it goes down by answering. The
-  // engine states which reasons were applied as primary — defaulted from the
-  // person's own record — so this is the company's own split rather than one
-  // the client invented.
-  //
-  // OVER THE FIRST PAGE, and the title says so: the reader returns at most 50
-  // notices, so a badge claiming a total would be inventing a number the
-  // engine never computed. `answer.unread` and `answer.primary` are each one
-  // half of this question and neither is it, so it is counted here rather than
-  // read off a field that does not mean what it looks like.
-  const waiting = useMemo(() => {
-    const data = inbox.data;
-    if (!data) return 0;
-    const primary = new Set(data.primary_reasons);
-    return data.notices.filter((n) => !n.read && primary.has(n.reason)).length;
-  }, [inbox.data]);
-
-  const badges: Partial<Record<Workspace, RailBadge | null>> = {
-    inbox: waiting
-      ? {
-          text: waiting >= 50 ? "50+" : String(waiting),
-          attention: true,
-          title:
-            "unread notices under a reason your record counts as primary, on the first page — the engine counts no total",
-        }
-      : null,
-    activity: working ? { text: String(working), title: `${working} seats working` } : null,
-  };
+  const page: PageContext = useMemo(
+    () => ({ setLabels, setCoverage, setCounts, setShowWorking, setMenu, setFleet }),
+    [],
+  );
 
   const degraded = degradationOf({
     authRejected,
@@ -373,199 +452,134 @@ export function Shell({ children }: { children: ReactNode }) {
     configured: engine?.configured,
     onSignIn: goSignIn,
     onRetry: () => socket.reconnect(),
-    // A FAILED SIGN-OUT IS SAID, as the identity menu says it: a sign-out
-    // nothing answered must not look like one that worked.
+    // A FAILED SIGN-OUT IS SAID, as the user block says it: a sign-out nothing
+    // answered must not look like one that worked.
     onSignOut: () => {
       signOut().catch((err: unknown) =>
         toast.failed(`Signing out did not go through. ${refusalText(err)}`),
       );
     },
-    onConfig: () => nav.to(["admin", "config"]),
+    onConfig: () => nav.to(["settings", "config"]),
   });
+
+  // THE SETTINGS COLUMN'S FIGURES — the health push the frame already holds,
+  // and three guarded answers asked only while the column is on screen and
+  // only of a reader whose grants reach them. See `sidebar/settingsFigures.tsx`.
+  const figures = useSettingsSidebar({
+    here: row?.renderer === "column",
+    grants: viewer.grants,
+    health: engine,
+    published: publishedFleet,
+  });
+
+  const screen = (
+    <FillRequest.Provider value={setFilling}>
+      <PeekWidthRequest.Provider value={setRestingPeek}>
+        <PageContextValue.Provider value={page}>{children}</PageContextValue.Provider>
+      </PeekWidthRequest.Provider>
+    </FillRequest.Provider>
+  );
 
   return (
     // THE STEPPER'S ORDER, published by whichever list the reader is on, so
     // `[` and `]` walk the rows they are actually looking at. See `PeekHost`.
-    <PeekNeighbours>
-      <div
-        className="app"
-        data-rail-collapsed={collapsed || undefined}
-        data-no-sidebar={sections === null || undefined}
-        // THE GRID GAINS ITS FOURTH TRACK ONLY WHILE THE RAIL IS OPEN — an
-        // empty column would take its width from every screen that never opens
-        // one. See `.app[data-peek]` in frame.css.
-        data-peek={peekable(peek) || undefined}
-      >
-        <AppRail
-          active={workspace}
-          badges={badges}
-          collapsed={collapsed}
-          onToggle={toggleRail}
-          locked={viewer.anonymous}
-          footer={
-            <EngineFooter
-              connected={connected}
-              authRejected={authRejected}
-              configured={engine?.configured}
-              inFlight={health.in_flight ?? 0}
-              theme={theme}
-              setTheme={setTheme}
-              density={density}
-              setDensity={setDensity}
-              collapsed={collapsed}
-            />
+    <NewTaskOpener.Provider value={openNewTask}>
+      <PeekNeighbours>
+        <AppShell
+          className="app"
+          // THE SHEET GAINS ITS PEEK COLUMN ONLY WHILE A PEEK IS OPEN — an
+          // empty column would take its width from every screen that never
+          // opens one — and only where the frame has room for it; see
+          // `.app[data-peek]` in frame.css. The reserve is what the column's
+          // track leaves the list, so a dragged width cannot take it back.
+          data-peek={peekShape}
+          style={
+            peekShape === "column"
+              ? ({ "--peek-reserve": `${listReserve(frame)}px` } as CSSProperties)
+              : undefined
           }
-        />
-
-        {sections && (
-          <WorkspaceSidebar
-            title={RAIL.find((r) => r.key === workspace)?.label ?? ""}
-            sections={sections}
-            open={drawer}
-            onClose={() => setDrawer(false)}
-          />
-        )}
-
-        <main className="page">
-          <PageBar
-            crumbs={crumbs}
-            actions={
-              <>
-                <StarPage path={path} label={where} workspace={workspaceOf(path) || ""} />
-                <CopyLink />
-              </>
-            }
-            viewer={<IdentityMenu />}
-            onSearch={() => setPaletteOpen(true)}
-            onToggleSidebar={sections ? () => setDrawer((v) => !v) : undefined}
-          />
-          <StateBar degraded={degraded} coverage={coverage} />
-          {/* THE ATTRIBUTE IS THE SHELL'S OWN, set from the request the screen
-              made. The chain it drives is in the stylesheet beside it, and it
-              names nothing inside any screen: a screen says THAT it wants the
-              height, never how the shell is built. */}
-          <div className="screen" id={SCREEN_SCROLL_ID} data-fill={filling || undefined}>
-            <div className="screen-inner">
-              <FillRequest.Provider value={setFilling}>
-                <PageContextValue.Provider value={page}>{children}</PageContextValue.Provider>
-              </FillRequest.Provider>
+          mainId={SCREEN_SCROLL_ID}
+          fill={filling}
+          navigationKey={route.hash}
+          toggleLabel="Navigation"
+          sidebar={<Sidebar onSearch={() => setPaletteOpen(true)} />}
+          topbar={
+            <PageHeader
+              crumbs={crumbs}
+              row={row}
+              counts={counts}
+              title={where}
+              workspace={workspace}
+              working={showWorking}
+              menu={menu}
+            >
+              <StateBar degraded={degraded} coverage={coverage} />
+            </PageHeader>
+          }
+          footer={
+            <PeekRestingWidth.Provider value={restingPeek ?? PEEK_WIDTH}>
+              <PeekHost />
+            </PeekRestingWidth.Provider>
+          }
+        >
+          {row && column > 0 ? (
+            // THE COLUMN'S WIDTH IS THE ONE THE PEEK ARITHMETIC COUNTED
+            // ([columnWidth]), handed to the grid rather than written again
+            // in the stylesheet, so the two cannot drift.
+            <div
+              className="section-frame"
+              style={{ "--section-column": `${column}px` } as CSSProperties}
+            >
+              {row.renderer === "tree" ? (
+                <ColumnBoundary what="The knowledge tree" resetKey={row.key}>
+                  <KnowledgeTree />
+                </ColumnBoundary>
+              ) : (
+                <SectionColumn
+                  row={row}
+                  path={route.path}
+                  grants={viewer.loading ? null : viewer.grants}
+                  figures={figures}
+                />
+              )}
+              <div className="section-body">{screen}</div>
             </div>
-          </div>
-        </main>
+          ) : (
+            screen
+          )}
+        </AppShell>
 
-        {/* THE ONE PEEK IN THE PRODUCT. Mounted here rather than by a screen,
-          which is what makes it available to every list instead of to the one
-          that remembered to render a rail — see `frame/PeekHost.tsx`. */}
-        <PeekHost />
-
+        {/* THE PALETTE HAS A BOUNDARY OF ITS OWN, and it is mounted only while
+          open, so a palette that threw is a dialog saying so — closed the
+          way the palette closes — and the next ⌘K is a fresh palette. */}
         {paletteOpen && (
-          <CommandPalette onClose={() => setPaletteOpen(false)} locked={viewer.anonymous} />
+          <LayerBoundary title="Search" onClose={() => setPaletteOpen(false)}>
+            <CommandPalette
+              onClose={() => setPaletteOpen(false)}
+              onShowKeys={() => setLegendOpen(true)}
+            />
+          </LayerBoundary>
         )}
-      </div>
-    </PeekNeighbours>
+        {/* THE SHEET'S CODE IS THE WORK WORKSPACE'S CHUNK — it is a Work form,
+          and the frame's own entry stays the frame — so it is mounted only
+          while open, through the same loader every screen uses. */}
+        {newTask !== null && (
+          <LayerBoundary title="New task" onClose={() => setNewTask(null)}>
+            <NewTaskSheet preset={newTask} onClose={() => setNewTask(null)} />
+          </LayerBoundary>
+        )}
+        {legendOpen && <KeyLegend onClose={() => setLegendOpen(false)} />}
+      </PeekNeighbours>
+    </NewTaskOpener.Provider>
   );
 }
 
-/** The rail's foot: the engine's own state, the theme and the density. */
-function EngineFooter({
-  connected,
-  authRejected,
-  configured,
-  inFlight,
-  theme,
-  setTheme,
-  density,
-  setDensity,
-  collapsed,
-}: {
-  connected: boolean;
-  authRejected: boolean;
-  configured: boolean | undefined;
-  inFlight: number;
-  theme: ThemeChoice;
-  setTheme: (t: ThemeChoice) => void;
-  density: Density;
-  setDensity: (d: Density) => void;
-  collapsed: boolean;
-}) {
-  // uilet's tone vocabulary, which is ours renamed: positive → success,
-  // caution → warning, critical → danger.
-  const tone = connected ? (configured === false ? "warning" : "success") : "danger";
-  const word = connected
-    ? configured === false
-      ? "no config"
-      : "connected"
-    : authRejected
-      ? "refused"
-      : "unreachable";
-  return (
-    <>
-      {/* A LINK TO THIS NODE'S PAGE, not a modal. The engine's own state is an
-          object with a page like every other, and a panel that could only be
-          reached from here was the one surface with no address. */}
-      <a className="rail-engine" href="#/admin/fleet" title={`Engine ${word}`}>
-        {/* The dot is the shape half and the word beside it is the state —
-            which is exactly StatusDot's contract, so it is `aria-hidden` and
-            a screen reader reads the word once rather than twice. */}
-        <span className="rail-engine-marks">
-          <StatusDot tone={tone} />
-          {inFlight > 0 && <span className="t-num">{inFlight}</span>}
-        </span>
-        {!collapsed && <span className="truncate">{word}</span>}
-      </a>
-      {!collapsed && (
-        <>
-          {/* BOTH ROWS ARE SETTINGS, which is what `semantics="radio"` says:
-              announced as a radio group, and the arrows select as they move.
-              That is our `activate="automatic"` under uilet's name, and it is
-              right here for the reason uilet gives — a choice that is not in
-              the URL and pushes no history entry costs nothing to change on
-              every keypress.
+/**
+ * Knowledge's tree, out of the Knowledge chunk: the one `tree` renderer, and
+ * it is the workspace's own code — it reads spaces and pages — so the frame
+ * loads it the way it loads a screen rather than carrying it in the entry.
+ */
+const KnowledgeTree = lazyScreen("knowledge", (module) => module.KnowledgeTree);
 
-              NOT uilet's own ThemeSwitcher / DensitySwitcher, which draw
-              exactly these two rows: they own the value themselves behind a
-              `storageKey` and expose no controlled `value` / `onChange`. This
-              dashboard's theme is also set from the command palette's `>`
-              scope and read by `lib/prefs.ts`, so a control holding a second
-              copy of it would sit unmoved while the page around it changed. */}
-          <SegmentedControl<ThemeChoice>
-            semantics="radio"
-            size="sm"
-            label="Theme"
-            value={theme}
-            onValueChange={setTheme}
-            options={[
-              { value: "light", icon: <LightModeGlyph size="xs" />, title: "Light" },
-              {
-                value: "system",
-                icon: <ComputerGlyph size="xs" />,
-                title: "Follow the system",
-              },
-              { value: "dark", icon: <DarkModeGlyph size="xs" />, title: "Dark" },
-            ]}
-          />
-          <SegmentedControl<Density>
-            semantics="radio"
-            size="sm"
-            label="Density"
-            value={density}
-            onValueChange={setDensity}
-            options={[
-              // THE LETTER IS A PICTURE AND THE WORD IS THE NAME. S, M and L
-              // name nothing out loud, so each option carries the word too —
-              // `srLabel`, which ours had no place for at all.
-              { value: "compact", label: "S", srLabel: "Compact", title: "Compact" },
-              { value: "normal", label: "M", srLabel: "Normal", title: "Normal" },
-              {
-                value: "comfortable",
-                label: "L",
-                srLabel: "Comfortable",
-                title: "Comfortable",
-              },
-            ]}
-          />
-        </>
-      )}
-    </>
-  );
-}
+/** The New task sheet, out of the Work chunk. See [LayerBoundary]. */
+const NewTaskSheet = lazyScreen("work", (module) => module.NewTaskSheet);

@@ -18,20 +18,40 @@
 //
 // It decides nothing about WHICH id a write is published under beyond the
 // binding: that is each surface's — `/chart` and `/iam` step the key by the
-// verb and [Digest] ([statelog.StepOpID]); the human write surface derives
-// one id per write it makes from the key, the verb, the object and the
-// arguments — because what a write is about is the surface's own vocabulary.
+// verb and [Digest] ([statelog.StepOpID]); the human write surface and the
+// operator surface's act route derive one id per write they make from the
+// key, the verb, the object and the arguments — because what a write is about
+// is the surface's own vocabulary.
+//
+// # A key is the caller's own, and nobody else's
+//
+// Every key [Key] answers is SCOPED BY THE PRINCIPAL the request resolved to
+// ([iam.Principal.ID]) — see [scope]. Unscoped, a key named an operation for
+// whoever sent it first: the ledger answers an operation it already holds
+// before the write is decided, so a party who learned somebody else's key — a
+// log line, a shared terminal, a client that printed it — could send it with
+// their own request and have the victim's write answered as theirs, or send
+// it FIRST and have the victim's real write answered from the ledger with
+// nothing of it written. The scope is the principal's ID and never its login,
+// a token's label or a session's lineage: a rename moves the first, a
+// rotation the second and a step-up the third, and each would have turned one
+// person's retry into a second write.
 package opkey
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/crewlet/crewlet/internal/api/httpjson"
+	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
@@ -41,8 +61,9 @@ const Header = "Idempotency-Key"
 
 // Key is the request's operation key: the caller's own where they sent one,
 // held to [statelog.CheckCallerOpID], and one minted at now where they did
-// not — which the answer then hands back, so a retry can send it. It answers
-// false once it has written the refusal ([Refuse]).
+// not — either way SCOPED by the request's principal ([scope]) — and the
+// answer then hands it back, so a retry can send it. It answers false once
+// it has written the refusal ([Refuse]).
 //
 // # An operation id the engine's grammar minted, both ways
 //
@@ -54,21 +75,103 @@ const Header = "Idempotency-Key"
 // published, on the first attempt and on every retry. So a fresh key is minted
 // through [statelog.NewOpID], and a caller's is refused naming the rule rather
 // than ignored: ignoring it published under a fresh id, which is the double
-// write the key was sent to prevent.
+// write the key was sent to prevent. The scoped key keeps the instant of the
+// key it was scoped from, so the ledger vouches for it exactly as long.
 //
-// BARE, with no name: the key is what a caller holds, and every id a write is
-// published under is derived from it and named by the surface.
+// BARE OF ANY VERB: the key is what a caller holds, and every id a write is
+// published under is derived from it and named by the surface. Its one name
+// is the scope's tag, which is what lets a retry send it back unchanged.
 func Key(w http.ResponseWriter, r *http.Request, now time.Time) (string, bool) {
 	given := strings.TrimSpace(r.Header.Get(Header))
 	if given == "" {
-		return statelog.NewOpID(now, ""), true
+		return scope(r.Context(), statelog.NewOpID(now, "")), true
 	}
+	return scoped(w, r, given)
+}
+
+// Require is [Key] for a route on which the caller MUST name the operation:
+// an absent header is refused `400 op_id_invalid` naming it, exactly as a
+// malformed one is, rather than minted here.
+//
+// FOR A ROUTE WHOSE CALLER RETRIES BY ITSELF — the dashboard's act route,
+// which mints its key once per gesture and sends it again unchanged when an
+// answer never came. A key minted here would be handed back in an answer that
+// is, in the one case a retry exists for, never read: the request that lost
+// its answer would be retried under a fresh key and made twice.
+func Require(w http.ResponseWriter, r *http.Request) (string, bool) {
+	given := strings.TrimSpace(r.Header.Get(Header))
+	if given == "" {
+		Refuse(w, errNoKey)
+		return "", false
+	}
+	return scoped(w, r, given)
+}
+
+// errNoKey is [Require]'s refusal of a request that named no operation.
+var errNoKey = errors.New("this route takes the operation from the " + Header +
+	" header, and the request carried none: mint one operation id when the " +
+	"gesture begins and send it, unchanged, on every retry of it")
+
+// scoped holds a caller's key to the grammar and scopes it.
+func scoped(w http.ResponseWriter, r *http.Request, given string) (string, bool) {
 	if err := statelog.CheckCallerOpID(given); err != nil {
 		Refuse(w, err)
 		return "", false
 	}
-	return given, true
+	return scope(r.Context(), given), true
 }
+
+// scope is key as the operation of the principal on ctx: derived from the
+// principal's ID and the key, at the key's own instant, and NAMED by a tag of
+// that ID — unless key already carries the tag, which is this principal's
+// retry of a key an earlier answer handed them.
+//
+// # Why the tag, and why it is safe to trust
+//
+// The answer hands the SCOPED key back, and a retry sends it as the header:
+// scoped again, it would be another operation, and the retry a second write.
+// So a key already bearing this principal's tag is taken as it is. Nothing is
+// trusted that matters: the tag is compared with the REQUESTER's own, so a key
+// bearing anybody else's — sent by somebody who copied it — is scoped again
+// under the sender, and names an operation of theirs that no write of the
+// key's owner ever had. Forging a key bearing your own tag reaches only your
+// own operations.
+//
+// A REQUEST NOBODY RESOLVED is scoped by the nil ID, which no principal holds.
+// It does not reach here behind the request guard, and a write with no
+// principal is refused by every surface before it is made; the scope only has
+// to keep such a key apart from every real caller's.
+func scope(ctx context.Context, key string) string {
+	id := uuid.Nil
+	if p, how := iam.From(ctx); how == iam.Resolved {
+		id = p.ID
+	}
+	tag := tagOf(id)
+	if strings.HasSuffix(key, "."+tag) && strings.Count(key, ".") == 1 {
+		return key
+	}
+	at, _ := statelog.OpMintedAt(key)
+	return statelog.DeriveOpID(at, tag, scopeNamespace, id.String(), key)
+}
+
+// tagOf is the name a principal's scoped keys carry: `k` and sixteen hex
+// digits of a digest of the ID — 64 bits, which tells two principals apart
+// with certainty and keeps the key inside [statelog.MaxCallerOpIDBytes] with
+// room for every step a surface appends. Not a credential: it is derived from
+// an ID that is no secret, and [scope] compares it with the requester's own.
+func tagOf(id uuid.UUID) string {
+	sum := sha256.Sum256([]byte(scopeNamespace + "\x00" + id.String()))
+	return "k" + hex.EncodeToString(sum[:])[:tagDigits]
+}
+
+// tagDigits is how many hex digits of the ID's digest a scoped key's tag
+// carries — see [tagOf].
+const tagDigits = 16
+
+// scopeNamespace keeps a scoped key's derivation apart from every other one
+// over the same key. FIXED for the life of the format: a new one would make a
+// retry that straddles the change a second write.
+const scopeNamespace = "crewlet.opkey.scope"
 
 // Refuse answers a key the surface cannot publish under: `400
 // op_id_invalid`, naming the header, with err as the rule it broke, and

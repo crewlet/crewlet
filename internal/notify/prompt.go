@@ -112,11 +112,16 @@ type Prompt interface {
 	// constituents of one coalesced trigger disagreed about the identity
 	// the ledger key would depend on which event sorted first.
 	//
-	// For eight of the nine sources the two coincide, because an issue
-	// key, a page id, a monitor id and a task's id are each one object
-	// that is both the merge unit and the durable thread; those delegate
-	// in one line. [ChatPrompt] is where they differ, and its doc shows the
-	// invariant deciding the answer.
+	// For most sources the two coincide, because an issue key, a page id
+	// and a monitor id are each one object that is both the merge unit and
+	// the durable thread; those delegate in one line. Two cut the
+	// partition finer, and each one's doc shows the invariant deciding the
+	// answer: [ChatPrompt], where a direct conversation is one conversation
+	// however its replies are threaded, and the native tracker's, whose
+	// partition is the task's identity cut by the surface a wake owes its
+	// reply on — so a merge of two wakes owing two surfaces never has to
+	// drop one of the promises, while every turn about the task still
+	// keeps one ledger.
 	ConversationIdentity(metadata map[string]string, subject string) string
 
 	// WakesActor reports whether an event type reaches the party who
@@ -170,6 +175,22 @@ type Inbound struct {
 	Body string
 
 	Metadata map[string]string
+
+	// Owes names the CHAT SURFACE the woken seat promised to post on, when
+	// the promise is not simply "answer where you were asked" — which
+	// [Prompt.Addressed] already says, on this notification's own source.
+	//
+	// SET BY THE PARSER, PER RECIPIENT, because only the parser knows which
+	// copy of one change carries a promise: today that is the tracker's
+	// `answered` wake to an asker whose decision said it would report the
+	// outcome in a channel, and none of the other copies of that answer.
+	// Empty — every vendor edge — owes nothing beyond the source.
+	//
+	// A FIELD rather than a [Prompt] method, unlike Addressed, because it is
+	// not a reading of the source's routing that every source has to give:
+	// it is one first-party promise, and nine prompts answering "" to it
+	// would be nine places to forget that a merge has to carry it.
+	Owes string
 }
 
 // Parties resolves a third-party app's external id to a colleague in the org.
@@ -204,7 +225,7 @@ type Party struct {
 	Name   string
 
 	// Origin is the handle the seat was CREATED under ([org.Role.Origin],
-	// ADR-0019) — its identity, where Handle is only the address it answers
+	// ADR-0026) — its identity, where Handle is only the address it answers
 	// to now. What a party's own memory is filed under is keyed on it (see
 	// [Party.Identity]), because keyed on the address a rename forgot it.
 	// Empty on a party the registry did not build from a seat.

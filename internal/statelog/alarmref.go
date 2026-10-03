@@ -76,6 +76,9 @@ var alarmMeaning = map[Kind]string{
 		"half — the embeddings provider or the vector domain is failing.",
 	KindSearchScoped: "Searches are being answered over part of the corpus " +
 		"because a node did not answer its bucket range.",
+	KindHistoryPartial: "Fleet history reads — turns, traces, the event log — " +
+		"are being answered without every node, because one did not answer " +
+		"inside the fleet read budget.",
 	KindRecallBelowFloor: "Less of the corpus has current vectors than " +
 		"semantic recall claims to cover.",
 	KindRecordsGated: "An apply gate dropped a record. A gated record is " +
@@ -107,14 +110,18 @@ const alarmHeader = `# Alarms
 Every condition the engine raises about itself, what it means, and what to do
 about it.
 
-An alarm reaches you two ways, and they are the same table evaluated once: a
-` + "`crewlet.alarm.active{kind}`" + ` gauge your collector scrapes, and a named
-` + "`WARN`" + ` line when it starts and another when it clears, carrying how long it
-was up. Nothing has to be polled for either — every node evaluates the whole
-table every fifteen seconds, and again the moment its quarter-hourly
-measurements (each log's daily intake, the vector coverage, the store's
-connection-pool waits) land, so an alarm with a sixty-second threshold is
-raised within a beat of passing it.
+An alarm reaches you three ways, and they are the same table evaluated once: a
+` + "`crewlet.alarm.active{kind}`" + ` gauge your collector scrapes, a named ` + "`WARN`" + `
+line when it starts and another when it clears, carrying how long it was up,
+and a count on the node's health envelope (` + "`GET /health`" + ` and the
+dashboard's health push carry ` + "`alarms: {count, worst}`" + `, where a per-log
+alarm counts once for each log it stands on and ` + "`worst`" + ` is the alarm that
+has been firing longest). Nothing has to be polled for any of
+them — every node evaluates the whole table on its own heartbeat, every
+fifteen seconds, and again the moment its quarter-hourly measurements (each
+log's daily intake, the vector coverage, the store's connection-pool waits)
+land, so an alarm with a sixty-second threshold is raised within a beat of
+passing it.
 
 The log line is the one to read first. It carries the measurement that raised
 the alarm, in the units of the thing measured, and the remedy from the table
@@ -137,6 +144,13 @@ threshold for an operator to tune: each one fires at the number that already
 decides something — the grace that sheds a node, the grace that moves its
 seats, the budget a caller was promised, the replay window a log's ceiling was
 sized to hold.
+
+A seat whose token window is spent is NOT an alarm, because nothing is wrong
+with the node: the ceiling is doing what it was set to do. Its mail is parked
+on its inbox until the window turns over or a revision raises the ceiling —
+the ` + "`seat_budget_parked`" + ` line names the window and when it resets, and
+the budgets surfaces show the refusing window. See the budget park in
+docs/concepts/agent-runtime.md.
 `
 
 // sentenceList joins names the way a sentence does: "a", "a and b", "a, b

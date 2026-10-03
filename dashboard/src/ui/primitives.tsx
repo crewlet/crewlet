@@ -19,11 +19,10 @@
  *     the one thing the package cannot know — which of the SIX phase strings
  *     the engine emits map onto the three hues it publishes, and that the
  *     other three take neutral.
- *  3. FOUR CONTROLS THE PACKAGE CANNOT YET DRAW, each for a measured reason
+ *  3. THREE CONTROLS THE PACKAGE CANNOT YET DRAW, each for a measured reason
  *     written at its own definition: `Segmented` (its `SegmentedControl`
  *     keeps the stop the arrows last pointed at, which is stale when the
- *     value is changed from OUTSIDE the row), `Meter` (no unknown ceiling, no
- *     direction), `CopyButton` (the package has the WRITE, which this now
+ *     value is changed from OUTSIDE the row), `CopyButton` (the package has the WRITE, which this now
  *     takes, but its `useClipboard` settles a refusal back to offering its
  *     action) and `DownloadButton` (no peer at all — there is a `CopyButton`
  *     and a `Copyable`, and nothing that saves). The CHROME of the last two
@@ -46,20 +45,15 @@ import {
   useId,
   useRef,
   useState,
+  type FocusEvent,
   type KeyboardEvent,
   type ReactNode,
 } from "react";
-import { CheckGlyph, ContentCopyGlyph, ErrorGlyph, SaveGlyph } from "@crewlethq/icons/glyphs";
-import {
-  Button,
-  cx,
-  EmptyValue,
-  Tag,
-  type TagVariant,
-  type Tone as UiletTone,
-  writeClipboard,
-} from "@crewlethq/ui";
-import { Mark, type MarkName } from "./glyph.tsx";
+import { CheckGlyph, CopyGlyph, CircleAlertGlyph, SaveGlyph } from "@crewlethq/icons/glyphs";
+import { Button, cx, EmptyValue, Tag, type Tone as UiletTone, writeClipboard } from "@crewlethq/ui";
+import type { GlyphName } from "@crewlethq/icons/glyphs";
+import { Mark } from "./glyph.tsx";
+import { fmtExact } from "~/lib/format.ts";
 
 // ---------------------------------------------------------------------------
 // Vocabulary
@@ -116,42 +110,19 @@ export function uiletTone(tone: Tone): UiletTone {
 // ---------------------------------------------------------------------------
 
 /**
- * Which uilet variant draws a phase.
+ * A phase mark: the neutral pill with the phase's word.
  *
- * Phase is the one categorical identity this product spends colour on outside
- * a chart, because it is what a reader follows across the Model, Seat,
- * Activity and Trace screens — and `TagVariant` carries that vocabulary
- * already, on the design system's own hues (`--color-phase-*`), measured to
- * stay separable under protan and deutan vision.
- *
- * THE PREFIX IS THE POINT: uilet spells them `phase-onboarding`,
- * `phase-execute` and `phase-review` so a phase and a state can never be
- * confused for one another inside one union, and a bare `execute` is a type
- * error rather than a pill that quietly renders neutral.
- */
-const PHASE_VARIANT: Record<string, TagVariant> = {
-  onboarding: "phase-onboarding",
-  execute: "phase-execute",
-  review: "phase-review",
-};
-
-/**
- * A phase mark.
- *
- * The engine emits three phases beyond the three uilet draws — `subagent`,
- * `auxiliary` and `judge` — and there is no hue for them, which is the right
- * answer rather than a gap: they take the neutral pill, exactly as this drew
- * them before the port, and the word beside the colour is what a reader
- * actually reads. An unknown phase off the wire lands there too, which is the
- * behaviour a rolling upgrade needs.
+ * A PHASE IS A CATEGORY, AND A CATEGORY HAS NO COLOUR. The design system
+ * removed its phase family in 0.5.0 for the reason this product gives for every
+ * other identity: beside a state badge the state is the one coloured thing on
+ * the row, and the phase is the word that says where the work is. Inside a
+ * FIGURE a phase is a series (`lib/spend.ts`' `phaseColor`); on a row it is a
+ * word, and every phase — the engine's seven, and one a newer peer sends — is
+ * drawn the same way, which is the behaviour a rolling upgrade needs.
  */
 export function PhaseTag({ phase }: { phase: string }) {
   const key = (phase || "").toLowerCase();
-  return (
-    <Tag variant={PHASE_VARIANT[key] ?? "neutral"}>
-      {key || <EmptyValue label="No phase on this record" />}
-    </Tag>
-  );
+  return <Tag variant="neutral">{key || <EmptyValue label="No phase on this record" />}</Tag>;
 }
 
 // ---------------------------------------------------------------------------
@@ -289,7 +260,21 @@ function useRovingGroup<T extends string>(
     e.preventDefault();
   };
 
-  return { box, onKeyDown, stop };
+  // THE STOP FOLLOWS FOCUS, HOWEVER FOCUS ARRIVED — a click, or a dialog
+  // handing focus back to the option that opened it. Only the arrows used to
+  // move it, so an option that opens something rather than committing (the
+  // time picker's Custom) took focus on its click, kept `tabIndex={-1}`, and
+  // got focus back when its dialog was dismissed: the reader stood on an
+  // option that was neither checked nor the group's tab stop, and the next
+  // Tab or arrow started from somewhere else. Where focus is, the reader is.
+  const onFocus = (e: FocusEvent<HTMLDivElement>) => {
+    const buttons = box.current?.querySelectorAll<HTMLElement>("[data-roving]");
+    const at = buttons ? Array.prototype.indexOf.call(buttons, e.target) : -1;
+    const next = values[at];
+    if (next !== undefined && next !== held.stop) setHeld((h) => ({ ...h, stop: next }));
+  };
+
+  return { box, onKeyDown, onFocus, stop };
 }
 
 /**
@@ -352,13 +337,27 @@ export function Segmented<T extends string>({
    * the chip. `0` is a value and draws — "Archived 0" is exactly what a
    * reader needs to know before they click it — so an option with nothing
    * to say passes no count at all.
+   *
+   * `capped` says the number is a FLOOR — the page it was counted on stopped
+   * with more behind it — and it is drawn `50+`, never as an exact figure.
+   * A flag rather than a string for the same reason the count is a number.
    */
   options: {
     value: T;
     label: ReactNode;
     count?: number;
-    icon?: MarkName;
+    capped?: boolean;
+    icon?: GlyphName;
     title?: string;
+    /**
+     * The option cannot be chosen here, and `describedBy` names the element
+     * that says why. It STAYS IN THE ARROWS' PATH and focusable
+     * (`aria-disabled`, not `disabled`): a reader has to be able to land on a
+     * mode to hear why it is unavailable, and a disabled button is skipped
+     * silently. Pressing it does nothing.
+     */
+    disabled?: boolean;
+    describedBy?: string;
   }[];
   onChange: (value: T) => void;
   size?: "sm";
@@ -366,10 +365,16 @@ export function Segmented<T extends string>({
   /** See [useRovingGroup]. Defaults to manual; `automatic` needs a reason. */
   activate?: "manual" | "automatic";
 }) {
-  const { box, onKeyDown, stop } = useRovingGroup(
+  // A DISABLED OPTION IS NEVER COMMITTED, by a press or by automatic
+  // activation alike — the one gate both paths go through.
+  const choose = (next: T) => {
+    if (options.find((o) => o.value === next)?.disabled) return;
+    onChange(next);
+  };
+  const { box, onKeyDown, onFocus, stop } = useRovingGroup(
     options.map((o) => o.value),
     value,
-    onChange,
+    choose,
     activate,
   );
   // THE ONE THING MANUAL ACTIVATION OWES A READER: saying so.
@@ -399,6 +404,7 @@ export function Segmented<T extends string>({
       aria-label={ariaLabel}
       aria-describedby={manual ? hintID : undefined}
       onKeyDown={onKeyDown}
+      onFocus={onFocus}
     >
       {manual && (
         <span id={hintID} className="sr-only">
@@ -420,169 +426,17 @@ export function Segmented<T extends string>({
           // still deciding.
           tabIndex={o.value === stop ? 0 : -1}
           title={o.title}
-          onClick={() => onChange(o.value)}
+          aria-disabled={o.disabled || undefined}
+          aria-describedby={o.describedBy}
+          onClick={() => choose(o.value)}
         >
           {o.icon && <Mark name={o.icon} size="xs" />}
           {o.label}
-          {o.count != null && <span className="count-chip t-num">{o.count}</span>}
+          {o.count != null && (
+            <span className="count-chip t-num">{`${fmtExact(o.count)}${o.capped ? "+" : ""}`}</span>
+          )}
         </button>
       ))}
-    </div>
-  );
-}
-
-// ---------------------------------------------------------------------------
-// Measure
-// ---------------------------------------------------------------------------
-
-/**
- * A bar: how full something is, and WHICH WAY FULL MEANS.
- *
- * # Why this is not `@crewlethq/ui`'s `Meter`
- *
- * TWO GAPS, and each of them makes a bar say something untrue on a screen this
- * dashboard ships today.
- *
- *  1. THERE IS NO WAY TO SAY "NO CEILING". `Meter` draws `role="meter"`
- *     unconditionally with `aria-valuemax={max}`, and a company with no token
- *     budget reaches this component as `max={0}` — which states a range of
- *     ZERO WIDTH. The fraction a reader is offered is 0 of 0, and any value
- *     but zero breaches the role's own normative rule (WAI-ARIA 1.2: "the
- *     value of aria-valuenow MUST NOT fall below or exceed the computed
- *     values of aria-valuemin and aria-valuemax").
- *
- *     AND THE OBVIOUS ESCAPE IS THE WORSE ONE, which is what makes this a gap
- *     in the role rather than in the call: leaving `aria-valuemax` off to mean
- *     "no ceiling" is exactly when the spec fabricates one — it "defaults to
- *     100" when the attribute is missing or not a number. So `role="meter"`
- *     has no way to say that nobody set a limit, and the only honest move is
- *     to stop being a meter: a non-positive `max` draws the bar as decoration
- *     and leaves the legend to carry what IS known. Its `aria-valuenow` is
- *     unclamped too, which is the second half of the ARIA note further down.
- *
- *  2. `meterTone` HAS THE "SPENT" POLARITY WELDED IN — `>= 100` is `danger`,
- *     `>= 75` is `warning` — so a bar measuring PROGRESS reads a finished
- *     outcome as a crisis and one three quarters of the way there as a
- *     warning. A caller can override with `tone`, but an override computed per
- *     call site from the same ratio is the rule spelled at every site rather
- *     than once, which is precisely what `fullMeans` exists to replace. What
- *     it would need is a `fullMeans`/`polarity` prop feeding `meterTone`, or a
- *     second exported ramp for the achieved direction.
- *
- * # The direction is the caller's to state, because it is not derivable
- *
- * A bar at 100% is two opposite pieces of news depending on what it measures.
- * A budget at 100% is refused charges; a completion bar at 100% is the thing
- * finished. The tone was derived from the fill alone — 75% caution, 100%
- * critical — which is exactly right for a budget and exactly backwards for
- * progress: three-quarters of the way there rendered as a WARNING, and fully
- * achieved would have rendered as a CRISIS.
- *
- * So `fullMeans` is REQUIRED rather than defaulted. A default would be the
- * wrong answer half the time, silently, and the one call site that had
- * noticed was passing `tone="accent"` to opt out of the rule rather than
- * fixing it — which is the shape a wrong default always leaves behind.
- *
- *   - `spent`    — a budget, a capacity, a quota. Full is bad, and the bar
- *                  warns before it gets there.
- *   - `achieved` — progress towards something wanted. Full is GOOD and says
- *                  so; nothing below it is a fault the bar can diagnose, so
- *                  everything short of done is simply the accent. NOTHING IN
- *                  THE PRODUCT MEASURES THIS TODAY — the goals screen did,
- *                  and it left with goals — which is exactly why the prop is
- *                  still required rather than defaulted: the next progress
- *                  bar has to state its direction instead of inheriting the
- *                  budget ramp in silence.
- *
- * `tone` still overrides both, for the cases a caller knows something the
- * ratio does not — a budget already refusing charges is critical at any fill.
- *
- * # And two things about the ARIA
- *
- * A `role="meter"` with no accessible name announces as "meter, 120000" and
- * nothing else — a number with no subject, on a screen that has several. The
- * visible legend is not the name: `label` is a ReactNode, several call sites
- * pass a percentage sentence rather than a noun, and two sites pass none at
- * all because the meter sits in a table cell whose column heading does the
- * naming for a sighted reader. So the name is a required prop of its own,
- * exactly as it is on [Segmented].
- *
- * And `aria-valuenow` may not exceed `aria-valuemax`. The fill is clamped —
- * a bar cannot be 130% long — but the value was not, so a budget LOWERED
- * under a counter that has already spent past it (which is the whole reason
- * an operator opens this screen) published an out-of-range value that a
- * screen reader is entitled to render as anything at all. The clamp goes on
- * the value and the true figures go in `aria-valuetext`, so the overage is
- * reported rather than hidden.
- */
-export function Meter({
-  used,
-  max,
-  label,
-  ariaLabel,
-  right,
-  tone,
-  fullMeans,
-}: {
-  used: number;
-  max: number;
-  label?: ReactNode;
-  /** What this meter measures, as a bare noun phrase — "Company budget", not
-      "94% used". The accessible name; see the note above. */
-  ariaLabel: string;
-  right?: ReactNode;
-  tone?: "accent" | "positive" | "caution" | "critical" | "neutral";
-  /** Which way full means; see the note above. Required, never defaulted. */
-  fullMeans: "spent" | "achieved";
-}) {
-  const scaled = max > 0;
-  // CLAMPED AT BOTH ENDS, like `aria-valuenow` below. Only the top used to
-  // be, so a negative reading rendered `width: -5%` — which CSSOM drops,
-  // leaving a bar that silently keeps its previous width rather than reading
-  // empty. The doc above promises clamping; this is the half that was not.
-  const pct = scaled ? Math.max(0, Math.min(100, (used / max) * 100)) : 0;
-  // The tone is DERIVED from the fill AND from what full means, unless the
-  // caller overrides it — so a bar that is nearly full warns where warning is
-  // the right news, and celebrates where it is not.
-  const auto =
-    fullMeans === "achieved"
-      ? pct >= 100
-        ? "positive"
-        : "accent"
-      : pct >= 100
-        ? "critical"
-        : pct >= 75
-          ? "caution"
-          : "accent";
-  return (
-    <div className="meter">
-      {(label || right) && (
-        <div className="meter-legend">
-          <span className="truncate">{label}</span>
-          <span className="t-num">{right}</span>
-        </div>
-      )}
-      <div
-        className="meter-track"
-        // NO SCALE, NO METER. A non-positive `max` states a range of zero
-        // width, so the fraction on offer is 0 of 0 — and the escape is
-        // worse than the problem: `aria-valuemax` "defaults to 100" when it
-        // is missing or not a number, so omitting it to mean "no ceiling" is
-        // the one case that fabricates a confident one. The role cannot say
-        // that nobody set a limit, so this stops being a meter and the
-        // legend beside it carries whatever is actually known.
-        role={scaled ? "meter" : undefined}
-        aria-label={scaled ? ariaLabel : undefined}
-        aria-valuenow={scaled ? Math.max(0, Math.min(used, max)) : undefined}
-        aria-valuemin={scaled ? 0 : undefined}
-        aria-valuemax={scaled ? max : undefined}
-        // THE TRUE FIGURES, past the clamp. A meter reading "100%" when the
-        // counter is at 130% of a budget somebody just lowered is the one
-        // state where the exact numbers are the whole message.
-        aria-valuetext={scaled ? `${used} of ${max}` : undefined}
-      >
-        <div className="meter-fill" data-tone={tone ?? auto} style={{ width: `${pct}%` }} />
-      </div>
     </div>
   );
 }
@@ -636,6 +490,7 @@ function FeedbackButton({
   title,
   variant,
   size = "sm",
+  disabled,
 }: {
   run: () => boolean | Promise<boolean>;
   /** The glyph at rest. A COMPONENT, which is how every uilet control takes
@@ -658,6 +513,9 @@ function FeedbackButton({
   title?: string;
   variant?: "default" | "ghost";
   size?: "md" | "sm";
+  /** Nothing to act on yet — an export of an empty table. `title` then says
+   *  why, so the control is never a dead button with no reason. */
+  disabled?: boolean;
 }) {
   // THE ATTEMPT TRAVELS WITH THE STATE, because an identical outcome twice
   // running is not a DOM change and a live region announces changes only. A
@@ -722,21 +580,22 @@ function FeedbackButton({
       <Button
         // OUR TWO WORDS, SAID IN UILET'S. `ghost` is the transparent one and
         // `default` the bordered one this product has always drawn; the
-        // package spells them `tertiary` and `secondary`, and its own default
+        // package spells them `ghost` and `secondary`, and its own default
         // is `primary`, which is neither. Translated in one place rather than
         // at the three call sites, for the reason [uiletTone] gives above.
         size={size === "sm" ? "small" : "medium"}
-        variant={variant === "ghost" ? "tertiary" : "secondary"}
+        variant={variant === "ghost" ? "ghost" : "secondary"}
         leadingIcon={
           state === "done" ? (
             <CheckGlyph size={glyph} />
           ) : state === "failed" ? (
-            <ErrorGlyph size={glyph} />
+            <CircleAlertGlyph size={glyph} />
           ) : (
             icon
           )
         }
         onClick={onClick}
+        disabled={disabled}
         title={state === "failed" ? failedSaid : title}
       >
         {state === "done" ? doneLabel : state === "failed" ? failedLabel : label}
@@ -820,7 +679,7 @@ export function CopyButton({
   return (
     <FeedbackButton
       run={run}
-      icon={<ContentCopyGlyph size={size === "sm" ? "xs" : "sm"} />}
+      icon={<CopyGlyph size={size === "sm" ? "xs" : "sm"} />}
       label={label}
       doneLabel="Copied"
       failedLabel="Copy failed"
@@ -870,6 +729,7 @@ export function DownloadButton({
   title,
   variant,
   size = "sm",
+  disabled,
 }: {
   text: Text;
   /** The name to offer it under. Sanitised here — see [safeFilename]. */
@@ -879,6 +739,8 @@ export function DownloadButton({
   title?: string;
   variant?: "default" | "ghost";
   size?: "md" | "sm";
+  /** See [FeedbackButton]'s. */
+  disabled?: boolean;
 }) {
   const name = safeFilename(filename);
   const run = useCallback(() => saveTextFile(resolve(text), name, mime), [text, name, mime]);
@@ -901,8 +763,24 @@ export function DownloadButton({
       title={title}
       variant={variant}
       size={size}
+      disabled={disabled}
     />
   );
+}
+
+/**
+ * Hand text to the reader as a file from a control that cannot say so on
+ * itself — a menu item, which closes on the press — and report what happened:
+ * whether the browser took the download, and the name it was offered under
+ * (sanitised exactly as [DownloadButton]'s), for the toast that says so.
+ */
+export function downloadText(
+  text: string,
+  filename: string,
+  mime = "application/json;charset=utf-8",
+): { started: boolean; name: string } {
+  const name = safeFilename(filename);
+  return { started: saveTextFile(text, name, mime), name };
 }
 
 /**

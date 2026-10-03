@@ -24,9 +24,9 @@
  * - a draft kept for the other mode is discarded, and the operator is told —
  *   except a create draft whose save was out, which is carried onto the
  *   company that save made;
- * - a draft this page itself kept a moment ago (the operator switched lens
+ * - a draft this page itself kept a moment ago (the operator left Edit org
  *   and came back) is restored without asking: the offer exists for a draft
- *   somebody may have walked away from, not for a lens switch.
+ *   somebody may have walked away from, not for a trip away and back.
  *
  * WHAT CLEARS IT: whatever makes the plan say so (a save, a discard, an empty
  * log), and a state that may no longer be kept (`keep` false after a change
@@ -37,7 +37,7 @@
  * the kept log with its write id and the nodes it creates before its first
  * write (`markWrite`), and the mark comes off once nothing about the save is
  * unknown. A draft found still marked is a save whose outcome this tab lost,
- * perhaps after the operator left the lens, and part of it may have landed:
+ * perhaps after the operator left the builder, and part of it may have landed:
  * it is restored as an update, never offered as Keep, and the rebase resolves
  * its own creations onto the nodes the chart holds (`history.rebase`). A run
  * this page still has OUT is waited for first (`useSave.saveInFlight`): its
@@ -62,8 +62,8 @@ import { saveInFlight } from "./useSave.ts";
 
 /**
  * When this page last kept a draft, by its `savedAt`. Module state, because a
- * lens switch unmounts the Builder and the next mount is the one that has to
- * recognize the draft as its own.
+ * trip away from Edit org unmounts the Builder and the next mount is the one
+ * that has to recognize the draft as its own.
  */
 let keptByThisPage: number | null = null;
 
@@ -77,13 +77,13 @@ export interface DraftKeeping {
   readonly offer: KeptDraft | null;
   /**
    * Whether the draft as it stands is found again after a reload or a trip
-   * off the lens: false while storage refuses it or it is over the cap.
+   * off the builder: false while storage refuses it or it is over the cap.
    */
   readonly survives: boolean;
   /** True until the kept draft, if any, is decided. */
   readonly pending: boolean;
   /**
-   * A save this page sent before the lens was left is still out, and the
+   * A save this page sent before the builder was left is still out, and the
    * decision waits for it. Editing waits too: the kept draft is what that save
    * is carried onto if it stops part way, and a new log written over it
    * meanwhile would lose whatever of it did not land.
@@ -92,7 +92,7 @@ export interface DraftKeeping {
   /**
    * Marks the kept draft with a save being sent, or clears the mark once
    * nothing about the save is unknown (`null`). Works on storage directly, so
-   * a save settling after the lens was left still marks what it must.
+   * a save settling after the builder was left still marks what it must.
    */
   markWrite(pending: PendingWrite | null): void;
   readonly notice: KeepNotice | null;

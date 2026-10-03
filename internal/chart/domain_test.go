@@ -241,9 +241,11 @@ func TestARecordCarriesBackWhatANewerBuildWrote(t *testing.T) {
 // a schema the suite proved and the migration did not.
 func candidate() statelogtest.Candidate {
 	return statelogtest.Candidate{
-		Domain: chart.Domain{},
-		Encode: encodeSuiteRecord,
-		Kinds:  suiteKinds(),
+		Domain:   chart.Domain{},
+		Encode:   encodeSuiteRecord,
+		Fields:   chart.VersionedFields(),
+		Carrying: carryingSuiteField,
+		Kinds:    suiteKinds(),
 	}
 }
 
@@ -278,6 +280,11 @@ func suiteID(kind chart.ObjectKind) string {
 //
 // IT ENCODES AT ANY VERSION, including one above this build's, because that is
 // exactly what a newer peer publishes and what this build has to retain.
+//
+// VERSION ZERO IS THE WRITER'S PATH: the domain's own encoder stamps the record,
+// which is what the suite's stamping case reads back, and the record carries no
+// versioned field — so an edge is the base format's object, parent and lead,
+// and the stamp is version 1.
 func encodeSuiteRecord(kind, id, opID string, version int) ([]byte, error) {
 	rec := chart.MutationRecord{
 		RecordEnvelope: chart.RecordEnvelope{
@@ -292,6 +299,10 @@ func encodeSuiteRecord(kind, id, opID string, version int) ([]byte, error) {
 		ActorKind: chart.AuthorOperator,
 	}
 	op, payload, scope := suitePayload(chart.ObjectKind(kind), id)
+	if placement, ok := payload.(chart.PlacementPayload); ok && version == 0 {
+		placement.Edges = baseEdges(placement.Edges)
+		payload = placement
+	}
 	rec.Op = op
 	rec.Scope = scope
 	if payload != nil {
@@ -302,6 +313,16 @@ func encodeSuiteRecord(kind, id, opID string, version int) ([]byte, error) {
 		rec.Mutation = body
 	}
 	return chart.Encode(rec)
+}
+
+// baseEdges is edges as the base format states them: an object, a parent and
+// a lead, with every field a later version added left off.
+func baseEdges(edges []chart.Edge) []chart.Edge {
+	out := make([]chart.Edge, 0, len(edges))
+	for _, edge := range edges {
+		out = append(out, chart.Edge{Object: edge.Object, Parent: edge.Parent, Lead: edge.Lead})
+	}
+	return out
 }
 
 // suitePayload is one valid (op, payload, scope) per kind.

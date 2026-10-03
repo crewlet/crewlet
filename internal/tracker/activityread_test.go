@@ -180,6 +180,9 @@ func TestAFeedRefusesAPositionItCannotUseAsTheRequestsMistake(t *testing.T) {
 	inbox := func(q tracker.InboxQuery) func() error {
 		return func() error {
 			q.Handle, q.Level = "bob", statelog.ReadStale
+			// THE SCOPE EVERY SURFACE DEFAULTS TO, so the case reaches
+			// the position it is about rather than the absent scope.
+			q.Snoozed = tracker.SnoozeExclude
 			_, err := r.reader.Inbox(t.Context(), q, wednesday)
 			return err
 		}

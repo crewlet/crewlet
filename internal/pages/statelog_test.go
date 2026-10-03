@@ -3,6 +3,7 @@ package pages_test
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"testing"
 	"time"
 
@@ -37,9 +38,14 @@ func TestThePagesDomainIsACertifiedDomain(t *testing.T) {
 			// would be a schema the suite proved and the migration
 			// did not.
 			Encode: encodeSuiteRecord,
-			Kinds:  suiteKinds(),
-			Rows:   pages.NewRows,
-			Write:  suiteWrite,
+			// THE VERSIONED-FIELD TABLE, and a record carrying each of
+			// its fields — which is what certifies the path the table
+			// names is where the encoder actually writes the field.
+			Fields:   pages.VersionedFields(),
+			Carrying: carryingSuiteField,
+			Kinds:    suiteKinds(),
+			Rows:     pages.NewRows,
+			Write:    suiteWrite,
 			// THE GATE RECORD, which this domain had an applier, a fence
 			// and a table for and no writer — so the trim never learned an
 			// evicted node had left this log.
@@ -83,6 +89,39 @@ func suiteWrite(ctx context.Context, pub *statelog.Publisher, db *store.DB) erro
 	}
 	_, _, err = s.EnsureContainer(ctx, chartAt(0), suiteContainer, "The suite's space", "")
 	return err
+}
+
+// carryingSuiteField builds a valid record carrying exactly one versioned
+// field, with its version left for the encoder to stamp.
+//
+// EVERY FIELD THE TABLE NAMES HAS A CASE, and a field without one fails here
+// rather than passing unexamined: the suite reads the version this returns,
+// and a record that did not carry the field would be stamped at 1 and reported
+// as the path being wrong, which is a fixture fault dressed as a domain one.
+func carryingSuiteField(field statelog.VersionedField) ([]byte, error) {
+	switch field.Name {
+	case "ContainerPayload.ChartPosition":
+		body, err := marshal(pages.ContainerPayload{
+			V: pages.DocumentVersion, Key: suiteContainer, Name: "The suite's space",
+			ChartPosition: chartAt(0),
+		})
+		if err != nil {
+			return nil, err
+		}
+		return pages.Encode(pages.MutationRecord{
+			RecordEnvelope: pages.RecordEnvelope{
+				OpID:      "suite-carrying-" + field.Name,
+				Subject:   pages.ContainerSubject(suiteContainer),
+				Op:        pages.OpPatch,
+				Scope:     pages.ScopeSet{Subject: true},
+				CreatedAt: time.Unix(1_700_000_000, 0).UTC(), Gen: 1,
+				Writer: "suite-node",
+			},
+			Mutation: body, Actor: "suite", ActorKind: pages.AuthorOperator,
+		})
+	}
+	return nil, fmt.Errorf("no suite record carries %s — add a case that sets it "+
+		"and nothing else versioned", field.Name)
 }
 
 // suiteKinds is every kind, derived from the enum rather than typed again.

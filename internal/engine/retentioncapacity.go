@@ -27,15 +27,19 @@ import (
 //
 // A size is a LEVEL: four `os.Stat` calls and one `statfs`, microseconds
 // apiece, and correct whenever they are taken. So the reading measures them
-// directly and the tick publishes the same numbers as gauges.
+// directly and the trim tick publishes the same numbers as gauges.
 //
 // A wait is a DELTA: `sql.DBStats` counts since the process started, and the
 // interesting quantity is how long a caller queued RECENTLY. Consuming a delta
 // is destructive — whoever reads it clears it for everyone after — so it is
-// taken on the tick alone, at a cadence that is regular by construction, and
-// never on a request whose frequency an operator's dashboard decides.
+// taken on the trim's tick alone ([statelog.TrimInterval]), at a cadence that
+// is regular by construction — never on the faster alarm evaluation
+// ([statelog.AlarmInterval]), which would change what the `pool_wait` alarm's
+// p95 is a percentile OF, and never on a request whose frequency an
+// operator's dashboard decides.
 
-// capacity records what one tick can measure about this node's own storage.
+// capacity records what one trim tick can measure about this node's own
+// storage.
 func (r *retention) capacity(ctx context.Context) {
 	if r.metrics == nil || r.db == nil {
 		return
@@ -174,10 +178,10 @@ func fileBytes(path string) (int64, error) {
 // space fills the three storage fields of a reading.
 //
 // MEASURED RATHER THAN READ BACK OFF THE GAUGES. The gauges are published on
-// the trim's own tick, which is a quarter of an hour; a volume fills in less
-// time than that, and an alarm evaluated against a fifteen-minute-old free
-// count is one that reports the space that was there before the thing that
-// used it.
+// the trim's own tick, which is a quarter of an hour, while the alarms are
+// evaluated every [statelog.AlarmInterval]; a volume fills in less time than a
+// quarter hour, and an alarm evaluated against a fifteen-minute-old free count
+// is one that reports the space that was there before the thing that used it.
 func (r *retention) space(out *statelog.Reading) {
 	if r.db == nil {
 		return

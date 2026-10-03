@@ -23,6 +23,7 @@ import { PhaseCard } from "./PhaseCard.tsx";
 import { TurnCard } from "./TurnCard.tsx";
 import { Router } from "~/app/router.tsx";
 import { groupTurns, ledgerOf, triggerHeadline, type PhaseRecord } from "~/lib/phases.ts";
+import { phaseRecord } from "~/test/phaseRecord.ts";
 
 vi.mock("~/lib/phases.ts", async (importOriginal) => {
   const actual = await importOriginal<typeof import("~/lib/phases.ts")>();
@@ -48,56 +49,27 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
-/** A phase that started five seconds ago and last reported one second ago. */
+/**
+ * A phase that started five seconds ago and last reported one second ago —
+ * the suites' one whole record (`~/test/phaseRecord.ts`), so a field the
+ * record gains is one this case cannot leave out.
+ */
 function running(over: Partial<PhaseRecord> = {}): PhaseRecord {
-  return {
+  return phaseRecord({
     key: "t1|execute|1",
     turnId: "t1",
     workKey: "wk-1",
-    phase: "execute",
-    iteration: 1,
     agentId: "a-dev",
     role: "Dev A",
     model: "scripted",
-    providerKey: "",
     live: true,
-    failed: false,
-    error: "",
-    errorKind: "",
-    systemPrompt: "",
-    userPrompt: "",
-    response: "",
-    tools: [],
     narration: [{ round: 1, reasoning: "the file first", content: "Reading the file." }],
-    partial: null,
-    inputTokens: 0,
-    outputTokens: 0,
-    totalTokens: 0,
     roundsUsed: 1,
-    exhaustedRounds: false,
-    emptyAnswerRounds: 0,
-    rescueFired: false,
-    decision: "",
-    notes: "",
-    conversationKey: "",
-    toolsAvailable: [],
-    toolCatalogue: [],
-    worker: "",
-    taskId: "",
-    hostPhase: "",
-    hostIteration: 0,
-    backend: "",
-    codingAgent: "",
-    sandboxId: "",
-    costUSD: 0,
-    deliveredRefs: [],
-    trigger: null,
     at: iso(T0 - 1_000),
     startedAt: iso(T0 - 5_000),
-    durationMs: 0,
     eventId: "ev-1",
     ...over,
-  };
+  });
 }
 
 /** Moves the clock one tick at a time, as an open tab sees it. */

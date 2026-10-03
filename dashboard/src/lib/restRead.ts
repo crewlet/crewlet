@@ -241,9 +241,11 @@ export function useRestRead<T>(
     };
   }, [question, ask, reread]);
 
-  // THE SOCKET COMING BACK reads again, quietly, as `useQuery` re-asks.
+  // THE SOCKET COMING BACK reads again, quietly, as `useQuery` re-asks — and
+  // its first coming up only where the last read never reached the engine.
   const quietly = useCallback(() => ask(false), [ask]);
-  useRereadOnReconnect(quietly, enabled);
+  const unreached = useCallback(() => unanswered.current > 0, []);
+  useRereadOnReconnect(quietly, enabled, unreached);
 
   // AND, where asked for, THE TAB COMING BACK. `visibilitychange` rather than
   // focus, for the reason `useQuery` gives: it fires for a tab that was away,

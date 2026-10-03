@@ -17,8 +17,8 @@
  *   rather than refusing it.
  * - THE SETTINGS' DRY RUN ([placeSettingsFindings]). The settings document is
  *   still a revision the engine validates whole, and its problems name paths
- *   in it: the charter's are the company node's, an integration's go to the
- *   Integrations screen, a schedule's to the Schedules screen.
+ *   in it: the charter's are the company node's, an integration's go to
+ *   Settings › Integrations, a schedule's to the Schedules screen.
  * - A SAVE'S REFUSAL (`save.ts`), placed on the node the refused write was
  *   about, beside the step it stopped at.
  */

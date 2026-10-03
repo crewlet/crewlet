@@ -127,8 +127,8 @@ func TestAKeyTwoTasksHoldIsFlaggedOnTheOnesThatDidNotClaimIt(t *testing.T) {
 // asked, so a case about what a HIT carries does not depend on the index.
 type fixedRanking []tracker.RankedDoc
 
-func (f fixedRanking) RankItems(context.Context, string, int) ([]tracker.RankedDoc, error) {
-	return f, nil
+func (f fixedRanking) RankItems(context.Context, tracker.SearchQuery) (tracker.RankedDocs, error) {
+	return tracker.RankedDocs{Docs: f}, nil
 }
 
 func (fixedRanking) Building(context.Context) bool { return false }
@@ -185,12 +185,16 @@ func TestEveryRowAnItemIsOpenedFromSaysWhenItsKeyOpensAnotherTask(t *testing.T) 
 	// AN ASK AND A NOTICE ON EACH HOLDER, so the inbox, the asks and the
 	// feed all have a row about every one of them.
 	for _, id := range []string{"t-1", "t-2", "t-3"} {
-		apply(taskRecord(id, tracker.OpPatch, tracker.TaskPatch{
+		comment := taskRecord(id, tracker.OpPatch, tracker.TaskPatch{
 			Comment: &tracker.Comment{ID: "c-" + id, Task: id, Author: "bo",
 				AuthorKind: tracker.AuthorHuman, Body: "which one is this?",
 				Ask: "ana", CreatedAt: at},
 		}, &tracker.Notify{Kind: tracker.ChangeComment,
-			Snapshot: tracker.Snapshot{Key: "ENG-7", Assignee: "ana"}}))
+			Snapshot: tracker.Snapshot{Key: "ENG-7", Assignee: "ana"}})
+		// BY BO, who wrote the comment: a change is never news to its own
+		// author, and the notice under test is ana's.
+		comment.Actor = "bo"
+		apply(comment)
 	}
 	// A LEAD PUTS A HOLDER AT THE TOP OF SOMEBODY'S PRIORITIES — the one
 	// notice whose SUBJECT is not the task it is about: the subject is the
@@ -272,11 +276,12 @@ func TestEveryRowAnItemIsOpenedFromSaysWhenItsKeyOpensAnotherTask(t *testing.T) 
 		t.Fatalf("the board answered %v, want both holders of ENG-7", seen)
 	}
 
-	hits, err := tracker.NewSearcher(h.db, fixedRanking{{ID: "t-1"}, {ID: "t-2"}}).
-		Search(ctx, "which", 0)
+	found, err := tracker.NewSearcher(h.db, fixedRanking{{ID: "t-1"}, {ID: "t-2"}}).
+		Search(ctx, tracker.SearchQuery{Text: "which", Limit: 10})
 	if err != nil {
 		t.Fatalf("the ranked search: %v", err)
 	}
+	hits := found.Hits
 	if len(hits) != 2 {
 		t.Fatalf("the ranked search answered %d hits, want both holders", len(hits))
 	}
@@ -337,7 +342,7 @@ func TestEveryRowAnItemIsOpenedFromSaysWhenItsKeyOpensAnotherTask(t *testing.T) 
 	inboxOf := func(handle string) []tracker.InboxNotice {
 		t.Helper()
 		inbox, err := reader.Inbox(ctx, tracker.InboxQuery{
-			Handle: handle, Level: statelog.ReadStale,
+			Handle: handle, Level: statelog.ReadStale, Snoozed: tracker.SnoozeExclude,
 		}, now)
 		if err != nil {
 			t.Fatalf("%s's inbox: %v", handle, err)
@@ -382,7 +387,7 @@ func TestEveryRowAnItemIsOpenedFromSaysWhenItsKeyOpensAnotherTask(t *testing.T) 
 
 	mine, err := reader.MyWork(ctx, tracker.MyWorkQuery{
 		Handle: "ana", Level: statelog.ReadStale,
-	}, now)
+	}, now, time.UTC)
 	if err != nil {
 		t.Fatalf("ana's own work: %v", err)
 	}
@@ -416,23 +421,25 @@ func TestEveryRowAnItemIsOpenedFromSaysWhenItsKeyOpensAnotherTask(t *testing.T) 
 // noticeTaskMigration is the replicated migration that gave a notice the id of
 // the task it is about, read from the file that ships it.
 const noticeTaskMigration = "internal/store/schema/replicated/" +
-	"0039_a_notice_names_the_task_it_is_about.sql"
+	"0047_a_notice_names_the_task_it_is_about.sql"
 
 // A NOTICE FROM BEFORE IT NAMED ITS TASK READS AS IT DID THEN, OR BETTER.
 //
-// The migration that added the column backfills it, and the two kinds of
-// notice come out of it differently on purpose. A task commit's notice is
-// about its own subject, so it is filled from there and a duplicate's notice
-// links by id exactly as one written today does. A prioritised notice's
-// subject is a PERSON, and the task its wake named is in no row the table
-// reaches — so it stays empty, and an empty task must leave the key as the
-// notice's address: asked against nothing, every directory row reads as
-// "another task", and the reader is sent to an id the notice does not have.
+// The column is DERIVED, so the rows written before it are filled by the
+// applier's own re-derivation (derivation version 7) and never by a second
+// copy of the rule in the migration's SQL — which this case also holds, by
+// reading the migration and refusing a backfill in it. The two kinds of
+// notice come out differently on purpose. A task commit's notice is about its
+// own subject, so it is filled from there and a duplicate's notice links by id
+// exactly as one written today does. A prioritised notice's subject is a
+// PERSON, and the task its wake named is in no row the pass reaches — so it
+// stays empty, and an empty task must leave the key as the notice's address:
+// asked against nothing, every directory row reads as "another task", and the
+// reader is sent to an id the notice does not have.
 //
-// THE MIGRATION'S OWN STATEMENT, read from its file and run over rows put
-// back the way the build before it wrote them, because the backfill runs
-// exactly once on every database that has rows and a fresh one never runs it
-// against anything at all.
+// OVER ROWS PUT BACK THE WAY THE BUILD BEFORE THE COLUMN WROTE THEM, and then
+// [tracker.Applier.Rederive] — the pass a node runs on its first boot of a
+// build whose rules differ from its checkpoint's.
 func TestANoticeFromBeforeItNamedItsTaskStillOpensWhatItMeant(t *testing.T) {
 	t.Parallel()
 	h := newApplyHarness(t)
@@ -451,24 +458,29 @@ func TestANoticeFromBeforeItNamedItsTaskStillOpensWhatItMeant(t *testing.T) {
 		task.Key, task.Assignee = "ENG-7", "ana"
 		apply(taskRecord(id, tracker.OpCreate, task, nil))
 	}
-	// A COMMENT ON THE DUPLICATE, for ana — a task commit's notice.
-	apply(taskRecord("t-2", tracker.OpPatch, tracker.TaskPatch{
+	// A COMMENT ON THE DUPLICATE, for ana — a task commit's notice — by bo,
+	// since a change is never news to its own author.
+	byBo := func(rec tracker.MutationRecord) tracker.MutationRecord {
+		rec.Actor = "bo"
+		return rec
+	}
+	apply(byBo(taskRecord("t-2", tracker.OpPatch, tracker.TaskPatch{
 		Comment: &tracker.Comment{ID: "c-t-2", Task: "t-2", Author: "bo",
 			AuthorKind: tracker.AuthorHuman, Body: "is this the one?",
 			CreatedAt: at},
 	}, &tracker.Notify{Kind: tracker.ChangeComment,
-		Snapshot: tracker.Snapshot{Key: "ENG-7", Assignee: "ana"}}))
+		Snapshot: tracker.Snapshot{Key: "ENG-7", Assignee: "ana"}})))
 	// AND ONE ON A TASK SINCE PURGED, for di: its row is gone, so only its
 	// history says the notice was a task's.
 	gone := newTask("t-3")
 	gone.Key, gone.Assignee = "ENG-9", "di"
 	apply(taskRecord("t-3", tracker.OpCreate, gone, nil))
-	apply(taskRecord("t-3", tracker.OpPatch, tracker.TaskPatch{
+	apply(byBo(taskRecord("t-3", tracker.OpPatch, tracker.TaskPatch{
 		Comment: &tracker.Comment{ID: "c-t-3", Task: "t-3", Author: "bo",
 			AuthorKind: tracker.AuthorHuman, Body: "still needed?",
 			CreatedAt: at},
 	}, &tracker.Notify{Kind: tracker.ChangeComment,
-		Snapshot: tracker.Snapshot{Key: "ENG-9", Assignee: "di"}}))
+		Snapshot: tracker.Snapshot{Key: "ENG-9", Assignee: "di"}})))
 	apply(taskRecord("t-3", tracker.OpPurge,
 		map[string]any{"reason": "filed twice"}, nil))
 	// AND THE CLAIMANT AT THE TOP OF CY'S LIST — a person's notice.
@@ -493,17 +505,12 @@ func TestANoticeFromBeforeItNamedItsTaskStillOpensWhatItMeant(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read the migration: %v", err)
 	}
-	at0 := strings.Index(string(text), "UPDATE tracker_notifications")
-	if at0 < 0 {
-		t.Fatalf("%s carries no backfill, so this case would assert the "+
-			"column's empty default and call it a migration", noticeTaskMigration)
+	if strings.Contains(string(text), "UPDATE tracker_notifications") {
+		t.Fatalf("%s backfills the column in SQL — a derived column has one "+
+			"implementation, the applier's re-derivation, and a second copy of "+
+			"the rule drifts the day either is edited", noticeTaskMigration)
 	}
-	backfill := string(text[at0:])
-	w, err := h.db.Replicated().Writer(t.Context())
-	if err != nil {
-		t.Fatalf("take the writer: %v", err)
-	}
-	if err := w.Tx(t.Context(), func(tx *sql.Tx) error {
+	if err := h.db.Replicated().Tx(t.Context(), func(tx *sql.Tx) error {
 		// AS THE BUILD BEFORE THE COLUMN LEFT THEM — and with ana's
 		// notice's history row gone, as a reanchor leaves a notice that
 		// outlived it: only the task row it names says it was a task's.
@@ -516,13 +523,15 @@ func TestANoticeFromBeforeItNamedItsTaskStillOpensWhatItMeant(t *testing.T) {
 			             WHERE recipient = 'ana')`); err != nil {
 			return err
 		}
-		_, err := tx.ExecContext(t.Context(), backfill)
+		_, err := h.applier.Rederive(t.Context(), tx, statelog.ApplyOptions{})
 		return err
 	}); err != nil {
-		t.Fatalf("run the backfill: %v", err)
+		t.Fatalf("re-derive: %v", err)
 	}
-	if err := w.Close(); err != nil {
-		t.Fatalf("release the writer: %v", err)
+	if tracker.DerivationVersion < 7 {
+		t.Error("the applier fills a notice's task_id by re-derivation and " +
+			"its derivation version does not say so — a node upgrading onto " +
+			"rows written without the column would never fill them")
 	}
 
 	log, err := statelogtest.LocalReader(tracker.Domain{}, h.db.Replicated(),
@@ -537,7 +546,7 @@ func TestANoticeFromBeforeItNamedItsTaskStillOpensWhatItMeant(t *testing.T) {
 	only := func(handle string) tracker.InboxNotice {
 		t.Helper()
 		inbox, err := reader.Inbox(t.Context(), tracker.InboxQuery{
-			Handle: handle, Level: statelog.ReadStale,
+			Handle: handle, Level: statelog.ReadStale, Snoozed: tracker.SnoozeExclude,
 		}, at.Add(time.Hour))
 		if err != nil {
 			t.Fatalf("%s's inbox: %v", handle, err)
@@ -550,19 +559,19 @@ func TestANoticeFromBeforeItNamedItsTaskStillOpensWhatItMeant(t *testing.T) {
 	}
 	if got := only("ana"); got.Task != "t-2" || !got.SubjectKeyCollision {
 		t.Errorf("the comment notice on the duplicate came out of the "+
-			"backfill naming task %q with subject_key_collision=%v, want t-2 "+
+			"re-derivation naming task %q with subject_key_collision=%v, want t-2 "+
 			"and true — it is about its own subject, and ENG-7 opens t-1",
 			got.Task, got.SubjectKeyCollision)
 	}
 	if got := only("di"); got.Task != "t-3" {
-		t.Errorf("the notice on a purged task came out of the backfill "+
+		t.Errorf("the notice on a purged task came out of the re-derivation "+
 			"naming task %q, want t-3 — its row is gone, and its history is "+
 			"what says the notice was a task's", got.Task)
 	}
 	if got := only("cy"); got.Task != "" || got.SubjectKeyCollision ||
 		got.SubjectKey != "ENG-7" {
 
-		t.Errorf("the prioritised notice came out of the backfill naming "+
+		t.Errorf("the prioritised notice came out of the re-derivation naming "+
 			"task %q under key %q with subject_key_collision=%v, want no task, "+
 			"ENG-7 and false — its subject is a person, nothing it holds names "+
 			"the task, and its key is the only address it has",

@@ -67,7 +67,8 @@ type domainCeiling struct {
 	// to a smaller ceiling" can reach. Declared by the register entry
 	// beside Field, because the floor is the FIELD's (Tier A validates
 	// it) and not the budget's: [MinDomainCeiling] is where scaling stops,
-	// and the org chart's and the identity log's fields go well below it.
+	// and the org chart's, the identity log's and the usage log's fields go
+	// well below it.
 	// A refusal that offered a smaller ceiling only above that gibibyte
 	// never offered one for a 512 MiB ask whose field takes 64 MiB.
 	Floor int64
@@ -99,19 +100,20 @@ const StreamBudgetShare = 0.5
 // knowledge base's — because below it a log that grows with a corpus is not a
 // log, it is a window that refuses appends within a week of a company starting
 // work. It is where SCALING stops and it is nobody's floor but theirs: the org
-// chart's and the identity estate's fields go down to 64 MiB, a log that asks
-// for less than this keeps what it asked for because scaling never raises, and
-// the capacity verb holds a target to the floor of the log's own field
-// ([capacityBounds]), never to this.
+// chart's, the identity estate's and the usage log's fields go down to 64 MiB,
+// a log that asks for less than this keeps what it asked for because scaling
+// never raises, and the capacity verb holds a target to the floor of the log's
+// own field ([capacityBounds]), never to this.
 const MinDomainCeiling int64 = 1 << 30
 
 // tierACeiling is where Tier A puts one domain's ceiling on a volume with free
 // bytes of headroom.
 //
-// A SWITCH RATHER THAN A METHOD on the domain, for [stateLog.applierFor]'s
-// reason: the Tier A field is the engine's vocabulary rather than the domain's,
-// and what this costs is that a new domain fails here, at boot, naming itself,
-// rather than reserving a default outside the budget.
+// A REGISTER FIELD RATHER THAN A METHOD on the domain, for
+// [stateLog.applierFor]'s reason: the Tier A field is the engine's vocabulary
+// rather than the domain's, and what this costs is that a new domain fails
+// here, at boot, naming itself, rather than reserving a default outside the
+// budget.
 //
 // # Why the mutation log's is DERIVED and the vector changelog's is capped
 //

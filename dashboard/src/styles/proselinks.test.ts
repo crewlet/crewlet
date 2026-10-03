@@ -1,8 +1,7 @@
 // @vitest-environment node
-import { readdirSync, readFileSync, statSync } from "node:fs";
-import { join } from "node:path";
-import { fileURLToPath } from "node:url";
 import { describe, expect, test } from "vitest";
+
+import { modules } from "../test/source.ts";
 
 /**
  * AN ANCHOR IN A SENTENCE SAYS SO, because nothing else can tell.
@@ -11,8 +10,8 @@ import { describe, expect, test } from "vitest";
  * chrome this product is mostly made of — a breadcrumb, a row that happens to
  * be an anchor, a caption-sized navigation — because each of those is a THING
  * on the page rather than a word in a line. It is wrong the moment an anchor
- * IS a word in a line: the sentence around it is `--text`, the link is
- * `--accent-ink`, and colour alone is what WCAG 1.4.1 refuses. Those anchors
+ * IS a word in a line: the sentence around it is `--color-text-primary`, the link is
+ * `--color-brand-accent-ink`, and colour alone is what WCAG 1.4.1 refuses. Those anchors
  * take `.prose-link`, which puts the underline back and keeps it.
  *
  * # Why a scan, and why it keys on the CLASS ATTRIBUTE
@@ -37,8 +36,6 @@ import { describe, expect, test } from "vitest";
  * anchor is gone fails too, so the list cannot outlive what it excuses.
  */
 
-const SRC = fileURLToPath(new URL("..", import.meta.url));
-
 /** An anchor this scan does not ask about, and why it does not have to. */
 interface Allowed {
   /** `file:line`, so a moved anchor is re-read rather than silently excused. */
@@ -48,43 +45,16 @@ interface Allowed {
 
 const ALLOWED: Allowed[] = [
   {
-    where: "routes/work/shapes/Board.tsx",
-    why:
-      "The `N more →` link at the foot of a column. It is a standalone call to " +
-      "action on its own line, not a word in a sentence, and `.work-col-foot a` " +
-      "draws it — so the reset is right and there is no prose for an underline " +
-      "to separate it from.",
-  },
-  {
     where: "routes/work/shapes/Grid.tsx",
     why:
       "The same `N more →` link at the foot of a band, drawn by " +
       "`.grid-band-foot a` for the reason the board's entry above gives. The " +
       "shapes draw one answer and the link means the same thing in all of them.",
   },
-  {
-    where: "routes/knowledge/Pages.tsx",
-    why:
-      "The ancestor trail and the children list under 'Where it sits'. Both are " +
-      "LISTS of links — a path and a set of siblings — rather than links inside a " +
-      "sentence, so the reset is right for them: what separates them from the text " +
-      "around them is that there is no text around them. They carry no class " +
-      "because the containers draw them, which is the one case the forward " +
-      "question has a good answer without one.",
-  },
 ];
 
+/** The modules that can hold markup: an anchor is JSX, and JSX is `.tsx`. */
 const SOURCE = /\.tsx$/;
-
-function files(directory: string): string[] {
-  const out: string[] = [];
-  for (const entry of readdirSync(directory)) {
-    const path = join(directory, entry);
-    if (statSync(path).isDirectory()) out.push(...files(path));
-    else if (SOURCE.test(entry) && !entry.includes(".test.")) out.push(path);
-  }
-  return out;
-}
 
 /**
  * Every `<a` in the tree that opens without a `className`.
@@ -164,10 +134,9 @@ export function unmarkedInSentence(source: string): number[] {
 }
 
 describe("an anchor in a sentence", () => {
-  const scanned = files(SRC).map((path) => ({
-    where: path.slice(SRC.length),
-    text: readFileSync(path, "utf8"),
-  }));
+  const scanned = modules()
+    .filter(({ path }) => SOURCE.test(path))
+    .map(({ path, text }) => ({ where: path, text }));
 
   test("carries a class, so somebody decided which kind of link it is", () => {
     const bare = scanned

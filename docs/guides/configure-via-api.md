@@ -26,8 +26,9 @@ See the [Configuration concept doc](../concepts/configuration.md) for the two-ti
 > with their own records, their own per-object arbitration and their own
 > history — see [The org chart domain](../concepts/chart-domain.md). A `PUT` or
 > a `PATCH` here carrying a top-level `roles:` or `units:` is refused in full
-> with `400 chart_not_writable_here`, and so is a write to
-> `/config/roles/{handle}` or `/config/units/{key}`. Both stay **readable**.
+> with `400 chart_not_writable_here`, and there is no `/config/roles/{handle}`
+> or `/config/units/{key}`: a seat and a unit are not collections of the
+> settings, so both paths are `404 no_route`.
 >
 > The chart has its own routes: `GET`/`PATCH /chart/units/{key}` and
 > `/chart/seats/{handle}` for content, `POST /chart/batch` for structure, and
@@ -175,11 +176,10 @@ PUT /config/llm-providers/{key}
 PUT /config/mcp-servers/{name}
 ```
 
-`roles` and `units` are still **readable** at `/config/roles/{handle}` and
-`/config/units/{key}` — a revision written before the chart's split still
-carries both inside it, and you have to be able to see one you are repairing.
-There is no write route for either: the chart's own surface is
-[below](#evolving-the-org-chart).
+There is no `/config/roles/{handle}` or `/config/units/{key}`: no revision
+carries a seat or a unit, so neither is a collection here, and both paths are
+`404 no_route`. Seats and units are read and written through the chart's own
+surface, [below](#evolving-the-org-chart).
 
 Each is addressed by the thing the *document* resolves it by, never by its
 display name: a provider by its key under `providers.llm`, a server by its
@@ -187,8 +187,8 @@ display name: a provider by its key under `providers.llm`, a server by its
 address from.
 
 Why bother, when `PUT /config` already works? Because that write makes every
-edit a company-wide one. Changing one seat's goal means sending back a
-document carrying every other seat, every provider and every integration — and
+edit a company-wide one. Changing one server's endpoint means sending back a
+document carrying every other server, every provider and every integration — and
 a concurrent edit anywhere in it is yours to lose. A per-entity write narrows
 what you are claiming to have changed, which is what makes the revision
 summary in the history mean something.
@@ -235,28 +235,55 @@ consequences worth knowing before you script against it:
   even though nothing in the body you sent is about it. This is the point of
   validating whole — you never see the rest of the document, so it is the one
   place that break can be caught.
-- **An unknown field is refused, not dropped.** A body carrying `gaol` where
-  you meant `goal` is `400 invalid_body` naming the field, exactly as the
-  whole-document parser refuses an unknown key. A decoder that ignored what it
-  did not recognise would answer `201` and store a seat with no goal, and this
-  is the surface most likely to be hand-edited in a hurry.
-- **A `PUT` never creates.** An id the active revision does not carry is
-  `404 no_such_entity`. Naming one that is not there is far more often a typo
-  than an intent to add a seat, and adding through this route would grow the
-  company without you ever seeing the document you changed. Add through
-  `PUT /config`.
+- **An unknown field is refused, not dropped.** A body carrying `heders`
+  where you meant `headers` is `400 invalid_body` naming the field, exactly as
+  the whole-document parser refuses an unknown key. A decoder that ignored what
+  it did not recognise would answer `201` and store a server that sends no
+  credentials, and this is the surface most likely to be hand-edited in a
+  hurry.
+- **A plain `PUT` never creates.** An id the active revision does not carry
+  is `404 no_such_entity`: naming one that is not there is far more often a
+  typo than an intent to add one. To ADD an MCP server or an LLM provider,
+  say so — send the same `PUT` with `If-None-Match: *`, the create-only
+  condition at the new entity's own address. It is added (an MCP server after
+  every server already declared, so no seat's tool block moves) and the whole
+  company validated as for any write; a name already taken is
+  `412 entity_exists` rather than a replacement of a server you never saw. Do
+  not send `If-Match` beside it (`400 conflicting_preconditions`): the create
+  lands on the revision active when it commits, compare-and-set. A seat and a
+  unit are not created here at all — there is no `/config/roles` or
+  `/config/units` — so hire a seat or open a unit through the
+  [org chart's own routes](#evolving-the-org-chart), where each has the place
+  in the chart this path cannot name.
+
+  ```bash
+  curl -X PUT http://localhost:8000/config/mcp-servers/linear \
+    -H "Authorization: Bearer $CREWLET_API_TOKEN" \
+    -H "If-None-Match: *" \
+    -H "X-Summary: add the linear server" \
+    -d '{"name":"linear","transport":"http","url":"https://mcp.example.com",
+         "headers":{"Authorization":"${LINEAR_TOKEN}"}}'
+  ```
 - **The path is the identity, and a `PUT` never renames.** `PUT
   /config/mcp-servers/tracker` replaces whatever is at `tracker`; a body
   carrying a different `name` is `400 identity_mismatch` rather than a move.
   A server's name is the key every seat declares its credentials under and the
   prefix its tools carry, so a rename here silently unhooks everything that
   named it, and nothing that references the old name travels with the splice.
-  Keep the identity in the body and change whatever else you like.
+  Keep the identity in the body and change whatever else you like. To rename
+  one, rename it in the company file together with everything that names it,
+  and `crewlet config import` that — the next point says why `/config` cannot.
 - **`PUT` is the only verb.** There is no `DELETE /config/mcp-servers/tracker`;
-  the path answers `405`. Removal is a full-document edit for the same reason
-  creation is, only more so — deleting a provider silently repoints everything
-  that named it. If that is going to happen, it should happen in a document you
-  looked at, and land as one reviewable revision. Export, edit, `PUT /config`.
+  the path answers `405`. Removal is a whole-company edit, unlike a create:
+  adding a server or a provider changes nothing that already names one, while
+  deleting a provider silently repoints every seat whose model chain named it,
+  and deleting a server leaves every `mcp_env` block keyed on it read by
+  nothing. Those chains and blocks are the org chart's, so no write to
+  `/config` can see them — a whole-document `PUT /config` included. If that is
+  going to happen, it should happen in a document you looked at: edit the
+  company file, settings and chart together, and `crewlet config import` it,
+  which validates the two halves as one company and refuses anything still
+  naming what you removed before it writes either.
 
 A write keeps what the node's own build cannot represent. During a rolling
 upgrade a node may hold a document a newer node wrote, with settings its
@@ -474,15 +501,19 @@ classified, beside the `detail` that renders them.
 | `400` | `validation_error` | The whole resulting document failed validation; `detail` carries the message and `problems` locates each failure |
 | `400` | `summary_required` | Any write with neither an `X-Summary` header nor a top-level `_summary` key in the body |
 | `400` | `invalid_query` | `dry_run` given as anything but `true` or `false` |
+| `400` | `chart_not_writable_here` | A `PUT` or `PATCH /config` body carrying a chart key (`roles`, `units`, …): the org chart is written through [its own routes](#evolving-the-org-chart), and `fields` names what was refused |
+| `400` | `conflicting_preconditions` | A per-entity `PUT` carrying both `If-None-Match: *` and `If-Match`; send one |
+| `400` | `identity_mismatch` | A per-entity `PUT` whose body names another id than its path: this route never renames — rename in the company file, with everything that names it, and `crewlet config import` it |
 | `401` | `invalid_token` | Bearer missing / wrong / wrong scheme |
 | `404` | `no_active_revision` | Reading `/config` before the first PUT |
-| `404` | `no_such_entity` | A per-entity `PUT` naming an id the active revision does not carry — this route never creates |
+| `404` | `no_such_entity` | A per-entity `PUT` naming an id the active revision does not carry — a plain `PUT` never creates; send `If-None-Match: *` to add an MCP server or an LLM provider |
 | `404` | `no_route` | A path under `/config` this surface does not serve |
 | `405` | `method_not_allowed` | A `/config` path under a method it does not take; `Allow` names the ones it does |
 | `409` | `no_active_revision` | A per-entity write before the first PUT: there is nothing to splice into |
 | `409` | `revision_advanced` | Stale `If-Match`, a concurrent writer won the race, or the write was built on an empty store while the fleet is running a company |
 | `412` | `no_active_revision` | `If-Match: <revision>` sent while the node has no active revision; retry without `If-Match`, or send `If-None-Match: *` |
-| `412` | `already_configured` | `If-None-Match: *` sent while a revision is active on this node or anywhere in the fleet |
+| `412` | `already_configured` | `If-None-Match: *` on `PUT /config` sent while a revision is active on this node or anywhere in the fleet |
+| `412` | `entity_exists` | A per-entity create (`If-None-Match: *`) naming an MCP server or LLM provider the active revision already has |
 | `415` | `unsupported_patch_media_type` | A `PATCH` in a patch format other than a JSON Merge Patch, such as `application/json-patch+json` |
 | `503` | `draining` | The node has been told to stop. Nothing was written; `Retry-After` says when to try again, against a peer or against this node once it has restarted — see [During a drain](../reference/api-endpoints.md#during-a-drain) |
 

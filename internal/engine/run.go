@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"slices"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -22,11 +23,13 @@ import (
 	"github.com/crewlet/crewlet/internal/api/webhooks"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
+	"github.com/crewlet/crewlet/internal/eventfan"
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/iam/authevents"
 	"github.com/crewlet/crewlet/internal/integration"
 	"github.com/crewlet/crewlet/internal/learning"
+	"github.com/crewlet/crewlet/internal/learning/memread"
 	"github.com/crewlet/crewlet/internal/learning/memsync"
 	"github.com/crewlet/crewlet/internal/maintenance"
 	"github.com/crewlet/crewlet/internal/mcp"
@@ -188,6 +191,15 @@ type Engine struct {
 	// had no model, which the apply that brings one releases. See
 	// nomodels.go.
 	modelHolds modelHolds
+
+	// budgetParks is every seat inbox this node holds because a capped
+	// token window is refusing, each with the alarm that releases it when
+	// the window turns over. See budgetpark.go.
+	budgetParks budgetParks
+
+	// pauses is this node's watched copy of every seat a person paused,
+	// and the inbox holds it took because of them. See seatpause.go.
+	pauses seatPauses
 
 	// applying serialises [Engine.Apply] against [Engine.Drain], and stopped,
 	// which it guards, is what refuses an apply once a drain has begun. See
@@ -449,9 +461,16 @@ type Engine struct {
 	// and re-claimed. Both maps are guarded by mcpMu because they must
 	// never disagree: a registry naming tools of a bridge that is gone
 	// offers the model entries that can only fail.
+	//
+	// mcpShared and mcpSeats are what each start of a server concluded —
+	// the shared servers per apply, the per-role children per seat claim —
+	// for the heartbeat's [coord.NodeStatus.MCP]. Under mcpMu too, because
+	// a seat's outcomes are replaced and forgotten with its bridge.
 	mcpMu     sync.Mutex
 	seatMCP   map[string]*mcp.Bridge
 	seatTools map[string]*tools.Registry
+	mcpShared []mcpOutcome
+	mcpSeats  map[string][]mcpOutcome
 
 	// hooks caches the webhook verification material for the company it
 	// was assembled from. See [Engine.WebhookSecrets] for why it is keyed
@@ -531,6 +550,15 @@ type Engine struct {
 	// `crewlet retention status` — and cleared by the teardown.
 	retention atomic.Pointer[retention]
 
+	// alarms is the retention loop's alarm tracker, published for the API's
+	// health envelope ([Engine.Alarms]). ATOMIC and never cleared, because it
+	// is read from every health request and push tick on goroutines this
+	// engine does not own, while the loop that writes it starts and stops
+	// on the engine's own: a plain field read against startRetention's write
+	// is a data race, and nil-ing it on a stop would turn the last reading a
+	// draining node took into "no evaluation has ever run".
+	alarms atomic.Pointer[statelog.Tracker]
+
 	// budgetReports is the live token-meter loop. Every node runs one —
 	// the counters are shared, so this is a frame rather than a duty.
 	budgetReports *budgetReporter
@@ -542,6 +570,36 @@ type Engine struct {
 	// company's provider budget. It reads the current epoch's embedder per
 	// tick instead, so a model change lands without a restart.
 	embedding *embedDuty
+
+	// usage is this node's usage publisher: the loop that republishes the
+	// days this node's own event log holds. On the ENGINE for the embedding
+	// duty's reason — a second loop after an apply would be two writers on
+	// this node's own subjects — and it reads the current epoch's clock and
+	// chart per tick instead.
+	usage *usageLoop
+
+	// history is the fleet's turn-level history reader, and
+	// stopHistoryServe withdraws this node as one of its answerers. See
+	// history.go.
+	history          *eventfan.Fleet
+	stopHistoryServe queue.Unsubscribe
+
+	// steers is this node's running turns' note boxes, and stopSteerServe
+	// withdraws the node as their answerer. See steer.go.
+	steers         *steerDesk
+	stopSteerServe queue.Unsubscribe
+
+	// memoryReads answers a seat's memory from the node holding it, and
+	// stopMemoryServe withdraws this node as one of its answerers. See
+	// memoryread.go.
+	memoryReads     *memread.Reader
+	stopMemoryServe queue.Unsubscribe
+
+	// sandboxTails answers a running coding run's live output from the node
+	// that owns it, and stopTailServe withdraws this node as one of its
+	// answerers. See sandboxtail.go.
+	sandboxTails  *sandbox.TailReader
+	stopTailServe queue.Unsubscribe
 
 	// scheduler is the role/unit cron tick. On the ENGINE rather than on an
 	// epoch for the same reason maintenance is: it is a loop this process
@@ -767,6 +825,7 @@ func New(ctx context.Context, opts Options) (_ *Engine, err error) {
 		boot:     opts.Bootstrap,
 		backends: backends, ownsBackends: ownsBackends, cipher: cipher,
 		onboarded: runner.NewLatch(), skills: skills.NewRegistry(),
+		steers:              newSteerDesk(),
 		mcp:                 mcp.NewBridge(nil),
 		sandboxOtel:         otel,
 		sandboxPollInterval: opts.SandboxPollInterval,
@@ -866,6 +925,19 @@ func New(ctx context.Context, opts Options) (_ *Engine, err error) {
 	// land on would be lost. Building it starts nothing.
 	if err = e.newSkillSync(nodeID); err != nil {
 		return nil, fmt.Errorf("engine: tool skills: %w", err)
+	}
+
+	// THIS NODE ANSWERS FOR ITS OWN HISTORY from the moment it has a store
+	// and a broker, whatever else it goes on to run — see history.go for
+	// why a maintenance-mode node answers too. Like the core runtime below,
+	// it is on EVERY node and in every mode: answering is not publishing.
+	if err = e.armHistory(ctx); err != nil {
+		return nil, fmt.Errorf("engine: serve the fleet's history: %w", err)
+	}
+	// AND FOR THE NOTES A PERSON SENDS ITS TURNS, which only this node can
+	// hand to them — see steer.go.
+	if err = e.armSteer(ctx); err != nil {
+		return nil, fmt.Errorf("engine: serve notes to running turns: %w", err)
 	}
 
 	// THE ADMISSION HANDSHAKE, BEFORE ANY PUBLISHER — and this is the
@@ -1082,7 +1154,12 @@ func New(ctx context.Context, opts Options) (_ *Engine, err error) {
 			return e.prepareSeat(ctx, s, lease.Epoch, lease.Owner)
 		},
 		SeatDone: e.releaseSeat,
-		LeaseTTL: e.leaseTTL,
+		// A SEAT A PERSON PAUSED is attached already held, so placement
+		// moving it here does not deliver the mail it is holding: the
+		// release on the node it left dropped that node's hold with the
+		// attachment. See seatpause.go.
+		AttachHolds: e.attachHolds,
+		LeaseTTL:    e.leaseTTL,
 		// The host's own ceiling, from Tier A. Per NODE, so a fleet's is
 		// N times this. Passed through unresolved: zero is the shape of an
 		// absent key and node.New is what turns it into the default, so
@@ -1133,6 +1210,17 @@ func New(ctx context.Context, opts Options) (_ *Engine, err error) {
 	e.watchdog.Watch("seat-host", n.Host())
 	e.node = n
 	e.dispatch = e.buildDispatcher(opts, backends)
+	// THIS NODE ANSWERS FOR THE MEMORY OF THE SEATS IT HOLDS, in every mode
+	// and whether or not it serves the API — see memoryread.go. After the
+	// node, whose incarnation a seat's lease names.
+	if err = e.armMemoryReads(ctx); err != nil {
+		return nil, fmt.Errorf("engine: serve seats' memory: %w", err)
+	}
+	// AND THE LIVE OUTPUT OF THE CODING RUNS IT OWNS, for the same reason
+	// and at the same point — see sandboxtail.go.
+	if err = e.armSandboxTails(ctx); err != nil {
+		return nil, fmt.Errorf("engine: serve coding runs' live output: %w", err)
+	}
 
 	// EVERYTHING BELOW THIS LINE PUBLISHES, and a maintenance-mode node
 	// starts none of it: the seat host and its mailboxes, every duty, the
@@ -1161,29 +1249,32 @@ func New(ctx context.Context, opts Options) (_ *Engine, err error) {
 		return e, nil
 	}
 
+	// WHICH SEATS A PERSON PAUSED, read before the seat host claims
+	// anything — [Engine.Start] runs it — so the first mail this node is
+	// handed meets a node that already knows. Bounded: past its budget the
+	// watch keeps trying and the screening defers until it answers.
+	e.startSeatPauses(ctx)
 	// LAST, because its fleet-singleton duty is claimed under the node's
 	// own incarnation.
 	if err := e.startSandboxWaiter(ctx); err != nil {
 		return nil, fmt.Errorf("engine: sandbox waiter: %w", err)
 	}
 	e.startMaintenance(ctx)
-	// THE LIVE TOKEN METERS, which the dashboard's header pushes from and
-	// which nothing published — so every header carried zeroes. Armed
-	// before the native backends, because it needs neither: the counters
-	// are coordination's and the company's caps are the epoch's.
-	e.startBudgetReports(ctx)
 	// THE CORE'S DUTIES — the log's own trim and the identity estate's —
-	// on every node that publishes, company or not: a fleet nobody has
-	// configured still writes its identity and chart logs, and without the
-	// trim a domain's log only ever grows, to its ceiling, where appends
-	// are refused. Beside the sweep and after the node exists for the same
-	// reason: each duty is claimed under the node's incarnation, and one
-	// that ran before the lease existed would run on every node at once.
+	// and this node's own usage publisher, on every node that publishes,
+	// company or not: a fleet nobody has configured still writes its
+	// identity and chart logs, and without the trim a domain's log only
+	// ever grows, to its ceiling, where appends are refused. Beside the
+	// sweep and after the node exists for the same reason: each duty is
+	// claimed under the node's incarnation, and one that ran before the
+	// lease existed would run on every node at once.
 	e.startCoreDuties(ctx)
 	// AND THE NATIVE HALF'S — the vector domain's one writer — where there
 	// are native halves. An unconfigured node has none yet, and the apply
 	// that brings its first company arms it then — see
-	// [Engine.startNativeFor].
+	// [Engine.startNativeFor]. The live token meters are NOT armed here:
+	// they are [Engine.Start]'s, after the host runs — see
+	// [Engine.startBudgetReports].
 	e.startNativeDuties(ctx)
 	// Beside the sweep, and a fleet singleton on the same terms: two nodes
 	// reconciling one third-party app at the same moment can each create an identity
@@ -1293,7 +1384,10 @@ func (e *Engine) buildDispatcher(opts Options, backends *Backends) *Dispatcher {
 		d.Park = e.park
 	}
 	if d.Pause == nil {
-		d.Pause = e.pause
+		d.Pause = e.holdInbox
+	}
+	if d.Budget == nil {
+		d.Budget = e.budgetPark
 	}
 	if d.Answer == nil {
 		// THE CALLER THIS METHOD NEVER HAD. TryResumeFromAnswer has been
@@ -1306,6 +1400,12 @@ func (e *Engine) buildDispatcher(opts Options, backends *Backends) *Dispatcher {
 		// node whose sandbox arrived by apply offered no reply to any
 		// parked run for the life of the process.
 		d.Answer = e.answerParkedRun
+	}
+	if d.AnswerByTurn == nil {
+		// The other way an answer reaches a parked run: named by its turn,
+		// from any node, onto this seat's inbox. See [Dispatcher.routeAnswers].
+		// LIVE for the reason Answer is — see [Engine.answerRunByTurn].
+		d.AnswerByTurn = e.answerRunByTurn
 	}
 	if d.NoteDeferred == nil {
 		d.NoteDeferred = e.node.Host().NoteDeliveryDeferred
@@ -1365,6 +1465,15 @@ func (e *Engine) Start(ctx context.Context) error {
 	if err := e.node.Start(context.WithoutCancel(ctx)); err != nil {
 		return fmt.Errorf("engine: start: %w", err)
 	}
+	// THE LIVE TOKEN METERS, which the dashboard's header pushes from and
+	// which nothing published — so every header carried zeroes. AFTER the
+	// host is running, because its first frame is published at once and
+	// asks the fleet's protocol floor, which reads the presence lease
+	// node.Start has just claimed: armed before it, that first frame was
+	// declined and every dashboard waited out a whole interval knowing
+	// nothing about the company's budget. Detached, like everything else
+	// here — see [Engine.startBudgetReports].
+	e.startBudgetReports(ctx)
 	// AFTER the host is running, and detached from the caller's context
 	// like the host itself. Before it, every watched duty reads as not
 	// live and the watchdog stands down for the life of the process —
@@ -1560,11 +1669,20 @@ func (e *Engine) teardown(ctx context.Context) {
 	e.stopMaintenance()
 	// THE NATIVE HALF'S DUTY BEFORE THE CORE'S, in the order the halves
 	// come down below: the vector domain's writer publishes into a log the
-	// core's trim is deciding how far to purge.
+	// core's trim is deciding how far to purge — and so does this node's
+	// usage publisher, which is not a duty but writes the usage log the trim
+	// counts.
 	e.stopEmbedding()
+	e.stopUsage()
 	e.stopRetention()
 	e.stopIdentityDuties()
 	e.stopBudgetReports()
+	// Before the node's stop detaches the inboxes: an alarm firing into a
+	// client that is closing would log a release it could not make.
+	e.stopBudgetParks()
+	// And the pause watch, for the same reason: a resume landing on a
+	// client that is closing would lift a hold on nothing.
+	e.stopSeatPauses()
 	// AFTER THE DRAIN AND AFTER EVERY LOOP, which is what the admission
 	// says: the key means "this process may be publishing", so withdrawing
 	// it while a seat was still finishing a turn would tell a coordinator
@@ -1608,6 +1726,21 @@ func (e *Engine) teardown(ctx context.Context) {
 	// the core, whose logs are the last thing standing: its view triggers
 	// were ended at the top of this list.
 	e.stopNative(ctx)
+	// BEFORE backends.Close, which closes the store an answer reads: a
+	// peer's question arriving mid-teardown is declined rather than read
+	// from a closing file.
+	e.stopHistory(ctx)
+	// With it, and for the same reason: a note answered `accepted` by a
+	// node that is tearing down is a note no round will read.
+	e.stopSteer(ctx)
+	// And a seat's memory, read from the store backends.Close is about to
+	// close.
+	e.stopMemoryReads(ctx)
+	// And a run's live output, read from boxes this node is about to stop
+	// driving.
+	e.stopSandboxTails(ctx)
+	// AND THEN THE CORE, whose logs are the last thing standing — see the
+	// comment above stopNative.
 	e.stopCore()
 	if e.node != nil {
 		e.node.Stop(ctx)
@@ -1695,6 +1828,7 @@ func (e *Engine) conditionsFor(sandboxRuns func(string) (bool, bool)) func(strin
 		if sandboxRuns != nil {
 			heldBySandbox, sandboxAwaitsAnswer = sandboxRuns(handle)
 		}
+		paused, known := e.pauseOfHandle(handle)
 		return inbox.Conditions{
 			// FRESHNESS, not membership: a renew at t proves exclusivity
 			// through t+ttl, and a membership snapshot can be a full TTL
@@ -1714,12 +1848,18 @@ func (e *Engine) conditionsFor(sandboxRuns func(string) (bool, bool)) func(strin
 			// hardcoded true, which made a seat's own inbox the one
 			// path a shed could never reach.
 			AdmitsTriggers: e.admits(),
+			// A PERSON'S PAUSE, off this node's watched copy — and
+			// whether that copy has been read at all, which is a
+			// different answer from "not paused". See seatpause.go.
+			Paused:       paused,
+			PauseUnknown: !known,
 		}
 	}
 }
 
-// seatFence is the per-round ownership check a turn on this seat runs under,
-// or nil when this process holds no grant to check against.
+// seatFence is the per-round check a turn on this seat runs under: that this
+// process still holds the grant the turn was admitted under, where it holds
+// one at all, and that nobody has asked the turn to stop.
 //
 // THE MISSING HALF OF THE ADMISSION. [Engine.conditionsFor] above asks
 // [seat.Host.MayStart] once, when the delivery arrives, and a turn then runs
@@ -1731,11 +1871,38 @@ func (e *Engine) conditionsFor(sandboxRuns func(string) (bool, bool)) func(strin
 // described something that did not run. See [seat.Host.Fence] for why the
 // check is on the EPOCH rather than on membership, and for the two states —
 // a store blip and an unproven teardown — that deliberately do not close it.
+//
+// AND A PERSON'S STOP. A pause that asked for the running turn to stop closes
+// the same fence, at the same round boundary, with [turn.ErrStoppedByPerson]
+// — ownership first, because a turn on a seat this node no longer holds is
+// the successor's to be stopped or not, and handing the delivery on is what
+// it is owed. The stop is read off this node's copy of the pauses on every
+// round, so it reaches a turn that started before the pause did.
+//
+// THE SEAT'S ID IS RESOLVED ONCE, when the fence is built for the turn: a
+// pause is kept on the id, and a rename landing mid-turn moves the handle and
+// not the seat. A handle the running company resolves to no agent seat has no
+// pause to read, and its turn is fenced on ownership alone.
 func (e *Engine) seatFence(handle string) func() error {
-	if e.node == nil {
-		return nil
+	var owned func() error
+	if e.node != nil {
+		owned = e.node.Host().Fence(handle)
 	}
-	return e.node.Host().Fence(handle)
+	seat, seatErr := e.seatID(handle)
+	resolved := seatErr == nil
+	return func() error {
+		if owned != nil {
+			if err := owned(); err != nil {
+				return err
+			}
+		}
+		if !resolved {
+			// No agent seat answers to the handle: there is no pause to
+			// read, and the turn is fenced on ownership alone.
+			return nil
+		}
+		return e.stopFor(seat, handle)
+	}
 }
 
 // park requeues a partition onto the seat's own inbox.
@@ -1845,6 +2012,12 @@ func (e *Engine) runTurn(ctx context.Context, req Request) (turn.Result, error) 
 	// event carries the turn's identity, and a runner built without it
 	// publishes phases attributed to nobody.
 	tel := e.describeTurn(ctx, company, req)
+	// THE TURN IS ON THE RECORD BEFORE ANYTHING SLOW, and the prefetch below
+	// is the first slow thing: it reads a chat thread and searches the
+	// knowledge base over the network, and until a phase opened nothing
+	// else said this run existed. Every path out of this frame that returns
+	// closes it — see [Engine.publishTurnStarted].
+	e.publishTurnStarted(ctx, tel, req.Depth, req.DelegationChain, false)
 	// THE ASK, not the partition: a coalesced conversation reaches the model
 	// as ONE merged digest rather than as its constituents concatenated —
 	// see [Request.Trigger] and internal/engine/coalesce.go.
@@ -1865,6 +2038,11 @@ func (e *Engine) runTurn(ctx context.Context, req Request) (turn.Result, error) 
 	reply := ReplyFor(req.Events)
 	turnIdentity := tel.runnerTurn(company, req.Depth, req.DelegationChain,
 		task, reply, e.WithheldContacts())
+	// The executor's runtime, from the seat's own provider chain — see
+	// [Engine.agentRunFor] — and the box a person's note reaches this turn
+	// through, which that runtime decides can be read at all.
+	agentRun := e.agentRunFor(company, req.Handle, turnIdentity.Context)
+	box := steerBox(agentRun)
 	r, err := company.RunnerFor(req.Handle, e.seatRegistry(company, req.Handle), RunnerInput{
 		Task:    task,
 		Context: blocks,
@@ -1878,11 +2056,10 @@ func (e *Engine) runTurn(ctx context.Context, req Request) (turn.Result, error) 
 		}),
 		Publisher: e.backends.Queue,
 		Turn:      turnIdentity,
-		// The executor's runtime, from the seat's own provider chain —
-		// see [Engine.agentRunFor].
-		AgentRun: e.agentRunFor(company, req.Handle, turnIdentity.Context),
-		Markers:  e.markers(),
-		Latch:    e.onboarded,
+		AgentRun:  agentRun,
+		Steer:     box,
+		Markers:   e.markers(),
+		Latch:     e.onboarded,
 		// Read off the PINNED epoch, so a revision that raises a ceiling
 		// mid-turn cannot move the limit a round is judged against.
 		Budget: e.meterFor(company, req.Handle),
@@ -1905,13 +2082,33 @@ func (e *Engine) runTurn(ctx context.Context, req Request) (turn.Result, error) 
 		OnPhase: func(ph phase.Phase) { status.Phase(ph.String()) },
 	})
 	if err != nil {
-		// No turn-completed event: nothing started, so nothing ended. A
-		// seat whose runner could not be built never published a started
-		// phase either, so there is no live row to close — and publishing a
-		// completion for a turn that never ran would put a failed turn in
-		// the record of a seat that did not take one.
+		// CLOSED, BECAUSE IT WAS OPENED. This path used to publish nothing
+		// on the reasoning that nothing had started — which stopped being
+		// true the moment the turn announced itself above: its start is on
+		// the record, its context was gathered, and a start with no end is
+		// what a reader takes for a turn that is still running, or one whose
+		// process died under it. So it ends as what it is, a run that failed
+		// before its first phase, with the build's own error as the reason.
+		//
+		// It costs the retry nothing: the dispatch hands the delivery back,
+		// the redelivery is a NEW run with a start and an end of its own
+		// (ADR-0017), and the learning dispatcher marks a unit of work
+		// spent only on a settled outcome, which the empty decision of a
+		// turn that never reached its loop is not.
+		e.publishTurnCompleted(ctx, tel, runner.Spend{}, turn.Result{}, err)
+		// AND CHARGED LIKE ANY OTHER ENDING: the run happened, on the
+		// item it names, and a task's turn count is its attempts.
+		e.recordTurnSpend(ctx, tel.chargeFor(runner.Spend{}, turn.Result{}, err, time.Now().UTC()))
 		return turn.Result{}, err
 	}
+
+	// A PERSON MAY NOW STEER IT. The box is closed as soon as the turn
+	// returns — before its completion is published, so the record of a note
+	// the turn missed precedes the record that the turn ended — and the
+	// defer is the backstop for every other way out of this frame. Closing
+	// twice records nothing twice. See steer.go.
+	closeSteer := e.openSteer(req.RunID, req.Handle, box, r)
+	defer closeSteer(ctx)
 
 	// BEFORE THE EXECUTOR, on its own budget. A seat's first ever turn used
 	// to onboard inside the phase that decides what to do, and could spend
@@ -1932,6 +2129,9 @@ func (e *Engine) runTurn(ctx context.Context, req Request) (turn.Result, error) 
 
 	res, err := turn.Run(ctx, r, company.TurnSettings(req.TimeoutSeconds),
 		turnInputFor(req, reply))
+	// THE BOX CLOSES THE MOMENT THE TURN RETURNS: no later round will read
+	// a note, and one offered from here on is answered `closed`.
+	closeSteer(ctx)
 	// The moment the turn returns, and before its frame unwinds: the runner
 	// holds the suspended conversation only until then, and a row without
 	// one is a detached run nothing can ever resume.
@@ -1940,14 +2140,22 @@ func (e *Engine) runTurn(ctx context.Context, req Request) (turn.Result, error) 
 	// intent to park and a run that can actually be resumed are different
 	// facts, and this call is where the second one is established. See
 	// [stillWorking].
+	//
+	// THE SEGMENT'S CHARGE IS DECIDED FIRST, because a segment charged to
+	// nothing hands what it spent to the suspension this call writes.
+	spend := r.Spend()
+	charge := tel.chargeFor(spend, res, err, time.Now().UTC())
 	if res.Suspended {
-		working = stillWorking(e.persistSuspension(ctx, r, req.RunID))
+		working = stillWorking(e.persistSuspension(ctx, r, req.RunID, tel.written, charge.carry))
 	}
 	// Published on BOTH paths. An error here means a phase broke, which is
 	// precisely when a dashboard most needs the turn closed: the phase
 	// events already put the seat into `working`, and returning without this
 	// leaves it there until the seat happens to take another turn.
-	e.publishTurnCompleted(ctx, tel, r.Spend(), res, err)
+	e.publishTurnCompleted(ctx, tel, spend, res, err)
+	// AND CHARGED to the work item it was on, after the record of the turn
+	// exists — see turnspend.go.
+	e.recordTurnSpend(ctx, charge)
 	// AND, if a colleague asked for this turn, the answer they are waiting
 	// for. Here because this is the one frame holding both the result and
 	// the trigger; after the completion event because the reply wakes
@@ -1963,8 +2171,14 @@ func (e *Engine) runTurn(ctx context.Context, req Request) (turn.Result, error) 
 // carrying this fleet-wide is that an operator can see where the work
 // actually is right now.
 func (e *Engine) nodeStatus(ctx context.Context) coord.NodeStatus {
+	// FEATURES FIRST and unconditionally: they are what this BUILD honours,
+	// fixed at compile time, so no read below can change them. The MCP rows
+	// are this process's own record of what it started, read under a lock
+	// and never from a child.
 	status := coord.NodeStatus{
 		StartedAt: e.startedAt, GrantCeilingHash: e.grantCeilingHash,
+		Features: slices.Clone(coord.Features),
+		MCP:      e.mcpStatus(),
 	}
 	if b := e.backends; b != nil && b.Queue != nil {
 		status.InFlight = b.Queue.InFlightCount()

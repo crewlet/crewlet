@@ -26,7 +26,7 @@ import (
 // deletes it, and every event still addressed to the seat is kept for the
 // life of the deployment. No other seat ever attaches to it: the mailbox is
 // named by an id derived from the handle the seat was created under, which
-// the chart never issues twice (ADR-0019).
+// the chart never issues twice (ADR-0026).
 //
 // So a mailbox is retired once its seat has been absent from the active
 // revision for [MailboxRetirementGrace]. The pieces, and why each is shaped

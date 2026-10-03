@@ -19,7 +19,7 @@ import (
 //
 // # The two readers, and why both have to exist
 //
-// [config.DecodeSettings] refuses a revision that still carries an org chart.
+// [config.DecodeSettings] refuses a revision that carries an org chart.
 // [config.DecodeCompany] does not. Neither is the safe default:
 //
 //   - A site that APPLIES a revision must refuse one, or the node boots,
@@ -107,7 +107,7 @@ func TestEveryStoredDecodeSiteIsDeclared(t *testing.T) {
 					t.Errorf("%s reads a stored revision with the LENIENT "+
 						"reader and is not declared here. If it applies the "+
 						"revision it must use config.DecodeSettingsAsCompany, "+
-						"which refuses one still carrying an org chart; if it "+
+						"which refuses one carrying an org chart; if it "+
 						"only shows one, add it above with the reason", rel)
 				}
 			case "DecodeSettings", "DecodeSettingsAsCompany":

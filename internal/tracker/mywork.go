@@ -3,6 +3,7 @@ package tracker
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"time"
 
@@ -48,6 +49,15 @@ import (
 //
 // Twenty rows each. A turn-start block is read by a model beside its prompt,
 // and seven unbounded lists is an answer that crowds out the work.
+//
+// # And each is COUNTED in full beside its page
+//
+// [MyWork.Totals] carries how many rows each block would hold without the
+// bound, counted by the SAME predicate in the SAME transaction as the rows.
+// The page is twenty; the claim is not — and a sidebar badge or a tab heading
+// drawn from `len(assigned)` reads "20" for the person with two hundred, which
+// is the one person the number is for. A count taken by a second read beside
+// this one would describe a different instant from the rows it heads.
 
 // MyWorkRows is how many rows each block carries.
 //
@@ -68,6 +78,18 @@ type AskRow struct {
 	AskedBy string    `json:"asked_by" person:"seat"`
 	AskedAt time.Time `json:"asked_at"`
 	Body    string    `json:"body"`
+
+	// Decision is the structure the ask carries when it asks somebody to
+	// choose — the options, the recommendation and the evidence — so the
+	// person or the model answering it decides from the same read.
+	Decision *Decision `json:"decision,omitempty"`
+
+	// Open says the ask is still waiting on an answer. Every row my_work
+	// lists is — the block is what is still owed — but the row is the
+	// shape every surface listing asks shares, and a list that also holds
+	// answered ones must be able to say which is which without the reader
+	// inferring it from which list it came from.
+	Open bool `json:"open"`
 
 	// Answer is the literal call that answers it. A model handed the
 	// comment id still has to compose the call, and every one it composes
@@ -97,6 +119,32 @@ type ChecklistRow struct {
 	Done      bool   `json:"done"`
 }
 
+// ClaimTotal is how many rows one block holds in full, beside the page of
+// [MyWorkRows] it carries.
+//
+// CAPPED AT [TotalHintCeiling] and saying so, for [Answer.TotalCapped]'s
+// reason: a count over an unbounded set is the query that turns a poll into a
+// scan, and a clamped number read as exact is the lie the flag exists to stop.
+type ClaimTotal struct {
+	Total  int  `json:"total"`
+	Capped bool `json:"capped,omitempty"`
+}
+
+// MyWorkTotals is one [ClaimTotal] per block, keyed by the block's own name.
+//
+// A NAMED FIELD PER BLOCK rather than a map, so a block added to [MyWork]
+// without its total is a struct a test can walk rather than a key nobody
+// thought to write — see TestEveryMyWorkBlockHasATotal.
+type MyWorkTotals struct {
+	Priorities      ClaimTotal `json:"priorities"`
+	Assigned        ClaimTotal `json:"assigned"`
+	AskedOfMe       ClaimTotal `json:"asked_of_me"`
+	ChecklistItems  ClaimTotal `json:"checklist_items"`
+	Collaborating   ClaimTotal `json:"collaborating"`
+	WatchingRecent  ClaimTotal `json:"watching_recent"`
+	UnblockedRecent ClaimTotal `json:"unblocked_recent"`
+}
+
 // MyWork is the compound answer.
 type MyWork struct {
 	Handle string `json:"handle" person:"seat"`
@@ -113,6 +161,10 @@ type MyWork struct {
 	WatchingRecent  []TaskRow      `json:"watching_recent"`
 	UnblockedRecent []TaskRow      `json:"unblocked_recent"`
 
+	// Totals is every block counted in full — see [MyWorkTotals]. A block's
+	// slice is a PAGE of at most [MyWorkRows]; its total is the claim.
+	Totals MyWorkTotals `json:"totals"`
+
 	Level          statelog.ReadLevel `json:"read_level"`
 	LogSeq         uint64             `json:"log_seq"`
 	AppliedThrough uint64             `json:"applied_through"`
@@ -123,9 +175,11 @@ type MyWork struct {
 
 // MyWorkQuery asks for one person's own day.
 type MyWorkQuery struct {
-	// Handle is whose. Required — "mine" is resolved by the surface from
-	// its own credential, never by this reader, because a reader that
-	// defaulted it would answer about whoever it happened to pick.
+	// Handle is whose — the person's record name (iam.RecordOwner), which
+	// for a person bound to a seat is that seat whatever credential they
+	// hold. Required — "mine" is resolved by the surface from its own
+	// credential, never by this reader, because a reader that defaulted it
+	// would answer about whoever it happened to pick.
 	Handle string `person:"seat"`
 
 	Level       statelog.ReadLevel
@@ -141,17 +195,22 @@ type MyWorkQuery struct {
 }
 
 // MyWork answers everything one person is expected to look at.
-func (r *Reader) MyWork(ctx context.Context, q MyWorkQuery, now time.Time) (
-	MyWork, error) {
+//
+// `now` and `loc` are the instant and the company's clock the day is cut on,
+// the pair [ParseQuery] takes for a `due=` filter: every row's `overdue` mark
+// here is derived from where the company's day began, so it agrees with the
+// mark the same task carries on a board.
+func (r *Reader) MyWork(ctx context.Context, q MyWorkQuery, now time.Time,
+	loc *time.Location) (MyWork, error) {
 	call := r.pinned()
-	got, err := call.myWork(ctx, identified(call.chart, q), now)
+	got, err := call.myWork(ctx, identified(call.chart, q), now, loc)
 	return shown(call.chart, got), err
 }
 
-// myWork is [Reader.MyWork] once every person the question names is their seat's
-// identity — see people.go.
-func (r *Reader) myWork(ctx context.Context, q MyWorkQuery, now time.Time) (
-	MyWork, error) {
+// myWork is [Reader.MyWork] once every person the question names is their
+// seat's identity — see people.go.
+func (r *Reader) myWork(ctx context.Context, q MyWorkQuery, now time.Time,
+	loc *time.Location) (MyWork, error) {
 
 	if q.Level == "" {
 		return MyWork{}, fmt.Errorf("tracker: this my_work read names no " +
@@ -178,7 +237,7 @@ func (r *Reader) myWork(ctx context.Context, q MyWorkQuery, now time.Time) (
 		MaxLagSeq:   q.MaxLagSeq,
 		Set:         true,
 	}, func(tx *sql.Tx) error {
-		return readMyWork(ctx, tx, q.Handle, now, &out)
+		return readMyWork(ctx, tx, q.Handle, now, loc, &out)
 	})
 	if err != nil {
 		return MyWork{}, err
@@ -193,85 +252,82 @@ func (r *Reader) myWork(ctx context.Context, q MyWorkQuery, now time.Time) (
 }
 
 func readMyWork(ctx context.Context, tx *sql.Tx, handle string, now time.Time,
-	out *MyWork) error {
+	loc *time.Location, out *MyWork) error {
 
 	// THE DAY BOUNDARY the `overdue` column on every row is computed
-	// against. UTC, because a compound answer has no caller-supplied zone
-	// and the alternative — a boundary read from the process's own clock
-	// — would put one node's rows a day out from another's.
-	anchor, err := ResolveDate("today", now, time.UTC)
+	// against: the company's own midnight, on the clock the surface
+	// passed. It was UTC once, on the reasoning that this answer had no
+	// caller-supplied zone — and that put every row a day out from the
+	// board for the hours between the company's midnight and UTC's, with a
+	// task due today marked overdue on one screen and not on the other.
+	// Never the process's own clock, which would put one node's rows a
+	// day out from another's.
+	anchor, err := ResolveDate("today", now, loc)
 	if err != nil {
 		return err
 	}
 	dayStart := anchor.At
 	open := openGroups()
 
-	priorities, err := readPriorityRows(ctx, tx, handle, dayStart)
+	priorities, total, err := readPriorityRows(ctx, tx, handle, dayStart)
 	if err != nil {
 		return err
 	}
 	out.Priorities = priorities
+	out.Totals.Priorities = ClaimTotal{Total: total}
 
 	// ASSIGNED, in the queue's own order — priority then due, which is
 	// exactly what `tracker_tasks_queue_idx` is built in, so the block a
 	// turn opens on is the query the index is named for.
-	assigned, _, err := readTasks(ctx, tx,
+	if out.Assigned, out.Totals.Assigned, err = taskBlock(ctx, tx,
 		"t.removed_at IS NULL AND t.assignee = ? AND t.status_group IN ("+
 			placeholders(len(open))+")",
 		append([]any{handle}, open...),
 		[]sortTerm{
 			{Column: "t.prio_rank", Descending: true},
 			{Column: "t.due_at"}, {Column: "t.id"},
-		}, MyWorkRows, dayStart)
-	if err != nil {
+		}, dayStart); err != nil {
 		return err
 	}
-	out.Assigned = assigned
 
-	asks, err := readAsks(ctx, tx, handle, dayStart)
-	if err != nil {
+	if out.AskedOfMe, out.Totals.AskedOfMe, err = readAsks(ctx, tx, handle,
+		dayStart, MyWorkRows); err != nil {
 		return err
 	}
-	out.AskedOfMe = asks
 
-	items, err := readChecklistClaims(ctx, tx, handle)
-	if err != nil {
+	if out.ChecklistItems, out.Totals.ChecklistItems, err = readChecklistClaims(
+		ctx, tx, handle); err != nil {
 		return err
 	}
-	out.ChecklistItems = items
 
-	// COLLABORATING EXCLUDES WHAT THIS SEAT OWNS, because a task already
+	// COLLABORATING EXCLUDES WHAT THIS PERSON OWNS, because a task already
 	// in `assigned` listed again here is one row spending two of the seven
 	// blocks — and the distinction the block exists for is precisely
 	// "brought on without owning".
-	collaborating, _, err := readTasks(ctx, tx,
+	if out.Collaborating, out.Totals.Collaborating, err = taskBlock(ctx, tx,
 		"t.removed_at IS NULL AND t.assignee <> ? AND t.status_group IN ("+
 			placeholders(len(open))+") AND EXISTS (SELECT 1 FROM "+
 			"tracker_collaborators c WHERE c.task_id = t.id AND c.handle = ?)",
 		append(append([]any{handle}, open...), handle),
 		[]sortTerm{{Column: "t.updated_at", Descending: true}, {Column: "t.id"}},
-		MyWorkRows, dayStart)
-	if err != nil {
+		dayStart); err != nil {
 		return err
 	}
-	out.Collaborating = collaborating
 
 	// WATCHING, MINUS THE MUTED. A mute is how somebody says "keep me on
 	// this but stop telling me", and a block that ignored it would put
 	// every muted task back in front of them once a turn.
-	watching, _, err := readTasks(ctx, tx,
+	if out.WatchingRecent, out.Totals.WatchingRecent, err = taskBlock(ctx, tx,
 		"t.removed_at IS NULL AND t.assignee <> ? AND EXISTS (SELECT 1 FROM "+
 			"tracker_watchers w WHERE w.task_id = t.id AND w.handle = ? "+
 			"AND w.muted = 0)",
 		[]any{handle, handle},
 		[]sortTerm{{Column: "t.updated_at", Descending: true}, {Column: "t.id"}},
-		MyWorkRows, dayStart)
-	if err != nil {
+		dayStart); err != nil {
 		return err
 	}
-	out.WatchingRecent = watching
 
-	// UNBLOCKED: this seat's open work that HAD a blocker and no longer
+	// UNBLOCKED: this person's open work that HAD a blocker and no longer
 	// has an open one. The only block about a CHANGE rather than a state,
 	// and the reason it is here at all — a task that became workable while
 	// nobody was looking has nothing else to announce it at turn start.
@@ -280,7 +336,7 @@ func readMyWork(ctx context.Context, tx *sql.Tx, handle string, now time.Time,
 	// leg every task that never had a dependency qualifies, which is most
 	// of the board; without the second, a task with one blocker cleared
 	// and another still open reads as workable and is not.
-	unblocked, _, err := readTasks(ctx, tx,
+	if out.UnblockedRecent, out.Totals.UnblockedRecent, err = taskBlock(ctx, tx,
 		"t.removed_at IS NULL AND t.assignee = ? AND t.status_group IN ("+
 			placeholders(len(open))+") AND EXISTS (SELECT 1 FROM "+
 			"tracker_task_deps d WHERE d.task_id = t.id "+
@@ -288,12 +344,30 @@ func readMyWork(ctx context.Context, tx *sql.Tx, handle string, now time.Time,
 			"tracker_task_deps d WHERE d.task_id = t.id AND d.blocker_open = 1)",
 		append([]any{handle}, open...),
 		[]sortTerm{{Column: "t.updated_at", Descending: true}, {Column: "t.id"}},
-		MyWorkRows, dayStart)
-	if err != nil {
+		dayStart); err != nil {
 		return err
 	}
-	out.UnblockedRecent = unblocked
 	return nil
+}
+
+// taskBlock reads one task block's page AND its total, from ONE predicate.
+//
+// ONE PREDICATE FOR BOTH is the whole point: a total written as a second
+// statement beside the page's is a second copy of the claim, and the first
+// edit to one of them makes a heading count rows the list below it would
+// never show.
+func taskBlock(ctx context.Context, tx *sql.Tx, where string, args []any,
+	terms []sortTerm, dayStart time.Time) ([]TaskRow, ClaimTotal, error) {
+
+	rows, _, err := readTasks(ctx, tx, where, args, terms, MyWorkRows, dayStart)
+	if err != nil {
+		return nil, ClaimTotal{}, err
+	}
+	total, capped, err := countHint(ctx, tx, where, args)
+	if err != nil {
+		return nil, ClaimTotal{}, err
+	}
+	return rows, ClaimTotal{Total: total, Capped: capped}, nil
 }
 
 // openGroups is the two status groups where work has not stopped.
@@ -311,30 +385,35 @@ func openGroups() []any {
 	return out
 }
 
-// readPriorityRows reads the stored list, IN ITS STORED ORDER.
+// readPriorityRows reads the stored list, IN ITS STORED ORDER, and how many
+// of its entries are still open work.
 //
 // The order is the content — somebody decided it — so the rows are re-ordered
 // to match the list rather than sorted by anything. A finished or removed task
 // is filtered out HERE rather than rewritten out of the list, because the list
 // is a person's own object and a read must not write to it: the next write to
 // the list drops it for good.
+//
+// THE WHOLE LIST IS READ AND THE PAGE IS CUT AFTER THE FILTER. It was cut
+// first — the stored list truncated to [MyWorkRows] and then filtered — so a
+// list of twenty-five whose first five were finished answered fifteen rows
+// while twenty open ones stood in it, and entries twenty-one to twenty-five
+// were never reachable at all. The list is bounded by [MaxPriorities], so the
+// whole of it is one small read, and its total is exact.
 func readPriorityRows(ctx context.Context, tx *sql.Tx, handle string,
-	dayStart time.Time) ([]TaskRow, error) {
+	dayStart time.Time) ([]TaskRow, int, error) {
 
 	person, held, err := readPerson(ctx, tx, handle)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	if !held || len(person.Priorities) == 0 {
 		// EMPTY, NOT NIL — see [readTasksJoined]. A person with no
 		// stored list has an empty one, and the block renders as
 		// absent rather than throwing on its own length.
-		return []TaskRow{}, nil
+		return []TaskRow{}, 0, nil
 	}
 	ids := person.Priorities
-	if len(ids) > MyWorkRows {
-		ids = ids[:MyWorkRows]
-	}
 	open := openGroups()
 	args := make([]any, 0, len(ids)+len(open))
 	for _, id := range ids {
@@ -344,22 +423,44 @@ func readPriorityRows(ctx context.Context, tx *sql.Tx, handle string,
 	rows, _, err := readTasks(ctx, tx,
 		"t.removed_at IS NULL AND t.id IN ("+placeholders(len(ids))+
 			") AND t.status_group IN ("+placeholders(len(open))+")",
-		args, []sortTerm{{Column: "t.id"}}, MyWorkRows, dayStart)
+		args, []sortTerm{{Column: "t.id"}}, len(ids), dayStart)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	byID := make(map[string]TaskRow, len(rows))
 	for _, row := range rows {
 		byID[row.ID] = row
 	}
-	out := make([]TaskRow, 0, len(ids))
+	out := make([]TaskRow, 0, min(len(rows), MyWorkRows))
+	live := 0
 	for _, id := range ids {
-		if row, live := byID[id]; live {
+		row, listed := byID[id]
+		if !listed {
+			continue
+		}
+		// A LIST NAMING ONE TASK TWICE counts it once. The priorities
+		// write deduplicates, but a person record is also written whole
+		// by [Writer.WriteDocument], and a heading counting one task
+		// twice would disagree with the board it links to.
+		delete(byID, id)
+		live++
+		if len(out) < MyWorkRows {
 			out = append(out, row)
 		}
 	}
-	return out, nil
+	return out, live, nil
 }
+
+// openAsksFrom and openAsksWhere are the open asks put to one person, bound
+// to their record name as the one argument: every reader of "what is waiting
+// on this person" states them through here.
+const (
+	openAsksFrom = `tracker_comments c
+		JOIN tracker_tasks t ON t.id = c.task_id`
+	openAsksWhere = `c.ask = ?
+		  AND c.resolved = 0 AND c.answered_by IS NULL
+		  AND c.removed = 0 AND t.removed_at IS NULL`
+)
 
 // readAsks reads the questions waiting on this person.
 //
@@ -367,18 +468,26 @@ func readPriorityRows(ctx context.Context, tx *sql.Tx, handle string,
 // ask is open until somebody answers it or resolves it, and a removed comment
 // is not an ask at all.
 func readAsks(ctx context.Context, tx *sql.Tx, handle string,
-	dayStart time.Time) ([]AskRow, error) {
+	dayStart time.Time, limit int) ([]AskRow, ClaimTotal, error) {
+
+	// ONE FROM-AND-WHERE for the page and the count — see [taskBlock] —
+	// and for the oldest ask's instant [Reader.Decisions] reads beside them.
+	from, where := openAsksFrom, openAsksWhere
+	total, capped, err := countCapped(ctx, tx, from, where, []any{handle})
+	if err != nil {
+		return nil, ClaimTotal{}, fmt.Errorf("tracker: count the asks "+
+			"waiting on %s: %w", handle, err)
+	}
+	claim := ClaimTotal{Total: total, Capped: capped}
 
 	rows, err := tx.QueryContext(ctx, `
-		SELECT c.id, c.task_id, c.author, c.body, c.created_at
-		FROM tracker_comments c
-		JOIN tracker_tasks t ON t.id = c.task_id
-		WHERE c.ask = ? AND c.resolved = 0 AND c.answered_by IS NULL
-		  AND c.removed = 0 AND t.removed_at IS NULL
+		SELECT c.id, c.task_id, c.author, c.body, c.created_at, c.document
+		FROM `+from+`
+		WHERE `+where+`
 		ORDER BY c.created_at DESC
-		LIMIT ?`, handle, MyWorkRows)
+		LIMIT ?`, handle, limit)
 	if err != nil {
-		return nil, fmt.Errorf("tracker: read the asks waiting on %s: %w",
+		return nil, ClaimTotal{}, fmt.Errorf("tracker: read the asks waiting on %s: %w",
 			handle, err)
 	}
 	defer func() { _ = rows.Close() }()
@@ -386,23 +495,25 @@ func readAsks(ctx context.Context, tx *sql.Tx, handle string,
 	type ask struct {
 		comment, task, author, body string
 		at                          int64
+		document                    []byte
 	}
 	var pending []ask
 	for rows.Next() {
 		var a ask
 		//nolint:govet // shadow: scoped to this block; see .golangci.yml
-		if err := rows.Scan(&a.comment, &a.task, &a.author, &a.body, &a.at); err != nil {
-			return nil, fmt.Errorf("tracker: scan an ask: %w", err)
+		if err := rows.Scan(&a.comment, &a.task, &a.author, &a.body, &a.at,
+			&a.document); err != nil {
+			return nil, ClaimTotal{}, fmt.Errorf("tracker: scan an ask: %w", err)
 		}
 		pending = append(pending, a)
 	}
 	//nolint:govet // shadow: scoped to this block; see .golangci.yml
 	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("tracker: read the asks waiting on %s: %w",
+		return nil, ClaimTotal{}, fmt.Errorf("tracker: read the asks waiting on %s: %w",
 			handle, err)
 	}
 	if len(pending) == 0 {
-		return []AskRow{}, nil
+		return []AskRow{}, claim, nil
 	}
 
 	ids := make([]any, 0, len(pending))
@@ -413,7 +524,7 @@ func readAsks(ctx context.Context, tx *sql.Tx, handle string,
 		"t.id IN ("+placeholders(len(ids))+")", ids,
 		[]sortTerm{{Column: "t.id"}}, len(ids), dayStart)
 	if err != nil {
-		return nil, err
+		return nil, ClaimTotal{}, err
 	}
 	byID := make(map[string]TaskRow, len(tasks))
 	for _, row := range tasks {
@@ -425,10 +536,20 @@ func readAsks(ctx context.Context, tx *sql.Tx, handle string,
 		if !held {
 			continue
 		}
+		var stored Comment
+		if len(a.document) > 0 {
+			//nolint:govet // shadow: scoped to this block; see .golangci.yml
+			if err := json.Unmarshal(a.document, &stored); err != nil {
+				return nil, ClaimTotal{}, fmt.Errorf("tracker: decode the ask %s: %w",
+					a.comment, err)
+			}
+		}
 		out = append(out, AskRow{
 			TaskRow: row, Comment: a.comment, AskedBy: a.author,
-			AskedAt: store.DecodeTime(a.at),
-			Body:    textcut.Within(a.body, MaxExcerpt),
+			AskedAt:  store.DecodeTime(a.at),
+			Body:     textcut.Within(a.body, MaxExcerpt),
+			Decision: stored.Decision,
+			Open:     true,
 			// THE LITERAL CALL, composed here rather than described.
 			// A model handed a comment id still has to compose the
 			// answer, and every one it composes differently is a
@@ -438,29 +559,55 @@ func readAsks(ctx context.Context, tx *sql.Tx, handle string,
 			// whose key another task claimed first, answered through
 			// the key, would post the answer on the claimant — where
 			// the comment it `answers` does not exist.
-			Answer: fmt.Sprintf("%s(item: %q, body: \"…\", answers: %q)",
-				CommentOnWorkTool, row.Address(), a.comment),
+			Answer: answerCall(row.Address(), a.comment, stored.Decision),
 		})
 	}
-	return out, nil
+	return out, claim, nil
 }
 
-// readChecklistClaims reads the sub-items this person owns.
+// answerCall is the literal call that answers an ask.
+//
+// A DECISION'S CALL CARRIES ITS RECOMMENDATION as the choice, because that is
+// the answer the asker proposed and the one most answers are: a reader who
+// agrees sends it as written, and one who does not changes one value rather
+// than composing a call from the options.
+//
+// The item is the task's ADDRESS ([ItemAddress]), never its bare key.
+func answerCall(address, comment string, decision *Decision) string {
+	if decision != nil && decision.Recommended != "" {
+		return fmt.Sprintf("%s(item: %q, body: \"…\", answers: %q, choice: %q)",
+			CommentOnWorkTool, address, comment, decision.Recommended)
+	}
+	return fmt.Sprintf("%s(item: %q, body: \"…\", answers: %q)",
+		CommentOnWorkTool, address, comment)
+}
+
+// readChecklistClaims reads the sub-items this person owns, and how many.
 func readChecklistClaims(ctx context.Context, tx *sql.Tx, handle string) (
-	[]ChecklistRow, error) {
+	[]ChecklistRow, ClaimTotal, error) {
 
 	// THE OPEN ONES, on live tasks. A done item is not a claim, and an
-	// item on a removed task is an item nobody can act on.
+	// item on a removed task is an item nobody can act on. ONE
+	// FROM-AND-WHERE for the page and the count — see [taskBlock].
+	const from = `tracker_checklist_items i
+		JOIN tracker_tasks t ON t.id = i.task_id`
+	const where = `i.assignee = ? AND i.done = 0 AND t.removed_at IS NULL`
+	total, capped, err := countCapped(ctx, tx, from, where, []any{handle})
+	if err != nil {
+		return nil, ClaimTotal{}, fmt.Errorf("tracker: count the checklist "+
+			"items of %s: %w", handle, err)
+	}
+	claim := ClaimTotal{Total: total, Capped: capped}
+
 	rows, err := tx.QueryContext(ctx, `
 		SELECT i.task_id, t.key, t.key_collision, t.title, i.checklist_id,
 		       i.item_id, i.name, i.done
-		FROM tracker_checklist_items i
-		JOIN tracker_tasks t ON t.id = i.task_id
-		WHERE i.assignee = ? AND i.done = 0 AND t.removed_at IS NULL
+		FROM `+from+`
+		WHERE `+where+`
 		ORDER BY t.key, i.ord
 		LIMIT ?`, handle, MyWorkRows)
 	if err != nil {
-		return nil, fmt.Errorf("tracker: read the checklist items of %s: %w",
+		return nil, ClaimTotal{}, fmt.Errorf("tracker: read the checklist items of %s: %w",
 			handle, err)
 	}
 	defer func() { _ = rows.Close() }()
@@ -471,15 +618,15 @@ func readChecklistClaims(ctx context.Context, tx *sql.Tx, handle string) (
 		var done, collision int
 		if err := rows.Scan(&row.Task, &row.TaskKey, &collision, &row.TaskTitle,
 			&row.Checklist, &row.Item, &row.Name, &done); err != nil {
-			return nil, fmt.Errorf("tracker: scan a checklist item: %w", err)
+			return nil, ClaimTotal{}, fmt.Errorf("tracker: scan a checklist item: %w", err)
 		}
 		row.Done = done != 0
 		row.TaskKeyCollision = collision == 1
 		out = append(out, row)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("tracker: read the checklist items of %s: %w",
+		return nil, ClaimTotal{}, fmt.Errorf("tracker: read the checklist items of %s: %w",
 			handle, err)
 	}
-	return out, nil
+	return out, claim, nil
 }

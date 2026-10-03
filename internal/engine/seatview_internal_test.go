@@ -44,7 +44,7 @@ func TestASeatViewWithNoChartRefusesRatherThanAnsweringSeatless(t *testing.T) {
 // A BINDING'S SEAT IS FOUND BY THE HANDLE IT WAS CREATED UNDER, on a running
 // node, through a rename and through a removal.
 //
-// A binding names its seat by that identity (ADR-0020), and this is the one
+// A binding names its seat by that identity (ADR-0027), and this is the one
 // place the request path and the dangling-binding rule turn it back into a
 // seat. Looked up as an ADDRESS, the seat's new handle would answer for the
 // identity too — which is how a person bound before a rename came to sign in

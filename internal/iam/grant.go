@@ -146,8 +146,9 @@ const (
 	// company data and can stop the company dead: POST /backup (which
 	// copies every credential and every seat's memory to a path the
 	// caller names), the retention floor, the capacity window, the
-	// maintenance gestures, evict and readmit, and POST /budgets/reset —
-	// and the purges, a work item's and a page's, which nothing undoes.
+	// maintenance gestures, evict and readmit, and pausing, resuming or
+	// steering a seat the caller neither holds nor leads — and the purges,
+	// a work item's and a page's, which nothing undoes.
 	// One grant rather than one per gesture because they share a blast
 	// radius and an audience — whoever runs the deployment — and
 	// splitting them would invite a gate that holds all of them but one.

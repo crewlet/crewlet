@@ -31,21 +31,20 @@ func (s *recordSpy) wrote(handle string) (tracker.WriteResult, error) {
 	}}, nil
 }
 
-func (s *recordSpy) WriteInbox(_ context.Context, _, handle string,
-	_, _, _ []tracker.InboxEntry, _ []tracker.Reason, _ tracker.Position,
-	_ tracker.PersonAuthority) (tracker.WriteResult, error) {
+func (s *recordSpy) MarkInbox(_ context.Context, _, handle string,
+	_ tracker.InboxGesture, _ tracker.PersonAuthority) (tracker.WriteResult, error) {
 
 	return s.wrote(handle)
 }
 
-func (s *recordSpy) WritePins(_ context.Context, _, handle string, _ []string,
-	_ []tracker.Favorite, _ tracker.PersonAuthority) (tracker.WriteResult, error) {
+func (s *recordSpy) WritePins(_ context.Context, _, handle string,
+	_ tracker.PinGesture, _ tracker.PersonAuthority) (tracker.WriteResult, error) {
 
 	return s.wrote(handle)
 }
 
 func (s *recordSpy) WritePriorities(_ context.Context, _, handle string, _ []string,
-	_ tracker.PersonAuthority) (tracker.WriteResult, error) {
+	_ *uint64, _ tracker.PersonAuthority) (tracker.WriteResult, error) {
 
 	return s.wrote(handle)
 }
@@ -186,12 +185,19 @@ func TestAPersonalVerbIsDecidedOnTheRecordItWrites(t *testing.T) {
 					return decide(ctx, action, object)
 				},
 			}) {
+				// ONE GESTURE EACH, the smallest that is a change: a
+				// mark naming nothing is refused before it is decided.
+				args := map[string]any{}
 				switch tool.Name() {
-				case tracker.MarkInboxTool, tracker.SetPinsTool, tracker.MyWorkTool:
+				case tracker.MarkInboxTool:
+					args["read"] = []any{"r-1"}
+				case tracker.SetPinsTool:
+					args["views"] = map[string]any{"add": []any{"v-1"}}
+				case tracker.MyWorkTool:
 				default:
 					continue
 				}
-				res, err := tool.Call(ctx, map[string]any{})
+				res, err := tool.Call(ctx, args)
 				if err != nil {
 					t.Fatalf("%s: %v", tool.Name(), err)
 				}

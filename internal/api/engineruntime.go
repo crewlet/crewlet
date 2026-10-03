@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/engine"
+	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tools"
 )
 
@@ -109,7 +110,7 @@ func (r engineRuntime) ShuttingDown() bool { return r.engine.ShuttingDown() }
 // Snapshot is this node's live state.
 func (r engineRuntime) Snapshot(ctx context.Context) RuntimeState {
 	host := r.engine.Node().Host()
-	return RuntimeState{
+	state := RuntimeState{
 		InFlight: r.engine.Backends().Queue.InFlightCount(),
 		// THE SAME FLAG the drain gate refuses work on, so a probe can
 		// never report a node in rotation while its routes refuse.
@@ -148,4 +149,29 @@ func (r engineRuntime) Snapshot(ctx context.Context) RuntimeState {
 		Posture:      string(r.reconciler.Posture(ctx)),
 		AppliedEpoch: r.reconciler.Applied(),
 	}
+	return state
+}
+
+// Fleet is the envelope's fleet counts: the standing alarms, from memory, and
+// the presence count, from the coordination plane under the caller's context.
+//
+// THE ALARMS FIRST, and unconditionally: they cost no I/O, so a presence read
+// that runs out of budget leaves the count absent without taking the alarm
+// count with it.
+func (r engineRuntime) Fleet(ctx context.Context) FleetState {
+	var state FleetState
+	if standing, evaluated := r.engine.Alarms(); evaluated {
+		// NON-NIL ONCE EVALUATED, even with nothing firing: an empty
+		// slice is the real claim that nothing holds, and nil is that no
+		// evaluation has run — see [FleetState.Alarms].
+		state.Alarms = append(make([]statelog.StandingAlarm, 0, len(standing)),
+			standing...)
+	}
+	// THE FLEET'S SIZE, from the presence leases every fan-out on this node
+	// divides its work by, read live for the posture's reason. A failed or
+	// out-of-budget read leaves it nil — see [FleetState.LiveNodes].
+	if nodes, err := r.engine.LiveNodes(ctx); err == nil {
+		state.LiveNodes = &nodes
+	}
+	return state
 }

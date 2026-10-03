@@ -11,12 +11,21 @@
 
 import { act, cleanup, render, screen } from "~/test/inCase.ts";
 import { announce } from "@crewlethq/ui";
-import { afterEach, beforeEach, expect, test } from "vitest";
+import { afterEach, beforeAll, beforeEach, expect, test } from "vitest";
+import { CHUNKS, loadChunk } from "./lazyScreen.ts";
 import { App } from "./App.tsx";
 import { ANNOUNCER_LABEL } from "./announcer.tsx";
 import { Router } from "./router.tsx";
 import { ClientContext } from "~/lib/store-hooks.ts";
 import { LiveSocket, Store } from "~/protocol/index.ts";
+
+// EVERY SCREEN'S CODE IS IN BEFORE A CASE STARTS — the sign-in screens' chunk
+// and every workspace's (`app/lazyScreen.ts`) — because this suite asserts
+// where a reader is sent and what is drawn there, not how long a cold
+// `import()` takes under a test transformer.
+beforeAll(async () => {
+  await Promise.all([...CHUNKS, "signin" as const].map((chunk) => loadChunk(chunk)));
+});
 
 class InertWebSocket {
   static CONNECTING = 0;

@@ -123,7 +123,7 @@ func TestTheChainHashMovesWithTheStructureAndOnlyWithIt(t *testing.T) {
 // It used to. Hashing display names put every seat under a relabelled division
 // through a full onboarding turn — reading pages it had already read, for a
 // team it had not left — and put a person through one for changing their own
-// name. See ADR-0019.
+// name. See ADR-0026.
 func TestRelabellingAUnitOrASeatDoesNotReOnboardAnybody(t *testing.T) {
 	t.Parallel()
 	seat := &org.Role{Name: "Engineer", DeclaredHandle: "eng"}

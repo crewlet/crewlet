@@ -265,9 +265,9 @@ func (GenerationRecord) GenerationSubject(gen uint32) (statelog.Subject, bool) {
 // field carried for it would be read by nothing while deferring the record on
 // every older node ([namesOperator]).
 //
-// AT THE BASE VERSION ([writeVersion]): a generation record is not a gate, and
-// a version a peer cannot read would defer the very record that says its log
-// moved on.
+// PINNED AT THE BASE VERSION, which [Encode] holds it to: a generation record
+// is not a gate, and a version a peer cannot read would defer the very record
+// that says its log moved on.
 func (GenerationRecord) GenerationRecord(f statelog.GenerationFacts) (statelog.GenerationRecord, bool, error) {
 	subject := GenerationSubject(f.Generation)
 	author, kind := generationActor(f)
@@ -288,7 +288,7 @@ func (GenerationRecord) GenerationRecord(f statelog.GenerationFacts) (statelog.G
 	// node that wrote it.
 	payload, err := Encode(MutationRecord{
 		RecordEnvelope: RecordEnvelope{
-			V: writeVersion(OpGeneration, false), OpID: opID,
+			V: BaseRecordVersion, OpID: opID,
 			Subject: subject, Op: OpGeneration, CreatedAt: f.At.UTC(),
 			Scope: RootScope(), Gen: f.Generation, Writer: f.Writer,
 		},

@@ -4,6 +4,7 @@ import (
 	"context"
 	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/sandbox/codingagent"
@@ -409,26 +410,87 @@ func TestAMalformedAskDoesNotLoseTheResult(t *testing.T) {
 	}
 }
 
-func TestTheTranscriptIsTailCapped(t *testing.T) {
+// THE BOUND IS BYTES, AND THE CUT IS ON A BOUNDARY. The transcript rides an
+// event, and an event's ceiling is bytes: a transcript of three-byte runes
+// under the old 100 000-RUNE cap was 300 KB on the wire, past the 256 KiB this
+// bound promises. And the kept half opens on a whole character, because a
+// byte offset from the end lands mid-rune two times in three here, which the
+// event store's JSON encoding turns into U+FFFD.
+func TestTheTranscriptIsCutAtABoundaryInBytes(t *testing.T) {
 	runner := codingagent.NewClaudeCode()
 	b := box(t, runner)
 	p := paths(b)
 	b.Put(p.Findings(), "Outcome: succeeded")
-	b.Put(p.Err(), strings.Repeat("x", codingagent.MaxTranscript*2)+"\nTHE CONCLUSION")
+	b.Put(p.Err(), strings.Repeat("日", codingagent.MaxTranscriptBytes)+"\nTHE CONCLUSION")
 
 	res, err := runner.Collect(t.Context(), b, sandbox.RunHandle{})
 	if err != nil {
 		t.Fatalf("Collect: %v", err)
 	}
-	if len(res.Transcript) > codingagent.MaxTranscript+64 {
-		t.Fatalf("transcript is %d characters", len(res.Transcript))
+	kept, marked := strings.CutPrefix(res.Transcript, "…")
+	if !marked {
+		t.Fatal("the cap was silent")
+	}
+	if len(kept) > codingagent.MaxTranscriptBytes {
+		t.Fatalf("the transcript kept %d bytes, past the %d-byte bound", len(kept), codingagent.MaxTranscriptBytes)
+	}
+	if !utf8.ValidString(kept) || strings.HasPrefix(kept, string(utf8.RuneError)) {
+		t.Fatal("the transcript was cut through a rune")
 	}
 	// The TAIL is kept: the conclusion is what a reader wants.
-	if !strings.Contains(res.Transcript, "THE CONCLUSION") {
+	if !strings.HasSuffix(kept, "THE CONCLUSION") {
 		t.Fatal("the tail cap dropped the end of the transcript instead of the start")
 	}
-	if !strings.Contains(res.Transcript, "truncated") {
-		t.Fatal("the cap was silent")
+}
+
+// A crash explains itself at the bottom, so the failure text a run that
+// produced nothing reports is its stderr's END, bounded like the transcript
+// and marked where it was cut.
+func TestACrashDetailKeepsItsEndAndSaysItCut(t *testing.T) {
+	runner := codingagent.NewClaudeCode()
+	b := box(t, runner)
+	p := paths(b)
+	b.Put(p.Err(), strings.Repeat("noise\n", codingagent.MaxTranscriptBytes)+"FATAL: migrations/0007.sql is missing")
+	b.Put(p.ExitCode(), "1")
+
+	res, err := runner.Collect(t.Context(), b, sandbox.RunHandle{})
+	if err != nil {
+		t.Fatalf("Collect: %v", err)
+	}
+	if !strings.HasSuffix(res.Error, "FATAL: migrations/0007.sql is missing") {
+		t.Error("the line naming the failure was cut away")
+	}
+	if !strings.HasPrefix(res.Error, "…") {
+		t.Error("the cut is silent")
+	}
+	if len(res.Error) > codingagent.MaxTranscriptBytes+len("…") {
+		t.Errorf("the failure text is %d bytes, past its bound", len(res.Error))
+	}
+}
+
+// THE REPORT IS BOUNDED TOO, and keeps its HEAD. It is the response on the
+// run's own phase record, the agent writes it and nothing else limits it —
+// and a record over the queue's ceiling is refused whole. Unlike a log, a
+// report is read from the top, where its summary is.
+func TestTheReportIsBoundedAndKeepsItsHead(t *testing.T) {
+	runner := codingagent.NewClaudeCode()
+	b := box(t, runner)
+	p := paths(b)
+	b.Put(p.Findings(), "Outcome: succeeded\n"+strings.Repeat("detail\n", codingagent.MaxTranscriptBytes))
+	b.Put(p.ExitCode(), "0")
+
+	res, err := runner.Collect(t.Context(), b, sandbox.RunHandle{})
+	if err != nil {
+		t.Fatalf("Collect: %v", err)
+	}
+	if !strings.HasPrefix(res.Text, "Outcome: succeeded") {
+		t.Error("the report's opening line was cut away")
+	}
+	if len(res.Text) > codingagent.MaxTranscriptBytes+len("…") || !strings.HasSuffix(res.Text, "…") {
+		t.Errorf("the report is %d bytes and unmarked, not bounded", len(res.Text))
+	}
+	if !res.Success {
+		t.Error("a bounded report stopped reading as a success")
 	}
 }
 
@@ -471,4 +533,82 @@ func lastBackground(t *testing.T, b *sandbox.FakeSandbox) string {
 		t.Fatal("nothing was started in the background")
 	}
 	return cmds[len(cmds)-1]
+}
+
+// ---------------------------------------------------------------------
+// peek — a running job's live output
+// ---------------------------------------------------------------------
+
+// A PEEK IS THE TAIL OF THE PARSED TRANSCRIPT, REDACTED, and touches nothing.
+//
+// What a person watching a run wants is what it is doing now, so the END of
+// the agent's own account is kept; the box's environment holds the seat's
+// credentials, so a key the agent echoed must not reach a screen; and a peek
+// racing the completion poll must not change what the poll sees.
+func TestPeekTailsTheParsedTranscriptAndRedacts(t *testing.T) {
+	t.Parallel()
+	runner := codingagent.NewOpenCode()
+	b := box(t, runner)
+	p := paths(b)
+	secret := "sk-ant-api03-" + strings.Repeat("x", 40)
+	var stream strings.Builder
+	for i := range 400 {
+		stream.WriteString(`{"type":"text","part":{"text":"step ` + strings.Repeat("·", 20) +
+			` number ` + string(rune('a'+i%26)) + `"}}` + "\n")
+	}
+	stream.WriteString(`{"type":"text","part":{"text":"exporting ` + secret + ` and running go test"}}` + "\n")
+	b.Put(p.Result(), stream.String())
+	b.Put(p.Err(), "stderr is not what a parsed transcript run shows")
+
+	out, err := runner.Peek(t.Context(), b, sandbox.RunHandle{})
+	if err != nil {
+		t.Fatalf("Peek: %v", err)
+	}
+	if out.Source != sandbox.SourceTranscript {
+		t.Errorf("source = %q; want the parsed transcript", out.Source)
+	}
+	if strings.Contains(out.Text, secret) {
+		t.Error("a credential the agent echoed reached the live output unredacted")
+	}
+	if !strings.HasSuffix(out.Text, "running go test") {
+		t.Errorf("the live output does not end with the newest line: …%q", out.Text[max(0, len(out.Text)-60):])
+	}
+	if !out.Cut || len(out.Text) > sandbox.MaxLiveOutputBytes+len("…") || !utf8.ValidString(out.Text) {
+		t.Errorf("cut=%v len=%d valid=%v; want the last %d bytes on a rune boundary, marked",
+			out.Cut, len(out.Text), utf8.ValidString(out.Text), sandbox.MaxLiveOutputBytes)
+	}
+	if out.Finished {
+		t.Error("a job with no done marker read as finished")
+	}
+	if out.AsOf.IsZero() {
+		t.Error("the peek carries no instant")
+	}
+	if done, _ := b.ReadFile(t.Context(), p.Done()); len(done) != 0 {
+		t.Error("a peek wrote the done marker")
+	}
+}
+
+// An agent that writes nothing parseable until it exits shows its stderr, and
+// one that has written nothing at all says so rather than failing.
+func TestPeekFallsBackToStderrAndThenToNothing(t *testing.T) {
+	t.Parallel()
+	runner := codingagent.NewClaudeCode()
+	b := box(t, runner)
+	p := paths(b)
+
+	out, err := runner.Peek(t.Context(), b, sandbox.RunHandle{})
+	if err != nil || out.Source != sandbox.SourceNone || out.Text != "" {
+		t.Errorf("an empty box peeked %+v, %v; want source none and no text", out, err)
+	}
+
+	b.Put(p.Err(), "cloning github.com/acme/api\n")
+	out, err = runner.Peek(t.Context(), b, sandbox.RunHandle{})
+	if err != nil || out.Source != sandbox.SourceStderr || out.Text != "cloning github.com/acme/api" {
+		t.Errorf("a box with only stderr peeked %+v, %v; want its stderr", out, err)
+	}
+
+	b.Put(p.Done(), "0")
+	if out, _ = runner.Peek(t.Context(), b, sandbox.RunHandle{}); !out.Finished {
+		t.Error("a job whose done marker is written did not read as finished")
+	}
 }

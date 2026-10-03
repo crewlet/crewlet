@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -139,32 +140,49 @@ func (c *nodeClient) post(ctx context.Context, path string, into any) error {
 }
 
 // postKeyed is [nodeClient.post] carrying an operation key, which is what
-// makes a retry of the same gesture the same operation on the node's ledger.
-func (c *nodeClient) postKeyed(ctx context.Context, path, key string, into any) error {
+// makes a retry of the same gesture the same operation on the node's ledger —
+// and, where body is not nil, a JSON body: the act transport's shape, which
+// takes a gesture's arguments as `{"args": …}` and refuses any other
+// Content-Type.
+func (c *nodeClient) postKeyed(ctx context.Context, path, key string, body, into any) error {
 	header := http.Header{}
 	if key = strings.TrimSpace(key); key != "" {
 		header.Set(opkey.Header, key)
 	}
-	return c.send(ctx, http.MethodPost, path, header, into)
+	var payload []byte
+	if body != nil {
+		raw, err := json.Marshal(body)
+		if err != nil {
+			return fmt.Errorf("encode the request: %w", err)
+		}
+		payload = raw
+	}
+	return c.send(ctx, http.MethodPost, path, header, payload, into)
 }
 
 // maxNodeResponseBytes bounds one answer read back from a node.
 //
 // An error body is a sentence; a proxy's error page is not. The largest
-// legitimate answer this client reads is /query/budgets, which is one row of
-// roughly two hundred bytes per seat — so a megabyte is three orders of
-// magnitude above a large company's answer and still small enough that a
-// misdirected -url cannot make the CLI buffer a website.
-const maxNodeResponseBytes = 1 << 20
+// legitimate answer this client reads is /query/budgets, which states every
+// seat's day, week and month — about two hundred bytes a window, so some seven
+// hundred a seat. Four megabytes is some six thousand seats, an order of
+// magnitude above a large company, because an answer past the bound fails the
+// command outright; and it is still small enough that a misdirected -url cannot
+// make the CLI buffer a website.
+const maxNodeResponseBytes = 4 << 20
 
 func (c *nodeClient) do(ctx context.Context, method, path string, into any) error {
-	return c.send(ctx, method, path, nil, into)
+	return c.send(ctx, method, path, nil, nil, into)
 }
 
 func (c *nodeClient) send(ctx context.Context, method, path string,
-	header http.Header, into any) error {
+	header http.Header, payload []byte, into any) error {
 
-	req, err := http.NewRequestWithContext(ctx, method, c.base+path, nil)
+	var reader io.Reader
+	if payload != nil {
+		reader = bytes.NewReader(payload)
+	}
+	req, err := http.NewRequestWithContext(ctx, method, c.base+path, reader)
 	if err != nil {
 		return fmt.Errorf("build the request: %w", err)
 	}
@@ -172,6 +190,11 @@ func (c *nodeClient) send(ctx context.Context, method, path string,
 		for _, v := range values {
 			req.Header.Add(name, v)
 		}
+	}
+	if payload != nil {
+		// THE ONE BODY THIS CLIENT SENDS IS JSON, and the act transport
+		// refuses any other Content-Type rather than guessing.
+		req.Header.Set("Content-Type", "application/json")
 	}
 	if c.token != "" {
 		req.Header.Set("Authorization", "Bearer "+c.token)

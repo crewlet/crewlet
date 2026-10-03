@@ -95,7 +95,7 @@ const (
 	heldAsAlias
 
 	// heldAsIdentity is the key an object was CREATED under and has since
-	// been renamed away from — its identity (ADR-0019, ADR-0020).
+	// been renamed away from — its identity (ADR-0026, ADR-0027).
 	heldAsIdentity
 )
 

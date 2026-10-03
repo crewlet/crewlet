@@ -1,749 +1,716 @@
 /* ===========================================================================
-   The frame: rail, workspace sidebar, page bar, state bar, detail rail, grid.
+   The frame: the sidebar's own rows, the page header, the state bar, the
+   detail rail, the grid.
 
    Everything here is chrome that every screen wears. A screen's own rules live
    in screens.css; a reusable piece's rules live in components.css. The split
    matters because the frame is the only thing on screen that must look
-   identical on all twenty screens — a copy of a rail rule inside a screen is
-   how one screen's chrome starts drifting from the rest.
+   identical on every screen — a copy of a header rule inside a screen is how
+   one screen's chrome starts drifting from the rest.
 
-   THE ACCENT APPEARS TWICE IN THE WHOLE FRAME: the current rail row and the
-   current sidebar row. Colour carries STATE, never identity, and "where you
-   are" is the one piece of state the chrome itself holds.
+   THE KIT OWNS THE FRAME'S GEOMETRY. The sidebar on the frame rung, the sheet
+   floating beside it at `--size-shell-inset` with its corner and hairline, the
+   52px bar, the drawer below `breakpoint.shell` — all of that is
+   `@crewlethq/ui`'s `AppShell` and `SidebarNav`, and nothing here restates it.
+   What is here is what the kit has no opinion about: the two rows the page
+   header draws, the peek as a column of the sheet, the Settings column, and
+   the sidebar's own few rows (the health card, the user block).
+
+   WHERE YOU ARE IS DRAWN WITHOUT A HUE: the current sidebar row and the
+   current section are raised or underlined, and the one accent in the chrome
+   is the Inbox's badge — the count of what is waiting on the reader. Colour
+   carries STATE, never identity, and "where you are" is not a state.
+
+   EVERY WIDTH THIS FILE WRITES IN A MEDIA QUERY IS `app/layout.ts`'s: the
+   kit's `breakpoint.shell` (1024) and `breakpoint.phone` (640). A media query
+   cannot read a custom property, so the literal is written here and
+   `styles/frame.test.ts` holds each against the module that reads it. The
+   peek's own width has NO literal here at all: it turns on the screen's shape
+   and the reader's density, which no media query can read, so the shell
+   decides it and writes the answer as `data-peek` (`app/layout.ts`).
    ======================================================================== */
 
 :root {
-  /* THE RAIL'S WIDTH IS DECIDED BY ITS FOOT, not by its longest label.
-
-     The label is still the point of the rail — a row a reader has to learn by
-     its icon is a row they hover — and the longest workspace name
-     ("Knowledge") measures 58.27px at `--fs-3xs`, which a rail cannot hand it
-     until the rail is 72px: the border, `.rail-rows`' inset and the row's own
-     padding take 13px before any text is reached, so the floor is 71.27 and a
-     71px rail still ellipsed. That is why this was raised from 68, where it
-     drew as "Knowled…", to a flat 80 in the first place. What 80 does not fit
-     is the two segmented controls UNDER those labels, and that is not a taste
-     question: a pill row is three hit targets at
-     `--size-target-min`, which is 24px because WCAG 2.2 says a pointer target
-     may not stand smaller, plus two 2px gaps and the row's own 2px padding —
-     80px, and not one pixel of it is negotiable. Inside an 80px rail, after
-     the border and the foot's own inset, each control had 63px to draw those
-     80 in, so its third option landed OUTSIDE it — and 6px past the rail's own
-     edge as well: "dark" and "comfortable" hung there with no ground under
-     them, permanently, on every screen.
-
-     So the width is composed from the thing that cannot shrink, and the label
-     floor is met with room to spare rather than by coincidence. The `+ 1px` is
-     the rail's own `border-right`, which `box-sizing: border-box` takes out of
-     the track before the foot ever sees it — the pixel that made the obvious
-     96px still one short.
-
-     The settings could have moved to the command palette's `>` scope instead,
-     where they already live and where the collapsed rail and the phone's
-     bottom bar already send them. They are kept because a theme switch a
-     reader can SEE is the reason either of them is in the chrome at all; what
-     was actually wrong was a rail too narrow to hold what it was drawing. */
-  --rail-foot-w: 80px;
-  --rail-w: calc(var(--rail-foot-w) + 2 * var(--space-2) + 1px);
-  --rail-w-collapsed: 48px;
-  /* The bottom bar's height on a phone. A glyph, its label under it, and the
-     touch target both have to live in: 56px is the floor every platform's own
-     guidance gives for one a thumb hits reliably, and the label needs the
-     rest. It is a token because the page's own bottom padding is derived from
-     it — a bar whose height and a page whose clearance are two literals is a
-     list whose last row goes under the navigation the day either moves. */
-  --rail-bar-h: 62px;
-  /* The page bar keeps the old topbar's height: the two are the same band,
-     and a reader moving between an old bookmark and a new one should not see
-     the content jump. */
-  --page-bar-h: var(--topbar-h);
-  /* Below this the detail rail becomes a drawer. The measured quantity is the
-     LIST FLOOR: 444px is under the width a work row needs for a key, a title
-     and an assignee. The threshold is that floor plus the chrome in front of
-     it, with the sidebar OPEN: the peek is 420px and the sidebar 236, so the
-     window has to carry those plus the rail plus the floor.
-
-     DERIVED AT THE WIDEST DENSITY, which is the half a single measurement
-     misses. `--rail-w` composes `2 * --space-2`, and every spacing token is
-     `calc(Npx * var(--density))` — so the rail is 94.11px compact, 97px
-     normal and 99.23px comfortable, and the sum it feeds is 1194.11, 1197
-     and 1199.23. A media query cannot read `--density` any more than it can
-     read `--peek-drawer-max`, so one number has to serve all three, and only
-     the LARGEST is safe: at 1197 a comfortable-density reader got the peek as
-     a column over a list of 441px between 1198 and 1199, which is the same
-     defect this paragraph exists to record, one density over. 1200 clears
-     the comfortable sum and is at most 6px conservative on compact — a drawer
-     where a column would just have fitted costs a reader nothing, and a
-     column over a list too narrow to read is the bug.
-
-     IT WAS 1180, DERIVED WHEN `--rail-w` WAS A FLAT 80px. The rail became
-     `--rail-foot-w + 2 * --space-2 + 1px` above and this sum was not redone,
-     so between 1181 and 1200 the peek stayed a column over a list of
-     427–443px: below the floor this number exists to hold, at twenty widths
-     of window, with nothing to report it. The floor is what was measured; the
-     threshold is arithmetic over it, the chrome AND the density, and it has
-     to be redone whenever any of the three moves.
-
-     AND THE BOARD'S OWN 1500 DOES NOT GOVERN IT. A second threshold was
-     measured once, from the tracker's board: three panes are the rail, the
-     sidebar and the peek, what is left is the board, a lane is 292 and at
-     1280 exactly one lane was left — "which is not a board" — so the peek
-     should overlay below about 1500. That measurement was about a peek this
-     SCREEN owned, as a column of its own body grid, and the rules enforcing
-     it matched an attribute nothing ever set; they have been deleted from
-     screens.css. The peek is the frame's now, one threshold for every screen,
-     so the quantity it turns on has to be the one common to all of them — a
-     LIST too narrow to read, which nothing can rescue. A board has its own
-     answer to a narrow body and it is horizontal scroll: lanes keep their
-     width and the reader pushes them, which is what `.work-board` does. A
-     list cannot scroll sideways without becoming unreadable, so the list is
-     what sets this number. */
-  --peek-drawer-max: 1200px;
+  /* The page bar's floor: the kit's own bar height, so a peek's bar and the
+     page's stand on one line. */
+  --page-bar-h: var(--size-shell-topbar);
 }
 
-/* ---- The application grid ------------------------------------------------
-   Three columns and one scroll container. ONE, because the router restores a
-   scroll position per history entry and a page with three independent
-   scrollers has three positions and no way to name them. The sidebar and the
-   peek scroll internally; the page is the one the router owns. */
+/* ---- The page column's own furniture -------------------------------------
+   The ONE scroll container is the kit's `main`; the toolbar a screen puts its
+   own controls in and the command palette are ours. */
 
-.app {
-  display: grid;
-  grid-template-columns: var(--rail-w) var(--sidebar-w) minmax(0, 1fr);
-  height: 100dvh;
+/* THE SCROLLER IS THE KIT'S, and the router restores a position on it per
+   history entry. Smooth scrolling would animate every restore. */
+.crewlet-app-shell__main {
+  scroll-behavior: auto;
+}
+
+/* THE TOOLBAR OWNS THE TOP OF THE SCROLLER, so everything else that sticks
+   starts below it. Asked with `:has` on the whole scroller rather than on a
+   direct child, because a toolbar rendered inside a tab panel or a panel is
+   still sticky against this same scroller and still covers the same band.
+   The offset is ONE band of controls: a toolbar narrow enough to wrap is
+   taller than that and a column head then parks under its second row — the
+   only alternative is measuring the band in JS and writing the property from
+   a ResizeObserver, which puts a layout read in the scroll path to buy a
+   pixel at the one width where the grid is already dropping columns. */
+.crewlet-app-shell__main:has(.toolbar) {
+  --sticky-top: var(--toolbar-h);
+}
+
+/* NO MAX WIDTH. The kit's content column caps at `--size-content-max`, which
+   is right for prose and wrong for this product: the screens are tables,
+   boards and charts, and a cap throws away exactly the width a wide window
+   bought — a grid of forty rows reading at 1600px on a 2560px screen with
+   grey either side. Prose and forms take their measure from `--size-measure`
+   where they need one. The kit's padding and gap are the rhythm every screen
+   was already written to, and stay. */
+.app .crewlet-app-shell__content {
+  max-width: none;
+  /* AND IT IS THE SCREEN'S MEASURING STICK, under the same name the bar's is
+     (`.page-head`): every `@container page` rule a screen writes — the item
+     page's rail, the event feed's phone row, Home's figures — is about how
+     wide the SCREEN'S column is, and a query binds to the nearest ancestor
+     of that name. Only the header declared one, which is not an ancestor of
+     any screen, so each of those rules matched nothing at any width. */
+  container: page / inline-size;
+}
+
+.toolbar {
+  position: sticky;
+  top: 0;
+  z-index: var(--z-index-sticky);
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-2);
+  flex-wrap: wrap;
+  padding: var(--spacing-2) 0;
+  background: var(--color-surface-background);
+  min-width: 0;
+  /* A FLOOR, NOT A HEIGHT. The band is what `--sticky-top` offsets the grid's
+     column heads by, so it has to be a real number even on a screen whose
+     toolbar holds one short chip — and a fixed height would clip the wrapped
+     row instead, which is the case the floor deliberately lets grow. */
+  min-height: var(--toolbar-h);
+}
+
+/* ---- The command palette ------------------------------------------------
+   THE KIT DRAWS THE SURFACE (`CommandPalette`): the field, the scope tabs, the
+   lead's raised box and the key legend's band. What is here is what the
+   dashboard puts IN it — the legend's two ends, the answer, the picker's head
+   and the task key's register. `.palette` is the class the kit's frame takes. */
+
+/* THE FRAME IS WHAT THE SERVED MODE IS PLACED AGAINST (below), and it opens
+   where the approved palette does: 96px down, the kit's 64px inset plus the
+   32px step. The kit caps the frame at 74dvh, so the two together fit any
+   window over 370px tall. A phone keeps the kit's inset, where the first
+   screen is too short to give a row of it away. */
+.palette {
+  position: relative;
+}
+@media (width >= 640px) {
+  .palette {
+    margin-top: var(--spacing-7);
+  }
+}
+
+/* A DIALOG'S MARK SITS ON ITS TITLE'S LINE. The kit centres the header's items,
+   which is right for a title alone and wrong once a subtitle runs to two or
+   three lines under it: the mark floated beside the description, belonging to
+   neither line. With a subtitle the row aligns to the top, and the mark's box
+   is one title line tall so the glyph centres on that line. A dialog with no
+   subtitle keeps the kit's centring, where the two are the same thing. */
+.crewlet-modal__header:has(.crewlet-modal__subtitle) {
+  align-items: flex-start;
+}
+.crewlet-modal__header:has(.crewlet-modal__subtitle) .crewlet-modal__icon {
+  align-items: center;
+  height: calc(var(--font-size-sm) * var(--font-line-height-tight));
+}
+
+/* THE GROUP HEADINGS IN THE DESIGN'S REGISTER: "Tasks", "Pages", "Actions"
+   in sentence case at the small label step, as the approved palette writes
+   them — the listbox's uppercase micro-label is a table's column head, and
+   here it shouted over rows that are themselves one quiet line each. */
+.palette .crewlet-listbox__heading {
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-regular);
+  letter-spacing: normal;
+  text-transform: none;
+}
+
+/* THE LEGEND SPANS THE BAND, keys at its start and what the search is doing at
+   its end, as the approved palette draws it. The kit's start slot is sized to
+   its content; this lets it take the band so the end can sit at the end. */
+.palette .crewlet-modal__footer-start {
+  flex: 1 1 auto;
+}
+/* THE KEYS WRAP rather than run off the band: a phone's palette is 358px wide
+   and three keys with their words are not. */
+.palette-keys {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--spacing-1) var(--spacing-4);
+}
+.palette-keys > span,
+.palette-scope-note,
+.palette-mode {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--spacing-1);
+  white-space: nowrap;
+}
+/* The scope's note starts the band's end. */
+.palette-scope-note {
+  margin-left: auto;
+}
+/* The mode SERVED, as a quiet pill: "Hybrid search", or the ranking a
+   degraded search actually ran — at the END OF THE SCOPE ROW, where the
+   approved palette draws it. It is written in the legend (the kit's scope row
+   has no trailing slot) and placed against the frame: the field's band, then
+   half the scope row's, both the kit's own row tokens. The tabs never reach
+   it: five short words take 290px of a frame that is 640px or wider wherever
+   the pill is drawn, and a phone does not draw it (below). */
+.palette-mode {
+  position: absolute;
+  top: calc(var(--size-row-lg) + var(--size-row-md) / 2);
+  right: var(--spacing-4);
+  transform: translateY(-50%);
+  padding: 0 var(--spacing-2);
+  min-height: 20px;
+  border-radius: var(--radius-pill);
+  background: var(--color-surface-elevated);
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-2xs);
+}
+
+/* A task's key inside a row's label: the mono register at the hint's ink, so
+   the title after it reads as the label. */
+.palette-key {
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-regular);
+  color: var(--color-text-tertiary);
+}
+
+/* THE ANSWER, inside the kit's raised lead. */
+.palette-answer {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-2);
+}
+.palette-answer-head,
+.palette-answer-note {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--spacing-2);
+  margin: 0;
+  font-size: var(--font-size-xs);
+  color: var(--color-text-tertiary);
+}
+.palette-answer-note {
+  font-size: var(--font-size-compact);
+  color: var(--color-text-secondary);
+}
+.palette-answer-note.is-refused {
+  color: var(--color-feedback-danger-ink);
+}
+.palette-answer-body > :first-child {
+  margin-top: 0;
+}
+.palette-answer-body > :last-child {
+  margin-bottom: 0;
+}
+.palette-answer-wait {
+  margin: 0;
+  color: var(--color-text-tertiary);
+}
+.palette-sources-label {
+  font-size: var(--font-size-xs);
+  color: var(--color-text-tertiary);
+}
+/* ONE LINE OF SOURCES: a chip gives up width before the line wraps, and the
+   ones past the first few are "+N" (`SOURCE_CHIPS`) — a second line of chips
+   is what pushed the three actions off the first screen. */
+.palette-answer-sources {
+  display: flex;
+  flex-wrap: nowrap;
+  align-items: center;
+  gap: var(--spacing-2);
+  min-width: 0;
+}
+.palette-sources-label,
+.palette-sources-more {
+  flex: none;
+}
+.palette-sources-more {
+  font-size: var(--font-size-2xs);
+  color: var(--color-text-tertiary);
+}
+/* A SOURCE IS A CHIP numbered as the answer cites it ([n]), so a claim leads
+   to its document. A pointer target: every source is also a row. */
+.palette-source {
+  display: inline-flex;
+  flex: 0 1 auto;
+  align-items: center;
+  gap: var(--spacing-1);
+  min-height: 20px;
+  min-width: 4em;
+  max-width: 100%;
+  padding: 0 var(--spacing-2);
+  border: 1px solid var(--color-border-default);
+  border-radius: var(--radius-pill);
+  font-size: var(--font-size-2xs);
+  color: var(--color-text-secondary);
+  text-decoration: none;
   overflow: hidden;
-  background: var(--bg);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.palette-source:hover {
+  color: var(--color-text-primary);
+  border-color: var(--color-border-hover);
+}
+.palette-source-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.palette-source-n {
+  font-family: var(--font-family-mono);
+  color: var(--color-text-tertiary);
+}
+.palette-answer-foot {
+  margin: 0;
+  font-size: var(--font-size-2xs);
+  color: var(--color-text-tertiary);
+}
+.palette-pick {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-1);
+}
+.palette-pick > p {
+  margin: 0;
+  color: var(--color-text-primary);
 }
 
-.app[data-rail-collapsed="true"] {
-  grid-template-columns: var(--rail-w-collapsed) var(--sidebar-w) minmax(0, 1fr);
-}
-
-/* A workspace with no tree of its own — the Inbox and My work are two-pane
-   screens whose scope lives in the page. */
-.app[data-no-sidebar="true"] {
-  grid-template-columns: var(--rail-w) minmax(0, 1fr);
-}
-
-.app[data-no-sidebar="true"][data-rail-collapsed="true"] {
-  grid-template-columns: var(--rail-w-collapsed) minmax(0, 1fr);
-}
-
-/* THE PEEK IS A COLUMN OF THIS GRID, not a child of whichever screen opened
+/* ---- The peek, as a column of the sheet ----------------------------------
+   THE PEEK IS A COLUMN OF THE SHEET, not a child of whichever screen opened
    it. It used to be a flex child inside the tracker's own three-column
-   layout, which is exactly why no other screen could have one: a second
-   screen would have had to rebuild that layout to hold it.
+   layout, which is exactly why no other screen could have one. It is the
+   kit's `footer` slot now — the one place inside the sheet and outside `main`
+   — and while one is open at a width that can hold it, the sheet becomes a
+   grid: the page header across the top, the screen and the peek side by side
+   under it. The header spans both, because the section a reader is on is
+   still the section they are on with a row peeked.
 
-   The shell mounts it, so the track has to exist here — and it exists ONLY
-   while the rail is open, because an empty fourth column would take its
-   width from every screen that never opens one. `--peek-w` is the reader's
-   own dragged width, published on the ROOT by `DetailRail` — not on the rail
-   itself, which is this grid's own child, and a custom property inherits
-   downward only, so a value set there could never reach the track that sizes
-   it. On the root the column and the panel read one value and cannot
-   disagree about how wide it is.
+   ONLY WHILE ONE IS OPEN, because an empty column would take its width from
+   every screen that never opens one — and ONLY WHERE THE FRAME HAS ROOM, which
+   the shell decides and writes as `data-peek="column"` (the other value,
+   `drawer`, is the block further down). Not a media query: the width that
+   leaves the list its floor is 236px wider beside Settings' section column
+   than beside any other screen, and it moves with the density, and a media
+   query can see neither. `app/layout.ts` has the arithmetic.
 
-   AND THE TRACK ONLY EXISTS WHERE THE PEEK IS A COLUMN. Below
-   `--peek-drawer-max` the rail is `position: fixed` (see the drawer block
-   further down), which takes it out of grid flow but does NOT shrink an
-   explicitly sized track — so an unconditional fourth track reserved 420px
-   of empty page at exactly the widths the drawer exists to rescue, and at
-   ≤960 it also out-specified the two-column reset and kept the empty sidebar
-   track as well. 1201 rather than a `calc()` off the token because a custom
-   property cannot be read in a media query; `frame.test.ts` holds the two
-   numbers against each other so they move together. */
-@media (min-width: 1201px) {
-  .app[data-peek="true"] {
-    grid-template-columns:
-      var(--rail-w) var(--sidebar-w) minmax(0, 1fr)
-      var(--peek-w, 420px);
-  }
+   THE TRACK IS THE READER'S WIDTH, CAPPED. `--peek-w` is the dragged width,
+   published on the ROOT by `DetailRail`, so the column and the panel read one
+   value and cannot disagree about how wide it is. It may be anything to 640
+   and it outlives the window it was dragged in, so the track takes it only as
+   far as the sheet can give with the list still at its floor: `100%` is the
+   sheet, and `--peek-reserve` — the shell's, from `listReserve` — is the
+   gutter, the padding, a section column and the list. At the threshold the
+   cap is exactly the resting 420, so the column never opens narrower than
+   the width it was decided at. */
+.app[data-peek="column"] .crewlet-app-shell__sheet {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) min(var(--peek-w, 420px), 100% - var(--peek-reserve));
+  grid-template-rows: auto minmax(0, 1fr);
+}
 
-  .app[data-peek="true"][data-rail-collapsed="true"] {
-    grid-template-columns:
-      var(--rail-w-collapsed) var(--sidebar-w) minmax(0, 1fr)
-      var(--peek-w, 420px);
-  }
+.app[data-peek="column"] .page-head {
+  grid-column: 1 / -1;
+  grid-row: 1;
+}
 
-  .app[data-peek="true"][data-no-sidebar="true"] {
-    grid-template-columns: var(--rail-w) minmax(0, 1fr) var(--peek-w, 420px);
-  }
+.app[data-peek="column"] .crewlet-app-shell__main {
+  grid-column: 1;
+  grid-row: 2;
+}
 
-  .app[data-peek="true"][data-no-sidebar="true"][data-rail-collapsed="true"] {
-    grid-template-columns: var(--rail-w-collapsed) minmax(0, 1fr) var(--peek-w, 420px);
-  }
+.app[data-peek="column"] .peek-rail {
+  grid-column: 2;
+  grid-row: 2;
 }
 
 /* ---- The reset does not take the focus ring with it ----------------------
    `all: unset` is how a <button> becomes a plain box, and this file reaches for
-   it five times: the rail's collapse control, the sidebar's twist, a grid's
-   sortable column head, its more-row and a histogram bar. `all` is every
-   property, `outline` among them — so each of those rules sets
-   `outline-style: none` on the element.
+   it three times: a grid's sortable column head, its column reset and a
+   histogram bar. `all` is every property, `outline` among them — so each of
+   those rules sets `outline-style: none` on the element.
 
    THE RING THEN LOSES A TIE RATHER THAN A FIGHT, which is why nothing about
-   this looks wrong in the file. `base.css`'s `:focus-visible` is one
-   pseudo-class, specificity (0,1,0); `.rail-collapse` is one class, the same
-   (0,1,0). Frame.css is imported after base.css, so the later rule wins and
-   the ring is gone. It is the SAME failure the comment above that
-   `:focus-visible` describes for the design system's components — a tie
-   decided by import order, visible to somebody using the keyboard and to
-   nobody else.
-
-   Measured with a tab walk against a running engine: the rail's collapse
-   control took focus with no ring on every screen in the product, and the
-   sidebar's twist on every screen that has a tree.
-
-   ONE RULE RATHER THAN FIVE, and it states nothing the baseline does not —
-   it re-states exactly what `base.css` says, at a specificity the reset cannot
-   out-rank. `styles/frame.test.ts` holds the two lists together: a sixth
+   this looks wrong in the file. The kit baseline's `:focus-visible` is one
+   pseudo-class, specificity (0,1,0); `.grid-th` is one class, the same
+   (0,1,0). The baseline is imported first, so the later rule wins and the
+   ring is gone. ONE RULE, and it states nothing the baseline does not — it
+   re-states exactly the baseline's ring, at a specificity the reset cannot
+   out-rank. `styles/frame.test.ts` holds the two lists together: an
    `all: unset` that is not named here fails the build. */
-.rail-collapse:focus-visible,
-.side-twist:focus-visible,
-.side-section-label.foldable:focus-visible,
 .grid-th:focus-visible,
 .grid-cols-reset:focus-visible,
 .histogram-bar:focus-visible {
-  outline: 2px solid var(--focus);
+  outline: 2px solid var(--color-focus);
   outline-offset: 2px;
 }
 
-/* ---- The global rail ---------------------------------------------------- */
+/* ---- The sidebar's own rows ----------------------------------------------
+   The navigation is the kit's `SidebarNav`; what is here is the three things
+   the kit has no row for — the ⌘K field's place, the engine's state, and who
+   this browser is. */
 
-.rail {
-  display: flex;
-  flex-direction: column;
-  min-height: 0;
-  background: var(--surface-panel);
-  border-right: 1px solid var(--border);
+/* THE FOOT'S OWN NAVIGATION SITS ON THE FOOT'S INSET. The kit's `SidebarNav`
+   brings the rail's gutter with it, and the foot already stands on that
+   gutter, so Settings drew one gutter to the right of every row above it. */
+.crewlet-app-shell__rail-foot > .crewlet-sidebar-nav {
+  padding: 0;
 }
 
-.rail-brand {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  height: var(--page-bar-h);
-  border-bottom: 1px solid var(--border);
-  flex: 0 0 auto;
-}
-
-/* THE MARK IS BOUNDED, NEVER SIZED. `crewlet-icon.svg` is 1467×978 — a 3:2
-   mark, and it MEETS its box rather than filling it, so any box whose own
-   ratio is not 3:2 draws the mark smaller than the box and letterboxes the
-   rest. A 24px SQUARE drew it 24px across 16px of art and padded the other 8,
-   which in a cell 96px wide and `--page-bar-h` tall left a 24×16 speck.
-
-   So NEITHER axis is given a size. Both are given a MAXIMUM over the file's
-   own intrinsic 1467×978, and whichever binds decides the box while the other
-   derives from the ratio — which is what keeps the ratio in the FILE rather
-   than restated as a `calc(… * 3 / 2)` here, where it would be a second
-   declaration of the mark's shape that nothing holds against the first.
-
-   `max-height` is `--control-h`, the step every control in this band
-   measures: `.rail-brand`, `.side-head`, `.peek-bar` and `.page-bar` are one
-   `--page-bar-h` band, so the mark stands as tall as the chrome beside it and
-   scales with `--density` for the same reason that does. `max-width` is the
-   column less the inset `.rail-rows` already takes. Open, the height binds and
-   the mark is 48×32; in the 48px column the width binds and it is 39×26.
-
-   A MAXIMUM ON BOTH AXES RATHER THAN A SIZE ON ONE AND A CLAMP ON THE OTHER,
-   because the clamp does NOT carry through a definite size: `height:
-   var(--control-h)` with `max-width` gave a 39×32 box in the narrow column,
-   ratio 1.219, and the mark letterboxed inside it exactly as it had in the
-   square. CSS 2.1 § 10.4's table rescales the other axis only where that axis
-   was itself derived — a height the author stated is a used value the clamp
-   never revisits. Measured in Chromium at 1200px: 39.00×26.00 here against
-   39.00×32.00 with the clamp.
-
-   And a maximum rather than a `[data-collapsed]` rule, because that attribute
-   is REACT STATE while the 48px column is also a BREAKPOINT: at 960 and below
-   the grid already hands the rail `--rail-w-collapsed` with `collapsed` still
-   false. That gap is how `.rail-engine > .truncate` came to render 61px of
-   word inside a 48px column and spill out of both sides of it. A maximum
-   reads the width it was actually given, so it cannot miss the half nothing
-   told it about. */
-.rail-brand img {
-  width: auto;
-  height: auto;
-  max-height: var(--control-h);
-  max-width: calc(100% - 2 * var(--space-1));
-}
-
-.rail-rows {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  padding: var(--space-2) var(--space-1);
-  overflow-y: auto;
-  flex: 1 1 auto;
-  min-height: 0;
-}
-
-.rail-row {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 2px;
-  padding: var(--space-2) 2px;
-  border-radius: var(--r-md);
-  color: var(--text-muted);
-  position: relative;
-}
-
-.rail-row:hover {
-  background: var(--surface-hover);
-  color: var(--text);
-}
-
-/* THE INK, NOT THE FILL. `--accent` is a fill — it is what a primary button
-   and a meter bar are painted WITH — and `--accent-ink` is the same hue moved
-   to where it can be read as text, which is why every anchor in `base.css`
-   already takes it. Spent as text on the soft ground this row also carries, the
-   fill measures 3.09:1 in dark and 3.81 in light, under the 4.5 small text
-   needs; the ink is 5.96 and 7.34. The rail's current row is the one piece of
-   chrome that says where the reader IS. */
-.rail-row.active {
-  color: var(--accent-ink);
-  background: var(--accent-soft);
-}
-
-/* The current row also carries a bar, so "where you are" survives a viewer
-   who cannot separate the accent from the muted text. It hangs back into the
-   rail's own `--space-1` padding, and the offset is a `calc()` because CSS
-   has no unary minus in front of a function: `-var(--space-1)` parses as a
-   value nothing can compute, the whole declaration is dropped, and `left`
-   falls back to `auto` — which on an abspos child of a centred column flex
-   row is the STATIC position, so the bar painted straight down the middle of
-   the icon it was meant to sit beside. */
-.rail-row.active::before {
-  content: "";
-  position: absolute;
-  left: calc(-1 * var(--space-1));
-  inset-block: 6px;
-  width: 2px;
-  border-radius: 1px;
-  background: var(--accent);
-}
-
-.rail-glyph {
-  position: relative;
-  display: flex;
-}
-
-.rail-label {
-  font-size: var(--fs-3xs);
-  line-height: 1.1;
-  text-align: center;
-  max-width: 100%;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.rail-badge {
-  position: absolute;
-  top: -5px;
-  right: -9px;
-  min-width: 15px;
-  height: 15px;
-  padding: 0 4px;
-  border-radius: 999px;
-  font-size: 9px;
-  font-weight: var(--fw-semibold);
-  line-height: 15px;
-  text-align: center;
-  background: var(--surface-raised);
-  color: var(--text-muted);
-  border: 1px solid var(--border);
-  font-variant-numeric: tabular-nums;
-}
-
-/* AN INK GOES ON THE SOFT, NEVER ON THE FILL. The three rungs are a set:
-   `--caution` is what a thing is painted WITH, `--caution-soft` is the ground
-   it tints, and `--caution-ink` is the one of the three that is a TEXT colour.
-   This badge took the fill as its ground and the ink on top of it, which is the
-   one pairing of the three the design system does not offer: 1.72:1, measured
-   in the browser, on a 9px semibold digit. The count was a dot.
-
-   It is the only place in this tree that puts text on a solid feedback fill —
-   everything else spending `--caution` is a status dot or a meter bar, which
-   carry none. So there is no ink published for that ground, and nothing else
-   to keep consistent with; the badge's own resting state is already a tinted
-   ground with a border and a muted digit, and this is that shape in amber.
-   11.79:1 in dark and 14.72 in light, with the fill kept as the RING so the
-   badge still reads as attention from the corner of an eye. */
-.rail-badge.attention {
-  background: var(--caution-soft);
-  border-color: var(--caution);
-  color: var(--caution-ink);
-}
-
-.rail-lock {
-  position: absolute;
-  bottom: -4px;
-  right: -6px;
-  color: var(--text-faint);
-}
-
-/* THE FOOT IS THREE THINGS, NOT ONE BLOCK. A state, two settings and the
-   rail's own hinge sat 4px from each edge of an 80px rail and 4px from each
-   other, which is the inset `.rail-rows` above takes for a column of ROWS —
-   and a row is a strip of one kind of thing, where the neighbour above it
-   being 4px away is what says they are one list. These are four unrelated
-   controls stacked: the engine's state, the theme, the density and the
-   collapse. At the rows' own spacing they read as a fifth, sixth and seventh
-   nav item rather than as the bar under them, and the two segmented controls —
-   which draw their own boundary — touched both walls.
-
-   So the foot takes its OWN inset: `--space-2` at the sides, which doubles the
-   air around the two controls that have a border of their own, and
-   `--space-3` top and bottom, which separates the first control from the
-   hairline above it by more than the controls are separated from each other.
-   The gap is `--space-2`, one step up from the rows', because what is being
-   separated here is kinds rather than siblings. */
-.rail-foot {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: var(--space-2);
-  padding: var(--space-3) var(--space-2);
-  border-top: 1px solid var(--border);
-  flex: 0 0 auto;
-}
-
-.rail-collapse {
-  all: unset;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 100%;
-  height: 22px;
-  border-radius: var(--r-sm);
-  color: var(--text-faint);
-  cursor: pointer;
-}
-
-.rail-collapse:hover {
-  background: var(--surface-hover);
-  color: var(--text);
-}
-
-/* ---- The workspace sidebar ---------------------------------------------- */
-
-.workspace-side {
-  display: flex;
-  flex-direction: column;
-  min-height: 0;
-  background: var(--surface-panel);
-  border-right: 1px solid var(--border);
-}
-
+/* THE RAIL'S HEAD: the company's lockup, and the one create the chrome
+   carries at the far end of the same line, as the approved design draws it.
+   The lockup takes what is left, so a long company name truncates rather than
+   pushing the `+` off the rail. */
 .side-head {
   display: flex;
   align-items: center;
-  height: var(--page-bar-h);
-  padding: 0 var(--space-3);
-  border-bottom: 1px solid var(--border);
-  flex: 0 0 auto;
-}
-
-.side-title {
-  font-size: var(--fs-sm);
-  font-weight: var(--fw-semibold);
-}
-
-.side-filter {
-  padding: var(--space-2) var(--space-2) 0;
-  flex: 0 0 auto;
-}
-
-.side-tree {
-  flex: 1 1 auto;
-  min-height: 0;
-  overflow-y: auto;
-  padding: var(--space-2) var(--space-1) var(--space-4);
-}
-
-.side-section + .side-section {
-  margin-top: var(--space-3);
-}
-
-.side-section-label {
-  font-size: var(--fs-3xs);
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
-  color: var(--text-muted);
-  padding: var(--space-1) var(--space-2);
-}
-
-/* THE SAME HEADING, PRESSABLE. It is a `<button>` where the section folds, so
-   the reset is the one this file already uses for the tree's own twist — and
-   the ring it takes away is restored by the `:focus-visible` list at the top
-   of this file, which names `.side-section-label` beside `.side-twist` for
-   exactly that reason.
-
-   FULL WIDTH AND LEFT-ALIGNED: `all: unset` leaves a button centring its
-   text, so without these the two foldable headings would sit in the middle of
-   the rail while every fixed one sits at its left edge. */
-.side-section-label.foldable {
-  all: unset;
-  box-sizing: border-box;
-  display: flex;
-  align-items: center;
-  gap: 2px;
-  width: 100%;
-  cursor: pointer;
-  font-size: var(--fs-3xs);
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
-  color: var(--text-muted);
-  padding: var(--space-1) var(--space-2);
-}
-
-.side-section-label.foldable:hover {
-  color: var(--text);
-}
-
-.side-row {
-  display: flex;
-  align-items: center;
-  min-height: var(--row-h-sm);
-  padding-left: calc(var(--depth, 0) * var(--space-3));
-}
-
-.side-twist {
-  all: unset;
-  width: 16px;
-  height: 16px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  color: var(--text-faint);
-  cursor: pointer;
-  flex: 0 0 auto;
-}
-
-.side-twist:hover {
-  color: var(--text);
-}
-
-.side-link {
-  display: flex;
-  align-items: center;
-  gap: var(--space-2);
-  flex: 1 1 auto;
+  gap: var(--spacing-2);
   min-width: 0;
-  padding: var(--space-1) var(--space-2);
-  border-radius: var(--r-sm);
-  color: var(--text-secondary);
-  font-size: var(--fs-xs);
+  width: 100%;
+}
+.side-head > :first-child {
+  flex: 1;
+  min-width: 0;
 }
 
-.side-link:hover {
-  background: var(--surface-hover);
-  color: var(--text);
+/* THE ⌘K FIELD SITS ON THE NAV'S OWN GUTTER, so its left edge is the left
+   edge every nav row's background starts at. */
+.side-search {
+  padding: 0 var(--size-nav-gutter) var(--spacing-3);
 }
 
-.side-row.current > .side-link {
-  background: var(--accent-soft);
-  color: var(--accent-ink);
-  font-weight: var(--fw-medium);
+/* A SIDEBAR SECTION THAT COULD NOT BE DRAWN (`app/boundaries.tsx`): its
+   heading stays, and one caption line under it says so, set in from the rail
+   the way a row's words are, with the retry beside the words rather than a
+   panel-sized block the rail has no room for. */
+.side-failed {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--spacing-1);
+  margin: 0;
+  padding: 0 var(--size-nav-gutter);
+  font-size: var(--font-size-compact);
+  color: var(--color-text-secondary);
 }
 
-/* The mark's column, drawn on every row. See WorkspaceSidebar.tsx for what a
-   conditional one cost. 16px is the glyph's own box, which the 6px dot is
-   centred in, so a tone row and an icon row put their first letter in the same
-   place — and so does a row carrying neither. */
-.side-mark {
+/* A SCREEN WHOSE CHUNK NEVER CAME: Reload and Try again, side by side in the
+   callout's action slot. */
+.boundary-actions {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: var(--spacing-2);
+}
+
+/* A layer's fallback dialog (the palette, the New task sheet): the thrown message, which wraps rather than
+   scrolls, since a reader asked to report it should see all of it. */
+.boundary-message {
+  margin: 0;
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-compact);
+  color: var(--color-text-secondary);
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+/* A LOCKED ROW keeps its words and adds the key after them. */
+.side-locked,
+.section-column-label {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--spacing-1);
+  min-width: 0;
+}
+
+/* A STATE WAITING ON THE READER — the tools the engine says need a person —
+   is the kit's badge in the WARNING tone, as the approved Settings artboard
+   draws Integrations' figure ("pill need"). The kit fills its badge with the
+   accent because its one badge is an unread count; this figure is a state,
+   and colour is state, so in the accent it read as a second inbox. The soft
+   fill and its ink are the feedback pair every warning tag wears, on the
+   rail and on the raised current row alike. */
+.section-row-attention .crewlet-nav-item__badge {
+  background: var(--color-feedback-warning-soft);
+  color: var(--color-feedback-warning-ink);
+}
+
+/* THE ENGINE'S STATE, the design's status block: its words over one detail
+   line, on the card rung inside the hairline — the one row in the foot that
+   reports rather than goes somewhere. A link to the nodes, or the button that
+   asks for a token when the token is what is wrong. */
+.health-card {
+  /* A GRID, so the dot shares the TITLE's row and is centred on that line's
+     own box — whatever the title's size at this density, however many lines
+     follow it. It was a flex row with the dot's box sized to a computed line
+     height, which is a second statement of the title's metrics that drifts
+     the moment either changes; in a row it centred on the whole card. */
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  column-gap: var(--spacing-2);
+  width: 100%;
+  min-width: 0;
+  padding: calc(var(--spacing-2) + 1px) var(--size-nav-row-pad);
+  border: 1px solid var(--color-border-default);
+  border-radius: var(--radius-lg);
+  background: var(--color-surface-subtle);
+  color: var(--color-text-primary);
+  font: inherit;
+  text-align: left;
+  text-decoration: none;
+  cursor: pointer;
+}
+
+.health-card:hover {
+  border-color: var(--color-border-hover);
+}
+
+.health-card:focus-visible {
+  outline: 2px solid var(--color-focus);
+  outline-offset: var(--size-focus-ring-inset-offset);
+}
+
+/* The dot sits in the title's row; the text's lines take the column beside
+   it, each on a row of its own; the chevron spans them all. */
+.health-card-dot {
+  display: flex;
+  grid-row: 1;
+  grid-column: 1;
+}
+
+.health-card-text {
+  display: contents;
+  line-height: var(--font-line-height-snug);
+}
+
+.health-card-text > * {
+  grid-column: 2;
+  line-height: var(--font-line-height-snug);
+}
+
+.health-card-title {
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-medium);
+}
+
+.health-card-detail,
+.health-card-alarm {
+  font-size: var(--font-size-2xs);
+  color: var(--color-text-tertiary);
+  overflow-wrap: anywhere;
+}
+
+/* THE ALARM LINE CARRIES ITS OWN TONE, because the dot beside the title is
+   the posture's: a standing alarm is warning ink with its glyph, a table not
+   yet evaluated is plain secondary text. */
+.health-card-alarm {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--spacing-1);
+  color: var(--color-text-secondary);
+}
+
+.health-card-alarm[data-tone="warning"] {
+  color: var(--color-feedback-warning-ink);
+}
+
+.health-card-alarm > svg {
+  flex: none;
+}
+
+.health-card-go {
+  grid-column: 3;
+  grid-row: 1 / span 3;
+  flex: none;
+  color: var(--color-text-tertiary);
+}
+
+/* WHO THIS BROWSER IS, and the reader's own preferences beside the name. */
+.user-block {
   display: flex;
   align-items: center;
-  justify-content: center;
-  width: 16px;
-  flex: 0 0 auto;
+  gap: var(--spacing-1);
+  min-width: 0;
+  padding: var(--spacing-1) 0;
 }
 
-.side-sub {
-  font-size: var(--fs-3xs);
-  color: var(--text-muted);
+.user-block-who {
+  display: flex;
+  flex: 1 1 auto;
+  align-items: center;
+  gap: var(--spacing-2);
+  min-width: 0;
+  padding: var(--spacing-1) var(--spacing-1);
+  border-radius: var(--radius-md);
+  color: var(--color-text-primary);
+  text-decoration: none;
 }
 
-.side-count {
-  font-size: var(--fs-3xs);
-  color: var(--text-muted);
-  font-variant-numeric: tabular-nums;
-  flex: 0 0 auto;
+a.user-block-who:hover {
+  background: var(--color-surface-hover);
 }
 
-.side-empty {
-  padding: var(--space-2) var(--space-3);
-  font-size: var(--fs-2xs);
-  color: var(--text-muted);
+a.user-block-who:focus-visible {
+  outline: 2px solid var(--color-focus);
+  outline-offset: var(--size-focus-ring-inset-offset);
 }
 
-/* ---- The page column ---------------------------------------------------- */
-
-/* AND IT IS THE PAGE BAR'S MEASURING STICK. Every rule that decides whether
-   the bar's contents still fit was written against the WINDOW, and the window
-   is not what they overflow: `--rail-w` composes to 97px and an open workspace
-   sidebar is another 236, so a 1919px window gives the bar 1586 and a 1440px
-   window with the sidebar shut gives it 1343. A media query cannot tell those
-   apart, which is why `@media (max-width: 860px)` was still the only place the
-   controls were allowed their own line while the bar was breaking at 1586.
-
-   READ THE TOKENS, NEVER A REMEMBERED LITERAL. This paragraph said 96 and 234
-   because both were true when it was written: the rail was a flat `--rail-w`
-   before it became `--rail-foot-w + 2 * --space-2 + 1px` above, and the extra
-   pixel is the border the composition exists to account for. A width quoted
-   here is a copy of a value that lives somewhere else, and this one was two
-   changes stale with nothing to say so — the same failure `.num-block`'s
-   invented ceiling had in components.css.
-
-   `inline-size` rather than `size`: the bar's height is its content's, and a
-   container that contains block size would have to be told one. */
-.page {
+.user-block-text {
   display: flex;
   flex-direction: column;
   min-width: 0;
-  min-height: 0;
-  container: page / inline-size;
+  line-height: var(--font-line-height-snug);
 }
 
-/* THE BAR SHRINKS, AND ONLY THE CONTAINER QUERY BELOW BREAKS IT.
-   `flex-wrap: wrap` used to be on this rule at every width, and it was the
-   wrong instrument for what it was aimed at. What it was aimed at is real and
-   is still answered: a screen's control group is portalled in and is as wide
-   as that screen needs, and a bar whose `overflow` is `visible` puts the tail
-   of an overfull one PAST THE EDGE, where off the edge means unreachable
-   rather than merely out of sight — the star, Copy link, the viewer chip and
-   the SEARCH TRIGGER, which is the command palette's only pointer
-   affordance.
+.user-block-name {
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-medium);
+}
 
-   But a flex container assigns items to lines by their HYPOTHETICAL main size
-   — the base size, BEFORE any shrinking — and only shrinks what is already on
-   a line. So `wrap` does not mean "shrink until it fits, then break": it means
-   "never shrink, always break". Every ellipsis rule in this block was
-   unreachable under it, and the break landed wherever the running total first
-   overflowed, which on a turn page is AFTER the screen's own controls. That
-   left the viewer chip and the search trigger alone at the left of a second
-   line under the trail — with a hundred visible pixels of slack on the first,
-   because `.spacer` grew into what the break had freed. Measured on
-   `#/activity/turns/<id>` at a 1919px window with the rail and the sidebar
-   open: a 1587px bar, 52px tall everywhere else, 69px here.
+.user-block-detail {
+  font-size: var(--font-size-2xs);
+  color: var(--color-text-tertiary);
+}
 
-   So this rule does not wrap, and three others make that safe:
-
-     - the TRAIL gives way first and stops at a floor (`.crumbs` below), which
-       is what makes the ellipsis machinery reachable. It also grows into the
-       free space, which retires the `.spacer` that used to sit between it and
-       the controls.
-     - the CONTROLS shrink and wrap INSIDE themselves (`.page-controls`
-       below), so a group wider than the bar stacks at the right rather than
-       pushing the globals off the end.
-     - and below the width where a floored trail cannot sit beside them at
-       all, the controls take a line of their own — `@container page` further
-       down, where the phone block used to hold that rule alone.
-
-   A FLOOR RATHER THAN A HEIGHT, because all three of those can make the bar
-   taller than one row and a fixed height would clip it. An unwrapped bar is
-   exactly the height it always was. */
-.page-bar {
+.preferences {
   display: flex;
-  flex-wrap: nowrap;
+  flex-direction: column;
+  gap: var(--spacing-3);
+  width: 18rem;
+  max-width: calc(100vw - 2 * var(--spacing-4));
+  padding: var(--spacing-3);
+}
+
+.preferences-row {
+  display: flex;
   align-items: center;
-  gap: var(--space-2);
+  justify-content: space-between;
+  gap: var(--spacing-3);
+}
+
+/* THE SESSION'S OWN GESTURES, above the preferences in the same popover: who
+   this browser is signed in as, its grants, and the ways to change how it
+   proves it or to end it. One column at the popover's width, ruled off from
+   the preferences under it, because the two are different kinds of thing —
+   a session's and a browser's. */
+.preferences-account {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--spacing-2);
+  width: 18rem;
+  max-width: calc(100vw - 2 * var(--spacing-4));
+  padding: var(--spacing-3) var(--spacing-3) 0;
+}
+.preferences-account + .preferences {
+  border-top: 1px solid var(--color-border-default);
+  margin-top: var(--spacing-3);
+}
+
+/* ---- The page header -----------------------------------------------------
+   Two rows and the state bar: the kit's top bar (the breadcrumb and what this
+   page can do), the workspace's section tabs, and whatever the engine's
+   condition says. ONE element for all of them, so the peek column's grid can
+   place the header as one block across both columns.
+
+   AND IT IS THE BAR'S MEASURING STICK. Every rule that decides whether the
+   bar's contents still fit was written against the WINDOW, and the window is
+   not what they overflow: the sidebar and a peek each take a share the window
+   does not report. `inline-size` rather than `size`: the header's height is
+   its content's, and a container that contains block size would have to be
+   told one. */
+.page-head {
+  display: flex;
+  flex: none;
+  flex-direction: column;
+  min-width: 0;
+  container: page / inline-size;
+  background: var(--color-surface-background);
+}
+
+/* THE BAR GROWS RATHER THAN CLIPS. The kit's top bar is exactly one row high,
+   and this one breaks a line when what it holds does not fit — so its height
+   is a FLOOR here.
+
+   IT WRAPS BY WHAT IT HOLDS, NOT AT A WIDTH. A flex container assigns items to
+   lines by their UNSHRUNK size, so a wrap over a trail at its content width
+   breaks as soon as a long title and the controls exceed the bar, with free
+   space left on the first line. The trail's basis is therefore 0 (`.crumbs`),
+   clamped by its floor — the way back out, measured: the line holds the
+   floor plus the controls, the break comes only when even the floor cannot
+   sit beside them, and the grow factor hands the trail everything the line
+   has left. A threshold measured
+   on the busiest bar forced the controls onto their own line on every screen
+   under it, a sparse one included. */
+.app .page-bar {
+  flex-wrap: wrap;
+  gap: var(--spacing-1) var(--spacing-2);
   height: auto;
   min-height: var(--page-bar-h);
-  padding: var(--space-1) var(--space-4);
-  border-bottom: 1px solid var(--border);
-  background: var(--surface-panel);
-  flex: 0 0 auto;
+  padding: var(--spacing-1) var(--spacing-4) var(--spacing-1) var(--spacing-5);
 }
 
 /* THE TRAIL IS WHAT GIVES WAY, AND IT IS WHAT TAKES THE SLACK.
 
-   `flex-grow: 1` is the `.spacer` this replaces: the trail absorbs the free
-   space, so the controls, the viewer chip and the search trigger stay in the
-   right-hand corner without a blank element between them and the breadcrumb.
-   A second grower beside it would only halve what it gets.
+   `flex-grow: 1` is the spacer this replaces: the trail absorbs the free
+   space, so the controls stay in the right-hand corner without a blank element
+   between them and the breadcrumb. Its BASIS is 0, which is what lets the bar
+   wrap by what it holds (see `.page-bar`). `flex-shrink: 100` is the ordering
+   against the only other things here that can give — the kit's own idiom
+   (`.crewlet-card__subtitle` takes the same factor so a title never gives way
+   first).
 
-   `flex-shrink: 100` is the ordering, against the viewer chip and the search
-   trigger, which are the only other items here that can give. It is uilet's
-   own idiom for the same problem: `.crewlet-card__subtitle` takes
-   `flex-shrink: 100` so a card's title never gives way first. The control
-   group is out of that arithmetic entirely — see `.page-controls` below for
-   why it may not shrink by so much as a fraction of a pixel.
+   AND ITS FLOOR IS THE WAY BACK OUT, which is the correction to the obvious
+   `min-width: 0`: at zero the trail gives way until the way back out is gone,
+   and the way back out is the one thing on this bar the reader cannot
+   reconstruct from anywhere else. The floor is MEASURED (`--crumb-floor`,
+   written by `Breadcrumb`): the ancestors at their width and the last crumb's
+   stub — at least 20ch, and at most the room beside the drawer toggle (which
+   `Breadcrumb` caps it at) or the whole bar. A fixed 20ch alone let a
+   seat's trail share a phone's line with its one button and cut
+   "Engineering · Co" mid-letter under it; measured, a trail that cannot show
+   its ancestry beside the controls breaks the line instead.
 
-   AND IT STOPS AT 20ch, which is the correction to the obvious `min-width: 0`.
-   At zero the trail gives way until the way back out is gone, and the way back
-   out is the one thing on this bar the reader cannot reconstruct from anywhere
-   else — a 1200px bar rendered it as "Activit". The last part already floors
-   at `5ch` (see below), so what the floor protects is the ancestors.
-
-   20ch IS WHAT THE NARROWEST LINE CAN GIVE, which is a different number from
-   what the deepest address needs. Measured in Chromium against the shipped
-   stylesheets, at `--fs-sm` (14px Inter, so 1ch is 8.83px and 20ch is
-   176.6px): the least the trail's own line ever hands it is 178.8px — 20.25ch
-   — at a 310px and at a 350px viewport, where it sits beside the drawer
-   toggle, the viewer chip and the search trigger. 21ch is over that at some
-   widths and 22ch is over it at every one, and a floor the line cannot honour
-   does not widen the trail — it pushes the search trigger, the command
-   palette's only pointer affordance, onto a row of its own.
-
-   IT IS NOT ENOUGH FOR EVERY ADDRESS, AND NO FLOOR IS. This note used to say
-   "Admin / Infrastructure /" was the deepest fixed ancestry the route table
-   can produce and that 20ch held it beside the stub; neither is true.
-   `workspaces/crumbs.ts` builds THREE fixed ancestors on three admin routes —
-   measured, "Admin / Configuration / Revisions /" is 26.53ch, "Admin /
-   Infrastructure / Domains /" is 25.93ch and "Admin / Tools / Servers /" is
-   19.02ch — so the first of those wants 31.53ch (278.4px) beside the 5ch
-   stub, a hundred pixels more than the narrowest line has. Twelve of the
-   twenty fixed ancestries the table can produce want more than 20ch beside the
-   stub. The two this note quoted are two that do not, and their real widths
-   are 12.82ch ("Activity / Turns /", quoted as 15ch) and 17.92ch ("Admin /
-   Infrastructure /", quoted as 19ch) — 22.92ch beside the stub, over the floor
-   that was said to hold it.
-
-   SO THE OVERFLOW SCROLLS RATHER THAN BEING LOST. `overflow: hidden` clipped
-   it as a BOX, with no ellipsis because the clip happens outside the text —
-   and the ancestors are `flex: 0 0 auto` (see below), so once they alone are
-   wider than the trail there is nothing left to ellipsise and the cut lands
-   wherever the pixels ran out. Measured on `#/admin/config/revisions/<id>` at
-   a 390px viewport: 218.8px of trail against 278.4px of address, drawn as
-   "Admin / Configuration / Revisions" with the final letter shaved and NOTHING
-   after it — no separator, no ellipsis, and the object's own crumb pushed
-   outside the clip at zero pixels wide, although `.crumb-here` floors at 5ch
-   precisely to keep an ellipsised stub. At 360px it reads "Admin /
-   Configuration / Revi". `overflow-x: auto` is the instrument `.page-controls`
-   takes one breakpoint down, for the same reason given there: past the edge is
-   unreachable, and a thumb, a trackpad or a shift-wheel reaches a scroller.
-
-   IT IS THE USER'S GESTURE THAT THIS BUYS, AND ONLY THAT — the difference is
-   narrower than it looks and worth writing down, because `overflow: hidden` is
-   a scrollport too. Script can scroll one, and so can focus: tabbing to the
-   last ancestor link scrolled it into view under `hidden` exactly as it does
-   under `auto` (measured, both). What no gesture reached was everything past
-   it, because the object's own crumb is a `<span>` and nothing focuses it —
-   so on the surface where this bites, a phone, the trail had no way at all to
-   be moved. The scrollbar goes for `.crewlet-tabs--pill`'s reason in
-   screens.css — on a 52px bar it would sit on the baseline the trail is drawn
-   on — and `overflow-y` stays hidden, so the block axis clips exactly as it
-   did.
-
-   Below the container query the controls take a line of their own — not the
-   trail, which keeps sharing the first one with the drawer toggle, the viewer
-   chip and the search trigger. That line is the narrowest the trail ever has,
-   and it is the one the floor above is measured on. */
+   Past the whole bar the trail SCROLLS rather than clipping as a box: the
+   ancestors never shrink (see below), so once they alone are wider than the
+   bar there is nothing left to ellipsise and a clip lands wherever the pixels
+   ran out. A thumb, a trackpad or a shift-wheel reaches a scroller, and the
+   tab stop in `Breadcrumb` is what reaches it from a keyboard. The scrollbar
+   is not drawn: on a 52px bar it would sit on the baseline the trail is
+   written on. */
 .crumbs {
   display: flex;
   align-items: center;
   gap: 2px;
-  flex: 1 100 auto;
-  min-width: 20ch;
+  flex: 1 100 0;
+  min-width: min(100%, max(20ch, var(--crumb-floor, 0px)));
   overflow-x: auto;
   overflow-y: hidden;
   overscroll-behavior-x: contain;
   scrollbar-width: none;
-  font-size: var(--fs-sm);
+  font-size: var(--font-size-sm);
 }
 
 .crumbs::-webkit-scrollbar {
@@ -757,180 +724,471 @@
   min-width: 0;
 }
 
-/* THE OBJECT'S OWN NAME TAKES THE CUT, never the way back out.
-   Every part shrank proportionally, so a page bar holding a long final crumb
-   — a turn's uuid, a page title, an item's summary — starved the ancestors
-   with it: `#/activity/turns/{id}` rendered its trail as `A… / T… / 3c98da…`,
-   with six hundred pixels of free space to the right of the bar. The reader
-   knows which object they are on, because the header below says so in 24px;
-   what they cannot reconstruct from anywhere else is the two links out of it.
-   So the ancestors keep their width and the last part is the one that
-   ellipsises. */
+/* THE OBJECT'S OWN NAME TAKES THE CUT, never the way back out. A bar holding
+   a long final crumb — a turn's uuid, a page title — starved the ancestors
+   with it when every part shrank proportionally. The reader knows which object
+   they are on, because the header below says so; what they cannot
+   reconstruct is the links out of it. So the ancestors keep their width and
+   the last part is the one that ellipsises. */
 .crumb-part:not(:last-child) {
   flex: 0 0 auto;
 }
 
 .crumb-sep {
-  color: var(--text-faint);
-  padding: 0 2px;
+  flex: none;
+  margin: 0 var(--spacing-1);
+  color: var(--color-text-muted);
+}
+
+.crumb-link,
+.crumb-here {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--spacing-2);
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .crumb-link {
-  color: var(--text-muted);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  color: var(--color-text-tertiary);
 }
 
 .crumb-link:hover {
-  color: var(--text);
+  color: var(--color-text-primary);
 }
 
-.crumb-here {
-  color: var(--text);
-  font-weight: var(--fw-medium);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  /* AND IT NEVER COLLAPSES TO NOTHING. It is the part that absorbs the
-     shrinking, and a page bar carrying eight actions — the turn page does —
-     leaves the trail little enough that "absorbs" became "disappears": the
-     crumb measured zero pixels wide, so the trail ended at a separator with
-     nothing after it. A floor of a few characters keeps an ellipsised stub,
-     which is what `text-overflow` is for and what tells a reader the trail
-     has a last part at all.
+.crumb-glyph,
+.crumb-seat {
+  flex: none;
+}
 
-     THE FLOOR IS A WIDTH, NOT A PLACE, which is the half it cannot do on its
-     own: where the ancestors are already wider than the trail the stub is
-     still 5ch, it is simply laid out past the trail's right-hand edge —
-     measured at zero visible pixels on `#/admin/config/revisions/<id>` at a
-     390px viewport. What reaches it there is the scroller `.crumbs` above
-     takes, not this. */
+/* A project's key as a chip before its name ([Crumb.tag]): the chip keeps its
+   own weight and ink whether the crumb is a link or the page's heading. */
+.crumb-tag {
+  font-weight: var(--font-weight-regular);
+  line-height: 1.4;
+}
+
+/* THE LABEL IS THE BOX THAT ELLIPSISES. `.crumb-link` and `.crumb-here` are
+   flex containers (a glyph and a label, one gap), and text straight inside a
+   flex container is an anonymous flex item that `text-overflow` never
+   reaches: the page's h1 was cut mid-word at the bar's edge. A span is a
+   real flex item, blockified, which is what an ellipsis applies to — and its
+   `min-width: 0` is what lets it shrink below its text at all. */
+.crumb-text {
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+/* THE LAST CRUMB IS THE PAGE'S `h1`, so the heading's own margins and size
+   are the bar's, not the document's. */
+.crumb-here {
+  margin: 0;
+  color: var(--color-text-primary);
+  font-size: inherit;
+  font-weight: var(--font-weight-medium);
+  line-height: inherit;
+}
+
+/* AND THE LAST PART NEVER COLLAPSES TO NOTHING: a floor of a few characters
+   keeps an ellipsised stub, which is what tells a reader the trail has a last
+   part at all. The floor is the last part's alone — an ancestor with no page
+   of its own ("Servers" under Tools) never shrinks, and a floor there would
+   only pad a short word. */
+.crumb-part:last-child > .crumb-here {
   min-width: 5ch;
+}
+
+/* AN OBJECT'S LENSES, BESIDE ITS NAME (`PageLenses` in PageActions.tsx):
+   `Work › ENG Core · Items | About | History`. On every page without lenses
+   the slot is empty and is no flex item at all, so it costs the bar no gap.
+
+   WITH LENSES, THE LENSES TAKE THE LINE'S SLACK, not the trail: the trail's
+   grow is what keeps the controls in the right-hand corner, and it would push
+   the lenses there too — against the controls, away from the name they are
+   about. So the trail sizes to its content and still gives way first
+   (`flex-shrink: 100`, down to its floor), capped at 60% of the bar so a
+   long name ellipsises beside its lenses rather than pushing them onto a line
+   of their own; the lens group grows, holding its tabs at its start. */
+.page-lenses {
+  display: flex;
+  align-items: center;
+  flex: 1 0 auto;
+  min-width: 0;
+}
+
+.page-lenses:empty {
+  display: none;
+}
+
+.page-bar:has(> .page-lenses:not(:empty)) > .crumbs {
+  flex: 0 100 auto;
+  max-width: 60%;
 }
 
 /* WHAT THIS PAGE CAN DO, in one element — the portalled slot and the frame's
    own actions together, so the container query below can move both onto a
    line of their own with one rule.
 
-   IT WRAPS INSIDE ITSELF, which is what makes a bar that does not wrap safe:
-   a group wider than the bar stacks its own rows at the right-hand end rather
-   than running past the edge, and past the edge is unreachable here because
-   `.page-bar` has no scroller of its own above the container query below.
-   `justify-content: flex-end` keeps a stacked row under the cluster it
-   belongs to rather than orphaned at the group's left, and the row gap is the
-   tighter rung because two rows of controls 8px apart read as two groups.
+   IT WRAPS INSIDE ITSELF, and it MAY NOT SHRINK AT ALL: a group that wraps
+   does not absorb a shrink by giving up a few pixels of label, it drops its
+   last control onto a second row, and flexbox distributes shrinkage in one
+   pass proportional to each item's factor — so any factor above zero is a
+   fraction of a pixel that pushes "Copy link" onto a row of its own.
+   `max-width: 100%` is the valve: a group wider than the WHOLE bar is clamped
+   to it and wraps.
 
-   AND IT MAY NOT SHRINK AT ALL — `flex-shrink: 0`, which is the one number in
-   this block that had to be measured rather than reasoned about. A group that
-   WRAPS does not absorb a shrink by giving up a few pixels of label: it drops
-   its last control onto a second row. The group is exactly its own content
-   wide, so ANY shrink at all crosses that threshold — and flexbox distributes
-   shrinkage in a single pass proportional to each item's factor times its
-   base size, with no way to say "empty that one first". At a 1250px bar the
-   trail still had 250px to give and the controls' proportional share of the
-   99px overflow was 0.13 of a pixel; "Copy link" was on a row of its own.
-   Raising the trail's factor does not fix it, it only makes the fraction
-   smaller, and there is no factor at which a fraction is zero.
-
-   `max-width: 100%` is the valve that `flex-shrink: 0` would otherwise
-   remove: a group wider than the WHOLE bar is clamped to it and wraps, which
-   is the case the shrink was there for. Between the two — a group that fits
-   the bar but not beside a floored trail — the container query below has
-   already given it a line of its own. */
+   `margin-left: auto` KEEPS IT TO THE RIGHT-HAND EDGE when the bar has broken
+   a line under the trail: the grow on `.crumbs` is what pushes it there on
+   one line, and on a line of its own there is no trail beside it to grow. */
 .page-controls {
   display: flex;
   align-items: center;
   flex-wrap: wrap;
   justify-content: flex-end;
-  gap: var(--space-1) var(--space-2);
+  gap: var(--spacing-1) var(--spacing-2);
   flex: 0 0 auto;
   min-width: 0;
   max-width: 100%;
+  margin-left: auto;
 }
 
-/* THE SCREEN'S OWN HALF SHRINKS TOO, or the group above can only wrap at the
-   one seam between the portalled slot and the frame's star and Copy link —
-   which on a screen with six controls of its own is no seam at all. `.wrap`
-   is already on the slot in the markup; this is what lets it reach a width
-   narrow enough to use it. */
+/* THE SCREEN'S OWN HALF SHRINKS, or the group above can only wrap at the one
+   seam between the portalled slot and the frame's own controls. */
 .page-actions {
   flex: 0 1 auto;
   min-width: 0;
 }
 
-/* ---- The page bar, once its own width runs out --------------------------
-   THE BAR'S WIDTH, NOT THE WINDOW'S, which is the whole reason this is a
-   container query. Measured on the turn page, the busiest bar in the product,
-   with its state chips where they belong (the object header) rather than
-   here: a screen's control group is 545px, the viewer chip 93, the search
-   trigger 220, four gaps 40. That is 898 before the trail has a pixel, so
-   below about 1100 the trail is at or under the 20ch floor `.crumbs` sets and
-   the line has to break somewhere.
+/* THE FRAME'S STAR AND COPY LINK are one element only so the phone rule below
+   can fold them with one selector; on a wide bar they are the controls row's
+   own items, laid out exactly as before they had a wrapper. */
+.page-frame-actions {
+  display: contents;
+}
 
-   It breaks HERE, and that is the correction. Left to the wrap alone the
-   break lands in source order — after the controls — so the viewer chip and
-   the search trigger, the command palette's only pointer affordance, ended up
-   alone at the left of a second line under the trail. The division the file
-   already argues for is the other one: the way in and out stays on the first
-   line, and what this page can do takes the second.
+/* "MORE" IS A PHONE'S CONTROL ONLY (`PageMore` in PageHeader.tsx): on a wider
+   bar every action it holds is drawn inline, and an action in two places at
+   once is two things a reader has to learn are the same. */
+.page-more {
+  display: none;
+}
 
-   `flex-basis: 100%` is what breaks it and `order` is what puts it after the
-   globals rather than before them: in document order the controls sit between
-   the trail and the viewer chip, and a line break there would push the chip
-   and the search trigger down with them. */
-@container page (max-width: 1100px) {
-  /* THE ONE PLACE THE BAR BREAKS A LINE. The base rule does not wrap at all
-     (see its own note), so the break below is a layout decision taken at a
-     known width rather than whatever the widest control group happened to
-     cause. */
-  .page-bar {
-    flex-wrap: wrap;
-  }
+/* WHO IS WORKING NOW: their faces and the count, a link to what they run. */
+.working-now {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--spacing-2);
+  min-height: var(--size-control-md);
+  padding: 0 var(--spacing-2);
+  border-radius: var(--radius-md);
+  color: var(--color-text-tertiary);
+  font-size: var(--font-size-xs);
+  text-decoration: none;
+  white-space: nowrap;
+}
 
-  /* AND THE TRAIL CLAIMS ITS FLOOR RATHER THAN ITS CONTENT. With the bar
-     wrapping again, the base rule's `flex-basis: auto` puts the trail's whole
-     427px into the line-assignment the wrap runs BEFORE any shrinking — which
-     is the very thing that orphaned the search trigger on a wide bar, except
-     that here it orphans it under the trail on a phone. At `0` the trail
-     claims its `min-width`, the globals stay beside it, and the grow factor
-     still hands it everything the line has left. */
-  .crumbs {
-    flex-basis: 0;
-  }
+.working-now:hover {
+  background: var(--color-surface-hover);
+  color: var(--color-text-primary);
+}
 
+/* ---- The page bar on a phone's width -------------------------------------
+   THE HEADER'S WIDTH, NOT THE WINDOW'S, and the kit's `breakpoint.phone` (640,
+   `app/layout.ts`). Under it the controls are ONE line that SCROLLS rather
+   than stacking rows: a screen's own control group is as wide as that screen
+   needs, and at 390px some of it can be past the edge whatever the bar does.
+   Scrolling keeps every control reachable, where rows of controls would push
+   the screen a third of the way down a phone.
+
+   THEY SHARE A LINE WHEN THEY FIT, by the rule the wide bar already keeps (a
+   line breaks only when the trail's floor cannot sit beside them). They used
+   to take a line of their own by rule — right when there were five of them;
+   folded into "More" (below) a task's controls are one button, and a line of
+   their own for one ellipsis was a row of chrome with nothing on it. */
+@container page (width < 640px) {
   .page-controls {
     order: 9;
-    flex: 0 0 100%;
+    flex: 0 0 auto;
     min-width: 0;
-    /* AND THE GROUP ITSELF STOPS WRAPPING, for the reason the slot inside it
-       does below: on its own line it has the bar's whole width, so wrapping
-       would stack rows inside a scroller instead of scrolling. */
     flex-wrap: nowrap;
     justify-content: flex-start;
-    /* AND THEY SCROLL rather than overflow. A screen's control group is as
-       wide as that screen needs — five window buttons and an export on the
-       audit — and at 390px some of them are past the edge whatever the bar
-       does. Scrolling keeps every one of them reachable, which overflowing
-       does not. */
     overflow-x: auto;
     overscroll-behavior-x: contain;
   }
 
-  /* THE GROUP DOES NOT WRAP INSIDE ITS OWN SCROLLER. `.wrap` is on the slot
-     for the wide bar, where wrapping is what keeps a long group inside the
-     page; inside a horizontal scroller it wraps to the scroller's own width
-     instead of scrolling, which is the one thing that would hide the tail
-     again. */
   .page-controls .page-actions {
     flex-wrap: nowrap;
-    /* AND IT STOPS SHRINKING. On a wide bar the slot gives width so the group
-       above it can wrap; inside a horizontal scroller shrinking is what
-       squashes one button under the next instead of scrolling — measured at
-       500px, "Copy turn" cut to "Copy tu" with "Download turn" drawn over the
-       star. */
+    /* AND IT STOPS SHRINKING: inside a horizontal scroller shrinking squashes
+       one button under the next instead of scrolling. */
     flex: 0 0 auto;
+    /* AND IT LEADS THE LINE. On a wide bar the screen's own controls END the
+       row, where its primary action belongs; on a line that scrolls from its
+       start, the end is past the edge, and the one control a screen most
+       wants pressed would be the one a phone reader has to swipe to. */
+    order: -1;
   }
+
+  /* ONE ACTION IN VIEW, THE REST IN "MORE". The frame's star and Copy link,
+     and what a screen marks as folding (Edit project, a task's own menu),
+     leave the line for the one menu that holds them — so a project's New task
+     and its lenses share a line instead of standing as three rows of chrome
+     over the work. */
+  .page-frame-actions,
+  .page-action-folds {
+    display: none;
+  }
+
+  .page-more {
+    display: inline-flex;
+    flex: none;
+  }
+}
+
+/* ---- An object's tabs (`ObjectTabs` in app/frame/ObjectTabs.tsx) ----------
+   The kit's underline row, drawn with the tabs that FIT, then "More" for the
+   rest. The rule under the row is the wrapper's, painted on its last pixel
+   row — the same row the kit strip's own border sits on — so it runs on under
+   "More" and to the edge. The gap is the kit strip's own (`spacing-2`),
+   because the fold's arithmetic counts one gap between the last tab drawn and
+   "More". */
+.object-tabs {
+  position: relative;
+  display: flex;
+  align-items: stretch;
+  gap: var(--spacing-2);
+  min-width: 0;
+  box-shadow: inset 0 -1px 0 var(--color-border-default);
+}
+
+/* THE ROW IS AS WIDE AS THE TABS IT DRAWS, and never scrolls: what does not
+   fit has already left it for the menu. */
+.object-tabs > .object-tabs-strip {
+  flex: 0 1 auto;
+  width: auto;
+  min-width: 0;
+}
+
+.object-tabs-more {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+}
+
+/* THE TWIN: an empty box that clips, holding a row of every tab at its own
+   width. Laid out, so it can be measured; clipped, so a row wider than a
+   phone cannot widen the page; invisible and inert, so nothing reaches it. */
+.object-tabs-twin {
+  position: absolute;
+  inset-block-start: 0;
+  inset-inline-start: 0;
+  width: 0;
+  height: 0;
+  overflow: hidden;
+  visibility: hidden;
+  pointer-events: none;
+}
+
+.object-tabs-twin-row {
+  display: flex;
+  gap: var(--spacing-2);
+  width: max-content;
+}
+
+.object-tabs-twin-row .crewlet-tabs {
+  width: max-content;
+  overflow: visible;
+}
+
+/* ---- The section tabs ----------------------------------------------------
+   A workspace's sections, under the bar, as LINKS: each goes to its own
+   address, so the current one is `aria-current="page"` and is drawn from that
+   attribute — the underline and the primary ink, no hue — and the two cannot
+   come apart. The row never scrolls: the tabs that do not fit fold into the
+   "More" menu at its end (`SectionTabs` in PageHeader.tsx measures which). It
+   is the containing block of the folded ones, which sit at its start, out of
+   the flow and invisible, so they can be measured again when it grows. */
+.section-tabs {
+  position: relative;
+  display: flex;
+  align-items: stretch;
+  gap: var(--spacing-5);
+  min-height: var(--size-control-lg);
+  padding: 0 var(--spacing-5);
+  border-bottom: 1px solid var(--color-border-default);
+  overflow: hidden;
+}
+
+.section-tab[data-folded],
+.section-tabs-more[data-folded],
+.section-tabs-note[data-folded] {
+  position: absolute;
+  inset-block-start: 0;
+  inset-inline-start: 0;
+  visibility: hidden;
+  pointer-events: none;
+}
+
+/* "More" is the kit's own quiet menu button — the one the page bar's "More"
+   is — centred on the tabs' line. */
+.section-tabs-more {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+}
+
+/* A workspace's reading note (`WorkspaceRow.note`), at the row's far end: a
+   sentence about every section, never one of them. It gives way to the tabs —
+   folded whenever the strip has no room for it beside every one of them
+   (`noteFits`), which on a phone is always. */
+.section-tabs-note {
+  flex: none;
+  align-self: center;
+  margin-left: auto;
+  font-size: var(--font-size-xs);
+  color: var(--color-text-tertiary);
+  white-space: nowrap;
+}
+
+/* THE EDGE THAT HAS MORE PAST IT FADES. A row that scrolls with its bar hidden
+   cut a control at the edge ("All wo", a list's "Ta" and "No g"), which read
+   as a broken label rather than as more to swipe to. `lib/useScrollEdges.ts`
+   writes the two attributes from the scroll position, so a row that fits — every row above
+   the phone's width — carries neither and fades nothing. A MASK rather than an
+   overlay: it fades whatever is under it on every ground, in both themes, with
+   no colour of its own to keep in step with the surface. */
+.page-controls[data-more-end],
+.work-tabs-group[data-more-end],
+.work-bar-run[data-more-end] {
+  mask-image: linear-gradient(to right, #000 calc(100% - var(--spacing-8)), transparent);
+}
+
+.page-controls[data-more-start],
+.work-tabs-group[data-more-start],
+.work-bar-run[data-more-start] {
+  mask-image: linear-gradient(to left, #000 calc(100% - var(--spacing-8)), transparent);
+}
+
+.page-controls[data-more-start][data-more-end],
+.work-tabs-group[data-more-start][data-more-end],
+.work-bar-run[data-more-start][data-more-end] {
+  mask-image: linear-gradient(
+    to right,
+    transparent,
+    #000 var(--spacing-8),
+    #000 calc(100% - var(--spacing-8)),
+    transparent
+  );
+}
+
+.section-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--spacing-2);
+  flex: none;
+  padding: 0 2px;
+  border-bottom: 2px solid transparent;
+  color: var(--color-text-tertiary);
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-medium);
+  text-decoration: none;
+  white-space: nowrap;
+}
+
+.section-tab:hover {
+  color: var(--color-text-primary);
+}
+
+/* A section's figure: the tertiary step whatever the tab's own ink, so the
+   current tab's name lifts and its number does not. */
+.section-tab-count {
+  color: var(--color-text-tertiary);
+  font-weight: var(--font-weight-regular);
+}
+
+.section-tab[aria-current="page"] {
+  color: var(--color-text-primary);
+  border-bottom-color: var(--color-text-primary);
+}
+
+/* INSIDE ITS OWN BOX, because the row clips at its edges and an outset ring on
+   the first tab would be cut there. */
+.section-tab:focus-visible {
+  outline: 2px solid var(--color-focus);
+  outline-offset: var(--size-focus-ring-inset-offset);
+}
+
+/* ---- The Settings column and the Knowledge tree ---------------------------
+   Settings draws its sections as a column beside the screen, and Knowledge
+   its search and its spaces' tree the same way, flush with the
+   sheet: the column is the full height of the scroller's view, drawn with a
+   hairline, and its list stays put while the section beside it scrolls. The
+   kit's content padding is taken back for this one frame and given to the
+   section body instead. */
+.app .crewlet-app-shell__content:has(> .section-frame) {
+  min-height: 100%;
+  padding: 0;
+}
+
+/* THE SCROLLER IS THE COLUMN'S MEASURE, so it is made one. What the column
+   has to be as tall as is the scroller's VIEW — the window less the page bar,
+   the sheet's inset and whatever banner is showing, none of which the column
+   can count — and a size container is the one thing CSS lets a descendant ask
+   that of. Scoped to the frame that needs it: size containment reads the
+   scroller's height from the shell's flex column rather than from what it
+   holds, which is already how the kit sizes it (`flex: 1 1 auto;
+   min-height: 0`), but no other screen has a reason to be asked. */
+.app .crewlet-app-shell__main:has(> .crewlet-app-shell__content > .section-frame) {
+  container: scroller / size;
+}
+
+.section-frame {
+  display: grid;
+  flex: 1 1 auto;
+  /* THE SHELL HANDS THE WIDTH IN (`--section-column`, from `columnWidth` in
+     app/layout.ts) — the same number the peek threshold counted, so the
+     column drawn and the column subtracted are one value. */
+  grid-template-columns: var(--section-column) minmax(0, 1fr);
+  min-height: 100%;
+}
+
+/* AS TALL AS THE VIEW, NEVER AS THE GRID. A sticky box moves only inside its
+   containing block, which here is its grid area — the row the section beside
+   it makes as tall as its content. `min-height: 100%` resolved against that
+   area and made the column exactly as tall as the section, so it had nowhere
+   to stick to and a wheel over Nodes carried Company and Connect off the top.
+   At the view's height it sticks for the whole scroll, its hairline runs the
+   height of the window at every scroll position, and a list longer than a
+   short window scrolls inside itself rather than below the fold. */
+.section-column {
+  position: sticky;
+  top: 0;
+  align-self: start;
+  height: 100cqb;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: var(--spacing-4) 0;
+  border-right: 1px solid var(--color-border-default);
+}
+
+.section-body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-5);
+  min-width: 0;
+  padding: var(--spacing-5) var(--spacing-5) var(--spacing-10);
+}
+
+/* THE PHONE'S PICKER (`SectionColumn`): one row naming the section the reader
+   is on, which unfolds the column's list. Beside the section there is room
+   for the whole list, so at every width above the phone breakpoint the toggle
+   is not drawn and the list always is. */
+.section-picker-toggle {
+  display: none;
 }
 
 /* ---- The state bar ------------------------------------------------------ */
@@ -944,12 +1202,12 @@
 .state-facts {
   display: flex;
   align-items: center;
-  gap: var(--space-2);
-  padding: var(--space-1) var(--space-4);
-  border-bottom: 1px solid var(--border);
-  background: var(--bg);
-  font-size: var(--fs-3xs);
-  color: var(--text-muted);
+  gap: var(--spacing-2);
+  padding: var(--spacing-1) var(--spacing-4);
+  border-bottom: 1px solid var(--color-border-hover);
+  background: var(--color-surface-background);
+  font-size: var(--font-size-2xs);
+  color: var(--color-text-tertiary);
   min-height: 24px;
 }
 
@@ -958,22 +1216,22 @@
 .object-head {
   display: flex;
   flex-direction: column;
-  gap: var(--space-1);
-  padding: var(--space-4) 0 var(--space-3);
+  gap: var(--spacing-1);
+  padding: var(--spacing-4) 0 var(--spacing-3);
 }
 
 .object-head.peek {
-  padding: var(--space-3) 0 var(--space-2);
+  padding: var(--spacing-3) 0 var(--spacing-2);
 }
 
 .object-eyebrow {
   display: flex;
   align-items: center;
-  gap: var(--space-2);
-  font-size: var(--fs-3xs);
+  gap: var(--spacing-2);
+  font-size: var(--font-size-2xs);
   text-transform: uppercase;
   letter-spacing: 0.06em;
-  color: var(--text-muted);
+  color: var(--color-text-tertiary);
 }
 
 .object-id {
@@ -986,14 +1244,14 @@
    a five-declaration rule that does nothing if any one of them is missing,
    which is what `styles/text.test.ts` exists to refuse. */
 .object-title {
-  font-size: var(--fs-xl);
-  font-weight: var(--fw-semibold);
+  font-size: var(--font-size-xl);
+  font-weight: var(--font-weight-semibold);
   margin: 0;
   min-width: 0;
 }
 
 .object-head.peek .object-title {
-  font-size: var(--fs-lg);
+  font-size: var(--font-size-lg);
 }
 
 /* THE OBJECT'S STATE, BESIDE ITS NAME — and it keeps its width. These are
@@ -1005,32 +1263,77 @@
   flex: 0 0 auto;
 }
 
+/* THE TRACK FLOOR IS 7.5rem, which is what fits a turn's seven facts on one
+   line at 1280: the fact line there is 984px, and seven 8rem tracks with
+   their six gaps needed 992 — so "Wall clock" took a row of its own on the
+   laptop width this product is designed at. 120px still holds every fact's
+   label and a two-line value. */
 .fact-line {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(8rem, 1fr));
-  column-gap: var(--space-4);
-  row-gap: var(--space-3);
-  padding-top: var(--space-1);
+  grid-template-columns: repeat(auto-fill, minmax(min(7.5rem, 100%), 1fr));
+  column-gap: var(--spacing-4);
+  row-gap: var(--spacing-3);
+  padding-top: var(--spacing-1);
 }
 
+/* TWO BANDS: the label, and the value with its footnotes under it. The
+   labels sit on one line across the row and every value's first line on the
+   next; a note stays under its own value (`.fact-body`) rather than on a band
+   of notes a neighbour's two-line value could push away from it. */
 .fact {
   display: grid;
   grid-template-rows: subgrid;
-  grid-row: span 4;
+  grid-row: span 2;
   row-gap: 0;
   min-width: 0;
 }
 
+.fact-body {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
 .fact-label {
-  font-size: var(--fs-3xs);
+  font-size: var(--font-size-2xs);
   text-transform: uppercase;
   letter-spacing: 0.05em;
-  color: var(--text-muted);
+  color: var(--color-text-tertiary);
 }
 
 .fact-value {
-  font-size: var(--fs-xs);
-  color: var(--text);
+  font-size: var(--font-size-compact);
+  color: var(--color-text-primary);
+}
+
+/* A LINKED FACT WRAPS WITH ITS CLAMP. `.t-link` never wraps (it is written for
+   a link in a row), and inside the two-line clamp that made a linked value one
+   line cut at the track's edge with no ellipsis: "Unit: Leadership › Execut".
+   The clamp is the fact's, so the link inside it wraps like any other text. */
+.fact-value .t-link {
+  white-space: normal;
+}
+
+/* A SET OF CHIPS (`Fact.set`) takes the same two tracks, so a node's three
+   roles sit on one line; it wraps between chips where two are too narrow.
+
+   ONE TOKEN, ONE LINE (`Fact.token`): two tracks, never wrapped, and cut with
+   an ellipsis only where two tracks are still too narrow — its title carries
+   the whole of it. The link inside keeps the line too, which is the opposite
+   of the rule above and the point: an id is not prose. */
+.fact.is-token,
+.fact.is-set {
+  grid-column: span 2;
+}
+.fact-token {
+  display: block;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.fact-token .t-link {
+  white-space: nowrap;
 }
 
 /* A FOOTNOTE MAY NOT SET ITS COLUMN'S WIDTH, and the grid above is what makes
@@ -1043,7 +1346,7 @@
    than as one row of facts.
 
    The cap that used to answer it was `max-width: 16ch`, and it could only ever
-   narrow the problem: sixteen characters at `--fs-3xs` is still wider than
+   narrow the problem: sixteen characters at `--font-size-2xs` is still wider than
    most values, so a footnote went on setting its column and the pitch went on
    being irregular. The column is a grid track now and the note wraps inside
    whatever it is, so there is nothing left to cap.
@@ -1054,8 +1357,8 @@
    which costs nothing now that the track does the bounding. */
 .fact-note,
 .fact-setby {
-  font-size: var(--fs-3xs);
-  color: var(--text-muted);
+  font-size: var(--font-size-2xs);
+  color: var(--color-text-tertiary);
   text-wrap: balance;
 }
 
@@ -1073,8 +1376,8 @@
   display: flex;
   flex-direction: column;
   min-height: 0;
-  background: var(--surface-panel);
-  border-left: 1px solid var(--border);
+  background: var(--color-surface-subtle);
+  border-left: 1px solid var(--color-border-hover);
 }
 
 .peek-grip {
@@ -1088,16 +1391,16 @@
 }
 
 .peek-grip:hover {
-  background: var(--accent-soft);
+  background: var(--color-brand-accent-soft);
 }
 
 .peek-bar {
   display: flex;
   align-items: center;
-  gap: var(--space-1);
+  gap: var(--spacing-1);
   height: var(--page-bar-h);
-  padding: 0 var(--space-2);
-  border-bottom: 1px solid var(--border);
+  padding: 0 var(--spacing-2);
+  border-bottom: 1px solid var(--color-border-hover);
   flex: 0 0 auto;
 }
 
@@ -1105,37 +1408,34 @@
   flex: 1 1 auto;
   min-height: 0;
   overflow-y: auto;
-  padding: 0 var(--space-4) var(--space-6);
+  padding: 0 var(--spacing-4) var(--spacing-6);
 }
 
-/* THE DRAWER SIDE OF THE SAME THRESHOLD, and it must tile exactly with the
-   `min-width` guard above: one pixel of daylight between them is a band of
-   widths with no peek column AND no drawer. Three numbers say one thing —
-   `--peek-drawer-max`, that guard, and this — so `frame.test.ts` holds all
-   three against each other. It held only two when the threshold moved from
-   1180 to 1200, which would have left 1181–1200 with neither. */
-@media (max-width: 1200px) {
-  .peek-veil {
-    display: block;
-    position: fixed;
-    inset: 0;
-    background: color-mix(in srgb, var(--surface-panel) 60%, transparent);
-    z-index: calc(var(--z-drawer) - 1);
-  }
+/* THE DRAWER: the other value of the same attribute, so there is no width at
+   which the peek is both a column and a drawer, or neither — which is what two
+   media queries on one number had to be kept tiling to promise. Below the
+   frame's threshold the peek slides over the screen behind a veil, and a fixed
+   box takes no track, so the sheet stays one column under it. */
+.app[data-peek="drawer"] .peek-veil {
+  display: block;
+  position: fixed;
+  inset: 0;
+  background: color-mix(in srgb, var(--color-surface-subtle) 60%, transparent);
+  z-index: calc(var(--z-index-overlay) - 1);
+}
 
-  .peek-rail {
-    position: fixed;
-    top: 0;
-    right: 0;
-    bottom: 0;
-    z-index: var(--z-drawer);
-    width: min(var(--peek-w, 420px), 92vw);
-    box-shadow: var(--shadow-2);
-  }
+.app[data-peek="drawer"] .peek-rail {
+  position: fixed;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  z-index: var(--z-index-overlay);
+  width: min(var(--peek-w, 420px), 92vw);
+  box-shadow: var(--shadow-md);
+}
 
-  .peek-grip {
-    display: none;
-  }
+.app[data-peek="drawer"] .peek-grip {
+  display: none;
 }
 
 /* ---- The grid -----------------------------------------------------------
@@ -1145,7 +1445,7 @@
    makes a SCROLL CONTAINER, a sticky box is confined to its nearest
    scrollport, and this one has no height constraint — it grows to its rows —
    so its scroll offset is permanently 0 and `top` was never applied. The
-   scroller is `.screen` (see the note at the top of this file: ONE), which is
+   scroller is the kit's `main` (the page column's ONE scroller), which is
    what the header now sticks against, and it rides off with the bottom of the
    grid because a sticky box still cannot leave this element's box. */
 
@@ -1165,10 +1465,19 @@
 .grid-wrap {
   display: grid;
   min-width: 0;
-  border: 1px solid var(--border);
-  border-radius: var(--r-md);
+  border: 1px solid var(--color-border-hover);
+  border-radius: var(--radius-md);
   overflow: clip;
-  background: var(--surface-panel);
+  background: var(--color-surface-subtle);
+}
+
+/* A CARD'S BODY (`flush`): the card is the frame, so the grid draws none of
+   its own — one rule parts it from the card's head above. */
+.grid-wrap[data-flush] {
+  border: 0;
+  border-top: 1px solid var(--color-border-default);
+  border-radius: 0;
+  background: transparent;
 }
 
 /* A FULL-WIDTH BAND BY DEFAULT — the head, the body, the footer, the column
@@ -1200,20 +1509,21 @@
 .grid-head {
   align-items: center;
   /* A REAL HEIGHT, so the band head below can be offset by it rather than by
-     a number somebody measured off a screenshot. --row-h is the product's own
+     a number somebody measured off a screenshot. --size-row-md is the product's own
      row rhythm and clears an 11px label with its padding at every density. A
      floor rather than a height because `--density: compact` shrinks the
      padding but not the label, which at a fixed height would put the glyphs
      0.7px outside a box that clips; the band head then sticks that same sliver
      high, which is the cheaper of the two errors. */
-  min-height: var(--row-h);
-  border-bottom: 1px solid var(--border);
-  background: var(--surface-raised);
+  min-height: var(--size-row-md);
+  border-bottom: 1px solid var(--color-border-hover);
+  background: var(--color-surface-elevated);
   position: sticky;
   /* NOT 0: `.toolbar` is sticky at the top of the same scroller, opaque and
-     at --z-sticky, so a header that stopped at 0 would stop underneath it.
-     See `--sticky-top` in shell.css, which is 0 on a screen with no toolbar
-     rather than a band of empty page above every header. */
+     at --z-index-sticky, so a header that stopped at 0 would stop underneath it.
+     See `--sticky-top` on `.crewlet-app-shell__main:has(.toolbar)`, which is
+     0 on a screen with no toolbar rather than a band of empty page above
+     every header. */
   top: var(--sticky-top);
   z-index: 2;
 }
@@ -1223,11 +1533,11 @@
   display: flex;
   align-items: center;
   gap: 4px;
-  padding: var(--space-2) var(--space-3);
-  font-size: var(--fs-3xs);
+  padding: var(--spacing-2) var(--spacing-3);
+  font-size: var(--font-size-2xs);
   text-transform: uppercase;
   letter-spacing: 0.05em;
-  color: var(--text-muted);
+  color: var(--color-text-tertiary);
   cursor: pointer;
   min-width: 0;
 }
@@ -1237,11 +1547,11 @@
 }
 
 .grid-th:not(.plain):hover {
-  color: var(--text);
+  color: var(--color-text-primary);
 }
 
 .grid-th.sorted {
-  color: var(--text);
+  color: var(--color-text-primary);
 }
 
 .grid-th.right {
@@ -1249,7 +1559,7 @@
 }
 
 .grid-th:focus-visible {
-  outline: 2px solid var(--focus);
+  outline: 2px solid var(--color-focus);
   outline-offset: -2px;
 }
 
@@ -1262,8 +1572,8 @@
 
 .grid-row {
   align-items: center;
-  min-height: var(--row-h);
-  border-bottom: 1px solid var(--border-subtle);
+  min-height: var(--size-row-md);
+  border-bottom: 1px solid var(--color-border-default);
   color: inherit;
   cursor: pointer;
   /* The containing block for `.row-link` below. */
@@ -1283,11 +1593,14 @@
 /* AND THE CELLS' OWN LINKS SIT ABOVE IT. Positioned and later in the document
    than the overlay, so they win the hit test in the same stacking context —
    without this the overlay swallows every click and a seat chip inside a row
-   would open the row. No `z-index`: introducing one here would put the rows
-   into stacking contexts the sticky header and the peek rail then have to be
-   reasoned about against. */
+   would open the row. A write control's refusal is lifted with them, or its
+   sentence could not be selected and a click on it opened the row. No
+   `z-index`: introducing one here would put the rows into stacking contexts
+   the sticky header and the peek rail then have to be reasoned about
+   against. */
 .grid-row a:not(.row-link),
-.grid-row button {
+.grid-row button,
+.grid-row .write-refusal {
   position: relative;
 }
 
@@ -1296,31 +1609,31 @@
 }
 
 .grid-row:hover {
-  background: var(--surface-hover);
+  background: var(--color-surface-hover);
 }
 
 .grid-row.selected {
-  background: var(--accent-soft);
+  background: var(--color-brand-accent-soft);
 }
 
 .grid-row.cursor {
-  box-shadow: inset 2px 0 0 var(--accent);
+  box-shadow: inset 2px 0 0 var(--color-brand-accent);
 }
 
 /* A FAILED ROW IS MARKED ON ITS EDGE, not tinted: a tinted row competes with
    the status column that already says so, and two signals for one fact is how
    a reader learns to trust neither. */
 .grid-row.failed {
-  box-shadow: inset 2px 0 0 var(--critical);
+  box-shadow: inset 2px 0 0 var(--color-feedback-danger);
 }
 
 .grid-cell {
-  padding: var(--space-1) var(--space-3);
-  font-size: var(--fs-xs);
+  padding: var(--spacing-1) var(--spacing-3);
+  font-size: var(--font-size-compact);
   min-width: 0;
   display: flex;
   align-items: center;
-  gap: var(--space-2);
+  gap: var(--spacing-2);
 }
 
 /* A column that shrinks to its content and never wraps — a key, a timestamp,
@@ -1347,22 +1660,22 @@
 }
 
 .grid-band + .grid-band {
-  border-top: 1px solid var(--border);
+  border-top: 1px solid var(--color-border-hover);
 }
 
 .grid-band-head {
   display: flex;
   align-items: center;
-  gap: var(--space-2);
-  padding: var(--space-2) var(--space-3);
-  background: var(--surface-raised);
-  font-size: var(--fs-2xs);
-  font-weight: var(--fw-semibold);
+  gap: var(--spacing-2);
+  padding: var(--spacing-2) var(--spacing-3);
+  background: var(--color-surface-elevated);
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-semibold);
   position: sticky;
-  /* Under the column heads, which are `--row-h` tall and already parked at
+  /* Under the column heads, which are `--size-row-md` tall and already parked at
      `--sticky-top`. A band head is confined to its own `.grid-band`, so it
      leaves with the band rather than stacking up. */
-  top: calc(var(--sticky-top) + var(--row-h));
+  top: calc(var(--sticky-top) + var(--size-row-md));
   /* Above the rows — which are `position: relative` for the row link and so
      would otherwise paint over it in document order — and below the column
      heads at 2. */
@@ -1377,15 +1690,14 @@
    uppercase register, because the deeper heading is the more specific one and
    a shout at both levels ranks neither. */
 .grid-band .grid-band > .grid-band-head {
-  padding-left: calc(var(--space-3) + var(--space-4));
-  background: var(--surface-panel);
+  padding-left: calc(var(--spacing-3) + var(--spacing-4));
+  background: var(--color-surface-subtle);
   text-transform: none;
   letter-spacing: normal;
-  font-weight: var(--fw-medium);
-  /* `--text-muted` IS THE READABLE RUNG — this sheet's aliases are one step
-     off the package's, so it resolves to `--color-text-tertiary` at 6.63:1.
-     See the note at `.props-empty`; there is no `--text-tertiary` here. */
-  color: var(--text-muted);
+  font-weight: var(--font-weight-medium);
+  /* `--color-text-tertiary` IS THE READABLE RUNG for a sentence; see the note
+     at `.props-empty`. */
+  color: var(--color-text-tertiary);
 }
 
 /* AND A SUB-BAND DRAWS NO RULE ABOVE ITSELF. `.grid-band + .grid-band` is the
@@ -1397,16 +1709,16 @@
 
 .grid-band-count {
   margin-left: auto;
-  color: var(--text-muted);
-  font-weight: var(--fw-normal);
+  color: var(--color-text-tertiary);
+  font-weight: var(--font-weight-regular);
   font-variant-numeric: tabular-nums;
 }
 
 .grid-band-foot {
-  padding: var(--space-1) var(--space-3);
-  font-size: var(--fs-3xs);
-  color: var(--text-muted);
-  background: var(--surface-raised);
+  padding: var(--spacing-1) var(--spacing-3);
+  font-size: var(--font-size-2xs);
+  color: var(--color-text-tertiary);
+  background: var(--color-surface-elevated);
 }
 
 /* THE WAY INTO WHAT A BAND DID NOT FIT. A band carries a page of a count the
@@ -1414,20 +1726,20 @@
    reachable from — and the link is a standalone call to action on its own
    line, drawn by its container exactly as the board's column foot is. */
 .grid-band-foot a {
-  color: var(--accent-ink);
+  color: var(--color-brand-accent-ink);
 }
 .grid-band-foot a:hover {
-  color: var(--text);
+  color: var(--color-text-primary);
 }
 
 .grid-foot {
   display: flex;
   align-items: center;
-  gap: var(--space-2);
-  padding: var(--space-2) var(--space-3);
-  border-top: 1px solid var(--border);
-  background: var(--surface-raised);
-  font-size: var(--fs-2xs);
+  gap: var(--spacing-2);
+  padding: var(--spacing-2) var(--spacing-3);
+  border-top: 1px solid var(--color-border-hover);
+  background: var(--color-surface-elevated);
+  font-size: var(--font-size-xs);
 }
 
 .grid-cols-reset {
@@ -1437,9 +1749,9 @@
      full-width band above would be undone here and the button would be sized
      by the first column. */
   grid-column: 1 / -1;
-  padding: var(--space-1) var(--space-3);
-  font-size: var(--fs-3xs);
-  color: var(--accent-ink);
+  padding: var(--spacing-1) var(--spacing-3);
+  font-size: var(--font-size-2xs);
+  color: var(--color-brand-accent-ink);
   cursor: pointer;
   text-align: left;
 }
@@ -1453,11 +1765,11 @@
    over one rule is how the two would start disagreeing about what an empty
    `cols=` means. */
 .grid-cols-label {
-  font-size: var(--fs-3xs);
-  font-weight: var(--fw-medium);
-  letter-spacing: var(--track-wide);
+  font-size: var(--font-size-2xs);
+  font-weight: var(--font-weight-medium);
+  letter-spacing: var(--font-letter-spacing-wide);
   text-transform: uppercase;
-  color: var(--text-muted);
+  color: var(--color-text-tertiary);
 }
 /* TWO COLUMNS, because a chooser is a list of short words and a single file of
    them makes a menu as tall as the grid has columns — twelve on the work
@@ -1465,50 +1777,54 @@
 .grid-cols-choices {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: var(--space-1) var(--space-3);
+  gap: var(--spacing-1) var(--spacing-3);
 }
 .grid-cols-choice {
   display: flex;
   align-items: center;
-  gap: var(--space-2);
+  gap: var(--spacing-2);
   /* THE POINTER TARGET IS THE ROW, not the box: a 13px checkbox is under the
      minimum on a phone, and the label is what a reader aims at. */
   min-height: var(--size-target-min);
-  font-size: var(--fs-xs);
-  color: var(--text-secondary);
+  font-size: var(--font-size-compact);
+  color: var(--color-text-secondary);
   cursor: pointer;
 }
 
 /* ---- Cells -------------------------------------------------------------- */
 
 .cell-date {
-  color: var(--text-muted);
+  color: var(--color-text-tertiary);
   white-space: nowrap;
 }
 
 .cell-seat {
   display: inline-flex;
   align-items: center;
-  gap: var(--space-2);
+  gap: var(--spacing-2);
   min-width: 0;
   color: inherit;
 }
 
 /* A NO-OP UNTIL NOW, and nothing could see it: `.cell-seat` takes `color:
-   inherit` and a grid row's colour IS `--text`, so "hover moves it to
-   `--text`" moved it nowhere, and what actually answered the pointer was the
+   inherit` and a grid row's colour IS `--color-text-primary`, so "hover moves it to
+   `--color-text-primary`" moved it nowhere, and what actually answered the pointer was the
    baseline's hover underline that this application never wanted. With that
    reset, hovering a seat name changed nothing at all.
 
    The step is the other direction here, and it has to be: the rungs move a
-   link TOWARD `--text` when it starts at the accent ink, and this register
-   deliberately starts at `--text` so a grid of seat names does not read as a
+   link TOWARD `--color-text-primary` when it starts at the accent ink, and this register
+   deliberately starts at `--color-text-primary` so a grid of seat names does not read as a
    page of links. Onto the accent's one text rung is the same move in reverse,
    and it says what the row's own wash cannot — that this NAME is the link
    rather than the row. `.wl-who` in screens.css is the same object and takes
-   the same answer. */
-.cell-seat:hover {
-  color: var(--accent-ink);
+   the same answer.
+
+   ONLY WHERE THE NAME IS THE LINK: `SeatLabel` wears the same class inside a
+   row that is itself the link, and an accent there would say the name goes
+   somewhere the row does not. */
+a.cell-seat:hover {
+  color: var(--color-brand-accent-ink);
 }
 
 .cell-status {
@@ -1519,196 +1835,38 @@
 }
 
 .cell-glyph {
-  font-size: var(--fs-2xs);
+  font-size: var(--font-size-xs);
   line-height: 1;
 }
 
 .cell-status.positive .cell-glyph {
-  color: var(--positive);
+  color: var(--color-feedback-success);
 }
 .cell-status.caution .cell-glyph {
-  color: var(--caution);
+  color: var(--color-feedback-warning);
 }
 .cell-status.critical .cell-glyph {
-  color: var(--critical);
+  color: var(--color-feedback-danger);
 }
 .cell-status.info .cell-glyph {
-  color: var(--info);
+  color: var(--color-feedback-info);
 }
 .cell-status.neutral .cell-glyph {
-  color: var(--text-faint);
-}
-
-.cell-meter {
-  display: inline-block;
-  width: 64px;
-  height: 6px;
-  border-radius: 3px;
-  background: var(--surface-raised);
-  overflow: hidden;
-}
-
-.cell-meter-fill {
-  display: block;
-  height: 100%;
-  background: var(--accent);
-}
-
-.cell-meter-fill.positive {
-  background: var(--positive);
-}
-.cell-meter-fill.caution {
-  background: var(--caution);
-}
-.cell-meter-fill.critical {
-  background: var(--critical);
-}
-
-/* ---- Narrow ------------------------------------------------------------- */
-
-@media (max-width: 960px) {
-  .app,
-  .app[data-rail-collapsed="true"],
-  .app[data-no-sidebar="true"] {
-    grid-template-columns: var(--rail-w-collapsed) minmax(0, 1fr);
-  }
-
-  .rail-label {
-    display: none;
-  }
-
-  /* AND THE ENGINE'S WORD GOES WITH THEM. `Shell.tsx` already drops it when
-     the READER collapses the rail — but that `collapsed` is a React state and
-     this is a breakpoint, and the two are independent: at 960 and below the
-     rail is 48px wide with `collapsed` still false, which leaves the pill 31px
-     once the rail's border and the foot's inset are taken. `.truncate` does
-     not save it, because it clips at its OWN box and a centred column item is
-     free to be wider than the box around it: measured at a 900px viewport,
-     "connected" laid out at its full 55.22px, 12.11px past each side of the
-     pill and past the 48px column itself — 4.11px off the window's left edge
-     and 3.11px past the column's right one. "unreachable" is 64.44px and
-     spills 8.72px and 7.72px. The dot is the state and the word is the label
-     for it, and the labels are already gone here. It comes back with them in
-     the bottom bar below, where the foot is a row of the bar and the pill has
-     63.22px to draw in. */
-  .rail-engine > .truncate {
-    display: none;
-  }
-
-  .workspace-side {
-    position: fixed;
-    top: 0;
-    bottom: 0;
-    left: var(--rail-w-collapsed);
-    width: var(--sidebar-w);
-    z-index: var(--z-drawer);
-    transform: translateX(-110%);
-    box-shadow: var(--shadow-2);
-
-    /* AND OUT OF REACH, NOT MERELY OUT OF SIGHT. A transform moves pixels and
-       nothing else: the closed drawer kept EIGHT TAB STOPS — the filter box,
-       the four section links and every project in the tree — so a reader
-       tabbing the page lost focus into a panel 260px off the left edge, with
-       no scroll that could bring it back, and a screen reader read out a whole
-       navigation nobody could see. On twenty of the twenty-four screens.
-
-       `visibility` is the property that takes a subtree out of the focus order
-       AND out of the accessibility tree, and it animates in DISCRETE steps,
-       which is what makes it usable beside a slide: delayed by the slide's own
-       duration on the way out, so the drawer is still drawn while it leaves,
-       and switched with no delay on the way in, so it is reachable the moment
-       it starts arriving. `display: none` cannot do either half — it would
-       skip the animation outright — and `inert` cannot be spelled here at all,
-       because whether this aside is a drawer is a fact about the VIEWPORT and
-       the markup is the same at every width. */
-    visibility: hidden;
-    transition:
-      transform var(--dur) var(--ease),
-      visibility 0s linear var(--dur);
-  }
-
-  .workspace-side[data-open="true"] {
-    transform: none;
-    visibility: visible;
-    transition:
-      transform var(--dur) var(--ease),
-      visibility 0s;
-  }
+  color: var(--color-text-muted);
 }
 
 /* ---- The page's own one-line explanation --------------------------------- */
 
+/* NO WORD ALONE ON THE LAST LINE: at the measure, Secrets' note broke to a
+   second line holding "value." and nothing else, which reads as a sentence
+   that stopped rather than one that ended. `pretty` reflows the last lines
+   of every screen's note so its tail carries more than one word. */
 .page-note {
-  margin: 0 0 var(--space-3);
-  font-size: var(--fs-xs);
-  color: var(--text-muted);
-  max-width: var(--measure);
-}
-
-/* ---- The viewer's own menu ----------------------------------------------- */
-
-/* THE NAME ON ITS TRIGGER, BOUNDED. The trigger is the design system's own
-   button, which sizes to its label, and a long name would otherwise take the
-   page bar's width away from the trail beside it. */
-.viewer-name {
-  max-width: 180px;
-}
-
-/* ---- The rail's engine pill ---------------------------------------------- */
-
-/* THE PILL STACKS, exactly as `.rail-row` above does, and for the same
-   reason: a dot, a word and an in-flight count do not fit on one line of it.
-
-   THE PILL IS NOT THE RAIL, which is the width that matters here. The rail's
-   column is `--rail-w` — 97px at density 1, and 94.11 or 99.23 at the other
-   two, since the insets it composes scale — but its own `border-right` and
-   the foot's inset are spent before this box begins, so the pill is
-   `--rail-foot-w` wide, a flat 80px at every density, and its `--space-1`
-   padding leaves 72px of content (70.9px at comfortable, 73.46px at
-   compact).
-
-   Measured in Chromium against the shipped stylesheets, at `--fs-3xs` — 11px
-   Inter, and a font size is the one token density does not scale, so these
-   are the widths at all three. The four words `Shell.tsx` puts here are
-   "unreachable" at 64.44px, "connected" at 55.22px, "no config" at 49.06px
-   and "refused" at 39.91px. So the longest alone wants 64.44 of the 72, and a
-   row owes 6px more to the dot and 2px to the gap between it and the word:
-   72.44 into 72, with nothing else on the line at all, which draws as
-   "unreacha…".
-
-   AND THE COUNT IS WHAT MAKES THAT THE GOOD CASE. It renders whenever the
-   engine has work in flight, and the marks then measure 19.14px at one digit
-   and 26.27px at two, leaving the word 50.86px and 43.73px — so a row cut the
-   one piece of chrome that says whether the engine is reachable down to
-   "3 connec…", exactly while the engine was busiest. A status indicator
-   nobody can read is a status indicator that is not there.
-
-   Stacked, the word has the pill's whole 72px and every one of the four fits,
-   the longest with 7.56px to spare. The dot and the count share the first
-   line because they are both marks; the word takes the second. */
-.rail-engine {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 2px;
-  width: 100%;
-  padding: var(--space-1) var(--space-1);
-  border-radius: var(--r-sm);
-  color: var(--text-muted);
-  font-size: var(--fs-3xs);
-  min-width: 0;
-}
-
-/* The marks, on one line above the word. */
-.rail-engine-marks {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-}
-
-.rail-engine:hover {
-  background: var(--surface-hover);
-  color: var(--text);
+  margin: 0 0 var(--spacing-3);
+  font-size: var(--font-size-compact);
+  color: var(--color-text-tertiary);
+  max-width: var(--size-measure);
+  text-wrap: pretty;
 }
 
 /* ---- An object's own facts ------------------------------------------------
@@ -1729,16 +1887,16 @@
 .props {
   display: grid;
   grid-template-columns: minmax(92px, max-content) minmax(0, 1fr);
-  gap: var(--space-2) var(--space-3);
-  font-size: var(--fs-xs);
+  gap: var(--spacing-2) var(--spacing-3);
+  font-size: var(--font-size-compact);
   align-items: baseline;
   min-width: 0;
   margin: 0;
 }
 
 .props > dt {
-  color: var(--text-muted);
-  font-size: var(--fs-2xs);
+  color: var(--color-text-tertiary);
+  font-size: var(--font-size-xs);
   min-width: 0;
 }
 
@@ -1747,17 +1905,24 @@
   min-width: 0;
   overflow-wrap: anywhere;
 }
+/* A LINKED VALUE WRAPS WITH ITS CELL, as a linked fact does (`.fact-value
+   .t-link` above): `.t-link` never wraps, being written for a link in a row,
+   so a turn id linked from a run's properties ran past the card's edge at
+   phone width instead of breaking where `overflow-wrap` lets it. */
+.props > dd .t-link {
+  white-space: normal;
+}
 
 .props-section {
   grid-column: 1 / -1;
-  margin-top: var(--space-2);
-  padding-top: var(--space-2);
-  border-top: 1px solid var(--border-subtle);
-  font-size: var(--fs-3xs);
-  font-weight: var(--fw-medium);
-  letter-spacing: var(--track-wide);
+  margin-top: var(--spacing-2);
+  padding-top: var(--spacing-2);
+  border-top: 1px solid var(--color-border-default);
+  font-size: var(--font-size-2xs);
+  font-weight: var(--font-weight-medium);
+  letter-spacing: var(--font-letter-spacing-wide);
   text-transform: uppercase;
-  color: var(--text-muted);
+  color: var(--color-text-tertiary);
 }
 
 /* THE RAIL'S FIRST HEADING HAS NOTHING TO BE SEPARATED FROM, so it loses the
@@ -1776,22 +1941,17 @@
    the CALLER wrote for it. See PropertiesRail's own doc for why the rail does
    not decide this for itself.
 
-   `--text-muted` IS THE READABLE RUNG HERE, and the name is the trap. This
-   sheet's aliases are one step off the token package's: `uilet.css` maps
-   `--text-muted` to `--color-text-tertiary` (6.63:1 light, 7.01:1 dark) and
-   `--text-faint` to `--color-text-muted` (~3:1, the non-text floor). So the
-   palette doc's rule — words a reader has to read take
-   `--color-text-tertiary`, never `--color-text-muted` — is kept by the line
-   BELOW and broken by `--text-faint`, which is what `styles/rungs.test.ts`
-   fails on in both directions. There is no `--text-tertiary` in this tree:
-   reaching for that spelling names a property nothing declares, which
-   `styles/tokens.test.ts` fails on and which the browser drops whole, taking
-   the colour with it rather than falling back. This is a sentence, so it sits
-   at the same rung as every other empty state in the product. */
+   `--color-text-tertiary` IS THE READABLE RUNG HERE, and the name is the
+   trap: `--color-text-muted` sounds like the quiet word and is the ~3:1
+   non-text step, a floor for a MARK. The palette doc's rule — words a reader
+   has to read take `--color-text-tertiary`, never `--color-text-muted` — is
+   kept by the line below, and `styles/rungs.test.ts` fails on a word set in
+   the muted step in both directions. This is a sentence, so it sits at the
+   same rung as every other empty state in the product. */
 .props-empty {
   grid-column: 1 / -1;
-  font-size: var(--fs-2xs);
-  color: var(--text-muted);
+  font-size: var(--font-size-xs);
+  color: var(--color-text-tertiary);
 }
 
 /* WHO SET IT, under the value rather than beside it: the value is what the
@@ -1800,8 +1960,8 @@
 .props-setby {
   display: block;
   margin-top: 2px;
-  font-size: var(--fs-3xs);
-  color: var(--text-muted);
+  font-size: var(--font-size-2xs);
+  color: var(--color-text-tertiary);
 }
 
 /* THE `turn ↗` LINK IS ONE TOKEN, in the fact line and in the rail alike —
@@ -1839,41 +1999,83 @@
   align-items: flex-end;
   gap: 1px;
   width: 100%;
-  padding: var(--space-1) 0;
-  border-bottom: 1px solid var(--border);
+  padding: var(--spacing-1) 0;
+  border-bottom: 1px solid var(--color-border-hover);
 }
 
+/* THE SLOT IS THE CONTROL; THE FILL INSIDE IT IS THE BAR. Painted as the slot
+   itself, a seven-day window holding one busy day drew a solid block a seventh
+   of the card wide — a panel, not a quantity — the defect the kit's
+   `StackedColumns` was drawn to avoid. The fill takes the kit's own
+   column proportion (`.crewlet-stacked-columns__column`: 63% of its slot,
+   capped at `--spacing-7`), centred, so one bucket and ninety draw with the
+   geometry every other chart in the product uses; the click target stays the
+   whole slot, because a thinner bar is no reason for a smaller control. */
 .histogram-bar {
   all: unset;
-  flex: 1;
+  flex: 1 1 0;
   min-width: 2px;
-  background: var(--accent);
-  border-radius: var(--r-sm) var(--r-sm) 0 0;
+  height: 100%;
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
   /* A bar is only a control where the caller gave it something to do, and
      ui/Histogram.tsx renders a div rather than a button where it did not —
      so the pointer follows the element rather than a class. */
   cursor: inherit;
 }
 
+/* A COUNT IS DATA, SO IT IS DRAWN IN THE DATA RAMP. The accent is the kit's
+   HERE/ACT colour — the primary action, the selection, the reader's own count
+   — and a histogram filled with it both disagreed with every other chart in
+   the workspace and spent the one colour that says "act here" on a picture.
+   The accent is kept for the one bar the reader is pointing at, which is the
+   selection this control is about to make.
+
+   A COLUMN THAT STACKS FROM ITS FOOT, so the failed share below sits at the
+   bottom of the fill it is part of — one rule, where a second `.histogram-fill`
+   used to override the first one's `display` further down the sheet. */
+.histogram-fill {
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+  overflow: hidden;
+  width: 63%;
+  min-width: 2px;
+  max-width: var(--spacing-7);
+  background: var(--color-data-1);
+  border-radius: var(--radius-sm) var(--radius-sm) 0 0;
+}
+
+/* THE FAILED FOOT of a bar (`Bar.failed`): the bottom of the same fill, in
+   the danger tone every failure in the product wears. */
+.histogram-failed {
+  display: block;
+  width: 100%;
+  background: var(--color-feedback-danger);
+}
+
 button.histogram-bar {
   cursor: pointer;
 }
 
-button.histogram-bar:hover {
-  background: var(--accent-hover);
+button.histogram-bar:hover > .histogram-fill,
+button.histogram-bar:focus-visible > .histogram-fill {
+  background: var(--color-brand-accent);
 }
 
-.histogram-bar[data-empty] {
-  background: var(--surface-inset);
+/* AN EMPTY BUCKET IS A VISIBLE FLOOR. It was `--color-surface-inset`, which on
+   the card rung the chart sits on is within a shade of the card itself — so an
+   empty stretch drew nothing, and a week with one busy day read as one block
+   over a bare line. The strong border is the tone the kit rules an axis in:
+   present, and plainly not a quantity. */
+.histogram-bar[data-empty] > .histogram-fill {
+  background: var(--color-border-strong);
 }
 
-button.histogram-bar[data-empty]:hover {
-  background: var(--border-strong);
-}
-
-.histogram-bar:focus-visible {
-  outline: 2px solid var(--focus);
-  outline-offset: 1px;
+button.histogram-bar[data-empty]:hover > .histogram-fill,
+button.histogram-bar[data-empty]:focus-visible > .histogram-fill {
+  background: var(--color-border-strong-hover);
 }
 
 /* THE DATES UNDER THE BARS, which is the half that makes the plot an axis. A
@@ -1904,15 +2106,15 @@ button.histogram-bar[data-empty]:hover {
   /* THE ROW IS AS TALL AS ONE LABEL, stated rather than left to the absolutely
      positioned children — which contribute no height at all, so without this
      the chart and whatever follows it would overlap. */
-  height: calc(var(--fs-3xs) * var(--lh-normal));
+  height: calc(var(--font-size-2xs) * var(--font-line-height-normal));
   margin-top: 2px;
 }
 
 .histogram-tick {
   position: absolute;
   top: 0;
-  font-size: var(--fs-3xs);
-  color: var(--text-muted);
+  font-size: var(--font-size-2xs);
+  color: var(--color-text-tertiary);
   /* A COLUMN OF TIMES LINES UP or it reads as a jitter in the axis itself. */
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
@@ -1930,190 +2132,131 @@ button.histogram-bar[data-empty]:hover {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: var(--space-1);
-  margin-bottom: var(--space-2);
+  gap: var(--spacing-1);
+  margin-bottom: var(--spacing-2);
 }
 
 /* ---- Key mark -----------------------------------------------------------
    A mono key mark, wherever a project or item key stands beside prose. */
 .key-mark {
-  font-family: var(--font-mono);
-  font-size: var(--fs-3xs);
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-2xs);
   padding: 1px 4px;
-  border-radius: var(--r-xs);
-  background: var(--surface-inset);
-  color: var(--text-muted);
+  border-radius: var(--radius-xs);
+  background: var(--color-surface-inset);
+  color: var(--color-text-tertiary);
   flex: 0 0 auto;
 }
 
-/* ---- Phone: the rail is a bottom bar ------------------------------------ */
+/* ---- Phone: one pane, and a row is a card ------------------------------- */
 
-/* THE ONE COLUMN A PHONE CANNOT SPARE. At 960 the rail collapses to 48px of
-   icons, which is the right move on a tablet and the wrong one on a 390px
-   phone: it is an eighth of the window spent on navigation, permanently, down
-   the side of every screen — and it is the edge a thumb reaches worst. Every
-   phone-shaped application this product is measured against puts its top-level
-   navigation along the bottom, and so does this one below 860, which is the
-   same width at which the Inbox becomes one pane.
-
-   THE RAIL DOES NOT MOVE IN THE MARKUP. It is the grid's first child and stays
-   there; what changes is that the grid becomes one column with a row for the
-   bar, and the bar is fixed to the bottom edge. Reordering it in the DOM would
-   put the navigation after the page for a screen reader and for Tab, which is
-   the opposite of what this is for. */
-@media (max-width: 860px) {
-  .app,
-  .app[data-rail-collapsed="true"],
-  .app[data-no-sidebar="true"],
-  .app[data-no-sidebar="true"][data-rail-collapsed="true"] {
-    grid-template-columns: minmax(0, 1fr);
-  }
-
-  .rail {
-    position: fixed;
-    inset: auto 0 0 0;
-    z-index: var(--z-drawer);
-    flex-direction: row;
-    height: var(--rail-bar-h);
-    border-right: none;
-    border-top: 1px solid var(--border);
-    /* The home indicator on a modern phone sits over the bottom edge, so the
-       last row of anything flush to it is unpressable. */
-    padding-bottom: env(safe-area-inset-bottom, 0px);
-  }
-
-  /* The brand and the collapse control are both about a COLUMN, and there is
-     no column here. The rest of the foot — the engine pill, the theme — moves
-     into the bar's own row. */
-  .rail-brand,
-  .rail-collapse {
+/* BELOW THE KIT'S `breakpoint.phone` (640, `app/layout.ts`), which is the
+   width at which a layout goes single-pane. The navigation needs nothing
+   here: below `breakpoint.shell` the sidebar is already the kit's drawer, and
+   the sheet the whole window. What changes at a phone's width is the grid. */
+@media (width < 640px) {
+  /* A PHONE KEEPS THE PALETTE'S KEYS ON ONE LINE: the mode pill and the
+     scope note are what its band can lose without losing a key — the tabs
+     already say the scope, and the mode is a property of the answer, which
+     still reads — and so is the ask chord, which a phone has no keyboard to
+     press (its row is still a row, pressed like any other). */
+  .palette-scope-note,
+  .palette-mode,
+  .palette-keys > .palette-keys-chord {
     display: none;
   }
-
-  .rail-rows {
-    flex-direction: row;
-    justify-content: space-around;
-    align-items: stretch;
-    padding: 0;
-    overflow-x: auto;
-    /* A bar a thumb drags sideways must not also drag the page behind it. */
-    overscroll-behavior-x: contain;
+  /* AND ITS SOURCES WRAP: four chips on one 326px line are four numbers and
+     an ellipsis each. The one-line rule is for the first screen of a desktop
+     window, where the actions under the answer have to stay in view; a
+     phone scrolls to them in any case. */
+  .palette-answer-sources {
+    flex-wrap: wrap;
   }
 
-  .rail-row {
-    flex: 1 0 auto;
-    justify-content: center;
-    min-width: 56px;
-    border-radius: 0;
+  /* The bar's inset tightens to the sheet's own phone inset, so the trail
+     starts where the screen's content does. */
+  .app .page-bar {
+    padding-inline: var(--spacing-3);
   }
 
-  /* THE BAR MOVES TO THE TOP EDGE OF THE ROW, because on a bottom bar a
-     vertical rule beside the icon is a rule against the screen's edge. */
-  .rail-row.active::before {
-    left: var(--space-2);
-    right: var(--space-2);
-    top: 0;
-    bottom: auto;
-    inset-block: auto;
-    width: auto;
-    height: 2px;
+  .section-tabs {
+    padding-inline: var(--spacing-3);
   }
 
-  /* THE LABEL COMES BACK. It is hidden at 960 because a 48px column cannot
-     hold "Knowledge"; a bar row is 56px wide and can, and a row of eight
-     unlabelled glyphs along the bottom of a phone is exactly the navigation
-     nobody learns. */
-  .rail-label {
-    display: block;
+  /* ONE PANE: the Settings column stacks above the section rather than
+     taking a third of the phone beside it.
+
+     AND THE SECTION TAKES WHAT IS LEFT. The frame is at least the view's
+     height, and two `auto` rows split a short section's spare height between
+     them — so the folded picker's row grew by half of it and opened a band
+     of nothing (230px on Nodes at 390 × 2400) between the picker and the
+     section it names. The picker's row is its own height; the rest is the
+     section's. */
+  .section-frame {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: auto 1fr;
   }
 
-  /* AND SO DOES THE ENGINE'S WORD, for the same reason and in the same place:
-     the foot is a row of the bar here rather than a 48px column. */
-  .rail-engine > .truncate {
-    display: inline;
+  /* IN THE FLOW, as tall as it is: a phone scrolls the page past the picker,
+     and the list it unfolds is part of that page rather than a pane of its
+     own. */
+  .section-column {
+    position: static;
+    height: auto;
+    overflow-y: visible;
+    border-right: none;
+    border-bottom: 1px solid var(--color-border-default);
   }
 
-  .rail-foot {
-    flex-direction: row;
+  /* FOLDED TO ONE ROW, which names where the reader is. Stacked whole, the
+     Settings column pushed every section's own content about 520px down —
+     below the fold on Nodes and Secrets. */
+  .section-picker {
+    padding: var(--spacing-2) var(--spacing-3);
+  }
+  .section-picker-toggle {
+    display: flex;
     align-items: center;
-    border-top: none;
-    border-left: 1px solid var(--border);
-    padding: 0 var(--space-2);
+    gap: var(--spacing-2);
+    width: 100%;
+    min-height: var(--size-target-min);
+    padding: 0 var(--spacing-2);
+    border: 1px solid var(--color-border-default);
+    border-radius: var(--radius-sm);
+    background: var(--color-surface-elevated);
+    color: var(--color-text-primary);
+    font: inherit;
+    font-weight: var(--font-weight-medium);
+    text-align: left;
+    cursor: pointer;
   }
-
-  /* The workspace drawer opens over the page from the left edge now, since
-     the rail no longer holds a column for it to sit beside. */
-  .workspace-side {
-    left: 0;
+  .section-picker-toggle:hover {
+    background: var(--color-surface-hover);
   }
-
-  /* THE PAGE'S CLEARANCE OVER THE BAR is `shell.css`'s, derived from
-     `--rail-bar-h` where `.screen-inner`'s padding is already declared. Set
-     here as well it would be two rules at one breakpoint racing on one
-     property, and the loser would be whichever file happened to load second.
-  */
-
-  /* ---- The page bar on a phone ------------------------------------------
-     NOTHING IN THE CHROME MAY SIT OUTSIDE THE VIEWPORT, which is what this
-     bar did. It is one non-wrapping row whose middle — a screen's own control
-     group, portalled in — is `flex: 0 0 auto`, so at 390px it took 364px on
-     the audit and 478px on the turns list and shoved everything after it off
-     the right edge. `overflow` is `visible` there, so off the edge meant
-     UNREACHABLE, not merely out of sight: the star, Copy link, the viewer
-     chip and the SEARCH TRIGGER — the command palette's only pointer
-     affordance, and therefore the only way to the theme and density settings
-     dropped below — were all past x=390 with no way to scroll to them. The
-     trail, meanwhile, shrank to exactly zero pixels wide, so the bar whose
-     whole subject is "where you are, and what you can do about it" answered
-     neither.
-
-     So the bar WRAPS, and the line break is where the division already is:
-     the way in and out stays on the first line, and what this page can do
-     takes the second. That is the shape the file already argues for one rule
-     up — "THE OBJECT'S OWN NAME TAKES THE CUT, never the way back out". */
-  /* The wrap, the floor, the auto height and the second line are all
-     elsewhere now — the first three on the BASE rule and the last in the
-     `@container page` block above it, which is where the band a viewport
-     query could not see is written down. What is left here is the phone's own
-     tightening. */
-  .page-bar {
-    padding: 0 var(--space-2);
-    gap: var(--space-1);
-  }
-
-  /* THE VIEWER IS ITS MARK HERE. The name is 117px of a 390px bar for a name
-     the reader already knows — their own — and the mark alone opens the same
-     menu. HIDDEN THE WAY `.sr-only` HIDES, and not `display: none`: the name
-     is the trigger's only accessible name (its mark is decoration), and a
-     button a screen reader announces as "button, menu" is one nobody can
-     find. Pinned to the origin for `.sr-only`'s reason — see base.css. */
-  .viewer-name {
-    position: absolute;
-    top: 0;
-    left: 0;
-    width: 1px;
-    height: 1px;
-    margin: -1px;
+  .section-picker-name {
+    flex: 1 1 auto;
+    min-width: 0;
     overflow: hidden;
-    clip-path: inset(50%);
+    text-overflow: ellipsis;
     white-space: nowrap;
   }
-
-  /* ---- The bottom bar is navigation --------------------------------------
-     `.rail-foot` is `flex: 0 0 auto` and carries the engine pill, the theme
-     switch and the density switch: 250px of a 390px bar, leaving 140px for
-     eight destinations, of which about two and a half were on screen. The
-     rows do scroll, so nothing was unreachable — but a navigation bar that
-     gives 64% of itself to two settings is not a navigation bar.
-
-     THE COLLAPSED RAIL ALREADY MADE THIS DECISION, in `Shell.tsx`: at 80px
-     the foot is the engine pill alone, because a theme switch does not fit.
-     A 390px bar is the narrowest surface in the product, and both settings
-     are in the command palette's `>` scope, which is where a reader who
-     wants them goes. The engine pill stays: it is the one thing in the foot
-     that is a STATE rather than a preference. */
-  .rail-foot > .crewlet-segmented {
+  .section-picker-chevron {
+    flex: none;
+    color: var(--color-text-tertiary);
+  }
+  .section-picker[data-open] .section-picker-chevron {
+    transform: rotate(180deg);
+  }
+  .section-picker:not([data-open]) .section-picker-list {
     display: none;
+  }
+
+  .section-picker[data-open] .section-picker-list {
+    padding-top: var(--spacing-2);
+  }
+
+  .section-body {
+    padding: var(--spacing-4) var(--spacing-3) var(--spacing-9);
   }
 
   /* ---- A ROW IS A CARD ON A PHONE ---------------------------------------
@@ -2165,7 +2308,7 @@ button.histogram-bar[data-empty]:hover {
      hover, selection and failure marks this file gives it. */
   .grid-row {
     display: block;
-    padding: var(--space-2) var(--space-3);
+    padding: var(--spacing-2) var(--spacing-3);
     min-height: 0;
   }
 
@@ -2179,7 +2322,7 @@ button.histogram-bar[data-empty]:hover {
      the viewport. A flex line per cell takes any number of children, because
      the cell keeps the flex box it already has in the wide layout.
      A FIXED BASIS is what lines the labels up without a shared track, and
-     7rem is MEASURED rather than chosen. At `--fs-3xs` uppercase with the
+     7rem is MEASURED rather than chosen. At `--font-size-2xs` uppercase with the
      0.05em tracking the rule below sets, the widest head that still fits on
      one line is CONVERSATION at 93.09px, so 112px clears it with 19px to
      spare and leaves the value the rest of a 390px card. ASSIGNEE, PRIORITY
@@ -2190,7 +2333,7 @@ button.histogram-bar[data-empty]:hover {
   .grid-cell {
     display: flex;
     align-items: baseline;
-    gap: var(--space-3);
+    gap: var(--spacing-3);
     padding: 1px 0;
     min-width: 0;
   }
@@ -2257,10 +2400,10 @@ button.histogram-bar[data-empty]:hover {
     content: attr(data-label);
     flex: 0 0 7rem;
     overflow-wrap: anywhere;
-    font-size: var(--fs-3xs);
+    font-size: var(--font-size-2xs);
     text-transform: uppercase;
     letter-spacing: 0.05em;
-    color: var(--text-muted);
+    color: var(--color-text-tertiary);
   }
 
   /* `shrink` and `right` are COLUMN shapes and there are no columns here: a
@@ -2297,5 +2440,68 @@ button.histogram-bar[data-empty]:hover {
     overflow: visible;
     text-overflow: clip;
     overflow-wrap: anywhere;
+  }
+
+  /* A TURN'S "WHAT IT DID" (`TurnWhatCell`) TAKES TWO LINES AND ITS KEY A
+     THIRD. Beside the key the summary kept about eighteen characters of the
+     card's value column — "Reviewed the open wo…" on every row, so every row
+     read the same. Here the summary has the column's width for two lines and
+     the key sits under it; the whole summary is still the cell's title. */
+  .grid-cell .turn-what {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 2px;
+  }
+  .grid-cell .turn-what-summary {
+    --clamp-lines: 2;
+  }
+  .grid-cell .turn-what-key {
+    max-width: 100%;
+  }
+
+  /* ---- THE COMPACT ROW (`phoneRows="compact"`) ---------------------------
+     TWO LINES, NO LABELS: what the row is, then its marks. A labelled line
+     per value is right for a grid of prose facts and wrong for a list of
+     marks a reader scans by the dozen — the work list's card was eight lines
+     for a task, key and title included, and a phone held two and a half.
+
+     ONE FLEX RUN THAT BREAKS ONCE. The lead cells are ordered first; the
+     row's own `::after` is a zero-height item of the full width ordered
+     between them and the rest, which is the one way a wrapping flex line is
+     told where to break without a wrapper the positional wide layout has no
+     room for. Every other cell follows as a mark, in column order. */
+  .grid-wrap[data-phone-rows="compact"] .grid-row {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--spacing-1) var(--spacing-2);
+  }
+  .grid-wrap[data-phone-rows="compact"] .grid-row::after {
+    content: "";
+    order: 1;
+    flex-basis: 100%;
+    height: 0;
+  }
+  .grid-wrap[data-phone-rows="compact"] .grid-cell {
+    order: 2;
+    padding: 0;
+    align-items: center;
+    gap: var(--spacing-1);
+  }
+  .grid-wrap[data-phone-rows="compact"] .grid-cell[data-lead] {
+    order: 0;
+  }
+  /* THE TITLE TAKES THE REST OF THE FIRST LINE, beside the key. */
+  .grid-wrap[data-phone-rows="compact"] .grid-cell[data-lead]:not(.shrink) {
+    flex: 1 1 0;
+    min-width: 0;
+    font-weight: var(--font-weight-medium);
+  }
+  .grid-wrap[data-phone-rows="compact"] .grid-cell[data-label]::before {
+    content: none;
+  }
+  /* TWO LINES, NEVER THREE: see `GridColumn.phoneOmit`. */
+  .grid-wrap[data-phone-rows="compact"] .grid-cell[data-phone-omit] {
+    display: none;
   }
 }

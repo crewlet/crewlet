@@ -11,25 +11,26 @@
  * sent only to a socket that asked to `watch` that seat and was allowed to. It
  * is how a person learns they have work without waiting for a poll.
  *
- * There are no HTTP fetches in normal operation. The REST snapshot is used for
- * exactly one thing: keeping the page honest while the socket is down (a proxy
- * that refuses to upgrade, a restarting engine), and it stops the moment the
- * socket is back.
+ * The socket is the channel for the projection and for every question the
+ * query registry answers — not for everything. Writes and the reads no
+ * question answers go over REST through `rest.ts` and `act.ts`, and this file
+ * makes two HTTP requests of its own: the degraded snapshot, which keeps the
+ * page honest while the socket is down (a proxy that refuses to upgrade, a
+ * restarting engine) and stops the moment the socket is back, and the refusal
+ * probe after a handshake that never opened.
  */
 
+// RELATIVE, like every contract import in this directory: it is also built
+// alone as `protocol.js`, where the `~` alias does not exist.
+import { CLOSE_FORBIDDEN, CLOSE_UNAUTHENTICATED } from "../contract/closecodes.ts";
+import type { QueryErrorCode } from "../contract/errors.ts";
+import { UNAVAILABLE_RETRY_MS } from "../contract/retry.ts";
 import { api } from "./api.ts";
 import { retryHintOf } from "./rest.ts";
-import { retryAfterMs, UNAVAILABLE_RETRY_MS } from "./retry.ts";
+import { retryAfterMs } from "./retry.ts";
 import { needSession } from "./session.ts";
 import type { Store } from "./store.ts";
-import type {
-  Frame,
-  LogRefusal,
-  QueryErrorCode,
-  QueryMap,
-  QueryName,
-  QueryRefusal,
-} from "./types.ts";
+import type { Frame, LogRefusal, QueryMap, QueryName, QueryRefusal } from "./types.ts";
 
 /**
  * A rejected question, carrying — when the engine refused it on AUTHORITY —
@@ -41,36 +42,50 @@ import type {
  * {@link queryErrorCode}; the refusal rides beside it rather than replacing it,
  * so a screen that only branches on the code is unchanged and one that can say
  * what would admit the reader has it to say.
+ *
+ * AND A `bad_params` REFUSAL'S SENTENCE rides beside it as `detail` — the one
+ * refusal the engine writes FOR the caller, naming the parameter to change and
+ * what it accepts; every other failure's text stays in the node's log, so this
+ * is never a path or a driver's message. A rejection carrying only the code
+ * left a screen to say "something was missing" about a window the reader
+ * chose. An `unavailable` answer's words are its {@link LogRefusal}'s.
  */
 export class QueryRefusedError extends Error {
   constructor(
     code: string,
     readonly refusal: QueryRefusal | LogRefusal | null,
+    readonly detail: string | null = null,
   ) {
     super(code);
     this.name = "QueryRefusedError";
   }
 }
 
-/** What a failed `query` said: its code, and the refusal behind it, if any. */
+/**
+ * What a failed `query` said: its code, the refusal behind it, if any, and a
+ * `bad_params` refusal's sentence, or null.
+ */
 export interface QueryFailure {
   error: string;
   refusal: QueryRefusal | LogRefusal | null;
+  detail: string | null;
 }
 
 /**
  * A failed `query` as the pair `QueryState` renders from.
  *
  * ONE READING of a rejection, for every surface that asks outside `useQuery` —
- * a page of older rows, the shared health read. Read inline at each, the
- * refusal was the half a surface forgot: its screen said a read was refused
- * and not which grant would have admitted the reader, although the answer had
- * named it.
+ * a page of older rows, a question asked once on a press. Read inline at
+ * each, the refusal was the half a surface forgot: its screen said a read was
+ * refused and not which grant would have admitted the reader, although the
+ * answer had named it.
  */
 export function queryFailure(err: unknown): QueryFailure {
+  const refused = err instanceof QueryRefusedError ? err : null;
   return {
     error: err instanceof Error ? err.message : "query_failed",
-    refusal: err instanceof QueryRefusedError ? err.refusal : null,
+    refusal: refused?.refusal ?? null,
+    detail: refused?.detail ?? null,
   };
 }
 
@@ -85,23 +100,15 @@ export function isLogRefusal(refusal: QueryRefusal | LogRefusal): refusal is Log
 
 const PATH = "/ws/stream";
 
-/**
- * The credential this socket was opened with names nobody any more — the
- * session ended, expired or was revoked. The engine re-checks an open socket
- * every minute and closes it with this when that happens. NOT a refusal on its
- * own: the browser may hold a newer cookie than the one this socket was opened
- * with, so the ordinary reconnect is the repair, and only a handshake that is
- * then refused (see `probeRefusal`) asks the reader for anything.
- */
-const CLOSE_UNAUTHENTICATED = 4401;
-
-/**
- * The credential still names somebody who may not have this surface: their
- * seat is gone from the chart, or the grant the socket needs was withdrawn.
- * Reconnecting reaches the same person with the same access, so the socket
- * STOPS and the page says why.
- */
-const CLOSE_FORBIDDEN = 4403;
+// What the two application close codes mean to a tab — `contract/closecodes.ts`
+// declares their numbers, held to the engine's by a gate in
+// `internal/api/stream`. A 4401 is a credential that names nobody any more:
+// NOT a refusal on its own, because the browser may hold a newer cookie than
+// the socket was opened with, so the ordinary reconnect is the repair and only
+// a handshake that is then refused (see `probeRefusal`) asks the reader for
+// anything. A 4403 is somebody who may not have this surface: reconnecting
+// reaches the same person with the same access, so the socket STOPS and the
+// page says why.
 
 /**
  * Reconnect backoff ceiling. Long enough that a dashboard left open against a
@@ -132,8 +139,8 @@ const QUERY_TIMEOUT_MS = 10_000;
 
 /**
  * How soon something the engine answered `unavailable` is asked again — a
- * query (see `useQuery`), the shared health read, or a watch — in
- * milliseconds, or `null` for "not on a timer".
+ * query (see `useQuery`) or a watch — in milliseconds, or `null` for "not on a
+ * timer".
  *
  * `unavailable` is the engine saying it cannot answer HERE, and its frame says
  * when that may change: `retry_after`, read through {@link retryAfterMs} —
@@ -142,10 +149,10 @@ const QUERY_TIMEOUT_MS = 10_000;
  * the engine says when it has nothing better; so does a refusal that is not
  * the state log's, which no `unavailable` answer carries.
  *
- * ONE READING for all three, because the engine's answer is one: a query, the
- * health read and a watch refused `unavailable` by the same node are waiting
- * on the same thing. The fixed five seconds every one of them re-asked at
- * whatever the frame said is what this replaced.
+ * ONE READING for both, because the engine's answer is one: a query and a
+ * watch refused `unavailable` by the same node are waiting on the same thing.
+ * The fixed five seconds each of them re-asked at whatever the frame said is
+ * what this replaced.
  */
 export function unavailableRetryMs(refusal: QueryRefusal | LogRefusal | null): number | null {
   if (refusal === null || !isLogRefusal(refusal)) return UNAVAILABLE_RETRY_MS;
@@ -178,6 +185,17 @@ const QUERY_ERROR_CODES: Record<QueryErrorCode, true> = {
   timeout: true,
   closed: true,
 };
+
+/**
+ * A `bad_params` frame's sentence, or null for any other frame. The engine
+ * writes that one refusal for the caller; an `unavailable` frame's words are
+ * its refusal's ({@link refusalOf}), and every other frame carries none.
+ */
+function badParamsDetail(msg: Frame): string | null {
+  return msg.error === "bad_params" && typeof msg.detail === "string" && msg.detail !== ""
+    ? msg.detail
+    : null;
+}
 
 /**
  * The refusal an error frame carries, or null — for a frame that is neither a
@@ -714,9 +732,25 @@ export class LiveSocket {
         // AND A REFUSAL ON AUTHORITY SAYS WHY — the rule and the grants that
         // would have admitted the reader — which the engine sends beside the
         // code under the REST envelope's own keys.
-        this.settle(msg.id, msg.error || "query_failed", null, refusalOf(msg));
+        this.settle(
+          msg.id,
+          msg.error || "query_failed",
+          null,
+          refusalOf(msg),
+          badParamsDetail(msg),
+        );
         break;
       case "pong":
+        break;
+      default:
+        // A KIND THIS BUILD DOES NOT KNOW IS A NEWER PEER'S, and it is
+        // ignored rather than thrown on or applied to a slice by a guess:
+        // a node on another build may push what this bundle was built
+        // before. It is COUNTED rather than dropped silently, because the
+        // same fall-through is also what this build's own engine sending a
+        // kind its own client forgot looks like — and the e2e replay
+        // asserts that count is zero.
+        this.store.noteUnknownPush((msg as { kind?: unknown }).kind);
         break;
     }
   }
@@ -726,13 +760,14 @@ export class LiveSocket {
     error: string | null,
     data: unknown,
     refusal: QueryRefusal | LogRefusal | null = null,
+    detail: string | null = null,
   ): void {
     if (id === undefined) return;
     const entry = this.inflight.get(id);
     if (!entry) return;
     this.inflight.delete(id);
     clearTimeout(entry.timer);
-    if (error) entry.reject(new QueryRefusedError(error, refusal));
+    if (error) entry.reject(new QueryRefusedError(error, refusal, detail));
     else entry.resolve(data);
   }
 

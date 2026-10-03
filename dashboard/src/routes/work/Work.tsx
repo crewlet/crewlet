@@ -10,6 +10,13 @@
  * feed is a page of its own (`#/work/history`), and what is left here is the
  * work: the saved views, the bar, and the rows.
  *
+ * NO INTRODUCTION ABOVE IT. A paragraph saying what the screen is cost every
+ * visit two lines above the rows to tell a reader something they needed once;
+ * the approved board starts its lanes under one bar. What the screen is lives
+ * in the docs and in [NoWorkYet], the one state where a reader has nothing
+ * else to look at — and that a change made here is made as you is said by
+ * every write's own receipt.
+ *
  * # What this screen is NOT
  *
  * It is not a second tracker. A company running Jira has none of these
@@ -27,9 +34,8 @@
  * on, by filing the duplicate.
  */
 
-import { href } from "~/app/router.tsx";
 import { PageActions } from "~/app/frame/PageActions.tsx";
-import { PageNote } from "~/app/frame/PageNote.tsx";
+import { NewTaskButton } from "~/components/NewTaskButton.tsx";
 import { QueryState } from "~/components/common.tsx";
 import { useQuery } from "~/lib/useQuery.ts";
 import { ItemsView, NoWorkYet } from "./ItemsView.tsx";
@@ -69,23 +75,12 @@ export function Work() {
 
   return (
     <>
+      {/* THE PAGE BAR ENDS WITH NEW TASK, as the approved Board draws it: the
+          one sheet, filed where the person's own work lands unless they
+          choose a project in it. */}
       <PageActions>
-        {/* REAL ANCHORS rather than buttons that navigate: these leave the
-            list, so they are middle-clickable like every other way out of a
-            screen, and they go through the router's own history rules instead
-            of around them. */}
-        <a className="t-link" href={href(["work", "projects"])}>
-          Projects →
-        </a>
-        <a className="t-link" href={href(["work", "history"])}>
-          History →
-        </a>
+        <NewTaskButton />
       </PageActions>
-      <PageNote>
-        The company&rsquo;s own work — every project, in one list. Read-only here: work is filed and
-        moved by the seats themselves, so every change is attributed to somebody.
-      </PageNote>
-
       <div className="work-main">
         {/* THE EMPTY STATE REPLACES THE LIST rather than following it. Drawn
             under it, a company with no projects read two sentences about one

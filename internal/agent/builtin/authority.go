@@ -144,10 +144,35 @@ func DecisionError(action authz.Action, d authz.Decision) error {
 	case d.Unknown():
 		return fmt.Errorf("%w %s: %w", ErrUndecidable, action, d.Err)
 	case !d.Allowed:
-		return fmt.Errorf("%w: %s refused (%s)", ErrRefused, action, d.Reason)
+		return &DecisionRefused{Action: action, Decision: d}
 	}
 	return nil
 }
+
+// DecisionRefused is an authority refusal carrying the decision that made it.
+//
+// THE DECISION, NOT ONLY ITS SENTENCE, because a surface answering in status
+// codes renders the table's own refusal — `403 unauthorized` with the rule's
+// reason and the grants that would have admitted the caller, or
+// `step_up_required` naming the proof window — and a tool result's cause is
+// the one place that answer travels from the gate to the surface. Reduced to
+// prose there, the operator transport had to choose between parsing a sentence
+// written for a model and answering a refusal that could not say what would
+// change it.
+//
+// IT IS [ErrRefused], so every caller testing for a refusal with [errors.Is]
+// keeps working, and its text is the sentence [Refusal] has always embedded.
+type DecisionRefused struct {
+	Action   authz.Action
+	Decision authz.Decision
+}
+
+func (e *DecisionRefused) Error() string {
+	return fmt.Sprintf("%s: %s refused (%s)", ErrRefused, e.Action, e.Decision.Reason)
+}
+
+// Unwrap makes every [DecisionRefused] an [ErrRefused].
+func (e *DecisionRefused) Unwrap() error { return ErrRefused }
 
 // subjectOf is what each tool is ABOUT, per tool, from its own arguments.
 //
@@ -185,6 +210,9 @@ var subjectOf = map[string]subject{
 	"write_page":           {kind: authz.KindPage},
 	"save_page":            {kind: authz.KindPage},
 	"comment_on_page":      {kind: authz.KindPage},
+	// A PLACE ARRANGES A TASK ON A BOARD, decided on the task's kind the
+	// way a rank move always was: the order is nobody's object.
+	"place_work_item": {kind: authz.KindTask},
 
 	// THE CONTAINER CLASS asks who leads the project or the container.
 	// `write_work_catalogue` is NOT here: the catalogue is the whole
@@ -250,6 +278,23 @@ var subjectOf = map[string]subject{
 	// a re-route with a re-key, so it is the lead's of the project the
 	// item is LEAVING — see workmove.go.
 	"move_work_item": {kind: authz.KindTask, inTool: true},
+
+	// A SEAT'S WORK IS DECIDED ON THE SEAT, and the seat is never quite
+	// what the arguments state. A pause and a resume name it by a handle
+	// somebody typed — `@sre`, a retired alias, the handle it was created
+	// under — which the tool resolves through the chart and decides on the
+	// seat's CURRENT handle, the one the lead relation is asked about.
+	// Decided here on the raw argument, a lead who typed their report's
+	// old handle was refused as leading nobody called that. A note names a
+	// TURN, whose seat only the node running it can say, so steer_turn
+	// asks that node first (a probe that offers nothing). And a run's
+	// answer is decided on the run's own row: its requester through the
+	// self arm, its seat's lead otherwise. See seatpause.go, steer.go and
+	// answerrun.go.
+	"pause_seat":  {kind: authz.KindPerson, inTool: true},
+	"resume_seat": {kind: authz.KindPerson, inTool: true},
+	"steer_turn":  {kind: authz.KindPerson, inTool: true},
+	"answer_run":  {kind: authz.KindPerson, inTool: true},
 }
 
 // subject is what one tool is about, as the names of its own arguments.
@@ -498,7 +543,7 @@ func (g *gated) admit(ctx context.Context, args map[string]any) *mcp.Result {
 		return &refusal
 	}
 	if refusal := g.check(ctx, args); refusal != nil {
-		result := refused(g.Name(), refusal)
+		result := authorityRefusal(g.Name(), refusal)
 		return &result
 	}
 	return nil
@@ -556,7 +601,10 @@ func undeclaredRefusal(tool tools.Callable, unread []string) mcp.Result {
 	names := strings.Join(unread, ", ")
 	return mcp.Result{
 		Failed: true,
-		Cause:  fmt.Errorf("%w: %s takes no %s", ErrUndeclaredArgument, tool.Name(), names),
+		// INVALID, beneath the sentinel: the request is the caller's to
+		// change, and a surface answering in status codes reads both.
+		Cause: mcp.Classify(mcp.RefusalInvalid,
+			fmt.Errorf("%w: %s takes no %s", ErrUndeclaredArgument, tool.Name(), names)),
 		Output: fmt.Sprintf("%s takes no argument %s — it reads %s, and one it "+
 			"does not read is refused rather than ignored, because ignoring it "+
 			"answers a different request from the one you sent", tool.Name(),
@@ -586,6 +634,57 @@ func (g *gated) check(ctx context.Context, args map[string]any) error {
 	return g.authorize(ctx, authz.Action(g.Name()), object)
 }
 
+// Admits reports whether the authority table could admit the party on ctx to
+// tool at all — the question a person's surface asks to decide which of a
+// catalogue's verbs to offer them, before anybody has named an object.
+//
+// THE OBJECT IS THE ONE A CALL NAMING NOTHING IS ABOUT. For a verb the gate
+// decides, it is the gate's own object for a call with no arguments
+// ([subject.objectFor]): the caller, for a personal verb that takes no name;
+// the kind alone, for a colleague write the capability decides. For a verb its
+// tool decides ([subject.inTool]) it is the UNRESOLVED object of its kind
+// ([authz.Object.Unresolved], under [unresolvedName]), because what that
+// verb is about is a stored row or a name the call has not given.
+//
+// AN UNRESOLVED ANSWER ADMITS. [authz.ErrUnresolved] is the table saying that
+// whose record it is decides it — a caller who leads somebody, asked about a
+// verb a lead may take on a report — and that caller can be admitted on the
+// record they lead, which is exactly what offering the verb means. It is not
+// the node failing to decide, and reporting it as [ErrUndecidable] would
+// answer every lead's question with a retry.
+//
+// nil admits; otherwise the error is the [Authorizer]'s own — [ErrRefused],
+// [ErrUndecidable] or [ErrNoAuthorizer] — so a surface tells "not offered"
+// from "this node cannot say" exactly as a call does.
+func Admits(ctx context.Context, authorize Authorizer, tool string) error {
+	if authorize == nil {
+		return ErrNoAuthorizer
+	}
+	subject := subjectOf[tool]
+	object := authz.Object{Kind: subject.kind, Owner: unresolvedName, Unresolved: true}
+	if !subject.inTool {
+		principal, _ := iam.From(ctx)
+		object = subject.objectFor(principal, nil)
+	}
+	err := authorize(ctx, authz.Action(tool), object)
+	if errors.Is(err, authz.ErrUnresolved) {
+		return nil
+	}
+	return err
+}
+
+// unresolvedName is the owner an object nobody has resolved yet is decided
+// under where the call names no record at all — a turn a note is for, a verb
+// offered before anything is named.
+//
+// NO LOGIN AND NO SEAT HANDLE CAN EQUAL IT: a login carries a dot or a colon
+// and a seat handle only lowercase letters, digits and hyphens, and this has
+// parentheses and neither separator. So the table's self arm can never match
+// it, and with [authz.Object.Unresolved] the lead arm asks only whether the
+// caller leads anybody. Empty would not do: every personal class refuses an
+// empty owner as naming nobody, before it reads Unresolved at all.
+const unresolvedName = "(unresolved)"
+
 // mayWrite is the ask a WORK tool makes once it has read what it needs.
 //
 // A NIL ANSWER IS THE ALLOW and a non-nil one is the result to return. It is
@@ -614,17 +713,18 @@ func askAuthority(ctx context.Context, authorize Authorizer,
 	action authz.Action, object authz.Object) *tools.Result {
 
 	if authorize == nil {
-		refusal := refused(string(action), ErrNoAuthorizer)
+		refusal := authorityRefusal(string(action), ErrNoAuthorizer)
 		return &refusal
 	}
 	if err := authorize(ctx, action, object); err != nil {
-		refusal := refused(string(action), err)
+		refusal := authorityRefusal(string(action), err)
 		return &refusal
 	}
 	return nil
 }
 
-// refused is what a refused call answers the MODEL with.
+// authorityRefusal is what a call the authority refused answers the MODEL
+// with.
 //
 // A FAILED RESULT AND NOT AN ERROR, which is internal/mcp's own contract: an
 // error means the turn is being torn down and nothing is reported, while a
@@ -632,10 +732,28 @@ func askAuthority(ctx context.Context, authorize Authorizer,
 // that, so I will ask somebody who can" is a legitimate next move and an
 // invisible refusal is a round spent finding out nothing.
 //
-// THE REFUSAL RIDES AS THE CAUSE, so a surface answering in status codes reads
-// which of the three it was from the value rather than from the sentence.
-func refused(name string, why error) mcp.Result {
-	return mcp.Result{Failed: true, Output: Refusal(name, why), Cause: why}
+// THE REFUSAL RIDES AS THE CAUSE, beneath its class ([authorityClass]), so a
+// surface answering in status codes reads which of the three it was from the
+// value rather than from the sentence — [errors.Is] against [ErrRefused],
+// [ErrUndecidable] or [ErrNoAuthorizer], or [mcp.RefusalOf] for the class.
+func authorityRefusal(name string, why error) mcp.Result {
+	return mcp.Result{Failed: true, Output: Refusal(name, why),
+		Cause: mcp.Classify(authorityClass(why), why)}
+}
+
+// authorityClass is the class an authority answer reads as on a surface that
+// is not a model.
+//
+// UNDECIDABLE IS UNAVAILABLE, because waiting can clear it — the chart a rule
+// reads was behind, the caller's identity could not be read — and FORBIDDEN is
+// everything else: a refusal, a caller nobody identified (the HTTP surface
+// tells that one apart with [ErrUnauthenticated] beneath the class), and a
+// surface wired with no decision at all, which no retry clears either.
+func authorityClass(why error) mcp.Refusal {
+	if errors.Is(why, ErrUndecidable) {
+		return mcp.RefusalUnavailable
+	}
+	return mcp.RefusalForbidden
 }
 
 // Refusal is the ONE sentence an authority refusal reads as, on every surface

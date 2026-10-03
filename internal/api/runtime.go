@@ -25,6 +25,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/logging"
+	"github.com/crewlet/crewlet/internal/statelog"
 )
 
 var log = logging.Get("api")
@@ -111,6 +112,36 @@ type RuntimeState struct {
 	VerifiableSources []string
 }
 
+// FleetState is what the health ENVELOPE says about the fleet beyond this
+// node: two counts, and nothing a probe decides on.
+//
+// NOT PART OF [RuntimeState], because /ready and every other Snapshot reader
+// would then pay for it. The presence count is a key-iterating coordination
+// scan, and a readiness probe that scans the fleet on every call to throw the
+// answer away turns a wedged broker into a probe hang for a fact it never
+// reads. Only the envelope asks, through [NodeRuntime.Fleet].
+type FleetState struct {
+	// LiveNodes is how many nodes hold a presence lease — the fleet's
+	// size as this node's fan-outs see it. NIL IS A READ THAT DID NOT
+	// HAPPEN, never zero: a health card told "0 nodes" by the node that
+	// is serving it has been told something false, where "cannot say" is
+	// what an unreachable coordination plane (or a read that outran its
+	// budget) actually means.
+	LiveNodes *int
+
+	// Alarms are the alarms this node's latest alarm evaluation found
+	// firing, the longest-standing first — the evaluation that set the
+	// `crewlet.alarm.active` gauge and wrote the alarm log lines, never a
+	// second one. ONE ENTRY PER LOG for an alarm kept per log, carrying the
+	// log beside the kind, because the alarm table keys its instances by
+	// (kind, log) and two logs' alarms of one kind are two conditions with
+	// two starts. Nil is "no evaluation has run" (mid-boot, or a node
+	// running no state log), which is the opposite of an empty slice: the
+	// real claim that nothing is firing. Held in memory, so a presence read
+	// that did not finish never costs the envelope its alarms.
+	Alarms []statelog.StandingAlarm
+}
+
 // NodeRuntime is the seam for facts only the engine can answer.
 //
 // Required: every process that serves the API runs the engine beside it, so
@@ -135,6 +166,13 @@ type NodeRuntime interface {
 	// every call. A write refused for draining must not first wait on a
 	// network read that has nothing to do with the answer.
 	ShuttingDown() bool
+
+	// Fleet is the envelope's fleet counts. It reads the coordination
+	// plane, and its caller BOUNDS it (engine.ProbeReadBudget): the
+	// envelope is the liveness probe's body, and the counts are what it can
+	// most afford to leave out. It must honour ctx, and answer what it has
+	// (the alarms, which are in memory) when ctx ends before presence does.
+	Fleet(ctx context.Context) FleetState
 
 	// Tools is the tool catalogue this node serves, for the dashboard's
 	// tool screen.

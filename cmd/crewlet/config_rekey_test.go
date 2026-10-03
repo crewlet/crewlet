@@ -12,6 +12,7 @@ import (
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/secrets"
 	"github.com/crewlet/crewlet/internal/store"
 )
@@ -171,7 +172,7 @@ func plantPlaintext(t *testing.T, dir string, document []byte) string {
 	}
 	defer func() { _ = db.Close() }()
 	id, err := db.Configs().InsertActive(t.Context(), store.Revision{
-		Source: "file", CreatedBy: "an-older-build", CreatedByKind: "system",
+		Source: "file", CreatedBy: "an-older-build", CreatedByKind: iam.ActorSystem,
 		Summary: "written before the keyring was required", Payload: document,
 	})
 	if err != nil {

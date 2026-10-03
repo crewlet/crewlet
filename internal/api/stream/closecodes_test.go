@@ -27,8 +27,8 @@ import (
 // against a withdrawn grant, or stopping dead over a cookie that merely
 // expired, with no test anywhere to say so.
 //
-// Read from the dashboard's SOURCE by declaration, and held in both
-// directions: each dashboard constant equals the engine's, and every 4000-range
+// Read from the dashboard's SOURCE by declaration — its contract module
+// (dashboard/src/contract/closecodes.ts) — and held in both directions: each dashboard constant equals the engine's, and every 4000-range
 // close code the engine declares has a dashboard constant — a code the engine
 // sends and the dashboard has no name for is a close it handles as a network
 // blip.
@@ -40,14 +40,13 @@ func TestTheDashboardClosesOnTheEnginesCloseCodes(t *testing.T) {
 	}
 	read := map[int]string{}
 	for name, engine := range dashboard {
-		body, err := clientsource.Declaration(clientsource.Tree(t),
-			`(?m)^\s*(?:export\s+)?const\s+`+name+`\s*=\s*(\d+)\s*;`)
+		raw, err := clientsource.Scalar(clientsource.Tree(t), name)
 		if err != nil {
 			t.Fatalf("%s: %v", name, err)
 		}
-		value, err := strconv.Atoi(body)
+		value, err := strconv.Atoi(raw)
 		if err != nil {
-			t.Fatalf("%s = %q, which is not a number", name, body)
+			t.Fatalf("%s = %q, which is not a number", name, raw)
 		}
 		if value != int(engine) {
 			t.Errorf("the dashboard's %s is %d and the engine closes with %d: one "+

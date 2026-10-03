@@ -147,7 +147,9 @@ The runtime tree the engine builds from a revision (`org.Organization`, with the
 ```
 Organization
 ├── Name, Mission, Vision string; Policies []string
-├── TokenBudget int                        (org-wide ceiling; 0 = unlimited)
+├── TokenBudget TokenCeilings              (org-wide ceiling per calendar window
+│                                           — day, week, month — on the company
+│                                           clock; an absent window is uncapped)
 ├── KnowledgeScope []string                (knowledge.scope: the one org-wide
 │                                           knowledge read scope)
 ├── Roles []*Role                          (root-level org-wide seats)
@@ -216,7 +218,8 @@ Role (a SEAT: can live at root level OR inside a unit)
 ├── Space string                       (likewise, the seat's own knowledge
 │                                       container. Does NOT scope knowledge reads,
 │                                       that is the org-wide knowledge.scope only)
-├── TokenBudget int                    (0 = unlimited)
+├── TokenBudget TokenCeilings          (this seat's own ceiling per window, on
+│                                       top of the company's; absent = uncapped)
 ├── LLM, LLMReview, LLMSubagent,
 │   LLMAuxiliary, LLMJudge,
 │   LLMSandbox ProviderKeys            (the executor's chain and the per-phase
@@ -444,6 +447,17 @@ Custom types are welcome — use whatever fits your org. The type is information
 
 Each Role defines a unique **seat** with its own backstory, skills, personality, and domain expertise. A seat is held by an AI agent (`kind: agent`, the default) or a **human teammate** (`kind: human`). Each agent seat is one agent, identified by an id derived from the company name and the handle it was created under; human seats participate in the same hierarchy (manages, unit lead, rosters, escalation) but are addressable-only: no runtime, no inbox, no LLM. The founder defines each seat individually, and seats are not interchangeable. See [Humans in the Org Chart](humans-in-the-org.md).
 
+### What a signed-in reader can see about a seat
+
+The org chart is served as a projection every signed-in reader holding `state:read` may read ([`GET /org`](../reference/api-endpoints.md#get-org), and the socket's `org` push) — like every route, never without a credential — so what it carries is decided one field at a time, and some fields by who is reading. Beside the founder's own prose and the hierarchy, it carries:
+
+- **The company's clock** (`timezone`) — the one clock every day, week and month in the engine is cut on, as the engine resolves it: an unwritten `timezone` is UTC. Every `state:read` reader gets it.
+- **Its token budget** — the ceilings the seat's runtime half writes for it (and, at the top, the company's settings write for the company) per calendar window. Every `state:read` reader gets them: a ceiling is a fact about what the seat may spend, and the meters spending against it are [`GET /budgets`](../reference/api-endpoints.md#get-budgets) at the same grant.
+- **Its model chain** (`llm`) — every phase's chain of provider keys, as a turn resolves it: the flat `llm_<phase>` fields over the `llm` mapping, the seat's `llm` for a phase naming nothing, then the company's `default` provider or its first. A key is the label `providers.llm` gives an entry; the model and credentials behind it are not shown. **Only a reader holding `config:read`** is handed it, because it is derived from the seat's runtime half, which every other reader is shown stripped.
+- **Its tool sources** (`tool_sources`) — `builtin`, then `mcp:<server>` for each MCP server the seat is granted: every shared server, and a `shared: false` template only where the seat or its unit declares credentials for it under `mcp_env`. It is the same rule the engine starts the seat's own server instances by. The credentials themselves are never shown, and the list itself only to a `config:read` reader, for the model chain's reason.
+
+A human seat carries neither of the last two, because it runs no model and no tools. Everything else about a seat — its contact identities, email, `mcp_env`, sandbox, placement, integrations, workers and schedules — is read only through the org chart's own reads with the runtime half (`config:read`, credentials masked) or the operator-gated configuration.
+
 ### Handle-Based Identity
 
 Every agent gets a deterministic **handle** slug derived from its role name:
@@ -492,7 +506,7 @@ Handle uniqueness is a **runnable** rule: a file breaking it is refused everywhe
 - **Refused where a file becomes the company.** `crewlet validate`, `crewlet config import` and a company file `crewlet run` imports (`-company` into an empty store, `-import-company` over a different company) refuse a file that breaks one, naming the file and the rule.
 - **Read where nothing is written.** A `-company` file `crewlet run` boots on without importing it (the store's own company outranks it), and the vendor commands that act on a company file without storing it (`crewlet gitlab provision`, `crewlet slack provision` and their siblings, `crewlet llm status`), read one as it stands.
 
-A stored configuration revision never carries a chart any more — the chart is [its own log](chart-domain.md), and a revision written before the split is refused at boot, naming `crewlet config import` — so no stored revision is applied with an org rule broken.
+A stored configuration revision never carries a chart — the chart is [its own log](chart-domain.md) — so no stored revision is applied with an org rule broken.
 
 ### A unit's key is what survives a rename
 
@@ -623,6 +637,8 @@ units:
 Here VP Engineering auto-manages only `tech-lead`. `dev-a` and `dev-b` report to Tech Lead alone.
 
 **Only the unit's own direct members shield.** A seat outside the unit that manages it, such as a root-level CEO with `manages: [backend]`, lists every seat in `Backend` but does not stop `Backend`'s lead from auto-managing those seats as well. That scope is deliberate: management is stored on the manager, so a CEO managing a whole division by key would otherwise leave every lead inside it with an empty roster. The consequence is that such a member has **two managers**. `org.Organization.Manager` reports the first seat in walk order that lists it, and root-level seats are walked first, so the CEO is the one an identity prompt names. To keep the unit lead as the primary manager, have the outside seat manage the lead (`manages: [backend-lead]`) rather than the unit.
+
+**The dashboard's org chart draws exactly this primary line.** Each seat's card hangs under the manager `Organization.Manager` names, and the seats of a unit its lead leads from outside it are boxed together under that lead with the unit's name — so a member with two managers is drawn once, under the one an identity prompt names, and a chart that looks wrong is a `manages` list worth reading. See [the org chart is the company running](../reference/dashboard-design.md#the-org-chart-is-the-company-running). **Agents › Edit org**'s Reporting chart draws the same line for a DRAFT, from the engine's dry run of it, so a change to `manages` or to a unit's lead can be read before it is saved — and when reordering seats moves a primary manager, the builder says so ([The Org Builder](../guides/org-builder.md#the-reporting-chart)).
 
 The lead can be a **human seat** — a human manager running an AI team is a first-class pattern: agents escalate to the human with their own Slack/Jira tools (an @-mention), and the human assigns work in the PM tool. See [Humans in the Org Chart](humans-in-the-org.md).
 

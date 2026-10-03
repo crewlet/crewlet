@@ -62,7 +62,9 @@ package auth
 import (
 	"context"
 	"crypto/subtle"
+	"maps"
 	"net/http"
+	"slices"
 	"strings"
 	"time"
 
@@ -413,6 +415,18 @@ func (g *Guard) Client(r *http.Request) string { return g.clients.Of(r) }
 
 // Tokens reports how many credentials are loaded, for the same startup line.
 func (g *Guard) Tokens() int { return len(g.tokens) }
+
+// TokenIDs names the Tier A credentials this guard accepts, sorted — their
+// LABELS and never their values, for `GET /iam/node-tokens`.
+//
+// READ OFF THE GUARD rather than off Tier A, because the guard is what decides
+// which bearer authenticates on this node: an answer built from a document the
+// guard was not built from would name credentials that authenticate nobody
+// here. Per node because Tier A is — two nodes mid-rollout may accept
+// different tokens, and each answers for its own.
+func (g *Guard) TokenIDs() []string {
+	return slices.Sorted(maps.Keys(g.tokens))
+}
 
 // entry is the Tier A token a candidate matches, compared in constant time —
 // THE TOKEN COMPARISON, IN ONE PLACE: every bearer the guard resolves, on a

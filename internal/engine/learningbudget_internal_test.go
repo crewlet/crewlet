@@ -7,10 +7,16 @@ import (
 	"go/parser"
 	"go/token"
 	"testing"
+	"time"
 
 	"github.com/crewlet/crewlet/internal/agent/phase"
-	"github.com/crewlet/crewlet/internal/agent/toolloop"
+	"github.com/crewlet/crewlet/internal/agent/prefetch"
+	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/coord"
+	coordmem "github.com/crewlet/crewlet/internal/coord/memory"
+	"github.com/crewlet/crewlet/internal/knowledge"
 	"github.com/crewlet/crewlet/internal/org"
+	"github.com/crewlet/crewlet/internal/period"
 	"github.com/crewlet/crewlet/internal/providers/llm"
 	"github.com/crewlet/crewlet/internal/providers/llm/chain"
 )
@@ -28,21 +34,20 @@ import (
 // ordinary way is charged without knowing it is being charged, which is what
 // makes a worker added later charge too.
 
-// countingMeter records what it was asked to spend and whether it refuses.
+// countingMeter records what it was asked to record.
 type countingMeter struct {
-	spent  int
-	calls  int
-	refuse bool
-	err    error
+	spent int
+	calls int
+	err   error
 }
 
-func (m *countingMeter) Spend(_ context.Context, tokens int) (toolloop.SpendOutcome, error) {
+func (m *countingMeter) Record(_ context.Context, tokens int) error {
 	m.calls++
 	if m.err != nil {
-		return toolloop.SpendOutcome{}, m.err
+		return m.err
 	}
 	m.spent += tokens
-	return toolloop.SpendOutcome{OK: !m.refuse, Used: m.spent}, nil
+	return nil
 }
 
 // answeringProvider returns a completion with a known token cost.
@@ -69,11 +74,11 @@ func (m staticModels) Head(*org.Role, phase.Phase) (chain.Member, error) {
 	return chain.Member{Key: "aux", Provider: m.provider}, nil
 }
 
-func meteredHead(t *testing.T, inner llm.Provider, m toolloop.BudgetMeter) chain.Member {
+func meteredHead(t *testing.T, inner llm.Provider, m spendRecorder) chain.Member {
 	t.Helper()
 	models := meteredModels{
 		inner:  staticModels{provider: inner},
-		charge: func(*org.Role) toolloop.BudgetMeter { return m },
+		charge: func(*org.Role) spendRecorder { return m },
 	}
 	member, err := models.Head(&org.Role{Name: "Dev"}, phase.Auxiliary)
 	if err != nil {
@@ -98,15 +103,92 @@ func TestAnAuxiliaryCompletionChargesTheSharedCounter(t *testing.T) {
 	}
 }
 
-// WITH NO CEILING TO ENFORCE THE PROVIDER IS UNWRAPPED, so an unlimited
-// company pays no round trip per auxiliary call to be told "yes" — the same
-// reason meterFor returns nil rather than an always-allow meter.
-func TestWithNoBudgetTheProviderIsNotWrapped(t *testing.T) {
+// WITH NO COUNTER TO CHARGE THE PROVIDER IS UNWRAPPED: a wrapper over a nil
+// meter would panic on the first completion rather than charge anything.
+func TestWithNoCounterTheProviderIsNotWrapped(t *testing.T) {
 	t.Parallel()
 	inner := &answeringProvider{in: 5, out: 5}
 	member := meteredHead(t, inner, nil)
 	if member.Provider != llm.Provider(inner) {
-		t.Fatal("a company with no ceiling still got a metered provider")
+		t.Fatal("a seat with no counter still got a metered provider")
+	}
+}
+
+// AN UNCAPPED COMPANY'S AUXILIARY SPEND IS COUNTED TOO. The counters are what
+// a ceiling set later judges, so spend that reached none of them would be a
+// window handed back its whole allowance the moment somebody capped it.
+func TestAnUncappedSeatsAuxiliarySpendIsCounted(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	fleet := coordmem.NewFleet()
+	free := &org.Role{Name: "Free"}
+	c := meteredCompany(config.TokenBudget{}, free)
+	e := &Engine{backends: &Backends{Fleet: fleet}}
+	models := meteredModels{
+		inner:  staticModels{provider: &answeringProvider{in: 30, out: 12}},
+		charge: func(seat *org.Role) spendRecorder { return e.spendFor(c, seatHandle(seat)) },
+	}
+	member, err := models.Head(free, phase.Auxiliary)
+	if err != nil {
+		t.Fatalf("Head: %v", err)
+	}
+	if _, err := member.Provider.Complete(ctx, llm.Request{}); err != nil {
+		t.Fatalf("Complete: %v", err)
+	}
+	windows := coord.WindowsAt(time.Now(), time.UTC)
+	for _, scope := range []string{coord.OrgScope, scopeOf(t, c, free)} {
+		u, err := fleet.Used(ctx, scope, windows)
+		if err != nil || u.In(period.Day).Used != 42 {
+			t.Errorf("%s's day = (%+v, %v), want the 42 tokens the completion spent",
+				scope, u.In(period.Day), err)
+		}
+	}
+}
+
+// SPEND PAST THE CEILING IS RECORDED, AND IT IS WHAT CLOSES THE GATE.
+//
+// The record used to go through the gate's own Charge, which REFUSED a
+// completion that did not fit and so recorded nothing: the counter stayed
+// under the ceiling, the pre-flight gate still read room, and every later
+// reflection pass ran and went uncounted in its turn. The spend has happened
+// at the vendor, so it is recorded whole — and the gate then reads no room.
+func TestAnAuxiliaryCompletionPastTheCeilingIsRecordedAndClosesTheGate(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	fleet := coordmem.NewFleet()
+	lead := &org.Role{Name: "Lead", TokenBudget: org.TokenCeilings{period.Day: 100}}
+	c := meteredCompany(config.TokenBudget{}, lead)
+	e := &Engine{backends: &Backends{Fleet: fleet}}
+	windows := coord.WindowsAt(time.Now(), time.UTC)
+	if _, err := fleet.PostCharge(ctx, scopeOf(t, c, lead), 90, windows); err != nil {
+		t.Fatalf("PostCharge: %v", err)
+	}
+	gate := e.learningBudget(c)
+	if ok, err := gate(ctx, lead); err != nil || !ok {
+		t.Fatalf("gate with 10 left = (%v, %v), want (true, nil)", ok, err)
+	}
+
+	models := meteredModels{
+		inner:  staticModels{provider: &answeringProvider{in: 30, out: 12}},
+		charge: func(seat *org.Role) spendRecorder { return e.spendFor(c, seatHandle(seat)) },
+	}
+	member, err := models.Head(lead, phase.Auxiliary)
+	if err != nil {
+		t.Fatalf("Head: %v", err)
+	}
+	if _, err := member.Provider.Complete(ctx, llm.Request{}); err != nil {
+		t.Fatalf("Complete: %v", err)
+	}
+	for _, scope := range []string{coord.OrgScope, scopeOf(t, c, lead)} {
+		u, err := fleet.Used(ctx, scope, windows)
+		if err != nil || u.In(period.Day).Used != 132 {
+			t.Errorf("%s's day = (%+v, %v), want 132: the 42 the completion spent "+
+				"past a ceiling of 100 is still spent", scope, u.In(period.Day), err)
+		}
+	}
+	if ok, err := gate(ctx, lead); err != nil || ok {
+		t.Fatalf("gate after the ceiling was passed = (%v, %v), want (false, nil): "+
+			"a pass that starts now spends more past it, uncounted", ok, err)
 	}
 }
 
@@ -144,17 +226,44 @@ func TestAFailedCompletionChargesNothing(t *testing.T) {
 	}
 }
 
-// THE PRE-FLIGHT GATE ASKS WITHOUT SPENDING. A probe that charged a token to
-// find out whether it may charge would make the question cost what it is
-// asking about.
-func TestTheBudgetGateProbesWithAZeroCharge(t *testing.T) {
+// THE PRE-FLIGHT GATE DECLINES A SEAT WITH NO ROOM LEFT, AND ASKS WITHOUT
+// SPENDING.
+//
+// It used to ask with a charge of zero tokens, which the counter answers OK
+// without looking — a phase whose provider reported no usage still ran — so
+// the gate had never declined anything: a company at its ceiling kept starting
+// reflection passes and paying for their auxiliary calls until each one's
+// first charge was refused mid-pass.
+func TestTheLearningGateDeclinesASeatWithNoRoomLeft(t *testing.T) {
 	t.Parallel()
-	meter := &countingMeter{}
-	if _, err := meter.Spend(t.Context(), 0); err != nil {
-		t.Fatal(err)
+	ctx := t.Context()
+	fleet := coordmem.NewFleet()
+	lead := &org.Role{Name: "Lead", TokenBudget: org.TokenCeilings{period.Day: 100}}
+	c := meteredCompany(config.TokenBudget{}, lead)
+	e := &Engine{backends: &Backends{Fleet: fleet}}
+	gate := e.learningBudget(c)
+
+	if ok, err := gate(ctx, lead); err != nil || !ok {
+		t.Fatalf("gate with the whole day left = (%v, %v), want (true, nil)", ok, err)
 	}
-	if meter.spent != 0 {
-		t.Errorf("the probe moved the counter by %d", meter.spent)
+	windows := coord.WindowsAt(time.Now(), time.UTC)
+	if _, err := fleet.PostCharge(ctx, scopeOf(t, c, lead), 100, windows); err != nil {
+		t.Fatalf("PostCharge: %v", err)
+	}
+	if ok, err := gate(ctx, lead); err != nil || ok {
+		t.Fatalf("gate with the day spent = (%v, %v), want (false, nil): a pass that "+
+			"starts now spends past the ceiling", ok, err)
+	}
+	// And asking moved nothing.
+	u, err := fleet.Used(ctx, scopeOf(t, c, lead), windows)
+	if err != nil || u.In(period.Day).Used != 100 {
+		t.Fatalf("the seat's day = (%+v, %v) after two questions, want the 100 spent",
+			u.In(period.Day), err)
+	}
+	// A seat nothing caps is never declined.
+	free := &org.Role{Name: "Free"}
+	if ok, err := e.learningBudget(meteredCompany(config.TokenBudget{}, free))(ctx, free); err != nil || !ok {
+		t.Fatalf("gate for an uncapped seat = (%v, %v), want (true, nil)", ok, err)
 	}
 }
 
@@ -214,5 +323,67 @@ func TestLearningWorkersResolveModelsThroughTheMeter(t *testing.T) {
 				fn.Name.Name, fset.Position(call.Pos()))
 			return false
 		})
+	}
+}
+
+// searchableKnowledge is a knowledge backend that will always search, so the
+// prefetch's knowledge block reaches its auxiliary query call.
+type searchableKnowledge struct{}
+
+func (searchableKnowledge) Backend() string                             { return "test" }
+func (searchableKnowledge) CanSearch(*org.Role, *org.Organization) bool { return true }
+func (searchableKnowledge) Search(context.Context, knowledge.Query) knowledge.Result {
+	return knowledge.Result{}
+}
+
+// queryingProvider answers a usable search query at a known token cost.
+type queryingProvider struct{ in, out, calls int }
+
+func (p *queryingProvider) Model() string { return "test-model" }
+
+func (p *queryingProvider) Complete(context.Context, llm.Request) (*llm.Completion, error) {
+	p.calls++
+	return &llm.Completion{Model: "test-model", Content: "deploy runbook",
+		InputTokens: p.in, OutputTokens: p.out}, nil
+}
+
+// THE TURN-START PREFETCH'S AUXILIARY CALLS ARE CHARGED.
+//
+// The memory filter, the knowledge query and the episode summary each send a
+// full prompt on EVERY turn, and the prefetch resolved them off the bare
+// registry — so that spend reached no counter, a seat at its ceiling went on
+// paying for its turn-start context, and the window an operator reads
+// understated it. This drives a real Fetch through the engine's own sources
+// and reads both counters back.
+func TestThePrefetchsAuxiliaryCompletionsAreCharged(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	fleet := coordmem.NewFleet()
+	seat := &org.Role{Name: "Dev"}
+	c := meteredCompany(config.TokenBudget{}, seat)
+	provider := &queryingProvider{in: 300, out: 25}
+	models, err := phase.NewRegistry([]phase.Entry{{Key: "aux", Provider: provider}})
+	if err != nil {
+		t.Fatalf("NewRegistry: %v", err)
+	}
+	c.Models = models
+	e := &Engine{backends: &Backends{Fleet: fleet}}
+
+	src := e.prefetchSources(c)
+	src.Knowledge = searchableKnowledge{}
+	prefetch.New(src).Fetch(ctx, prefetch.Request{
+		Seat: seat, Org: c.Org, Task: "ship the release", TurnID: "run-1",
+	})
+	if provider.calls != 1 {
+		t.Fatalf("the auxiliary model was called %d times, want the one knowledge "+
+			"query — the case exercises nothing otherwise", provider.calls)
+	}
+	windows := coord.WindowsAt(time.Now(), time.UTC)
+	for _, scope := range []string{coord.OrgScope, scopeOf(t, c, seat)} {
+		u, err := fleet.Used(ctx, scope, windows)
+		if err != nil || u.In(period.Day).Used != 325 {
+			t.Errorf("%s's day = (%+v, %v), want the 325 tokens the prefetch's "+
+				"knowledge query spent", scope, u.In(period.Day), err)
+		}
 	}
 }

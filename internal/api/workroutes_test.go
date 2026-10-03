@@ -11,6 +11,7 @@ import (
 	"github.com/crewlet/crewlet/internal/api/workapi"
 	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/pages"
+	queuememory "github.com/crewlet/crewlet/internal/queue/memory"
 )
 
 // workStub is a write surface with one route, recording whether a request
@@ -105,8 +106,10 @@ func TestTheRealWriteSurfaceMountsBesideTheReads(t *testing.T) {
 		PageStore: unreadPages{},
 	}
 	surface, err := workapi.New(workapi.Options{
-		Halves: func() (workapi.Halves, bool) { return halves, true },
-		Chart:  authz.NoChart{},
+		Halves:   func() (workapi.Halves, bool) { return halves, true },
+		Chart:    authz.NoChart{},
+		Operator: operatorSurface(t, halves.Work),
+		Audit:    queuememory.New(),
 	})
 	if err != nil || surface == nil {
 		t.Fatalf("workapi.New: %v", err)

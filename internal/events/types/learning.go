@@ -2,6 +2,7 @@ package types
 
 import (
 	"fmt"
+	"time"
 
 	"github.com/crewlet/crewlet/internal/events"
 )
@@ -205,8 +206,20 @@ type SkillUsed struct {
 	// SkillID is empty for a registry-loaded skill.
 	SkillID    string          `json:"skill_id"`
 	SourceKind SkillSourceKind `json:"source_kind"`
-	// FileLoaded is a bundled file path, empty when loading the skill body.
+	// FileLoaded was meant to name a bundled file a load read instead of
+	// the body. No skill in any build carries bundled files, so nothing
+	// writes it and it is always empty; it stays on the wire because
+	// ADR-0006 never removes a key a peer may still send.
 	FileLoaded string `json:"file_loaded"`
+
+	// SourcePageID and SourceContainer name the knowledge-base page a
+	// REGISTRY skill was read from, so a load is attributable to the page
+	// an author edits rather than only to a key — a key is inside the page
+	// and moves when the page is edited, and two pages can declare one.
+	// Empty for a synthesized skill, which lives in this node's own store
+	// and has no page, and absent on a record an older build wrote.
+	SourcePageID    string `json:"source_page_id,omitempty"`
+	SourceContainer string `json:"source_container,omitempty"`
 }
 
 // EventType is the "skill_used" wire type.
@@ -244,19 +257,28 @@ type PrefetchSummary struct {
 	// for — see [AgentPhaseCompleted.WorkKey] and ADR-0017. Carried so the
 	// work-key filter answers with a run's WHOLE record rather than only
 	// its phases.
-	WorkKey                string `json:"work_key,omitempty"`
-	CounterpartyHit        bool   `json:"counterparty_hit"`
-	CounterpartyBytes      int    `json:"counterparty_bytes"`
-	SynthesizedSkillsHit   bool   `json:"synthesized_skills_hit"`
-	SynthesizedSkillsBytes int    `json:"synthesized_skills_bytes"`
-	EpisodeRecallHit       bool   `json:"episode_recall_hit"`
-	EpisodeRecallBytes     int    `json:"episode_recall_bytes"`
-	OnboardingHintHit      bool   `json:"onboarding_hint_hit"`
-	OnboardingHintBytes    int    `json:"onboarding_hint_bytes"`
-	PersonalMemoryHit      bool   `json:"personal_memory_hit"`
-	PersonalMemoryBytes    int    `json:"personal_memory_bytes"`
-	RelevantKnowledgeHit   bool   `json:"relevant_knowledge_hit"`
-	RelevantKnowledgeBytes int    `json:"relevant_knowledge_bytes"`
+	WorkKey string `json:"work_key,omitempty"`
+	// StartedAt is when the context assembly began, UTC, and DurationMS how
+	// long it took, measured where it ran. The prefetch is the stretch
+	// between a turn announcing itself and its first phase opening — it
+	// reads a diary, a thread and a knowledge base, and calls an auxiliary
+	// model for two of them — and without its own measurement a turn's
+	// timeline had a gap there nothing on the record could explain. Absent
+	// on an older peer's summary.
+	StartedAt              time.Time `json:"started_at,omitzero"`
+	DurationMS             int       `json:"duration_ms"`
+	CounterpartyHit        bool      `json:"counterparty_hit"`
+	CounterpartyBytes      int       `json:"counterparty_bytes"`
+	SynthesizedSkillsHit   bool      `json:"synthesized_skills_hit"`
+	SynthesizedSkillsBytes int       `json:"synthesized_skills_bytes"`
+	EpisodeRecallHit       bool      `json:"episode_recall_hit"`
+	EpisodeRecallBytes     int       `json:"episode_recall_bytes"`
+	OnboardingHintHit      bool      `json:"onboarding_hint_hit"`
+	OnboardingHintBytes    int       `json:"onboarding_hint_bytes"`
+	PersonalMemoryHit      bool      `json:"personal_memory_hit"`
+	PersonalMemoryBytes    int       `json:"personal_memory_bytes"`
+	RelevantKnowledgeHit   bool      `json:"relevant_knowledge_hit"`
+	RelevantKnowledgeBytes int       `json:"relevant_knowledge_bytes"`
 	// RelevantKnowledgeSelectionCount distinguishes the two hit=true paths: a
 	// non-zero count means the filter rendered real picks, while zero with
 	// hit=true means it ran, found nothing relevant, and rendered the empty

@@ -19,6 +19,7 @@ import (
 	"github.com/crewlet/crewlet/internal/engine"
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
+	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/queue/topics"
 	"github.com/crewlet/crewlet/internal/seat/placement"
@@ -68,7 +69,8 @@ var brokenRevision = json.RawMessage(`{"name":"Acme",
 // chart's log at boot and untouched by every apply below.
 const grownCompanyDoc = `
 name: Acme
-token_budget: 4242
+token_budget:
+  day: 4242
 providers:
   llm:
     zulu:
@@ -170,7 +172,7 @@ func (p *plane) activate(ctx context.Context, t *testing.T, doc string) int64 {
 	t.Helper()
 	document := p.seal(t, yamlToJSON(t, doc))
 	id, err := p.store.Configs().InsertActive(ctx, store.Revision{
-		Source: "test", CreatedBy: revisionAuthor, CreatedByKind: "operator",
+		Source: "test", CreatedBy: revisionAuthor, CreatedByKind: iam.ActorHuman,
 		OperatorID: revisionCredential, Summary: "revision",
 		Payload: document, CreatedAt: pinnedNow,
 	})
@@ -180,8 +182,10 @@ func (p *plane) activate(ctx context.Context, t *testing.T, doc string) int64 {
 	// THE AUTHOR RIDES THE POINTER, as the config surface publishes it.
 	published, err := p.fleet.Activate(ctx, coord.ActivationRequest{
 		RevisionID: id, Summary: "revision", Payload: document, At: pinnedNow,
-		CreatedBy: revisionAuthor, CreatedByKind: "operator",
-		OperatorID: revisionCredential,
+		Origin: coord.RevisionOrigin{
+			Author: revisionAuthor, AuthorKind: iam.ActorHuman,
+			OperatorID: revisionCredential,
+		},
 	})
 	if err != nil {
 		t.Fatalf("activate: %v", err)
@@ -190,7 +194,7 @@ func (p *plane) activate(ctx context.Context, t *testing.T, doc string) int64 {
 }
 
 // revisionAuthor and revisionCredential are who [plane.activate] writes a
-// revision as: a person through their own machine token.
+// revision as: a person (kind human) through their own machine token.
 const (
 	revisionAuthor     = "jane.doe"
 	revisionCredential = "pat:0192f00d-0000-7000-8000-00000000000a"
@@ -203,7 +207,8 @@ func (p *plane) activatePayload(t *testing.T, summary string, payload json.RawMe
 	t.Helper()
 	payload = p.seal(t, payload)
 	id, err := p.store.Configs().InsertActive(t.Context(), store.Revision{
-		Source: "test", CreatedBy: "operator", Summary: summary,
+		CreatedByKind: iam.ActorOperator,
+		Source:        "test", CreatedBy: "operator", Summary: summary,
 		Payload: payload, CreatedAt: pinnedNow,
 	})
 	if err != nil {
@@ -303,10 +308,10 @@ func TestANewRevisionReplacesTheEpoch(t *testing.T) {
 	if p.engine.Company() == before {
 		t.Fatal("the epoch was mutated in place")
 	}
-	if got := before.Config.TokenBudget; got != 0 {
+	if got := dayCeiling(before); got != 0 {
 		t.Errorf("the previous epoch changed under the apply: budget %d", got)
 	}
-	if got := p.engine.Company().Config.TokenBudget; got != 4242 {
+	if got := dayCeiling(p.engine.Company()); got != 4242 {
 		t.Errorf("token budget = %d, want the new revision's", got)
 	}
 	// AND THE CHART DID NOT MOVE, which is the split this engine now runs
@@ -402,6 +407,72 @@ func TestTheOutcomeIsRecordedWhereEveryPeerReadsIt(t *testing.T) {
 	}
 }
 
+// A CONVERGED NODE KEEPS SAYING SO.
+//
+// The apply-status row ages out after four reconcile intervals by design, so
+// a node that stops reporting vanishes from the fleet view. It was written on
+// an apply alone, so a node that converged stopped reporting a minute later:
+// the fleet view drew it as having applied nothing while its own /health
+// served the current epoch, and every peer dropped it as stale evidence.
+func TestAConvergedNodeKeepsItsApplyStatusFresh(t *testing.T) {
+	t.Parallel()
+	now := pinnedNow
+	p := newPlane(t, func(o *engine.ReconcilerOptions) {
+		o.Now = func() time.Time { return now }
+	})
+	epoch := p.activate(t.Context(), t, grownCompanyDoc)
+	if err := p.recon.Tick(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	// Longer than the row's freshness: without a refresh this is the row
+	// every peer skips and the fleet view drops.
+	now = pinnedNow.Add(2 * coord.StatusFreshness)
+	if err := p.recon.Tick(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	row := p.fleetRow(t)
+	if !row.UpdatedAt.Equal(now) {
+		t.Errorf("row written at %v, want this tick's %v — a converged node stopped reporting",
+			row.UpdatedAt, now)
+	}
+	if row.Epoch != epoch || configplane.ApplyStatus(row.Status) != configplane.StatusOK {
+		t.Errorf("row = %+v, want ok on epoch %d", row, epoch)
+	}
+	// A refresh is not an apply: the epoch is built once.
+	if len(p.applies) != 1 {
+		t.Errorf("%d applies, want the one", len(p.applies))
+	}
+}
+
+// AND A NODE THAT GAVE UP KEEPS SAYING WHY. Out of retries on an epoch, the
+// failure it recorded is what its peers and the fleet view need; aged out, the
+// node read as one that never tried.
+func TestANodeOutOfRetriesKeepsItsFailureFresh(t *testing.T) {
+	t.Parallel()
+	now := pinnedNow
+	p := newPlane(t, func(o *engine.ReconcilerOptions) {
+		o.Now = func() time.Time { return now }
+	})
+	p.activatePayload(t, "broken", brokenRevision)
+	for range configplane.MaxApplyAttempts {
+		_ = p.recon.Tick(t.Context())
+	}
+	first := p.fleetRow(t)
+	now = pinnedNow.Add(2 * coord.StatusFreshness)
+	_ = p.recon.Tick(t.Context())
+	row := p.fleetRow(t)
+	if !row.UpdatedAt.Equal(now) {
+		t.Errorf("row written at %v, want this tick's %v", row.UpdatedAt, now)
+	}
+	if configplane.ApplyStatus(row.Status) != configplane.StatusError || row.Error != first.Error {
+		t.Errorf("row = %+v, want the recorded failure %q restated", row, first.Error)
+	}
+	if len(p.applies) != configplane.MaxApplyAttempts {
+		t.Errorf("%d applies, want the %d attempts and no more", len(p.applies),
+			configplane.MaxApplyAttempts)
+	}
+}
+
 func TestReactivatingAnUnchangedRevisionAppliesAgain(t *testing.T) {
 	t.Parallel()
 	// THE credential-rotation gesture. The payload is identical and the
@@ -462,13 +533,6 @@ func TestAnAlreadyAppliedEpochIsNotReapplied(t *testing.T) {
 	}
 }
 
-// THE FLEET'S REVISION IS THIS NODE'S ACTIVE ONE ONCE THE NODE RUNS IT.
-//
-// A node's active revision is what its GET /config serves, what it boots on,
-// and what it offers the whole fleet at its next start whenever it is newer
-// than the pointer. One that is not the fleet's, left there after the node
-// applied the fleet's epoch, is a node serving a company the fleet is not
-// running, and republishing it one restart later over the one that is.
 // RE-ACTIVATING THE REVISION THIS NODE HOLDS MOVES ITS ACTIVATION INSTANT.
 //
 // Re-activation is the credential-rotation gesture, and the local row's
@@ -507,6 +571,13 @@ func TestReactivatingTheHeldRevisionMovesItsLocalInstant(t *testing.T) {
 	}
 }
 
+// THE FLEET'S REVISION IS THIS NODE'S ACTIVE ONE ONCE THE NODE RUNS IT.
+//
+// A node's active revision is what its GET /config serves, what it boots on,
+// and what it offers the whole fleet at its next start whenever it is newer
+// than the pointer. One that is not the fleet's, left there after the node
+// applied the fleet's epoch, is a node serving a company the fleet is not
+// running, and republishing it one restart later over the one that is.
 func TestTheNodesActiveRevisionFollowsTheFleetOnceApplied(t *testing.T) {
 	t.Parallel()
 	activeID := func(t *testing.T, p *plane) string {
@@ -533,7 +604,8 @@ func TestTheNodesActiveRevisionFollowsTheFleetOnceApplied(t *testing.T) {
 			t.Fatalf("Target: %v", err)
 		}
 		stray, err := p.store.Configs().InsertActive(t.Context(), store.Revision{
-			Source: "test", CreatedBy: "operator", Summary: "stray",
+			CreatedByKind: iam.ActorOperator,
+			Source:        "test", CreatedBy: "operator", Summary: "stray",
 			Payload: yamlToJSON(t, companyDoc), CreatedAt: pinnedNow.Add(time.Hour),
 		})
 		if err != nil {
@@ -558,7 +630,8 @@ func TestTheNodesActiveRevisionFollowsTheFleetOnceApplied(t *testing.T) {
 		t.Parallel()
 		p := newPlane(t)
 		previous, err := p.store.Configs().InsertActive(t.Context(), store.Revision{
-			Source: "test", CreatedBy: "operator", Summary: "before",
+			CreatedByKind: iam.ActorOperator,
+			Source:        "test", CreatedBy: "operator", Summary: "before",
 			Payload: yamlToJSON(t, companyDoc), CreatedAt: pinnedNow,
 		})
 		if err != nil {
@@ -566,7 +639,8 @@ func TestTheNodesActiveRevisionFollowsTheFleetOnceApplied(t *testing.T) {
 		}
 		document := p.seal(t, yamlToJSON(t, grownCompanyDoc))
 		held, err := p.store.Configs().Insert(t.Context(), store.Revision{
-			ParentID: previous, Source: "api", CreatedBy: "operator", Summary: "written",
+			CreatedByKind: iam.ActorOperator,
+			ParentID:      previous, Source: "api", CreatedBy: "operator", Summary: "written",
 			Payload: document, CreatedAt: pinnedNow,
 		})
 		if err != nil {
@@ -679,7 +753,7 @@ func TestOneEpochIsRetriedABoundedNumberOfTimes(t *testing.T) {
 	}
 	// THE SETTINGS, which is what a revision carries: the seats come from
 	// the chart's own log and a config apply never moves them.
-	if got := p.engine.Company().Config.TokenBudget; got != 4242 {
+	if got := dayCeiling(p.engine.Company()); got != 4242 {
 		t.Errorf("token budget = %d, want the fixed revision's", got)
 	}
 }
@@ -715,7 +789,7 @@ func TestASealedRevisionNeedsTheKeyItWasSealedUnder(t *testing.T) {
 	if err := p.recon.Tick(t.Context()); !errors.Is(err, secrets.ErrDecrypt) {
 		t.Fatalf("err = %v, want the revision refused as undecryptable", err)
 	}
-	if got := p.engine.Company().Config.TokenBudget; got == 4242 {
+	if got := dayCeiling(p.engine.Company()); got == 4242 {
 		t.Error("the node runs a revision it could not open")
 	}
 
@@ -724,7 +798,7 @@ func TestASealedRevisionNeedsTheKeyItWasSealedUnder(t *testing.T) {
 	if err := p.recon.Tick(t.Context()); err != nil {
 		t.Fatalf("a revision sealed under this node's keyring: %v", err)
 	}
-	if got := p.engine.Company().Config.TokenBudget; got != 4242 {
+	if got := dayCeiling(p.engine.Company()); got != 4242 {
 		t.Errorf("token budget = %d, want the sealed revision's", got)
 	}
 }
@@ -779,7 +853,7 @@ func TestAnUnsealedRevisionFromThePeersIsNeitherAppliedNorKept(t *testing.T) {
 	if got := node.recon.Applied(); got == forged.Epoch {
 		t.Error("the node applied the epoch an unsealed revision was published at")
 	}
-	if got := node.engine.Company().Config.TokenBudget; got == 4242 {
+	if got := dayCeiling(node.engine.Company()); got == 4242 {
 		t.Error("the node runs the forged document's settings")
 	}
 	// THE FLEET VIEW the node reports into is the one it reads, the
@@ -824,8 +898,8 @@ func TestThisNodesOwnUnsealedCopyIsNamedAsItsOwn(t *testing.T) {
 	p := newPlane(t)
 	document := yamlToJSON(t, grownCompanyDoc)
 	id, err := p.store.Configs().InsertActive(t.Context(), store.Revision{
-		Source: "test", CreatedBy: "operator", Summary: "an older build's",
-		Payload: document, CreatedAt: pinnedNow,
+		Source: "test", CreatedBy: "operator", CreatedByKind: iam.ActorOperator,
+		Summary: "an older build's", Payload: document, CreatedAt: pinnedNow,
 	})
 	if err != nil {
 		t.Fatalf("store the revision: %v", err)
@@ -1298,16 +1372,16 @@ func TestAPeerConvergesOnARevisionItHasNeverSeen(t *testing.T) {
 	// the one node the write reached and nobody on every other — the history
 	// an operator reads depended on which node answered. Mutation: adopt as
 	// `peer` and this fails.
-	if adopted.CreatedBy != revisionAuthor || adopted.CreatedByKind != "operator" ||
+	if adopted.CreatedBy != revisionAuthor || adopted.CreatedByKind != iam.ActorHuman ||
 		adopted.OperatorID != revisionCredential || adopted.Source != "fleet" {
 		t.Errorf("the peer's copy records %q/%q/%q from %q, want the writer's "+
-			"%s/operator/%s from the fleet", adopted.CreatedBy, adopted.CreatedByKind,
+			"%s/human/%s from the fleet", adopted.CreatedBy, adopted.CreatedByKind,
 			adopted.OperatorID, adopted.Source, revisionAuthor, revisionCredential)
 	}
 	// The SETTINGS of the revision it converged on, not the one it booted
 	// with. Not its seats: those come from the chart's own log, which a
 	// config apply does not carry and never moves.
-	if got := peer.engine.Company().Config.TokenBudget; got != 4242 {
+	if got := dayCeiling(peer.engine.Company()); got != 4242 {
 		t.Errorf("the peer's token budget is %d, want the revision it "+
 			"converged on", got)
 	}
@@ -1564,4 +1638,14 @@ func TestTheProgressTripleIsReadAsOneMoment(t *testing.T) {
 	if row.Epoch != epoch {
 		t.Errorf("reported epoch = %d, want %d", row.Epoch, epoch)
 	}
+}
+
+// dayCeiling is a company's daily token ceiling, 0 where it declares none — the
+// one window [grownCompanyDoc] sets, so a revision's settings can be told from
+// the one before it.
+func dayCeiling(c *engine.Company) int {
+	if c == nil || c.Config == nil || c.Config.TokenBudget.Day == nil {
+		return 0
+	}
+	return *c.Config.TokenBudget.Day
 }

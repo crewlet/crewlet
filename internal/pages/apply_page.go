@@ -502,11 +502,39 @@ func (a *Applier) applyComment(ctx context.Context, tx *sql.Tx, at applyContext,
 		n, _ := res.RowsAffected()
 		return int(n), ChangeCommentEdited, nil
 	}
+	// WHEN IT WAS WRITTEN IS THE HELD ROW'S, on an edit. The patch carries no
+	// creation instant — a writer stating one would be stating what it read in
+	// another transaction — so the applier reads it here, in its own. Encoded
+	// from the edit's instant instead, the document said an edited comment was
+	// written the moment it was edited: every reader of the document (the
+	// thread, the edit's own answer, a page's detail) reported the two instants
+	// equal, and "(edited)" could never be drawn.
+	//
+	// FROM THE HELD DOCUMENT, which carries the insert's instant at full
+	// precision; the row's column holds the same instant in microseconds and
+	// answers only for a document this build cannot decode, which the readers
+	// skip as well.
+	created := at.brokerAt
+	var heldDoc []byte
+	var heldAt int64
+	switch err := tx.QueryRowContext(ctx,
+		`SELECT document, created_at FROM pages_comments WHERE id = ?`, c.ID).
+		Scan(&heldDoc, &heldAt); {
+	case err == nil:
+		if held, derr := DecodeComment(heldDoc); derr == nil && !held.CreatedAt.IsZero() {
+			created = held.CreatedAt
+		} else {
+			created = store.DecodeTime(heldAt)
+		}
+	case !errors.Is(err, sql.ErrNoRows):
+		return 0, "", fmt.Errorf("pages: read comment %s at %s: %w",
+			c.ID, at.position, err)
+	}
 	document, err := EncodeComment(Comment{
 		V: DocumentVersion, ID: c.ID, PageID: pageID,
 		Author: c.Author, AuthorKind: c.AuthorKind, Body: deref(c.Body),
 		Mentions: sorted(c.Mentions), ReplyTo: c.ReplyTo,
-		CreatedAt: at.brokerAt, UpdatedAt: at.brokerAt,
+		CreatedAt: created, UpdatedAt: at.brokerAt,
 	})
 	if err != nil {
 		return 0, "", err

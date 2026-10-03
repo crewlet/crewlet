@@ -51,6 +51,22 @@
 // returned publish therefore reads the STREAM's own state, never a consumer's
 // count; see Backlog, which is where the tempting one-round-trip form was and
 // what it did.
+//
+// # What a broker that does not answer looks like from above
+//
+// The client reports a broker it cannot reach in a dozen words of its own — a
+// timeout, no responders, a stream with no leader, a connection reconnecting
+// or disconnected, a reconnect buffer that filled — and what the waiting call
+// ends on is often only a deadline. Every verb that calls the broker therefore
+// marks its failure with the contract's word for it before returning
+// ([Queue.brokerFailed]): queue.ErrUnavailable for silence, a condition the
+// layers above answer with "try again"; [ErrConnectionLost], which is
+// queue.ErrNotLive, for a connection the client closed for good. Unmarked,
+// every one of them read above the queue as this node's own fault. The
+// domain-log seam (DomainLog, DomainConsumer) is deliberately not marked:
+// internal/statelog classifies its own appends and reads into outcomes and
+// refusals, and a second classification beneath it would be a second answer
+// to one question.
 package jetstream
 
 import (

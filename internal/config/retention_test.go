@@ -385,6 +385,17 @@ func TestTheByteCeilingsAreBounded(t *testing.T) {
 		"the chart at a gibibyte":   {func(b *config.Bootstrap) { b.Stream.ChartLogMaxBytes = gib }, true, ""},
 		"the chart at 16 GiB":       {func(b *config.Bootstrap) { b.Stream.ChartLogMaxBytes = 16 * gib }, true, ""},
 		"the chart past 16 GiB":     {func(b *config.Bootstrap) { b.Stream.ChartLogMaxBytes = 16*gib + 1 }, false, "chart_log_max_bytes"},
+		// THE IDENTITY LOG AND THE USAGE LOG TAKE THE CHART'S FLOOR, for
+		// the chart's reason: neither grows with a corpus, and a floor is
+		// free space every node must have before it boots.
+		"identity below its floor": {func(b *config.Bootstrap) { b.Stream.IamLogMaxBytes = mib*64 - 1 }, false, "iam_log_max_bytes"},
+		"identity at its floor":    {func(b *config.Bootstrap) { b.Stream.IamLogMaxBytes = mib * 64 }, true, ""},
+		"identity at 16 GiB":       {func(b *config.Bootstrap) { b.Stream.IamLogMaxBytes = 16 * gib }, true, ""},
+		"identity past 16 GiB":     {func(b *config.Bootstrap) { b.Stream.IamLogMaxBytes = 16*gib + 1 }, false, "iam_log_max_bytes"},
+		"usage below its floor":    {func(b *config.Bootstrap) { b.Stream.UsageLogMaxBytes = mib*64 - 1 }, false, "usage_log_max_bytes"},
+		"usage at its floor":       {func(b *config.Bootstrap) { b.Stream.UsageLogMaxBytes = mib * 64 }, true, ""},
+		"usage at 64 GiB":          {func(b *config.Bootstrap) { b.Stream.UsageLogMaxBytes = 64 * gib }, true, ""},
+		"usage past 64 GiB":        {func(b *config.Bootstrap) { b.Stream.UsageLogMaxBytes = 64*gib + 1 }, false, "usage_log_max_bytes"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			b := config.RunnableBootstrap()
@@ -447,38 +458,51 @@ func TestTheSnapshotDirectoryResolvesAgainstTheStore(t *testing.T) {
 func TestTheBrokerStorageLimitIsBoundedEmbeddedOnlyAndFitsItsOwnCeilings(t *testing.T) {
 	t.Parallel()
 	const gib = int64(1) << 30
+	const mib = int64(1) << 20
 	for name, tc := range map[string]struct {
 		mutate func(*config.Bootstrap)
 		accept bool
 		says   string
 	}{
-		"unset":                {func(*config.Bootstrap) {}, true, ""},
-		"below five gibibytes": {func(b *config.Bootstrap) { b.Stream.StoreMaxBytes = 5*gib - 1 }, false, "store_max_bytes"},
-		"at five gibibytes":    {func(b *config.Bootstrap) { b.Stream.StoreMaxBytes = 5 * gib }, true, ""},
-		"at 64 TiB":            {func(b *config.Bootstrap) { b.Stream.StoreMaxBytes = 65536 * gib }, true, ""},
-		"past 64 TiB":          {func(b *config.Bootstrap) { b.Stream.StoreMaxBytes = 65537 * gib }, false, "store_max_bytes"},
-		// THE FLOOR IS WHY THE FLOOR MOVED. Four state-log domains at
-		// their own floors are four gibibytes, which is what the limit
-		// used to be — and the cross-field rule below refuses only a sum
-		// GREATER than the limit, so at four this document validated and
-		// the node then failed at boot on whichever stream the broker
-		// reached last. The floor is what moves that refusal forward to
-		// `crewlet validate`.
-		"every domain at its own floor": {func(b *config.Bootstrap) {
+		"unset": {func(*config.Bootstrap) {}, true, ""},
+		// SIX: what six state logs reserve at their smallest unset
+		// ceilings (4.5625 GiB), and about 1.44 GiB for every stream that
+		// reserves nothing.
+		"below six gibibytes": {func(b *config.Bootstrap) { b.Stream.StoreMaxBytes = 6*gib - 1 }, false, "store_max_bytes"},
+		"at six gibibytes":    {func(b *config.Bootstrap) { b.Stream.StoreMaxBytes = 6 * gib }, true, ""},
+		"at 64 TiB":           {func(b *config.Bootstrap) { b.Stream.StoreMaxBytes = 65536 * gib }, true, ""},
+		"past 64 TiB":         {func(b *config.Bootstrap) { b.Stream.StoreMaxBytes = 65537 * gib }, false, "store_max_bytes"},
+		// THE FLOOR IS WHY THE FLOOR MOVED. Six state-log domains at the
+		// ceilings they take unset come to 4.5625 GiB, which fits the old
+		// five-gibibyte limit — and the cross-field rule below refuses
+		// only a sum GREATER than the limit, so at five this document
+		// validated and the node was left 0.44 GiB for every mailbox, the
+		// event stream and every coordination bucket. The floor is what
+		// moves that refusal forward to `crewlet validate`.
+		"every domain at its unset size inside the floor": {func(b *config.Bootstrap) {
+			b.Stream.StoreMaxBytes = 6 * gib
+			b.Stream.TrackerLogMaxBytes, b.Stream.TrackerVectorsMaxBytes = gib, gib
+			b.Stream.PagesLogMaxBytes, b.Stream.UsageLogMaxBytes = gib, gib
+			b.Stream.ChartLogMaxBytes, b.Stream.IamLogMaxBytes = 64*mib, 512*mib
+		}, true, ""},
+		"every domain at its unset size inside the old limit": {func(b *config.Bootstrap) {
 			b.Stream.StoreMaxBytes = 5 * gib
 			b.Stream.TrackerLogMaxBytes, b.Stream.TrackerVectorsMaxBytes = gib, gib
-			b.Stream.PagesLogMaxBytes, b.Stream.ChartLogMaxBytes = gib, gib
-		}, true, ""},
-		"four domain floors inside the old limit": {func(b *config.Bootstrap) {
-			b.Stream.StoreMaxBytes = 4 * gib
-			b.Stream.TrackerLogMaxBytes, b.Stream.TrackerVectorsMaxBytes = gib, gib
-			b.Stream.PagesLogMaxBytes, b.Stream.ChartLogMaxBytes = gib, gib
+			b.Stream.PagesLogMaxBytes, b.Stream.UsageLogMaxBytes = gib, gib
+			b.Stream.ChartLogMaxBytes, b.Stream.IamLogMaxBytes = 64*mib, 512*mib
 		}, false, "store_max_bytes"},
-		"the chart's ceiling counts against the limit": {func(b *config.Bootstrap) {
+		// EACH OF THE SIX IS IN THE SUM: ceilings that fit exactly, and
+		// the one log that tips them past the limit.
+		"tipped past it by the chart's log": {func(b *config.Bootstrap) {
 			b.Stream.StoreMaxBytes = 16 * gib
 			b.Stream.TrackerLogMaxBytes, b.Stream.TrackerVectorsMaxBytes = 8*gib, 4*gib
 			b.Stream.PagesLogMaxBytes, b.Stream.ChartLogMaxBytes = 4*gib, 4*gib
 		}, false, "chart_log_max_bytes"},
+		"tipped past it by the identity log": {func(b *config.Bootstrap) {
+			b.Stream.StoreMaxBytes = 48 * gib
+			b.Stream.TrackerLogMaxBytes, b.Stream.TrackerVectorsMaxBytes = 32*gib, 16*gib
+			b.Stream.IamLogMaxBytes = 64 * mib
+		}, false, "iam_log_max_bytes"},
 		// OTHERWISE A VALID EXTERNAL DOCUMENT, coordination included: a
 		// case whose document has a second problem passes on whichever
 		// of the two fires, which would leave this rule uncovered.
@@ -499,6 +523,11 @@ func TestTheBrokerStorageLimitIsBoundedEmbeddedOnlyAndFitsItsOwnCeilings(t *test
 			b.Stream.StoreMaxBytes = 16 * gib
 			b.Stream.TrackerLogMaxBytes, b.Stream.TrackerVectorsMaxBytes = 32*gib, 16*gib
 		}, false, "store_max_bytes"},
+		"tipped past it by the usage log": {func(b *config.Bootstrap) {
+			b.Stream.StoreMaxBytes = 48 * gib
+			b.Stream.TrackerLogMaxBytes, b.Stream.TrackerVectorsMaxBytes = 32*gib, 16*gib
+			b.Stream.UsageLogMaxBytes = 1 * gib
+		}, false, "usage_log_max_bytes"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			b := config.RunnableBootstrap()

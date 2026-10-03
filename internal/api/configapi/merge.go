@@ -42,9 +42,9 @@ import (
 // That is an argument about THIS format, and the obvious reply is to reach for
 // one that does address list members — RFC 6902, or a Kubernetes-style merge
 // key. Neither replaces the entity routes, and the reason is not about
-// formats: a patch addresses by STRUCTURE and a seat is addressed by
-// IDENTITY, which is why the same handle reaches a seat whether it sits at
-// the root or three units down.
+// formats: a patch addresses by STRUCTURE and an entity is addressed by
+// IDENTITY, which is why a server's name reaches it wherever it sits in
+// `mcp_servers`, and goes on reaching it after one above it is removed.
 //
 // # `null` deletes
 //

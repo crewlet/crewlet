@@ -439,7 +439,8 @@ func (s *surface) seedStored(t *testing.T, doc string, mutate func(map[string]an
 		t.Fatal(err)
 	}
 	id, err := s.configs.InsertActive(t.Context(), store.Revision{
-		Source: "peer", CreatedBy: "another node", Summary: "seed",
+		CreatedByKind: iam.ActorOperator,
+		Source:        "peer", CreatedBy: "another node", Summary: "seed",
 		Payload: payload, CreatedAt: pinned,
 	})
 	if err != nil {

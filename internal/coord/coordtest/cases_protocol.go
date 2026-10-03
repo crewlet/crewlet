@@ -238,6 +238,27 @@ var protocolCases = []testCase{
 		})
 	}},
 
+	{"a_seat_id_node_waits_for_the_last_handle_named_node", func(h *harness) {
+		// The bump that named a seat's lease and mailbox by the seat's id,
+		// stated as the deploy it protects. A node at the protocol before
+		// it names the same seat's lease by its handle, so the two claim
+		// DIFFERENT resources for one seat, each wins its own, and the
+		// seat runs twice. That node's presence alone is enough to hold
+		// this build back — before it has taken a single seat.
+		const handleNamedProtocol = 4
+		if coord.ProtocolVersion <= handleNamedProtocol {
+			h.t.Fatalf("ProtocolVersion %d is not above %d, the last protocol that named "+
+				"a seat's lease by its handle: this build would claim seats beside "+
+				"nodes that name them differently", coord.ProtocolVersion, handleNamedProtocol)
+		}
+		h.claim(coord.NodeResource("by-handle"), coord.AcquireOptions{
+			Owner: "by-handle:1", TTL: LongTTL, Ungated: true, Protocol: handleNamedProtocol,
+		})
+		h.refused(coord.SeatResource(seatID("ceo")), coord.AcquireOptions{
+			Owner: "by-id:1", TTL: LongTTL, Protocol: coord.ProtocolVersion,
+		})
+	}},
+
 	// --- the observability half ----------------------------------------
 
 	{"fleet_protocol_floor_reports_the_oldest_live_holder", func(h *harness) {

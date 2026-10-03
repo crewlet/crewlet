@@ -26,12 +26,12 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/crewlet/crewlet/internal/agent/ledger/ledgerstore"
 	"github.com/crewlet/crewlet/internal/api"
 	"github.com/crewlet/crewlet/internal/api/auth"
 	"github.com/crewlet/crewlet/internal/api/authapi"
 	"github.com/crewlet/crewlet/internal/api/chartapi"
 	"github.com/crewlet/crewlet/internal/api/configapi"
+	"github.com/crewlet/crewlet/internal/api/livestate"
 	"github.com/crewlet/crewlet/internal/api/mcpbridge"
 	"github.com/crewlet/crewlet/internal/api/queries"
 	"github.com/crewlet/crewlet/internal/api/secretsapi"
@@ -44,7 +44,6 @@ import (
 	"github.com/crewlet/crewlet/internal/fleetsecrets"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/integration"
-	"github.com/crewlet/crewlet/internal/learning"
 	"github.com/crewlet/crewlet/internal/logging"
 	"github.com/crewlet/crewlet/internal/observe"
 	"github.com/crewlet/crewlet/internal/org"
@@ -184,6 +183,8 @@ func run(args []string, stdout, stderr io.Writer) error {
 		return runRetention(rest, stdout, stderr)
 	case "work":
 		return runWork(rest, stdout, stderr)
+	case "seats":
+		return runSeats(rest, stdout, stderr)
 	case "llm":
 		return runLLM(rest, stdout, stderr)
 	case "search":
@@ -205,7 +206,8 @@ Usage:
   crewlet validate [flags]    Check both config tiers without starting anything
   crewlet schema [tier]       Print a tier's JSON Schema (company by default)
   crewlet migrate [config]    Apply pending schema migrations (-check reports only)
-  crewlet budgets <cmd>       Show or reset the durable token counters
+  crewlet budgets show        Show the durable token counters: each scope's day,
+                              week and month, its ceiling and its state
   crewlet backup -dir PATH    Copy this node's store and stream estate, through
                               the running engine, to a path on ITS host
   crewlet retention <cmd>     What the state log is holding, why it is not
@@ -213,6 +215,8 @@ Usage:
   crewlet work <cmd>          The gestures on work items that belong to a person:
                               purge, which destroys a task and every row it
                               produced and which nothing undoes
+  crewlet seats <cmd>         Pause a seat (-stop also ends the turn it is on)
+                              or resume it: its holder, its lead, or fleet:operate
   crewlet secrets <cmd>       Read and rotate the encrypted secret store
   crewlet config <cmd>        Import, inspect and activate company revisions
   crewlet chart <cmd>         The company's org chart: show it, check it against
@@ -246,7 +250,8 @@ Config:
 Environment:
   %s
             The credential a command that talks to a RUNNING node sends
-            (budgets, backup, retention, work, secrets, config, chart, iam):
+            (budgets, backup, retention, work, seats, secrets, config,
+            chart, iam):
             one of the node's api.auth.tokens values, or a machine token
             minted by "crewlet iam token". It is never a flag — a flag is in
             the shell history and in ps — and never read out of the config
@@ -1398,6 +1403,7 @@ type httpSurface struct {
 	// its answers — a stale password's rewrite — which is its own to stop
 	// and must stop before the engine its writes go to does.
 	auth *authapi.Service
+	runs *observe.SandboxReconciler
 }
 
 // stop closes the HTTP surface, once the engine has drained. See [shutdown]
@@ -1423,6 +1429,8 @@ func (s *httpSurface) stop(ctx context.Context, log *slog.Logger) {
 	if s.projector != nil {
 		s.projector.Stop(grace)
 	}
+	// Nil-safe, and nil on a bridge-only node: it has no panel to keep.
+	s.runs.Stop()
 	if s.app != nil {
 		s.app.Stop()
 	}
@@ -1455,6 +1463,37 @@ func (s *httpSurface) stop(ctx context.Context, log *slog.Logger) {
 // alternative — a listener held open for a build — is the thing the grace
 // exists to stop.
 const apiShutdownGrace = 5 * time.Second
+
+// seedPauses puts every paused seat on the live projection, by the agent id the
+// projection keys seats by. A pause whose seat the company no longer has is
+// skipped: the chart write that removed the seat clears it.
+func seedPauses(ctx context.Context, e *engine.Engine, live *livestate.LiveState) error {
+	pauses, err := e.Backends().Fleet.ListSeatPauses(ctx)
+	if err != nil {
+		return err
+	}
+	company := e.Company()
+	if company == nil || company.Org == nil {
+		return nil
+	}
+	seeds := make([]livestate.SeedPause, 0, len(pauses))
+	for _, p := range pauses {
+		// BY THE SEAT'S IDENTITY, which is what the record is keyed on:
+		// a pause names the seat it was taken on, never the handle it
+		// answered to then, so a rename keeps it and a hire on the freed
+		// handle inherits nothing. A seat the chart no longer holds has
+		// no row to draw a pause on.
+		if company.Org.AgentSeatByID(p.Seat) == nil {
+			continue
+		}
+		seeds = append(seeds, livestate.SeedPause{AgentID: p.Seat.String(), Paused: livestate.Paused{
+			By: p.By, ByKind: p.ByKind, OperatorID: p.OperatorID,
+			At: p.At.UTC().Format(time.RFC3339Nano), Reason: p.Reason, StopRunning: p.StopRunning,
+		}})
+	}
+	live.SeedPauses(seeds)
+	return nil
+}
 
 // companyConfig is the engine's CURRENT company document, or nil.
 // companyConfig is the company this node is serving: the SETTINGS a revision
@@ -1735,7 +1774,7 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 	if err != nil {
 		return nil, err
 	}
-	workSource, pageSource, searchSource := api.NativeSources(e)
+	workSource, pageSource, backlinkSource, searchSource := api.NativeSources(e)
 	// The contextcheck exemption is for the two PUSH TICKS this constructor
 	// registers — the roster re-send and the health frame. Both manufacture
 	// a bounded context of their own instead of inheriting one, which is
@@ -1773,22 +1812,29 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 		// bridge would resolve every token to no session and answer 401
 		// to a box whose run is perfectly healthy.
 		Bridge: e.Bridge(),
-		// The OPERATOR MCP surface, as each request finds the native
-		// halves: a node meets them at its first company, which it may
-		// meet by an apply long after this line ran. An API concern
-		// rather than the engine's, because its writer identity comes off
-		// an HTTP request's own credential.
-		Operator: api.NativeOperator(e),
 		// THE ENGINE'S TRAIL, which the guard reports a refused bearer
 		// and every Tier A token use through.
 		AuthEvents:   e.AuthEvents(),
 		QueueBackend: e.Backends().Queue.Backend(),
-		// The read surface answers from this node's OWN store. A
-		// question it has no source for comes back unknown rather than
-		// empty, which is the difference between "this node has no
-		// event log" and "the company has done nothing".
+		// THIS NODE'S OWN event store, which the webhook edge writes the
+		// deliveries it accepts into.
+		EventLog: e.Backends().Store.Events(),
+		// A question the read surface has no source for comes back
+		// unknown rather than empty, which is the difference between
+		// "this node has no event log" and "the company has done
+		// nothing".
 		Sources: queries.Sources{
-			Events: e.Backends().Store.Events(),
+			// THE FLEET'S turn-level history: every live node's own
+			// store, asked at query time, with the nodes that did not
+			// answer named on every answer (ADR-0021). The ENGINE's,
+			// because the roster is its lease view and the answerer it
+			// registered is the other half of the same protocol.
+			Events: e.History(),
+			// EVERY NODE'S company days, for every named spend window
+			// and its series — the replicated usage domain (ADR-0020),
+			// resolved per read so an adoption's reopened estate is the
+			// one answered from.
+			Usage: e.UsageEstate(),
 			// Read through the ENGINE's epoch rather than a captured
 			// company: an apply replaces it, and a screen bound to the
 			// one this process booted on would describe a company that
@@ -1807,17 +1853,21 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 			// through — so a lead reading a report's inbox by login reads
 			// the record the report's own screen reads, and not an empty
 			// one under the login.
-			Holders:  e,
-			Coord:    e.Backends().Coord,
-			Plane:    e.Backends().Fleet,
-			Runs:     sqlledger.New(e.Backends().Store.SQL()),
-			Diary:    learning.NewDiary(e.Backends().Store),
-			Episodes: learning.NewEpisodes(e.Backends().Store),
-			// The skills a seat drafted for ITSELF. They were written,
-			// versioned and loadable by the agent, and reachable by no
-			// screen — so the operator paying for the learning loop
-			// could not see what it had produced.
-			Skills: learning.NewSkills(e.Backends().Store),
+			Holders: e,
+			// WHOSE CONTACT IDENTITIES THIS NODE'S REGISTRY WITHHOLDS —
+			// a suspended or departed person's — so a screen's roster
+			// and colleague lookup leave out exactly the people an
+			// inbound message would not be attributed to.
+			WithheldContacts: e.WithheldContacts,
+			Coord:            e.Backends().Coord,
+			Plane:            e.Backends().Fleet,
+			Runs:             sqlledger.New(e.Backends().Store.SQL()),
+			// A SEAT'S MEMORY AND ITS CONVERSATION LEDGER, answered by
+			// the node HOLDING the seat. The ENGINE's reader, because
+			// the answerer it registered on every node is the other
+			// half of the same protocol, and a node serving no API may
+			// be the one holding the seat.
+			Memory: memoryReads(e),
 			// The fleet's agent-to-agent authorization record. The
 			// FLEET's, not this node's: a channel is opened by whichever
 			// node owns the requester's seat, so a per-node read would
@@ -1861,11 +1911,14 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 				}
 				return states
 			},
-			// The DURABLE record of detached coding runs. Read rather
-			// than projected: a run parked on a person's question can
-			// wait days, and the live projection sweeps long before
-			// that — so the states that most need somebody were the
-			// ones least likely to be on screen.
+			// Which surfaces a pass converges, so the roll-up can tell a
+			// surface waiting for its first report from one that will
+			// never get one.
+			Converges: e.Converges,
+			// The DURABLE record of detached coding runs, whole: the
+			// board needs the row's own facts (the branch, the pause
+			// TTL, the bridge's call log) that the live panel, which
+			// is reconciled against this same record, does not carry.
 			//
 			// The FLEET's record, so the screen shows every node's
 			// runs rather than this one's. A run is recovered by
@@ -1873,6 +1926,11 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 			// per-node read drew a dashboard that disagreed with
 			// itself depending on which node answered.
 			Sandbox: sandbox.NewCoordStore(e.Backends().Fleet),
+			// A RUNNING RUN'S LIVE OUTPUT, answered by the node that
+			// owns the run. The ENGINE's reader, because the answerer
+			// it registered on every node is the other half of the same
+			// protocol, and a node serving no API may be the owner.
+			SandboxTail: sandboxTails(e),
 			// THIS NODE'S COPY of the company's own tracker and
 			// knowledge base — the same copy a seat's tools read, so an
 			// operator and an agent looking at one item see one item —
@@ -1887,17 +1945,18 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 			// no_active_revision`, and one about a half the company
 			// keeps elsewhere (Jira, Confluence) is the question this
 			// node does not have. See [api.NativeSources].
-			Work:       workSource,
-			Pages:      pageSource,
+			Work:  workSource,
+			Pages: pageSource,
+			// WHO LINKS TO A PAGE, from this node's lexical index, which
+			// derives the links from the bodies it already reads —
+			// resolved per question for the same reason, since the
+			// index is the native half's.
+			Backlinks: backlinkSource,
+			// RANKED SEARCH, gated on its own index rather than on
+			// the tracker: the rows are the fleet's and the lexical
+			// index is this node's own, so a node still building one
+			// answers every board question and cannot rank a word.
 			WorkSearch: searchSource,
-			// The seat's own thread ledger, and its counterparty
-			// profiles. Both are per-node stores, both have been
-			// written since their subsystems landed, and neither
-			// reached a screen: the conversations panel drew an
-			// empty list for every seat and the memory answer
-			// carried a `counterparties` key that was always `[]`.
-			Conversations:  ledgerstore.NewConversations(e.Backends().Store),
-			Counterparties: learning.NewCounterparties(e.Backends().Store),
 			// WHAT THIS NODE CAN SAY ABOUT THE LOG'S OWN HISTORY —
 			// how far each domain may be trimmed, what is stopping
 			// it, and what this node costs to replace. Assembled per
@@ -1905,14 +1964,20 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 			// under the answer and the other half is this node's own
 			// loops.
 			Retention: retentionSource(ctx, e),
-			NodeID:    nodeID,
+			// EVERY MODEL'S KEY BAG: the provenance this node's epoch
+			// resolved and its pools' state, read per call because an
+			// apply replaces every pool — beside the fleet's cooldown
+			// ledger, so a key a peer benched reads cooling here before
+			// this node's refresher has pulled it.
+			CredentialPools: e.CredentialPools,
+			Cooldowns:       e.Backends().Fleet,
+			// WHAT THE FLEET HAS BACKED UP: each owner's newest
+			// announced point, marked by the policy the trim takes —
+			// Tier A, fixed for the life of this process.
+			Backups:     e.Backends().Fleet,
+			BackupFloor: boot.Stream.TrackerRetention.Floor(),
+			NodeID:      nodeID,
 		},
-		// The WRITE half of the counter, for POST /budgets/reset. On the
-		// default topology the coordination store is this engine's own
-		// embedded broker, so a node that is running is the only thing
-		// that can reach it — which is why the reset is a route and not
-		// only a CLI subcommand.
-		Budgets: e.Backends().Fleet,
 		// The fleet's record of what the log may delete, for the one
 		// retention gesture the engine cannot make on its own: an
 		// operator's assertion that a copy has left the host.
@@ -1931,7 +1996,11 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 		// Both estates a node holds, reachable only from inside it: the
 		// store is locked to this process and the broker binds no
 		// socket. See internal/backup.
-		Backup:  backups,
+		Backup: backups,
+		// THE RUNTIME AUDIT goes onto this node's own queue, whose
+		// publish listener writes the event store here — the same
+		// publisher the operator surface audits through.
+		Audit:   e.Backends().Queue,
 		Config:  configSurface,
 		Secrets: secretSurface,
 		Setup:   setupSurface,
@@ -1991,10 +2060,12 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 	}
 	// HOW A PERSON BECOMES A PRINCIPAL, the other end of the cookie it
 	// mints, the tokens /iam/credentials mints, the company's identity
-	// directory and the human write surface — each absent on a node that
-	// serves none, and handed over by the one method that keeps an absent
-	// surface absent rather than mounting its routes over a nil service.
-	// See [api.HumanSurfaces.Mount].
+	// directory, the human write surface and the ONE operator surface it
+	// dispatches through (both of the operator's transports, and the
+	// viewer's `acts`) — each absent on a node that serves none, and handed
+	// over by the one method that keeps an absent surface absent rather
+	// than mounting its routes over a nil service. See
+	// [api.HumanSurfaces.Mount].
 	humans.Mount(&opts)
 	app, err := api.New(opts) //nolint:contextcheck // see the paragraph above the options
 	if err != nil {
@@ -2039,24 +2110,53 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 	// that arrives both ways once. Before the bind, so the first socket to
 	// open sees the seeded snapshot rather than an empty one it will never
 	// be sent a correction for.
+	//
+	// THE FLEET'S HISTORY, read from every live node's store through the
+	// engine's history reader: each node's store holds what that node
+	// published, so a seed read from this one alone showed a restarted node
+	// only its own share of the company.
 	seedCtx, cancelSeed := context.WithTimeout(ctx, projectionSeedBudget)
-	err = observe.Seed(seedCtx, e.Backends().Store.Events(), app.Stream().State())
-	cancelSeed()
+	_, composed := companyConfig(e)
+	err = observe.Seed(seedCtx, e.History(), composed, app.Stream().State())
 	if err != nil {
 		// NOT FATAL, and said out loud rather than swallowed: what a
-		// failed seed costs is a feed and a spend window that start now,
-		// which is invisible on the screen itself.
+		// failed seed costs is a feed, a spend window and a seat's last
+		// turn that start now, which is invisible on the screen itself.
 		log.WarnContext(ctx, "live_projection_not_seeded", "error", err,
-			"hint", "the activity feed and the spend rollup start at this "+
-				"process's boot; older history is still answered by the "+
-				"events and tokens queries, which read the store directly")
+			"hint", "the activity feed, the spend rollup and each seat's last "+
+				"turn start at this process's boot; older history is still "+
+				"answered by the events, turns and tokens queries")
 	}
+	// AND WHICH SEATS A PERSON PAUSED, from the record itself, for the
+	// same reason: a pause taken last week is in no event this process
+	// will hear, and a seat drawn as working while it is paused is the
+	// one state a person pausing it must not be shown.
+	if err = seedPauses(seedCtx, e, app.Stream().State()); err != nil {
+		log.WarnContext(ctx, "seat_pauses_not_seeded", "error", err,
+			"hint", "a seat paused before this process started shows as paused "+
+				"from its next pause or resume; the pause itself is in force")
+	}
+	// AND THE RUNNING CODING RUNS, from the durable record every node
+	// opens, before the bind for the seed's reason: a run parked on a
+	// question for days is exactly the one the events of this process's
+	// lifetime will never mention. Then every interval, which is what
+	// corrects a panel whose completion event never arrived.
+	runs := observe.NewSandboxReconciler(sandbox.NewCoordStore(e.Backends().Fleet), app.Stream())
+	if err = runs.Reconcile(seedCtx); err != nil {
+		log.WarnContext(ctx, "sandbox_panel_not_seeded", "error", err,
+			"hint", "the running-runs panel starts from what this process "+
+				"hears; the durable run record is read again every "+
+				livestate.ReconcileInterval.String())
+	}
+	cancelSeed()
+	runs.Start(ctx)
 
 	server, addr, err := listenAPI(ctx, boot, app, log)
 	if err != nil {
 		// THE PROJECTOR FIRST, in the order httpSurface.stop takes: it is
 		// already running, on a broadcast subscription to the engine's
 		// queue, and nothing else holds it once this returns.
+		runs.Stop()
 		projector.Stop(context.WithoutCancel(ctx))
 		app.Stop()
 		return nil, err
@@ -2105,7 +2205,7 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 	e.SetOnCompanyPublished(func(context.Context) { app.Stream().CompanyPublished() })
 
 	return &httpSurface{app: app, server: server, projector: projector,
-		auth: humans.SignIn}, nil
+		auth: humans.SignIn, runs: runs}, nil
 }
 
 // serveBridgeOnly is serveAPI for a node whose roles leave out ingress: it
@@ -2184,16 +2284,21 @@ func listenAPI(ctx context.Context, boot *config.Bootstrap, handler http.Handler
 // against a listener — costs one slot for ten seconds rather than for ever.
 const apiReadHeaderTimeout = 10 * time.Second
 
-// projectionSeedBudget bounds the store read that seeds the live projection.
+// projectionSeedBudget bounds the fleet reads that seed the live projection and
+// the first read of the durable run record.
 //
-// The read is two indexed range scans of this node's own file, each stopping at
-// the projection's own bound: the newest 400 event rows without their payloads,
-// and the newest 8 000 phase records of one day from promoted columns. Both are
-// milliseconds on a healthy node, so five seconds is three orders of magnitude
-// of headroom and is a ceiling on the one case that matters: a store that will
-// not answer must not hold the listener shut, since nothing else can accept a
-// webhook while the bind is waiting. A seed that times out costs history on a
-// screen, never a delivery.
+// The reads run side by side, so the budget is the slowest of them rather than
+// their sum. On a healthy fleet each is milliseconds: indexed range scans of
+// every node's own file, stopping at the projection's own bounds (the newest
+// 400 event rows without their payloads, the newest 8 000 phase records of one
+// day, three turns a seat), plus one listing of the run record. What sizes the
+// budget is a peer that does NOT answer, which every scatter waits
+// [eventfan.FleetReadBudget] for — and a seat's turn read is two scatters, so
+// five seconds is those two and a second of headroom. It stays a ceiling on
+// the one case that matters: a fleet that will not answer must not hold the
+// listener shut, since nothing else can accept a webhook while the bind is
+// waiting. A seed that times out costs history on a screen, never a delivery,
+// and the warning it logs says which reads it cost.
 const projectionSeedBudget = 5 * time.Second
 
 // apiIdleTimeout bounds how long a kept-alive connection may sit between
@@ -2679,4 +2784,24 @@ func retentionSource(ctx context.Context, e *engine.Engine) func(context.Context
 		report, _ := e.RetentionReport(ctx)
 		return report
 	}
+}
+
+// memoryReads is the engine's memory reader as the read surface's seam, or nil
+// when the engine has none — a typed nil in the interface would register
+// `agent_memory` and `conversations` over a reader that cannot answer.
+func memoryReads(e *engine.Engine) queries.SeatMemory {
+	if r := e.MemoryReads(); r != nil {
+		return r
+	}
+	return nil
+}
+
+// sandboxTails is this node's run-output reader, as the read surface wants it
+// — converted for [memoryReads]'s reason: a nil *TailReader in the interface
+// would register a question whose every answer panics.
+func sandboxTails(e *engine.Engine) queries.SandboxTails {
+	if r := e.SandboxTails(); r != nil {
+		return r
+	}
+	return nil
 }

@@ -11,6 +11,55 @@
 // comes from the registry, so a per-seat registration would put N copies of
 // every builtin in it — and the fact that varies per call is the CALLER, not
 // the tool.
+//
+// # How a write is made once
+//
+// Every write these tools make is sent again sometimes — a turn redelivered
+// after a crash, a call repeated after an `unknown`, a person pressing retry —
+// and the state log collapses a repetition only when it arrives under the SAME
+// operation id. So every id a write derives — the operation's, and a created
+// task's, comment's, view's, checklist item's or page's own — comes from ONE
+// identity per call, chosen by one rule:
+//
+//   - IN A TURN, the turn: its work key (or its run, for a turn with no
+//     ledgerable trigger), the instant that unit of work began, a digest of
+//     the call's own arguments and how many different calls to the same tool
+//     the run made first ([opIDFor], [Actor.OperationSince],
+//     turnctx.CallLog). A re-run makes the same calls and derives the same
+//     ids; a different call, or the same one after a different one, is a new
+//     operation.
+//   - OUTSIDE A TURN, the request's or the call's own operation. A transport
+//     that names its requests — the act transport and the HTTP write
+//     surface — carries the `Idempotency-Key` a retry repeats, held to the
+//     operation grammar and scoped to the principal by internal/api/opkey,
+//     as [Actor.WorkKey] with its instant as [Actor.WorkSince] (and as
+//     [pages.Actor.OpKey] for a page write), so a request is a unit of work
+//     exactly as a turn's trigger is and every id is derived from it as a
+//     turn's are. The operator's assistant over MCP names the call's
+//     OPERATION ([Actor.Operation]) instead: it brings back the `op_id` its
+//     call was answered with, or is minted one; that operation carries the
+//     instant it was minted and NAMES THE CALL — the tool and a digest of its
+//     arguments — so it is accepted only with that call
+//     ([WorkDeps.bindOperation]): the same call made again is the same
+//     operation, and anything else under it is refused before a write.
+//   - WITH NEITHER — a tool that takes no `op_id`, called over MCP — each
+//     write is fresh, since nothing will repeat it. The page tools are such
+//     tools, and so are write_project and write_work_catalogue, whose writes
+//     restate what they declare, so a repeat under a new operation already
+//     changes nothing a first attempt landed.
+//
+// There is deliberately no second key: a request key beside the operation, a
+// seed beside the turn, would be a second answer to "is this the same write",
+// free to disagree with the first. And a caller is told only ITS OWN way to
+// repeat: an answer carries an `op_id` only where its caller holds an
+// [Actor.Operation] ([withOperation], [sameCall]).
+//
+// # And what it answers when nobody knows
+//
+// A write whose outcome is `unknown` is answered as a FAILED result naming the
+// operation to make again ([unknownWrite], [failedUnknown]) — never a receipt
+// carrying `outcome: unknown` beside a key or a version, which a model reads as
+// the write done and a person's screen would draw.
 package builtin
 
 import (
@@ -85,7 +134,8 @@ func (t *lookupColleague) CallForTurn(_ context.Context, turn *turnctx.Turn, arg
 		return failed("lookup_colleague needs a `query`: a handle, a role name, or an id on any connected platform."), nil
 	}
 	if turn == nil || turn.Org == nil {
-		return failed("No organization is in scope, so there is nobody to look up."), nil
+		return refused(tools.RefusalUnavailable,
+			"No organization is in scope, so there is nobody to look up."), nil
 	}
 
 	seats := Corpus(turn.Org, turn.WithholdsContacts)
@@ -95,7 +145,10 @@ func (t *lookupColleague) CallForTurn(_ context.Context, turn *turnctx.Turn, arg
 	switch {
 	case len(found) == 0:
 		log.Debug("lookup_colleague_no_match", "query", safe, "corpus", len(seats))
-		return failed(fmt.Sprintf(
+		// NOT FOUND, because the colleague IS what this call is about —
+		// unlike a2a_ask's `target`, where an unmatched spelling is an
+		// argument to correct before the ask can be sent.
+		return refused(tools.RefusalNotFound, fmt.Sprintf(
 			"No colleague matches %q. Known handles: %s.",
 			safe, strings.Join(allHandles(seats), ", "))), nil
 

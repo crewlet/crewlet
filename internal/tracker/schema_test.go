@@ -185,7 +185,7 @@ func TestTrackerTasksIndexCount(t *testing.T) {
 	}
 	// Twenty: eleven plain and nine partial, the eighth the abandoned
 	// move's (replicated migration 0018) and the ninth the move stragglers'
-	// (0038) — each partial on a flag a healthy company holds on no row, so
+	// (0046) — each partial on a flag a healthy company holds on no row, so
 	// neither is a cost any ordinary commit pays. EVERY ONE IS REACHED BY A PLAN,
 	// which is what TestEveryIndexServesARegisteredQuery establishes and
 	// this count makes visible — an index added without a reader moves this
@@ -234,8 +234,8 @@ func TestEveryTrackerTableIsAccountedFor(t *testing.T) {
 
 // THE SPEND COLUMNS ARE ONE LIST, AND THE DDL IS DRIVEN FROM IT.
 //
-// Eight column names written out in the struct, the DDL and the applier's
-// statement is three chances to add the ninth to two of them — and the failure
+// Ten column names written out in the struct, the DDL and the applier's
+// statement is three chances to add the eleventh to two of them — and the failure
 // is silent: a counter nothing increments reads zero for ever, which looks
 // exactly like a task nobody has worked on.
 func TestTheSpendColumnsMatchTheSchema(t *testing.T) {

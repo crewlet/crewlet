@@ -10,19 +10,25 @@ import (
 	"github.com/crewlet/crewlet/internal/api/auth"
 	"github.com/crewlet/crewlet/internal/api/authapi"
 	"github.com/crewlet/crewlet/internal/api/iamapi"
+	"github.com/crewlet/crewlet/internal/api/operator"
 	"github.com/crewlet/crewlet/internal/api/workapi"
+	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/engine"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/iam/credential"
 	"github.com/crewlet/crewlet/internal/iam/session"
 	"github.com/crewlet/crewlet/internal/iamdomain"
+	"github.com/crewlet/crewlet/internal/org"
+	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/tracker"
 )
 
 // THE SURFACES A PERSON REACHES, built over the engine running beside them:
-// the way in, the identity directory, the human write surface, and the two
-// credential arms the guard resolves a browser's cookie and a machine token
+// the way in, the identity directory, the operator surface (the dashboard's
+// act route and an operator's own assistant), the human write surface, and the
+// two credential arms the guard resolves a browser's cookie and a machine token
 // through.
 //
 // # Here, beside the options they fill, and not in the command that serves them
@@ -66,6 +72,13 @@ type HumanSurfaces struct {
 	// meet that long after this surface was built.
 	Directory guardedMounter
 	Work      guardedMounter
+
+	// Operator is the operator surface — `/operator/act`, the dashboard's
+	// write transport, and `/operator/mcp`, an operator's own assistant —
+	// and the ONE DISPATCH Work's tool-backed routes call through. One
+	// server per node, because its answer cache is per node and a second
+	// one beside it would be a second catalogue for one surface.
+	Operator *operator.Server
 }
 
 // NewHumanSurfaces builds a node's human surfaces over its engine and the Tier
@@ -97,14 +110,23 @@ func NewHumanSurfaces(boot *config.Bootstrap, e *engine.Engine) (HumanSurfaces, 
 	if err != nil {
 		return HumanSurfaces{}, err
 	}
+	// AND THE OPERATOR SURFACE, whose dispatch the write surface's tools
+	// are reached through — both deciding on ONE chart value, so a route
+	// and the tool behind it cannot be handed two charts and answer one
+	// question two ways.
+	authority := engine.ChartAuthorityOf(e)
+	operators, err := operatorSurface(e, authority)
+	if err != nil {
+		return HumanSurfaces{}, err
+	}
 	// AND THE WRITE SURFACE, over the halves each request finds.
-	work, err := workSurface(e)
+	work, err := workSurface(e, operators, authority)
 	if err != nil {
 		return HumanSurfaces{}, err
 	}
 	return HumanSurfaces{
 		SignIn: signIn, Sessions: sessions, Tokens: tokens,
-		Directory: directory, Work: work,
+		Directory: directory, Work: work, Operator: operators,
 	}, nil
 }
 
@@ -123,6 +145,7 @@ func (h HumanSurfaces) Mount(o *Options) {
 	}
 	o.Sessions, o.Tokens = h.Sessions, h.Tokens
 	o.IAM, o.Work = h.Directory, h.Work
+	o.Operator = h.Operator
 }
 
 // signInSurface builds /auth and the session arm beside it.
@@ -250,6 +273,12 @@ func directorySurface(boot *config.Bootstrap, e *engine.Engine) (guardedMounter,
 		// nothing else would say so.
 		Ceiling:  boot.API.Auth.MaxGrants,
 		Bindings: danglingBindings(e),
+		// THIS NODE'S Tier A labels — never their values — for
+		// `GET /iam/node-tokens`, read off a guard built from the same Tier
+		// A the request guard is: which bearer authenticates is a pure
+		// function of that document, and this surface is built before the
+		// API's own guard exists.
+		TokenIDs: auth.New(boot).TokenIDs,
 		// What an administrator did — a token minted or revoked, a
 		// session ended, a person removed — on the node's audit feed.
 		Audit: e.AuthEvents(),
@@ -291,23 +320,91 @@ var errNoIdentityEstate = errors.New("api: the engine runs no identity estate, "
 	"so there is nobody to sign in or enrol — an engine built by engine.New " +
 	"always does, from boot, whether or not it has a company")
 
+// operatorSurface builds the operator surface over this engine: ONE server per
+// node, whose catalogue is built for every call from the halves the node
+// serves at that moment ([NativeOperatorHalves]).
+//
+// THE SAME DEPS A SEAT'S TOOLS GET, with one field different: the actor, which
+// is the request's principal ([operator] sets it per call). That is what makes
+// this one implementation of every tool rather than two — see
+// [builtin.WorkDeps.Actor].
+//
+// The seat controls — a parked coding run answered by its turn, a seat paused
+// or resumed, a note to a running turn — are served on every node whatever the
+// company's backends: each record is the fleet's, and each is carried out by
+// the node holding the seat, which reads it off that seat's inbox or its own
+// watched copy. A person's question answered from the company's knowledge runs
+// on the auxiliary model of their own seat and is charged to the company's
+// windows, with the answers cached on this node — once, here, since a cache a
+// per-call catalogue built would remember nothing.
+func operatorSurface(e *engine.Engine, authority authz.Chart) (*operator.Server, error) {
+	chart := func() *org.Organization {
+		c := e.Company()
+		if c == nil {
+			return nil
+		}
+		return c.Org
+	}
+	server, err := operator.New(operator.Options{
+		Halves: NativeOperatorHalves(e),
+		Org:    chart,
+		// THE AUTHORITY DECISION, which is the SAME one every seat's
+		// registry is built with — one table, one function, every surface.
+		// It reads the chart per call, because an apply replaces it.
+		Authorize: builtin.Decide(authority),
+		// WHAT EACH NODE CAN CARRY OUT, read off the same lease table the
+		// seat host heartbeats into, so a verb the node holding a seat has
+		// not been upgraded to carry is refused rather than accepted and
+		// never done.
+		Fleet: coord.FeatureReader{Leases: e.Backends().Coord},
+		Runs: builtin.RunDeps{Desk: sandbox.AnswerDesk{
+			Pending: sandbox.NewCoordStore(e.Backends().Fleet),
+			Queue:   e.Backends().Queue,
+		}},
+		Pauses: builtin.SeatPauseDeps{
+			Pauses: e.Backends().Fleet, Announce: e.Backends().Queue, Org: chart,
+		},
+		Steer: builtin.SteerDeps{Asker: e.Backends().Queue},
+		Answer: builtin.AnswerDeps{
+			Models: engine.AnswerModels(e), Budget: engine.AnswerBudget(e),
+			Corpus: e.KnowledgeCorpus,
+			Cache:  builtin.NewAnswerCache(builtin.AnswerCacheEntries),
+		},
+		// EVERY CALL THAT MAY WRITE is audited onto this node's own queue,
+		// so the event store here holds who did what through any of the
+		// three transports.
+		Audit: e.Backends().Queue,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("api: the operator surface: %w", err)
+	}
+	return server, nil
+}
+
 // workSurface builds the human write surface over the halves each request
 // finds.
 //
-// FROM THE SAME DEPS the operator's assistant is served from — see
-// [NativeToolDeps] — and deciding on the same chart, so a route and the tool
-// behind it answer one question one way. What it adds is the two writers the
-// tools never reach: the tracker's, bound to the caller, for a rank move, a
-// comment edit and the purge, and the knowledge base's store for its rename
-// and its three destructive verbs.
+// ITS TOOLS THROUGH THE OPERATOR SURFACE'S DISPATCH — the one the act route and
+// an operator's assistant call — and its own decisions on authority, the chart
+// value that dispatch decides on, so a route and the tool behind it answer one
+// question one way. What it adds is
+// the two writers the tools never reach: the tracker's, bound to the caller,
+// for a comment edit and the purge, and the knowledge base's store for its
+// rename and its three destructive verbs.
 //
 // PER REQUEST, never captured here: the halves come up with the node's first
 // company, which a node that booted with none meets at an apply after this
 // surface is serving. See [workapi.Options.Halves].
-func workSurface(e *engine.Engine) (guardedMounter, error) {
+func workSurface(e *engine.Engine, operators *operator.Server,
+	authority authz.Chart) (guardedMounter, error) {
+
 	surface, err := workapi.New(workapi.Options{
-		Halves: func() (workapi.Halves, bool) { return nativeHalves(e) },
-		Chart:  engine.ChartAuthorityOf(e),
+		Halves:   func() (workapi.Halves, bool) { return nativeHalves(e) },
+		Chart:    authority,
+		Operator: operators,
+		// A VERB WITH NO TOOL is recorded onto the same queue the
+		// dispatch records a tool's call onto.
+		Audit: e.Backends().Queue,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("api: the work surface: %w", err)
@@ -355,20 +452,21 @@ func personWriter(w *tracker.Writer, actor builtin.Actor) *tracker.Writer {
 }
 
 // NativeToolDeps are the deps the builtin tools are built from for a surface
-// whose caller is a PERSON rather than a seat: the operator's assistant over
-// MCP, and the HTTP write surface.
+// whose caller is a PERSON rather than a seat: the operator surface's
+// catalogue, which the dashboard's act route, an operator's assistant over MCP
+// and the human write surface's tool-backed routes all call through, and the
+// rows the write surface reads before it decides.
 //
-// ONE CONSTRUCTOR FOR BOTH, because the two serve the same tools and a field
-// wired on one and forgotten on the other is a tool that behaves differently
-// depending on where it was called from — which is the drift each of the
-// comments below records having happened once already. Actor and Authorize are
-// left for each surface to set: the first carries a per-request key on one of
-// them, and the second is decided where the surface is built.
+// ONE CONSTRUCTOR FOR ALL OF THEM, because a field wired on one and forgotten
+// on another is a tool that behaves differently depending on where it was
+// called from — which is the drift each of the comments below records having
+// happened once already. Actor and Authorize are left for the operator surface
+// to set per call: the actor is the request's principal carrying the call's
+// operation, and the decision is the chart's.
 //
-// The DEFAULTS are deliberately absent. A seat files into its unit's project
-// when it names none, because a seat HAS a unit; a person does not, so the
-// argument is required and the tool refuses naming it rather than guessing a
-// project on somebody's behalf.
+// THE CHART SEAMS ARE READ PER CALL — leads, units, mentions, the default
+// project, the clock — because these deps are built for every request and an
+// apply can move any of them between two.
 func NativeToolDeps(e *engine.Engine) (builtin.WorkDeps, builtin.PageDeps) {
 	var work builtin.WorkDeps
 	var kb builtin.PageDeps
@@ -442,6 +540,13 @@ func NativeToolDeps(e *engine.Engine) (builtin.WorkDeps, builtin.PageDeps) {
 			TrashWriter: func(actor builtin.Actor) builtin.TrashWriter {
 				return personWriter(writer, actor)
 			},
+			// AND THE BOARD DRAG. A card's place in its project's order
+			// is a person's arrangement, so no seat holds it — see
+			// internal/agent/builtin/workplace.go — and the write
+			// surface's rank route is an adapter over it.
+			Placer: func(actor builtin.Actor) builtin.WorkPlacer {
+				return personWriter(writer, actor)
+			},
 			// AND A PROJECT'S OWN SETTINGS. Unlike the five above,
 			// this one is on every surface — declaring a tag is open
 			// to every seat — and what an operator adds here is the
@@ -470,9 +575,19 @@ func NativeToolDeps(e *engine.Engine) (builtin.WorkDeps, builtin.PageDeps) {
 			// task woke nobody at all — the lead fallback is what
 			// catches exactly that task — and with no Units every
 			// project this surface listed read as belonging to no team.
-			Leads:          engine.LiveLeads(e),
-			Units:          engine.LiveUnits(e),
-			DefaultProject: func(string) string { return "" },
+			Leads: engine.LiveLeads(e),
+			Units: engine.LiveUnits(e),
+			// A PERSON'S CREATE THAT NAMES NO PROJECT lands where their
+			// seat's work does — the derivation every seat's surface and
+			// the dashboard's `viewer` use, read per call against the
+			// current chart. Keyed on the actor's handle, which is a seat
+			// only for a person the identity directory binds to one: a
+			// credential nobody is bound through has no seat, so its
+			// create names a project or is refused naming the argument,
+			// rather than a project guessed on its behalf. It was a stub
+			// answering "" for everybody, so a bound founder's create was
+			// refused while the viewer said it defaulted.
+			DefaultProject: engine.LiveDefaultProject(e),
 			// THE MENTION RESOLVER, which this surface went without: a
 			// comment's @-mention is turned into a wake by the tracker's
 			// recipients only when the writer resolved it, so an
@@ -480,7 +595,18 @@ func NativeToolDeps(e *engine.Engine) (builtin.WorkDeps, builtin.PageDeps) {
 			// watchers and never her — while the tool's own description,
 			// which their assistant reads, promised it would.
 			Mentions: engine.LiveMentions(e),
-			Await:    e.WaitCommitted,
+			// AND WHERE AN ASKER MAY PROMISE TO REPORT A DECISION —
+			// the chart's chat surfaces and unit channels, read per
+			// call. Without it a person's `decision.inform` was refused
+			// while a seat's, on the same chart, was not.
+			Channels: engine.LiveChannels(e),
+			// AND THE COMPANY'S CLOCK (ADR-0018), read per call: every
+			// `due=friday`, `due=overdue` and relative date a person
+			// wrote resolved on UTC while a seat's own resolved on the
+			// company's zone, and an apply can move the clock between
+			// two requests.
+			Zone:  e.Zone,
+			Await: e.WaitCommitted,
 		}
 	}
 	if reader, writer := e.Pages(), e.PagesStore(); reader != nil && writer != nil {

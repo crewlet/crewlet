@@ -55,13 +55,27 @@ import (
 // MaxInFlightQueries bounds how many queries ONE PRINCIPAL may have running at
 // once, across every socket they hold.
 //
-// FOUR, which is what one screen opens with — the agent page issues three —
-// so a single dashboard never queues against itself. It is the same number it
-// has always been and it now means something different: per person rather than
-// per tab, which is the unit internal/store's reader floor was already sized
-// in. A burst past it QUEUES rather than piling into the engine's connection
-// pool, because queries run on their own goroutines so a store scan cannot
-// stall the live feed.
+// FOUR, and it is the per-person share of the node's READER POOL, which the
+// engine's own reads share (a seat's tool reads, the coverage probes):
+// internal/store's reader floor is eight, sized as two full dashboards at this
+// allowance each, so this number is what that floor holds for a person — per
+// person rather than per tab, which is the unit the floor was sized in. A
+// larger cap would not run a fifth query any sooner on a small host: it would
+// park it in `database/sql`'s wait for a connection rather than here, holding
+// a goroutine and a connection's worth of queue against the engine's own reads
+// instead of against this person's.
+//
+// It is NOT sized to a screen's burst, which it used to claim ("the agent page
+// opens with three") and which stopped being true when the one sidebar landed:
+// the shell keeps five reads standing on every page — the viewer, the Inbox
+// count, My work's count, the projects and the pinned views — two asked the
+// moment a tab opens and three the moment the viewer answers. A screen's first
+// reads therefore queue behind them for the length of a tracker read, and
+// after the first paint the five poll on independent 60 s to 5 min timers and
+// rarely coincide. That queue is the design working: a burst waits HERE, per
+// person, rather than in the pool every reader on the node shares — and it
+// queues rather than piling into the pool because queries run on their own
+// goroutines, so a store scan cannot stall the live feed.
 const MaxInFlightQueries = 4
 
 // budgetKeyOf is the key a principal's in-flight budget is held under: its ID.

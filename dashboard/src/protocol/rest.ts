@@ -28,7 +28,8 @@
 
 import { retryAfterMs, unansweredRetryMs } from "./retry.ts";
 import { confirmStepUp, needSession, type StepUpWindow } from "./session.ts";
-import type { LogRefusal, QueryErrorCode, QueryRefusal } from "./types.ts";
+import type { QueryErrorCode } from "../contract/errors.ts";
+import type { LogRefusal, QueryRefusal } from "./types.ts";
 
 /**
  * What the engine said when it refused.
@@ -53,10 +54,13 @@ export class RestError extends Error {
    */
   readonly sentence: string;
   /**
-   * The `Retry-After` the answer carried, in whole seconds, or null for none.
-   * A `429` always carries one and says how long the curve makes the next
-   * attempt wait; a `503` carries one where waiting can clear the cause and
-   * none where it cannot, which is a difference a screen has to render.
+   * The `Retry-After` the answer carried, in whole seconds, or null for none —
+   * either form the RFC allows ([retryAfterSeconds]). A `429` always carries
+   * one and says how long the curve makes the next attempt wait; a `503` the
+   * engine wrote carries one where waiting can clear the cause and none where
+   * it cannot, which is a difference a screen has to render. A refusal
+   * something in front of the engine wrote keeps its header here too, though
+   * [retryHint] never reads it as the engine's.
    */
   readonly retryAfter: number | null;
   /** Everything else the body carried, for a caller that needs a field. */
@@ -236,7 +240,10 @@ export interface RetryContext {
  *   otherwise: the live socket can be up the whole time — a request past its
  *   deadline on a slow engine, one dropped on the way — so its coming back
  *   never happens, and a screen with no poll of its own held the banner until
- *   somebody reloaded.
+ *   somebody reloaded. A `Retry-After` something in front of the engine wrote
+ *   — a proxy's `503` page — is not waited out: nobody at the engine decided
+ *   it, and the backoff is already this tab's whole answer to a node it
+ *   cannot hear.
  * - Every other failure carries no hint, since nobody at the engine decided
  *   one, and waits the screen's own `cadence`.
  */
@@ -314,13 +321,31 @@ export function restFailure(err: unknown): RestFailure {
 }
 
 /**
- * The seconds a `Retry-After` header names, or null for none. The engine
- * writes whole seconds and never an HTTP date; anything else is not its
- * answer and is read as none.
+ * A `Retry-After` header value as whole seconds from `now`, or null for a
+ * header that is absent or says nothing usable.
+ *
+ * BOTH FORMS RFC 9110 ALLOWS. The engine writes delay-seconds, but a proxy in
+ * front of it may answer for it with an HTTP-date, and reading that as "no
+ * hint" would drop the one instruction the refusal carried. A date already
+ * past is a wait of zero, never a negative one. Which of the two WROTE it —
+ * and so whether a zero means "waiting will not change it" — is not this
+ * function's question: that is [RestError.retryHint]'s rule.
  */
+export function retryAfterSeconds(header: string | null | undefined, now: number): number | null {
+  const value = header?.trim() ?? "";
+  if (value === "") return null;
+  if (/^\d+$/.test(value)) return Number(value);
+  // AN HTTP-DATE NAMES ITS DAY OR MONTH IN LETTERS in every form the RFC
+  // admits, and `Date.parse` alone would read "-4" as a year.
+  if (!/[A-Za-z]/.test(value)) return null;
+  const at = Date.parse(value);
+  if (Number.isNaN(at)) return null;
+  return Math.max(0, Math.ceil((at - now) / 1000));
+}
+
+/** The seconds a response's `Retry-After` names, or null for none. */
 function retryAfterOf(response: Response): number | null {
-  const raw = response.headers.get("Retry-After")?.trim() ?? "";
-  return /^\d+$/.test(raw) ? Number(raw) : null;
+  return retryAfterSeconds(response.headers.get("Retry-After"), Date.now());
 }
 
 /**
@@ -372,9 +397,10 @@ function offline(err: unknown): RestError {
  *
  * It is the DEFAULT, not the only deadline: a call whose path is genuinely
  * longer passes [RequestOptions.timeoutMs] rather than removing the deadline.
- * The node gate is the one that does — the engine allows a gesture a minute
- * from its first record to its last answer, so thirty seconds gave up on a
- * gesture the node went on to finish, holding nothing to finish it with.
+ * Two do. A backup copies the whole store before it answers. And the node
+ * gate is allowed two minutes from its first record to its last answer
+ * (`contract/gate.ts`), so thirty seconds gave up on a gesture the node went
+ * on to finish, holding nothing to finish it with.
  */
 export const REQUEST_TIMEOUT_MS = 30_000;
 
@@ -406,9 +432,12 @@ export interface RequestOptions {
    */
   signal?: AbortSignal;
   /**
-   * How long this request may take before it is abandoned, in milliseconds.
-   * Defaults to [REQUEST_TIMEOUT_MS]; a caller whose path is genuinely longer
-   * says so here, and the refusal it gets on expiry names ITS deadline.
+   * How long this request may take before it is abandoned, in milliseconds —
+   * [REQUEST_TIMEOUT_MS] unless the caller's path is genuinely longer and
+   * says so here, rather than removing the deadline; the refusal it gets on
+   * expiry names ITS deadline, not the default's. Two paths are: `POST
+   * /backup`, whose copy is synchronous and bounded by the size of the store
+   * rather than by anything a screen decides, and the node gate.
    */
   timeoutMs?: number;
   /**
@@ -435,6 +464,18 @@ export interface RestResponse {
    * the tag back exactly as it was given.
    */
   etag: string | null;
+}
+
+/**
+ * A deadline as a person would say it: in minutes where it is a whole number
+ * of them past the first, and in seconds otherwise — EXACT either way, because
+ * the sentence names the deadline that ran out, and the node gate's two
+ * minutes and fifteen seconds rounded to "2 minutes" would be a deadline
+ * nobody set.
+ */
+function waitWords(ms: number): string {
+  const seconds = Math.round(ms / 1000);
+  return seconds >= 120 && seconds % 60 === 0 ? `${seconds / 60} minutes` : `${seconds} seconds`;
 }
 
 /** Whether a rejection is the caller's own abort rather than a failure. */
@@ -609,7 +650,7 @@ async function attempt(
     return timedOut
       ? new RestError(0, {
           error: "unreachable",
-          detail: `the engine did not answer within ${timeoutMs / 1000} seconds`,
+          detail: `the engine did not answer within ${waitWords(timeoutMs)}`,
         })
       : offline(err);
   };
@@ -654,13 +695,21 @@ async function attempt(
       // all the detail there is; on a success it is a broken answer either
       // way, so both become an error rather than a silent null — and one
       // that says it is not the engine's answer ([RestError.unanswered]),
-      // since nothing in it says what the engine did.
-      throw new RestError(response.ok ? 502 : response.status, {
-        error: "unreadable_body",
-        detail: response.ok
-          ? "the answer was cut short, or is not the engine's JSON"
-          : `a ${response.status} came back that is not the engine's JSON — something in front of it answered`,
-      });
+      // since nothing in it says what the engine did. A refusal's
+      // `Retry-After` still travels on the error, as what was said — a
+      // proxy answering a 503 page for an engine that is restarting says
+      // when to come back in the header, whatever its body is — though
+      // [RestError.retryHint] never reads it as the engine's.
+      throw new RestError(
+        response.ok ? 502 : response.status,
+        {
+          error: "unreadable_body",
+          detail: response.ok
+            ? "the answer was cut short, or is not the engine's JSON"
+            : `a ${response.status} came back that is not the engine's JSON — something in front of it answered`,
+        },
+        response.ok ? null : retryAfterOf(response),
+      );
     }
   }
 

@@ -435,13 +435,14 @@ func TestTheSummaryCarriesEveryThreadFact(t *testing.T) {
 
 	e := &Engine{backends: &Backends{Queue: q}}
 	seat := &org.Role{Name: "Tech Lead", DeclaredHandle: "lead"}
+	began := time.Date(2026, 9, 24, 9, 30, 0, 0, time.UTC)
 	e.publishPrefetchSummary(t.Context(), seat, "agent-1", "run-3", "work-3",
 		prefetch.Request{}, prefetch.Blocks{
 			ThreadContext:             "- **Ana Ruiz (ana)**: staging redirects in a loop",
 			ThreadContextPosts:        12,
 			ThreadContextRead:         true,
 			ThreadContextStoppedShort: true,
-		})
+		}, began, 1850*time.Millisecond)
 
 	select {
 	case summary := <-got:
@@ -456,6 +457,64 @@ func TestTheSummaryCarriesEveryThreadFact(t *testing.T) {
 		}
 		if !summary.ThreadContextStoppedShort {
 			t.Error("a read that stopped short arrived as a complete one")
+		}
+		if !summary.StartedAt.Equal(began) || summary.DurationMS != 1850 {
+			t.Errorf("the assembly's timing arrived as %v / %dms, want %v / 1850ms",
+				summary.StartedAt, summary.DurationMS, began)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("no prefetch summary was published")
+	}
+}
+
+// THE CONTEXT ASSEMBLY IS TIMED WHERE IT RUNS.
+//
+// It is the stretch between a turn announcing itself and its first phase
+// opening — a diary, a thread, a knowledge base, an auxiliary model for two of
+// them — and without its own measurement a turn's timeline had a gap there that
+// nothing on the record could explain.
+func TestPrefetchSummaryIsTimed(t *testing.T) {
+	t.Parallel()
+	q := memory.New()
+	if err := q.Start(t.Context()); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	t.Cleanup(func() { _ = q.Stop(context.Background()) })
+
+	got := make(chan types.PrefetchSummary, 1)
+	if err := q.Subscribe(t.Context(), topics.Event("prefetch_summary"), "probe",
+		func(_ context.Context, ev *events.Event) queue.Result {
+			if p, ok := events.DataAs[*types.PrefetchSummary](ev); ok && p != nil {
+				got <- *p
+			}
+			return queue.Ack()
+		}); err != nil {
+		t.Fatalf("Subscribe: %v", err)
+	}
+
+	e := &Engine{backends: &Backends{Queue: q}}
+	company := &Company{
+		Config: &config.Company{},
+		Org: &org.Organization{Name: "Nimbus", Roles: []*org.Role{
+			{Name: "Tech Lead", DeclaredHandle: "lead"}}},
+	}
+	before := time.Now().UTC()
+	e.prefetchFor(t.Context(), company, Request{
+		Handle: "lead", RunID: "run-4", WorkKey: "work-4",
+		Events: []*events.Event{notification("gitlab", "dev", nil, true)},
+	}, "a pull request got a comment")
+	after := time.Now().UTC()
+
+	select {
+	case summary := <-got:
+		if summary.StartedAt.IsZero() || summary.StartedAt.Location() != time.UTC ||
+			summary.StartedAt.Before(before) || summary.StartedAt.After(after) {
+			t.Errorf("started_at = %v, want a UTC instant inside the call [%v, %v]",
+				summary.StartedAt, before, after)
+		}
+		if limit := int(after.Sub(before) / time.Millisecond); summary.DurationMS < 0 || summary.DurationMS > limit {
+			t.Errorf("duration_ms = %d, want a measurement inside the call's own %dms",
+				summary.DurationMS, limit)
 		}
 	case <-time.After(5 * time.Second):
 		t.Fatal("no prefetch summary was published")

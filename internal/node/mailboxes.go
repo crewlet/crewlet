@@ -201,15 +201,18 @@ func (n *Node) EnsureMailboxes(ctx context.Context) {
 		}
 		made, err := n.cfg.Queue.EnsureSubscription(ctx, inbox, group)
 		if errors.Is(err, queue.ErrNotLive) {
-			// The queue is not up yet, which is not a fault: the boot
-			// apply runs before Start and Start does this again a moment
-			// later. Returning rather than continuing, because every
-			// remaining seat would report the same thing — one honest
-			// line beats seven identical warnings about a state that is
-			// about to resolve itself.
+			// The queue is not live, which is not a fault here: either it is
+			// not started yet — the boot apply runs before Start and Start
+			// does this again a moment later — or its broker client closed
+			// the connection for good (jetstream.ErrConnectionLost), which
+			// the node stops for on its own. Returning rather than
+			// continuing, because every remaining seat would report the
+			// same thing — one honest line beats seven identical warnings
+			// about a state the node is already acting on.
 			n.log.Debug("seat_mailboxes_deferred",
-				"detail", "the broker client is not started yet; the node's "+
-					"own start creates these")
+				"detail", "the queue is not live: not started yet, in which "+
+					"case the node's own start creates these, or stopping "+
+					"for a connection its broker client closed for good")
 			return
 		}
 		if err != nil {

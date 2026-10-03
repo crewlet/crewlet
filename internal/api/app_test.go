@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -19,6 +20,7 @@ import (
 	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/config"
 	coordmemory "github.com/crewlet/crewlet/internal/coord/memory"
+	"github.com/crewlet/crewlet/internal/eventfan"
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/iam/authevents"
@@ -66,11 +68,29 @@ func runSuite(m *testing.M) int {
 // fakeRuntime is the engine's answers, fixed.
 type fakeRuntime struct {
 	state api.RuntimeState
+	fleet api.FleetState
 	tools []api.ToolInfo
+
+	// presenceHangs makes Fleet's presence read one that never returns on
+	// its own, the way a wedged broker's key scan does: it answers only
+	// when its context ends, with the in-memory alarms and no count.
+	presenceHangs bool
+	// fleetReads counts every Fleet call, so a probe that must not scan the
+	// fleet can be shown not to.
+	fleetReads atomic.Int32
 }
 
 func (f *fakeRuntime) Snapshot(context.Context) api.RuntimeState { return f.state }
 func (f *fakeRuntime) Tools() []api.ToolInfo                     { return f.tools }
+
+func (f *fakeRuntime) Fleet(ctx context.Context) api.FleetState {
+	f.fleetReads.Add(1)
+	if f.presenceHangs {
+		<-ctx.Done()
+		return api.FleetState{Alarms: f.fleet.Alarms}
+	}
+	return f.fleet
+}
 
 // ShuttingDown answers from the same state Snapshot does, which is the
 // contract: one fact, two ways to read it.
@@ -159,18 +179,26 @@ func withRequired(t *testing.T, opts api.Options) api.Options {
 		// record a login names states its own.
 		opts.Sources.Holders = nobodyHolds{}
 	}
+	if opts.EventLog == nil {
+		opts.EventLog = sharedEvents
+	}
 	if opts.Sources.Events == nil {
-		opts.Sources.Events = sharedEvents
+		opts.Sources.Events = eventfan.Solo(config.DefaultNodeID, opts.EventLog)
 	}
 	if opts.Sources.NodeID == "" {
 		opts.Sources.NodeID = config.DefaultNodeID
 	}
-	if opts.Sources.Chart == nil {
-		// NO CHART, which every lead relation reads as UNKNOWN: a case
-		// about who leads whom names the chart it means.
-		opts.Sources.Chart = authz.NoChart{}
+	if opts.Sources.WithheldContacts == nil {
+		// A DIRECTORY THAT WITHHOLDS NOBODY'S CONTACTS: a case about a
+		// suspended person's chat ids states its own.
+		opts.Sources.WithheldContacts = func() func(string) bool {
+			return func(string) bool { return false }
+		}
 	}
 	fleet := coordmemory.NewFleet()
+	if opts.Sources.Coord == nil {
+		opts.Sources.Coord = coordmemory.New()
+	}
 	if opts.Inbound.Publisher == nil {
 		opts.Inbound.Publisher = queuememory.New()
 	}
@@ -195,9 +223,6 @@ func withRequired(t *testing.T, opts api.Options) api.Options {
 	if opts.Chart == nil {
 		opts.Chart = noRoutes{}
 	}
-	if opts.Budgets == nil {
-		opts.Budgets = fleet
-	}
 	if opts.Retention == nil {
 		opts.Retention = fleet
 	}
@@ -215,6 +240,9 @@ func withRequired(t *testing.T, opts api.Options) api.Options {
 	}
 	if opts.Inbox == nil {
 		opts.Inbox = &fakeInbox{}
+	}
+	if opts.Audit == nil {
+		opts.Audit = queuememory.New()
 	}
 	return opts
 }
@@ -249,11 +277,11 @@ func TestNewRefusesEveryMissingDependencyByName(t *testing.T) {
 		t.Fatal("an app wired to nothing was built")
 	}
 	for _, field := range []string{
-		"Runtime", "Sources.Company", "Sources.Events", "Sources.NodeID", "Sources.Chart",
-		"Sources.Holders",
+		"Runtime", "EventLog", "Sources.Company", "Sources.Events", "Sources.NodeID",
+		"Sources.Chart", "Sources.Holders", "Sources.WithheldContacts", "Sources.Coord",
 		"Inbound.Publisher", "Inbound.Claims", "Inbound.Secrets", "Inbound.AppFlow",
-		"Config", "Secrets", "Setup", "Budgets", "Retention", "Capacity", "Backup",
-		"AuthEvents", "Inbox", "Nodes",
+		"Config", "Secrets", "Setup", "Chart", "Retention", "Capacity", "Backup",
+		"AuthEvents", "Inbox", "Nodes", "Audit",
 	} {
 		if !strings.Contains(err.Error(), "Options."+field) {
 			t.Errorf("the refusal does not name Options.%s: %v", field, err)
@@ -714,6 +742,23 @@ func TestAnUnknownRouteIsNotFound(t *testing.T) {
 	// reaches the mux, which then has nothing for it.
 	if rec.Code != http.StatusNotFound {
 		t.Errorf("status = %d, want 404", rec.Code)
+	}
+}
+
+// THERE IS NO BUDGET RESET (ADR-0019). A ceiling is per calendar window and a
+// window's allowance comes back when it turns over; room before then is made by
+// raising the ceiling. Asked with a credential that could write, so a 404 is
+// the mux having nothing rather than the guard refusing a stranger.
+func TestThereIsNoBudgetResetRoute(t *testing.T) {
+	t.Parallel()
+	b := closedPosture()
+	a := newApp(t, api.Options{Bootstrap: &b})
+	req := httptest.NewRequest(http.MethodPost, "/budgets/reset", nil)
+	req.Header.Set("Authorization", "Bearer secret")
+	rec := httptest.NewRecorder()
+	a.ServeHTTP(rec, req)
+	if rec.Code != http.StatusNotFound {
+		t.Errorf("POST /budgets/reset = %d, want 404: nothing resets a window", rec.Code)
 	}
 }
 

@@ -135,6 +135,18 @@ func (e *Engine) convergeOn(ctx context.Context, c *Company) []string {
 		if c.Models != nil {
 			e.releaseModelHolds(ctx)
 		}
+		// AND A SEAT PARKED ON ITS BUDGET whose ceilings this company
+		// changed, for the same reason and in the same place: the first
+		// thing a released inbox does is judge a delivery against the
+		// counters, and it must do so under the ceilings now current. A
+		// seat's ceiling is chart runtime, so raising one through /chart
+		// moves no settings revision — run from the apply alone, the park
+		// held until somebody next applied settings.
+		e.reconcileBudgetParks(ctx, c)
+		// AND A PAUSE WHOSE SEAT THE CHART REMOVED goes with the seat.
+		// See seatpause.go for why only a company holding every hire may
+		// say so.
+		e.clearRemovedSeatPauses(ctx, c)
 		steps = append(steps, "mailboxes")
 	}
 

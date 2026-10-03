@@ -87,8 +87,7 @@
 
 import { useMemo } from "react";
 import { useShared } from "~/lib/share.ts";
-import { Button, EmptyValue, Tag, useClipboard } from "@crewlethq/ui";
-import { ContentCopyGlyph } from "@crewlethq/icons/glyphs";
+import { EmptyValue, Tag } from "@crewlethq/ui";
 
 import {
   columnChoicesOf,
@@ -99,28 +98,19 @@ import {
 } from "~/app/frame/DataGrid.tsx";
 import { DateCell, KeyCell, SeatCell } from "~/app/frame/cells.tsx";
 import { peekRow } from "~/app/frame/DetailRail.tsx";
-import {
-  Assignee,
-  DueMark,
-  PriorityMark,
-  StatusBadge,
-  TypeIcon,
-  blockedBy,
-  type RowChrome,
-} from "~/components/work.tsx";
+import { Assignee, DueMark, TypeIcon, blockedBy, type RowChrome } from "~/components/work.tsx";
 import { GroupMark, headingOf } from "./group.tsx";
 import { itemAddress, type Shape } from "~/lib/work.ts";
+import { COLUMN_SORT_KEYS } from "~/contract/work.ts";
 import { fmtDuration } from "~/lib/format.ts";
-import { callText } from "~/lib/toolcall.ts";
+import { RestoreButton } from "~/components/writes.tsx";
+import { AssigneeCell, InlineEdits, PriorityCell, StatusCell } from "./cells.tsx";
 import type {
   WorkActivityRecord,
   WorkGroup,
   WorkProjectDetail,
   WorkSummary,
 } from "~/protocol/index.ts";
-
-/** How long the copy button says it worked, matching `ToolCall.tsx`'s. */
-const COPIED_MS = 1_400;
 
 /**
  * The two shapes this grid draws, as the screen's `shape=` spells them.
@@ -152,33 +142,6 @@ export function isGridShape(shape: Shape): shape is GridShape {
 export function colsParam(shape: GridShape): string {
   return `cols.${shape}`;
 }
-
-/**
- * Every column a header click orders by — and each name IS one of the query
- * grammar's own sort keys.
- *
- * [DataGrid] writes the column's key straight into `sort=`, which this screen
- * sends to the engine, and `ParseQuery` REFUSES a sort key it does not know
- * rather than ignoring it. So one wrong header does not mis-sort a column: it
- * takes the whole board down with a refusal, on the click.
- *
- * Held against the grammar by `internal/tracker/client_gate_test.go`, because
- * this is a copy the dashboard has to keep — a separate build in a separate
- * language cannot import a Go identifier. The union makes a typo a compile
- * error; the gate makes a RENAME in the engine one. It covers BOTH sets, which
- * is what collapsing them bought: the list's heads are sortable now, and they
- * are the same declaration the table's are held against.
- */
-const COLUMN_SORT_KEYS = [
-  "title",
-  "priority",
-  "due",
-  "start",
-  "points",
-  "estimate",
-  "updated",
-  "removed",
-] as const;
 
 type SortKey = (typeof COLUMN_SORT_KEYS)[number];
 
@@ -228,6 +191,8 @@ interface ColumnContext {
   /** A blocker's KEY from its id, where this page holds its row — see
    *  [blockedBy]. The list's title cell names what holds a task up. */
   keyOf?: (id: string) => string | undefined;
+  /** Who can hold a task, for a writer's inline assignee picker. */
+  seats?: readonly { handle: string; name: string; human?: boolean }[];
 }
 
 /**
@@ -257,12 +222,16 @@ function listColumns(ctx: ColumnContext): GridColumn<WorkSummary>[] {
       header: "",
       label: "Priority",
       shrink: true,
-      cell: (row) => <PriorityMark priority={row.priority} />,
+      // A WRITER'S PICKER, drawn as the same mark — see `shapes/cells.tsx`.
+      cell: (row) => <PriorityCell row={row} />,
     },
     {
       key: "key",
       header: "Key",
       shrink: true,
+      // THE KEY AND THE TITLE ARE THE PHONE ROW'S FIRST LINE — what the task
+      // is — and every other mark is the line under them.
+      phoneLead: true,
       // NOT SORTABLE. A key is `PROJ-<n>` and the engine has no ordering
       // over it; the nearest thing is `created`, which is a different
       // claim and is not on the row at all.
@@ -275,11 +244,12 @@ function listColumns(ctx: ColumnContext): GridColumn<WorkSummary>[] {
       // NOT SORTABLE, for the reason the table's own status column gives:
       // there is no ordering over a company's own status words, and
       // `group_by=status` is what a reader asking this actually wants.
-      cell: (row) => <StatusBadge status={row.status} defs={detail?.statuses} />,
+      cell: (row) => <StatusCell row={row} defs={detail?.statuses} />,
     },
     sorted("title", {
       header: "Title",
       sortValue: (row) => row.title,
+      phoneLead: true,
       // THE CELL IS ALREADY A FLEX ROW WITH A GAP, so the title and its mark
       // are two children of it rather than a box inside a box.
       cell: (row) => (
@@ -334,7 +304,14 @@ function listColumns(ctx: ColumnContext): GridColumn<WorkSummary>[] {
       // and a project with no lead routes to nobody at all, so it is a state
       // worth seeing down a queue.
       cell: (row) => (
-        <Assignee handle={row.assignee} seatName={chrome.seatName} seatKind={chrome.seatKind} />
+        <AssigneeCell
+          row={row}
+          chrome={chrome}
+          seats={ctx.seats ?? []}
+          readOnly={
+            <Assignee handle={row.assignee} seatName={chrome.seatName} seatKind={chrome.seatKind} />
+          }
+        />
       ),
     },
     updatedColumn(),
@@ -383,28 +360,37 @@ function tableColumns(ctx: ColumnContext): GridColumn<WorkSummary>[] {
       // and alphabetical order over them means nothing. `group_by=status`
       // is what a reader asking this actually wants, and the filter bar
       // already offers it.
-      cell: (row) => <StatusBadge status={row.status} defs={detail?.statuses} />,
+      cell: (row) => <StatusCell row={row} defs={detail?.statuses} />,
     },
     sorted("priority", {
       header: "Priority",
       shrink: true,
       sortValue: (row) => row.priority ?? "",
-      cell: (row) => <PriorityMark priority={row.priority} word />,
+      cell: (row) => <PriorityCell row={row} word />,
     }),
     {
       key: "assignee",
       header: "Assignee",
       shrink: true,
-      cell: (row) =>
-        row.assignee ? (
-          <SeatCell
-            handle={row.assignee}
-            name={chrome.seatName?.(row.assignee)}
-            kind={chrome.seatKind?.(row.assignee)}
-          />
-        ) : (
-          <EmptyValue label="Nobody holds this" />
-        ),
+      cell: (row) => (
+        <AssigneeCell
+          row={row}
+          chrome={chrome}
+          seats={ctx.seats ?? []}
+          named
+          readOnly={
+            row.assignee ? (
+              <SeatCell
+                handle={row.assignee}
+                name={chrome.seatName?.(row.assignee)}
+                kind={chrome.seatKind?.(row.assignee)}
+              />
+            ) : (
+              <EmptyValue label="Nobody holds this" />
+            )
+          }
+        />
+      ),
     },
   ];
   if (workspace) out.push(projectColumn(false));
@@ -502,8 +488,71 @@ function updatedColumn(): GridColumn<WorkSummary> {
   return sorted("updated", {
     header: "Updated",
     shrink: true,
+    // THE FIRST TO GIVE WAY ON A PHONE as it is at 1280 ([LIST_GIVES_WAY]):
+    // what the task's page answers one click away, and on the compact row it
+    // wrapped onto a third line of its own.
+    phoneOmit: true,
     sortValue: (row) => row.updated ?? "",
     cell: (row) => <DateCell at={row.updated} />,
+  });
+}
+
+/**
+ * WHAT GIVES WAY FIRST when a set does not fit its box — `GridColumn.drop`,
+ * lowest first. Beside a peek at 1280 the list is about 450px wide, and with
+ * every column kept the title was 70px of "Which regi…".
+ *
+ * NEVER THE TITLE, AND NEVER WHAT OPENS OR OWNS A ROW: the key (the address),
+ * the status (the one fact a queue is scanned for) and who holds it. What goes
+ * first is what the task's own page answers one click away — when it last
+ * moved, then the dates and sizes a reader switched on, then the due date,
+ * then the marks — and the grid says which it hid.
+ */
+const LIST_GIVES_WAY: Record<string, number> = {
+  updated: 1,
+  start: 2,
+  points: 3,
+  estimate: 4,
+  project: 5,
+  due: 6,
+  type: 7,
+  priority: 8,
+};
+
+/** The table's order: its assignee is a NAME, which is what that set is for. */
+const TABLE_GIVES_WAY: Record<string, number> = {
+  updated: 1,
+  start: 2,
+  points: 3,
+  estimate: 4,
+  project: 5,
+  due: 6,
+  priority: 7,
+  type: 8,
+};
+
+/**
+ * THE TITLE'S FLOOR: the narrowest it is still a title at. Sixteen ems carries
+ * about thirty-five characters — a task title's first five or six words, which
+ * is what tells two tasks apart down a list. Below it the columns above give
+ * way instead: beside a peek at 1280 that is when it moved, its due date and
+ * its type mark, and the title keeps the rest. Ten ems, tried first, kept every
+ * mark and cut every title to its first three words.
+ */
+const TITLE_FLOOR = "16rem";
+
+function givingWay(
+  columns: GridColumn<WorkSummary>[],
+  order: Record<string, number>,
+): GridColumn<WorkSummary>[] {
+  return columns.map((c) => {
+    if (c.key === "title") return { ...c, floor: TITLE_FLOOR };
+    // THE STATUS IS DRAWN WHOLE. It is the one fact a queue is scanned for,
+    // and at a content column's fifth of a list beside a peek it read
+    // "In progr…". A company's status words are short by nature, and what
+    // gives way when they do not fit is the columns above, not the word.
+    if (c.key === "status") return { ...c, width: "max-content" };
+    return order[c.key] !== undefined ? { ...c, drop: order[c.key] } : c;
   });
 }
 
@@ -517,7 +566,10 @@ function updatedColumn(): GridColumn<WorkSummary> {
  * looking exactly like a correct one.
  */
 function buildColumns(shape: GridShape, ctx: ColumnContext): GridColumn<WorkSummary>[] {
-  const out = shape === "table" ? tableColumns(ctx) : listColumns(ctx);
+  const out =
+    shape === "table"
+      ? givingWay(tableColumns(ctx), TABLE_GIVES_WAY)
+      : givingWay(listColumns(ctx), LIST_GIVES_WAY);
   if (!ctx.removals) return out;
   return out.concat(trashColumns(ctx.removals, ctx.chrome));
 }
@@ -559,6 +611,8 @@ export function WorkGrid({
   overflowHref,
   removals,
   foot,
+  seats,
+  more,
 }: {
   /** Which column set, and which `cols=` key. */
   shape: GridShape;
@@ -594,6 +648,13 @@ export function WorkGrid({
    * which is the count the toolbar above it already carries.
    */
   foot?: string;
+  /** Who can hold a task, for a writer's inline assignee picker. */
+  seats?: readonly { handle: string; name: string; human?: boolean }[];
+  /**
+   * THE REST OF THE LIST, where the answer carried a cursor: "Load more", and
+   * what is loaded out of how many match. Absent on a complete answer.
+   */
+  more?: { load: () => void; note: string };
 }) {
   // THE PAGE IS WHAT CAN RESOLVE AN EDGE. A dependency names the blocking
   // task's id and the key a reader recognises is on that task's own row, so
@@ -628,8 +689,9 @@ export function WorkGrid({
       removals,
       // OWN KEYS ONLY: a record inherits `toString` and its kind.
       keyOf: (id: string) => (Object.hasOwn(keys, id) ? keys[id] : undefined),
+      seats,
     }),
-    [keys, chrome, detail, workspace, removals],
+    [keys, chrome, detail, workspace, removals, seats],
   );
 
   const columns = useMemo(() => buildColumns(shape, ctx), [shape, ctx]);
@@ -670,7 +732,7 @@ export function WorkGrid({
     }));
   }, [groups, axis, subAxis, chrome, labels, onOverflow, overflowHref]);
 
-  return (
+  const grid = (
     <DataGrid
       rows={bands ? undefined : rows}
       bands={bands}
@@ -702,12 +764,17 @@ export function WorkGrid({
       // AND THE COLUMN SET IS THE SHAPE'S, which is the one key the two shapes
       // may not share — see the header.
       colsName={shape}
+      // THE LIST IS SCANNED BY THE DOZEN, so on a phone a task is two lines —
+      // key and title, then its marks. The table keeps the labelled card: its
+      // question is a field at a time, and there the name beside each value is
+      // the point.
+      phoneRows={shape === "list" ? "compact" : "labelled"}
       empty={
         removals
           ? {
               title: "The trash is empty",
               hint: "Nothing in this container has been removed. A removal is reversible at any age, so what lands here stays until somebody restores or purges it.",
-              icon: "delete",
+              icon: "trash",
             }
           : {
               title: "Nothing matches",
@@ -715,8 +782,14 @@ export function WorkGrid({
             }
       }
       footer={foot}
+      onLoadMore={more?.load}
+      loadedNote={more?.note}
     />
   );
+  // A REMOVED TASK IS NOT EDITED FROM THE TRASH — it is restored first — so the
+  // trash grid is drawn without the inline writes and every cell reads.
+  if (removals) return grid;
+  return <InlineEdits seatName={chrome.seatName}>{grid}</InlineEdits>;
 }
 
 /**
@@ -790,13 +863,13 @@ function trashColumns(removals: Removals, chrome: RowChrome): GridColumn<WorkSum
         const record = removals.get(row.id);
         if (!record?.actor)
           return <EmptyValue label="Its removal is older than the loaded history" />;
+        // THE PERSON: a person the directory binds to a seat writes AS that
+        // seat (`iam.ActorFor`), so the author is who removed it, named as the
+        // change log names the same row.
+        const who = record.actor;
         return (
           <span className="row gap-1">
-            <SeatCell
-              handle={record.actor}
-              name={chrome.seatName?.(record.actor)}
-              kind={chrome.seatKind?.(record.actor)}
-            />
+            <SeatCell handle={who} name={chrome.seatName?.(who)} kind={chrome.seatKind?.(who)} />
             {/* WHICH KIND OF WRITER, because that is the question a trash
                 screen exists to answer: an assistant removing a subtree and
                 a person removing one task look identical without it.
@@ -806,8 +879,7 @@ function trashColumns(removals: Removals, chrome: RowChrome): GridColumn<WorkSum
                 and `system` (`tracker.AuthorKind`) — there is no `seat` among
                 them, so the word this checked against matched nothing and the
                 tag was drawn on EVERY removal, including every ordinary one.
-                A mark on every row is a mark that separates nothing, which is
-                the same rule the priority scale keeps for `normal`. The
+                A mark on every row is a mark that separates nothing. The
                 history row one screen over already spelled it `agent`; this
                 is the copy that drifted. */}
             {record.actor_kind && record.actor_kind !== "agent" && (
@@ -822,47 +894,11 @@ function trashColumns(removals: Removals, chrome: RowChrome): GridColumn<WorkSum
       header: "",
       label: "Restore",
       shrink: true,
-      cell: (row) => <RestoreCall row={row} />,
+      // THE TASK'S ADDRESS, not its key: a removed task whose key another
+      // task claimed first would otherwise be restored as the claimant —
+      // which is not in the trash, so the write is refused, and the task a
+      // reader meant stays there.
+      cell: (row) => <RestoreButton item={itemAddress(row)} />,
     },
   ];
-}
-
-/**
- * The call that brings one task back, ready to paste.
- *
- * A COPY BUTTON RATHER THAN A RESTORE BUTTON, for the reason the whole
- * `ToolCall` surface exists: this dashboard reads, and a browser posting a
- * restore would be attributed to "the dashboard", which is not a person and
- * cannot be asked why. The full block is too tall for a grid row, so the row
- * carries the one call a reader on this tab wants and the peek carries the
- * rest.
- */
-function RestoreCall({ row }: { row: WorkSummary }) {
-  const clip = useClipboard({ resetMs: COPIED_MS });
-  // THE TASK'S ADDRESS, not its key: a removed task whose key another task
-  // claimed first would otherwise be restored as the claimant — which is not
-  // in the trash, so the call fails, and the task a reader meant stays there.
-  const text = callText({
-    tool: "restore_work_item",
-    label: "Bring it back from the trash",
-    args: { item: itemAddress(row) },
-  });
-  return (
-    <Button
-      size="small"
-      variant="tertiary"
-      leadingIcon={<ContentCopyGlyph />}
-      title={text}
-      onClick={(e) => {
-        // THE ROW IS AN ANCHOR. Without this the copy also opens the task,
-        // so the reader lands on a page they did not ask for holding a call
-        // they did.
-        e.preventDefault();
-        e.stopPropagation();
-        void clip.copy(text);
-      }}
-    >
-      {clip.state === "copied" ? "Copied" : "Restore"}
-    </Button>
-  );
 }

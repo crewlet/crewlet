@@ -33,10 +33,17 @@ func (s *LiveState) foldSpend(env Envelope, payload map[string]any) bool {
 	// happened inside the projection's write lock, which is the mutex
 	// every /agents request and every websocket snapshot waits on.
 	s.spend = append(s.spend, spendEntry{at: newStamp(env.Timestamp), Record: tokens.Record{
-		EventID:      env.ID,
-		Timestamp:    env.Timestamp,
+		EventID:   env.ID,
+		Timestamp: env.Timestamp,
+		// THE SEAT IS ITS AGENT ID, and that is the only key the rollup
+		// files a record under (tokens.Aggregate). The role rides along
+		// as the name the seat had when the phase ran — a LABEL the
+		// rollup prints for a seat the chart no longer holds, never a
+		// key — read off the payload's `role`, the field the store's
+		// `agent_role` column is filled from, so a record from the live
+		// window and the same record from the store print one name.
 		AgentID:      str(payload, "agent_id"),
-		AgentRole:    str(payload, "role", "agent_role"),
+		AgentRole:    str(payload, "role"),
 		Phase:        str(payload, "phase"),
 		HostPhase:    str(payload, "host_phase"),
 		Worker:       str(payload, "worker"),
@@ -47,7 +54,15 @@ func (s *LiveState) foldSpend(env Envelope, payload map[string]any) bool {
 		InputTokens:  num(payload, "input_tokens"),
 		OutputTokens: num(payload, "output_tokens"),
 		TotalTokens:  num(payload, "total_tokens"),
-		CostUSD:      fraction(payload, "cost_usd"),
+		// Every value the store's columns carry (schema/0015, 0032):
+		// the live window and a queried one fold through one
+		// aggregation, and a value one producer carries and the other
+		// drops is a rollup that changes when the window crosses the
+		// live edge.
+		CacheReadTokens:  num(payload, "cache_read_tokens"),
+		CacheWriteTokens: num(payload, "cache_write_tokens"),
+		ProviderKey:      str(payload, "provider_key"),
+		CostUSD:          fraction(payload, "cost_usd"),
 	}})
 	s.pruneSpend(env.Timestamp)
 	return true

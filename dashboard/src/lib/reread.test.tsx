@@ -77,8 +77,16 @@ test("a screen that has gone asks nothing more", () => {
  * along, nor because the read itself changed identity — every render of a
  * loader makes a new one, and a re-read per render would be a loop.
  */
-function Reconnecting({ read, enabled = true }: { read: () => void; enabled?: boolean }) {
-  useRereadOnReconnect(read, enabled);
+function Reconnecting({
+  read,
+  enabled = true,
+  unreached,
+}: {
+  read: () => void;
+  enabled?: boolean;
+  unreached?: () => boolean;
+}) {
+  useRereadOnReconnect(read, enabled, unreached);
   return null;
 }
 
@@ -120,4 +128,38 @@ test("a read that is not enabled is not asked when the socket comes back", () =>
   );
   act(() => client.store.setConnected(true));
   expect(read).not.toHaveBeenCalled();
+});
+
+// A PAGE LOAD IS NOT A RECONNECT. The socket first comes up a moment after a
+// screen's REST reads went out over HTTP, which needed no socket, so asking
+// then asked every guarded read twice per page load for nothing.
+test("a socket first coming up asks nothing of a read that reached the engine", () => {
+  const client = connectedClient(false);
+  const read = vi.fn();
+  render(
+    <ClientContext.Provider value={client}>
+      <Reconnecting read={read} />
+    </ClientContext.Provider>,
+  );
+  act(() => client.store.setConnected(true));
+  expect(read).not.toHaveBeenCalled();
+
+  // A RECONNECT after that first connect is news, and asks.
+  act(() => client.store.setConnected(false));
+  act(() => client.store.setConnected(true));
+  expect(read).toHaveBeenCalledTimes(1);
+});
+
+// UNLESS THE READ NEVER REACHED THE ENGINE: then the socket arriving is the
+// first sign that it can.
+test("a socket first coming up asks a read that never reached the engine", () => {
+  const client = connectedClient(false);
+  const read = vi.fn();
+  render(
+    <ClientContext.Provider value={client}>
+      <Reconnecting read={read} unreached={() => true} />
+    </ClientContext.Provider>,
+  );
+  act(() => client.store.setConnected(true));
+  expect(read).toHaveBeenCalledTimes(1);
 });

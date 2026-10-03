@@ -12,16 +12,29 @@
  *   `lead` and the unit tree, which a seat's editor changes ("Edit reports").
  *
  * THE CHART ITSELF IS `TreeCanvas` FROM `@crewlethq/ui`, drawn in its `node`
- * appearance, which is the console org chart's own language: a node one rank
- * tall and as wide as its own name between a fixed icon zone and a fixed
- * actions column, branches that are single cubics from a parent's bottom into
- * a child's top, and a hue on the agent seats that reaches the node's fill,
- * its edge, the halo outside it, its name and the branch arriving at it. This
- * module is what the engine's own model puts into that: the layout, the
- * connectors, the ARIA tree pattern, focus and the reveal of every
+ * appearance: a node one rank tall and as wide as its own name between a fixed
+ * icon zone and a fixed actions column, with the design system's own ELBOW
+ * connectors between the ranks — the orthogonal branch every chart of this
+ * company is drawn with, the live org chart's included, so the chart a reader
+ * edits and the chart they watch are one drawing. The `node` appearance draws
+ * that branch at twice the card appearance's weight, because a node is half a
+ * card's height and a hairline between two ranks of them is a thread: the
+ * kit's decision, at the console chart's own ratio, and nothing here restyles
+ * it. This module is what the engine's own model puts into that: the layout,
+ * the connectors, the ARIA tree pattern, focus and the reveal of every
  * pointer-only control are the design system's; a node's CONTENT, what a key
  * does to a seat and what an Add offers under a unit are the engine's,
  * because only the engine knows what a seat, a unit and a reporting cycle are.
+ *
+ * EVERY NODE IS THE CHART'S OWN NEUTRAL SURFACE. Colour on this dashboard
+ * says what a seat is DOING and never who it is, and a draft is not doing
+ * anything: an agent seat used to carry one of six hues hashed from its key,
+ * reaching its fill, its edge, its halo, its name and the branch arriving at
+ * it, which is a legend a reader had to learn and could never decode — the
+ * same seat was purple here and neutral on the chart they had just left. What
+ * tells a person's seat from an agent's is the badge's outline, a shape the
+ * design system draws, so it reads to somebody who cannot separate a hue at
+ * all. The one colour a node takes is the accent ring of the selection.
  *
  * EVERY SEAT IS A NODE OF ITS OWN. A unit's seats used to be drawn as ROWS
  * stacked inside the unit's card, which made a unit as tall as its membership
@@ -66,12 +79,13 @@
  * dialog (`Builder.tsx` decides which, because only it knows which view is
  * mounted).
  *
- * The chart's reading of the draft is `chartModel.ts`, every action is
- * `nodeActions.tsx`, and which hue a seat takes is `nodeTone.ts`.
+ * The chart's reading of the draft is `chartModel.ts`, and every action is
+ * `nodeActions.tsx`.
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { plural } from "~/lib/format.ts";
+import { handleLabel } from "~/lib/seats.ts";
 import {
   useBuilder,
   useBuilderView,
@@ -87,7 +101,7 @@ import {
   type Structure,
   type UnitView,
 } from "./chartModel.ts";
-import { AddNodeGhostForm } from "./AddNodeDialog.tsx";
+import { AddNodeGhostForm, addLabel } from "./AddNodeDialog.tsx";
 import { COMPANY_KEY, type NodeKey } from "./model/keys.ts";
 import {
   addSections,
@@ -104,21 +118,18 @@ import {
   ReportingMarks,
   SeatMarks,
   UnitMarks,
-  handleLabel,
-  nodeGlyphKind,
   seatKindLabel,
   unitTypeLabel,
 } from "./nodeMarks.tsx";
-import { nodeTone, seatTone } from "./nodeTone.ts";
 import { useOpenScreen, useReporting, useStructure } from "./useCharts.ts";
 import {
-  AccountTreeGlyph,
+  NetworkGlyph,
   ChevronRightGlyph,
-  CloseGlyph,
-  CycleGlyph,
-  DeleteGlyph,
-  EditGlyph,
-  KeyboardArrowDownGlyph,
+  XGlyph,
+  Repeat2Glyph,
+  TrashGlyph,
+  PencilGlyph,
+  ChevronDownGlyph,
 } from "@crewlethq/icons/glyphs";
 import {
   AddPill,
@@ -134,18 +145,19 @@ import {
   type TreeCanvasHandle,
   type TreeCardContext,
   type TreeCardInput,
-  type TreeCardTone,
   type TreeComposing,
   type TreeInput,
   type TreeItemAction,
   type TreeModel,
   VisuallyHidden,
 } from "@crewlethq/ui";
+import { seatBadge } from "~/ui/SeatAvatar.tsx";
+import { CANVAS_LABELS, largestRoot, useLegibleFirstView } from "~/ui/canvasView.ts";
 
 /**
- * The canvas of the Builder lens.
+ * The builder's canvas.
  *
- * WHICH CHART IS THE LENS'S. The Builder owns the `chart` section param (its
+ * WHICH CHART IS THE BUILDER'S. The Builder owns the `chart` section param (its
  * toolbar is where the chart is chosen) and hands the answer in, so this view
  * never reads the URL a second time, where the two readings could disagree.
  */
@@ -228,7 +240,7 @@ const ADD_GHOST = "adding:";
  * and measured on this build the switch and the fullscreen toggle had ended up
  * in the page's toolbar 800px from the bar they belong to. But the fullscreen
  * toggle acts on the builder's whole container and the switch writes the
- * lens's own section param, and neither of those is this view's to hold: the
+ * builder's own section param, and neither of those is this view's to hold: the
  * Builder hands them in, and this view says WHERE they are drawn.
  */
 export interface Chrome {
@@ -271,11 +283,10 @@ function StructureChart({
     const parent = adding.parent ?? COMPANY_KEY;
     const view = structure.nodes.get(parent);
     if (!view) return null;
-    const where = view.name || "the company";
     return {
       id: ADD_GHOST,
       parent,
-      label: `Add to ${where}`,
+      label: addLabel(view.name),
       onCancel: adding.onClose,
       render: () => (
         <AddNodeGhostForm
@@ -325,14 +336,6 @@ function StructureChart({
       onNodeKey={onNodeKey}
       isNode={(id) => structure.nodes.has(id)}
       hasNodeMenu={(id) => structure.nodes.has(id)}
-      // A HUMAN SEAT WEARS THE DASHED EDGE every human seat on this dashboard
-      // wears, and it is the node's frame, so the design system draws it.
-      cardOutline={(id) => {
-        const view = structure.nodes.get(id);
-        return view?.type === "seat" && view.kind === "human";
-      }}
-      // AN AGENT SEAT CARRIES A HUE, derived from its key: see `nodeTone.ts`.
-      cardTone={(id) => nodeTone(structure.nodes.get(id))}
       renderCard={(id, card) => (
         <StructureCard api={api} structure={structure} id={id} card={card} open={open} />
       )}
@@ -392,7 +395,7 @@ function ReportingChart({
   if (!chart.known) {
     return (
       <EmptyState
-        icon={<AccountTreeGlyph />}
+        icon={<NetworkGlyph />}
         title="Reporting lines appear once the engine describes the company"
         description="Who reports to whom is derived by the engine from the saved org chart, so it is drawn here once the engine has described the company this draft was made on. A company that has not been saved yet has nothing to describe."
       />
@@ -401,7 +404,7 @@ function ReportingChart({
   if (chart.roots.length === 0 && chart.cycles.length === 0) {
     return (
       <EmptyState
-        icon={<AccountTreeGlyph />}
+        icon={<NetworkGlyph />}
         title="No seats to report on"
         description="Who reports to whom is drawn here once the organization has a seat."
       />
@@ -432,11 +435,6 @@ function ReportingChart({
       onNodeKey={onNodeKey}
       isNode={(id) => seatOf(id) !== undefined}
       hasNodeMenu={(id) => seatOf(id) !== undefined}
-      cardOutline={(id) => chart.items.get(id)?.kind === "human"}
-      cardTone={(id) => {
-        const item = chart.items.get(id);
-        return item ? seatTone(item.kind, item.key ?? undefined) : undefined;
-      }}
       renderCard={(id, card) =>
         id === CYCLE_GROUP ? (
           <CycleGroupCard card={card} count={chart.cycles.length} />
@@ -480,8 +478,6 @@ function Chart({
   cardOf,
   renderCard,
   renderUnder,
-  cardOutline,
-  cardTone,
   onNodeKey,
   hasNodeMenu,
   isNode,
@@ -497,8 +493,6 @@ function Chart({
   cardOf: (id: string) => string;
   renderCard: (id: string, card: TreeCardContext) => ReactNode;
   renderUnder?: (id: string, card: TreeCardContext) => ReactNode;
-  cardOutline?: (id: string) => boolean;
-  cardTone?: (id: string) => TreeCardTone | undefined;
   onNodeKey: (id: string, action: Exclude<TreeItemAction, "menu">) => boolean;
   hasNodeMenu: (id: string) => boolean;
   /** Whether an id names a node of the draft, which is what a selection can hold. */
@@ -507,8 +501,43 @@ function Chart({
 }) {
   const api = useBuilder();
   const view = useRef<TreeCanvasHandle>(null);
+  const [host, setHost] = useState<HTMLDivElement | null>(null);
 
-  // ONE IDENTITY FOR THE LENS'S LIFETIME, read through a ref: the Builder
+  /*
+   * THE FIRST VIEW IS HELD AT THE LEGIBILITY FLOOR (`ui/canvasView.ts`). The
+   * canvas fits the whole draft on its first layout, and a company as wide as
+   * Nimbus fitted at 57% at 1440: names at eight pixels, captions at seven,
+   * the one chart a reader edits drawn smaller than the one they watch. Held,
+   * it is drawn at exactly the floor, centred across on the selected node or,
+   * with none, on the chart's root — the company, on the structure chart; the
+   * top of the largest tree, on the reporting one — which is where an
+   * organization is read from. Zoomed about the canvas's centre instead, the
+   * root sat off centre and a sliver of one card stood at one edge with the
+   * company's two people past it.
+   *
+   * WHERE A NODE CANNOT BE PLACED (one inside a closed parent has no card),
+   * it is revealed. REVEALING IS FOCUSING, in the kit, and a focus the kit was
+   * ASKED for is not a selection — it selects on a press or an arrow key,
+   * never on `focusNode` — so the node is shown and not chosen, which is what
+   * keeps the toolbar and the card's ring on what the reader picked. The
+   * focus goes back where it was, so a reader's first key is not read by the
+   * tree's type-ahead.
+   */
+  const selected = api.selection.key;
+  const root = useMemo(() => largestRoot(nodes), [nodes]);
+  const chosen = selected !== null && isNode(selected) ? selected : null;
+  const anchor = useCallback((): string | null => chosen ?? root, [chosen, root]);
+  const reveal = useCallback(() => {
+    const target = chosen ?? root;
+    if (target === null) return;
+    const had = document.activeElement;
+    view.current?.focusNode(target);
+    if (had instanceof HTMLElement && had !== document.body) had.focus({ preventScroll: true });
+    else (document.activeElement as HTMLElement | null)?.blur();
+  }, [chosen, root]);
+  useLegibleFirstView(host, anchor, reveal);
+
+  // ONE IDENTITY FOR THE BUILDER'S LIFETIME, read through a ref: the Builder
   // registers a view in an effect, and a handle that changed identity would
   // register the mounted view again after every edit and every answer.
   const handle = useMemo(
@@ -535,20 +564,27 @@ function Chart({
   }, [about]);
 
   return (
-    <div className="bchart">
+    <div className="bchart" ref={setHost}>
       <TreeCanvas
         className="bchart-canvas"
         ref={view}
         label={label}
+        // THE LABELS THE FLOOR PRESSES BY (`ui/canvasView.ts`).
+        labels={CANVAS_LABELS}
         appearance="node"
-        connector="curve"
+        // THE DESIGN SYSTEM'S OWN CONNECTOR, named rather than defaulted so
+        // the choice is on the page: this chart drew the console's single
+        // cubic once, and beside the live chart's elbows the two charts of
+        // one organization read as two products.
+        connector="elbow"
+        // AND NO `cardTone`: every node is the chart's neutral surface — see
+        // the module note. The design system tints a card and the branch
+        // arriving at it only when asked, so asking for nothing is the rule.
         nodes={nodes}
         cards={cards}
         cardOf={cardOf}
         renderCard={renderCard}
         renderUnder={renderUnder}
-        cardOutline={cardOutline}
-        cardTone={cardTone}
         onNodeKey={onNodeKey}
         hasNodeMenu={hasNodeMenu}
         // PUSHED BACK BEHIND A SURFACE ABOUT ONE OF ITS NODES, so what is
@@ -605,15 +641,12 @@ function StructureCard({
       <>
         <div {...card.item(id)} title={seatTitle(view)}>
           <OrgNodeLabel
-            icon={<NodeGlyph kind={nodeGlyphKind(view)} />}
-            iconRing={view.kind === "human" ? "dashed" : "none"}
-            // AN AGENT SEAT WEARS THE LARGE MARK. The chart this is drawn from
-            // sizes a mark by what it stands for: a container at half its icon
-            // zone and the thing the chart is ABOUT at three quarters of it,
-            // which is what tells an agent seat from a unit at the far end of
-            // a chart. A human seat keeps the small figure inside its dashed
-            // ring, which is the boundary that says what it is.
-            iconSize={view.kind === "human" ? "md" : "lg"}
+            // A SEAT LEADS WITH ITS BADGE, and the badge's outline is who
+            // holds it: a person's circle, an agent's squircle. That is the
+            // one cue — the card is the same solid card for both, and the
+            // dashed edge a person's seat used to wear now means only "a place
+            // nothing fills yet".
+            avatar={seatBadge(view.name, view.kind)}
             name={view.name}
             caption={seatKindLabel(view)}
             captionMarks={<SeatMarks view={view} />}
@@ -712,9 +745,7 @@ function ReportingCard({
     <>
       <div {...card.item(item.id)} title={title}>
         <OrgNodeLabel
-          icon={<NodeGlyph kind={item.kind === "human" ? "human" : "agent"} />}
-          iconRing={item.kind === "human" ? "dashed" : "none"}
-          iconSize={item.kind === "human" ? "md" : "lg"}
+          avatar={seatBadge(item.name, item.kind)}
           name={item.name}
           caption={seatKindLabel(item)}
           captionMarks={<ReportingMarks item={item} />}
@@ -744,7 +775,7 @@ function CycleGroupCard({ card, count }: { card: TreeCardContext; count: number 
     <>
       <div {...card.item(CYCLE_GROUP)} title={note}>
         <OrgNodeLabel
-          icon={<CycleGlyph />}
+          icon={<Repeat2Glyph />}
           name="Reporting cycle"
           caption={plural(count, "cycle")}
         />
@@ -801,7 +832,7 @@ function NodeActions({
     <div {...card.actions(id)}>
       <IconButton
         label={`Edit ${label}`}
-        icon={<EditGlyph />}
+        icon={<PencilGlyph />}
         size="sm"
         variant="ghost"
         tabIndex={-1}
@@ -813,7 +844,7 @@ function NodeActions({
       {deletable && (
         <IconButton
           label={`Delete ${label}`}
-          icon={<DeleteGlyph />}
+          icon={<TrashGlyph />}
           size="sm"
           variant="ghost-danger"
           tabIndex={-1}
@@ -903,7 +934,7 @@ function ToggleButton({ card, id, name }: { card: TreeCardContext; id: string; n
     <OrgNodeDisclosure {...card.press(id)}>
       <IconButton
         label={expanded ? `Collapse ${name}` : `Expand ${name}`}
-        icon={expanded ? <KeyboardArrowDownGlyph /> : <ChevronRightGlyph />}
+        icon={expanded ? <ChevronDownGlyph /> : <ChevronRightGlyph />}
         size="sm"
         variant="ghost"
         tabIndex={-1}
@@ -943,13 +974,7 @@ function ToggleButton({ card, id, name }: { card: TreeCardContext; id: string; n
  * toolbar, which mirrors the selected node.
  */
 function AddButton({ api, view }: { api: BuilderApi; view: NodeView }) {
-  return (
-    <AddPill
-      label={`Add to ${view.name || "the company"}`}
-      sections={addSections(api, view)}
-      tabIndex={-1}
-    />
-  );
+  return <AddPill label={addLabel(view.name)} sections={addSections(api, view)} tabIndex={-1} />;
 }
 
 /**
@@ -1032,7 +1057,7 @@ function LeadChip({
               clear: (
                 <IconButton
                   label={`Clear the lead of ${unit.name}`}
-                  icon={<CloseGlyph />}
+                  icon={<XGlyph />}
                   size="sm"
                   variant="ghost"
                   tabIndex={-1}

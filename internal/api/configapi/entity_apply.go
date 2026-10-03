@@ -32,35 +32,25 @@ type EntityError struct{ Err error }
 func (e *EntityError) Error() string { return "configapi: " + e.Err.Error() }
 func (e *EntityError) Unwrap() error { return e.Err }
 
-// entityDraft replaces the entity of one kind under one id.
+// entityDraft replaces the entity of one kind under one id — or, with create,
+// adds one under an id the collection does not carry yet.
 //
 // Nothing to splice into is refused rather than treated as an empty company:
 // building the first revision out of one entity is not what this write is for.
-func entityDraft(kind, id string, body submitted, expect string) (draft, error) {
+func entityDraft(kind, id string, body submitted, expect string, create bool) (draft, error) {
 	access, ok := entityKinds[kind]
 	if !ok {
 		return draft{}, &EntityError{Err: fmt.Errorf("%w: %q (want one of %v)",
 			ErrUnknownEntityKind, kind, EntityKinds())}
 	}
-	// A COLLECTION THIS SURFACE READS AND DOES NOT WRITE. It is the org
-	// chart, which is a domain of its own. The route table mounts no write
-	// for one (chartdoor.go refuses it at the door with its per-noun
-	// wording), so this is the draft's own statement of the table's rule
-	// rather than a second door: a draft for a read-only collection has no
-	// splice to make.
-	if access.replace == nil {
-		return draft{}, &EntityError{Err: fmt.Errorf(
-			"%w: %s/%s is part of the org chart, which is written through "+
-				"its own log rather than through a configuration revision "+
-				"(want one of %v)",
-			ErrEntityReadOnly, kind, id, WritableEntityKinds())}
-	}
 	return draft{
 		expect: expect, requireActive: true,
 		// VALIDATED WHOLE, not just the entity. A provider that an entity
-		// write reshapes is valid on its own and may break every seat
-		// naming it, and a per-entity surface is exactly where that gets
-		// introduced.
+		// write reshapes is valid on its own and may break every worker
+		// template naming it, and a per-entity surface is exactly where
+		// that gets introduced. A seat naming it is the org chart's, which
+		// no revision holds — see [ErrIdentityMismatch] for the one write
+		// that checks the two halves together.
 		rules: (*config.Company).Validate,
 		build: func(b base) (*config.Company, []byte, error) {
 			// A SECOND COPY, so the splice lands on a document that still
@@ -70,14 +60,20 @@ func entityDraft(kind, id string, body submitted, expect string) (draft, error) 
 			if err != nil {
 				return nil, nil, fmt.Errorf("configapi: decode the active revision: %w", err)
 			}
-			if refused := access.replace(spliced, id, body); refused != nil {
+			write := access.replace
+			if create {
+				write = access.create
+			}
+			if refused := write(spliced, id, body); refused != nil {
 				return nil, nil, &EntityError{Err: refused}
 			}
 			// The masks the caller was shown come back as the values they
-			// hide, against the revision they were shown FROM.
+			// hide, against the revision they were shown FROM. A created
+			// entity matches no member of that revision, so nothing in it
+			// is restored: it was never shown, so it holds no mask.
 			spliced.RestoreRedacted(b.prior)
 			entity, _ := access.find(spliced, id)
-			document, err := spliceStored(b.document, access, id, entity)
+			document, err := spliceStored(b.document, access, id, entity, create)
 			if err != nil {
 				return nil, nil, err
 			}

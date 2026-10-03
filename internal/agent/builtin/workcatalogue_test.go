@@ -489,9 +489,14 @@ var errTrackerRefusedTheField = &refusal{
 		"read is one stored, replicated and applied by nothing",
 }
 
+// refusal is a refusal the tracker wrote, as it writes one: its own sentence,
+// MARKED [tracker.ErrInvalid] — an unmarked error is the node's failure, which
+// is never told in the domain's words.
 type refusal struct{ text string }
 
 func (r *refusal) Error() string { return r.text }
+
+func (r *refusal) Unwrap() error { return tracker.ErrInvalid }
 
 // catalogueTool is `write_work_catalogue` as an OPERATOR holds it, which is
 // the only registry it is in: a declaration is the company's vocabulary, and a

@@ -29,6 +29,8 @@ func (c *capturingConversations) Threads(context.Context, string, int) ([]ledger
 	return nil, nil
 }
 
+func (c *capturingConversations) ThreadCount(context.Context, string) (int, error) { return 0, nil }
+
 func (c *capturingConversations) Purge(context.Context, time.Time) (int64, error) { return 0, nil }
 
 // THE ACCOUNT REACHES THE ROW, which is the half a ledger unit test cannot

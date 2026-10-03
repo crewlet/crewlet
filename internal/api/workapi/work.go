@@ -1,16 +1,16 @@
 package workapi
 
 import (
-	"context"
 	"fmt"
 	"net/http"
 	"strings"
 
 	"github.com/crewlet/crewlet/internal/agent/builtin"
 	"github.com/crewlet/crewlet/internal/api/httpjson"
+	"github.com/crewlet/crewlet/internal/api/operator"
 	"github.com/crewlet/crewlet/internal/authz"
+	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/iam"
-	"github.com/crewlet/crewlet/internal/tools"
 	"github.com/crewlet/crewlet/internal/tracker"
 )
 
@@ -60,7 +60,9 @@ func (s *Service) workRoutes(mount mounter) {
 	// has read the author.
 	route("PATCH /work/items/{key}/comments/{cid}", task(authz.ActionWorkComment),
 		(*served).patchItemComment)
-	route("POST /work/items/{key}/rank", task(authz.ActionWorkRank), (*served).postRank)
+	// A PLACE ON A BOARD IS `place_work_item`, decided on the task's kind
+	// as the tool's own gate decides it.
+	route("POST /work/items/{key}/rank", task(authz.ActionWorkPlace), (*served).postRank)
 	// DEPENDING AND RELATING ARE EDITS OF THE ITEM, made through
 	// update_work_item's own set-valued arguments; the routes are narrower
 	// doors onto the same verb.
@@ -238,107 +240,61 @@ func (s *served) putPriorities(w http.ResponseWriter, r *http.Request) {
 // are not widened: no seat, and no assistant, gains a way to name another
 // person's record.
 func (s *served) putInbox(w http.ResponseWriter, r *http.Request) {
-	s.personRecord(w, r, builtin.MarkInboxFor)
+	s.personRecord(w, r, tracker.MarkInboxTool, builtin.MarkInboxFor)
 }
 
 func (s *served) putPins(w http.ResponseWriter, r *http.Request) {
-	s.personRecord(w, r, builtin.SetPinsFor)
+	s.personRecord(w, r, tracker.SetPinsTool, builtin.SetPinsFor)
 }
 
-// personRecord is the one body both person routes share.
-func (s *served) personRecord(w http.ResponseWriter, r *http.Request,
-	write func(ctx context.Context, deps builtin.WorkDeps, name string,
-		args map[string]any) tools.Result) {
+// personRecord is the one body both person routes share: the write, through
+// the operator surface's dispatch, so it is decided, answered and recorded as
+// the tool behind it would be.
+func (s *served) personRecord(w http.ResponseWriter, r *http.Request, tool string,
+	write operator.RecordWrite) {
 
 	args, ok := readArgs(w, r)
-	if !ok || !noOperationArg(w, args) {
+	if !ok {
+		return
+	}
+	if !operator.NoOperationArg(args) {
+		operator.RefuseOperationArg(w, tool)
 		return
 	}
 	key, ok := operationKey(w, r)
 	if !ok {
 		return
 	}
-	work, _ := s.deps(key)
-	answerTool(w, key, write(r.Context(), work,
-		strings.TrimSpace(r.PathValue("handle")), args))
+	handle := strings.TrimSpace(r.PathValue("handle"))
+	result, err := s.operator.DispatchRecord(r.Context(), operator.Call{
+		Transport: types.TransportWork, Key: key, Tool: tool, Args: args,
+	}, handle, write)
+	about := operator.About(tool, args)
+	about["handle"] = handle
+	s.answerDispatched(w, r, key, tool, about, result, err)
 }
 
 // ---- the gestures no tool makes ---------------------------------------- //
 
-// postRank places one item between two neighbours in its project's order.
+// postRank is place_work_item: one item placed beside a neighbour in its
+// project's order, and into another lane where the body names one.
 //
-// # Why this is not a tool
-//
-// A rank move is a gesture on a BOARD a person is looking at: it names two
-// neighbours by what is on either side of the card being dropped. A seat sees
-// no board and has no neighbours to name, so it is given no such verb and the
-// order it needs is the priority list instead.
-//
-// # The neighbours name the project
-//
-// Both neighbours must be in the item's own project, because the order is the
-// project's: a card cannot be placed between two cards on somebody else's
-// board. Naming neither is refused rather than read as "the head", because a
-// move to nowhere is a request somebody built wrong.
+// AN ADAPTER, where it used to be a gesture of this surface's own that read
+// both neighbours and minted the rank itself: the tool mints the place
+// between the neighbours as the board stands when the write LANDS, inside the
+// tracker's own decide, so two people dropping cards into one gap cannot be
+// handed one key — a rank minted here from a read taken before the write was a
+// second implementation of the order, and the one the dashboard did not use.
+// The version the board read is the tool's required `if_match`, which an
+// `If-Match` header supplies as on every other route.
 func (s *served) postRank(w http.ResponseWriter, r *http.Request) {
 	args, ok := readArgs(w, r)
-	if !ok || !only(w, args, "after", "before") {
+	if !ok || !only(w, args, "after", "before", "status", "if_match") ||
+		!fromPath(w, args, "item", r.PathValue("key")) ||
+		!ifMatch(w, r, args, "if_match") {
 		return
 	}
-	item, ok := s.readTask(w, r, r.PathValue("key"), tracker.DetailWants{})
-	if !ok {
-		return
-	}
-	var bounds [2]tracker.Rank
-	named := 0
-	for i, field := range []string{"after", "before"} {
-		ref, _ := args[field].(string)
-		if ref = strings.TrimSpace(ref); ref == "" {
-			continue
-		}
-		named++
-		neighbour, found := s.readTask(w, r, ref, tracker.DetailWants{})
-		if !found {
-			return
-		}
-		if neighbour.Task.Project != item.Task.Project {
-			httpjson.FailWith(w, http.StatusUnprocessableEntity, httpjson.CodeRefused,
-				map[string]string{"detail": fmt.Sprintf("%s is in %s and %s is "+
-					"in %s — an item is placed among its own project's items",
-					neighbour.Named(), neighbour.Task.Project, item.Named(),
-					item.Task.Project)})
-			return
-		}
-		bounds[i] = neighbour.Task.Rank
-	}
-	if named == 0 {
-		httpjson.FailWith(w, http.StatusBadRequest, httpjson.CodeInvalidBody,
-			map[string]string{"detail": "name the item this one goes `after`, " +
-				"the one it goes `before`, or both"})
-		return
-	}
-	key, ok := operationKey(w, r)
-	if !ok {
-		return
-	}
-	actor, ok := s.actor(w, r, key)
-	if !ok {
-		return
-	}
-	result, err := s.Tracker(actor).MoveTask(r.Context(),
-		keyedOp(key, "rank", item.Task.ID, args), item.Task.Project, item.Task.ID,
-		bounds[0], bounds[1])
-	if err != nil {
-		failErr(w, err, key)
-		return
-	}
-	// THE ITEM BY ITS ADDRESS, as every tool's receipt on this surface
-	// names it ([builtin.ReceiptOf]): `item` is what a client puts back in
-	// the path, and a key another task claimed first opens that task.
-	answer(w, key, result.Outcome, result.Unvouched, builtin.ReceiptOf(map[string]any{
-		"outcome":  string(result.Outcome),
-		"position": positionOf(result.Position),
-	}, item))
+	s.call(w, r, tracker.PlaceWorkItemTool, args)
 }
 
 // patchItemComment rewrites one remark on a work item, AS ITS AUTHOR.
@@ -391,8 +347,10 @@ func (s *served) patchItemComment(w http.ResponseWriter, r *http.Request) {
 		keyedOp(key, "comment-edit", cid, args), detail.Task.ID, detail.Task.Project,
 		cid,
 		body, notify)
+	operator.AuditGesture(r.Context(), s.audit, types.TransportWork,
+		string(authz.ActionWorkCommentEdit), key, result.Outcome, result.Position, err)
 	if err != nil {
-		failErr(w, err, key)
+		failErr(w, r, err, key)
 		return
 	}
 	answer(w, key, result.Outcome, result.Unvouched, builtin.ReceiptOf(map[string]any{
@@ -453,7 +411,7 @@ func (s *served) postPurge(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !strings.EqualFold(confirm, detail.Task.Key) {
-		httpjson.FailWith(w, http.StatusUnprocessableEntity, httpjson.CodeRefused,
+		httpjson.FailWith(w, http.StatusUnprocessableEntity, httpjson.CodeInvalid,
 			map[string]string{"detail": fmt.Sprintf("?confirm= says %q and the "+
 				"item is %s — nothing was destroyed", confirm, detail.Task.Key)})
 		return
@@ -469,10 +427,12 @@ func (s *served) postPurge(w http.ResponseWriter, r *http.Request) {
 	result, err := s.Tracker(actor).PurgeTask(r.Context(),
 		keyedOp(key, "purge", detail.Task.ID, purgeArgs(confirm, reason)),
 		detail.Task.ID, detail.Task.Project, reason)
+	operator.AuditGesture(r.Context(), s.audit, types.TransportWork,
+		string(authz.ActionWorkPurge), key, result.Outcome, result.Position, err)
 	if err != nil {
 		log.Warn("api_purge_failed", "task", detail.Task.ID, "actor", actor.Handle,
 			"error", err)
-		failErr(w, err, key)
+		failErr(w, r, err, key)
 		return
 	}
 	// LOGGED AT INFO WITH THE REASON, because this is the one gesture whose
@@ -500,7 +460,7 @@ func (s *served) readTask(w http.ResponseWriter, r *http.Request, ref string,
 	detail, err := s.Work.Reader.Task(r.Context(), strings.TrimSpace(ref),
 		want, decisionRead)
 	if err != nil {
-		readFailed(w, err)
+		readFailed(w, r, err)
 		return tracker.TaskDetail{}, false
 	}
 	return detail, true

@@ -64,3 +64,20 @@ func TestAPurgedSkillPageIsReportedToTheRegistry(t *testing.T) {
 			"serving it (%d reports)", *reports)
 	}
 }
+
+// A PAGE'S OWN ANSWER SAYS WHAT IT WAS DERIVED AS. The listing always carried
+// the tool-skill mark and the detail never did, so the page a listing row
+// opened could not say it was machinery rather than prose — and the screen's
+// "loaded as a skill by" line keys on exactly this flag.
+func TestAPagesDetailSaysWhetherItIsAToolSkill(t *testing.T) {
+	t.Parallel()
+	r, _ := hooked(t)
+	skill := r.write(author("jane"), pages.NewPage{Title: "Deploying", Body: skillBody})
+	ordinary := r.write(author("jane"), pages.NewPage{Title: "Runbook", Body: "prose"})
+	if got := r.get(skill.Page.ID); !got.Skill {
+		t.Errorf("the skill page's detail says skill=false")
+	}
+	if got := r.get(ordinary.Page.ID); got.Skill || got.Onboarding {
+		t.Errorf("an ordinary page's detail says skill=%v onboarding=%v", got.Skill, got.Onboarding)
+	}
+}

@@ -190,7 +190,7 @@ map of what to attack, which is why those surfaces are guarded even for reads.
 | `knowledge:write` | Authoring the company's own pages: write, save, comment — except in the tool-skills container, which takes `config:write` as well |
 | `config:write` | Changing the company — `PATCH /config` and the epoch activation that rebuilds every seat's tools, providers and MCP children; the org chart's structure, its runtime half and the relations authority is derived from; the tracker's workspace catalogue (`write_work_catalogue`), which is configuration rather than any project's; and a page in the tool-skills container (`pages.skill.write`), which is injected into every seat's turn. **It is host access** — see below |
 | `secrets:write` | Sealing, rotating, deleting and re-keying the fleet's credentials |
-| `fleet:operate` | The deployment's own controls: `POST /backup`, the retention floor, the capacity window, the maintenance gestures, evict and readmit, `POST /budgets/reset`, and the two purges — a work item's and a page's — which no seat may make whatever it holds. With `people:manage` beside it, `POST /iam/invalidate-all`; with `config:write` beside it, taking an object out of the org chart — the one structural change nothing undoes |
+| `fleet:operate` | The deployment's own controls: `POST /backup`, the retention floor, the capacity window, the maintenance gestures, evict and readmit, and the two purges — a work item's and a page's — which no seat may make whatever it holds. With `people:manage` beside it, `POST /iam/invalidate-all`; with `config:write` beside it, taking an object out of the org chart — the one structural change nothing undoes |
 | `people:manage` | Authority over **person rows**: inviting somebody, changing what they carry, suspending them, revoking their sessions, resetting a second factor, removing them — and, with `fleet:operate` beside it, ending every session in the company. It also lists the seats nobody holds (`/chart/seats?unheld=true`), which is what an invitation is sent into |
 | `sandbox:run` | Starting a detached coding run, and holding the per-run credential its MCP bridge mints |
 
@@ -592,7 +592,7 @@ What that means in practice:
   time, a renamed seat could be claimed again under its new name, and a
   removed person's claim on the old name went on withholding the seat from
   whoever held it next. See
-  [ADR-0020](https://github.com/crewlet/crewlet/blob/main/adr/0020-a-seat-binding-names-the-seat-it-was-created-as.md).
+  [ADR-0027](https://github.com/crewlet/crewlet/blob/main/adr/0027-a-seat-binding-names-the-seat-it-was-created-as.md).
 - **The bind arbitrates.** `iam.seat.<identity>` is a claim, create-only at an
   expectation of zero, so two people cannot be bound to one seat, under any of
   its names: they contend at the broker and exactly one wins.
@@ -649,6 +649,20 @@ allowing it.** A read that failed has said nothing, and reading that silence as
 "nobody holds this seat" would make a store fault the one moment every removal
 succeeds. The refusal says the directory could not be read; the remedy is to
 try again once it can.
+
+**A Tier A token's binding has a third end, and it is on a node's disk.** A
+token acts under the login `token:<id>`, and a directory row holding that
+login is what binds it to a seat — but the label is written in a node's Tier A
+file and the row through `/iam`, by two people at two times. A label somebody
+mistyped on either side names a login nobody holds, and the token goes on
+working as itself, unbound, while its operator believes it acts as a seat:
+nothing dangles, so `GET /iam/check` has nothing to name, and no directory
+read can reach a node's configuration. **`GET /iam/node-tokens`** answers it
+per node: each of the answering node's labels — never a value — joined to the
+row holding its login (none, a reservation, or a row with its stage), and for a
+held row whether it binds the token to a seat and which. It is decided like
+every other directory listing, on `people:manage` or `audit:read`, and it is
+what Settings › People & access reads.
 
 ## Sessions go stale, and an unset deadline is stale
 
@@ -1303,6 +1317,13 @@ access log. Its sign-in surface is three screens outside the frame:
 | `#/invite/<id>.<secret>` | [The invitation link](#everybody-arrives-by-invitation). It renders the invitation with the secret in the `X-Crewlet-Invite-Secret` header, spends nothing by being opened, and redeems it with the login, name and password the person chose — which signs them in |
 | `#/enrol?next=` | Where a session that may only [enrol a second factor](#a-required-second-factor-is-enrolled-before-anything-else) goes first: the seed from `POST /auth/totp` (the key and its `otpauth://` address), the first code, and the recovery codes shown once |
 
+A button that changes something — filing work, a save, marking the inbox,
+pausing a seat, answering a decision — posts to `POST /operator/act/{tool}`
+with that same cookie, so it runs the tool the person's own assistant would
+and is decided and recorded exactly as that call would be: as the principal
+the session resolves to, never as "the dashboard", and never refused for being
+unbound (see [ADR-0024](https://github.com/crewlet/crewlet/blob/main/adr/0024-the-dashboard-acts-as-the-principal-its-session-resolves-to.md)).
+
 What the rest of the dashboard does with the session follows the three answers
 a guarded route gives. A `401` — from any call, or from the socket's plain-HTTP
 re-ask, since a refused handshake reaches a page with no status — sends the
@@ -1533,11 +1554,15 @@ this caller may do that.
 
 ### `/operator` is not under `/mcp/`
 
-The operator MCP surface files and moves work and writes the company's
-knowledge base, and the credential's own name is what lands on each record as
-the author. `/mcp/` is exempt **wholesale**, so mounting it there would have put
-a writable company surface behind no credential at all. It has its own
-always-guarded prefix for exactly that reason.
+The operator surface files and moves work and writes the company's knowledge
+base — over MCP at `/operator/mcp` for a person's assistant, and over
+`/operator/act` for the dashboard's buttons — and every record it writes names
+the caller as `iam.ActorFor` makes them: a person the directory binds to a
+seat writes as the seat, with author kind `human`; anybody else under their
+own login, with author kind `operator`; and the credential it came through
+beside either, as `operator_id`. `/mcp/` is exempt **wholesale**, so mounting
+it there would have put a writable company surface behind no credential at
+all. It has its own always-guarded prefix for exactly that reason.
 
 ---
 
@@ -1632,18 +1657,18 @@ unlocks.
 
 | Rule | Covers | Decided by |
 |---|---|---|
-| **Read** | The board, pages, the org chart, the roster, the fleet, spend | `state:read` |
+| **Read** | The board, pages, the org chart, the roster, the fleet, spend; and a person's question answered from the company's knowledge (`answer_knowledge`), which a principal no seat binds is refused, because it runs on the bound seat's model | `state:read` |
 | **Self** | The caller's own diary, episodes, skills and onboarding marker | The caller, and **nobody else** — not even the admin grant |
 | **Colleague write** | Filing, commenting, updating, merging; declaring a project's tags; authoring a page; asking a colleague | `work:write` for work, `knowledge:write` for pages |
 | **Own record** | Marking an inbox, pinned views | The owner, or `fleet:operate` |
-| **Own or lead** | Priorities, a person's day, reading their queue | The owner, whoever leads them, or `fleet:operate` |
+| **Own or lead** | Priorities, a person's day, reading their queue; whether a seat works — pausing it, resuming it, a note to the turn it is running (`pause_seat`, `resume_seat`, `steer_turn`) — and answering the question a coding run parked on (`answer_run`) | The owner, whoever leads them, or `fleet:operate`. For a seat's controls the owner is the person bound to the seat; for a run's question it is the run's **requester** — the person whose message woke the turn that launched it — and otherwise whoever leads the run's seat, so nobody who merely leads the requester answers a question the run put to them |
 | **Saved view** | Saving a view | A **personal** view (one naming an owner): its owner, or `fleet:operate`. A **shared** one: its container's lead — a project's, a unit's, or the person whose page it sits on and whoever leads them — or `fleet:operate`, which is the only way to a workspace-wide tab. Replacing a stored view asks this twice: for the view written, and for the view it overwrites as it stands |
 | **Container** | A project's policy — its fields, default assignee, tag renames and archives, archiving the project — re-routing a task to another team, and a page container's own settings | The project's lead or, for pages, the lead of the unit whose `space:` the container is; or `fleet:operate` |
 | **Chart object** | The prose of the org chart: a unit's name and purpose, a seat's goal and responsibilities. The relations authority is derived from — a seat's `project`, `space` and `email`, a unit's `project`, `space` and `channel` — and the runtime half are not in it: they take `config:write`, whoever leads the object. Nor is whom a seat manages, which is the chart's structure | Whoever leads that unit or seat, or `config:write` — the one relation rule whose admin path is the company's grant rather than `fleet:operate`, because the chart is what that grant restructures and what every seat's prompt is built from. A seat never edits its own |
 | **Destructive** | Removing and restoring a task; trashing and restoring a page | The **container's** lead, or `fleet:operate` |
 | **Authored** | Editing and removing a page comment | Whoever wrote it, or `fleet:operate` |
 | **Operator** | Configuration, secrets, integrations, the node itself, the tracker's workspace catalogue, writing a page in the tool-skills container, and the org chart's structure | The grant the verb names — `config:write` for a tool skill, which is injected into every seat's turn and so rewrites the prompt the company runs under, and for the chart's structure; a chart **removal** names two, `config:write` and `fleet:operate`, and so does ending every session in the company (`fleet:operate` and `people:manage`) |
-| **Directory read** | Who can reach the company: the directory, one person's row, their credentials and sessions | The person the row is about, `people:manage`, or `audit:read` |
+| **Directory read** | Who can reach the company: the directory, one person's row, their credentials and sessions, and the answering node's Tier A token labels joined to the rows holding their logins (`GET /iam/node-tokens`) | The person the row is about, `people:manage`, or `audit:read` |
 | **Directory self** | Minting and revoking a credential, ending sessions | The person themselves, or `people:manage` |
 
 **Some verbs are no agent's, whatever their rule says.** Purging a task or a
@@ -1651,13 +1676,25 @@ page, archiving a project, and writing a tool skill carry a mark beside their
 rule rather than a rule of their own: no seat takes them, whatever it holds or
 leads, because an irreversible delete, a project nobody can file into again
 and the instructions every seat obeys are not something a model decides inside
-a turn. The mark composes with the rule rather than
+a turn. The seat controls and the two answers carry it too: a seat that could
+pause a colleague, resume itself, steer another's turn or answer its own run's
+question would be overruling the people who run it, and a seat already has
+`search_knowledge` and a model of its own. The mark composes with the rule rather than
 replacing it — archiving is still the project lead's, and a purge still needs
 `fleet:operate` — and it is checked **first**, so an agent is told it is a seat
 rather than that it lacks a capability it may well hold.
 
 A lead may re-order what their report works on; marking somebody's mail read is
-a different gesture and nobody asked a lead to make it. A colleague may file
+a different gesture and nobody asked a lead to make it. And whether a seat
+works is its lead's to decide, or the deployment's, exactly as what it works
+on is — never any reader's: everybody signed in holds a credential, so "any
+operator" would let every reader of the board stop any seat in the company,
+end the turn it is on, or put words in it. Each seat control is decided on
+the seat, inside its tool, because the seat is never simply what the
+arguments state: a typed handle resolves through the chart, a turn names its
+seat only to the node running it — so a note asks that node first, and a probe
+nobody answers is `unavailable` rather than a refusal — and a run names the
+seat its row recorded. A colleague may file
 work in a project and may not take it out again. Adding a tag and renaming one
 are two rules for the same reason: the first files work, the second changes the
 word on everybody's board.

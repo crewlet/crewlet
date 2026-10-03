@@ -14,6 +14,7 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/turn"
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
+	"github.com/crewlet/crewlet/internal/period"
 	"github.com/crewlet/crewlet/internal/providers/llm"
 	"github.com/crewlet/crewlet/internal/providers/llm/chain"
 	"github.com/crewlet/crewlet/internal/queue"
@@ -21,12 +22,12 @@ import (
 
 // Why a turn stopped has to be its OWN event, not only a field on the summary.
 //
-// The dashboard's `afk` state is derived from exactly three types —
+// The live projection's failure hold is taken from exactly three types —
 // `llm_unavailable`, `turn.guard_breach`, `budget_exhausted`
 // (internal/api/livestate) — and from nothing else. The projection's own tests
 // cover that derivation and pass; for a long time nothing published the events
 // they synthesise, so the state was unreachable in production and the seat
-// screen's AFK banner, the `broken` rail and the attention queue's "the engine
+// screen's failure banner, the `broken` rail and the attention queue's "the engine
 // stopped it" row were all dead branches. Both halves were tested, and nothing
 // asserted they were connected. That is what these cases are for.
 
@@ -155,7 +156,7 @@ func TestAnExhaustedProviderChainSaysWhatItTried(t *testing.T) {
 		t.Errorf("last_error_kind = %q, want %q", got.LastErrorKind, llm.KindRateLimit)
 	}
 	// THE RUN the chain ran out under, and the unit of work beside it: an
-	// AFK record that named only the trigger could not say which attempt
+	// failure record that named only the trigger could not say which attempt
 	// at it went dark. See ADR-0017.
 	if got.TurnID != "t-1" || got.WorkKey != "wk-1" {
 		t.Errorf("turn_id = %q work_key = %q, want the turn's own run and key",
@@ -172,6 +173,8 @@ func TestARefusedChargeIsABudgetEventNotAProviderOne(t *testing.T) {
 	e.publishFailure(context.Background(), tel, turn.Result{Decision: phase.Failed},
 		fmt.Errorf("execute: %w", &toolloop.BudgetError{
 			Scope: string(types.BudgetScopeOrg), Used: 1_000_000, Limit: 900_000,
+			Period: period.Month, Window: "2026-09",
+			ResetsAt: time.Date(2026, time.October, 1, 0, 0, 0, 0, time.UTC),
 		}))
 
 	got := only[*types.BudgetExhausted](t, p, "budget_exhausted")
@@ -181,6 +184,13 @@ func TestARefusedChargeIsABudgetEventNotAProviderOne(t *testing.T) {
 	}
 	if got.UsedTokens != 1_000_000 || got.MaxTokens != 900_000 {
 		t.Errorf("used/max = %d/%d, want 1000000/900000", got.UsedTokens, got.MaxTokens)
+	}
+	// AND THE WINDOW, which is what says when the seat can run again: a
+	// month that resets on the 1st is a different decision about raising a
+	// ceiling from a day that resets tonight.
+	if got.Period != "month" || got.Window != "2026-09" || got.ResetsAt != "2026-10-01T00:00:00Z" {
+		t.Errorf("window = %q %q resets %q, want the month 2026-09 resetting 2026-10-01T00:00:00Z",
+			got.Period, got.Window, got.ResetsAt)
 	}
 	// A refused charge never reaches a provider, so calling it unavailable
 	// would blame a chain that was never walked.
@@ -205,7 +215,8 @@ func TestAnUnhandledExceptionIsBothABreachAndItsCause(t *testing.T) {
 	}
 	// An error that is neither a budget refusal nor an exhausted chain gets
 	// no second event: the summary's error/error_kind is the record of it,
-	// and inventing a class here would file an ordinary crash as AFK.
+	// and inventing a class here would file an ordinary crash as a provider
+	// stop.
 	none[*types.LLMUnavailable](t, p, "llm_unavailable")
 	none[*types.BudgetExhausted](t, p, "budget_exhausted")
 }
@@ -218,7 +229,7 @@ func TestATurnThatDidNotFailPublishesNoFailure(t *testing.T) {
 		turn.Result{Decision: phase.Done}, nil)
 
 	// Every one of these types is a failure BY TYPE, so a spurious publish
-	// does not merely add a row — it flips the seat to afk and paints the
+	// does not merely add a row — it holds a failure on the seat and paints the
 	// turn red on every surface that reads the taxonomy.
 	none[*types.TurnGuardBreach](t, p, "turn.guard_breach")
 	none[*types.LLMUnavailable](t, p, "llm_unavailable")
@@ -243,7 +254,7 @@ func TestClosingAFailedTurnPublishesTheSummaryAndTheCause(t *testing.T) {
 
 	// All FOUR: the dashboard's summary, the learning record, and the guard
 	// that named the stop. Dropping any one of them takes a whole surface
-	// with it — the seat's live row, the episode, or the afk state.
+	// with it — the seat's live row, the episode, or its failure hold.
 	summary := only[*types.AgentTurnCompleted](t, p, "agent_turn_completed")
 	if !summary.Failed || summary.ErrorKind != string(types.GuardMaxIter) {
 		t.Errorf("summary = failed:%v kind:%q, want failed with the guard's kind",
@@ -266,7 +277,7 @@ func TestClosingAFailedTurnPublishesTheSummaryAndTheCause(t *testing.T) {
 // A panicking phase is the one result that carries both an error and a breach,
 // and the summary named the error first: the Turn screen then said the engine
 // stopped it with "error", for the one failure that is the engine's own defect.
-// The breach is what the seat's AFK state reads, so it must be published too,
+// The breach is what the seat's failure hold reads, so it must be published too,
 // exactly once.
 func TestAPanickedTurnClosesUnderTheUnhandledExceptionGuard(t *testing.T) {
 	t.Parallel()

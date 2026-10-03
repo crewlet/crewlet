@@ -47,7 +47,7 @@ func TestAConfigurationWriteAsksForARecentProof(t *testing.T) {
 		{http.MethodPost, "/config/reload"},
 		{http.MethodPost, "/config/revisions/a-revision/revert"},
 	}
-	for _, kind := range configapi.WritableEntityKinds() {
+	for _, kind := range configapi.EntityKinds() {
 		writes = append(writes, [2]string{http.MethodPut, "/config/" + kind + "/an-id"})
 	}
 	for _, w := range writes {

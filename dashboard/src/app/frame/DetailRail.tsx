@@ -23,40 +23,56 @@
  *
  * # Width
  *
- * 420 px, dragged between 360 and 640, remembered per viewer. Under 1200 px it
- * is a drawer over the content instead: the rail plus a 236 px sidebar plus a
- * readable list does not fit, and the sidebar is the one that collapses first
- * because it is one keystroke away. The threshold itself is
- * `--peek-drawer-max` in frame.css, which is where its arithmetic — the 444 px
- * list floor, the chrome in front of it, and the density the chrome scales
- * with — is written down; this number is a copy of that one, so read it there.
+ * 420 px, dragged between 330 and 640, remembered per viewer — and 330 at rest
+ * beside a canvas, which a screen asks for (`peekWidth.ts`): a chart is shrunk
+ * into whatever the rail leaves it rather than reflowed. A width the reader
+ * DRAGGED is their preference and wins on every screen. It is a column
+ * of the sheet while the window can hold everything in front of the list, the
+ * peek and a list still wide enough to read beside it, and a drawer over the
+ * screen below that. The shell decides which (`data-peek`), from
+ * `peekColumnMin` in `app/layout.ts`, which is where the arithmetic — the
+ * 444 px list floor, every width in front of it, Settings' section column and
+ * the density — is written down, and where these widths come from. The
+ * dragged width is the reader's PREFERENCE: as a column it is capped at what
+ * leaves the list its floor, so a width dragged on a wide window never takes
+ * a narrower one's list away.
  */
 
-import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
+import { useCallback, useContext, useEffect, useRef, useState, type ReactNode } from "react";
 import { href, useNavigator, useRoute } from "../router.tsx";
 import { KINDS, parseRef, pathOf, refToken, type ObjectRef } from "./objects.ts";
 import { ButtonLink, IconButton } from "@crewlethq/ui";
 import {
-  ArrowOutwardGlyph,
-  CloseGlyph,
-  KeyboardArrowDownGlyph,
-  KeyboardArrowUpGlyph,
+  ArrowUpRightGlyph,
+  XGlyph,
+  ChevronDownGlyph,
+  ChevronUpGlyph,
 } from "@crewlethq/icons/glyphs";
-import { useKeyChords } from "~/lib/keys.ts";
+import { useKeymap } from "../keymap.ts";
+import { STORAGE_KEYS } from "~/lib/storage.ts";
+import { PEEK_MAX, PEEK_MIN } from "../layout.ts";
+import { PeekRestingWidth } from "./peekWidth.ts";
 
-const WIDTH_KEY = "crewlet.peek.width";
-const MIN = 360;
-const MAX = 640;
-const DEFAULT = 420;
+const WIDTH_KEY = STORAGE_KEYS.peekWidth;
+const MIN = PEEK_MIN;
+const MAX = PEEK_MAX;
 
-function storedWidth(): number {
+/**
+ * The width the reader dragged the rail to, or null where they never did.
+ *
+ * NULL RATHER THAN A DEFAULT: the default is the SCREEN's (`peekWidth.ts`),
+ * and a preference that answered with the frame's 420 when nothing was stored
+ * would read as a reader who chose 420 — on a canvas that asked for 330.
+ */
+function storedWidth(): number | null {
   try {
-    const raw = Number(localStorage.getItem(WIDTH_KEY));
+    const stored = localStorage.getItem(WIDTH_KEY);
+    const raw = stored === null ? NaN : Number(stored);
     if (Number.isFinite(raw) && raw >= MIN && raw <= MAX) return raw;
   } catch {
     // An unreadable preference is not a reason to render no rail.
   }
-  return DEFAULT;
+  return null;
 }
 
 /** The object the rail is open on, or null. */
@@ -153,24 +169,30 @@ export function DetailRail({
   ref: object,
   children,
   onStep,
+  query,
 }: {
   ref: ObjectRef;
   children: ReactNode;
   /** Step to the previous/next object in the list this was opened from. */
   onStep?: (delta: -1 | 1) => void;
+  /** What the object's own page carries from that list — see `PeekHost`. */
+  query?: Record<string, string>;
 }) {
   const { close } = usePeekControls();
-  const [width, setWidth] = useState(storedWidth);
+  // THE READER'S WIDTH, where they dragged one, over the width the screen
+  // under the rail rests it at.
+  const resting = useContext(PeekRestingWidth);
+  const [dragged, setDragged] = useState(storedWidth);
+  const width = dragged ?? resting;
   const dragging = useRef(false);
+  const rail = useRef<HTMLElement>(null);
 
-  useKeyChords([
-    // ESCAPE CLOSES FROM INSIDE A FIELD TOO: the peek holds inputs, and a
-    // reader who has focused one and wants out means the rail rather than the
-    // field.
-    { key: "escape", run: close, whileTyping: true },
-    { key: "[", run: () => onStep?.(-1), when: Boolean(onStep) },
-    { key: "]", run: () => onStep?.(1), when: Boolean(onStep) },
-  ]);
+  // ESCAPE CLOSES FROM INSIDE A FIELD TOO — the row says so in `keymap.ts`.
+  useKeymap({
+    "peek.close": close,
+    "peek.previous": { run: () => onStep?.(-1), when: Boolean(onStep) },
+    "peek.next": { run: () => onStep?.(1), when: Boolean(onStep) },
+  });
 
   // THE DRAGGED WIDTH IS PUBLISHED ON THE ROOT, not on the rail.
   //
@@ -198,16 +220,21 @@ export function DetailRail({
     dragging.current = true;
     function onMove(e: MouseEvent): void {
       if (!dragging.current) return;
-      const next = Math.min(MAX, Math.max(MIN, window.innerWidth - e.clientX));
-      setWidth(next);
+      // FROM THE RAIL'S OWN RIGHT EDGE, not the window's. The peek is a
+      // column of the floating sheet, which stands an inset and a hairline in
+      // from the window's edge, so `innerWidth - clientX` made the panel that
+      // much wider than the pointer — the grip ran ahead of the hand.
+      const right = rail.current?.getBoundingClientRect().right ?? window.innerWidth;
+      const next = Math.min(MAX, Math.max(MIN, right - e.clientX));
+      setDragged(next);
     }
     function onUp(): void {
       dragging.current = false;
       window.removeEventListener("mousemove", onMove);
       window.removeEventListener("mouseup", onUp);
-      setWidth((w) => {
+      setDragged((w) => {
         try {
-          localStorage.setItem(WIDTH_KEY, String(w));
+          if (w !== null) localStorage.setItem(WIDTH_KEY, String(w));
         } catch {
           // The drag still applies for this session.
         }
@@ -221,7 +248,7 @@ export function DetailRail({
   return (
     <>
       <div className="peek-veil" onClick={close} role="presentation" />
-      <aside className="peek-rail" aria-label={`${KINDS[object.kind].label} detail`}>
+      <aside ref={rail} className="peek-rail" aria-label={`${KINDS[object.kind].label} detail`}>
         <div
           className="peek-grip"
           onMouseDown={startDrag}
@@ -239,7 +266,7 @@ export function DetailRail({
               <IconButton
                 size="sm"
                 variant="ghost"
-                icon={<KeyboardArrowUpGlyph size="sm" />}
+                icon={<ChevronUpGlyph size="sm" />}
                 label="Previous"
                 title="Previous ([)"
                 onClick={() => onStep(-1)}
@@ -247,7 +274,7 @@ export function DetailRail({
               <IconButton
                 size="sm"
                 variant="ghost"
-                icon={<KeyboardArrowDownGlyph size="sm" />}
+                icon={<ChevronDownGlyph size="sm" />}
                 label="Next"
                 title="Next (])"
                 onClick={() => onStep(1)}
@@ -262,15 +289,15 @@ export function DetailRail({
           <ButtonLink
             size="small"
             variant="secondary"
-            href={peekHref(object)}
-            trailingIcon={<ArrowOutwardGlyph size="sm" />}
+            href={query ? href(pathOf(object), query) : peekHref(object)}
+            trailingIcon={<ArrowUpRightGlyph size="sm" />}
           >
             Open
           </ButtonLink>
           <IconButton
             size="sm"
             variant="ghost"
-            icon={<CloseGlyph size="sm" />}
+            icon={<XGlyph size="sm" />}
             label="Close"
             title="Close (esc)"
             onClick={close}

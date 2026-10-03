@@ -502,14 +502,13 @@ func (w *Writer) record(subject Subject, op OpKind, person string,
 	if namesOperator(op) {
 		operator = w.OperatorID
 	}
-	return MutationRecord{
+	rec := MutationRecord{
 		RecordEnvelope: RecordEnvelope{
-			// THE LOWEST VERSION THAT CARRIES THE OP'S MEANING — a
-			// gate pinned for ever, a sweep at the version whose
-			// predicate it states, a credential at the version that
-			// names it, everything else at the base. See
+			// THE VERSION IS LEFT TO THE ENCODER, which stamps the lowest
+			// that carries what the record holds ([Encode]): a credential
+			// at the version that names it, a condition at the version
+			// that states it, everything else at the base. See
 			// [RecordVersion] for why never the ceiling.
-			V:         writeVersion(op, operator != ""),
 			Subject:   subject,
 			Op:        op,
 			CreatedAt: w.Now().UTC(),
@@ -521,7 +520,16 @@ func (w *Writer) record(subject Subject, op OpKind, person string,
 		ActorKind:  w.ActorKind,
 		OperatorID: operator,
 		Reason:     reason,
-	}, nil
+		// THE SWEEP STATES THE PREDICATE IT IS WRITTEN WITH, which is
+		// version 2's: see [MutationRecord.CollectsSpent].
+		CollectsSpent: op == OpSweep,
+	}
+	if rec.InstallsGate() {
+		// A GATE IS PINNED FOR EVER, whatever a later version adds: see
+		// [GateRecordVersion].
+		rec.V = GateRecordVersion
+	}
+	return rec, nil
 }
 
 // request wraps one record in the framework's own request shape.

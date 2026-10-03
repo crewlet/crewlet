@@ -87,9 +87,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/nats-io/nats.go"
@@ -127,6 +129,14 @@ const streamDirName = "streams"
 // question — "is this the operator's mistake or ours?" — and answering it by
 // listing every specific refusal is how a new refusal silently starts
 // reporting as an engine failure.
+//
+// AND IT IS RETURNED ONLY BEFORE A BYTE IS COPIED. A refusal wearing it wrote
+// nothing into the directory (at most created it, empty), which is what lets
+// POST /backup leave it out of the audit: a request refused before the copy
+// began is not a backup that failed. A refusal that arrives once an estate is
+// already in the directory is NOT one — the directory holds a partial copy
+// somebody has to clear — so [Service.Take] returns it bare, and it is
+// audited as the failed backup it is.
 var ErrBadDestination = errors.New("backup: unusable destination")
 
 // ErrNotEmpty reports a destination that already holds something.
@@ -384,12 +394,7 @@ func (s *Service) Take(ctx context.Context, dir string) (Manifest, error) {
 		name := storeFileNames[db.Estate()]
 		info, err := db.Backup(ctx, filepath.Join(dir, name))
 		if err != nil {
-			// The store's own destination refusals join this package's,
-			// so one question answers for the whole subsystem.
-			if errors.Is(err, store.ErrBackupExists) || errors.Is(err, store.ErrBadBackupPath) {
-				return Manifest{}, fmt.Errorf("%w: %w", ErrBadDestination, err)
-			}
-			return Manifest{}, err
+			return Manifest{}, storeRefusal(err, len(manifest.Stores))
 		}
 		manifest.Stores = append(manifest.Stores, StoreArtifact{
 			Estate:     db.Estate(),
@@ -508,6 +513,57 @@ func estates(db *store.DB) []*store.DB {
 	return out
 }
 
+// storeRefusal classifies a store copy that failed, copied estates into.
+//
+// The store's own destination refusals join this package's, so one question
+// answers for the whole subsystem — but only while the directory is still
+// empty. Once an estate has been copied the directory holds part of a backup,
+// and a refusal then is a failed backup with debris rather than a request
+// refused before it began: [ErrBadDestination] promises nothing was copied.
+func storeRefusal(err error, copied int) error {
+	destination := errors.Is(err, store.ErrBackupExists) || errors.Is(err, store.ErrBadBackupPath)
+	if !destination {
+		return err
+	}
+	if copied > 0 {
+		return fmt.Errorf("backup: refused after %d estate(s) were already copied, "+
+			"so the directory holds a partial copy with no manifest — clear it "+
+			"before naming it again: %w", copied, err)
+	}
+	return fmt.Errorf("%w: %w", ErrBadDestination, err)
+}
+
+// destinationFault reports whether preparing a directory failed because of
+// the path the caller named — one through a regular file, a parent that does
+// not exist, one this user may not write, a read-only mount, a name too long
+// or looping — rather than because the host itself failed.
+//
+// Deliberately a list of the caller's errors rather than of the host's: an
+// I/O error or a full disk is not fixed by naming another directory, and an
+// errno nobody listed is the engine's until someone decides otherwise, which
+// errs toward an operator looking at the node rather than at a typo.
+func destinationFault(err error) bool {
+	for _, target := range []error{
+		fs.ErrNotExist, fs.ErrExist, fs.ErrPermission,
+		syscall.ENOTDIR, syscall.EROFS, syscall.ENAMETOOLONG, syscall.ELOOP,
+		syscall.EINVAL,
+	} {
+		if errors.Is(err, target) {
+			return true
+		}
+	}
+	return false
+}
+
+// prepareFailure wraps a failure to prepare dir: a destination refusal when
+// it is the caller's path at fault, the engine's failure otherwise.
+func prepareFailure(what, dir, remedy string, err error) error {
+	if destinationFault(err) {
+		return fmt.Errorf("%w: cannot %s %s: %w — %s", ErrBadDestination, what, dir, err, remedy)
+	}
+	return fmt.Errorf("backup: %s %s: %w", what, dir, err)
+}
+
 // emptyDir makes dir if it is absent, refuses it if it holds anything, and
 // makes sure it is the caller's alone to read.
 func emptyDir(dir string) error {
@@ -515,12 +571,22 @@ func emptyDir(dir string) error {
 	// sealed credential the secret store bootstrapped and every seat's
 	// memory, and the coordination snapshot carries the company's
 	// credentials outright.
+	//
+	// A FAILURE THAT IS ABOUT THE PATH says so with ErrBadDestination
+	// (destinationFault): a path through a regular file, a parent that does
+	// not exist or cannot be written, a read-only mount — each is a fact
+	// about the directory the caller named, and the fix is to name another.
+	// Returned bare, they read as the engine failing, which sent an operator
+	// who typed /etc/passwd to the engine's log for a mistake in their own
+	// request. An I/O error or a full disk stays the engine's failure.
 	if err := os.MkdirAll(dir, 0o700); err != nil {
-		return fmt.Errorf("backup: create %s: %w", dir, err)
+		return prepareFailure("create", dir,
+			"name a directory the engine's host can create and write", err)
 	}
 	entries, err := os.ReadDir(dir)
 	if err != nil {
-		return fmt.Errorf("backup: read %s: %w", dir, err)
+		return prepareFailure("read", dir,
+			"name a directory the engine's host can read and write", err)
 	}
 	if len(entries) > 0 {
 		return fmt.Errorf("%w: %s holds %d entries — name a directory of its own, "+
@@ -539,7 +605,8 @@ func emptyDir(dir string) error {
 	// which is how anyone would drive this. The directory is ours by then:
 	// it was required to be empty two lines above.
 	if err := os.Chmod(dir, 0o700); err != nil {
-		return fmt.Errorf("backup: make %s private: %w", dir, err)
+		return prepareFailure("chmod 0700", dir,
+			"name a directory the engine's user owns", err)
 	}
 	return nil
 }
@@ -777,6 +844,10 @@ func (s *Service) announce(ctx context.Context, dir string, manifest Manifest) {
 		Dir:      dir,
 		Streams:  map[string]coord.Position{},
 		Verified: true,
+		// THE WHOLE ARTEFACT, the same two sums the `backup_taken` line
+		// logs: what an operator weighs against the disk it went to and
+		// the link it is about to be shipped over.
+		Bytes: storeBytes(manifest) + snapshotSize(manifest.Streams),
 	}
 	for stream, at := range manifest.Domains {
 		point.Streams[stream] = coord.Position{

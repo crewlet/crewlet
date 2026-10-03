@@ -10,14 +10,17 @@
  * shape and read where it went.
  */
 
-import { cleanup, fireEvent, render, screen, waitFor } from "~/test/inCase.ts";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "~/test/inCase.ts";
 import { afterEach, beforeAll, afterAll, expect, test, vi } from "vitest";
 
 import { Work } from "./Work.tsx";
 import { PeekHost, PeekNeighbours } from "~/app/frame/PeekHost.tsx";
 import { Router } from "~/app/router.tsx";
-import { useClient, useConnection, useOrg } from "~/lib/store-hooks.ts";
-import type { QueryName, WorkSummary } from "~/protocol/index.ts";
+import { FrameReadings } from "~/app/Shell.tsx";
+import { ClientContext } from "~/lib/store-hooks.ts";
+import { LiveSocket, Store, type QueryName, type WorkSummary } from "~/protocol/index.ts";
+import { LayerHost, ToastProvider } from "@crewlethq/ui";
+import type { ReactNode } from "react";
 import {
   CLAIMANT_HREF,
   CLAIMANT_TITLE,
@@ -29,11 +32,14 @@ import {
   peekNow,
 } from "~/test/keyCollision.ts";
 
-vi.mock("~/lib/store-hooks.ts", async () => {
-  const actual =
-    await vi.importActual<typeof import("~/lib/store-hooks.ts")>("~/lib/store-hooks.ts");
-  return { ...actual, useClient: vi.fn(), useConnection: vi.fn(), useOrg: vi.fn() };
-});
+class InertWebSocket {
+  static CONNECTING = 0;
+  static OPEN = 1;
+  static CLOSED = 3;
+  readyState = InertWebSocket.CONNECTING;
+  send(): void {}
+  close(): void {}
+}
 
 // jsdom implements no scrolling, and the grid scrolls its cursor row.
 const scrollIntoView = Element.prototype.scrollIntoView;
@@ -49,6 +55,9 @@ afterEach(() => {
   vi.restoreAllMocks();
   location.hash = "#/";
 });
+
+/** The client the screen reads: a real store, and a socket answering from `answers`. */
+let client: { store: Store; socket: LiveSocket };
 
 /** The pair, dated so the timeline draws a bar and the calendar a chip. */
 const rows = (): WorkSummary[] =>
@@ -67,10 +76,13 @@ function serving(shape: string) {
           }
         : { items: pair, groups: [], complete: true },
   };
-  const query = vi.fn(async (what: string) => answers[what as QueryName] ?? {});
-  vi.mocked(useClient).mockReturnValue({ socket: { query } } as never);
-  vi.mocked(useConnection).mockReturnValue({ connected: true } as never);
-  vi.mocked(useOrg).mockReturnValue({ name: "Acme", roles: [] } as never);
+  Object.defineProperty(globalThis, "WebSocket", { writable: true, value: InertWebSocket });
+  const store = new Store();
+  store.applyOrg({ name: "Acme", roles: [] } as never);
+  const socket = new LiveSocket(store);
+  socket.query = (async (what: string) =>
+    answers[what as QueryName] ?? {}) as unknown as typeof socket.query;
+  client = { store, socket };
 }
 
 /** Where each shape draws a row: the element carrying its link and its click. */
@@ -99,17 +111,33 @@ function anchorOf(shape: string, title: string): HTMLElement {
 const linkIn = (el: HTMLElement): HTMLElement =>
   el.matches("a") ? el : (el.querySelector<HTMLElement>("a.row-link") ?? el);
 
-const hrefOf = (el: HTMLElement) => linkIn(el).getAttribute("href");
+/**
+ * Where the row's link goes, without the list it carries: a task opened from a
+ * list carries that list's question (`?list=`) so its page can step through it,
+ * and which task it opens is the path.
+ */
+const hrefOf = (el: HTMLElement) => (linkIn(el).getAttribute("href") ?? "").split("?")[0];
+
+/** A screen inside the frame's readings — who the viewer is and their counts. */
+function framed(children: ReactNode) {
+  return (
+    <ToastProvider>
+      <LayerHost>
+        <ClientContext.Provider value={client}>
+          <FrameReadings>
+            <Router>{children}</Router>
+          </FrameReadings>
+        </ClientContext.Provider>
+      </LayerHost>
+    </ToastProvider>
+  );
+}
 
 for (const shape of ["list", "table", "board", "timeline", "calendar"]) {
   test(`the ${shape} opens each of two tasks under one key as itself`, async () => {
     location.hash = `#/work?shape=${shape}&month=2031-04`;
     serving(shape);
-    render(
-      <Router>
-        <Work />
-      </Router>,
-    );
+    render(framed(<Work />));
     await waitFor(() => expect(anchorOf(shape, DUPLICATE_TITLE)).toBeTruthy());
 
     // THE LINK: the claimant by the key a person reads, the duplicate by its
@@ -154,27 +182,35 @@ test("[ and ] step the rail between two tasks under one key", async () => {
   location.hash = "#/work?shape=list";
   serving("list");
   render(
-    <Router>
+    framed(
       <PeekNeighbours>
         <Work />
         <PeekHost />
-      </PeekNeighbours>
-    </Router>,
+      </PeekNeighbours>,
+    ),
   );
   await waitFor(() => expect(anchorOf("list", DUPLICATE_TITLE)).toBeTruthy());
 
-  fireEvent.click(linkIn(anchorOf("list", CLAIMANT_TITLE)));
+  // IN AN ASYNC ACT: the item's peek body is a lazy chunk, and the click that
+  // opens it suspends the rail until the chunk has loaded.
+  await act(async () => {
+    fireEvent.click(linkIn(anchorOf("list", CLAIMANT_TITLE)));
+  });
   await waitFor(() => expect(peekNow()).toBe(`item:${SHARED_KEY}`));
   // THE RAIL IS UP before a key is pressed, or `]` lands on no binding and
   // the case reads a stepper that was never drawn as one that did not move.
   await waitFor(() => expect(screen.getByLabelText("Next")).toBeTruthy());
 
-  fireEvent.keyDown(window, { key: "]" });
+  await act(async () => {
+    fireEvent.keyDown(window, { key: "]" });
+  });
   await waitFor(() => expect(peekNow()).toBe(`item:${DUPLICATE}`));
 
   // AND BACK: the duplicate's own entry is found by its id, so its rail has
   // a stepper at all.
   await waitFor(() => expect(screen.getByLabelText("Previous")).toBeTruthy());
-  fireEvent.keyDown(window, { key: "[" });
+  await act(async () => {
+    fireEvent.keyDown(window, { key: "[" });
+  });
   await waitFor(() => expect(peekNow()).toBe(`item:${SHARED_KEY}`));
 });

@@ -10,10 +10,12 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/agent/builtin"
+	"github.com/crewlet/crewlet/internal/agent/prefetch"
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/learning"
 	"github.com/crewlet/crewlet/internal/org"
+	"github.com/crewlet/crewlet/internal/tools"
 )
 
 // The company's own retrieval_limit, honoured. It was validated (1..20),
@@ -344,18 +346,51 @@ func TestQueryEpisodesSearchesByMeaning(t *testing.T) {
 
 // "Nothing resembles this" and "this deployment cannot search by meaning" send
 // a model to opposite places: the second has a fallback it can still use, so
-// it must not read as the first.
+// it must not read as the first — and it is a CONDITION of what this
+// deployment runs, never a fault of the node, whose sentence tells a model the
+// call fails the same way whatever it asks.
+//
+// The recaller answers it itself for a company with no embeddings (and for a
+// provider that did not answer), and it is the same fact as a registry wired
+// with no recaller at all; only the recaller's own store failing is a fault.
+//
+// Mutation: drop prefetch.ErrNoSimilarity from query_episodes' switch and the
+// recaller's case goes red as internal_error; class the store's failure as
+// unavailable and its case does.
 func TestQueryEpisodesSaysWhenItCannotSearchByMeaning(t *testing.T) {
 	t.Parallel()
-	tool := registered(t, builtin.Deps{Episodes: &countingEpisodes{}},
-		builtin.QueryEpisodesTool)
+	disk := errors.New("learning: recall: open /var/lib/crewlet/node.db: disk I/O error")
+	for _, c := range []struct {
+		name   string
+		recall builtin.Recaller
+		class  tools.Refusal
+		says   string
+	}{
+		{"no recaller is wired", nil, tools.RefusalUnavailable, "without `query`"},
+		{"the recaller has no embeddings", &fakeRecall{err: fmt.Errorf("wrapped: %w",
+			prefetch.ErrNoSimilarity)}, tools.RefusalUnavailable, "without `query`"},
+		{"the recaller's store broke", &fakeRecall{err: disk},
+			tools.RefusalInternalError, "node's log"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			tool := registered(t, builtin.Deps{Episodes: &countingEpisodes{},
+				Recall: c.recall}, builtin.QueryEpisodesTool)
 
-	res := callFor(t, tool, turnFor(t, "agent-ceo"), map[string]any{"query": "anything"})
-	if !res.Failed {
-		t.Fatalf("a query with no recall configured reported success: %q", res.Output)
-	}
-	if !strings.Contains(res.Output, "embeddings") {
-		t.Errorf("the refusal does not say why: %q", res.Output)
+			res := callFor(t, tool, turnFor(t, "agent-ceo"), map[string]any{"query": "anything"})
+			if !res.Failed {
+				t.Fatalf("a query that could not search reported success: %q", res.Output)
+			}
+			if got := tools.RefusalOf(res); got != c.class {
+				t.Errorf("classed %q, want %q: %q", got, c.class, res.Output)
+			}
+			if !strings.Contains(res.Output, c.says) {
+				t.Errorf("the refusal does not say %q: %q", c.says, res.Output)
+			}
+			if strings.Contains(res.Output, "/var/lib") {
+				t.Errorf("the store's own error reached the sentence: %q", res.Output)
+			}
+		})
 	}
 }
 

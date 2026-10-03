@@ -3,9 +3,11 @@ package tracker_test
 import (
 	"database/sql"
 	"errors"
+	"fmt"
 	"slices"
 	"strings"
 	"testing"
+	"time"
 	"unicode/utf8"
 
 	"github.com/crewlet/crewlet/internal/statelog"
@@ -452,6 +454,139 @@ func TestALongCommentBodyIsAnExcerptWithAWayBackToTheWhole(t *testing.T) {
 	}
 }
 
+// EVERY COMMENT IS REACHABLE, PAST THE DETAIL'S TWENTY.
+//
+// The detail returns the newest [tracker.DetailComments] and a cursor, and a
+// thread longer than that was cut there on every screen: nothing followed the
+// cursor. This walks a thread of 57 at a page of 25 and must meet every
+// comment exactly once, oldest-to-newest inside each page, and end with no
+// cursor — and a page asked above the ceiling is held to it.
+func TestWorkCommentsPagesPastTheDetailsTwenty(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+	created := r.createTask("a long conversation")
+	const total = 57
+	for i := range total {
+		if _, err := r.writer.UpdateTask(t.Context(), fmt.Sprintf("op-c-%d", i),
+			created.ID, "ENG", tracker.NoIfMatch, tracker.TaskPatch{Comment: &tracker.Comment{
+				ID: fmt.Sprintf("cm-%02d", i), Task: created.ID, Author: "ana",
+				AuthorKind: tracker.AuthorHuman, Body: fmt.Sprintf("comment %d", i),
+				CreatedAt: wednesday.Add(time.Duration(i) * time.Minute),
+			}}, tracker.ChangeComment, nil); err != nil {
+			t.Fatalf("comment %d: %v", i, err)
+		}
+		// APPLIED BEFORE THE NEXT, since each write is decided from the
+		// state the one before it left.
+		r.drain()
+	}
+
+	first, err := r.reader.Task(t.Context(), created.ID, tracker.DetailWants{Comments: true},
+		statelog.Freshness{Level: statelog.ReadStale})
+	if err != nil {
+		t.Fatalf("detail: %v", err)
+	}
+	if len(first.Comments) != tracker.DetailComments || first.CommentsCursor == "" {
+		t.Fatalf("the detail holds %d comments and cursor %q, want its own page of %d and a cursor",
+			len(first.Comments), first.CommentsCursor, tracker.DetailComments)
+	}
+
+	seen := map[string]bool{}
+	cursor, pages := "", 0
+	for {
+		page, err := r.reader.Task(t.Context(), created.ID, tracker.DetailWants{
+			Comments: true, CommentCursor: cursor, CommentLimit: 25,
+		}, statelog.Freshness{Level: statelog.ReadStale})
+		if err != nil {
+			t.Fatalf("page %d: %v", pages, err)
+		}
+		pages++
+		for i, c := range page.Comments {
+			if seen[c.ID] {
+				t.Fatalf("%s came back on two pages", c.ID)
+			}
+			seen[c.ID] = true
+			if i > 0 && c.CreatedAt.Before(page.Comments[i-1].CreatedAt) {
+				t.Errorf("page %d is not in written order at %s", pages, c.ID)
+			}
+		}
+		if page.CommentsCursor == "" {
+			break
+		}
+		cursor = page.CommentsCursor
+		if pages > total {
+			t.Fatal("the cursor never ran out")
+		}
+	}
+	if len(seen) != total || pages != 3 {
+		t.Fatalf("walked %d of %d comments in %d pages, want all of them in 3", len(seen), total, pages)
+	}
+
+	held, err := r.reader.Task(t.Context(), created.ID, tracker.DetailWants{
+		Comments: true, CommentLimit: 500,
+	}, statelog.Freshness{Level: statelog.ReadStale})
+	if err != nil {
+		t.Fatalf("an oversized page: %v", err)
+	}
+	if len(held.Comments) != tracker.MaxCommentPage {
+		t.Errorf("a page asked at 500 held %d, want the ceiling %d", len(held.Comments), tracker.MaxCommentPage)
+	}
+}
+
+// A TASK FILED AND A REMARK MADE THROUGH A PERSON'S OWN TOKEN NAME THE PERSON.
+//
+// Bound to a seat, a person writes AS it (iam.ActorFor): the reporter and the
+// comment's author ARE the seat, and the token is the operator id the history
+// keeps beside the actor. There is no second "the seat behind the token" field
+// a screen must prefer over the record, and a seat renamed since is drawn as
+// it is called now, from the one reading of the chart the answer takes.
+func TestATaskFiledThroughAPersonsTokenNamesThePerson(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+	jane := r.writer.As("jane-founder", tracker.AuthorHuman, tracker.Provenance{
+		OperatorID: "pat:jane-laptop",
+	})
+	filed := newTask("t-filed-by-token")
+	filed.Key = ""
+	filed.Reporter = "jane-founder"
+	if _, err := jane.CreateTask(t.Context(), "op-filed", filed, nil); err != nil {
+		t.Fatalf("create through the token: %v", err)
+	}
+	r.drain()
+	remark := tracker.Comment{ID: "c-token", Task: filed.ID, Author: "jane-founder",
+		AuthorKind: tracker.AuthorHuman, Body: "hold it", CreatedAt: wednesday}
+	if _, err := jane.UpdateTask(t.Context(), "op-remark", filed.ID, "ENG",
+		tracker.NoIfMatch, tracker.TaskPatch{Comment: &remark}, tracker.ChangeComment,
+		nil); err != nil {
+		t.Fatalf("comment through the token: %v", err)
+	}
+	r.drain()
+
+	r.reader.Identities = renamed{"jane": "jane-founder"}
+	got, err := r.reader.Task(t.Context(), filed.ID, tracker.DetailWants{
+		Comments: true, History: true,
+	}, statelog.Freshness{Level: statelog.ReadStale})
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	if got.Task.Reporter != "jane" {
+		t.Errorf("reporter %q, want the person as she is called now", got.Task.Reporter)
+	}
+	if len(got.Comments) != 1 || got.Comments[0].Author != "jane" {
+		t.Errorf("the thread is %+v, want one remark by jane", got.Comments)
+	}
+	if len(got.History) == 0 {
+		t.Fatal("the task has no history")
+	}
+	for _, entry := range got.History {
+		if entry.Actor != "jane" || entry.ActorKind != tracker.AuthorHuman ||
+			entry.OperatorID != "pat:jane-laptop" {
+			t.Errorf("history row %s is %q (%s) via %q, want jane as a person "+
+				"through her token", entry.Kind, entry.Actor, entry.ActorKind,
+				entry.OperatorID)
+		}
+	}
+}
+
 // A COMMENT ID THAT IS NOT ON THIS TASK IS ITS OWN ANSWER.
 //
 // Its own sentinel beside ErrNoTask, because the caller's answer differs: a
@@ -481,5 +616,42 @@ func TestAnUnknownCommentIsItsOwnAnswer(t *testing.T) {
 				"which a caller cannot tell from a store it could not reach",
 				id, err)
 		}
+	}
+}
+
+// A TASK NAMES THE TASK IT IS FILED UNDER.
+//
+// A task carries its parent's id — the record — and a page heading itself
+// "Part of LEAD-12 · 2.4 release" needed a second read of the parent to say
+// it. The detail answers the parent's key, title and status in its own
+// transaction, and a top-level task names none.
+func TestTheDetailNamesTheTaskItIsFiledUnder(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+	parent := r.createTask("The 2.4 release")
+	child := r.createTask("Retry PXE boot")
+	if _, err := r.writer.UpdateTask(t.Context(), "op-parent", child.ID, "ENG", tracker.NoIfMatch,
+		tracker.TaskPatch{Parent: strptr(parent.ID)}, tracker.ChangeReparented, nil); err != nil {
+		t.Fatalf("re-parent: %v", err)
+	}
+	r.drain()
+
+	detail, err := r.reader.Task(t.Context(), child.Key, tracker.DetailWants{},
+		statelog.Freshness{Level: statelog.ReadSession})
+	if err != nil {
+		t.Fatalf("read the child: %v", err)
+	}
+	want := tracker.TaskRef{ID: parent.ID, Key: parent.Key, Title: "The 2.4 release",
+		Status: parent.Status}
+	if detail.Parent == nil || *detail.Parent != want {
+		t.Fatalf("the child names its parent as %+v, want %+v", detail.Parent, want)
+	}
+	top, err := r.reader.Task(t.Context(), parent.Key, tracker.DetailWants{},
+		statelog.Freshness{Level: statelog.ReadSession})
+	if err != nil {
+		t.Fatalf("read the parent: %v", err)
+	}
+	if top.Parent != nil {
+		t.Errorf("a top-level task names a parent %+v", top.Parent)
 	}
 }

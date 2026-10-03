@@ -4,43 +4,97 @@ import (
 	"encoding/json"
 	"fmt"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/jsoncarry"
+	"github.com/crewlet/crewlet/internal/statelog"
 )
 
-// RecordVersion is the record shape THIS BUILD can decode.
+// RecordVersion is the record shape THIS BUILD can decode — never the version
+// it stamps on what it writes.
 //
 // A record above it is RETAINED rather than skipped — see the deferral
 // contract in [statelog] — which is what makes a rolling upgrade a period of
-// reduced coverage rather than an outage.
+// reduced coverage rather than an outage. What a writer stamps is the LOWEST
+// version that reads the record, computed by [Encode] from
+// [versionedFields]; internal/tracker's RecordVersion states why, and
+// the rule is one rule across both strict domains.
+//
+// It moves ONLY with the table, and exactly to the table's highest version:
+// statelogtest's declaration case refuses a build that reads a version no
+// field introduced, because such a build would accept a newer peer's record
+// at that version and drop the field it was minted for.
 //
 // # What each version added
 //
 //   - 1: every shape this domain has.
-//   - 2: a container's settings carry the position on the org chart's log
+//   - 2: RETIRED. The field it carried — `chart_epoch`, a container's stamp
+//     of the configuration activation its settings were written from — does
+//     not exist in this build: a container is stamped by the org chart's log
+//     position instead, at 3. The position does not take the number over,
+//     because a version is a statement about which fields a record may
+//     carry, and one number naming two different fields is two builds
+//     disagreeing about what a record at it holds.
+//   - 3: a container's settings carry the position on the org chart's log
 //     they were derived from ([ContainerPayload.ChartPosition]).
-//
-// A record is WRITTEN at the lowest version a reader can apply without
-// losing anything it says, never simply at this constant — see
-// [recordVersionOf] for why that matters to a node still on the older build.
-const RecordVersion = 2
+const RecordVersion = 3
 
-// baseRecordVersion is the version a record whose shape no later version
-// changed is written at: 1, which every build there has ever been reads.
+// baseRecordVersion is version 1, the base format: what every build there has
+// ever been reads, and what a record carrying no versioned field is stamped at.
 //
-// THE BARRIER AND A REANCHOR'S GENERATION ARE WRITTEN AT IT FOR EVER, never at
-// [RecordVersion], because of what an older node does with a record it cannot
-// read: it retains it. A retained barrier is one more deferral row on that
-// node for every linearizable read anybody makes, and a node holding a
-// deferral declines to snapshot until it upgrades; a retained generation is a
-// transition that node never makes. Neither has anything a later version
-// could add to it.
+// THE BARRIER AND A REANCHOR'S GENERATION ARE PINNED AT IT FOR EVER, as every
+// gate is ([GateRecordVersion]) — never at [RecordVersion], and never left to a
+// table that could one day raise them — because of what an older node does
+// with a record it cannot read: it retains it. A retained barrier is one more
+// deferral row on that node for every linearizable read anybody makes, and a
+// node holding a deferral declines to snapshot until it upgrades; a retained
+// generation is a transition that node never makes. Neither has anything a
+// later version could add to it, and [Encode] refuses either one carrying a
+// versioned field ([RecordEnvelope.readByEveryBuild]).
 const baseRecordVersion = 1
 
-// containerPositionVersion is the version a container's settings are written at
-// since they began carrying the chart position. See [recordVersionOf].
-const containerPositionVersion = 2
+// versionedFields is every field a pages record has gained since the base
+// format, and the version a reader must be at to apply a record carrying it.
+//
+// Adding a field to a record, a payload or a document is adding a row here,
+// moving [RecordVersion] to its version, and giving the domain's statelogtest
+// candidate a record that carries it — on the tracker's terms, which are the
+// framework's ([statelog.VersionedField]). A field no tag has shipped is still
+// a field two builds of one rolling upgrade disagree about, so "nothing has
+// been released" does not exempt a new field from its row.
+//
+// VERSION 2 HAS NO ROW: it is retired (see [RecordVersion]), and a row naming
+// a field this build does not have would stamp nothing and certify nothing.
+var versionedFields = statelog.RecordFields{
+	// A CONTAINER'S CHART POSITION, at version 3. A build that cannot
+	// read it decodes a container's settings around it and applies the
+	// rest: its row then says nothing about which chart wrote it, so on
+	// that node the position guard ([Store.EnsureContainer]) has nothing
+	// to refuse an older chart with — the walk-back the stamp exists to
+	// stop, open on the very node that could not read it — and its
+	// document differs from every other node's.
+	//
+	// EVERY RECORD THAT CARRIES ONE, A RE-STAMP INCLUDED. A later chart
+	// position over the settings a row already holds carries nothing new
+	// but the stamp, and writing it at a version an older build applies
+	// whole — so as not to hold back the page writes in that space — leaves
+	// the row unstamped on that node while every peer holds the stamp: the
+	// first stale chart that node applies before re-stamping then walks
+	// the settings back for the whole fleet, because appliers apply what a
+	// writer decided. Retained, it is applied with its stamp the moment the
+	// node reads version 3. The price is the one every row here states: a
+	// node that cannot read it holds back that container, and the page
+	// writes nested in it, until it is upgraded.
+	//
+	// Scoped to the patch op, which is the one a container's settings ride;
+	// no page patch carries `chart_position`.
+	{Name: "ContainerPayload.ChartPosition", Since: 3, Op: string(OpPatch),
+		Path: []string{"mutation", "chart_position"}},
+}
+
+// VersionedFields is the table, for the conformance suite.
+func VersionedFields() statelog.RecordFields { return slices.Clone(versionedFields) }
 
 // GateRecordVersion is the version every gate-installing record carries, FOR
 // EVER.
@@ -183,6 +237,22 @@ type RecordEnvelope struct {
 // inverse that repairs it.
 func (e RecordEnvelope) InstallsGate() bool {
 	return e.Subject.Kind.InstallsGate() || e.Op == OpPurge
+}
+
+// readByEveryBuild reports a record every build there will ever be must read:
+// a gate ([RecordEnvelope.InstallsGate]), the read index's barrier, and a
+// reanchor's generation.
+//
+// Each is pinned at [baseRecordVersion] for its own reason, and all three
+// reasons are what an older node does with a record it cannot read. A gate it
+// deferred would leave its gate table empty while it went on applying every
+// record the gate was meant to drop, with no inverse that repairs it; a
+// barrier it retained is one more deferral row for every linearizable read;
+// a generation it retained is a transition it never makes. So none of them
+// may carry a versioned field, and [Encode] refuses one that does — a field
+// such a record needs is a field that belongs somewhere else.
+func (e RecordEnvelope) readByEveryBuild() bool {
+	return e.InstallsGate() || e.Op == OpBarrier || e.Op == OpGeneration
 }
 
 // MutationRecord is one committed mutation: the envelope plus everything a
@@ -344,7 +414,8 @@ func Decode(payload []byte) (MutationRecord, error) {
 	return rec, nil
 }
 
-// Encode renders a record, carrying back whatever a newer build wrote.
+// Encode renders a record, carrying back whatever a newer build wrote, and
+// stamps it with the lowest version that reads it.
 //
 // LOSSLESS IN BOTH DIRECTIONS, which is what makes a rolling upgrade safe: a
 // node that read a record it only half understood and republished it — the
@@ -354,11 +425,53 @@ func Decode(payload []byte) (MutationRecord, error) {
 // rather than a second merge of its own: a carried field LOSES to a known one,
 // and two implementations of that rule are one place where a stale carried
 // copy undoes the write that set it.
-func Encode(rec MutationRecord) ([]byte, error) {
+//
+// A ZERO VERSION IS "STAMP IT", on the tracker's rule: every writer leaves V
+// unset and this stamps [versionedFields]' minimum over the bytes it is about
+// to publish. A set version is kept — a relay keeps its writer's, a barrier
+// and a generation their pinned [baseRecordVersion] — and refused when it is
+// below what the record carries. A record every build must read
+// ([RecordEnvelope.readByEveryBuild]) is refused whenever it carries a
+// versioned field at all, stamped or set.
+func Encode(rec MutationRecord) ([]byte, error) { return encodeWith(rec, versionedFields) }
+
+// encodeWith is [Encode] under a named field table — the seam the stamping
+// rule is tested through, since a stand-in table can name a field on any op
+// while the production table names only the fields records actually gained.
+func encodeWith(rec MutationRecord, fields statelog.RecordFields) ([]byte, error) {
+	stamp := rec.V == 0
+	if stamp {
+		rec.V = baseRecordVersion
+	}
 	data, err := jsoncarry.Encode(rec, rec.Extra)
 	if err != nil {
 		return nil, fmt.Errorf("pages: encode the record on %s: %w",
 			rec.Subject, err)
+	}
+	minimum, err := fields.Minimum(string(rec.Op), data)
+	if err != nil {
+		return nil, fmt.Errorf("pages: stamp the record on %s: %w", rec.Subject, err)
+	}
+	switch {
+	case rec.readByEveryBuild() && minimum > baseRecordVersion:
+		return nil, fmt.Errorf("pages: the %s record on %s must be readable by "+
+			"every build for ever — an older node defers a gate, and retains a "+
+			"barrier or a generation, that it cannot read — and it carries %s, "+
+			"so a field it needs belongs somewhere else", rec.Op, rec.Subject,
+			strings.Join(fields.Carried(string(rec.Op), data), ", "))
+	case rec.V >= minimum:
+	case stamp:
+		rec.V = minimum
+		if data, err = jsoncarry.Encode(rec, rec.Extra); err != nil {
+			return nil, fmt.Errorf("pages: encode the record on %s: %w",
+				rec.Subject, err)
+		}
+	default:
+		return nil, fmt.Errorf("pages: the %s record on %s is stamped version %d "+
+			"and carries %s — a build reading %d would decode it, drop what it has "+
+			"no field for and apply the rest; leave the version unset and the "+
+			"encoder stamps the lowest one that reads it", rec.Op, rec.Subject,
+			rec.V, strings.Join(fields.Carried(string(rec.Op), data), ", "), rec.V)
 	}
 	return data, nil
 }

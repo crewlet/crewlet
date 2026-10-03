@@ -873,7 +873,7 @@ type Stream struct {
 	// EMBEDDED ONLY, for the reason `store_dir` and `debug` are: it is
 	// handed to the server this process STARTS. An external cluster's
 	// account limits are its own operator's to set.
-	StoreMaxBytes int64 `yaml:"store_max_bytes,omitempty" json:"store_max_bytes,omitempty" js:"min=5368709120;max=70368744177664" desc:"How much of store_dir's volume the EMBEDDED broker may hold; unset lets it take three quarters of that volume's free space at boot. Divide it when several engines share one filesystem."`
+	StoreMaxBytes int64 `yaml:"store_max_bytes,omitempty" json:"store_max_bytes,omitempty" js:"min=6442450944;max=70368744177664" desc:"How much of store_dir's volume the EMBEDDED broker may hold; unset lets it take three quarters of that volume's free space at boot. Divide it when several engines share one filesystem."`
 
 	// Cluster makes the embedded server join peers, which is the fleet
 	// topology: every node embeds a member of one cluster.
@@ -1018,19 +1018,20 @@ type Stream struct {
 	// ordered stream every change to the company's own structure goes
 	// through.
 	//
-	// UNSET TAKES A FLAT 64 MiB, and it is the only state log here that is
-	// NOT derived from the disk. The reason is that the other three grow
-	// with a corpus the operator's volume has something to say about, and
-	// this one does not: a chart is hundreds of objects, it changes when
-	// somebody is hired, moved or promoted, and 64 MiB is about two and a
-	// half years of a COMPLETELY BLOCKED trim at the modelled rate, once the
-	// gate reserve its largest record sizes is kept. A quarter of a storage
-	// array would be disk reserved for records no company will ever write,
-	// and a quarter of a laptop would be the same number by coincidence.
+	// UNSET TAKES A FLAT 64 MiB, and like the identity estate's and the
+	// usage log's it is NOT derived from the disk. The reason is that the
+	// corpus-sized logs grow with a corpus the operator's volume has
+	// something to say about, and this one does not: a chart is hundreds of
+	// objects, it changes when somebody is hired, moved or promoted, and
+	// 64 MiB is about two and a half years of a COMPLETELY BLOCKED trim at
+	// the modelled rate, once the gate reserve its largest record sizes is
+	// kept. A quarter of a storage array would be disk reserved for records
+	// no company will ever write, and a quarter of a laptop would be the
+	// same number by coincidence.
 	//
-	// SMALLER THAN EVERY OTHER LOG'S FLOOR, deliberately: the broker grants
-	// a stream its whole ceiling when it creates it, so this number is free
-	// space a node must have before it can boot at all. See
+	// SMALLER THAN THE CORPUS-SIZED LOGS' FLOOR, deliberately: the broker
+	// grants a stream its whole ceiling when it creates it, so this number
+	// is free space a node must have before it can boot at all. See
 	// [DefaultChartLogMaxBytes] for the boot this cost at a gibibyte.
 	//
 	// It shares the state logs' one budget, and what the mutation log's
@@ -1074,6 +1075,32 @@ type Stream struct {
 	// append rather than shedding history — which here would be shedding
 	// the authentication trail.
 	IamLogMaxBytes int64 `yaml:"iam_log_max_bytes,omitempty" json:"iam_log_max_bytes,omitempty" js:"min=67108864;max=17179869184" desc:"Byte ceiling on the identity estate's log; unset takes a flat 512 MiB, 64 MiB..16 GiB."`
+
+	// UsageLogMaxBytes is the byte ceiling on the usage log — the compacted
+	// stream every node publishes its own company days to, so that spend,
+	// turn and read history is answered fleet-wide and outlives the node
+	// that spent it.
+	//
+	// SIZED BY A CENSUS, NOT A RATE: the stream keeps one message per
+	// (node, day, seat or schedule) for 181 days, so its size is the
+	// number of those objects rather than how busy they were. A three-node
+	// fleet of forty seats and twenty schedules is about 217 MB; the 1 GiB
+	// default is four times that. Unset takes the default rather than a
+	// share of the disk, because a census is a property of the fleet's
+	// seats and schedules and a larger volume buys no more of them.
+	//
+	// THE FLOOR IS THE ORG CHART'S 64 MiB rather than the gibibyte the
+	// corpus-sized logs take, because the broker grants a stream its whole
+	// ceiling when it creates it: this number is free space a node must
+	// have before it can boot at all, and a ten-seat node's 181-day census
+	// is about 12 MB. See [UsageLogMaxBytesFloor].
+	//
+	// It shares the state logs' one budget, and what the mutation log's
+	// field says about it holds here: the value is the one the stream is
+	// CREATED with, and crossing it refuses the append — the day's figures
+	// stop replicating and the log's headroom alarm names this domain —
+	// rather than dropping the oldest day.
+	UsageLogMaxBytes int64 `yaml:"usage_log_max_bytes,omitempty" json:"usage_log_max_bytes,omitempty" js:"min=67108864;max=68719476736" desc:"Byte ceiling on the usage log, the compacted stream each node's company days replicate on; default 1 GiB, sized for 181 days of a fleet's seats and schedules, 64 MiB..64 GiB."`
 
 	// TrackerRetention is when the log may be trimmed, and it is the one
 	// block here that can stop a fleet's log growing for ever — or stop it
@@ -1392,6 +1419,8 @@ func (s *Stream) validate(path Path) error {
 		ChartLogMaxBytesFloor, ChartLogMaxBytesCeiling)
 	bytesInRange(&p, path, "iam_log_max_bytes", s.IamLogMaxBytes,
 		IamLogMaxBytesFloor, IamLogMaxBytesCeiling)
+	bytesInRange(&p, path, "usage_log_max_bytes", s.UsageLogMaxBytes,
+		UsageLogMaxBytesFloor, UsageLogMaxBytesCeiling)
 	bytesInRange(&p, path, "store_max_bytes", s.StoreMaxBytes,
 		StoreMaxBytesFloor, StoreMaxBytesCeiling)
 	// A LIMIT SMALLER THAN THE CEILINGS DECLARED INSIDE IT is a refusal
@@ -1416,20 +1445,22 @@ func (s *Stream) validate(path Path) error {
 	// the refusal itself, which names this limit, what was already spoken
 	// for, and the field the ceiling came from.
 	declared := s.TrackerLogMaxBytes + s.TrackerVectorsMaxBytes +
-		s.PagesLogMaxBytes + s.ChartLogMaxBytes + s.IamLogMaxBytes
+		s.PagesLogMaxBytes + s.ChartLogMaxBytes + s.IamLogMaxBytes +
+		s.UsageLogMaxBytes
 	if s.StoreMaxBytes > 0 && declared > s.StoreMaxBytes {
 		p.add(at(path, "store_max_bytes"), ErrConflict,
 			"%d bytes is smaller than the stream ceilings declared inside it "+
 				"(tracker_log_max_bytes %d + tracker_vectors_max_bytes %d + "+
 				"pages_log_max_bytes %d + chart_log_max_bytes %d + "+
-				"iam_log_max_bytes %d = %d): the broker "+
+				"iam_log_max_bytes %d + usage_log_max_bytes %d = %d): the broker "+
 				"refuses a stream whose ceiling it cannot back, so this node would "+
 				"fail to provision one of them. Raise store_max_bytes, or lower the "+
 				"ceilings — and leave headroom, because the state logs reserve only "+
 				"a share of this limit and every other stream on the broker grows "+
 				"inside it",
 			s.StoreMaxBytes, s.TrackerLogMaxBytes, s.TrackerVectorsMaxBytes,
-			s.PagesLogMaxBytes, s.ChartLogMaxBytes, s.IamLogMaxBytes, declared)
+			s.PagesLogMaxBytes, s.ChartLogMaxBytes, s.IamLogMaxBytes,
+			s.UsageLogMaxBytes, declared)
 	}
 	p.wrap(s.TrackerRetention.validate(at(path, "tracker_retention")))
 	// Refused here rather than at the broker. nats-server validates an

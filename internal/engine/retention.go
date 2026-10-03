@@ -207,6 +207,9 @@ func (e *Engine) startRetention(ctx context.Context, boot *config.Bootstrap, s *
 	loop, stop := context.WithCancel(context.WithoutCancel(ctx))
 	r.stop = stop
 	e.retention.Store(r)
+	// PUBLISHED FOR THE HEALTH ENVELOPE before either loop starts, so the
+	// first probe after a boot reads the tracker the first beat will feed.
+	e.alarms.Store(r.alarms)
 	r.done.Add(2)
 	go func() {
 		defer r.done.Done()
@@ -251,12 +254,34 @@ func (e *Engine) RetentionReport(ctx context.Context) (statelog.Report, bool) {
 	return r.Report(ctx), true
 }
 
+// Alarms is this node's standing alarms as its latest evaluation found them,
+// the longest-standing first ([statelog.Tracker.Standing]), and false where no
+// evaluation has run: a node mid-boot, or one running no state log, which has
+// no alarm table to evaluate.
+//
+// THE EVALUATION THE GAUGE AND THE LOG WERE FED, never a fresh report. The
+// health envelope reads this on every probe and every push tick, and a report
+// assembled there would be a second evaluation per caller — the cost scaling
+// with how many tabs are open, and the count on the screen able to disagree
+// with the alarm line the log just wrote.
+func (e *Engine) Alarms() ([]statelog.StandingAlarm, bool) {
+	tracker := e.alarms.Load()
+	if tracker == nil {
+		return nil, false
+	}
+	return tracker.Standing()
+}
+
 // run ticks until the context ends.
 //
 // IT TICKS IMMEDIATELY, which matters more here than the usual reason: the
 // published floor is what every other surface reads a blocked trim from, and a
 // fleet that had just started would otherwise answer "no floor published" for
 // fifteen minutes — indistinguishable from a fleet whose duty is not running.
+//
+// ONLY THE TRIM. The alarm table is evaluated on its own faster beat as well
+// ([retention.heartbeat]), on a goroutine of its own; [retention.beating]
+// keeps the two evaluations from interleaving.
 func (r *retention) run(ctx context.Context) {
 	ticker := time.NewTicker(statelog.TrimInterval)
 	defer ticker.Stop()
@@ -771,16 +796,7 @@ func holdsFor(holds []coord.TrimHold, stream string) []statelog.Hold {
 func (r *retention) backupTerm(points []coord.BackupPoint, stream string) (
 	seq uint64, at time.Time, generation uint32, have bool) {
 
-	eligible := points
-	if r.cfg.Floor() == config.BackupFloorOperator {
-		eligible = nil
-		for _, p := range points {
-			if p.Owner == coord.OperatorBackupOwner {
-				eligible = append(eligible, p)
-			}
-		}
-	}
-	newest, ok := coord.NewestBackup(eligible)
+	newest, ok := r.newestCounted(points)
 	if !ok {
 		return 0, time.Time{}, 0, false
 	}
@@ -793,6 +809,15 @@ func (r *retention) backupTerm(points []coord.BackupPoint, stream string) (
 		return 0, time.Time{}, 0, false
 	}
 	return reach.Seq, newest.At, reach.Generation, true
+}
+
+// newestCounted is the newest verified backup the operator's policy takes the
+// word of — the one point both the trim's backup term and the backup-age alarm
+// read, through [coord.CountedBackups], so the alarm can never age a backup the
+// trim does not count.
+func (r *retention) newestCounted(points []coord.BackupPoint) (coord.BackupPoint, bool) {
+	return coord.NewestBackup(coord.CountedBackups(points,
+		r.cfg.Floor() == config.BackupFloorOperator))
 }
 
 // feedTerm is how far this domain's wake feed has acknowledged.

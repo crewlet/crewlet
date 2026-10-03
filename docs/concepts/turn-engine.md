@@ -43,7 +43,7 @@ A fresh agent (no onboarding marker for its current org chain) needs to read its
 
 The marker invalidates itself when the org chain changes (`learning.ChainHash`, a hash of the seat's path through the organization), so a role move or a reorganization re-triggers onboarding for the new context. Set `onboarding_max_tool_rounds: 0` to disable the dedicated pass. When no marker store is wired (a node with no store), onboarding is skipped, because there is no way to record completion and the pass would otherwise run every turn. A human seat never onboards.
 
-On the dashboard, onboarding renders as its own phase within the turn it rode in on, with a neutral tag rather than one of the phase hues — it is one-time setup that happens to ride the first turn, not part of that turn's task, and colour is reserved for the phases a reader tracks across every screen.
+On the dashboard, onboarding renders as its own phase within the turn it rode in on, on the same neutral tag every phase takes — a phase is a category, and a category is its word rather than a colour. Inside a chart it is counted in the Auxiliary band: it is one-time setup that happens to ride the first turn, not part of that turn's task.
 
 ---
 
@@ -104,6 +104,8 @@ The turn engine checks the executor's account against its own record three times
 **What counts as a delivery, and where it lands** is one rule, applied everywhere. A tool delivers (`turn.Deliverable`) when it is **MCP-served and not positively annotated read-only**, or when it is a **first-party tool the engine registered as one that reaches somebody** — the native tracker's writes and the knowledge base's do, `reflect_and_persist` and `use_skill` do not, and the flag is set at registration rather than derived from annotations, because a diary write and a work-item comment are annotated identically. "Not a known read" is POSITIVE: an unannotated MCP tool counts as a possible delivery, which is the fail-closed direction, since the alternative exempts every tool a server forgot to [annotate](tool-capabilities.md). Only SUCCESSFUL calls count — a failed post did not post, and counting it would close the check on exactly the turn that needs to iterate.
 
 Each delivering tool also declares **which surface it reaches**: an MCP tool's is its own server (`mattermost`, `slack`, `github`), and an engine builtin's is the native feed's own source — `work` for the tracker, `page` for the knowledge base. Those are the same names an inbound notification reports its source under, and the gate compares the two — because "did this turn reach anybody" and "did the person waiting get told" are different questions, and only the second one matters to the asker. Asking the first is how a founder's Mattermost DM was closed out by a row in the tracker: the seat filed a work item instead of answering, every check passed, and the thread's last message stayed a clarification question the founder had already been answered out from under.
+
+**A notification may owe a surface other than its own source.** The answer to a [decision](../guides/work-tracker.md#asking-for-a-decision) whose asker promised to report the outcome in a chat channel arrives from the tracker (`work`), and on its source alone a comment on the item would close the turn. So the asker's copy carries `owes` — the chat surface the decision's `inform` named — and the obligation is raised on that surface instead: the turn is sent back until a tool on `slack` or `mattermost` has run, whether or not the tracker read the wake as addressed. Only the asker's copy owes it, and a merge of wakes carries it through; the tracker partitions an owing wake apart from the rest of the item's conversation, so one turn never owes two surfaces.
 
 The surface check **narrows only where it can**, and the two fallbacks are the design rather than leniency:
 
@@ -260,17 +262,17 @@ A turn can also end `failed` without the reviewer choosing it. Every failed turn
 | Every member of the provider chain failed retryably | `llm_unavailable`, with the chain it tried | `error` |
 | Any other broken phase | none | `error` |
 
-Those dedicated events are what the dashboard's `afk` state is derived from. A reviewer's own `failed` fired no guard, so it publishes none of them.
+Those dedicated events are what the seat's `last_error` is taken from, and `llm_unavailable` is also what reads the seat as `stopped` with the reason `provider` (see [Agent States](agent-runtime.md#agent-states)). A reviewer's own `failed` fired no guard, so it publishes none of them.
 
 A panic is the one cause that is both an error and a breach: the error says what broke and names the phase and round, the breach names the guard. The summary carries both, keeping the error's own text and taking the guard as its `error_kind`.
 
 **The phase that died publishes too.** A phase that returns an error never reaches its ordinary completion record, so a failed phase used to leave nothing behind but the `agent_phase_started` that opened it: the dashboard showed an in-flight LLM call whose response never arrived, and read "No response text yet" where the error belonged. Every operator-visible phase runs through one body (`Runner.runPhase`), and its failure path publishes the missing `agent_phase_completed` with `failed: true`, the error, and whatever the loop managed before it died: the conversation, the tool calls that ran, the tokens already billed, the round it was on, folded onto the rounds of any earlier extension. It then returns the original error unchanged, so the failure classification above is unaffected.
 
-**A panic is an unhandled exception, not a crash and not a retry.** A panic in a phase (a provider SDK, an MCP client, a tool handler) is recovered at the turn loop, logged as `turn_phase_panicked` with its stack, and ends the turn as `failed` with `turn.guard_breach(kind="unhandled_exception")`. The published detail carries the panic's value and never its stack, because the event store is readable by anyone the dashboard serves. A panic outside a phase, in the dispatcher's own stages or in a turn's set-up and tear-down, is recovered one frame further out (`dispatch_panicked`, or `sandbox_resume_panicked` on the resume path) and publishes the same breach. Either way the trigger is recorded and acknowledged rather than redelivered: a redelivery runs the same defect on the same input. Only what the delivery still holds is recorded: when a partition that would not merge has already requeued its tail, a panic in the head's turn records the head, and the tail's copies still run. See [A turn that broke halfway](seat-ownership.md#a-turn-that-broke-halfway).
+**A panic is an unhandled exception, not a crash and not a retry.** A panic in a phase (a provider SDK, an MCP client, a tool handler) is recovered at the turn loop, logged as `turn_phase_panicked` with its stack, and ends the turn as `failed` with `turn.guard_breach(kind="unhandled_exception")`. The published detail carries the panic's value and never its stack, because the event store is readable by anyone the dashboard serves. A panic outside a phase, in the dispatcher's own stages or in a turn's set-up and tear-down, is recovered one frame further out (`dispatch_panicked`, or `sandbox_resume_panicked` on the resume path) and publishes the same breach. That breach names the run the panic ended in `turn_id` — the id the turn's own `agent_turn_started` was published under, so the row saying it began and the row saying why it stopped are one turn's — and its unit of work in `work_key`; a panic in a screening stage, before any run was minted, names no run. Either way the trigger is recorded and acknowledged rather than redelivered: a redelivery runs the same defect on the same input. Only what the delivery still holds is recorded: when a partition that would not merge has already requeued its tail, a panic in the head's turn records the head, and the tail's copies still run. See [A turn that broke halfway](seat-ownership.md#a-turn-that-broke-halfway).
 
 A delegated worker is the one exception, and it is contained one frame nearer. `delegate` runs its workers on goroutines of their own, where a panic the turn loop cannot see would end the whole process, so each worker recovers its own and hands it back to the executor as that worker's result, with status `failed` and the panic's value as its error, logged as `subagent_panicked` with its stack. The executor reads it beside its siblings' answers and the turn goes on.
 
-The dashboard renders that record as a failed invocation (error first, partial work beneath it) and keeps it on screen. AFK is sticky until the agent does real work again: the projection leaves `afk` only on a new phase or turn activity, so the `agent_turn_completed` published beside the failure cannot flip a stopped seat back to a healthy idle one.
+The dashboard renders that record as a failed invocation (error first, partial work beneath it) and keeps it on screen. The failure is held until the agent does real work again: the projection clears it only on a new phase or turn activity, or a new instance of the seat, so the `agent_turn_completed` published beside the failure cannot erase its cause — nor flip a seat stopped on its provider back to a healthy idle one.
 
 ---
 
@@ -559,17 +561,93 @@ Every invariant is enforced in code, not in prompts (`internal/agent/turn/guards
 1. **Workers cannot delegate, contact colleagues, or write to shared surfaces.** `subagent.Permit` denies the first-party control tools (`delegate`, `run_sandbox`, `a2a_ask`, the discovery pair) and any tool whose [MCP annotations](tool-capabilities.md) classify it a write to an external shared surface — regardless of what the task or its template named. It also denies anything the parent cannot itself call, read LIVE: a tool the executor activated mid-phase is inheritable, and one it never had is not. The latter is derived from capability, not a tool-name list, so it covers any tool stack. **A `workers:` template is subject to every one of these**, which is what keeps founder-owned Tier B config out of the privilege-escalation path. Workers **can** discover and activate *read-only* tools themselves (see invariant 7): the discovery catalogue is built from the same three filters as the grant, so a worker can find the read tool it needs (e.g. a Jira JQL search) but can never widen itself into a write or a control tool.
 2. **No recruitment.** Colleague tools require an explicit handle / channel / issue_key / PR URL. There is no "find someone to help me" primitive that would auto-create a role.
 3. **Delegation depth cap.** The trigger event carries `delegation_depth`. When it meets `turn_engine.delegation_depth_limit` (default 3), the engine publishes a `turn.guard_breach(kind="depth_cap")` and terminates the turn as `failed` before any phase runs. This is the always-on backstop against runaway / circular delegation: it is checked at the top of every turn regardless of how the turn was triggered, and `a2a_ask` propagates the chain so the recipient's turn inherits the accumulated depth.
-4. **Per-turn budget cascade.** Agent budget → phase budgets → the delegation slice (default 20% of the parent's remaining). Exhaustion publishes `budget_exhausted` and marks the turn failed. ONE slice covers a whole `delegate` call whatever its task count, so a fan-out cannot multiply the operator's fraction by N; the wrapper reserves tokens under a lock before charging, so concurrent workers can't both pass the cap check and overshoot. A call whose slice divided by its task count falls below `min_tokens_per_task` is refused UP FRONT — N workers that each die mid-round have spent the whole slice and produced nothing.
+4. **Per-turn budget cascade.** Agent budget → phase budgets → the delegation slice (default 20% of the parent's remaining). Exhaustion publishes `budget_exhausted` — naming the refusing window and when it resets — and marks the turn failed; the seat is then [parked](agent-runtime.md#the-budget-park) until that window turns over or a revision raises the ceiling, and a delivery that reaches a seat whose window is already refusing is parked before any turn starts. ONE slice covers a whole `delegate` call whatever its task count, so a fan-out cannot multiply the operator's fraction by N; the wrapper reserves tokens under a lock before charging, so concurrent workers can't both pass the cap check and overshoot. A call whose slice divided by its task count falls below `min_tokens_per_task` is refused UP FRONT — N workers that each die mid-round have spent the whole slice and produced nothing.
 5. **Worker timeouts.** A per-task deadline from `turn_engine.delegation.task_timeout_seconds` (default 300 s) and an aggregate `call_timeout_seconds` (default 900 s) over the whole call, waves included, plus a `max_parallel` concurrency limit. Hitting the aggregate cap does *not* discard the workers that already finished — they come back with their real answers, and only the ones still running are reported as timed out. Their tokens were spent either way.
 6. **Stall detection.** Two `self_iterate` decisions with the same artifact hash publish a `turn.guard_breach(kind="stall")` and terminate the turn as `failed`. The threshold is a constant, not a knob: two identical rounds is the earliest point at which "unchanged" is a fact rather than a single sample, and the round cap already bounds how long a turn that IS changing may run. Max-iteration exhaustion (the executor/reviewer loop hit `max_iterations` without `done`) publishes `turn.guard_breach(kind="max_iter")` with the same terminal effect.
 7. **Tool surface isolation between phases.** Each phase builds its tool list from scratch. The executor and its workers carry the same *slim* catalogue (builtins + MCP server names) and the same `activate_tool` / `list_mcp_server_tools` discovery meta-tools — a worker's catalogue is the safety-filtered universe the grant was cut from (read-only / non-control / non-shared-write), so discovery cannot breach invariant 1. Review and Judge carry no catalogue and cannot discover tools. A `self_iterate` builds a fresh surface, which is correct: its LLM context started over too. A RESUMED executor is the exception — it replays the surface and the skill-guard state it suspended with, because it is re-entering the same conversation.
 8. **Required-skill guard (load-before-use).** A [tool skill](tool-skills.md) gates the tools its trigger covers (the `required: true` default; `required: false` opts out for advisory content): within one phase session, calls to those tools are rejected (with an instructive error and a `phase.tool_skill_blocked` event) until the LLM has loaded the skill body via `load_tool_skill`. Enforced at the shared dispatch gate; tracked per LLM session because the executor and each worker run on separate message histories — and replayed across a sandbox suspend, since the resumed executor is the same session and the bodies it loaded are still in its transcript.
 9. **A busy seat queues, it never drops.** A seat's inbox is one pull consumer that fetches again only after its handler returns, so a trigger that arrives during a minutes-long turn waits on the broker rather than erroring. Erroring instead would NAK it into bounded redelivery (25 deliveries, then the dead-letter topic) and spend that budget on events whose only problem is when they arrived. A seat HELD by a detached sandbox job (potentially hours, `sandbox.Coordinator.SeatHeldBySandbox`) is handled differently: the dispatcher **parks** those deliveries, requeuing them onto the inbox and then acking (`inbox.ActionPark`), so nothing is held against a broker ack window. The one delivery it answers instead of requeuing is a person's reply to a clarification question one of that seat's runs asked. A run waiting on such an answer holds nothing at all, so its seat keeps working and every delivery is simply offered to that match before it becomes a turn. The offer answers one of three things — the delivery was **consumed** by the run it answers, is **still owed** to a run this node could not resume just now, or is **nobody's**, so it becomes an ordinary turn. A delivery still owed to a run is NAK'd back to the broker (never deferred: one parked run's failing resume must not stop a free seat consuming at all; and never requeued, because a republish lands back on the inbox instantly and spaces nothing), so it returns on the queue's own backoff — bounded by three clauses, whichever ends first: the deliveries the *message* has left (the offer stops with five of them in reserve for the ordinary route, which is the only clause a seat handoff does not reset), 10 spaced attempts within one process, and the run's own `pause_ttl_seconds`. A held seat's mail is still parked rather than NAK'd: that wait outlasts any ack window. See [Mid-run clarification](code-sandbox.md#mid-run-clarification-crewlet-ask).
 
-> **Known gap.** Nothing takes a pause hold on the seat's inbox while it is parked on a sandbox run. The requeued copies therefore land back on a topic the seat is still consuming and are re-parked immediately, so a seat parked on a long run spins on republish-and-ack for the length of the run. The work is not lost (the same-id dedupe and the completion ledger hold) but the loop is real. Fixing it means a pause taken at the park AND released when the run settles; a pause without the release is strictly worse, because a seat that never resumes is deaf until the process restarts. `ResumeTopic` has no caller today, so both halves land together or neither does. The no-provider park is the model: it pauses the inbox, and the apply that adds a provider releases it.
-10. **A phase that breaks is not one case.** `turn.Run` returns an error only when a *phase itself* broke; a failed turn, an exhausted round budget and a not-done review are all results. What the dispatcher does with that error depends on what broke and on what the turn's own record proves it already did: a turn that **panicked** is **recorded and acked** whatever its record says, because a redelivery runs the same defect on the same input; a turn that reached outside the engine (an MCP write, a colleague ask, a coding run) is **recorded and acked** too, because a redelivery would repeat writes it cannot take back; one that proved nothing is **redelivered** exactly as before, which keeps the retry for every pre-effect failure. `turn.Abandon` is that one rule, read by the dispatcher and by the sandbox resume alike. See [A turn that broke halfway](seat-ownership.md#a-turn-that-broke-halfway) for the predicate and why it is deliberately narrow.
+> **Known gap.** Nothing takes a pause hold on the seat's inbox while it is parked on a sandbox run. The requeued copies therefore land back on a topic the seat is still consuming and are re-parked immediately, so a seat parked on a long run spins on republish-and-ack for the length of the run. The work is not lost (the same-id dedupe and the completion ledger hold) but the loop is real. Fixing it means a hold taken at the park AND released when the run settles; a hold without the release is strictly worse, because a seat that never resumes is deaf until the process restarts, so both halves land together or neither does. The holds the engine already takes are the model — the no-provider park, the [budget park](agent-runtime.md#the-budget-park) and a person's [pause](agent-runtime.md#pausing-a-seat) each take a hold of their own name on the inbox and release exactly that one when what caused it clears — so the fix is one more named hold, released when the run settles.
+10. **A phase that breaks is not one case.** `turn.Run` returns an error only when a *phase itself* broke; a failed turn, an exhausted round budget and a not-done review are all results. What the dispatcher does with that error depends on what broke and on what the turn's own record proves it already did: a turn that **panicked** is **recorded and acked** whatever its record says, because a redelivery runs the same defect on the same input; a turn that reached outside the engine (an MCP write, a colleague ask, a coding run) is **recorded and acked** too, because a redelivery would repeat writes it cannot take back; one that proved nothing is **redelivered** exactly as before, which keeps the retry for every pre-effect failure — except a refused budget, whose delivery is deferred and its seat [parked](agent-runtime.md#the-budget-park) until the window turns over, because a redelivery would only be refused again. `turn.Abandon` is that one rule, read by the dispatcher and by the sandbox resume alike. See [A turn that broke halfway](seat-ownership.md#a-turn-that-broke-halfway) for the predicate and why it is deliberately narrow.
 
 11. **A suspended turn's seat is marked busy from the store.** A turn whose executor suspended for a detached sandbox run writes its conversation to the run's row before its frame unwinds (`Engine.persistSuspension`, which is also what opens the run to the completion poll). The launch publishes `sandbox_run_started` to the seat's control topic, and the coordinator sets the seat's busy count from the pending store's own list of the seat's active runs (`Coordinator.syncBusy`), so a redelivered start, a restart and a seat takeover converge on the same answer. That handling is asynchronous, and nothing orders it before the suspended turn returns, so a delivery the inbox hands out in that window can start a turn beside the run. A run parked on a clarification question does not hold the seat at all, because the answer arrives on its inbox. On completion the coordinator claims the row and marks the seat busy through result collection; a resume that fails un-claims the row so a redelivery can retry (the suspended executor loop is never lost), unless the resumed turn must not be resumed again (`sandbox.ErrResumeAbandoned`: it had already written outside the engine, or it panicked), in which case the run is settled instead of un-claimed (its box reclaimed, its record deleted and the seat's busy count recounted), so the completion is not redelivered into a conversation a retry must not re-enter and the seat is not left parked on a turn that is over. **A claim that cannot be given back is settled too**, and for a reason that has nothing to do with repeated writes: a row left in the claim is read by no completion poll, re-claimed by no redelivery, matched by no answer and expired by no pause reaper, so "leave it for the next attempt" is a turn destroyed in silence with its box paused and billed until the seat happens to change hands. That covers both writes the claim is given back for — the park a completion asked for and the revert a failed resume makes — and it is announced as `sandbox_run_failed` with reason `claim_unreverted`.
+
+---
+
+## Steering a running turn
+
+A person watching a turn sometimes sees it heading the wrong way — about to
+post to the wrong channel, re-reading what it already has, missing the one
+constraint nobody wrote down. Stopping it (a [pause with
+`stop_running`](agent-runtime.md#pausing-a-seat)) throws away what it has done;
+waiting for it to finish costs a second turn. A **steer** is the third answer:
+a short note, sent with [`steer_turn`](../reference/api-endpoints.md#steering-a-running-turn),
+that enters the running conversation at its **next round boundary**.
+
+```mermaid
+sequenceDiagram
+    participant P as Person (any node)
+    participant F as Every node
+    participant N as Node running the turn
+    participant L as The turn's tool loop
+    P->>F: steer_turn{turn_id, note} — scattered on crewlet.steer.note
+    F-->>P: nothing (not their turn)
+    N-->>P: accepted → outcome "pending"
+    Note over L: the round's tool calls finish
+    L->>L: fence, then drain the box
+    L->>L: the note is a user message before the next provider call
+    N->>N: agent_turn_steered{delivered, phase, round}
+```
+
+- **Where it lands, and nowhere else.** At the top of a round, immediately
+  after the seat fence. That is the one point where the conversation is
+  complete — every tool call the previous round made has its answer — so a note
+  can never sit between a call and its result, which a provider rejects and a
+  model would read as the tool's output. After the fence, so a turn whose seat
+  moved or that a person stopped is not handed an instruction it will never act
+  on. And as a **user** message, never a system message: the system prompt is
+  the frozen prefix a provider caches on.
+- **It binds the rest of the turn.** The note is read by the executor or the
+  reviewer — whichever round comes next — and carried, as the same message,
+  into every later phase: the reviewer that judges the work opens with it, and
+  so does every executor iteration after it, across a parked coding run
+  included. Without that the reviewer would grade the work against the task the
+  person had corrected.
+- **Not every loop reads it.** A [worker](#workers) is a leaf its parent
+  directs, so a note offered while a worker runs waits for the executor's next
+  round. The onboarding pass and the extension judge do not read notes either.
+  A turn whose executor runs as a [coding CLI's own agentic
+  loop](subscription-llm-backends.md) cannot take a note at all — its rounds are
+  the CLI's — and says so: `steer_unsupported`.
+- **Whose turn it is to steer.** The seat's holder, whoever leads the seat,
+  or a principal holding `fleet:operate` — never a seat, and never any reader,
+  since everybody signed in holds a credential. The seat is the one thing the
+  asking node cannot know, because the turn runs wherever its seat is held, so
+  the decision takes two steps: first on the turn as named — the deployment's
+  grant admits there and then, and a caller who leads nobody is refused with
+  exactly the answer a seat they do not lead gets — and otherwise a **probe**
+  asks the node running the turn which seat it is, and the note is decided on
+  that seat before it is offered. A probe nobody answers is `unavailable`,
+  never a refusal: no answer says nothing about whose turn it was.
+- **One node answers.** Every node serves the subject and the note names the
+  turn; the node running it is the only one that can answer, so nothing has to
+  know where a turn runs. It keeps answering `closed` (the tool's
+  `not_running`) for the last 256 turns it ended, because a note races a turn's
+  end by seconds. No answer at all inside the two-second budget is `unknown`,
+  never `not_running`: a reply lost on the way back looks exactly like none.
+- **A note is one note.** Its id is the person's request id, so a retry of one
+  request is answered `accepted` without being read twice. A turn holds at most
+  **five** unread notes (`conflict` past that) of at most **2,000 characters**
+  each: a paragraph re-points work in flight, and more than that is a brief that
+  belongs on the work item.
+- **What became of it is on the record.** A note the turn reads is recorded
+  `agent_turn_steered{delivered}` with the phase, iteration and round that first
+  read it; the phase's `steers[]` and the live call's say the same. A note the
+  turn never reads — it ended, or parked on a coding run, before its next round
+  — is recorded `expired` when the turn's note box closes, before the turn's own
+  completion. It is not carried to a later turn: a note is about the work in
+  flight.
 
 ---
 
@@ -676,7 +754,12 @@ Everything that must happen **once per unit of work however many times it
 runs** keys on the work key, never on the run: the completion ledger, the
 [episode row](agent-learning.md), the counterparty interaction count, the
 [conversation entry](conversation-sessions.md), and the derived ids that make
-a re-run's tracker comment and work-item update land once. Everything that
+a re-run's tracker comment, work-item update and **filed work item** land once.
+A create's id is derived from the work key, the project and the title, so a
+turn that filed its work and then broke files it once, not again on the retry;
+two creates of the same title into the same project in one run are the one
+pair that collapses, and that pair is a repetition rather than two pieces of
+work. Everything that
 describes **one execution** keys on the run: the phase records, the live view,
 a [detached sandbox run](code-sandbox.md) and its MCP bridge session.
 
@@ -742,11 +825,90 @@ Where that shows on the screens:
 
 `adr/0017` records the decision and what folding the two into one value cost.
 
+## Which work a turn is on
+
+A turn is charged to **one work item or to none** — never split between two —
+and every turn-level record says which, as `work_item{backend, id, key,
+project}` beside `work_item_basis`, the rule that named it. `backend` is
+`native`, `jira`, `github` or `gitlab`; `id` is the identity (`key` is the label
+a person reads, and a rename or a move changes it); and
+`<backend>:<id>` is what is unique across trackers. The rules are tried in
+order, and the first that names an item wins:
+
+| Basis | When | Where the item comes from |
+|---|---|---|
+| `trigger` | the wake is about one item | a native tracker wake names its task; a Jira webhook names its issue by **issue id**; a GitHub event names `<repository id>#<number>` and a GitLab one `<project id>!<iid>` (or `#<iid>` for an issue). A code host's numeric repository or project id is what a rename or a transfer does not change, and GitHub's own global id is not used because a pull request has two — a comment carries its issue face's and a review its pull request face's |
+| `asked_by` | the turn answers a colleague's `a2a_ask` | the item the **asking** turn was on, carried on the `a2a_request` wake: help given on a task is work on it, and the colleague's own trigger names nothing |
+| `resume` | the turn re-enters a parked coding run | the item the run's row recorded at launch — the event that resumes it, a box's completion or a person's chat answer, names none |
+| `sole_write` | nothing above named an item, and the turn's own writes committed to **exactly one** task | resolved at completion only, because only then is "exactly one" a fact |
+
+Otherwise the turn is on nothing, which is the ordinary case for a chat wake,
+and the keys are **absent** rather than null. A wake that names no item — a
+person's priority list changing, a branch build, a Jira delivery that carried
+an issue key and no issue id — names nothing rather than an item keyed on a
+label.
+
+The first three are known before the turn runs, so `agent_turn_started`, every
+phase record and the live frames carry them from the start. The fourth appears
+only on the two completion records. **What counts as a write** is a task record
+the tracker's writer *committed* — `applied` or `pending` — made through any of
+the turn's tools or its delegated workers; a write the broker refused, one whose
+outcome is `unknown`, and a write to something that is not a task (a project's
+settings, somebody's list) count for nothing.
+
+**A turn that parks on a coding run** is one turn in several segments. What it
+wrote before the park travels on its suspended conversation, and a segment that
+parks concludes no sole write — the resumed half may write a second item — so
+the segment that finishes the turn judges "exactly one" over the whole turn.
+
+**A native item is charged for the turn.** Each completed segment adds what it
+spent to the task's own counters — its phases, its delegated workers, the
+round-cap judge and, on a resumed segment, the coding run it collected — under
+an id naming the segment (`turn/<turn_id>/dispatch`,
+`turn/<turn_id>/resume/<launch_id>`), so a segment recorded twice counts once
+and only the dispatch segment counts a turn. A parked segment on nothing hands
+what it spent on with its suspended conversation, and the segment that finishes
+the turn pays it if a sole write charges the turn. See
+[Spend is on the task](../guides/work-tracker.md#spend-is-on-the-task) and
+[ADR-0022](https://github.com/crewlet/crewlet/blob/main/adr/0022-a-turn-is-charged-to-one-work-item.md).
+
+### A turn's stages
+
+One `turn_id` moves through four stages, and the records say which it is in:
+
+| Stage | What says so |
+|---|---|
+| **context** | `agent_turn_started` published, no phase open yet — the prefetch is reading its thread and knowledge |
+| **phases** | an `agent_phase_started` open, `agent_turn_progress` frames streaming |
+| **parked** | the newest `agent_turn_completed` / `turn_completed` carries `suspended: true` — the segment ended on a detached coding run, and the same `turn_id` completes again when the run is collected |
+| **done** | a completion **without** `suspended`, or a `sandbox_run_failed` for the run a parked turn was waiting on: nothing resumes a turn whose run was lost |
+
+A reader that took any completion for the end listed a parked turn as finished,
+with its first segment's duration. The turns list (`GET /turns`) reads the
+stages this way. The newest end makes a turn `complete` or `parked`, never
+both. An end is a completion or a lost run, and a lost run used to leave its
+turn parked for good. The turn's `duration_ms` is the sum of every segment's own
+measurement, which is the time the turn worked and not the time its coding run
+took between segments. The live projection reads the same four stages onto each
+seat's `turn`, from `context` to `parked`, so a seat whose turn is parked says
+so rather than saying it is idle (see [Agent States](agent-runtime.md#agent-states)).
+
+### Finding everything on one item
+
+The event log promotes the item into a column (`work_item`, node migration
+`0033`) holding `<backend>:<id>`, so `GET /events?work_item=` and
+`GET /turns?work_item=` answer "everything that happened on this item" with an
+index seek rather than a read of every payload in the window. It is a column
+of the node's own audit log, derived by the writer from each event it stores
+exactly as `turn_id` and `work_key` are, and the migration backfills it from
+the rows already stored. The episode memory files a turn under the same
+identity, in a column of the same name.
+
 ---
 
 ## Events and tracing
 
-Every turn opens one `agent.turn` OTel span with child spans `agent.turn.execute`, `agent.turn.review`, `agent.turn.judge` (one per extension-judge call, nested under the phase that fired it). A worker does not open a span of its own; it reports as an `agent_phase_completed` event with `phase=subagent`, `host_phase=execute`, its `task_id` and its `worker` template, so a dashboard groups it under the executor round that delegated it and can pair it with a node of the graph. Each call also emits one `subagent_batched` carrying that graph and every task's status. The trigger event's OTel context is restored exactly once at the turn boundary so the span hierarchy is stable across agents.
+Every turn opens one `agent.turn` OTel span with child spans `agent.turn.execute`, `agent.turn.review`, `agent.turn.judge` (one per extension-judge call, nested under the phase that fired it). A worker does not open a span of its own; it reports as an `agent_phase_completed` event with `phase=subagent`, `host_phase=execute`, its `task_id`, its `worker` template and the `host_round` whose `delegate` call spawned it, so a dashboard groups it under the executor round that delegated it and can pair it with a node of the graph. Each call also emits one `subagent_batched` carrying that graph and every task's status. The trigger event's OTel context is restored exactly once at the turn boundary so the span hierarchy is stable across agents.
 
 The extension judge additionally emits an `AgentPhaseCompleted` event with `phase="judge"` carrying its system prompt, user prompt, response, token counts, and decision (`extend` / `rescue`) — the same shape as the executor / review phase events, so **Turns** and the seat's own transcript render judge calls alongside the main phases without any frontend change.
 
@@ -757,7 +919,7 @@ watching the dashboard is watching that loop. Two events carry it:
 
 | Event | When | Persisted |
 |---|---|---|
-| `AgentTurnProgress` | Once before the first call, then twice per tool-call round | No — stream only |
+| `AgentTurnProgress` | Once before the first call, then twice per tool-call round and once before each tool call | No — stream only |
 | `AgentPhaseCompleted` | Once, when the phase ends | Yes |
 
 **Before the first call**, because the phase's prompt exists before its
@@ -769,17 +931,26 @@ The opening update carries `prompt_messages` and nothing else, tagged
 `round_num = -1` (consumers read `round_num + 1` as "rounds so far", so
 the sentinel keeps it at zero rather than claiming a round).
 
-**Twice per round**, because a round has two moments worth showing. The
-first fires the instant the model has answered, before any of that
-round's tools run: the model's prose and its reasoning are what explain
-the tool call that is about to happen, and holding them back until the
-round's slowest tool returns is holding them back for exactly as long as
-they are most useful. The second fires once that round's tool results are
-in. A round that emits only a tool call and no text has nothing new to
-show at the first moment and skips it, so a tool-only round still costs
-one event. The final round — the one that ends the phase by making no
-tool call — publishes at the first moment and then ends the loop, which
-is how a phase's closing answer streams at all.
+**Twice per round, and once per call**, because a round has more than
+one moment worth showing. The first fires the instant the model has
+answered, before any of that round's tools run: the model's prose and its
+reasoning are what explain the tool call that is about to happen, and
+holding them back until the round's slowest tool returns is holding them
+back for exactly as long as they are most useful. Then one frame
+**before each call**, naming it as `running_call` — `{round, name,
+arguments, started_at}` — because a round's calls are serial and an
+execution is recorded only once its call has answered: a sandbox launch
+or a slow MCP server takes minutes, and a live view that learned of a
+call only when the whole round returned showed a seat doing nothing for
+exactly the stretch somebody was watching it. A round that reads a
+person's [note](#steering-a-running-turn) publishes once more, the moment
+it takes the note and before its provider call, with the note's
+`{round, note_id}` in `steers`. The last fires once the
+round's tool results are in, and names no running call, which is what
+clears it. A round of three calls therefore costs five frames. The final
+round — the one that ends the phase by making no tool call — publishes at
+the first moment and then ends the loop, which is how a phase's closing
+answer streams at all.
 
 **The same text either way.** Both events build their `response` with
 `internal/agent/toolloop` over the same
@@ -851,25 +1022,71 @@ update, which fires before the provider is called at all: a publish error
 returned there would end a phase that had not yet run.
 
 On a **resumed** executor phase — one that suspended on `run_sandbox` and
-picked up when the detached run landed — both events are scoped to the
-post-resume slice of the conversation, because the pre-suspend segment
-was already published as its own record. The live row and the record
-therefore still agree across a suspend.
+picked up when the detached run landed — both events cover the **whole
+phase**, the pre-suspend rounds included and numbered where they were: a
+suspending phase publishes no `agent_phase_completed` of its own (it returns
+before the record is written) and its progress frames are never stored, so
+the resumed record is the only durable account those rounds will ever have.
+Their narration, their calls, their tokens, their timing and their cache
+share are carried across the suspend on the parked state, and the live row
+and the record therefore still agree across it.
+
+### What a turn records about its time
+
+Every figure below is measured by the process doing the work, at the frame
+that makes the call, and carried on the record as a start and a duration. A
+reader that reconstructed timing from when events arrived subtracted two
+publishers' clocks and a queue's latency, and a phase started on one node and
+finished on another had no honest answer at all. Starts are UTC instants;
+durations are milliseconds on the publishing node's monotonic clock, so a
+wall-clock correction mid-call cannot report a negative or inflated one.
+
+| Where | Field | What it measures |
+|---|---|---|
+| `agent_phase_completed` | `started_at` | When **this segment** of the phase began. A resumed executor is one phase in two segments and its `duration_ms` covers both, so `started_at` is deliberately not "published minus duration" — that instant is when the first segment began, possibly a day earlier on another node, and the gap between the segments was the coding run rather than this phase |
+| | `duration_ms` | The phase's own wall clock, extensions and a suspend's pre-resume half included |
+| | `rounds[]` | One entry per provider call: `{round, started_at, duration_ms, model, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, tool_calls}`. The **model's half** of the round only — its tool calls are timed on their own rows — so a slow model and a slow tool are never one number. `round` is the scale `tool_executions[].round` and `round_narration[].round` share, across an extension and a resume |
+| | `max_rounds` / `round_ceiling` | The round cap the phase **ended** under (its base budget plus every extension the judge granted) and the most it could ever have been raised to. Never a ceiling below the cap: with extensions off, or a resumed executor whose fresh budget sits on top of its parked rounds, the ceiling is the cap |
+| | `cache_read_tokens` / `cache_write_tokens` | The provider's prompt cache's share of `input_tokens`, summed over the rounds. A **breakdown** of the input, never an addition to it: `total_tokens` is still input plus output, and the cache's share is `cache_read_tokens / input_tokens` |
+| | `provider_key` | The `providers.llm` entry that **served** the phase — the operator's name beside the vendor's `model`. The chain reports the member that answered, so after a hand-off it is the entry that took over rather than the head that failed; latched with `model` by the same rule (the first completion that names one), and stated by the head until then. Empty on a phase no entry answered, exactly as its `model` is. A judge names its entry, and a worker the member of its own chain that answered |
+| | `host_round` | On a worker (`phase=subagent`): the round of the executor whose `delegate` call spawned it. On a judge: the round the host phase ran out on. `host_iteration` names the turn iteration, which one phase of forty rounds spans whole |
+| | `launch_id` | On a resumed executor that collected a detached coding run: which launch it collected, since one turn can launch more than once. On a `phase: sandbox` record — the run itself, published when it is collected — it is part of the record's identity, `(turn_id, phase, iteration, launch_id)` |
+| | `activity_transcript` | On a `phase: sandbox` record only: the run's own account of what it did, tail-capped at 256 KiB and redacted. See [each run is published as a phase](code-sandbox.md#runs-are-uncapped-each-run-is-published-as-a-phase) |
+| | `work_item` | The item the turn is charged to, as the turn knew it when the record was published — absent while nothing named one |
+| `tool_executions[]` | `started_at` / `duration_ms` | When the call was handed to the surface and how long the surface took to answer. **Absent** on a row nothing timed — an older build's, an agent-mode run's bridged call — because absent means "not recorded" and a zero would mean "instant" |
+| | `origin` / `server` | Who **answered**: `builtin` or `mcp:<server>`, and the bare server name for the second. Absent on a call no tool answered — an unknown name, one not offered to the surface, one the skill guard refused — since the surface refused it before any server saw it |
+| `agent_turn_progress` | `rounds[]`, the cache tokens | As on the record, so far |
+| | `max_rounds` / `round_ceiling` | The cap the phase is running under **now** — an extension raises it mid-phase — and on the opening frame, before the model has answered once |
+| | `round_started_at` | When the latest round's provider call was made: the round being written while the model answers, the round whose tools are running after it has. Every round publishes a frame the moment its call is made, so a start later than every entry in `rounds[]` is a model call in flight and one equal to the last is that round's tools; the frame names the new round (`round_num`) and nothing from the one before it. Without it a unary round said nothing until it answered, and for the whole of a slow call a reader saw the previous round as the one in flight |
+| | `running_call` | The call in flight, published immediately before it runs and cleared by the next frame |
+| `agent_phase_started` | `work_item` | As on the record |
+| `subagent_batched` | `started_at` / `round` | When the delegate call began and the executor round that made it, so a fan-out is placed under its call; each worker's `host_round` matches it |
+| `prefetch_summary` | `started_at` / `duration_ms` | The context assembly — the stretch between `agent_turn_started` and the first phase opening, which reads a diary, a thread and a knowledge base and calls an auxiliary model for two of them |
+
+Every one of these is **additive**: an older peer's record has none of them,
+decodes with none, and re-encodes with none (a zero start is omitted rather
+than written as the year 1), so a timeline reads a missing figure as "not
+recorded" on a mixed fleet. The cache counts are the one producer of that
+figure in the engine — every backend reports them on its completion, and until
+the loop kept them they reached nothing past the round's span attribute. The
+runner's own tally of a turn carries them too, beside the delegated workers'
+input and output kept apart from the turn's own totals.
 
 ### Turn source (the triggering event)
 
-Every per-phase telemetry event (`AgentPhaseStarted`, `AgentPhaseCompleted`, `AgentTurnProgress`) and the `AgentTurnCompleted` aggregate carries a compact `trigger` descriptor, built by `types.DescribeTrigger` from the turn's trigger event. It records the `{id, type, summary, actor, timestamp}` of the event that *caused* the turn (a task assignment, notification, A2A request, or schedule tick). When the trigger is an external notification it additionally carries the originating `integration` (slack, jira, github and so on), the human `sender`, and the `source_event_type`, so the dashboard labels the source with the actual integration (a branded Slack or Jira badge with the sender) instead of a generic "external notification". **Turns** renders this as the turn's own header line (what woke it, and the integration badge when one did) and the seat's transcript carries the same, linking to the full event when the trigger was persisted (`#/activity/events/{id}`). The descriptor is empty for engine-internal turns with no trigger.
+Every per-phase telemetry event (`AgentPhaseStarted`, `AgentPhaseCompleted`, `AgentTurnProgress`) and the `AgentTurnCompleted` aggregate carries a compact `trigger` descriptor, built by `types.DescribeTrigger` from the turn's trigger event. It records the `{id, type, summary, actor, timestamp}` of the event that *caused* the turn (a task assignment, notification, A2A request, or schedule tick). When the trigger is an external notification it additionally carries the originating `integration` (slack, jira, github and so on), the human `sender`, and the `source_event_type`, so the dashboard labels the source with the actual integration (a branded Slack or Jira badge with the sender) instead of a generic "external notification". **Turns** renders this as the turn's own header line (what woke it, and the integration badge when one did) and the seat's transcript carries the same, linking to the full event when the trigger was persisted (`#/live/events/{id}`). The descriptor is empty for engine-internal turns with no trigger.
 
-Each phase row in that view is keyed to its **phase colour** (execute / review / auxiliary / worker / judge — the same hue as the phase pill): a left accent stripe identifies the phase at a glance even while the row is collapsed, and expanding a row tints its border, header, and body with that colour so several open sections stay visually distinct instead of blurring into one neutral stack. The standalone per-phase detail card carries the same accent.
+Each phase row in that view leads with its **phase word** on the neutral pill (execute / review / auxiliary / subagent / judge / sandbox / onboarding): a phase is a category, and the dashboard spends colour only on state, so a row that FAILED is the one that carries a hue — the danger rail — and every other row reads by its word. The standalone per-phase detail card is drawn the same way. Inside a chart a phase takes the series of the band the engine counts it in (see the [dashboard design](../reference/dashboard-design.md#the-one-rule)).
 
 | Event | Purpose |
 |-------|---------|
-| `agent_turn_completed` | Extended with top-level fields `turn_id`, `execute_model`, `review_model`, `subagent_count`, `subagent_tokens`, `iterations`, `decision`, `trigger` (the turn's source descriptor) (inherits `delegation_depth` / `parent_turn_id` / `delegation_chain` from the `Event` base) |
+| `agent_turn_started` | A turn beginning, published **before** its context is gathered, so a seat whose prefetch is reading a long thread is visibly working and a turn that dies there still leaves a row naming its run. Carries `turn_id`, `work_key`, the seat (`agent_id`, `agent_handle`, `role`), the `trigger` descriptor, `conversation_key` and `started_at` (the same instant `turn_completed` reports), plus `work_item` / `work_item_basis`, which are **absent** while nothing named the item the turn is on. Its depth and chain are the envelope's `delegation_depth` / `delegation_chain`. A resumed coding run publishes one per segment with `resumed: true` under the **same** `turn_id`, once the segment is certain to run — a resume that could not start is retried as the same run, so it announces nothing. Every start is paired with the turn's `agent_turn_completed`, a turn whose runner could not be built included. A start with no completion is a turn that died in its own frames: a panic recovered outside the loop, which the `turn.guard_breach` under the same `turn_id` names, or a process that died under it |
+| `agent_turn_completed` | Extended with top-level fields `turn_id`, `execute_model`, `review_model`, `subagent_count`, `subagent_tokens` (and its halves `subagent_input_tokens` / `subagent_output_tokens`), `cache_read_tokens` / `cache_write_tokens` over the turn's own phases, `work_item` / `work_item_basis` (see [Which work a turn is on](#which-work-a-turn-is-on) — the one record that can name a `sole_write`), `suspended` on a segment that parked rather than ended, `iterations`, `decision`, `trigger` (the turn's source descriptor) (inherits `delegation_depth` / `parent_turn_id` / `delegation_chain` from the `Event` base). `turn_completed`, the learning subsystem's record of the same turn, carries the same `work_item`, `work_item_basis` and `suspended`; it has no `task_id` |
 | `turn.guard_breach` | A runtime invariant stopped the turn; `kind` names which one (`depth_cap`, `stall`, `max_iter`, `scheduled_timeout`, `unhandled_exception`) and `detail` carries its message |
 | `a2a_channel_opened` / `a2a_message_sent` / `a2a_channel_closed` | The channel an `a2a_ask` opened and its traffic, the only *recorded* delegation edge (see [What a delegation records](#what-a-delegation-records)). The target's `a2a_request` wake carries `delegation_depth + 1` and the requester appended to `delegation_chain`. Each record names the turn that published it in `turn_id` / `work_key`, which is what draws the exchange on that turn's page; a close performed by the idle sweep carries neither, because no turn finished it |
 | `prompt.size` | The size of one phase's OPENING prompt — the system and user text, the conversation a resumed phase re-enters instead of them, and the **tool-definition array** (as compact JSON, with its count), plus a ~4-bytes-per-token approximation over all of it — so prompt growth is measurable across builds without reading every phase payload back. The figures are **bytes** whatever the keys say: that is what the engine can measure without a tokenizer and what a vendor bounds a request body in, and the two agree on ASCII while diverging on a prompt carrying non-Latin names, emoji or CJK. The keys are frozen by [ADR-0006](https://github.com/crewlet/crewlet/blob/main/adr/0006-event-evolution-is-additive-only.md) — renaming them would read back as a rendered `0` on every row already stored. The array is counted because both HTTP providers bill it as input and the `cli-agent` text backend writes it into the prompt literally; the figure is **round one's**, since a mid-phase `activate_tool` adds to what later rounds send. It is measured in one **canonical** shape (`{name, description, parameters}` per tool) rather than in any backend's own, so that one number is comparable across providers — which makes it a **floor**: OpenAI wraps each entry in `{"type":"function","function":{…}}`, Anthropic spells the schema `input_schema` and adds a cache breakpoint, and the `cli-agent` catalogue is larger again, so every backend sends more than the row says. A resumed phase's conversation is counted with the **reasoning** each parked round carries and the arguments of its tool calls, for the same reason: Anthropic hands every thinking block back into the request and is billed for it, and the `cli-agent` text backend writes the reasoning prose into the prompt. The reasoning counts **once** per round — the structured blocks where a round has them, the prose where it does not — because on Anthropic the prose is a rendering of those same blocks |
 | `phase.tool_skill_blocked` | The required-skill guard rejected a tool call: the session tried a tool covered by a required [tool skill](tool-skills.md) (the default; `required: false` opts out) before loading it via `load_tool_skill`. Carries the tool name and the missing skill keys; the LLM recovers by loading and retrying |
-| `budget_exhausted` | A charge the token budget refused ended the turn; published by the engine beside `agent_turn_completed` when the tool loop's budget check returns `toolloop.BudgetError` |
+| `budget_exhausted` | A charge the token budget refused ended the turn; published by the engine beside `agent_turn_completed` when the tool loop's budget check returns `toolloop.BudgetError`. Names the scope, the refusing window (`period`, `window`, `resets_at`) and that window's spend and ceiling |
 | `llm_unavailable` | Every member of the seat's provider chain failed retryably; carries the chain it tried and the last error |
 
 ---
@@ -934,9 +1151,12 @@ All fields are optional; defaults apply when absent.
 | `internal/agent/skills/guard.go` | Required-skill guard: load-before-use enforcement for `required: true` tool skills |
 | `internal/agent/extension/` | Round-cap extension judge |
 | `internal/agent/toolloop/` | The shared tool loop — one call plus its tool round-trips, across every phase — and the suspend primitive a detached run returns through |
+| `internal/agent/steer/` | A running turn's note box: what an offer is answered, the bounds on a note, and the wire a note crosses to reach the node running the turn |
+| `internal/engine/steer.go` | Each node's desk of its running turns' boxes: serving the scatter, answering only for its own turns, and recording the notes a turn never read |
 | `internal/tools/surface.go` | Phase-specific tool surface (filter + catalogue) |
 | `internal/agent/builtin/a2a.go` | `a2a_ask`, the only colleague wrapper; outreach to a third-party app goes through that app's MCP tools directly (`colleague.go` beside it is `lookup_colleague`) |
 | `internal/notify/status.go` | Working-status sessions: conversation resolution, `addressed` gating, heartbeat + clear |
+| `internal/engine/worksubject.go` | Which work item a turn is on: the four rules, in order, and the sources whose wakes can name one |
 
 ---
 

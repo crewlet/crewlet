@@ -43,6 +43,7 @@ import (
 	"context"
 	"strings"
 
+	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/textcut"
 )
@@ -109,10 +110,39 @@ type Hit struct {
 	PageID  string
 	Snippet string
 
+	// Backend names the backend that answered — [Searcher.Backend]'s value,
+	// stamped by the searcher on every hit. ON THE HIT rather than asked of
+	// the searcher afterwards, because a caller holding a searcher resolved
+	// per call (the engine's, across a config apply) could ask a DIFFERENT
+	// one, and a page id is an address only inside the backend that minted
+	// it.
+	Backend string
+
 	// Ancestors are the page's parent chain, outermost first. Empty on a
 	// backend with no such chain, which is why the auto-draft title
 	// prefix exists as a backstop.
 	Ancestors []string
+}
+
+// ReadPages is a ranked answer as a `knowledge_read` records it: each hit in
+// the order it was shown, carrying its 1-based rank.
+//
+// ONE CONVERSION for the two producers of a ranked read — the turn-start
+// prefetch and search_knowledge — so a page's rank means the same position
+// whichever of them surfaced it. The rank is the hit's position in what was
+// SHOWN, which is why a hit with no page id keeps its place in the count while
+// being left out: it was the third bullet whether or not it can be addressed.
+func ReadPages(hits []Hit) []types.KnowledgeReadPage {
+	out := make([]types.KnowledgeReadPage, 0, len(hits))
+	for i, hit := range hits {
+		if hit.PageID == "" {
+			continue
+		}
+		out = append(out, types.KnowledgeReadPage{
+			ID: hit.PageID, Container: hit.Container, Title: hit.Title, Rank: i + 1,
+		})
+	}
+	return out
 }
 
 // Query is one search, in the only terms a caller may use.
@@ -138,6 +168,11 @@ type Query struct {
 	// a caller deliberately search drafts and a caller who passed nothing
 	// get the safe behaviour.
 	ExcludeAncestors []string
+
+	// Mode is how to rank. The zero value is [ModeHybrid]. A backend that
+	// cannot serve it says so in the [Result]'s [Outcome] rather than
+	// quietly ranking another way.
+	Mode Mode
 }
 
 // Excluded is the ancestor exclusion this query asks for, applying the
@@ -173,12 +208,23 @@ type Searcher interface {
 	// own to answer would cost more than it saves.
 	CanSearch(seat *org.Role, o *org.Organization) bool
 
-	// Search returns up to Limit ranked hits.
+	// Search returns up to Limit ranked hits, and what the search
+	// actually did — see [Outcome].
 	//
 	// BEST EFFORT: it never reports an error. Every failure path is an
 	// empty result, and the prefetch degrades to an empty block rather
-	// than failing a turn because a wiki was slow.
-	Search(ctx context.Context, q Query) []Hit
+	// than failing a turn because a wiki was slow. What it does NOT do is
+	// fail silently: a search that could not cover the whole corpus, or
+	// could not rank the way it was asked to, says so in the outcome.
+	//
+	// AN EMPTY TEXT IS A PROBE: it runs nothing and does no I/O, and it
+	// answers the outcome a search in that mode would START from — the
+	// [Outcome.Modes] this backend serves as asked, and the
+	// [Outcome.Degraded] its configuration decides (no embeddings, a
+	// backend with no such ranker). That is how a screen learns which
+	// modes to offer before anybody has typed, rather than after the first
+	// search came back degraded.
+	Search(ctx context.Context, q Query) Result
 }
 
 // Scope normalises an org-wide read scope: trimmed, uppercased, deduped,

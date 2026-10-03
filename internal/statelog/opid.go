@@ -79,6 +79,21 @@ import (
 // id cannot be retried to a conclusion on a node whose ledger has lost rows —
 // falls on the caller that invented it, never on a colleague's write.
 //
+// # A domain with no ledger mints outside the grammar
+//
+// The two compacted domains — the vectors (`vec-<hex>`) and each node's usage
+// days (`usage-<hex>`) — publish under ids that are a digest of the object and
+// the value written, and carry no instant. That is not the caller's own
+// string the paragraph above prices: neither domain keeps an operation ledger
+// ([Domain.OpsTable] is empty), so there is no watermark for an instant to be
+// compared with and [Publisher.vouches] answers true before it would read one.
+// What makes a retry of theirs safe is the compacted apply itself — a subject's
+// current value replaced under a monotone position, so the same value written
+// twice lands as one — and a grammar whose only purpose is vouching would buy
+// them nothing. A domain that GAINS a ledger takes its ids into the grammar
+// in the same change, or every write it makes reads as minted before every
+// loss that ledger records.
+//
 // # Whose clock
 //
 // The instant is read off the clock of whichever node minted the id, and the

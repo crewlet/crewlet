@@ -120,7 +120,7 @@ func OrgSettings(c *Company) org.Settings {
 	}
 	return org.Settings{
 		Name: c.Name, Mission: c.Mission, Vision: c.Vision,
-		Policies: slices.Clone(c.Policies), TokenBudget: c.TokenBudget,
+		Policies: slices.Clone(c.Policies), TokenBudget: c.TokenBudget.Ceilings(),
 		KnowledgeScope: slices.Clone(c.Knowledge.KnowledgeScope),
 	}
 }

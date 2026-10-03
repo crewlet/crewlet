@@ -21,32 +21,53 @@ policies:
   - "Each engineering role owns specific projects (see the `Repo Ownership` page in the LEAD space); do not push to projects you do not own without an explicit handoff from their owner"
   - "The Phase-2 AI framework is developed in a dedicated project owned by AI Systems Engineering; the control plane (nimbuscore, nimbusk0s) stays focused on cluster-level primitives that the framework depends on"
 
-# Company-wide token budget — a single hard cap on total LLM tokens across
-# EVERY agent (CEO, CTO, PM, DevRel, the three engineers, their sub-agents,
-# and the learning/aux passes).  The engine's BudgetManager charges this
-# org budget on every LLM completion BEFORE the per-agent budget; the first
-# completion that would push the running total past the cap stops that turn
-# immediately and emits a ``BudgetExhausted`` event (budget_type="org").
-# 0 (or omitting the field) means unlimited.  No per-agent ``token_budget``
-# is set below, so this 10M ceiling is the only budget in force and the
-# whole company shares it.
+# The company's ONE clock, as an IANA zone (default UTC).  Every calendar
+# edge the engine cuts is cut on it: where "today" and "this week" begin
+# for a ``due=`` filter, a due band, an overdue mark and each person's own
+# day; what a relative date ("next Friday") or an all-day due date resolves
+# to; and the wall clock a schedule that names no ``timezone`` of its own
+# fires on — so the 09:00 schedules below fire at 09:00 in Berlin.  A clock for
+# AUTHORED instants and calendar edges only: no duration is measured
+# against it, because a duration measured on a wall clock changes length
+# twice a year.  See docs/getting-started/configuration.md.
+timezone: "Europe/Berlin"
+
+# Company-wide token budget — ceilings on total LLM tokens across EVERY
+# agent (CEO, CTO, PM, DevRel, the three engineers, their sub-agents, and
+# the learning/aux passes), one per calendar WINDOW on the company clock
+# above.  Every model round is charged against the company's ceilings
+# BEFORE a seat's own; the first completion that would push a window past
+# its ceiling stops that turn and emits a ``budget_exhausted`` event
+# (budget_type="org").
 #
-# NOTE: usage is durable — the counter lives in the fleet's coordination
-# store, so it survives engine restarts and is one number for the whole
-# company however many nodes run it.  Reset it deliberately, against a
-# running node: ``crewlet budgets reset``.  See
-# docs/guides/deployment.md § Token Budgets and
-# docs/getting-started/quickstart.md § Token Budgets.
-token_budget: 10000000                          # 10M tokens, org-wide (all agents combined)
+# Each key is optional and a window with no key has no ceiling: ``day``
+# runs Berlin midnight to midnight, ``week`` is the ISO week from Monday,
+# ``month`` the calendar month, and each opens again on its own when it
+# turns over.  0 is refused rather than read as "unlimited" — leave the key
+# out instead.  Here the month is the bill (roughly four weeks of the
+# schedules below plus ordinary chat traffic for seven seats) and the day
+# is the fuse: a runaway loop burns at most one day's allowance before the
+# company stops, rather than the month's.  No per-agent ``token_budget`` is
+# set below, so these two are the only ceilings in force and the whole
+# company shares them.
+#
+# Usage is durable — the counter lives in the fleet's coordination store,
+# so it survives engine restarts and is one number for the whole company
+# however many nodes run it.  See docs/getting-started/configuration.md
+# § Token budgets and docs/guides/deployment.md § Token Budgets.
+token_budget:
+  day: 3000000                                  # 3M tokens per Berlin day, org-wide
+  month: 40000000                               # 40M tokens per calendar month, org-wide
 
 # Skill variables — generic name->value facts substituted into tool-skill
 # text wherever a skill writes ${name}.  NIMBUS DECLARES NONE, and that is
 # what running the engine's own tracker and wiki buys here: the one address
 # its skills need is where this deployment answers, and the engine injects
 # that itself from ``api.external_url`` in the OPERATOR's own Tier A file,
-# as ${crewlet_base_url}.  The bundled platform-mentions skill builds every shareable link
-# on it — ${crewlet_base_url}/#/work/ENG-42, ${crewlet_base_url}/#/pages/…
-# — so there is nothing for an operator to keep in step.
+# as ${crewlet_base_url}.  The bundled platform-mentions skill builds every
+# shareable link on it — ${crewlet_base_url}/#/work/ENG-42 and
+# ${crewlet_base_url}/#/knowledge/pages/{page-id} — so there is nothing for
+# an operator to keep in step.
 #
 # The name is RESERVED: a company that declares ``crewlet_base_url`` itself
 # is refused, because two sources for one address is how a skill comes to
@@ -347,7 +368,6 @@ learning:
 scheduling:
   enabled: true
   tick_seconds: 10
-  default_timezone: "UTC"                  # schedules without their own ``timezone`` use this
   jitter_seconds: 30                       # spread schedules that share a popular cron minute (e.g. 9am)
 
 
@@ -484,17 +504,12 @@ integrations:
 tracker:
   backend: native
 
-  # The engine's own tracker's policy.  Nothing here gates a write: the
-  # timezone is what a relative date ("next Friday") and an all-day due
-  # date resolve against.  It is a clock for AUTHORED instants and
-  # calendar edges only — no duration is measured against it, because a
-  # duration measured on a wall clock changes length twice a year.
-  native:
-    timezone: "Europe/Berlin"
-    # ``inbox_retention_days`` left at its default of a year.  It is the
-    # one horizon here that deletes anything, and what it deletes is a
-    # DERIVED inbox row rather than the history it points at — that
-    # answers for ever.
+  # The engine's own tracker's policy is one setting, and it is left at
+  # its default here: ``native: {inbox_retention_days: 365}`` — a year.
+  # It is the one horizon that deletes anything, and what it deletes is a
+  # DERIVED inbox row rather than the history it points at, which answers
+  # for ever.  The clock the tracker's dates mean is the company's own
+  # ``timezone`` at the top of this file.
 
 knowledge:
   backend: native
@@ -668,7 +683,7 @@ units:
             # Fires a TaskAssigned to the CEO's own inbox on the cron.
             schedules:
               - name: morning-tracker-review
-                cron: "0 9 * * 1-5"            # 09:00 Mon–Fri, in scheduling.default_timezone
+                cron: "0 9 * * 1-5"            # 09:00 Mon–Fri, on the company's clock (``timezone``)
                 task: >
                   Review overnight activity across the LEAD, PROD and ENG projects:
                   stalled epics, new escalations from the CTO or PM, scope creep, and

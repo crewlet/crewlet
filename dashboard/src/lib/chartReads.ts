@@ -3,11 +3,12 @@
  * unit, or the whole chart, with its RUNTIME half where the reader may have it.
  *
  * WHY THIS IS A REST READ. The chart is its own log (`/chart`), and the parts
- * of it these screens need are the ones the anonymous org projection leaves
- * out on purpose: a seat's model chain, token budget, contact identities and
- * tool credentials, a unit's knowledge space and the credentials its members
- * inherit. No socket question answers them, so they are read the way the
- * builder reads them, over the dashboard's one REST transport.
+ * of it these screens need are the ones the org projection leaves out on
+ * purpose: a seat's contact identities, its runtime half (the authored model
+ * fields, sandbox, placement, workers and tool credentials), a unit's
+ * knowledge space and the credentials its members inherit. No socket question
+ * answers them, so they are read the way the builder reads them, over the
+ * dashboard's one REST transport.
  *
  * FIVE OUTCOMES, NOT A NULLABLE VALUE, for the reason `lib/seats.ts` gives for
  * the seat page: "this object is not in the chart", "you may not read it",
@@ -77,10 +78,11 @@ type Answer<T> = { readonly found: true; readonly value: T } | { readonly found:
 
 /**
  * One GET against the chart, re-read whenever `refresh` changes identity.
- * `path` null asks nothing (a parameter not known yet) and answers `unread`.
+ * `object` is what is read — [WHOLE_CHART], [chartSeat] or [chartUnit] — and
+ * null asks nothing (a parameter not known yet) and answers `unread`.
  */
 export function useChartRead<T>(
-  path: string | null,
+  object: string | null,
   query: Record<string, QueryValue> | undefined,
   refresh: unknown,
 ): ChartReading<T> {
@@ -90,10 +92,14 @@ export function useChartRead<T>(
     // is never shown under another's: a screen that moves from one seat to
     // the next reads `unread` until the new seat's answer arrives, rather than
     // the previous seat's settings under the new seat's name.
-    `${path ?? ""}?${queryKey}`,
+    `/chart${object ?? ""}?${queryKey}`,
     async (signal) => {
       try {
-        const answer = await rest.request("GET", path ?? "", {
+        // THE CHART'S OWN PATH AS A LITERAL, with only the object after it:
+        // this read reaches the org chart and nothing else, and a call that
+        // starts with its path is one `protocol/proxy.test.ts` can hold the
+        // dev server's proxy to.
+        const answer = await rest.request("GET", `/chart${object ?? ""}`, {
           ...(queryKey ? { query: JSON.parse(queryKey) as Record<string, QueryValue> } : {}),
           signal,
         });
@@ -108,7 +114,7 @@ export function useChartRead<T>(
         throw err;
       }
     },
-    { enabled: path !== null },
+    { enabled: object !== null },
   );
 
   // RE-READ ON EVERY ORG PUSH, quietly, keeping what is drawn until the answer
@@ -141,14 +147,17 @@ function failureOf(failure: RestFailure, err: unknown): ChartReading<never> {
   return { state: "failed", failure };
 }
 
-/** The path of one seat's chart read. */
-export function chartSeatPath(handle: string): string {
-  return `/chart/seats/${encodeURIComponent(handle)}`;
+/** The whole chart, for [useChartRead]: `GET /chart` itself. */
+export const WHOLE_CHART = "";
+
+/** One seat's place under `/chart`, for [useChartRead]. */
+export function chartSeat(handle: string): string {
+  return `/seats/${encodeURIComponent(handle)}`;
 }
 
-/** The path of one unit's chart read. */
-export function chartUnitPath(key: string): string {
-  return `/chart/units/${encodeURIComponent(key)}`;
+/** One unit's place under `/chart`, for [useChartRead]. */
+export function chartUnit(key: string): string {
+  return `/units/${encodeURIComponent(key)}`;
 }
 
 /** The query that asks for the runtime half where the reader may have it. */

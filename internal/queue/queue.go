@@ -37,6 +37,14 @@
 //     (ListSubscriptions). A mailbox outlives everything that knew its name,
 //     a removed seat's handle included, so the broker has to be able to say
 //     which mailboxes exist or a leaked one can never be found again.
+//   - A failed verb is MARKED with one of three sentinels when the failure is
+//     one a caller acts on, and nothing else about it may be branched on:
+//     ErrTooLarge (the event can never fit — permanent), ErrNotLive (this
+//     queue consumes and answers nothing until it is started again) and
+//     ErrUnavailable (the broker did not answer — a CONDITION, which the
+//     same call made again in a moment may clear). An unmarked failure is
+//     none of those: the caller's own mistake, or a broker answer that
+//     waiting does not change.
 package queue
 
 import (
@@ -56,15 +64,16 @@ var log = logging.Get("queue.contract")
 
 // ErrTooLarge reports that an event does not fit on the wire.
 //
-// THE SECOND SENTINEL THE LAYERS ABOVE MAY BRANCH ON, and for the same reason
-// as ErrNotLive: they must not branch on which backend is running, so each one
-// translates its own refusal into this and callers ask one question
-// everywhere.
+// ONE OF THE THREE SENTINELS THE LAYERS ABOVE MAY BRANCH ON — ErrNotLive and
+// ErrUnavailable are the others — and for the same reason as both: they must
+// not branch on which backend is running, so each one translates its own
+// refusal into this and callers ask one question everywhere.
 //
 // It exists because "too large" is the one publish failure that is PERMANENT.
-// Every other reason a publish fails — a broker restarting, a connection
-// dropping, a quorum briefly unavailable — is answered by trying again, so a
-// producer that cannot tell them apart has to treat all of them as transient.
+// The reasons a publish fails that trying again does answer — a broker
+// restarting, a connection dropping, a quorum briefly unavailable — are
+// ErrUnavailable, and a producer that could not tell this from them had to
+// treat every failure as transient.
 // The webhook edge did exactly that and asked the provider to retry a delivery
 // whose size guaranteed it would fail identically forever, releasing and
 // re-taking its claim on every attempt.
@@ -201,13 +210,14 @@ type Handler func(ctx context.Context, ev *events.Event) Result
 type BatchHandler func(ctx context.Context, evs []*events.Event) Result
 
 // ErrNotLive reports that a verb reached a queue that is not live — never
-// started, or stopped.
+// started, stopped, or holding a connection its broker client has closed for
+// good, which no later call reopens and which stops the node.
 //
-// ONE OF THE TWO SENTINELS THE LAYERS ABOVE MAY BRANCH ON — see ErrTooLarge
-// for the other — because they must not branch on which backend is running:
-// each backend keeps its own error (jetstream.ErrClosed,
-// memory.ErrNotStarted) and wraps this, so errors.Is(err, queue.ErrNotLive)
-// is the same question everywhere.
+// ONE OF THE THREE SENTINELS THE LAYERS ABOVE MAY BRANCH ON — see ErrTooLarge
+// and ErrUnavailable for the others — because they must not branch on which
+// backend is running: each backend keeps its own error (jetstream.ErrClosed,
+// jetstream.ErrConnectionLost, memory.ErrNotStarted) and wraps this, so
+// errors.Is(err, queue.ErrNotLive) is the same question everywhere.
 //
 // It exists because "the queue is down" is not a failure for every caller. A
 // seat release detaches the mailbox and the seat host KEEPS THE LEASE if that
@@ -217,6 +227,49 @@ type BatchHandler func(ctx context.Context, evs []*events.Event) Result
 // reading it as a failure would strand the seat for a full TTL on the one
 // path where the node is trying to hand it back.
 var ErrNotLive = errors.New("queue: not live")
+
+// ErrUnavailable reports that a verb did not reach the broker, or reached it
+// and was not answered: this node's connection to it is down and its client is
+// reconnecting, or the broker — or the stream or the consumer the verb
+// addressed, a leader mid-election among them — did not reply within the
+// client's own time.
+//
+// A CONDITION, and the only one of the three sentinels that is: the same call
+// made again once the connection is back may succeed, so a caller answers it
+// as it answers any wait that clears — later, or with "try again shortly" —
+// and never as a fault of this node, which it is not. Each backend wraps its
+// transport's own words in it rather than replacing them (on JetStream a
+// timeout, no responders, a reconnecting or disconnected connection, a
+// reconnect buffer that filled), so a log still reads the client's message
+// and errors.Is on the client's own sentinel still answers.
+//
+// IT IS NOT ErrNotLive, and the difference is what a caller may conclude. A
+// queue that is not live consumes nothing, which a seat release reads as
+// proof of teardown. A broker that did not answer proves nothing of the kind:
+// this queue's consumers stay attached and resume when the connection does,
+// so reading this as teardown would hand a seat to a peer while this node may
+// still be consuming it.
+//
+// THE VERBS ABOUT THIS NODE'S OWN ATTACHMENTS NEVER ANSWER IT — Quiesce,
+// Unquiesce, Detach, PauseTopic and ResumeTopic touch no broker, and must not
+// need one: a node that can no longer prove it owns a seat quiesces that
+// seat's mailbox on exactly the outage that cost it the proof, when the
+// coordination store rides the same broker. Every other verb has to reach the
+// broker and may.
+//
+// IT IS NOT A STATEMENT THAT NOTHING HAPPENED, exactly as no failed publish
+// ever was: a publish whose acknowledgement did not arrive may still have
+// been stored, so a producer that retries must tolerate a second copy.
+// "Published means durable" is a claim a success makes and a failure does not
+// unmake. Ask is the verb that refuses before anything is sent — see its
+// contract.
+//
+// A CALLER'S OWN DEADLINE OR CANCELLATION, ending a wait on a broker this
+// node is connected to, stays the context's error alone and is not marked:
+// the caller decided it, and the context says whose decision it was. One that
+// ends while the connection is down is marked, because the connection is why
+// nothing answered.
+var ErrUnavailable = errors.New("queue: broker unavailable")
 
 // StreamHandler receives broadcast events. Stream delivery is best-effort:
 // there is no ack, and a handler's failure is logged, never redelivered.
@@ -283,6 +336,19 @@ type Publisher interface {
 type EventQueue interface {
 	// Publish sends an event to a topic. It must not return until the
 	// event is persisted: callers rely on "published means durable".
+	//
+	// It names the event's ORIGIN. An event whose Node is empty leaves
+	// carrying the node this client was built for ([WithNode]), stamped
+	// before any publish listener or consumer can see it; one that already
+	// names a node — an event this node received and is handing on — keeps
+	// it. The caller's own event is never written to: see [Options.Stamp].
+	//
+	// A nil event is REFUSED, and reaches no listener and no consumer.
+	// There is nothing to send, and the encoding of nothing is not
+	// nothing: a backend that published it delivered an event with no id
+	// and no type to every consumer on the topic, where the memory twin
+	// refused the same call — the one divergence a caller can never see
+	// from its own side of the contract.
 	Publish(ctx context.Context, topic string, ev *events.Event) error
 
 	// Subscribe attaches a competing-consumer handler to topic/group.
@@ -377,6 +443,14 @@ type EventQueue interface {
 	// DeleteSubscription destroys the subscription and its retained
 	// mail. Must not require a local consumer: decommissioning a role
 	// cannot depend on which node happened to run the seat.
+	//
+	// It DETACHES THIS CLIENT FIRST, and a delete the broker does not
+	// hear — ErrUnavailable — has still done that: the detach is this
+	// node's own state and reaches no broker. What it leaves is the
+	// mailbox standing with nothing of this node's attached, the state
+	// every mailbox is in while no node holds its seat, which the retry
+	// finishes; never this node still consuming a mailbox its caller
+	// asked to destroy.
 	DeleteSubscription(ctx context.Context, topic, group string) (bool, error)
 
 	// ListSubscriptions reports every durable subscription whose topic
@@ -431,6 +505,18 @@ type EventQueue interface {
 	// the caller knows what a missing answer costs it — an error would
 	// force every caller to unwrap one to find out how many it got. An
 	// error means the ask could not be made at all.
+	//
+	// A BROKER THIS NODE CANNOT REACH IS REFUSED BEFORE ANYTHING IS SENT,
+	// with ErrUnavailable — never written into a client's reconnect buffer
+	// to go out once the connection is back. A buffered request is a
+	// RETAINED one, which is the one thing this verb promises never to
+	// be, and it would reach its servers after its asker had been told
+	// the ask failed: a steer note delivered to a turn its sender was
+	// told nothing reached. What stays possible is the instant between
+	// that check and the send, in which a connection that drops can still
+	// carry the request out later — so a request must be safe to receive
+	// once its asker has gone, as every reply to a vanished mailbox
+	// already is.
 	//
 	// THE REPLIES ARE UNORDERED and carry no sender. What a reply means
 	// is inside its own bytes, because the transport cannot say: a

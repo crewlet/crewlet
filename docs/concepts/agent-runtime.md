@@ -34,24 +34,38 @@ For a seat with direct reports, the executor prompt includes a **team roster**: 
 
 ## Agent States
 
-The engine keeps no per-seat state machine. What a seat is doing is derived from its events by the dashboard's live projection (`internal/api/livestate`), and the states it reports are these:
+The engine keeps no per-seat state machine in the turn path. What a seat is doing is computed by the live projection (`internal/api/livestate`) that every node serving the API holds, and it is served as **one word per seat** — `activity` — on every seat row: the handshake snapshot's, [`GET /agents`](../reference/api-endpoints.md#what-the-handshake-snapshot-carries) and every `agents` push. The dashboard maps the word to a colour and a label and derives nothing itself, so no two screens can disagree about a seat.
 
-```mermaid
-stateDiagram-v2
-    [*] --> Offline
-    Offline --> Idle: this node holds the seat
-    Idle --> Working: agent_phase_started
-    Working --> Idle: agent_turn_completed
-    Working --> Afk: llm_unavailable, turn.guard_breach, budget_exhausted
-    Afk --> Working: the next phase starts
-```
+| `activity` | When | `stopped_reason` |
+|---|---|---|
+| `working` | A turn is running on the seat (from `agent_turn_started`, so the prefetch counts as work), or a [coding run](code-sandbox.md) it launched is `launching` or `running`. | `null` |
+| `needs` | A coding run the seat launched is waiting on a person: `awaiting_clarification`, or `reseed` (the box was reclaimed and only the question survives). | `null` |
+| `stopped` | The seat cannot take work. | `paused`, `unplaced`, `budget` or `provider` |
+| `idle` | None of the above: the seat is held somewhere in the fleet and waiting for work. | `null` |
 
-- **Offline**: no node this API can see is serving the seat. The roster marks a seat idle only when this node holds its lease, so on a fleet a seat a peer is running reads as offline here; the fleet view answers who holds what.
-- **Idle**: the seat is held, its mailbox is attached, and no turn is running.
-- **Working**: a phase has started and the turn has not completed.
-- **Afk**: an engine-detected failure stopped the turn (no model answered, a turn guard fired, or the token budget ran out). The cause is kept until the seat does real work again.
+The rows are checked **in that order**, and the order is the rule. A seat whose turn is still running is `working` even while a person's pause waits for that turn to end, or while an older run of its waits on a question: what it is doing now is the truer word, and `paused` and the running-runs panel say the rest.
 
-The dashboard adds one state of its own: a seat whose detached [sandbox run](code-sandbox.md) is still in flight reads as busy even though the turn that started the run has completed.
+The four reasons a seat is `stopped`, in the order they are stated when more than one holds:
+
+- **`paused`** — a person [paused the seat](#pausing-a-seat). Its mail waits on its inbox until somebody resumes it.
+- **`unplaced`** — no node in the fleet holds the seat's lease, so nothing will run it however much mail it has. This is read from the **seat leases** (the same table [`fleet`](../reference/api-endpoints.md#fleet-sandbox-runs--schedules) reads), never from which seats the node serving the dashboard runs: a seat a peer holds is placed and reads `idle` or `working` like any other. The leases are read on every snapshot and on the dashboard's five-second tick, because a seat moves between nodes on a lease and publishes nothing. A read that fails changes nothing, and before the first read no seat is called unplaced — "no node holds it" is a fact about a lease table somebody read.
+- **`budget`** — a capped token window the seat is charged against, its own or the company's, is refusing: the seat is [parked](#the-budget-park) until the window resets or the ceiling is raised. Read from the live meter's per-window `state`, and only while that window lasts.
+- **`provider`** — the seat's model provider chain was exhausted (`llm_unavailable`), and the seat has done no work since. It clears the moment the seat starts a turn or a phase again, or a new instance of it is spawned.
+
+**How much a seat has done is a different question, with a different source.** The state is the projection's, and describes now; a seat's turns over days — how many ended, how many failed, what share a reviewer approved on the first pass, how long they take — are summed from every node's replicated usage days by [`seat_activity`](../reference/api-endpoints.md#queries), so they are the same on whichever node is asked and still count a node that has left.
+
+**A failed last turn is not a stop.** A turn guard that fired (stall, max iterations, the delegation-depth cap, a scheduled turn's wall-clock cap, an unhandled exception) fails that turn, and the seat takes its next wake like any other: it reads `idle`, and why its last turn failed is `last_error` and `last_turn.outcome`, which are separate fields.
+
+**The runs are read from the durable record**, not from the turn's stage. A turn that launched a detached coding run is `parked`, and a park says only that a run was launched; the run record — reconciled into the projection at boot and every thirty seconds, and never aged out — says whether that run is still running, has stopped to ask somebody, or is gone. A run parked on a question for thirteen hours is exactly the seat a person most needs to see, and it reads `needs` for as long as it waits.
+
+Beside the state, the projection holds **the turn the seat is on** and **the last turn it ended**. Both are on every seat row of the `agents` push:
+
+- `turn` is `{turn_id, work_item, work_item_basis, started_at, stage, node}`. `stage` is one of three values. `context` means the turn has started and is assembling what it knows. `phase` means a phase is running. `parked` means the turn launched a detached [coding run](code-sandbox.md) and is suspended until the run is collected. The run is collected later, possibly on another node or after a restart, and the same turn resumes then. A parked turn therefore stays the seat's turn, and it is not reported as an end. The suspension publishes a turn completion with `suspended: true`, and the projection used to read that completion as the end of the turn, so the seat said it was idle while its work ran on in a box. When a parked turn resumes, its `started_at` is still the turn's first start and not the segment's. `node` is the node that published the turn's newest event. A turn whose coding run is lost (`sandbox_run_failed`) has nothing left to resume it, so the loss ends that turn.
+- `last_turn` is `{turn_id, ended_at, outcome}`. `outcome` is `completed` or `failed`, and a turn is `failed` when any of its events was a failure. That is the same rule the turn list applies, so a seat seeded from the store and a seat watched live report the same outcome. `ended_at` is the turn's newest event: its completion, or the reflection pass that runs after the completion.
+
+A third key says whether a person has **paused** the seat: `paused` is `{by, at, reason, stop_running}` — who paused it (the person their token is bound to, or the token itself), when, why, and whether the pause also ended the turn the seat was on — and `null` while nobody has. It is an input to the seat's state: a paused seat reads `stopped` with `stopped_reason: "paused"` once it is not working. See [Pausing a seat](#pausing-a-seat).
+
+`activity`, `stopped_reason`, `turn`, `last_turn` and `paused` are always present, and each of the last four is `null` when it has no value. The client merges each pushed row over the row it holds, so an omitted key would leave a finished turn, or a lifted stop, on the card. After a restart, the turns are seeded from the fleet's turn list: each seat's newest turns are read from every live node, so the "last turn 24m ago" line survives a restart, and so does a turn that is still parked.
 
 How a seat comes to be held, and what happens when it is released, is [Seat Ownership](seat-ownership.md).
 
@@ -63,7 +77,9 @@ Each agent, when triggered (by event or task assignment), executes a **turn** th
 
 ```
 1. Collect context (task, knowledge, trigger event, delegation chain),
-   and derive from the trigger WHO IS WAITING for this turn
+   and derive from the trigger WHO IS WAITING for this turn and WHICH
+   WORK ITEM it is on (the trigger's, a colleague's ask's, or a parked
+   run's) — announced on agent_turn_started before the prefetch
 
 2. Executor phase
    ├── Tool surface = every first-party tool except mark_onboarded,
@@ -86,8 +102,12 @@ Each agent, when triggered (by event or task assignment), executes a **turn** th
    └── done | self_iterate (loop back, carrying the prior-work ledger
          so the next round does only the gap) | failed
 
-5. Publish agent_turn_completed and turn_completed; reflection consumes the latter
+5. Publish agent_turn_completed and turn_completed; reflection consumes the latter.
+   A turn nothing named an item for is charged here to the one task its
+   writes committed to, if there was exactly one
 ```
+
+Every turn is charged to **one work item or to none** — see [Which work a turn is on](turn-engine.md#which-work-a-turn-is-on).
 
 The executor and the reviewer can run on different LLM models — see the [Turn Engine](turn-engine.md#per-phase-llm-models) doc.
 
@@ -134,7 +154,7 @@ Under the two-stage [Turn Engine](turn-engine.md), each phase builds its own nar
 
 | Phase | What's in the prompt |
 |---|---|
-| **Executor** | Identity (role, unit, goal, manager, direct reports, team channel), company mission and vision, full policy text, role profile (backstory, responsibilities, behavioral guidelines), unit context (purpose, goals), team roster with per-member profile (leads only), the `## Human colleagues` note (only in a company with human seats), the executor's contract, [Tool Skills](tool-skills.md) **catalogue** (one-line summary per triggered skill), **slim** tool catalogue (builtin tool names + MCP server names; MCP tool names hidden behind ``list_mcp_server_tools``). Plus ``## The thread so far`` — the chat thread the turn was woken in, read at turn start and handed over rather than left for the agent to fetch (see [the thread block](#the-thread-a-turn-was-woken-in) below); it is not a learning prefetch but the trigger's own context, which is why it leads. Then the six learning prefetches, in the order they render: ``## First-turn onboarding`` (until ``mark_onboarded`` fires), ``## Personal memory`` (diary), ``## Synthesized skills you've learned``, ``## Relevant knowledge`` (a knowledge-base search built from the trigger), ``## Similar prior work`` (episodes), and ``## Known counterparty``. On rounds after the first, the user message also carries the [prior-work ledger](turn-engine.md#prior-work-ledger-across-self_iterate-rounds) as ``## Already done earlier in this turn``. |
+| **Executor** | Identity (role, unit, goal, manager, direct reports, team channel), company mission and vision, full policy text, role profile (backstory, responsibilities, behavioral guidelines), unit context (purpose, goals), team roster with per-member profile (leads only), the `## Human colleagues` note (only in a company with human seats), the executor's contract, ``## When a decision is not yours to make`` (the escalation guidance below; only when the seat holds `comment_on_work_item`), [Tool Skills](tool-skills.md) **catalogue** (one-line summary per triggered skill), **slim** tool catalogue (builtin tool names + MCP server names; MCP tool names hidden behind ``list_mcp_server_tools``). Plus ``## The thread so far`` — the chat thread the turn was woken in, read at turn start and handed over rather than left for the agent to fetch (see [the thread block](#the-thread-a-turn-was-woken-in) below); it is not a learning prefetch but the trigger's own context, which is why it leads. Then the six learning prefetches, in the order they render: ``## First-turn onboarding`` (until ``mark_onboarded`` fires), ``## Personal memory`` (diary), ``## Synthesized skills you've learned``, ``## Relevant knowledge`` (a knowledge-base search built from the trigger), ``## Similar prior work`` (episodes), and ``## Known counterparty``. On rounds after the first, the user message also carries the [prior-work ledger](turn-engine.md#prior-work-ledger-across-self_iterate-rounds) as ``## Already done earlier in this turn``. |
 | **Review** | One-line identity, the round's own account of what it set out to do, the outcome word (and who wrote it), the verbatim tool log, the text it produced, the decision-enum contract, and the [Tool Skills](tool-skills.md) catalogue for MCP-server-keyed skills (operator-scoped to the review phase). On rounds after the first, a `## Earlier rounds (already delivered)` section carries the [prior-work ledger](turn-engine.md#prior-work-ledger-across-self_iterate-rounds) so the duplicate-delivery rule holds turn-wide. No tool catalogue, no policies, no roster, no prefetch. |
 | **Worker** (`delegate`) | The worker's persona (a `workers:` template or the parent's inline prompt), the [Tool Skills](tool-skills.md) catalogue scoped to the tools the worker was granted, the slim tool catalogue, then the mandated runtime preamble (no further delegation, no colleague contact, read-only discovery only, and end by calling `submit_result`). |
 
@@ -142,7 +162,11 @@ Why the split: the executor is the frame making every ownership / delegation / p
 
 ### Built-in engine scaffolding
 
-Engine guardrails (event triage, escalation judgement, tool usage, knowledge-system usage) are carried by tool descriptions (`search_knowledge`, colleague-surface tools) and by the executor and review contracts themselves, not by dedicated prompt prose. Each tool's one-line description tells the LLM when to use it; the per-phase contract tells the LLM what output shape is expected. There is no special escalation mechanism: when stuck, an agent reaches its manager with the same colleague-surface tools it uses for any other collaboration (a Slack mention, a Jira comment, `a2a_ask`); the reviewer routes a turn that has *not yet* reached anybody back through `self_iterate` so the next round makes that outreach, and ends one that already has as `done`, because the colleague's reply is what re-triggers the agent (no `escalate` tool, no `ask_colleague` decision, and no waiting state).
+Engine guardrails (event triage, tool usage, knowledge-system usage) are carried by tool descriptions (`search_knowledge`, colleague-surface tools) and by the executor and review contracts themselves, not by dedicated prompt prose. Each tool's one-line description tells the LLM when to use it; the per-phase contract tells the LLM what output shape is expected.
+
+**Escalation is the one piece of guidance with a section of its own**, ``## When a decision is not yours to make``, rendered right after the executor's contract whenever the seat holds `comment_on_work_item`. It exists because the *shape* of an escalation is the engine's rather than any role's: a question that needs somebody to choose is a [structured ask](../guides/work-tracker.md#asking-for-a-decision) — the question, two to four options, the one the seat recommends and why, the evidence it looked at, and the role the person is asked in (`approver` or `contributor`) — put on the work item with `ask` and `decision`, or filed as the item itself with `create_work_item`. The person answers by choosing an option, and **the asker is woken with the choice**, by its label. What the section insists on is the half a model gets wrong: after asking, the seat **ends the turn blocked on that branch** — it finishes whatever does not depend on the answer and stops, rather than choosing for the person or waiting inside a turn that cannot receive the reply.
+
+There is still no special escalation *mechanism*: an ask is an ordinary comment, a colleague reached any other way (a Slack mention, `a2a_ask`) re-triggers the agent the same way, and the reviewer routes a turn that has *not yet* reached anybody back through `self_iterate` so the next round makes that outreach, and ends one that already has as `done`, because the reply is what re-triggers the agent (no `escalate` tool, no `ask_colleague` decision, and no waiting state).
 
 Tool- and MCP-server-specific guidance (when to call ``reflect_and_persist``, how to mention teammates on Jira vs Slack, when to author code via the [code sandbox](code-sandbox.md) and what the GitHub tools are for) lives in the [Tool Skills](tool-skills.md) registry — modular knowledge-base-sourced fragments (Confluence pages) where each skill carries a short **summary** (always inline in the per-phase catalogue) and a rich **body** that loads on demand via the always-on ``load_tool_skill`` builtin. The engine ships no skill prose; operators seed the skills container with ``crewlet confluence import`` and edit pages in the backend's editor thereafter.
 
@@ -191,7 +215,7 @@ The phase tools are not in the registry: the runner adds `submit_work`, `activat
 
 Colleague outreach happens through the upstream MCP tools directly (on the common stack: a chat server's post-message tool, the tracker's comment and update tools, the wiki's comment tool, the code host's review tools; these are examples, not engine-known names). The engine ships no chat or tracker wrappers of its own; `a2a_ask` is the one colleague tool it registers, and it is narrowly scoped to tight-loop, mechanical sync between agents. Use whichever chat, issue-tracker, wiki or code-host tools your MCP servers expose for any collaboration a human teammate would reasonably want to see. The engine prompts name none of these: they describe the *capability* and the LLM picks the tool from its catalogue (see [Tool Capabilities](tool-capabilities.md)). See [Turn Engine: Colleague-surface tools](turn-engine.md#colleague-surface-tools) for when to use each.
 
-Decisions use the agent's Slack MCP tools and team channel — see [Decision Framework](decision-framework.md).
+A decision a seat needs from somebody is a structured ask on a work item — `comment_on_work_item` or `create_work_item` with `ask` and `decision` — answered with a `choice` that wakes the asker; how a company decides stays behavioural guidance, see [Decision Framework](decision-framework.md).
 
 ### MCP Tools
 
@@ -248,6 +272,161 @@ single biggest behavioural difference from the engine's first
 implementation: anything shared between turns is guarded rather than
 safe-by-construction, and the whole suite runs under the race detector for
 exactly that reason.
+
+### The budget park
+
+A [token ceiling](../getting-started/configuration.md#token-budgets) is per
+calendar window — the day, the ISO week and the month on the company's clock —
+so a seat that has run out of room has not run out for good: it has room again
+when the window turns over, or as soon as somebody raises the ceiling. The
+dispatcher acts on that **before a delivery is claimed**: before the completion
+ledger reads it, before it is offered to a parked coding run as an answer
+(resuming one charges tokens exactly as a turn does), and before any model is
+asked anything.
+
+```mermaid
+stateDiagram-v2
+    [*] --> Asked: delivery reaches the seat
+    Asked --> Runs: every capped window has room
+    Asked --> Parked: a capped window is refusing
+    Runs --> Parked: a round is refused, nothing written outside yet
+    Runs --> Recorded: a round is refused after an outside write
+    Parked --> Asked: the window turns over
+    Parked --> Asked: a published company changes the ceilings or the clock
+```
+
+- **Asked.** The node reads the seat's counters and the company's, in the
+  current windows. A window is refusing when the gate has refused a charge in it
+  (its refusal stamp, cleared only by an admitted charge or the window turning
+  over) or when it has no room left for a single token. A counter that cannot be
+  read parks nothing: the turn runs and its own meter, which fails closed, is
+  the gate.
+- **Parked.** The seat's inbox takes a pause hold (`budget_window`), the
+  delivery is **deferred** — handed back unacked, for one of its deliveries,
+  with a reason naming the window: `budget: day window 2026-09-23 resets
+  2026-09-24T07:00:00Z` — and an alarm is set for the end of the refusing
+  window, the one that ends **last** where several refuse, since nothing can run
+  before it. `seat_budget_parked` is logged with the scope, the window, its
+  figures and the reset.
+- **Released.** At the reset, or at once when a published company changes the
+  ceilings of either scope or the company's clock (which moves every window's
+  end) — a settings apply for the company's ceilings and its clock, a chart
+  write for a seat's, since a seat's ceilings are its [runtime
+  half](chart-domain.md) and a chart write moves no settings revision — the hold
+  is lifted, `seat_budget_park_released` is logged, and the held mail is
+  delivered again in order and asked again. A change that lowers a ceiling
+  parks it again at the cost of one delivery.
+- **Refused mid-flight.** A window that had room when the delivery was claimed
+  can run out during the turn. That turn stops with `budget_exhausted`, and the
+  seat is parked exactly as above — unless the turn had already written outside
+  the engine (an MCP write, a colleague ask, a coding run), in which case the
+  trigger is recorded and acked, because running it again after the reset would
+  repeat those writes.
+
+**Why a park and not a retry.** Before the park, a wake reaching a spent seat
+ran a turn that was refused on its first charge, and a refusal proves nothing
+left the engine, so the delivery was NAKed and redelivered — and refused again,
+twenty-five times over about ten minutes, until the broker dead-lettered a
+perfectly healthy message. A seat that ran out at ten in the morning lost every
+message it was sent for the rest of the day.
+
+**Two stops with two owners.** The deferral quiesces the attachment, and that
+quiesce is the seat host's: it is resumed on the next lease renew, as every
+deferral is. The pause hold is the park's, and it is what keeps the resumed
+attachment from being handed anything until the release. So a park costs one
+delivery per message, not one per renew, and the release never resumes a
+consumer the seat host stopped because it could not prove it owns the seat.
+
+**This node alone agrees on it.** A park is a hold in this process's queue
+client and an alarm in its memory, derived from the fleet's shared counters on
+every delivery. A restart, or the seat moving to a peer, simply asks the
+counters again on the first delivery. It is not an [alarm](../reference/alarms.md):
+nothing is wrong with the node when a ceiling does its job.
+
+### Pausing a seat
+
+A person can **pause** a seat — from its profile, from their own assistant
+through the operator catalogue, or with `crewlet seats pause` — and resume it
+later. While it is paused the seat starts no new turn, its incoming mail waits
+on its inbox in order, and its scheduled runs are skipped. The turn it is on
+finishes first, unless the pause also asked to **stop** it (`stop_running`), in
+which case that turn ends at its next round.
+
+**Who may pause a seat** is the seat's holder — the person the identity
+directory binds to it — whoever leads it, or a principal holding
+`fleet:operate`; resuming it is the same, and neither is ever a seat's to do.
+Everybody signed in holds a credential, so "any operator" would let every
+reader of the board stop any seat in the company. A refusal names the grants
+that would have admitted the caller. See [the authority
+table](identity-and-access.md#the-thirteen-rules).
+
+```mermaid
+stateDiagram-v2
+    [*] --> Taking: seat not paused
+    Taking --> Paused: pause_seat
+    Taking --> Stopping: pause_seat with stop_running, a turn running
+    Stopping --> Paused: the turn reaches its next round and ends
+    Paused --> Stopping: pause_seat adds stop_running, a turn running
+    Paused --> Taking: resume_seat — what waited is delivered first, in order
+```
+
+- **The pause is one record for the whole company.** It lives in the
+  coordination store (`seat_pause`), keyed by the seat's **id** — the one
+  derived from the handle it was created under — never by the handle it
+  answers to, so a rename keeps the pause and a seat hired later under a freed
+  handle is never born paused. It has no age: it ends when somebody resumes
+  the seat, or when the seat leaves the company — the published company that
+  removes a seat, an apply or a chart write, clears its pause, and only a node
+  whose company holds every hire may say a seat is gone. It is written by
+  compare-and-set, so two people pausing one seat at once make one change: the
+  second is told it was already paused. The writer whose change won publishes
+  `seat_paused` or `seat_resumed`, naming the person as every write does
+  (`paused_by`, `paused_by_kind`) and the credential they came through
+  (`operator_id`).
+- **Every node carries it out from its own copy.** Each node watches the
+  records and, the moment a pause lands, takes a pause hold (`seat_paused`) on
+  the seat's inbox; the resume lifts it and the mail that waited is delivered.
+  A node that acquires a paused seat — placement moved it, or its holder
+  restarted — takes the hold **before** attaching the seat's mailbox, so the
+  mail it has been holding is never the first thing the new holder runs. A
+  delivery that races the hold is held and parked by the inbox screening. A
+  node that has not yet read the pauses at all (the seconds after a boot) defers
+  its deliveries rather than guessing. A store that cannot be reached is not a
+  resume: a node keeps the pauses it last read, and a paused seat stays paused.
+- **Stop now.** The per-round fence every turn runs under — the same one that
+  stops a turn whose seat moved to another node — also closes on a pause that
+  asked to stop, so the turn ends at a round boundary, never between a tool call
+  and its result. What it had not yet done is lost. The trigger is recorded as
+  worked and acked, not retried: a person who stopped a turn did not ask for it
+  to run again the moment they resume the seat. The turn's completion reads
+  `stopped` rather than `failed`, and `agent_turn_stopped` names who stopped it.
+  A detached [coding run](code-sandbox.md) is not fenced — it outlives its turn
+  by design — but the turn that resumes it is, and ends there with the run.
+- **Answers wait too.** An answer to a parked coding run, by chat or by turn,
+  is held behind the pause like the seat's other mail: resuming a run is work.
+- **Scheduled runs are skipped, not queued.** A fire that comes due on a paused
+  seat is recorded `skipped_paused` in the dispatch ledger and not sent — a
+  standup held behind a week's pause would otherwise run once for every day of
+  it. See [Scheduling](scheduling.md).
+
+A pause is refused `peer_upgrading` while any live node runs a build that
+cannot carry it: any of them may be the next to hold the seat. See
+[Coordination](coordination.md#what-a-node-says-about-itself).
+
+### Steering a running turn
+
+Short of stopping a turn, a person can **steer** it: send a note that the turn
+reads at its next round boundary and keeps to for the rest of the turn — from
+the live view, or from their own assistant with `steer_turn`. It is the
+seat's holder's, its lead's or a `fleet:operate` holder's to send, as a pause
+is — decided on the turn's seat, which only the node running the turn can
+name, so the note asks that node first. The note travels
+on an ephemeral scatter to every node; the node running the turn is the one
+that answers, and the turn's own record says what became of it
+(`agent_turn_steered`: `delivered` at the round that read it, or `expired` when
+the turn ended first). A turn whose executor runs as a coding CLI's own loop
+cannot take one. See [Turn Engine § Steering a running
+turn](turn-engine.md#steering-a-running-turn).
 
 ### Graceful shutdown
 
@@ -354,7 +533,7 @@ you opted into by sending the second signal.
 
 **Watching the drain.** On the dashboard and over the API, for as long as it lasts: the listener closes only once the drain has completed, so the dashboard shows the node as draining with its in-flight count, `GET /health` reports it, and `GET /ready` names the reason. The log says the same and outlives the process: `engine_draining` on the first signal, with what is being waited for and how to stop waiting, then `drain_in_progress` with the in-flight count every 10 seconds, then `drain_complete`, `api_stopped` and `engine_stopped`. Set [`logging.file`](../guides/deployment.md#the-log-file) if you want that record to survive the terminal it was watched in: the file is closed last of everything, after the drain and after the trace flush, so `engine_stopped` is in it. A node that [stops itself](seat-ownership.md#the-node-whose-broker-is-gone-and-why-it-leaves-too) because its broker connection is gone takes the same drain with no signal behind it: `engine_fatal` comes first, naming the cause, then the same lines in the same order, and it exits with status 1. One thing differs when the connection it lost is the **queue's own**: no turn still running can be acknowledged over it, so a peer will run each of them again, and the drain does not wait for them — it cancels them and ends at once, logging `drain_cut` with the in-flight count it stopped waiting for before `drain_complete`. When only the coordination store's connection was lost, acknowledgements still land and the drain waits as above.
 
-A node's drain is reported **by that node**: its own probes, its own dashboard and its own log. It gives up its presence at step 2, so a peer's **Fleet** screen stops listing it rather than showing it draining. On a split deployment a `-roles ingress` node drains the same way; it holds no seats and runs no turns, so its drain is short.
+A node's drain is reported **by that node**: its own probes, its own dashboard and its own log. It gives up its presence at step 2, so a peer's **Settings › Nodes** screen stops listing it rather than showing it draining. On a split deployment a `-roles ingress` node drains the same way; it holds no seats and runs no turns, so its drain is short.
 
 The drain is available programmatically up to the moment the listener closes:
 

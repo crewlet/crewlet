@@ -149,7 +149,7 @@
 //
 // # Every record is SIGNED, and no domain is handed an unverified byte
 //
-// This is ADR-0018. The broker has no authentication of its own and a record
+// This is ADR-0025. The broker has no authentication of its own and a record
 // is what the next node APPLIES, so the framework frames and signs on the way
 // to the appender and verifies before any domain decodes. The key is Tier A's
 // keyring (ADR-0011), and a node with no keyring refuses to start.
@@ -181,6 +181,24 @@
 // asks [PrefixIn] for the prefix its own snapshot has APPLIED and [DeferredIn]
 // whether a retained record is about what it is reading, both inside the
 // transaction that reads the rows (`prefix.go`).
+//
+// # A record is stamped with the lowest version that reads it
+//
+// The retain rule decides by the record's version, so the version is a
+// promise to the builds that PRECEDE the writer: a record stamped below what
+// its fields need is applied by an older node with the field dropped, and one
+// stamped at the writer's own version is retained by every older node whether
+// it carries anything new or not. A domain therefore declares a
+// [RecordFields] table — each field its records gained since the base format,
+// with the version that introduced it — and its encoder stamps
+// [RecordFields.Minimum]. The build's own [Domain.RecordVersion] is exactly
+// the table's highest version: [RecordFields.Check] and the conformance suite
+// hold both halves.
+//
+// A column an applier computes from its rows is invisible to a record
+// version, since what differs between builds is the rule; a [Deriver]
+// versions its rules on the checkpoint row and re-derives once, at the first
+// boot whose rules differ.
 //
 // # THE FLOOR THEOREM
 //

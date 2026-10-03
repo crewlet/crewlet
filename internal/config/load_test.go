@@ -169,7 +169,7 @@ func TestValidationReportsEveryFailureAtOnce(t *testing.T) {
 	t.Parallel()
 	_, err := ParseCompany([]byte(`
 name: Acme
-token_budget: -1
+token_budget: {week: -1}
 notification_coalesce_max_batch: 0
 turn_engine:
   max_iterations: 0
@@ -179,7 +179,7 @@ turn_engine:
 		t.Fatal("expected failures")
 	}
 	for _, want := range []string{
-		"token_budget", "notification_coalesce_max_batch",
+		"token_budget.week", "notification_coalesce_max_batch",
 		"turn_engine.max_iterations", "turn_engine.max_tool_rounds",
 	} {
 		if !strings.Contains(err.Error(), want) {

@@ -156,11 +156,11 @@ node:
 | `workers` | The company-wide singleton duties: the scheduler tick, the maintenance sweep (retention and removed-seat mailbox retirement), the sandbox waiter, the integration reconcile loop, and the learning passes (skill clustering, curation, episode compaction, promotion) on one lease |
 
 Roles decide what a node serves and which duties it holds, and **nothing
-about which state logs it applies**. Every node applies all five — the
-tracker, the vectors, the knowledge base, the org chart and the identity
-directory — whatever its roles, so a seats-only satellite holds a copy of
-your people, the verifiers of their credentials and their sessions like
-every other member; see
+about which state logs it applies**. Every node applies all six — the
+tracker, the vectors, the knowledge base, the org chart, the identity
+directory and the usage history — whatever its roles, so a seats-only
+satellite holds a copy of your people, the verifiers of their credentials
+and their sessions like every other member; see
 [what a satellite holds](satellite-nodes.md#what-a-satellite-holds) for why,
 and for what that means for the host you put one on.
 
@@ -340,9 +340,9 @@ and the dashboard keep answering. See
 
 **Upgrade one node at a time, and let each one finish.** Seat leases
 carry a protocol version, and a node refuses to claim seats while any
-live lease is held at an older one. The current version is **4**: a v3
+live lease is held at an older one. The current version is **5**: a v4
 node names a seat's lease and its mailbox after the seat's *handle* and a
-v4 node after its *id*, so the two would name different resources for one
+v5 node after its *id*, so the two would name different resources for one
 seat, each claim it, and both run it. The gate is what drains the fleet
 instead. The rule is asymmetric on purpose:
 older nodes keep working, newer ones wait — visibly, with
@@ -366,13 +366,40 @@ hiccup into a fleet-wide stall. The import runs once, at your hand, and
 refuses: it costs you a retry, where proceeding costs you a chart every older
 node rewrites.
 
-Two consequences worth stating plainly:
+The consequences worth stating plainly:
 
 - **A stalled rollout stalls placement.** If you leave one old node
   running, the new ones hold nothing. The log line says so; watch for it.
 - **Rolling *back* across a protocol bump needs a full stop.** An older
   build has no protocol check at all, so it will happily take over a
   newer node's expired leases. Nothing in the table can stop it.
+- **A stalled rollout stalls the fleet duties too, on upgrades that move
+  them.** Upgrading from a build that kept the `worker:` leases beside the
+  seat leases, newer nodes run no scheduler tick, retention sweep,
+  integration reconcile or curator pass while any older node is live, and
+  say so once with `coord_kv_duties_wait_for_older_build` (and
+  `coord_kv_duties_resumed` when it ends). See
+  [Coordination](../concepts/coordination.md#the-rolling-upgrade-across-the-duty-bucket).
+- **A gesture a newer build carries out for a person is refused
+  `peer_upgrading` until the node that would carry it out has that
+  build.** Each node advertises what its build can do on its heartbeat,
+  and a gesture another node carries out asks first — so mid-rollout it is
+  refused by name rather than accepted by an older node that never acts on
+  it. A read that cannot conclude (a store blip, a node mid-drain) refuses
+  `unavailable` instead, which a retry clears. See
+  [Coordination](../concepts/coordination.md#why-a-gesture-asks-the-fleet-first).
+- **A node that leaves takes its turn-level history with it.** Every node's
+  event store holds the events it published, and the dashboard's turns,
+  traces and event log are read from every live node at query time. A node
+  you drain for good, or a node whose volume you discard, is a node whose
+  turns, phases and events no screen can show again — the spend, turn
+  counts and page reads it recorded survive it, in the replicated `usage`
+  domain. Export to an OTLP sink first if you need that detail kept. See
+  [Reading the fleet's history](../concepts/event-system.md#reading-the-fleets-history).
+- **Mid-rollout, a history read can name a node as speaking another
+  protocol.** The history scatter carries a version, and a node on a build
+  that reshaped it answers with its own version and nothing else, which
+  the answer's `coverage` names rather than merging rows it cannot read.
 
 **An activation during a rollout reaches both builds.** A revision reaches
 every node through the activation pointer, which carries the sealed document
@@ -386,8 +413,9 @@ one failed attempt and applies the revision on its next poll. The one race the
 mirror cannot close is the earlier build's own: one of its nodes activating in
 the same instant as an upgraded node can leave the older nodes unable to reach
 that epoch (they shed their work to an upgraded peer and, three attempts
-later, fail `/ready`, visible on the fleet screen). Two nodes of the earlier
-build racing always had that outcome, and the next activation ends it. See
+later, fail `/ready`, visible on the **Settings › Nodes** screen). Two nodes
+of the earlier build racing always had that outcome, and the next activation
+ends it. See
 [Control Plane § The design](../concepts/control-plane.md#the-design).
 
 **Adding a state-log domain is a coordinated upgrade**, and it sits beside the
@@ -409,15 +437,8 @@ and keeps the records a joiner would still need.
 
 What that means for an operator: **upgrade every node before letting any node
 fall below the trim floor.** In practice this is the ordinary rolling deploy
-plus one check — watch the fleet screen until every node reports a snapshot
+plus one check — watch **Settings › Nodes** until every node reports a snapshot
 again before you start restoring, rebuilding or adding nodes.
-- **A stalled rollout stalls the fleet duties too, on upgrades that move
-  them.** Upgrading from a build that kept the `worker:` leases beside the
-  seat leases, newer nodes run no scheduler tick, retention sweep,
-  integration reconcile or curator pass while any older node is live, and
-  say so once with `coord_kv_duties_wait_for_older_build` (and
-  `coord_kv_duties_resumed` when it ends). See
-  [Coordination](../concepts/coordination.md#the-rolling-upgrade-across-the-duty-bucket).
 
 ## Watching a fleet
 
@@ -425,9 +446,16 @@ again before you start restoring, rebuilding or adding nodes.
 - **`seats_unplaceable`** — a seat nobody may run. Fix the selector, or
   start a node that matches.
 - **`seat_claims_blocked_by_older_protocol`** — an unfinished upgrade.
+- **`history_partial`** — history reads are coming back without a node: it
+  did not answer inside the fleet read budget. Every such answer names the
+  node in its `coverage`.
 - **`/health`** carries this node's seats, its in-flight count and its
-  config posture; the dashboard's **Fleet** screen puts every node's
+  config posture; the dashboard's **Settings › Nodes** screen puts every node's
   side by side, with seat ownership and per-node config epoch.
+- **Each node's heartbeat** also carries what its build can carry out and
+  how each of its MCP servers started — one row per server, counting the
+  instances that started and failed, with one failure's reason. See
+  [What a node says about itself](../concepts/coordination.md#what-a-node-says-about-itself).
 
 A node whose applied config epoch lags the fleet's is not an error on its
 own — every rollout produces lag. See
@@ -436,9 +464,9 @@ posture change.
 
 ## How a node that fell behind catches up
 
-The work tracker, the knowledge base's pages and embeddings, the org chart and
-the identity directory are each derived on every node from an ordered log the
-fleet shares. A node replays each log from wherever its own
+The work tracker, the knowledge base's pages and embeddings, the org chart,
+the identity directory and the usage history are each derived on every node
+from an ordered log the fleet shares. A node replays each log from wherever its own
 rows say it stopped — which works only while the log still **holds** those
 records. It does not hold them for ever: once every node has applied past a
 record, a backup covers it and it is at least a week old, it is trimmed.
