@@ -8,6 +8,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/api/auth"
 	"github.com/crewlet/crewlet/internal/api/httpjson"
+	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/iam"
@@ -419,17 +420,25 @@ func (s *Service) clearSession(w http.ResponseWriter) {
 // laptop they left in an office without signing out of the browser they are
 // doing it from.
 //
-// # It is somebody's OWN session, and that is checked against the estate
+// # Whose session it is comes from the estate, and who may end it from the table
 //
 // A lineage is not a secret — it is in a cookie, a proxy log, a screenshot —
 // so a route that closed whatever lineage it was handed would let anybody end
-// anybody's session. The person who OWNS it is what decides, read from this
-// node's own rows rather than claimed by the caller.
+// anybody's session. The person who OWNS it is read from this node's own rows
+// rather than claimed by the caller, and whether this caller may end it is
+// [authz.ActionSessionEnd] — the verb `DELETE /iam/people/{id}/sessions` is
+// mounted on, so ending one session and ending all of somebody's are one
+// rule: their own, on no proof at all (the first thing somebody does on
+// finding an intruder), or anybody else's on `people:manage`, a `step_up`
+// and a person present.
 //
-// The one exception is the same one every surface here has: a principal
-// carrying `fleet:operate` may end a session they do not own, because ending
-// somebody's session is what an operator does when a laptop is stolen and its
-// holder cannot be reached.
+// It used to be decided here, by a check of its own that admitted
+// `fleet:operate` for anybody's session with no step-up — a grant a machine
+// token may carry — so a leaked pipeline token, or a week-old cookie, could
+// end any session whose lineage it knew while the table, its walks and the
+// docs all said that took the directory's grant and a person present. An SRE
+// who finds a stolen laptop asks whoever holds `people:manage`, or uses the
+// Tier A token, which holds it and is fresh by construction.
 func (s *Service) LogoutOne(w http.ResponseWriter, r *http.Request) {
 	principal, resolution := iam.From(r.Context())
 	switch resolution {
@@ -457,14 +466,29 @@ func (s *Service) LogoutOne(w http.ResponseWriter, r *http.Request) {
 		// is exactly what the caller asked for, and a 404 would send
 		// somebody looking for a session they successfully closed.
 		//
-		// IT IS ALSO THE SAME ANSWER A SESSION THEY DO NOT OWN GETS
-		// BELOW, which is what keeps this from being an oracle for
-		// which lineages exist.
+		// IT IS NOT THE ANSWER A SESSION SOMEBODY ELSE HOLDS GETS BELOW,
+		// which is the table's refusal, so the difference says a lineage
+		// the caller already holds names a session they may not end. That
+		// is all it says — no owner, no person — and a lineage is not a
+		// secret (above); answering that refusal `ended` too would tell
+		// the caller a session they did not end is over.
 		httpjson.Write(w, http.StatusOK, map[string]string{"status": "ended"})
 		return
 	}
-	if !mayEnd(r, principal, owner) {
-		httpjson.Fail(w, http.StatusForbidden, httpjson.CodeUnauthorized)
+	// THE CALLER'S OWN, IN THE TABLE'S TERMS. The directory classes compare
+	// the principal's id, while a caller on a Tier A token opens its
+	// sessions under the token's login ([subjectOf]) — so a session whose
+	// owner is the caller's own subject is named by the id the self arm
+	// compares, and every other owner as itself.
+	about := owner
+	if owner == subjectOf(r, principal) {
+		about = principal.ID.String()
+	}
+	d := authz.Decide(r.Context(), principal, authz.ActionSessionEnd,
+		authz.Object{Kind: authz.KindPerson, Owner: about, ID: about},
+		authz.NoChart{}, s.now())
+	if d.Unknown() || !d.Allowed {
+		authz.EnvelopeRefusal(w, r, authz.Policy{Action: authz.ActionSessionEnd}, d)
 		return
 	}
 	if !live {
@@ -498,11 +522,13 @@ func (s *Service) LogoutOne(w http.ResponseWriter, r *http.Request) {
 		unresolved(w, r, "api_sign_out_one_unresolved", closed)
 		return
 	}
-	// A PERSON ENDING THEIR OWN is a logout; an operator ending somebody
-	// else's is a revocation, and the trail has to say which, because the
-	// second is the row an investigation of a stolen laptop is looking for.
+	// A PERSON ENDING THEIR OWN is a logout; an administrator ending
+	// somebody else's is a revocation, and the trail has to say which,
+	// because the second is the row an investigation of a stolen laptop is
+	// looking for. The ARM THAT ADMITTED says which, so the trail and the
+	// decision cannot disagree about whose session this was.
 	reason := types.EndLogout
-	if owner != subjectOf(r, principal) {
+	if d.Reason != authz.ReasonSelf {
 		reason = types.EndRevoked
 	}
 	s.audit.Emit(r.Context(), types.IAMSessionEnded{
@@ -529,26 +555,6 @@ func (s *Service) clearIfPresented(w http.ResponseWriter, r *http.Request, linea
 	}
 }
 
-// mayEnd reports whether this caller may end a session that person holds.
-//
-// # Both values come from this node, and neither from the caller
-//
-// The owner is read out of this node's own rows and the caller is what the
-// guard resolved. A lineage is not a secret — cookie, proxy log, screenshot —
-// so a rule that trusted anything the request carried about whose session it
-// is would let anybody end anybody's.
-//
-// THE OPERATOR EXCEPTION is `fleet:operate`, and it is what somebody does when
-// a laptop is stolen and its holder cannot be reached. It is the deployment's
-// grant, because ending a person's sessions is an act on the DEPLOYMENT's
-// security rather than on the company's work.
-func mayEnd(r *http.Request, p iam.Principal, owner string) bool {
-	if owner != "" && owner == subjectOf(r, p) {
-		return true
-	}
-	return p.Can(iam.GrantFleetOperate)
-}
-
 // subjectOf is the subject the caller's OWN sessions are opened under: a
 // person's id, or — for a caller acting on a Tier A token, by its bearer or by
 // a session exchanged from it — the token's login, which is what the exchange
@@ -557,7 +563,9 @@ func mayEnd(r *http.Request, p iam.Principal, owner string) bool {
 // ONE ANSWER FOR THE THREE GESTURES THAT ASK, so "end my session", "end my
 // other sessions" and "sign me out everywhere" agree about who "me" is: a
 // token's caller compared against its derived id owned none of the sessions
-// it had opened, and signing out everywhere bumped an epoch nothing read.
+// it had opened, and signing out everywhere bumped an epoch nothing read. The
+// named sign-out asks the authority table about a session this matches as the
+// caller's own id, which is what the table's self arm compares.
 func subjectOf(r *http.Request, p iam.Principal) string {
 	if entry, tierA := auth.TierA(r.Context()); tierA {
 		return iam.TokenLogin(entry.ID)

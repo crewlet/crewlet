@@ -102,6 +102,7 @@ func (r *exchangeRig) rebuild(b config.Bootstrap) {
 	mux := http.NewServeMux()
 	buildWith(r.t, b, func(o *authapi.Options) {
 		o.Writer, o.Sessions = r.estate, r.estate
+		o.Directory = sessionDirectory{estate: r.estate}
 	}).Routes(mux)
 	mux.HandleFunc("GET /probe", func(w http.ResponseWriter, req *http.Request) {
 		p, how := iam.From(req.Context())
@@ -387,6 +388,52 @@ func TestSigningOutOfAnExchangedSessionEndsIt(t *testing.T) {
 	}
 }
 
+// A TOKEN'S SESSION ENDS ANOTHER OF ITS OWN BY NAME, ON NO GRANT AT ALL.
+//
+// A session exchanged from a Tier A token is opened under the token's LOGIN,
+// and the authority table's self arm compares the principal's id — so the
+// named sign-out hands the table the caller's own id for a session whose owner
+// is the caller's own subject. The `lead` token holds no `people:manage`, so
+// read as anybody else's its own session would be refused. Mutation: ask the
+// table about the owner as stored and the sign-out is refused 403.
+func TestATokensSessionEndsAnotherOfItsOwnByName(t *testing.T) {
+	t.Parallel()
+	r := newExchangeRig(t)
+	first, _ := r.exchange(boundValue)
+	opened := r.estate.lineages()
+	second, _ := r.exchange(boundValue)
+	if first == nil || second == nil {
+		t.Fatal("the bound token did not exchange")
+	}
+	var named string
+	for _, lineage := range r.estate.lineages() {
+		if !slices.Contains(opened, lineage) {
+			named = lineage
+		}
+	}
+	req := httptest.NewRequest(http.MethodPost, "/auth/logout/"+named, nil)
+	req.AddCookie(first)
+	rec := httptest.NewRecorder()
+	r.handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("ending its own other session answered %d: %s", rec.Code,
+			rec.Body.String())
+	}
+	closes := r.estate.closes()
+	if len(closes) != 1 || closes[0].lineage != named ||
+		closes[0].person != iam.TokenLogin("lead") {
+		t.Errorf("closed %v, want the named session under %s", closes,
+			iam.TokenLogin("lead"))
+	}
+	if _, after := r.probe(second); after.Code != http.StatusUnauthorized {
+		t.Errorf("the ended session answered %d, want 401", after.Code)
+	}
+	if _, still := r.probe(first); still.Code != http.StatusOK {
+		t.Errorf("the session that asked answered %d, want it untouched",
+			still.Code)
+	}
+}
+
 // THE SESSION ROUTE SAYS WHEN THE SESSION ENDS.
 //
 // `expires_at` was declared and never filled, so every answer said the session
@@ -596,6 +643,26 @@ func (e *sessionEstate) BoundSeat(_ context.Context, login string) (
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	return e.bindings[login], nil
+}
+
+// sessionDirectory is the surface's directory over a session estate: nobody
+// is enrolled, and a named session is held by whoever this estate opened it
+// for.
+type sessionDirectory struct {
+	stubDirectory
+	estate *sessionEstate
+}
+
+func (d sessionDirectory) SessionStanding(_ context.Context, lineage string,
+	_ time.Time) (string, bool, error) {
+
+	d.estate.mu.Lock()
+	defer d.estate.mu.Unlock()
+	row, ok := d.estate.sessions[lineage]
+	if !ok {
+		return "", false, nil
+	}
+	return row.person, !row.ended && row.epoch >= d.estate.epochs[row.person], nil
 }
 
 // seatChart is a chart view holding a fixed set of seats.

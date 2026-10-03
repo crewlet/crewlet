@@ -2,6 +2,7 @@ package authapi_test
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"slices"
@@ -12,6 +13,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/crewlet/crewlet/internal/api/authapi"
+	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/iam/session"
@@ -276,5 +278,107 @@ func TestEndingANamedSessionAlreadyOverWritesNothing(t *testing.T) {
 			t.Errorf("THE CONTROL: a live session was closed %d times and "+
 				"announced %+v, want once each", closes, emitted)
 		}
+	}
+}
+
+// ENDING SOMEBODY ELSE'S NAMED SESSION IS THE AUTHORITY TABLE'S TO DECIDE.
+//
+// `POST /auth/logout/{lineage}` and `DELETE /iam/people/{id}/sessions` are one
+// gesture — ending a person's sessions — and the route used to answer it with
+// a check of its own: the owner, or `fleet:operate` for anybody's, with no
+// step-up. That grant may be minted onto a machine token, so a leaked pipeline
+// token, or a week-old cookie, could end any session whose lineage it knew,
+// while the table said ending somebody else's takes `people:manage`, a recent
+// proof and a person present. Each refusal is the table's own, in its own
+// envelope; the controls are an administrator a minute after proving, who ends
+// it and is recorded as revoking it, and the person themselves on a stale
+// proof, which their own sessions never ask for.
+//
+// Mutation: admit `fleet:operate` again and the first two cases end the
+// colleague's session.
+func TestEndingSomebodyElsesNamedSessionIsTheTablesToDecide(t *testing.T) {
+	t.Parallel()
+	const lineage = "0192f00d-0000-7000-8000-0000000000bb"
+	colleague := "0192f00d-0000-7000-8000-0000000000c0"
+	token := iam.MachineTokenName(uuid.Must(uuid.NewV7()).String())
+	fresh, stale := clock.Add(time.Hour), clock.Add(-time.Minute)
+	for _, tc := range []struct {
+		name   string
+		grants []iam.Grant
+		reauth time.Time
+		via    string
+		own    bool
+		want   int
+		reason authz.Reason
+		ending types.SessionEndReason
+	}{
+		{"the deployment's grant, which used to be enough",
+			[]iam.Grant{iam.GrantFleetOperate}, fresh, "", false,
+			http.StatusForbidden, authz.ReasonNoGrant, ""},
+		{"a machine token carrying the deployment's grant",
+			[]iam.Grant{iam.GrantFleetOperate}, fresh, token, false,
+			http.StatusForbidden, authz.ReasonNoGrant, ""},
+		{"a machine token carrying the directory's grant",
+			[]iam.Grant{iam.GrantPeopleManage}, fresh, token, false,
+			http.StatusForbidden, authz.ReasonTokenRefused, ""},
+		{"the directory's grant on a stale proof",
+			[]iam.Grant{iam.GrantPeopleManage}, stale, "", false,
+			http.StatusForbidden, authz.ReasonStepUp, ""},
+		{"the directory's grant, freshly proved",
+			[]iam.Grant{iam.GrantPeopleManage}, fresh, "", false,
+			http.StatusOK, "", types.EndRevoked},
+		{"their own, on a stale proof", nil, stale, "", true,
+			http.StatusOK, "", types.EndLogout},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			r := newSignInRig(t)
+			caller := iam.Principal{
+				ID:    uuid.MustParse("0192f00d-0000-7000-8000-00000000000d"),
+				Login: "ana.admin", Kind: iam.KindPerson, Stage: iam.StageActive,
+				Grants: tc.grants, ReauthAt: tc.reauth, Via: tc.via,
+			}
+			r.estate.owner = colleague
+			if tc.own {
+				r.estate.owner = caller.ID.String()
+			}
+			req := httptest.NewRequest(http.MethodPost, "/auth/logout/"+lineage, nil)
+			req = req.WithContext(iam.WithPrincipal(req.Context(), caller))
+			rec := httptest.NewRecorder()
+			mux := http.NewServeMux()
+			r.svc.Routes(mux)
+			mux.ServeHTTP(rec, req)
+			var body map[string]any
+			_ = json.Unmarshal(rec.Body.Bytes(), &body)
+			if rec.Code != tc.want {
+				t.Fatalf("answered %d %v, want %d", rec.Code, body, tc.want)
+			}
+			r.estate.mu.Lock()
+			closes := slices.Clone(r.estate.closes)
+			r.estate.mu.Unlock()
+			emitted, _ := r.audit.snapshot()
+			if tc.want != http.StatusOK {
+				if body[authz.DetailReason] != string(tc.reason) {
+					t.Errorf("refused with %v, want the table's %s", body, tc.reason)
+				}
+				if len(closes) != 0 || len(emitted) != 0 {
+					t.Errorf("a refused sign-out closed %v and announced %v",
+						closes, emitted)
+				}
+				return
+			}
+			if len(closes) != 1 || closes[0].lineage != lineage ||
+				closes[0].person != r.estate.owner {
+				t.Errorf("closed %+v, want the one session under its owner", closes)
+			}
+			if len(emitted) != 1 {
+				t.Fatalf("announced %+v, want one ending", emitted)
+			}
+			if ended, ok := emitted[0].(types.IAMSessionEnded); !ok ||
+				ended.Reason != tc.ending {
+				t.Errorf("announced %+v, want an ending for %s", emitted[0],
+					tc.ending)
+			}
+		})
 	}
 }
