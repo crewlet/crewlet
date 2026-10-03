@@ -97,5 +97,10 @@ func (a *Applier) writeSessionClose(ctx context.Context, tx *sql.Tx,
 			at.record.Subject.ID, err)
 	}
 	written, _ := result.RowsAffected()
+	if written > 0 {
+		// THE ONE SESSION, by its lineage: a sign-out ends what it names
+		// and no other credential the person holds.
+		a.moved.session(at.record.Subject.ID)
+	}
 	return int(written), nil
 }

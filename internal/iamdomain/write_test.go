@@ -50,8 +50,12 @@ type writeRig struct {
 	consumed uint64
 	events   *writerEvents
 
-	// directory counts the applier's post-commit directory signals.
+	// directory counts the applier's post-commit moves that said a seat's
+	// standing may have moved, and moved keeps every move it handed over
+	// since the last [writeRig.takeMoved].
 	directory atomic.Int64
+	movedMu   sync.Mutex
+	moved     []iamdomain.Moved
 
 	// sealer is what this node seals and opens somebody's values with,
 	// over [testKeyring] — held so a case can open what a row carries.
@@ -240,11 +244,34 @@ func newWriteRigWith(t *testing.T,
 		verifier: testVerifier(t),
 		sealer:   sealer, publisher: publisher, node: node, nodeDeps: nodeDeps,
 	}
-	// THE DIRECTORY SIGNAL IS COUNTED, so a case can say which records
-	// told this node its seats' standing may have moved.
-	rig.applier = iamdomain.NewApplier("node-a",
-		func() { rig.directory.Add(1) })
+	// WHAT EACH COMMITTED BATCH MOVED IS KEPT, so a case can say which
+	// records told this node its seats' standing may have moved, and whose
+	// credentials they told it about.
+	rig.applier = iamdomain.NewApplier("node-a", func(m iamdomain.Moved) {
+		if m.Seats {
+			rig.directory.Add(1)
+		}
+		rig.movedMu.Lock()
+		defer rig.movedMu.Unlock()
+		rig.moved = append(rig.moved, m)
+	})
 	return rig
+}
+
+// takeMoved is every move the applier handed over since the last call, folded
+// into one, and forgets them.
+func (r *writeRig) takeMoved() iamdomain.Moved {
+	r.movedMu.Lock()
+	defer r.movedMu.Unlock()
+	var out iamdomain.Moved
+	for _, m := range r.moved {
+		out.Seats = out.Seats || m.Seats
+		out.Everyone = out.Everyone || m.Everyone
+		out.People = append(out.People, m.People...)
+		out.Sessions = append(out.Sessions, m.Sessions...)
+	}
+	r.moved = nil
+	return out
 }
 
 // drain consumes every record the broker holds beyond what this node has

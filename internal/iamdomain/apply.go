@@ -47,12 +47,13 @@ var applyLog = logging.Get("iam.apply")
 // depended on which keyring keys this node holds — and two nodes a rotation
 // has not yet reached would write different rows from one record.
 //
-// THE DIRECTORY SIGNAL IS POST-COMMIT, because it is a consequence of a record
-// here that is not a row. A suspension withdraws the seat's contact identities from this
-// node's notify registry with no org-chart record at all, and the apply is the
-// only thing that sees that happen on EVERY node — the change feed relays a
-// record to one. So a committed batch that moved a seat's standing tells the
-// engine, which re-reads the directory and rebuilds the registry whole.
+// WHAT A BATCH MOVED IS SAID POST-COMMIT, because it is a consequence of a
+// record here that is not a row. A suspension withdraws the seat's contact
+// identities from this node's notify registry with no org-chart record at all,
+// and closes every dashboard socket the person holds open; the apply is the
+// only thing that sees either happen on EVERY node — the change feed relays a
+// record to one. So a committed batch hands the engine a [Moved] saying whose
+// standing it moved, and each listener re-reads the rows it needs.
 
 // Applier writes this node's copy of the identity estate.
 type Applier struct {
@@ -60,51 +61,48 @@ type Applier struct {
 	// record's writer against.
 	NodeID string
 
-	// directory is told, after a committed batch, that who holds which
-	// seat — or at what stage — may have moved. Nil is legal and means
-	// nobody is listening.
-	//
-	// IT CARRIES NOTHING, deliberately: its one listener is the notify
-	// registry, which is rebuilt WHOLE from a fresh read of the directory
-	// and swapped, because a diff applied to a fresh registry drops every
-	// identity it did not touch. So there is nothing a list of changed
-	// people could be used for except to be wrong about.
-	directory func()
+	// committed is told, after a committed batch, what it moved — see
+	// [Moved]. Nil is legal and means nobody is listening.
+	committed func(Moved)
 
-	// directoryMoved is set inside Apply when a record wrote a row the
-	// directory's standing is read from — a person's stage, a seat claim
-	// or its release, a removal — and drained by Committed. NOT guarded by
-	// a mutex, and the framework's contract is why: an applier is ONE
-	// writer, and Apply and Committed are called from the same goroutine
-	// with the commit in between. A SIGN-IN SETS NOTHING: it is the bulk of
-	// this log's traffic and it moves no seat's standing, so a rebuild per
-	// session would be a registry rebuilt per login for nothing.
-	directoryMoved bool
+	// moved is filled inside Apply as each record writes a row somebody's
+	// standing is read from, and drained by Committed. NOT guarded by a
+	// mutex, and the framework's contract is why: an applier is ONE writer,
+	// and Apply and Committed are called from the same goroutine with the
+	// commit in between. A body the store re-runs fills it twice, which
+	// costs a listener a re-read and nothing else — see [Moved] on why
+	// over-reporting is the safe direction.
+	moved Moved
 }
 
 // NewApplier builds the identity estate's applier for one node.
 //
-// directory is called after a committed batch that moved a seat's standing —
-// see the field. AFTER the commit and never inside the transaction, for the
-// reason internal/chart's view trigger gives: the store re-runs the body of an
+// committed is called after a committed batch that moved anything — see
+// [Moved]. AFTER the commit and never inside the transaction, for the reason
+// internal/chart's view trigger gives: the store re-runs the body of an
 // attempt that failed transiently, and a listener told about rows that then
-// rolled back would rebuild from rows no node holds.
-func NewApplier(nodeID string, directory func()) *Applier {
-	return &Applier{NodeID: nodeID, directory: directory}
+// rolled back would re-decide from rows no node holds.
+func NewApplier(nodeID string, committed func(Moved)) *Applier {
+	return &Applier{NodeID: nodeID, committed: committed}
 }
 
-// Committed is the post-commit half: the consequence of a record here that is
-// not a row — this node's contact routing hearing that a seat's standing may
-// have moved.
+// Committed is the post-commit half: the consequences of a record here that
+// are not rows — this node's contact routing hearing that a seat's standing
+// may have moved, and its open connections that a credential they were opened
+// with may have.
+//
+// IT MUST NOT BLOCK, and neither may the listener: it runs on the apply loop's
+// own goroutine with the next batch waiting behind it.
 func (a *Applier) Committed(context.Context) {
-	if !a.directoryMoved {
+	if a.moved.Empty() {
 		return
 	}
-	// RESET BEFORE THE CALL, so a signal the listener raises while it runs
+	// RESET BEFORE THE CALL, so a move the listener raises while it runs
 	// is one the next batch delivers rather than one this reset erases.
-	a.directoryMoved = false
-	if a.directory != nil {
-		a.directory()
+	moved := a.moved
+	a.moved = Moved{}
+	if a.committed != nil {
+		a.committed(moved)
 	}
 }
 

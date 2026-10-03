@@ -88,7 +88,7 @@ func (a *Applier) writePerson(ctx context.Context, tx *sql.Tx, at applyContext,
 		// A CONTENT RECORD STATES A STAGE, so a person's standing may
 		// have moved with it — an enrolment arriving on a reservation
 		// that already holds a seat is the ordinary case.
-		a.directoryMoved = true
+		a.moved.Seats = true
 	}
 
 	// THE CLAIM COLUMNS ARE NOT TOUCHED HERE, and that is the one thing
@@ -99,6 +99,13 @@ func (a *Applier) writePerson(ctx context.Context, tx *sql.Tx, at applyContext,
 	// columns", in a domain where the columns are somebody's identity.
 
 	credentials, err := a.writeCredentials(ctx, tx, at, id, person.Credentials)
+	if written > 0 || credentials > 0 {
+		// AND EVERY CREDENTIAL ACTING FOR THEM is to be decided again:
+		// the grants a session or a machine token carries are this row's,
+		// and a machine token this record revoked or dropped from the set
+		// is one it ended.
+		a.moved.person(id)
+	}
 	return int(written) + credentials, err
 }
 
@@ -220,7 +227,10 @@ func (a *Applier) writeStage(ctx context.Context, tx *sql.Tx, at applyContext,
 	}
 	written, _ := result.RowsAffected()
 	if written > 0 {
-		a.directoryMoved = true
+		// A STAGE THAT IS NOT `active` ends every credential acting for
+		// them, and one that is admits them again.
+		a.moved.Seats = true
+		a.moved.person(id)
 	}
 	return int(written), nil
 }
@@ -279,6 +289,11 @@ func (a *Applier) writeRevocation(ctx context.Context, tx *sql.Tx,
 		return 0, fmt.Errorf("iamdomain: bump person %s's epoch: %w", id, err)
 	}
 	written, _ := result.RowsAffected()
+	if written > 0 {
+		// EVERY SESSION AND MACHINE TOKEN THEY HOLD is over, which is the
+		// whole of what an epoch bump is for.
+		a.moved.person(id)
+	}
 	return int(written), nil
 }
 
@@ -362,8 +377,10 @@ func (a *Applier) writeRemoval(ctx context.Context, tx *sql.Tx, at applyContext,
 	if written > 0 {
 		// A REMOVAL RELEASES THE SEAT with every other claim, and the
 		// tombstone is what the directory then reads as the seat's
-		// standing — see [Reader.SeatHolders].
-		a.directoryMoved = true
+		// standing — see [Reader.SeatHolders]. And it ends every
+		// credential they held, with the rows it deleted.
+		a.moved.Seats = true
+		a.moved.person(id)
 	}
 	return int(written), nil
 }

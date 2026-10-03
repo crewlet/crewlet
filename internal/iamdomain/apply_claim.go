@@ -114,6 +114,13 @@ func (a *Applier) writeToken(ctx context.Context, tx *sql.Tx, at applyContext,
 			kind, at.record.Subject.ID, err)
 	}
 	written, _ := cleared.RowsAffected()
+	if written > 0 && kind != KindEmail {
+		// A LOGIN OR A SEAT TAKEN OFF SOMEBODY THIS RECORD DOES NOT NAME,
+		// so whoever it was is found by deciding every credential again —
+		// see [Moved.Everyone]. An address names nothing a credential
+		// acts as, so taking one moves no credential.
+		a.moved.Everyone = true
+	}
 
 	// AN UPSERT, NOT AN UPDATE, and this is the shape an enrolment's own
 	// order forces. The claims are taken BEFORE the person's content is
@@ -165,6 +172,11 @@ func (a *Applier) writeToken(ctx context.Context, tx *sql.Tx, at applyContext,
 	}
 	bound, _ := result.RowsAffected()
 	written += bound
+	if bound > 0 {
+		// THE PERSON IT WAS BOUND TO, whose login or seat a credential
+		// acting for them carries.
+		a.moved.person(at.record.Person)
+	}
 	if kind == KindSeat && bound > 0 {
 		// AND IT ENDS THE SAY OF EVERY REMOVAL THAT RELEASED THIS SEAT.
 		// A removal's tombstone withholds the seat it released because
@@ -190,7 +202,7 @@ func (a *Applier) writeToken(ctx context.Context, tx *sql.Tx, at applyContext,
 	if kind == KindSeat && written > 0 {
 		// A BIND puts a person — at whatever stage they are — between
 		// the seat and its contact routing.
-		a.directoryMoved = true
+		a.moved.Seats = true
 	}
 
 	// AND THE SEALED FORM, for the one claim whose token is not readable.
@@ -240,7 +252,14 @@ func (a *Applier) releaseToken(ctx context.Context, tx *sql.Tx, at applyContext,
 	if kind == KindSeat && written > 0 {
 		// AN UNBIND hands the seat back to the chart, which is a move in
 		// its standing — see [Reader.SeatHolders].
-		a.directoryMoved = true
+		a.moved.Seats = true
+	}
+	if kind != KindEmail && written > 0 {
+		// THE HOLDER IS NOT NAMED — a release clears the column on
+		// whoever holds it — so every credential is decided again: an
+		// unbound person's sockets act as their seat no longer. See
+		// [Moved.Everyone].
+		a.moved.Everyone = true
 	}
 	return int(written), nil
 }

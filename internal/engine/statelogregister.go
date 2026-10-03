@@ -504,12 +504,14 @@ func register() []registration {
 		{
 			Domain: iamdomain.Domain{},
 			NewApplier: func(s *stateLog) (statelog.Applier, error) {
-				// THE DIRECTORY'S SIGNAL, the party registry's second
-				// rebuild trigger beside the chart view's: a suspension
-				// withdraws a seat's contact identities with no chart
-				// record, so nothing on the publish path would ever see
-				// it. See directory.go.
-				return iamdomain.NewApplier(s.nodeID, s.nudgeDirectory), nil
+				// WHAT EACH COMMITTED BATCH MOVED: the party registry's
+				// second rebuild trigger beside the chart view's — a
+				// suspension withdraws a seat's contact identities with
+				// no chart record, so nothing on the publish path would
+				// ever see it (directory.go) — and every open
+				// connection's word that a credential it was opened with
+				// may have ended (identitymoved.go).
+				return iamdomain.NewApplier(s.nodeID, s.identityMoved), nil
 			},
 			NewSeams: func(s *stateLog, appendTo *jetstream.DomainLog,
 				runner *statelog.Runner) (writeSeams, error) {

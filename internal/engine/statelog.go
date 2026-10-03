@@ -18,6 +18,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
+	"github.com/crewlet/crewlet/internal/iamdomain"
 	"github.com/crewlet/crewlet/internal/jsprovision"
 	"github.com/crewlet/crewlet/internal/maintenance"
 	"github.com/crewlet/crewlet/internal/pages"
@@ -445,13 +446,14 @@ type applyHooks struct {
 	// no engine behind the log.
 	nudgeChart func()
 
-	// nudgeDirectory is what the IDENTITY APPLIER calls after a committed
-	// batch that moved a seat's standing — a suspension, a bind, an
-	// unbind, a removal — threaded down for nudgeChart's reason: the apply
-	// is the only thing that sees it on every node, and a suspension
-	// moves nothing a published company would ever carry. It must not
-	// block either. See internal/engine/directory.go.
-	nudgeDirectory func()
+	// identityMoved is what the IDENTITY APPLIER calls after a committed
+	// batch, with what it moved ([iamdomain.Moved]) — a seat's standing
+	// for the party registry, whose credentials for whatever holds one
+	// open — threaded down for nudgeChart's reason: the apply is the only
+	// thing that sees it on every node, and a suspension moves nothing a
+	// published company would ever carry. It must not block either. See
+	// [Engine.identityMoved].
+	identityMoved func(iamdomain.Moved)
 
 	// inboxMoved is what the TRACKER APPLIER calls after a committed
 	// batch that wrote somebody a notice — see [Engine.SetOnInboxMoved].
@@ -464,10 +466,10 @@ type applyHooks struct {
 // applyHooks is every post-commit hook this engine hands its appliers.
 func (e *Engine) applyHooks() applyHooks {
 	return applyHooks{
-		nudgeSkills:    e.nudgeSkills,
-		nudgeChart:     e.nudgeChart,
-		nudgeDirectory: e.nudgeDirectory,
-		inboxMoved:     e.inboxMoved,
+		nudgeSkills:   e.nudgeSkills,
+		nudgeChart:    e.nudgeChart,
+		identityMoved: e.identityMoved,
+		inboxMoved:    e.inboxMoved,
 	}
 }
 
