@@ -50,10 +50,9 @@ import (
 // Ordinary work still waits exactly where it waited before.
 //
 // The failure it stops has the same shape as the one a pin stops, one layer
-// up. A socket storm — the dashboards' half of the readers full of scans, and
-// the engine's own reads taking the rest — takes every connection; the
-// identity read that would let those very requests be decided queues behind
-// all of them; and the queue feeds itself.
+// up. A socket storm — N dashboards, four concurrent queries each, every one a
+// scan — takes every connection; the identity read that would let those very
+// requests be decided queues behind all of them; and the queue feeds itself.
 //
 // # It is not a second transaction implementation
 //

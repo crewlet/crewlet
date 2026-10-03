@@ -98,7 +98,6 @@ func TestTheSnapshotCarriesOnlyWhatItsAudienceMayRead(t *testing.T) {
 		Placement: func() (map[string]bool, error) { return map[string]bool{}, nil },
 		Chart:     authz.NoChart{},
 		Holders:   blindHolders{},
-		Readers:   testReaders,
 	})
 	if err != nil {
 		t.Fatal(err)

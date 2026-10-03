@@ -218,48 +218,22 @@ they are deliberately different mechanisms.
 ### The socket's admission semaphore
 
 One **socket** may have **four queries running at once**
-(`stream.MaxInFlightQueries`), on four goroutines of its own so a store scan
-cannot stall the live feed. A burst past the four waits in the socket's own
-**backlog** of 32 (`stream.MaxQueuedQueries`), in arrival order, and one past
-that is answered `unavailable` with a one-second retry hint; the read loop
-itself never waits. It used to: the bound was taken on the read loop, which
-was backpressure while the four ran on the socket's own reads and became
-something else once they waited at the node's ceiling below — a tab's fifth
-question then held its keepalive behind other sockets' bursts.
+(`stream.MaxInFlightQueries`). Queries run on their own goroutines so a store
+scan cannot stall the live feed, and the bound is a token pool taken **on the
+read loop's own goroutine**: a burst past it pauses the reader rather than
+piling up as blocked goroutines, so the backpressure is where it can be seen.
 
-**And every socket on the node together may run at most half the store's
-readers.** Nothing bounds how many sockets a caller holding `state:read` opens,
-so without a node-wide ceiling N sockets at four queries each would take every
-reader the store has, and what queues behind them is the engine's own reads —
-a seat's tool lookups mid-turn, the coverage probes, the `/health` body. The
-reserved connection below keeps exactly one read out of that queue, resolving
-who is acting, and nothing else; so the socket surface — the one reader
-population an outside caller drives — is held to **half of the store's
-ordinary readers** (`max(1, readers / 2)`), and the engine's own reads keep the
-other half. A query waits for that ceiling on its own goroutine, so a socket
-whose queries are waiting still answers its keepalive.
-
-**The ceiling is shared between callers in turn.** Served first come first
-served, it is one more thing a caller who opens sockets could take whole: three
-tabs at four queries each sat ahead of every colleague's first, and at the
-reader floor the ceiling is four, which one tab's standing reads fill. So each
-principal's queries wait in a lane of their own, and a slot that frees goes to
-the waiting principal **holding the fewest** — of those tied, the one served
-longest ago. However many queries one caller has queued, another caller's runs
-on the next free slot. A slot is never held back from a caller who is alone at
-the ceiling, because a dashboard query discloses nothing by when it runs and a
-held-back slot is a read nobody runs.
-
-**The floor below is sized from both.** The reader floor is eight: one full
-tab's four in the sockets' half, and the same again for the engine. So the
-semaphore, the ceiling and the floor are one decision stated three times, and
-changing one means changing the others. On a bigger host the pool is
-`GOMAXPROCS` readers and the ceiling moves with it, because a bigger node runs
-more seats whose reads need the other half. Tabs past the ceiling wait at it,
-in their callers' turns — which on a small host with several dashboards open is
-the design working — and
-`store.max_open_conns` raises it, since the ceiling is half of whatever the
-pool holds.
+**Four per socket is the number the pool below is sized from.** The reader
+floor is eight, derived as "two full dashboards at four queries each", and a
+dashboard is a tab — so the semaphore and the floor are one decision stated
+twice, and changing either means changing both. A person with three tabs open
+offers twelve concurrent queries, and that is accepted rather than engineered
+away: past the pool, a query waits in the pool's own queue, and the one read
+that must never wait behind such a burst — resolving who is acting — runs on
+the connection the store reserves for it (below). The allowance used to be per
+**principal**, one budget shared and reference-counted across every socket a
+person held; it bought a bound the reserved connection already gives where it
+matters, and cost a person's second tab a wait on their first.
 
 ### The store's reserved connection
 
@@ -286,19 +260,14 @@ work marked as **identity work** (resolving who is acting, before a route, a
 query or a tool call can decide anything) ever runs on it. Identity reads
 serialise on that one connection, which is exactly what "one connection's
 worth" means, and it is enough because an identity read is a keyed lookup
-rather than a scan. The dashboard's open sockets are decided again on the same
-connection whenever the identity estate or the company moves, and one move can
-decide every socket on the node at once — so a node takes those decisions **one
-at a time**, sharing one between the sockets opened with the same credential,
-and a REST request's own identity read waits behind at most one of them rather
-than one per open tab.
+rather than a scan.
 
 The failure it stops has the same shape as the one the pinned writers exist to
 break:
 
-1. A burst arrives: the sockets' half full of scans, and the engine's own
-   reads taking the rest.
-2. Together they take every connection.
+1. A socket storm arrives: N tabs, four concurrent queries each, every
+   one of them a scan.
+2. They take every connection.
 3. The identity lookup that would let those very requests be decided queues
    behind all of them.
 4. The queue feeds itself — the reads that are waiting are the ones identity
@@ -310,11 +279,7 @@ own limit, so `database/sql` would never reach that limit, its wait counter
 would stop climbing, and the `pool_starved` alarm — whose entire input is that
 counter — would go quiet for good. Holding a connection moves no queue at all.
 Ordinary work still waits exactly where it waited before, and the alarm still
-sees it. The sockets' ceiling above is a gate, and deliberately a partial one:
-it bounds the socket surface alone, so the engine's own reads still reach the
-pool's limit and `pool_starved` still counts them when they queue — which is
-the starvation the alarm exists for. A dashboard query waiting at the sockets'
-ceiling is not a pool wait, and the alarm does not count it.
+sees it.
 
 A handle opened with an explicit `max_open_conns` owns its own arithmetic: the
 reserve comes out of the number given, and at `1` nothing is held back at all,

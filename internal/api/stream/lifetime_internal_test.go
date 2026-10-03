@@ -97,7 +97,6 @@ func newDecidingService(t *testing.T, chart authz.Chart) *Service {
 		Placement: func() (map[string]bool, error) { return map[string]bool{}, nil },
 		Chart:     chart,
 		Holders:   blindHolders{},
-		Readers:   testReaders,
 	})
 	if err != nil {
 		t.Fatalf("NewService: %v", err)

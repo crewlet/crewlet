@@ -182,11 +182,6 @@ func withRequired(t *testing.T, opts api.Options) api.Options {
 	if opts.EventLog == nil {
 		opts.EventLog = sharedEvents
 	}
-	if opts.Readers == 0 {
-		// THE DERIVED FLOOR'S EIGHT, as a one-core node's store answers:
-		// a case about the socket's query ceiling builds its own.
-		opts.Readers = 8
-	}
 	if opts.Sources.Events == nil {
 		opts.Sources.Events = eventfan.Solo(config.DefaultNodeID, opts.EventLog)
 	}
@@ -289,7 +284,7 @@ func TestNewRefusesEveryMissingDependencyByName(t *testing.T) {
 		"Sources.Chart", "Sources.Holders", "Sources.WithheldContacts", "Sources.Coord",
 		"Inbound.Publisher", "Inbound.Claims", "Inbound.Secrets", "Inbound.AppFlow",
 		"Config", "Secrets", "Setup", "Chart", "Retention", "Capacity", "Backup",
-		"AuthEvents", "Inbox", "Credentials", "Readers", "Nodes", "Audit",
+		"AuthEvents", "Inbox", "Credentials", "Nodes", "Audit",
 	} {
 		if !strings.Contains(err.Error(), "Options."+field) {
 			t.Errorf("the refusal does not name Options.%s: %v", field, err)

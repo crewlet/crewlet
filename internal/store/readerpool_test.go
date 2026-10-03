@@ -25,10 +25,9 @@ func TestTheReaderPoolIsDerivedFromTheMachineAndKeepsItsFloor(t *testing.T) {
 		t.Errorf("defaultReaderConns() = %d, want max(%d, GOMAXPROCS=%d) = %d",
 			got, minReaderConns, runtime.GOMAXPROCS(0), want)
 	}
-	// THE FLOOR IS LOAD-BEARING and not decoration: one full tab's four in
-	// the sockets' half and four for the engine's own reads is eight, and a
-	// one-core host would otherwise size its pool at one and make a single
-	// tab queue against itself.
+	// THE FLOOR IS LOAD-BEARING and not decoration: two full dashboards is
+	// eight concurrent queries, and a one-core host would otherwise size
+	// its pool at one and make a single tab queue against itself.
 	if got < minReaderConns {
 		t.Errorf("the derived bound %d fell below the floor of %d", got, minReaderConns)
 	}
@@ -41,42 +40,6 @@ func TestTheReaderPoolIsDerivedFromTheMachineAndKeepsItsFloor(t *testing.T) {
 	// A caller that sets the bound owns the arithmetic: it wins outright.
 	if got := (Options{MaxOpenConns: 3}).poolSize(); got != 3 {
 		t.Errorf("an explicit bound became %d, want the 3 that was asked for", got)
-	}
-}
-
-// TestReadersIsWhatOrdinaryReadsMayHoldOnBothEstates.
-//
-// The dashboard socket's queries are capped at a share of this number so the
-// engine's own reads keep the rest, so it has to be the number ordinary reads
-// can actually hold: each estate's pool less what somebody else holds — the
-// replicated estate's pinned writers, each estate's identity reserve — and
-// the SMALLER of the two estates, since a reader of this node reads both. A
-// share of the configured pool instead would hand the sockets the pins and the
-// reserve too, and leave the engine's reads less than it promised.
-func TestReadersIsWhatOrdinaryReadsMayHoldOnBothEstates(t *testing.T) {
-	t.Parallel()
-	for _, tc := range []struct {
-		name string
-		opts Options
-		want int
-	}{
-		{"the derived pool: the readers it was derived for",
-			Options{PinnedWriters: 1}, defaultReaderConns()},
-		{"a fixed pool: the replicated estate's pins and both reserves come out",
-			Options{MaxOpenConns: 6, PinnedWriters: 2}, 3},
-		{"no room for the replicated estate's reserve: it does not come out",
-			Options{MaxOpenConns: 2, PinnedWriters: 1}, 1},
-	} {
-		db, err := Open(t.Context(), filepath.Join(t.TempDir(), "node.db"), tc.opts)
-		if err != nil {
-			t.Fatalf("%s: open: %v", tc.name, err)
-		}
-		if got := db.Readers(); got != tc.want {
-			t.Errorf("%s: Readers() = %d, want %d", tc.name, got, tc.want)
-		}
-		if err := db.Close(); err != nil {
-			t.Errorf("%s: close: %v", tc.name, err)
-		}
 	}
 }
 
@@ -108,10 +71,10 @@ func TestTheReserveIsSkippedWhereThereIsNoRoomForIt(t *testing.T) {
 
 // TestASocketStormCannotStarveIdentityWork is the reservation doing its job.
 //
-// A socket storm is the dashboards' half of the readers full of scans and the
-// engine's own reads taking the rest. Together they take every connection
-// first-come-first-served, and the identity read that would let those very
-// requests be decided queues behind all of them — so the queue feeds itself, exactly as the reader/writer loop
+// A socket storm is N dashboards × four in-flight queries each, every one of
+// them a scan. They take every connection first-come-first-served, and the
+// identity read that would let those very requests be decided queues behind
+// all of them — so the queue feeds itself, exactly as the reader/writer loop
 // [Writer] exists to break does. One connection is HELD from the open, and
 // [Identity] is the only way to spend it.
 func TestASocketStormCannotStarveIdentityWork(t *testing.T) {

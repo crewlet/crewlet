@@ -119,10 +119,6 @@ func TestARecheckWithdrawsOnlyTheWatchItDecided(t *testing.T) {
 	}
 }
 
-// testReaders is the store width this package's internal cases build a
-// service over: wide enough that no case meets the node's query ceiling.
-const testReaders = 64
-
 // blindHolders is an identity directory that can say nothing, for a case that
 // never names a login — every one in this package's own suite names a seat.
 type blindHolders struct{}
