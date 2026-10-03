@@ -3581,6 +3581,15 @@ something could have changed the answer:
   routes answer that person — until the node can read the record (an upgrade,
   or the key added and a restart) and applies it; every other socket is decided
   as before and stays open;
+- **this node stopped vouching for its identity rows** — its identity applier
+  halted on a record it cannot read (a removal or a company-wide invalidation
+  signed under a key the node was not restarted with, a record that fails its
+  signature, a recreated stream) or is frozen behind a broker it cannot reach,
+  and its lag has just passed the stall grace, which is the instant every
+  identity read on the node starts answering `503`. Every socket is decided
+  again and closes `1013`, its reconnect answering `503` like the node's REST
+  routes, apart from a credential the node serves even then (an unbound Tier A
+  token, the break-glass path);
 - **a company was published** — the org chart a seat binding resolves through
   may have moved;
 - **its credential ends on its own** — a session's absolute deadline, a
@@ -3606,13 +3615,14 @@ Each answer does one thing:
 | Resolved with different grants | *(no close)* | Nothing — the socket's pushes follow the new grants, and a fresh `snapshot` built for them replaces what the screen was showing. |
 | Resolved | *(no close)* | Nothing — and later questions are asked as the principal just resolved, so a narrowed grant takes effect from the record that narrowed it. |
 
-**A node behind its identity log** hears no record it has not applied, so its
-open sockets are served on their last decision until it applies the one that
-ends them. That is the same stall every other surface on the node already
-names: its REST routes answer `503` past the stall grace, and the alarm table
-reports it. A node that has **retained** a record is not behind — its applier
-has moved past the record — which is why retention is a signal of its own
-(above) rather than this stall.
+**A node behind its identity log** hears no record it has not applied, so
+inside the stall grace its open sockets are served on their last decision, as
+its REST routes are served on the rows it has. Past the grace it can vouch for
+nobody, and its open sockets close `1013` at that instant (above) — including
+on a node whose applier **halted** on the very record meant to end them, which
+no applied record would ever have announced. A node that has **retained** a
+record is not behind — its applier has moved past the record — which is why
+retention is a signal of its own (above) rather than this stall.
 
 `4401` and `4403` sit in the 4000–4999 range the standard reserves for
 applications, and both deliberately echo the HTTP status they mean; `1013` is

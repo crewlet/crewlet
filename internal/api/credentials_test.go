@@ -22,6 +22,7 @@ import (
 	"github.com/crewlet/crewlet/internal/iam/session"
 	"github.com/crewlet/crewlet/internal/iamdomain"
 	"github.com/crewlet/crewlet/internal/runtoken"
+	"github.com/crewlet/crewlet/internal/statelog"
 )
 
 // fakeCredentials is the engine's half of the credential feed: it keeps what
@@ -90,6 +91,18 @@ func (l *liveRows) deferPerson(person string) {
 	identity := l.rows[person]
 	identity.Deferred = true
 	l.rows[person] = identity
+}
+
+// behind sets how far behind its identity log the node holding these rows is,
+// for every person: what a halted or frozen applier leaves every read
+// reporting.
+func (l *liveRows) behind(lag time.Duration) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	for person, identity := range l.rows {
+		identity.Lag = lag
+		l.rows[person] = identity
+	}
 }
 
 // readsOf is how many times a person's rows have been read.
@@ -293,6 +306,57 @@ func TestARetainedRecordClosesTheTabsItLeavesUnknown(t *testing.T) {
 	if got := node.probe(t, jane.cookie); got != http.StatusServiceUnavailable {
 		t.Fatalf("the reconnect of the tab a retained record closed answered %d, "+
 			"want 503 — the handshake is where the client learns why", got)
+	}
+}
+
+// A NODE THAT STOPS VOUCHING FOR ITS IDENTITY ROWS CLOSES EVERY TAB ON THEM.
+//
+// An identity applier halted on a record it cannot read — the removal or the
+// company-wide invalidation meant to end these very sessions, signed under a
+// key this node lacks — commits no batch, and neither does one frozen behind
+// a broker it cannot reach: no move names anybody. What the node's reads
+// report is the lag, and past the stall grace the guard answers every one of
+// them unknown, so REST is 503. The engine's vouch watch hands the feed a move
+// naming everyone at that crossing (internal/engine's identityvouch.go), and
+// this holds the other half: told so, an open tab on a stalled node closes
+// 1013 and its reconnect's handshake answers 503, exactly as a request does.
+//
+// The control is the same move on a node behind by less than the grace, which
+// the guard still serves: its tab stays open. Kept open on the stalled node,
+// a removed person's tab went on receiving every push and answering every
+// question until the node restarted.
+func TestAStalledNodeClosesTheTabsItCannotVouchFor(t *testing.T) {
+	t.Parallel()
+	for _, c := range []struct {
+		name   string
+		lag    time.Duration
+		closes bool
+	}{
+		{"past the stall grace", statelog.StallGrace + time.Second, true},
+		{"inside the stall grace", statelog.StallGrace, false},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			node := newSocketNode(t, func() time.Time { return clock })
+			jane := node.tab(t, "jane.doe", clock.Add(8*time.Hour))
+			before := node.rows.readsOf(jane.person)
+			node.rows.behind(c.lag)
+
+			node.feed.fire(t, iamdomain.Moved{Everyone: true})
+			if !c.closes {
+				node.rows.readAtLeast(t, jane.person, before+1)
+				stillOpen(t, jane.conn)
+				return
+			}
+			if got := closeOf(t, jane.conn); got != stream.CloseUndecided {
+				t.Fatalf("a tab on a node past the stall grace closed %d, want %d",
+					got, stream.CloseUndecided)
+			}
+			if got := node.probe(t, jane.cookie); got != http.StatusServiceUnavailable {
+				t.Fatalf("the reconnect of a tab a stalled node closed answered %d, "+
+					"want 503 — the handshake is where the client learns why", got)
+			}
+		})
 	}
 }
 

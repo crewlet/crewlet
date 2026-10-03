@@ -40,6 +40,9 @@ import (
 //     it cannot read. Every node applies the identity log, so every node hears
 //     this from its own applier and decides its own sockets; nothing is sent
 //     between nodes.
+//   - THIS NODE STOPPED VOUCHING FOR ITS IDENTITY ROWS, which arrives on the
+//     same path as a move naming everyone: see "A node behind its identity
+//     log" below.
 //   - A COMPANY WAS PUBLISHED ([Service.CompanyPublished]): the org chart a
 //     seat binding resolves through and a watch is decided by may have moved —
 //     a seat removed, a lead moved off a team.
@@ -99,13 +102,24 @@ import (
 //
 // # A node behind its identity log
 //
-// A node hears no event for a record it has not applied, so an open socket on
-// a node whose identity applier is stalled is served on its last decision
-// until the node applies the record that ends it. That is the stall the rest
-// of the engine already names: the REST surface beside it answers 503 past
-// [statelog.StallGrace], and the alarm table reports the node. The socket used
-// to re-check itself on that grace and degrade; doing so cost the periodic
-// read on every healthy node to cover the one that is alarmed.
+// A node hears no event for a record it has not applied, and an applier that
+// HALTED on one — a removal or a company-wide invalidation signed under a key
+// the node was not restarted with, a record that fails its signature, a
+// recreated stream — or that is frozen behind a broker it cannot reach
+// commits nothing at all. The record it halted on is often the very one meant
+// to end these sockets. What does move is the log's lag: its checkpoint stops
+// while it owes records, and past [statelog.StallGrace] every identity read
+// on the node answers unknown, so REST is 503. So that crossing is an event
+// too: the engine watches the same lag against the same grace
+// (internal/engine's identityvouch.go) and, the moment it crosses, hands the
+// identity listener a move naming everyone. Every socket is decided again,
+// reads what a request reads, and closes [CloseUndecided]; its reconnect's
+// handshake answers 503. Inside the grace the guard still serves the rows it
+// has, and so does an open socket — the bound a lagging node already has on
+// REST, and no longer an unbounded one on the one surface a browser keeps
+// open. The socket used to re-check itself on a minute's timer and degrade;
+// that cost a periodic read on every healthy node to cover the one that is
+// alarmed, and the crossing is one in-memory read a second on each node.
 
 // Close codes beside [CloseUnauthenticated] and [CloseUnauthorized].
 const (
