@@ -6,7 +6,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/crewlet/crewlet/internal/chart"
 	"github.com/crewlet/crewlet/internal/org"
 )
 
@@ -326,56 +325,26 @@ units:
 	}
 }
 
-// A NAME THE ORG CHART RESERVES IS REFUSED IN THE FILE, for a unit and a seat.
+// A LOGIN-SHAPED HANDLE IS REFUSED IN THE FILE.
 //
-// The chart refuses these on every path that gives an object an address — and
-// an import decides nothing at its decide, so without this the file would
-// validate, its chart would land, and each reserved object would be declined
-// at the apply with nothing but a log line to say so. `crewlet validate` is
-// the one place that can say it first.
-func TestANameTheChartReservesIsRefusedInTheFile(t *testing.T) {
+// A seat handle is one segment, a person's login joins segments with dots and
+// a machine's with a colon ([iam.ValidSeatHandle]), so the three namespaces
+// cannot collide by the shape of the value. A seat declared under a login's
+// shape would be a name every lookup sends to the identity directory rather
+// than to the company's seats.
+func TestALoginShapedHandleIsRefusedInTheFile(t *testing.T) {
 	t.Parallel()
-	for _, key := range chart.ReservedKeys(chart.KindUnit) {
-		t.Run("unit "+key, func(t *testing.T) {
-			t.Parallel()
-			doc := "name: Acme\nunits:\n  - {name: Team, id: " + key + "}\n"
-			if err := rejects(t, doc, "units[0].id"); !errors.Is(err, ErrUnknownValue) {
-				t.Errorf("want ErrUnknownValue, got %v", err)
-			}
-		})
-	}
-	// THE SEAT'S RESERVED WORDS, and the three LOGIN shapes the seat-handle
-	// grammar refuses — each a name every lookup sends to the identity
-	// directory rather than to the chart.
-	for _, handle := range append(chart.ReservedKeys(chart.KindSeat),
-		"jane.doe", "ci:release", "token:ops") {
-		t.Run("seat "+handle, func(t *testing.T) {
+	for _, handle := range []string{"jane.doe", "ci:release", "token:ops"} {
+		t.Run(handle, func(t *testing.T) {
 			t.Parallel()
 			doc := "name: Acme\nroles:\n  - {name: Somebody, handle: \"" +
 				handle + "\"}\n"
 			rejects(t, doc, "roles[0].handle")
 		})
 	}
-
-	// THE CONTROL: `none` is a SEAT's reserved word only — it is what
-	// Datadog's routing means by nobody, which says nothing about a team.
+	// THE CONTROL: the same seat under a one-segment handle loads.
 	if _, err := ParseCompany([]byte(
-		"name: Acme\nunits:\n  - {name: Nothing, id: none}\n")); err != nil {
-		t.Errorf("a unit keyed none was refused: %v", err)
-	}
-}
-
-// THE SEAT'S RESERVED SET HOLDS DATADOG'S NOBODY.
-//
-// The chart cannot import this package, so it spells the word itself; this is
-// what keeps the two spellings one. Changed on one side alone, a seat named
-// after the new word would be silenced by its own handle while both sides
-// reported it valid.
-func TestTheChartReservesDatadogsNobodyForASeat(t *testing.T) {
-	t.Parallel()
-	if !slices.Contains(chart.ReservedKeys(chart.KindSeat), DatadogIgnore) {
-		t.Errorf("chart.ReservedKeys(seat) = %v and does not hold %q, the "+
-			"word integrations.datadog.route_to uses for nobody",
-			chart.ReservedKeys(chart.KindSeat), DatadogIgnore)
+		"name: Acme\nroles:\n  - {name: Somebody, handle: jane-doe}\n")); err != nil {
+		t.Errorf("a one-segment handle was refused: %v", err)
 	}
 }

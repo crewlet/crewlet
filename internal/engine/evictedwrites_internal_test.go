@@ -8,7 +8,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/crewlet/crewlet/internal/chart"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/iamdomain"
 	"github.com/crewlet/crewlet/internal/pages"
@@ -28,10 +27,10 @@ import (
 // applier took. The cases that exercised the gate all hand-built their records
 // with a writer filled in, which is exactly the half production never did.
 //
-// AND THE ORG CHART'S AND THE IDENTITY ESTATE'S WRITERS WERE THE SAME: until
-// their writes were stamped, a chart or identity record carried no writer at
-// all, so an evicted node's structural edits and session invalidations applied
-// on every node while its tracker writes were dropped.
+// AND THE IDENTITY ESTATE'S WRITER WAS THE SAME: until its writes were
+// stamped, an identity record carried no writer at all, so an evicted node's
+// session invalidations applied on every node while its tracker writes were
+// dropped.
 //
 // So the evictions here land on each log first — as a peer would publish them
 // — while this node's appliers are halted, which is what a node that has not
@@ -44,9 +43,8 @@ func TestAnEvictedNodesRealWritesAreDroppedByTheApplier(t *testing.T) {
 	n, c := e.native.Load(), e.core.Load()
 	s := c.log
 	self := s.nodeID
-	if n.writer == nil || n.pages == nil || c.chartWriter == nil || c.iamWriter == nil {
-		t.Fatal("the node runs no tracker writer, page store, chart writer or " +
-			"identity writer")
+	if n.writer == nil || n.pages == nil || c.iamWriter == nil {
+		t.Fatal("the node runs no tracker writer, page store or identity writer")
 	}
 	// THE HEARTBEAT IS WATCHED RATHER THAN OBEYED: halted appliers look
 	// like a node below the log, and an adoption racing the writes below
@@ -56,9 +54,8 @@ func TestAnEvictedNodesRealWritesAreDroppedByTheApplier(t *testing.T) {
 	s.rejoinMu.Unlock()
 	trackerLog := s.Domain(tracker.Domain{}.Name())
 	pagesLog := s.Domain(pages.Domain{}.Name())
-	chartLog := s.Domain(chart.Domain{}.Name())
 	iamLog := s.Domain(iamdomain.Domain{}.Name())
-	logs := []*runningDomain{trackerLog, pagesLog, chartLog, iamLog}
+	logs := []*runningDomain{trackerLog, pagesLog, iamLog}
 
 	writeView := func(opID, id string) tracker.WriteResult {
 		t.Helper()
@@ -69,18 +66,6 @@ func TestAnEvictedNodesRealWritesAreDroppedByTheApplier(t *testing.T) {
 		res, err := n.writer.WriteView(t.Context(), opID, evictedView(id), prior)
 		if err != nil {
 			t.Fatalf("write view %s: %v", id, err)
-		}
-		return res
-	}
-	createUnit := func(key string) chart.WriteResult {
-		t.Helper()
-		res, err := c.chartWriter.WriteBatch(t.Context(),
-			statelog.NewOpID(time.Now(), "unit-"+key), chart.Batch{
-				Operations: []chart.Operation{{Kind: chart.OpCreateUnit,
-					Object: chart.ObjectRef{Kind: chart.KindUnit, ID: key}}},
-			})
-		if err != nil {
-			t.Fatalf("create unit %s: %v", key, err)
 		}
 		return res
 	}
@@ -102,14 +87,12 @@ func TestAnEvictedNodesRealWritesAreDroppedByTheApplier(t *testing.T) {
 		"Before", ""); err != nil {
 		t.Fatalf("the control container write: %v", err)
 	}
-	createUnit("before")
 	invalidate("before")
 	for _, running := range logs {
 		waitApplied(t, running)
 	}
 	requireRow(t, back, "tracker_views", "id", "v-before", true)
 	requireRow(t, back, "pages_containers", "key", "BEFORE", true)
-	requireRow(t, back, "chart_units", "key", "before", true)
 	if got := sessionGeneration(t, back); got != 1 {
 		t.Fatalf("the control invalidation left the session generation at %d, want 1", got)
 	}
@@ -118,7 +101,6 @@ func TestAnEvictedNodesRealWritesAreDroppedByTheApplier(t *testing.T) {
 	s.haltAppliers()
 	appendRecord(t, trackerLog, tracker.EvictionSubject(self).String(), trackerEviction(t, self))
 	appendRecord(t, pagesLog, pages.EvictionSubject(self).String(), pagesEviction(t, self))
-	appendRecord(t, chartLog, chart.EvictionSubject(self).String(), chartEviction(t, self))
 	appendRecord(t, iamLog, iamdomain.EvictionSubject(self).String(), iamEviction(t, self))
 
 	// ITS OWN WRITES, THROUGH ITS REAL WRITERS: its fence reads its own
@@ -140,10 +122,6 @@ func TestAnEvictedNodesRealWritesAreDroppedByTheApplier(t *testing.T) {
 		t.Fatalf("read the pages log's end: %v", err)
 	}
 	pageAt := pagesLog.runner.Committed().At(pageSeq)
-	unit := createUnit("evicted")
-	if unit.Outcome != statelog.OutcomePending {
-		t.Fatalf("the evicted node's unit write answered %q, want pending", unit.Outcome)
-	}
 	invalidated := invalidate("evicted")
 	if invalidated.Outcome != statelog.OutcomePending {
 		t.Fatalf("the evicted node's invalidation answered %q, want pending",
@@ -153,7 +131,6 @@ func TestAnEvictedNodesRealWritesAreDroppedByTheApplier(t *testing.T) {
 	// EVERY RECORD NAMES THIS NODE — the one fact the gate reads.
 	requireWriter(t, trackerLog, viewAt.Seq, self)
 	requireWriter(t, pagesLog, pageSeq, self)
-	requireWriter(t, chartLog, unit.Position.Seq, self)
 	requireWriter(t, iamLog, invalidated.Position.Seq, self)
 
 	relaunch(t, s)
@@ -164,12 +141,11 @@ func TestAnEvictedNodesRealWritesAreDroppedByTheApplier(t *testing.T) {
 	// THE EVICTIONS APPLIED — which is what says the peer's records above
 	// were ones these appliers read, and the drops below are the gate's.
 	for _, table := range []string{"tracker_evictions", "pages_evictions",
-		"chart_evictions", "iam_evictions"} {
+		"iam_evictions"} {
 		requireRow(t, back, table, "node_id", self, true)
 	}
 	requireRow(t, back, "tracker_views", "id", "v-evicted", false)
 	requireRow(t, back, "pages_containers", "key", "EVICTED", false)
-	requireRow(t, back, "chart_units", "key", "evicted", false)
 	if got := sessionGeneration(t, back); got != 1 {
 		t.Fatalf("the session generation is %d after the evicted node's "+
 			"invalidation, want the 1 the control left — its record applied", got)
@@ -189,8 +165,6 @@ func TestAnEvictedNodesRealWritesAreDroppedByTheApplier(t *testing.T) {
 			"op-view-evicted", viewAt},
 		{"pages", pages.NewGates(back.Store),
 			statelog.Subject{Kind: string(pages.KindContainer), ID: "EVICTED"}, "", pageAt},
-		{"chart", chart.NewGates(back.Store),
-			statelog.Subject{Kind: string(chart.KindTree)}, unit.OpID, unit.Position},
 		{"iam", iamdomain.NewGates(back.Store),
 			statelog.Subject{Kind: string(iamdomain.KindInvalidation)},
 			invalidated.OpID, invalidated.Position},
@@ -270,30 +244,6 @@ func pagesEviction(t *testing.T, node string) []byte {
 			Writer: "node-peer", Scope: pages.ScopeSet{Subject: true},
 		},
 		Mutation: body, Actor: "node-peer", ActorKind: pages.AuthorOperator,
-	})
-	if err != nil {
-		t.Fatalf("encode the eviction record: %v", err)
-	}
-	return payload
-}
-
-// chartEviction is the same for the org chart's log.
-func chartEviction(t *testing.T, node string) []byte {
-	t.Helper()
-	body, err := json.Marshal(chart.Eviction{
-		V: chart.GateRecordVersion, NodeID: node, By: "operator",
-	})
-	if err != nil {
-		t.Fatalf("encode the eviction: %v", err)
-	}
-	payload, err := chart.Encode(chart.MutationRecord{
-		RecordEnvelope: chart.RecordEnvelope{
-			V: chart.GateRecordVersion, OpID: "op-evict-" + node,
-			Subject: chart.EvictionSubject(node), Op: chart.OpEviction,
-			Writer: "node-peer", CreatedAt: time.Now().UTC(),
-			Scope: chart.ScopeSet{Subject: true},
-		},
-		Mutation: body, Actor: "node-peer", ActorKind: chart.AuthorOperator,
 	})
 	if err != nil {
 		t.Fatalf("encode the eviction record: %v", err)

@@ -40,7 +40,7 @@ import (
 // functions because a DRY RUN is the first without the second. [Service.prepare]
 // reads the active revision, checks what the caller said it was building on,
 // opens the stored document, builds the proposed one from it, validates it
-// and derives what an answer reports: its warnings.
+// and derives what an answer reports: its warnings and its hierarchy.
 // Nothing is stored. [Service.commit] seals, stores and activates exactly the
 // bytes prepare produced. A check that ran a copy of the first half would
 // validate a different write from the one a save sends, which is the one
@@ -63,6 +63,11 @@ type Applied struct {
 	// the revision: references that resolve to nothing, and admission rules
 	// a re-activated stored company still breaks. Never nil.
 	Warnings []config.Warning
+
+	// Derived is the hierarchy the engine derives from the revision: every
+	// seat's handle, unit and agent id, and every unit's key, as the
+	// running company will see them.
+	Derived config.Derived
 }
 
 // RacedError reports that the active revision moved under the caller.
@@ -106,21 +111,22 @@ func (e *PatchError) Unwrap() error { return e.Err }
 //
 // A patch is validated as the WHOLE document it produces, so a section that
 // is fine on its own is still refused when it leaves the company invalid.
-type ValidationError struct{ Err error }
+type ValidationError struct {
+	Err error
+
+	// Derived is the hierarchy the refused document derives. A document
+	// can be refused for one seat and still show a person where every
+	// other seat lands, and the problems are placed on that hierarchy.
+	Derived config.Derived
+}
 
 func (e *ValidationError) Error() string { return "configapi: " + e.Err.Error() }
 func (e *ValidationError) Unwrap() error { return e.Err }
 
 // RefusalFields is the structured half of a refused configuration document,
 // for a surface answering the refusal in its own words: the problems it
-// breaks, located and classified ([config.Problems]).
-//
-// IT NO LONGER CARRIES A DERIVED HIERARCHY, and the reason is that a settings
-// document has none. The hierarchy came from `roles:` and `units:`, which are
-// the org chart's own domain now — so a refusal answering one would answer an
-// EMPTY chart for every company on earth, which reads as "your org chart is
-// gone" rather than as "this field is not here any more". A person placing a
-// problem on the chart reads the chart from the chart.
+// breaks, located and classified ([config.Problems]), and — for a document the
+// engine parsed far enough to have one — the hierarchy it derived.
 //
 // ONE MAPPING for every surface a document refusal reaches, so a dashboard
 // placing problems on the chart reads the same shape from /config and from
@@ -137,7 +143,8 @@ func RefusalFields(err error) map[string]any {
 	var docErr *DocumentError
 	switch {
 	case errors.As(err, &invalid):
-		return map[string]any{"problems": config.Problems(invalid.Err)}
+		return map[string]any{"problems": config.Problems(invalid.Err),
+			"derived": invalid.Derived}
 	case errors.As(err, &patchErr):
 		return map[string]any{"problems": config.Problems(patchErr.Err)}
 	case errors.As(err, &docErr):
@@ -235,6 +242,7 @@ type prepared struct {
 	base     string
 	document []byte
 	warnings []config.Warning
+	derived  config.Derived
 }
 
 // prepare builds and checks a write, storing nothing.
@@ -247,6 +255,8 @@ type prepared struct {
 //     and the prior masks are restored from, and a revision this build
 //     would refuse must stay replaceable by the write that corrects it.
 //   - The proposal, built by the draft.
+//   - Its hierarchy, DERIVED BEFORE IT IS JUDGED, because a refusal carries
+//     it too.
 //   - Its rules, and what an answer reports about it.
 func (s *Service) prepare(ctx context.Context, d draft) (*prepared, error) {
 	active, found, err := s.configs.Active(ctx)
@@ -285,10 +295,12 @@ func (s *Service) prepare(ctx context.Context, d draft) (*prepared, error) {
 	if err != nil {
 		return nil, err
 	}
+	derived := config.Derive(company)
 	if invalid := d.rules(company); invalid != nil {
-		return nil, &ValidationError{Err: invalid}
+		return nil, &ValidationError{Err: invalid, Derived: derived}
 	}
-	p := &prepared{document: document, warnings: company.Warnings()}
+	p := &prepared{document: document, warnings: company.Warnings(),
+		derived: derived}
 	if found {
 		p.base = active.ID
 	}
@@ -391,7 +403,7 @@ func (s *Service) commit(ctx context.Context, p *prepared, summary string,
 		"operator", by.OperatorID, "summary", summary)
 	return Applied{
 		RevisionID: id, Epoch: published.Epoch, Parent: p.base,
-		Warnings: p.warnings,
+		Warnings: p.warnings, Derived: p.derived,
 	}, nil
 }
 

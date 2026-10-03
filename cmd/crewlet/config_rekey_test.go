@@ -151,7 +151,7 @@ func plantPlaintextRevision(t *testing.T, dir string) string {
 	if err != nil {
 		t.Fatalf("load the fixture company: %v", err)
 	}
-	document, err := json.Marshal(config.SettingsOf(company).Company())
+	document, err := json.Marshal(company)
 	if err != nil {
 		t.Fatalf("encode the fixture company: %v", err)
 	}

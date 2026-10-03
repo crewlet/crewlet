@@ -429,33 +429,25 @@ type applyHooks struct {
 	// arrival and a departure. Nil nudges nobody.
 	nudgeSkills func()
 
-	// nudgeChart is what the CHART APPLIER calls after a committed batch,
-	// threaded down for the same reason nudgeSkills is: the apply is the
-	// only thing that sees every change on EVERY node, and the company
-	// view is derived from those rows.
-	//
-	// The change feed is deliberately not what notices. It relays a record
-	// to ONE node, so every other node's view would go on serving a chart
-	// it had already applied and could not see it had.
-	//
-	// IT MUST NOT BLOCK. This runs on the apply loop's own goroutine with
-	// the next batch waiting behind it, and the derivation reads the
-	// estate — so what it does is signal, and the rebuild happens
-	// elsewhere. Nil answers "nobody is listening", which is a build with
-	// no engine behind the log.
-	nudgeChart func()
-
 	// nudgeDirectory is what the IDENTITY APPLIER calls after a committed
 	// batch that moved a seat's standing — a suspension, a bind, an
-	// unbind, a removal — threaded down for nudgeChart's reason: the apply
-	// is the only thing that sees it on every node, and a suspension
-	// moves nothing a published company would ever carry. It must not
-	// block either. See internal/engine/directory.go.
+	// unbind, a removal — threaded down for nudgeSkills's reason: the
+	// apply is the only thing that sees it on EVERY node, and a suspension
+	// moves nothing a published company would ever carry. The change feed
+	// is deliberately not what notices: it relays a record to ONE node, so
+	// every other node's registry would go on routing a seat it could not
+	// see had been withdrawn.
+	//
+	// IT MUST NOT BLOCK. This runs on the apply loop's own goroutine with
+	// the next batch waiting behind it, so what it does is signal, and the
+	// rebuild happens elsewhere. Nil answers "nobody is listening", which
+	// is a build with no engine behind the log. See
+	// internal/engine/directory.go.
 	nudgeDirectory func()
 
 	// inboxMoved is what the TRACKER APPLIER calls after a committed
 	// batch that wrote somebody a notice — see [Engine.SetOnInboxMoved].
-	// Threaded down for nudgeChart's reason: every node applies every
+	// Threaded down for nudgeDirectory's reason: every node applies every
 	// record, so every node tells its own sockets, and the apply is the
 	// only thing that sees it on each. It must not block.
 	inboxMoved func([]tracker.InboxMovement)
@@ -465,7 +457,6 @@ type applyHooks struct {
 func (e *Engine) applyHooks() applyHooks {
 	return applyHooks{
 		nudgeSkills:    e.nudgeSkills,
-		nudgeChart:     e.nudgeChart,
 		nudgeDirectory: e.nudgeDirectory,
 		inboxMoved:     e.inboxMoved,
 	}
@@ -2192,18 +2183,8 @@ func (e *Engine) rejoin(ctx context.Context, s *stateLog) error {
 	// the boot launch gave them rather than a heartbeat tick's.
 	//
 	// ON EVERY EXIT, the failures included: a rejoin that found no donor
-	// changed no rows, so the rebuild finds its cursor where it left it and
-	// costs one comparison.
-	defer func() {
-		s.launchAppliers(ctx)
-		if _, err := e.refreshChart(ctx); err != nil {
-			log.WarnContext(ctx, "chart_view_unbuilt_after_rejoin",
-				"node", s.nodeID, "error", err.Error(),
-				"detail", "this node adopted a peer's rows and is still "+
-					"serving the view it built from its own; the periodic "+
-					"rebuild retries")
-		}
-	}()
+	// changed no rows, and its appliers resume from the cursors they left.
+	defer s.launchAppliers(ctx)
 
 	logs := make(map[string]*jetstream.DomainLog, len(s.domains))
 	for name, running := range s.domains {

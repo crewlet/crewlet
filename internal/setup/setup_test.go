@@ -269,14 +269,14 @@ func (r *recorder) Seat(_ context.Context, handle string) ([]byte, error) {
 func (r *recorder) SetSeat(
 	_ context.Context, handle string, body []byte, summary string, by iam.Actor,
 	expect string,
-) (string, error) {
+) (string, int64, error) {
 	if r.failApp != nil {
-		return "", r.failApp
+		return "", 0, r.failApp
 	}
 	r.events = append(r.events,
 		"seat:"+handle+" body="+string(body)+" summary="+summary+" expect="+expect+
 			" by="+by.Name+"/"+string(by.Kind)+"/"+by.OperatorID)
-	return "CREWLET_CHART_LOG@1:9", nil
+	return "rev-3", 9, nil
 }
 
 func (r *recorder) Current(context.Context) (string, error) {
@@ -574,6 +574,11 @@ func TestAPerSeatSubmissionWritesThroughTheSeat(t *testing.T) {
 	}
 	if len(result.Secrets) != 1 {
 		t.Errorf("wrote_secrets = %v", result.Secrets)
+	}
+	// A SEAT IS PART OF THE COMPANY DOCUMENT, so its write is a revision
+	// and an epoch like every other.
+	if result.RevisionID != "rev-3" || result.Epoch != 9 {
+		t.Errorf("result = %+v, want the revision and epoch the seat write made", result)
 	}
 }
 

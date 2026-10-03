@@ -1009,3 +1009,13 @@ func stamp(v any) string {
 	}
 	return parsed.Local().Format("2006-01-02 15:04")
 }
+
+// dash renders an empty cell as something a reader can see: a blank column
+// reads as a bug, while an unbound seat or a person with no login yet is a real
+// state the table should name.
+func dash(in string) string {
+	if in == "" {
+		return "—"
+	}
+	return in
+}

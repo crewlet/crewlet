@@ -187,6 +187,9 @@ func signInSurface(boot *config.Bootstrap, e *engine.Engine) (
 	surface, err := authapi.New(authapi.Options{
 		Bootstrap: boot,
 		Directory: reader,
+		// THE ORGANISATION THIS NODE RUNS, which an invitation's page
+		// names the seat it binds from.
+		Seats: engine.SeatViewOf(e),
 		// THE NODE'S OWN WRITER, which acts as the deployment. What the
 		// routes do with it is create people and open sessions, both of
 		// which are the deployment's to do on somebody's behalf — a
@@ -298,15 +301,9 @@ func directorySurface(boot *config.Bootstrap, e *engine.Engine) (guardedMounter,
 // alarm cannot disagree about which binding dangles. The seam it replaced
 // asked only whether the chart held a row by that handle, which is how a
 // person bound to an AGENT seat went unreported while every request they made
-// was refused.
-//
-// NIL ON AN ENGINE WITH NO CHART READER — one [engine.New] did not build —
-// which is the same third value a nil [Options.SeatHeld] is: there are no rows
-// to ask, so the arm is skipped rather than asked.
+// was refused. A node running no company yet answers the unknown arm per row,
+// which the report counts rather than guesses at.
 func danglingBindings(e *engine.Engine) iamapi.Bindings {
-	if e.Chart() == nil {
-		return nil
-	}
 	return func(ctx context.Context, row iamdomain.PersonRow) (bool, string, error) {
 		residue, dangling, err := e.DanglingBinding(ctx, row)
 		return dangling, residue.Detail, err

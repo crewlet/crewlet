@@ -4,11 +4,9 @@ import (
 	"errors"
 	"iter"
 	"maps"
-	"slices"
 	"sort"
 	"strings"
 
-	"github.com/crewlet/crewlet/internal/chart"
 	"github.com/crewlet/crewlet/internal/envref"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/org"
@@ -47,61 +45,13 @@ import (
 // added after companies existed belongs to. See [Company.ValidateRunnable]
 // for the distinction in full.
 
-// validateFileRules is the four whole-document rules, run together.
+// validateFileRules is the three whole-document rules, run together.
 func (c *Company) validateFileRules() error {
 	return errors.Join(
 		c.validateMCPEnvServers(),
 		c.validateSeatEmails(),
 		c.validateReferenceShapes(),
-		c.validateReservedNames(),
 	)
-}
-
-// validateReservedNames refuses a unit key or a seat handle the org chart will
-// not give an object.
-//
-// THE CHART'S OWN SET ([chart.ReservedKeys]) and not a list of this package's:
-// the chart refuses the same words on every path that gives an object an
-// address, and a file that validated here and then had its chart import
-// declined — seat by seat, on every node, with the operator told only by a
-// log line — is exactly the gap a second list would reopen the day the two
-// drifted. It holds `none` for a seat because that is what
-// `integrations.datadog.route_to` means by nobody ([DatadogIgnore]), so a seat
-// of that name would have every alert meant for it dismissed by its own
-// handle; a test holds the two equal.
-//
-// IN THE FILE AS WELL AS IN THE CHART, because an import decides nothing at
-// its decide: the chart declines a reserved name at the apply, one object at a
-// time and in a log line, after the rest of the file has landed. The file is
-// the one place an operator can be told before anything is published.
-func (c *Company) validateReservedNames() error {
-	var p problems
-	units := chart.ReservedKeys(chart.KindUnit)
-	for unit, path := range c.EachUnit() {
-		key := chart.NormalizeKey(unit.IdentityKey())
-		if slices.Contains(units, key) {
-			p.add(at(path, "id"), ErrUnknownValue,
-				"a unit cannot be keyed %q: the org chart reserves %v, each "+
-					"of which already means something (the org root, and the "+
-					"chart log's own subject kinds), so it would refuse to "+
-					"create this unit on every path. Give it another `id:`",
-				key, units)
-		}
-	}
-	seats := chart.ReservedKeys(chart.KindSeat)
-	for role, path := range c.eachRole() {
-		handle := role.Seat().Handle()
-		if slices.Contains(seats, handle) {
-			p.add(at(path, "handle"), ErrUnknownValue,
-				"a seat cannot be called %q: the org chart reserves %v for a "+
-					"seat — the org root, the chart log's own subject kinds and "+
-					"what integrations.datadog.route_to means by nobody — so it "+
-					"would refuse to create this seat on every path. %q derives "+
-					"that handle from its name; set another `handle:`",
-				handle, seats, role.Name)
-		}
-	}
-	return p.err()
 }
 
 // validateMCPEnvServers refuses an `mcp_env` block keyed on a name nothing
@@ -176,7 +126,7 @@ func (c *Company) validateMCPEnvServers() error {
 		}
 	}
 
-	for role, path := range c.eachRole() {
+	for role, path := range c.EachRole() {
 		check(path, role.MCPEnv)
 	}
 	for unit, path := range c.EachUnit() {
@@ -235,7 +185,7 @@ func (c *Company) validateSeatEmails() error {
 	// the document rather than a map.
 	var order []string
 	byEmail := map[string][]holder{}
-	for role, path := range c.eachRole() {
+	for role, path := range c.EachRole() {
 		email := strings.TrimSpace(role.Email)
 		if _, isRef := envref.Whole(email); !isRef {
 			email = iam.NormalizeEmail(email)
@@ -317,7 +267,7 @@ func (c *Company) validateReferenceShapes() error {
 		}
 	}
 
-	for role, path := range c.eachRole() {
+	for role, path := range c.EachRole() {
 		if ref := strings.TrimSpace(role.Unit); ref != "" && !entityID.MatchString(ref) {
 			p.add(at(path, "unit"), ErrShape,
 				"%q is not a unit key: %s. A seat declared at the org root "+

@@ -211,7 +211,7 @@ func TestThePostureMatrix(t *testing.T) {
 	//
 	// THE QUESTION SURFACE carries one route per read grant, because it is
 	// the one place every read class is reachable through one mount.
-	// `/config`, `/setup` and `/chart` have their own suites for their own
+	// `/config` and `/setup` have their own suites for their own
 	// rules; /secrets is here whole because it is cheap to stand up for
 	// real, and the deployment's controls are here whole because nothing
 	// else composes them.

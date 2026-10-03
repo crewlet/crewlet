@@ -39,6 +39,7 @@ package setupapi
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -66,7 +67,6 @@ import (
 	"github.com/crewlet/crewlet/internal/secrets"
 	"github.com/crewlet/crewlet/internal/setup"
 	"github.com/crewlet/crewlet/internal/slack"
-	"github.com/crewlet/crewlet/internal/statelog"
 )
 
 var log = logging.Get("api.setup")
@@ -113,24 +113,18 @@ const RetryBusy = disconnectRetryFor
 // `resolved: null`, every disconnect or GitHub App refused) would present the
 // mistake as a deliberate answer.
 type Options struct {
-	// Company reads the ACTIVE company: the SETTINGS a revision stores, and
-	// the ORG this node derives from the chart's own log. Both are nil
-	// while no revision is active, which every route answers as such.
+	// Company reads the ACTIVE company: the document a revision stores,
+	// and the ORG this node built from it. Both are nil while no revision
+	// is active, which every route answers as such.
 	//
-	// ONE FUNCTION RETURNING BOTH, never two accessors. A company is two
-	// halves that move on different rhythms — a revision is activated, a
-	// seat is hired — so two reads can straddle a publish, and a screen
-	// that took the integrations from one and the roster from the next
-	// would describe a company that never existed.
+	// ONE FUNCTION RETURNING BOTH, never two accessors: two reads can
+	// straddle an activation, and a screen that took the integrations from
+	// one revision and the roster from the next would describe a company
+	// that never existed.
 	Company func() (*config.Company, *org.Organization)
 
 	// Config is the write path, the same one PATCH /config drives.
 	Config *configapi.Service
-
-	// Seats is the OTHER write path, because a company is two things: a
-	// seat's own document is the org chart's, not the stored revision's.
-	// See [SeatDocuments].
-	Seats SeatDocuments
 
 	// Secrets seals a submitted credential, under the keyring every node
 	// holds.
@@ -238,7 +232,6 @@ func New(opts Options) (*Service, error) {
 	}{
 		{"Company", opts.Company == nil},
 		{"Config", opts.Config == nil},
-		{"Seats", opts.Seats == nil},
 		{"Secrets", opts.Secrets == nil},
 		{"Resolve", opts.Resolve == nil},
 		{"Passes", opts.Passes == nil},
@@ -280,7 +273,7 @@ func New(opts Options) (*Service, error) {
 		guard:        authz.ContextGuard(authz.NoChart{}),
 		writer: setup.Writer{
 			Secrets: opts.Secrets,
-			Config:  configWriter{svc: opts.Config, seats: opts.Seats},
+			Config:  configWriter{svc: opts.Config},
 			Now:     now,
 		},
 	}
@@ -354,27 +347,7 @@ func carriesCredential(values map[string]string, against []setup.Requirement) bo
 // The interface is the CONSUMER's — three strings and a patch — so the setup
 // package does not import an HTTP service to perform a write, and a test can
 // drive it with something that is not one.
-type configWriter struct {
-	svc   *configapi.Service
-	seats SeatDocuments
-}
-
-// SeatDocuments reads and writes ONE SEAT's whole document.
-//
-// CONSUMER-DEFINED AND TWO METHODS, over the org chart rather than over the
-// stored revision: a seat left the configuration document, so the surface
-// that used to serve this — `/config/roles/{handle}` — is gone, and no
-// revision holds a seat to splice into. What satisfies it is the engine.
-//
-// It carries BYTES rather than a typed seat, which is the same trade the
-// chart's own runtime blob makes: a vendor pass edits one nested block and
-// hands the rest back untouched, so a typed seam here would be a second
-// declaration of a shape [org.Role] already owns both ends of.
-type SeatDocuments interface {
-	SeatDocument(ctx context.Context, handle string) ([]byte, error)
-	SetSeatDocument(ctx context.Context, handle string, body []byte,
-		summary string, by iam.Actor) (statelog.Position, error)
-}
+type configWriter struct{ svc *configapi.Service }
 
 func (c configWriter) Apply(
 	ctx context.Context, patch []byte, summary string, by iam.Actor, expect string,
@@ -394,29 +367,26 @@ func (c configWriter) Reload(ctx context.Context, summary string, by iam.Actor) 
 	return applied.RevisionID, applied.Epoch, err
 }
 
-// Seat and SetSeat are the per-seat write, THROUGH THE CHART: a seat is not
-// part of the stored configuration any more, so there is no entity to splice
-// and no revision to store. See [engine.Engine.SeatDocument] for the document
-// the two carry and why its shape moved with them.
-//
-// THE EXPECTATION IS DROPPED, and that is not a lost guard. It was an
-// `If-Match` against a REVISION, and a per-seat write produces none; what
-// arbitrates a concurrent edit now is the chart's own per-object contention,
-// which is narrower than a revision-wide compare-and-set ever was — two
-// people editing two different seats no longer race at all.
+// Seat and SetSeat are the per-seat write, through the entity route: a seat
+// is addressed by its handle, because a merge patch cannot reach one element
+// of a list without replacing the list.
 func (c configWriter) Seat(ctx context.Context, handle string) ([]byte, error) {
-	return c.seats.SeatDocument(ctx, handle)
+	entity, err := c.svc.Entity(ctx, "roles", handle)
+	if err != nil {
+		return nil, err
+	}
+	return json.Marshal(entity)
 }
 
 func (c configWriter) SetSeat(
 	ctx context.Context, handle string, body []byte, summary string, by iam.Actor,
-	_ string,
-) (string, error) {
-	at, err := c.seats.SetSeatDocument(ctx, handle, body, summary, by)
-	if err != nil {
-		return "", err
-	}
-	return at.String(), nil
+	expect string,
+) (string, int64, error) {
+	applied, err := c.svc.ApplyEntity(ctx, configapi.ApplyEntityRequest{
+		Kind: "roles", ID: handle, Body: body, Summary: summary, By: by,
+		Expect: expect,
+	})
+	return applied.RevisionID, applied.Epoch, err
 }
 
 // ToolState is one integration's setup state.

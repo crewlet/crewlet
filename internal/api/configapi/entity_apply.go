@@ -1,9 +1,11 @@
 package configapi
 
 import (
+	"context"
 	"fmt"
 
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/iam"
 )
 
 // Writing ONE entity: the draft PUT /config/{kind}/{id} applies.
@@ -19,11 +21,48 @@ import (
 // A MERGE PATCH CANNOT DO THIS. RFC 7396 replaces an array wholesale, so a
 // patch addressing `mcp_servers[2]` would delete every other server.
 //
-// THERE IS NO PROGRAMMATIC DOOR BESIDE THE ROUTE. There was one, for "a
-// second surface in this binary" to change a seat through, and it outlived its
-// one caller: a seat left the configuration for the org chart, whose per-seat
-// write is the engine's own ([engine.Engine.SetSeatDocument]), so it was a
-// write path nothing reached, documented as the one the setup surface used.
+// AND THE SAME DRAFT FROM INSIDE THIS PROCESS ([Service.ApplyEntity]): the
+// setup surface records a seat's own app, and the reconcile loop records an
+// installation it discovered or removes a disconnected seat's credentials,
+// each against ONE seat — and a second surface that reimplemented what the
+// route knows would be a second idea of how a seat is written.
+
+// ApplyEntityRequest is one entity write.
+type ApplyEntityRequest struct {
+	// Kind is the collection: roles, units, llm-providers, mcp-servers.
+	Kind string
+
+	// ID is the entity's own identity within it, and the address: a
+	// mismatch between this and the body's identity is refused rather than
+	// coerced, because silently keeping the old one would land every other
+	// edit and leave the caller believing a rename took.
+	ID string
+
+	// Body is the entity's JSON, whole.
+	Body []byte
+
+	Summary string
+
+	// By is who the revision records as its author; see [ApplyRequest.By].
+	By iam.Actor
+
+	// Expect is the revision the caller built this edit on, empty for
+	// unconditional. See [ApplyRequest.Expect].
+	Expect string
+}
+
+// ApplyEntity splices one entity into the active revision and activates it.
+func (s *Service) ApplyEntity(ctx context.Context, req ApplyEntityRequest) (Applied, error) {
+	d, err := entityDraft(req.Kind, req.ID, asText(req.Body), req.Expect, false)
+	if err != nil {
+		return Applied{}, err
+	}
+	prepared, err := s.prepare(ctx, d)
+	if err != nil {
+		return Applied{}, err
+	}
+	return s.commit(ctx, prepared, req.Summary, req.By)
+}
 
 // EntityError reports an entity write the document refused: no such entity,
 // an identity mismatch, or a body this kind cannot read.
@@ -45,12 +84,10 @@ func entityDraft(kind, id string, body submitted, expect string, create bool) (d
 	}
 	return draft{
 		expect: expect, requireActive: true,
-		// VALIDATED WHOLE, not just the entity. A provider that an entity
-		// write reshapes is valid on its own and may break every worker
-		// template naming it, and a per-entity surface is exactly where
-		// that gets introduced. A seat naming it is the org chart's, which
-		// no revision holds — see [ErrIdentityMismatch] for the one write
-		// that checks the two halves together.
+		// VALIDATED WHOLE, not just the entity. A seat naming a provider
+		// that no longer exists is valid on its own and breaks the
+		// company, and a per-entity surface is exactly where that gets
+		// introduced.
 		rules: (*config.Company).Validate,
 		build: func(b base) (*config.Company, []byte, error) {
 			// A SECOND COPY, so the splice lands on a document that still
@@ -63,6 +100,9 @@ func entityDraft(kind, id string, body submitted, expect string, create bool) (d
 			write := access.replace
 			if create {
 				write = access.create
+			}
+			if write == nil {
+				return nil, nil, &EntityError{Err: ErrNotCreatable}
 			}
 			if refused := write(spliced, id, body); refused != nil {
 				return nil, nil, &EntityError{Err: refused}

@@ -44,7 +44,7 @@ import (
 //     header and the envelope together.
 func TestTheSettingsSurfacesRefuseInTheEnvelope(t *testing.T) {
 	t.Parallel()
-	surfaces := []string{"configapi", "secretsapi", "chartapi", "setupapi", "workapi",
+	surfaces := []string{"configapi", "secretsapi", "setupapi", "workapi",
 		"operator", "webhooks"}
 	walked := 0
 	for _, dir := range surfaces {
@@ -101,7 +101,7 @@ func TestTheSettingsSurfacesRefuseInTheEnvelope(t *testing.T) {
 // AN UNKNOWN OUTCOME IS WRITTEN ONE WAY.
 //
 // A write that may have landed and a refusal that wrote nothing are both 503s,
-// and every surface wrote the first for itself: `/chart` and `/iam` said it in
+// and every surface wrote the first for itself: `/iam` said it in
 // a sentence and nowhere else, `/work` carried `outcome` on some routes and
 // not others, so a client branching on the field — `crewlet work purge` —
 // told an operator whose purge may have landed that it wrote nothing.

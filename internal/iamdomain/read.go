@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/crewlet/crewlet/internal/chart"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/iam/credential"
 	"github.com/crewlet/crewlet/internal/iam/session"
@@ -874,17 +873,8 @@ type InvitationRow struct {
 	// against, and empty for an invitation nothing can redeem.
 	Verifier string
 
-	// Seat is the IDENTITY of the seat redeeming this binds, or empty —
-	// [Invitation.Seat]. SeatHandle and SeatName are that seat as THIS
-	// node's chart holds it now, read in the same snapshot, for the page a
-	// redeemer is shown: the identity is a handle the seat may have been
-	// renamed away from, and the person should see the seat they are
-	// joining as the company calls it today. Both are empty for a seat
-	// this node's chart no longer holds, which the redemption then refuses
-	// ([Writer.Enrol]).
-	Seat       string
-	SeatHandle string
-	SeatName   string
+	// Seat is the seat redeeming this binds, or empty — [Invitation.Seat].
+	Seat string
 }
 
 // Admits reports whether a secret presented with this invitation's id is the
@@ -957,21 +947,6 @@ func (r *Reader) InvitationByID(ctx context.Context, id string) (InvitationRow, 
 		out.Seat = doc.Seat
 		out.ExpiresAt = fromMillis(expires)
 		out.RedeemedAt = fromMillis(redeemed)
-		if doc.Seat == "" {
-			return nil
-		}
-		// THE SEAT AS THE CHART CALLS IT NOW, in this snapshot. An
-		// unreadable chart is this read's unknown arm like any other:
-		// a page that showed no seat would read as an invitation that
-		// binds none.
-		seat, found, err := chart.SeatByIdentityIn(ctx, tx, doc.Seat)
-		switch {
-		case err != nil:
-			return fmt.Errorf("iamdomain: read the seat invitation %q "+
-				"binds: %w", id, err)
-		case found:
-			out.SeatHandle, out.SeatName = seat.Handle, seat.Name
-		}
 		return nil
 	})
 	if err != nil {
@@ -1126,57 +1101,6 @@ func (r *Reader) HeldSeats(ctx context.Context) (map[string]bool, error) {
 		return nil, fmt.Errorf("iamdomain: read which seats are held: %w", err)
 	}
 	return held, nil
-}
-
-// HolderOf names the person bound to a seat — by its IDENTITY, the handle it
-// was created under, which is what a binding names (ADR-0027) — read INSIDE a
-// transaction the caller supplies.
-//
-// # The transaction is the caller's, and that is the point
-//
-// It satisfies the chart domain's [chart.Holders], which is consulted inside
-// that domain's own decide — so this read has to join the snapshot the
-// decision is being made in rather than open one of its own. A second
-// transaction would see a different instant, which is the specific failure
-// the write authority's "take ONE snapshot" rule exists to prevent.
-//
-// # What it can and cannot promise
-//
-// It is ADVISORY across the domain boundary and the chart's own seam says so
-// at length: two logs, two appliers, two anchors, so a bind and a removal can
-// each pass their decide and both land. What it establishes is what THIS
-// node's copy of the directory says at this instant, which is the strongest
-// honest claim available and is enough for the case it exists for — somebody
-// removing a seat a colleague is still using.
-//
-// # An error is never "nobody"
-//
-// It answers a WRITE: a removal decided on an unreadable directory is one that
-// silently orphans whoever holds the seat. So the error travels, and the chart
-// refuses.
-func (r *Reader) HolderOf(ctx context.Context, tx *sql.Tx, seat string) (string, error) {
-	if seat == "" {
-		return "", nil
-	}
-	var login string
-	err := tx.QueryRowContext(ctx, `
-		SELECT login FROM iam_people
-		 WHERE seat_id = ? AND stage = ?
-		 LIMIT 1`, seat, string(iam.StageActive)).Scan(&login)
-	switch {
-	case errors.Is(err, sql.ErrNoRows):
-		// NOBODY, and it is a finding rather than a failure: a seat the
-		// chart holds that no person is bound to is the ordinary state
-		// of every agent seat in the company.
-		return "", nil
-	case err != nil:
-		return "", fmt.Errorf("iamdomain: read who holds seat %q: %w", seat, err)
-	}
-	// THE LOGIN IS ALWAYS THERE. The query reads active people only — a
-	// reservation, the half-enrolled row a claim leaves, has no stage and
-	// is not one — and every enrolled principal holds a login, which is
-	// renamed and never released on its own.
-	return login, nil
 }
 
 // SeatHolder is one seat binding, as contact routing reads the directory.

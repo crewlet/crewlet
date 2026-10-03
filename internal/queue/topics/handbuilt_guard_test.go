@@ -86,7 +86,7 @@ func TestNoPackageBuildsASubjectByHand(t *testing.T) {
 	// matcher on strings whose verdict is known, so a matcher that has gone
 	// inert fails here rather than certifying a clean tree.
 	//
-	// THE STATE LOGS ARE IN THIS LIST TOO, and the chart's is why the list
+	// THE STATE LOGS ARE IN THIS LIST TOO, and the iam log's is why the list
 	// is worth keeping as the domains multiply: a namespace three tokens
 	// deep is the shape [markersFor]'s original two-segment truncation got
 	// wrong, so each new one is asserted rather than assumed to have been
@@ -94,7 +94,7 @@ func TestNoPackageBuildsASubjectByHand(t *testing.T) {
 	for _, want := range []string{
 		"crewlet.agent", "crewlet.events", "crewlet.notifications",
 		"crewlet.config", "dlq.", ".inbox", ".control", "agent-",
-		"crewlet.tracker.log", "crewlet.pages.log", "crewlet.chart.log",
+		"crewlet.tracker.log", "crewlet.pages.log", "crewlet.iam.log",
 	} {
 		if !markers[want] {
 			t.Errorf("marker %q was not derived from topics.go's constants; the "+
@@ -105,8 +105,8 @@ func TestNoPackageBuildsASubjectByHand(t *testing.T) {
 		"crewlet.agent.alice.inbox", "crewlet.agent.", "crewlet.events.>",
 		"crewlet.notifications.inbound", "crewlet.config.>", "dlq.x.y",
 		"agent-", "agent-alice", "agent-alice-control",
-		"crewlet.chart.log.tree", "crewlet.chart.log.seat.sarah-chen",
-		"crewlet.chart.log.>",
+		"crewlet.iam.log.person.0f3c", "crewlet.iam.log.session.0f3c",
+		"crewlet.iam.log.>",
 	} {
 		if _, hit := violation(markers, positive); !hit {
 			t.Errorf("control: %q is a hand-built name and the matcher did not flag it", positive)
@@ -126,10 +126,10 @@ func TestNoPackageBuildsASubjectByHand(t *testing.T) {
 		"crewlet.agent_handle",
 		"crewlet.events_seen",
 		// The same shape one token deeper, which is what a state log's
-		// namespace looks like: a metric under crewlet.chart.* is not a
+		// namespace looks like: a metric under crewlet.iam.* is not a
 		// subject, and flagging it is how a guard gets switched off.
-		"crewlet.chart.log_lag",
-		"crewlet.chart_units",
+		"crewlet.iam.log_lag",
+		"crewlet.iam_people",
 	} {
 		if marker, hit := violation(markers, negative); hit {
 			t.Errorf("control: %q is not a subject but the matcher flagged it on %q",

@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/changefeed"
-	"github.com/crewlet/crewlet/internal/chart"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/iamdomain"
 	"github.com/crewlet/crewlet/internal/pages"
@@ -62,7 +61,7 @@ func TestANilApplierFailsTheBootCheck(t *testing.T) {
 // TestACeilingWithNoFloorFailsTheBootCheck is the same control for the floor a
 // ceiling's field accepts: without it, a boot the broker refuses cannot say how
 // small a ceiling to set, and read as zero it would offer a smaller one for
-// every log, the org chart's at its floor included.
+// every log, the identity estate's at its floor included.
 func TestACeilingWithNoFloorFailsTheBootCheck(t *testing.T) {
 	entries := register()
 	last := len(entries) - 1
@@ -111,13 +110,11 @@ func TestABarrierDecisionIsExplicit(t *testing.T) {
 	// The shipped answers, so that a domain silently losing its read index
 	// is a failure here rather than a strongest read level nobody notices
 	// has stopped being available — for EVERY registered domain, since a
-	// table naming three of five pinned nothing about the org chart's or
-	// the identity estate's, and docs/guides/consistency.md publishes all
-	// of them.
+	// table naming three of five pinned nothing about the identity
+	// estate's, and docs/guides/consistency.md publishes all of them.
 	shipped := map[string]bool{
 		tracker.Domain{}.Name():   true,
 		pages.Domain{}.Name():     true,
-		chart.Domain{}.Name():     true,
 		iamdomain.Domain{}.Name(): true,
 		search.Domain{}.Name():    false,
 		usage.Domain{}.Name():     false,
@@ -152,10 +149,10 @@ func TestABarrierDecisionIsExplicit(t *testing.T) {
 // A REGISTERED DOMAIN WITH NO GENERATION RECORD FAILS THE BOOT CHECK.
 //
 // A reanchor opens a generation with the domain's own record, and the engine
-// once refused every log but the tracker's for want of one — so the org chart's
-// and the identity estate's logs, which a restored broker can leave behind as
-// readily as the tracker's, could never be re-anchored, and nobody learned it
-// until an incident asked. A domain that keeps none says so through its own
+// once refused every log but the tracker's for want of one — so the identity
+// estate's log, which a restored broker can leave behind as readily as the
+// tracker's, could never be re-anchored, and nobody learned it until an
+// incident asked. A domain that keeps none says so through its own
 // encoder, as the vectors do.
 func TestADomainWithNoGenerationRecordFailsTheBootCheck(t *testing.T) {
 	for _, entry := range register() {
@@ -181,9 +178,9 @@ func TestADomainWithNoGenerationRecordFailsTheBootCheck(t *testing.T) {
 //
 // The trim counts nodes on a log that claims identity, so a log the gate could
 // not write kept an evicted node counted there for ever — which is what the
-// tracker-only gesture did to the pages log. The org chart and the identity
-// estate joined the register after the gate did, and a gate that walked a
-// switch of its own reached neither.
+// tracker-only gesture did to the pages log. The identity estate joined the
+// register after the gate did, and a gate that walked a switch of its own
+// did not reach it.
 func TestEveryIdentityLogHasANodeGateWriter(t *testing.T) {
 	claims := 0
 	for _, entry := range register() {
@@ -198,9 +195,9 @@ func TestEveryIdentityLogHasANodeGateWriter(t *testing.T) {
 			claims++
 		}
 	}
-	if claims < 4 {
+	if claims < 3 {
 		t.Fatalf("the register holds %d identity-claiming domain(s), want the "+
-			"tracker, the pages, the org chart and the identity estate", claims)
+			"tracker, the pages and the identity estate", claims)
 	}
 
 	// CONTROL, both ways round.
@@ -360,12 +357,14 @@ func TestEveryRegisteredDomainHasACeilingCase(t *testing.T) {
 // TestTheRegisteredOrderIsTheDeclaredOrder pins the order, which is
 // load-bearing: it is the order streams are provisioned in, the order an
 // offer's terms are compared in and the order every operator surface reports.
+//
+// AND THE SET: the org chart is part of the company document, applied with
+// every revision, so the core runs exactly these five logs and no chart log.
 func TestTheRegisteredOrderIsTheDeclaredOrder(t *testing.T) {
 	want := []string{
 		tracker.Domain{}.Name(),
 		search.Domain{}.Name(),
 		pages.Domain{}.Name(),
-		chart.Domain{}.Name(),
 		iamdomain.Domain{}.Name(),
 		usage.Domain{}.Name(),
 	}

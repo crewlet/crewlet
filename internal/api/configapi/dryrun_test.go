@@ -135,14 +135,13 @@ func TestADryRunStoresActivatesAndPublishesNothing(t *testing.T) {
 			`{"providers": {"llm": {"zulu": {"type": "nowhere", "model": "m"}}}}`,
 			true, http.StatusBadRequest},
 		{"a patch naming an unknown key", http.MethodPatch, `{"missionn": "typo"}`, true, http.StatusBadRequest},
-		// A CHART IN A DRY RUN IS REFUSED TOO. A check that accepted what
-		// the write refuses would tell a builder the save will work.
-		{"a put carrying a chart", http.MethodPut,
+		// THE ORG IS PART OF THE DOCUMENT, so a dry run checks it too.
+		{"a put carrying seats", http.MethodPut,
 			companyDoc + "\nroles:\n  - {name: CEO, handle: ceo}\n",
-			true, http.StatusBadRequest},
-		{"a patch carrying a chart", http.MethodPatch,
+			true, http.StatusOK},
+		{"a patch carrying units", http.MethodPatch,
 			`{"units": [{"name": "Engineering", "id": "engineering"}]}`,
-			true, http.StatusBadRequest},
+			true, http.StatusOK},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()

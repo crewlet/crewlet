@@ -56,7 +56,7 @@ units:
 	}
 
 	seen := map[string]string{}
-	for role, path := range c.eachRole() {
+	for role, path := range c.EachRole() {
 		seen[role.Name] = path.String()
 	}
 	for name, want := range map[string]string{

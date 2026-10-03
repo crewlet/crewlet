@@ -52,7 +52,7 @@ func TestAPagesSubjectWithNoKindIsRefusedRatherThanBuilt(t *testing.T) {
 }
 
 // THE INVERSE REFUSES WHAT THE BUILDER COULD NOT HAVE PRODUCED — and, with
-// six domains on one broker, that now includes the other five's subjects.
+// five domains on one broker, that now includes the other four's subjects.
 func TestThePagesPathRefusesWhatItDidNotBuild(t *testing.T) {
 	t.Parallel()
 	for _, subject := range []string{
@@ -64,7 +64,6 @@ func TestThePagesPathRefusesWhatItDidNotBuild(t *testing.T) {
 		topics.TrackerLogPrefix + ".task.1",
 		topics.TrackerVectorsPrefix + ".source.1",
 		topics.UsageLogPrefix + ".seat.node-a.2026-09-23.a1",
-		topics.ChartLogPrefix + ".tree",
 		topics.IamLogPrefix + ".session.0f3c",
 	} {
 		if kind, id, ok := topics.PagesLogPath(subject); ok {
@@ -74,7 +73,7 @@ func TestThePagesPathRefusesWhatItDidNotBuild(t *testing.T) {
 	}
 }
 
-// THE SIX DOMAINS' SUBJECT SPACES ARE DISJOINT.
+// THE FIVE DOMAINS' SUBJECT SPACES ARE DISJOINT.
 //
 // They share one broker, and a stream created over a wildcard that overlapped
 // another's would take deliveries meant for it — silently, because both
@@ -85,7 +84,6 @@ func TestNoDomainsSubjectSpaceOverlapsAnothers(t *testing.T) {
 		"tracker": topics.TrackerLogPrefix + ".",
 		"vectors": topics.TrackerVectorsPrefix + ".",
 		"pages":   topics.PagesLogPrefix + ".",
-		"chart":   topics.ChartLogPrefix + ".",
 		"iam":     topics.IamLogPrefix + ".",
 		"usage":   topics.UsageLogPrefix + ".",
 	}

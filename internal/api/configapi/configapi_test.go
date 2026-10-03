@@ -1537,12 +1537,10 @@ func TestAnUnsupportedPatchFormatIsRefusedWithAcceptPatch(t *testing.T) {
 	if got := res.Header().Get("Accept-Patch"); got != "application/merge-patch+json" {
 		t.Errorf("Accept-Patch = %q, which does not name what would have worked", got)
 	}
-	// AND THE HINT NAMES A ROUTE THAT TAKES THE WRITE. It named
-	// PUT /config/roles/{handle}, a route this surface does not serve, so a
-	// caller following it met a second refusal.
-	if body := res.Body.String(); !strings.Contains(body, "PATCH /chart/seats/{handle}") ||
-		strings.Contains(body, "/config/roles") {
-		t.Errorf("the 415 hint does not send a seat edit to the chart: %s", body)
+	// AND THE HINT NAMES A ROUTE THAT TAKES THE WRITE: one seat is edited at
+	// its own address, because a merge patch replaces a list whole.
+	if body := res.Body.String(); !strings.Contains(body, "PUT /config/roles/{handle}") {
+		t.Errorf("the 415 hint does not send a seat edit to its entity route: %s", body)
 	}
 	// AND THE ONES IT DOES SPEAK STILL WORK, including the registered type
 	// and the bare application/json every published example sends.

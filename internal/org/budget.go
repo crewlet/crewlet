@@ -54,9 +54,9 @@ var ErrUnknownWindow = errors.New("not a calendar window")
 //
 // ITS SENTENCE NAMES THE KEY TO CHANGE AND THE REMEDY, whichever door the
 // budget came through: an author reads it against a company file, an
-// operator against a `PATCH /chart` body, and in both the line to change is
-// `token_budget.<window>`. The PATH to that key is the caller's to place —
-// a company's own block, a seat in a file, a seat in the chart — so the
+// operator against a `PUT /config/roles/{handle}` body, and in both the line
+// to change is `token_budget.<window>`. The PATH to that key is the caller's
+// to place — a company's own block, a seat at the root or in a unit — so the
 // sentence leads with the key rather than with where it sits.
 type CeilingFault struct {
 	// Window is the key, which is a [period.Period] that may not be Valid.

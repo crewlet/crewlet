@@ -212,7 +212,7 @@ type DuplicateError struct {
 	Kind DuplicateKind
 	// Key is the shared handle, unit key or contact identity, and for a
 	// unit it is the spelling the key was first met in: a unit key is
-	// matched as the chart folds an address ([chart.NormalizeKey]), and an
+	// matched folded ([NormalizeKey]), and an
 	// operator searches their document for what they wrote rather than for
 	// a form nothing in it contains. An identity is the value as it sits
 	// after [Organization.Normalize], which is the text every consumer

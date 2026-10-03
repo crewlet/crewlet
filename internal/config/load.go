@@ -220,6 +220,15 @@ func ParseCompanyNode(doc *yaml.Node) (*Company, error) {
 	// and idempotent, so re-importing the same file mints the same keys
 	// rather than a second identity per team.
 	MintUnitIDs(cfg.Units)
+	// AND EVERY SEAT GETS ITS HANDLE WRITTEN DOWN, for the same reason and
+	// at the same door: a handle is a seat's identity — its agent id, its
+	// mailbox, its memory and every reference to it derive from the
+	// handle — and one left to be derived from the display name moves the
+	// day somebody corrects a typo in that name, which is a removal and a
+	// creation nobody asked for. Written into the document here, every
+	// stored revision carries it, and editing a seat's name is only ever an
+	// edit of its name.
+	MintHandles(&cfg)
 	// The declaration order of providers.llm exists only in the document —
 	// a Go map has none — and per-phase resolution's last resort is "the
 	// first provider configured". Read here, against the whole document,
@@ -321,10 +330,7 @@ func ParseMemberNode(doc *yaml.Node, out any) error {
 //     restores its masks from or merges onto: no rules at all. Those readers
 //     never run the company, and refusing them is what locks it out.
 //   - Applying a revision (engine apply, boot, reload, revert): the rules a
-//     running company depends on, before anything is built. Those callers do
-//     not come through here at all any more — they read a revision as
-//     [DecodeSettings] does, which refuses one carrying an org chart rather
-//     than applying it with the chart dropped.
+//     running company depends on, before anything is built.
 //   - A document a person submits: every rule, after its masks are restored.
 func DecodeCompany(payload []byte) (*Company, error) {
 	// Onto the DEFAULTS, not onto a zero value. A field the payload omits

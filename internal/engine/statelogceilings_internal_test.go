@@ -789,19 +789,6 @@ func TestARefusedReservationNamesWhatItNeededAndHad(t *testing.T) {
 			},
 			never: []string{"derived", "scaled", "1073741824"},
 		},
-		// THE ORG CHART'S FIXED DEFAULT IS ITS FIELD'S FLOOR, so room is
-		// the only remedy there — and still nothing about a gibibyte.
-		"the org chart's fixed default at its floor": {
-			headroom: 3*gib + gib/32,
-			log:      "CREWLET_CHART_LOG",
-			needed:   config.DefaultChartLogMaxBytes,
-			says: []string{
-				"stream.chart_log_max_bytes is unset",
-				"the log's own fixed default",
-				"Give the broker more room;",
-			},
-			never: []string{"to a smaller ceiling", "derived", "1073741824"},
-		},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()

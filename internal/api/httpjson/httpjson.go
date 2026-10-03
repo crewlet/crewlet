@@ -352,10 +352,6 @@ const (
 	// not serve. The detail carries the Accept-Patch it does.
 	CodeUnsupportedPatchMediaType Code = "unsupported_patch_media_type"
 
-	// CodeChartNotWritableHere is a settings write that carried the org
-	// chart, which lives on its own routes now.
-	CodeChartNotWritableHere Code = "chart_not_writable_here"
-
 	// CodeNoSuchEntity is an entity route naming something the active
 	// document does not hold.
 	CodeNoSuchEntity Code = "no_such_entity"
@@ -367,6 +363,10 @@ const (
 	// CodeEntityExists is a create-only entity write (If-None-Match: *)
 	// naming an id the active document already holds.
 	CodeEntityExists Code = "entity_exists"
+
+	// CodeNotCreatable is a create-only entity write to a collection whose
+	// members have a place the path cannot name — a seat, a unit.
+	CodeNotCreatable Code = "not_creatable"
 
 	// CodeConflictingPreconditions is a write carrying both
 	// `If-None-Match: *` and `If-Match`, which describe two different
@@ -662,13 +662,6 @@ const (
 	// be read.
 	CodeMaintenanceUnreadable Code = "maintenance_unreadable"
 
-	// CodeFleetMixedVersion is a whole-chart import refused while a rolling
-	// upgrade is in progress: every node applies the import, the older one
-	// included, under its own reading of what a placement means. 409 rather
-	// than 503, because the remedy is finishing the upgrade and not waiting.
-	// The detail names the node still on the older protocol.
-	CodeFleetMixedVersion Code = "fleet_mixed_version"
-
 	// THE WEBHOOK EDGE. A delivery's sender is a vendor that reads the
 	// status and the Retry-After and nothing else, so what these buy is the
 	// OPERATOR: a delivery log at the vendor, a proxy's access log and the
@@ -865,9 +858,6 @@ var codes = map[Code]string{
 		"and names the operation already open when there is one.",
 	CodeMaintenanceUnreadable: "The maintenance window's state could not be " +
 		"read. The detail says why.",
-	CodeFleetMixedVersion: "An upgrade is still rolling through the fleet, and " +
-		"an import is applied by every node, the older ones included. Finish " +
-		"the upgrade and import again.",
 
 	CodeInvalidSignature: "This delivery's signature or token did not match " +
 		"what this route checks, so it was not accepted. Make the secret at the " +
@@ -883,7 +873,7 @@ var codes = map[Code]string{
 	CodeUnknownKind: "This build does not know that integration.",
 	CodeSeatRequired: "Name the seat this is for. The detail says why one is " +
 		"needed.",
-	CodeNoSuchSeat: "The org chart has no seat by that name.",
+	CodeNoSuchSeat: "The company has no seat by that name.",
 	CodeLiteralInConfig: "The configuration holds this credential written out " +
 		"rather than as a reference, so it was not overwritten. Move it into " +
 		"the secret store first — the detail says which field.",
@@ -911,15 +901,15 @@ var codes = map[Code]string{
 	CodeUnsupportedPatchMediaType: "This endpoint takes a JSON Merge Patch: an " +
 		"object shaped like the document. The detail lists the formats it " +
 		"accepts.",
-	CodeChartNotWritableHere: "The org chart is no longer part of the " +
-		"configuration, so nothing in this request was written. The detail " +
-		"names the chart's own routes.",
 	CodeNoSuchEntity: "The active configuration holds nothing by that name.",
 	CodeIdentityMismatch: "The body renames what the path names, and this " +
 		"route does not rename. Send it back under the name it already has.",
 	CodeEntityExists: "Something by that name is already in the " +
 		"configuration, so nothing was added. Pick another name, or edit " +
 		"the one that is there.",
+	CodeNotCreatable: "A seat or a unit has a place in the company that this " +
+		"address cannot name, so it is not added here. Add it through the " +
+		"whole configuration, or the unit it belongs in.",
 	CodeConflictingPreconditions: "A create (If-None-Match: *) and an edit " +
 		"(If-Match) were both asked for. Send one of them.",
 	CodeValidationError: "The configuration this change would produce is not " +

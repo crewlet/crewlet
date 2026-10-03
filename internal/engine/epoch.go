@@ -27,15 +27,17 @@ import (
 // of the turn. A revision published mid-turn is simply not observed by that
 // turn — the guarantee, not a limitation. The next turn gets it.
 
-// epoch holds the current company: the two halves it is composed from, and
-// the composition readers load.
+// epoch holds the current company.
 //
-// THE COMPOSED POINTER IS AN ATOMIC AND NOTHING MORE, so readers never block.
-// The mutex covers the two INPUTS and the build between them — see view.go for
-// why the composition happens on the write side rather than per read.
+// An atomic pointer and nothing else: readers never block, and there is no
+// lock because there is only ever one writer — see [Engine.Apply].
 type epoch struct {
-	chartView
 	current atomic.Pointer[Company]
+
+	// installed counts the epochs this node has published, so a reader
+	// that derives something from the org can tell the org moved without
+	// comparing two companies ([SeatView.Version]).
+	installed atomic.Uint64
 }
 
 // Company is the epoch this engine is running.
@@ -98,22 +100,12 @@ func (e *Engine) RecheckGitHub() {
 //
 // It also tells the OPERATOR one thing: that an epoch with no model is now
 // current. See nomodels.go.
-//
-// It takes the settings epoch and the COMPOSITION the caller already derived
-// for it ([epoch.withView]), and returns the company a reader now loads —
-// which is that same value whenever this node's rows have not moved in
-// between. Two arguments because the composition has to exist BEFORE the
-// publish: the registry is indexed for the exact value readers will find, and
-// deriving a second one here would give that value a different identity from
-// the one every stage above wired against.
-func (e *Engine) installEpoch(ctx context.Context, c, view *Company) *Company {
-	if view != nil && !e.indexes(view) {
-		e.refreshParties(ctx, view)
+func (e *Engine) installEpoch(ctx context.Context, c *Company) {
+	if c != nil && !e.indexes(c) {
+		e.refreshParties(ctx, c)
 	}
-	// COMPOSED rather than stored: the company a reader loads is this
-	// settings epoch and this node's chart view together, and whichever
-	// half moves republishes the pair. See view.go.
-	published := e.epoch.setSettings(c, view)
+	e.epoch.current.Store(c)
+	e.epoch.installed.Add(1)
 	if c != nil && c.Models == nil {
 		// Said here, once per epoch, because it is the only line that
 		// reaches the operator of a company nobody has messaged yet: with
@@ -130,7 +122,6 @@ func (e *Engine) installEpoch(ctx context.Context, c, view *Company) *Company {
 		e.backends.Store.LearnEmbeddingDim(embeddingWidth(c))
 	}
 	e.auditSkills()
-	return published
 }
 
 // indexes reports whether the live party registry was built from exactly this
@@ -244,10 +235,10 @@ func (e *Engine) Apply(ctx context.Context, cfg *config.Company,
 	}
 	// THE NATIVE HALVES, on a node whose FIRST company this is — before the
 	// tools, which are registered only where they exist, and before the
-	// inbound edge, whose parsers include their own. The state log, the org
-	// chart and the identity estate they ride are the CORE's, running since
-	// boot on every node, so this starts only what depends on the company.
-	// See [Engine.startNativeFor], and the bug it fixes.
+	// inbound edge, whose parsers include their own. The state log and the
+	// identity estate they ride are the CORE's, running since boot on every
+	// node, so this starts only what depends on the company. See
+	// [Engine.startNativeFor], and the bug it fixes.
 	startedNative, err := e.startNativeFor(ctx, next)
 	if err != nil {
 		log.WarnContext(ctx, "config_apply_failed", "error", err,
@@ -258,35 +249,7 @@ func (e *Engine) Apply(ctx context.Context, cfg *config.Company,
 	}
 	if startedNative {
 		applied = append(applied, "native")
-		// THE CHART THIS NODE'S BOOT WOULD HAVE SEEDED, now that there is
-		// a company file to seed it from: the document's own chart, where
-		// the chart is empty — in the boot's order and for its reasons
-		// ([New]), because this IS that boot, one company later. A no-op
-		// where there is nothing to publish (a stored revision carries no
-		// chart, and a chart an offline import staged was redeemed at
-		// boot, which the seed then finds), and it does not refuse the
-		// apply: a seed that did not land is warned about exactly as at
-		// boot.
-		e.seedChartAtBoot(ctx, next.Config)
-		// AND THE CHART VIEW OVER WHAT IT JUST WROTE, so the composition
-		// below wires every stage against this node's own chart rather
-		// than one read before the seed. Its derivation only: what follows
-		// a published company runs once this one is, below. A failure is
-		// not a refusal, for the boot's own reason — the view's triggers
-		// are running and retry it.
-		//nolint:govet // shadow: scoped to this block; see .golangci.yml
-		if _, err := e.rebuildChart(ctx); err != nil {
-			log.WarnContext(ctx, "chart_view_unbuilt_at_apply", "error", err,
-				"detail", "this company is composed without this node's chart "+
-					"rows until its chart view builds; the view's own triggers "+
-					"retry it")
-		}
 	}
-	// COMPOSED WITH THIS NODE'S CHART BEFORE ANY OTHER STAGE RUNS. The
-	// revision carries the SETTINGS and the org chart is a log of its own,
-	// so the company this apply just built has no seats in it at all — and
-	// every stage below wires against a roster. See [epoch.withView].
-	view := e.epoch.withView(next)
 	// THE SANDBOX RUNTIME, on a node that has never run one and whose
 	// revision reaches a sandbox cell — before the tools for the reason the
 	// native halves are: run_sandbox and an agent-mode executor are offered
@@ -305,7 +268,7 @@ func (e *Engine) Apply(ctx context.Context, cfg *config.Company,
 	// turn can start the instant the pointer moves, and a revision that
 	// silently dropped every builtin would look like a model that stopped
 	// using its tools.
-	if err := e.equip(ctx, view); err != nil {
+	if err := e.equip(ctx, next); err != nil {
 		log.WarnContext(ctx, "config_apply_failed", "error", err,
 			"detail", "the revision built but could not be equipped with this "+
 				"node's tools; the previous epoch is still current")
@@ -319,7 +282,7 @@ func (e *Engine) Apply(ctx context.Context, cfg *config.Company,
 	// against a stale org is a far smaller wrong than not reflecting. The
 	// one refusal is a node's FIRST company, whose dispatcher is attached
 	// here and would otherwise not exist at all.
-	if err := e.reconfigureReflection(ctx, view); err != nil {
+	if err := e.reconfigureReflection(ctx, next); err != nil {
 		log.WarnContext(ctx, "config_apply_failed", "error", err,
 			"detail", "the reflect dispatcher could not be attached for this "+
 				"node's first company; the revision is not served here yet")
@@ -351,33 +314,33 @@ func (e *Engine) Apply(ctx context.Context, cfg *config.Company,
 	// current — and during a rollout the new company is the one being
 	// adopted, so the window that favours it is the right one.
 	//
-	// IT IS NOT NAMED IN `applied` HERE, because the convergence below
-	// names it once for both paths — and it is the convergence's guarantee
+	// IT IS NOT NAMED IN `applied` HERE, because [Engine.followCompany]
+	// names it once for both paths — and it is that function's guarantee
 	// that the registry answers for the published company, not this
 	// call's. What this call buys is only which of the two windows the
 	// apply spends, and an apply refused between here and the publish has
 	// indexed a company nobody can reach, which costs a rebuild and
 	// nothing else.
-	e.refreshParties(ctx, view)
+	e.refreshParties(ctx, next)
 	if e.inboundStarted() {
 		// The TRACKER is rebuilt on the same edge and for the same
 		// reason: its lead map is derived from the org, so a node that
 		// kept its boot-time parser would route the new revision's work
 		// items by the old company's org chart.
-		e.reconcileConfluence(view)
-		e.reconcileDatadog(ctx, view)
-		e.reconcileJira(ctx, view)
-		e.reconcileGitLab(ctx, view)
-		e.reconcileGitHub(ctx, view)
+		e.reconcileConfluence(next)
+		e.reconcileDatadog(ctx, next)
+		e.reconcileJira(ctx, next)
+		e.reconcileGitLab(ctx, next)
+		e.reconcileGitHub(ctx, next)
 		// AND THE TWO CHAT SURFACES, which had no reconciler at all:
 		// their parsers were assembled once at boot, so a company that
 		// connected either one after starting had every delivery
 		// verified at the edge and routed to nobody until the process
 		// was restarted. See [Engine.reconcileSlack] for why one rebuilds
 		// unconditionally and the other does not.
-		e.reconcileSlack(ctx, view)
-		e.reconcileMattermost(ctx, view)
-	} else if err := e.startInbound(ctx, view); err != nil {
+		e.reconcileSlack(ctx, next)
+		e.reconcileMattermost(ctx, next)
+	} else if err := e.startInbound(ctx, next); err != nil {
 		// A NODE THAT BOOTED WITH NO COMPANY has no inbound edge for
 		// the reconcilers above to rebuild, and each of them returns
 		// early without one. So its first company STARTS the edge, and
@@ -398,15 +361,15 @@ func (e *Engine) Apply(ctx context.Context, cfg *config.Company,
 	// the same reason. Their appliers, index, stores and feeds are NOT:
 	// those follow a log, which a company revision does not change — see
 	// [Engine.reconcileNative].
-	e.reconcileNative(ctx, view)
+	e.reconcileNative(ctx, next)
 	// AND THE TOOL SKILLS' SOURCE, after the knowledge base's own reconcile
 	// above, because the Confluence source is read off the wiring it left
 	// running. See [Engine.reconcileSkills].
-	e.reconcileSkills(view)
+	e.reconcileSkills(next)
 	applied = append(applied, "integrations")
 
 	previous := e.Company()
-	published := e.installEpoch(ctx, next, view)
+	e.installEpoch(ctx, next)
 	applied = append(applied, "epoch")
 
 	// THE SWEEP, rebuilt for a node's FIRST company — after the epoch is
@@ -423,11 +386,7 @@ func (e *Engine) Apply(ctx context.Context, cfg *config.Company,
 	// them hold this revision's models and knobs. The loops keep running
 	// and keep their clocks. See [Engine.reconfigureLearningPasses].
 	//
-	// IT IS NOT PART OF THE CONVERGENCE BELOW because nothing it builds is
-	// derived from the org chart: a pass is the learning block's knobs and
-	// this company's models, and the loops read the roster per tick off
-	// whatever company is current. A chart write changes neither.
-	e.reconfigureLearningPasses(ctx, published)
+	e.reconfigureLearningPasses(ctx, next)
 	applied = append(applied, "learning_passes")
 
 	// AND EVERYTHING DERIVED FROM THE COMPANY ITSELF — the parties, the
@@ -437,12 +396,12 @@ func (e *Engine) Apply(ctx context.Context, cfg *config.Company,
 	// one: an apply refused later must not have rebuilt the derived state
 	// of an epoch that never became current.
 	//
-	// THE SAME LIST A CHART WRITE RUNS, through the same function, because
-	// a chart write publishes a company too. See [Engine.convergeOn].
-	applied = append(applied, e.convergeOn(ctx, published)...)
+	// THE SAME LIST A BOOT RUNS, through the same function. See
+	// [Engine.followCompany].
+	applied = append(applied, e.followCompany(ctx, next)...)
 
 	log.InfoContext(ctx, "config_applied",
-		"company", published.Config.Name, "seats", len(published.Seats()),
+		"company", next.Config.Name, "seats", len(next.Seats()),
 		"previous_seats", seatCount(previous))
 	return configplane.StatusOK, applied, nil
 }

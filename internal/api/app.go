@@ -10,7 +10,6 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/api/auth"
-	"github.com/crewlet/crewlet/internal/api/chartapi"
 	"github.com/crewlet/crewlet/internal/api/httpjson"
 	"github.com/crewlet/crewlet/internal/api/livestate"
 	"github.com/crewlet/crewlet/internal/api/mcpbridge"
@@ -89,9 +88,7 @@ type App struct {
 
 	// company reads the engine's CURRENT epoch, which is what
 	// [App.Configured] asks.
-	company  func() (*config.Company, *org.Organization)
-	seatHeld chartapi.Held
-	resolve  chartapi.Resolve
+	company func() (*config.Company, *org.Organization)
 
 	// estate answers whether the replicated estate can be read at the
 	// log's floor, for /ready. See [EstateFloor].
@@ -204,7 +201,7 @@ type guardedMounter interface {
 // Runtime, Inbox, EventLog, Sources.Company, Sources.Chart, Sources.Holders,
 // Sources.WithheldContacts, Sources.Events, Sources.NodeID, Sources.Coord, the
 // Inbound edge's Publisher, Claims, Secrets and AppFlow, Config, Secrets,
-// Setup, Chart, Retention, Capacity, Backup, Nodes, AuthEvents and Audit are
+// Setup, Retention, Capacity, Backup, Nodes, AuthEvents and Audit are
 // REQUIRED, and [New] refuses a missing one by name.
 //
 // Every one of them is something the engine beside the API holds: `crewlet
@@ -235,23 +232,6 @@ type Options struct {
 	// suite has: every credential then acts as itself. `crewlet run`
 	// always wires both halves over its engine.
 	SeatBindings auth.SeatBindings
-
-	// SeatHeld reports whether a seat is one somebody in the identity
-	// directory is bound to, or nil where there is no directory to ask.
-	//
-	// NIL SKIPS THE QUESTION rather than answering it, which is what a
-	// suite has: reading the absence as "nobody holds any seat" would
-	// report every human seat in the company as unheld on /health — see
-	// [chartapi.Held]. `crewlet run` always wires it: every node runs the
-	// identity estate from boot, one that has met no company included.
-	SeatHeld chartapi.Held
-
-	// Resolve is this node's own `${VAR}` resolution, which the continuous
-	// report compares seats' addresses and contact identities through —
-	// the same answer /chart/check is given ([chartapi.Resolve]). NIL SKIPS
-	// that one finding rather than answering it: every address on the
-	// chart's rows is a sealed reference, and references never collide.
-	Resolve chartapi.Resolve
 
 	// Sessions turns a browser's cookie into the person holding it.
 	//
@@ -387,16 +367,6 @@ type Options struct {
 	// cannot tell from a surface that is there — [HumanSurfaces.Mount] is
 	// the one place the conversion happens.
 	Auth authMounter
-
-	// Chart serves /chart and /company/export, normally a
-	// chartapi.Service: the company's org chart, which is a state-log
-	// domain of its own rather than part of the stored revision /config
-	// writes.
-	//
-	// REQUIRED, like Config: a node that served the settings and not the
-	// chart would answer `chart_not_writable_here` on one surface and 404
-	// on the one that refusal points at, which is worse than either alone.
-	Chart guardedMounter
 
 	// IAM serves /iam, normally an iamapi.Service: the company's identity
 	// directory.
@@ -559,8 +529,6 @@ func New(opts Options) (*App, error) {
 		// Sources.Company reads the CURRENT epoch, and "is there one" is
 		// the whole question [App.Configured] asks.
 		company:  opts.Sources.Company,
-		seatHeld: opts.SeatHeld,
-		resolve:  opts.Resolve,
 		estate:   opts.Estate,
 		identity: opts.Identity,
 	}
@@ -729,15 +697,10 @@ func New(opts Options) (*App, error) {
 	if opts.Auth != nil {
 		opts.Auth.Routes(mux)
 	}
-	// THE ORG CHART, and the only mount here that can fail: its routes
-	// carry their authority with their registration, so a policy that is
-	// missing or names a verb the table has no rule for is refused now
-	// rather than serving an ungated route for the life of the process.
-	if err := opts.Chart.Routes(mux); err != nil {
-		return nil, fmt.Errorf("api: mount the chart surface: %w", err)
-	}
-	// AND THE IDENTITY DIRECTORY, which fails the same way for the same
-	// reason: every /iam route states its authority where it is mounted.
+	// THE IDENTITY DIRECTORY, a mount that can fail: its routes carry their
+	// authority with their registration, so a policy that is missing or
+	// names a verb the table has no rule for is refused now rather than
+	// serving an ungated route for the life of the process.
 	if opts.IAM != nil {
 		if err := opts.IAM.Routes(mux); err != nil {
 			return nil, fmt.Errorf("api: mount the identity surface: %w", err)
@@ -818,7 +781,6 @@ func (o Options) missing() error {
 		{"Config", o.Config == nil},
 		{"Secrets", o.Secrets == nil},
 		{"Setup", o.Setup == nil},
-		{"Chart", o.Chart == nil},
 		{"Retention", o.Retention == nil},
 		{"Capacity", o.Capacity == nil},
 		{"Backup", o.Backup == nil},

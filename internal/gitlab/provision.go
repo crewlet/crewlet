@@ -94,10 +94,9 @@ func PlanFor(o *org.Organization, cfg *config.GitLab) (*provision.Plan, error) {
 			Role:     seat.Name,
 			TokenVar: name,
 		}
-		// THE OVERRIDE THAT NAMES THIS SEAT, followed through the chart
-		// here because this is the one step holding it — see
+		// THE OVERRIDE THAT NAMES THIS SEAT — see
 		// [config.GitLabProvisioning.OverrideFor].
-		if level, found := cfg.Provisioning.OverrideFor(o, seat); found {
+		if level, found := cfg.Provisioning.OverrideFor(seat); found {
 			entry.AccessLevel = string(level)
 		}
 		plan.Add(entry)

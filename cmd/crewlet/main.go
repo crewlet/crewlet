@@ -29,7 +29,6 @@ import (
 	"github.com/crewlet/crewlet/internal/api"
 	"github.com/crewlet/crewlet/internal/api/auth"
 	"github.com/crewlet/crewlet/internal/api/authapi"
-	"github.com/crewlet/crewlet/internal/api/chartapi"
 	"github.com/crewlet/crewlet/internal/api/configapi"
 	"github.com/crewlet/crewlet/internal/api/livestate"
 	"github.com/crewlet/crewlet/internal/api/mcpbridge"
@@ -38,7 +37,6 @@ import (
 	"github.com/crewlet/crewlet/internal/api/setupapi"
 	"github.com/crewlet/crewlet/internal/api/webhooks"
 	"github.com/crewlet/crewlet/internal/backup"
-	"github.com/crewlet/crewlet/internal/chart"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/engine"
 	"github.com/crewlet/crewlet/internal/fleetsecrets"
@@ -171,8 +169,6 @@ func run(args []string, stdout, stderr io.Writer) error {
 		return runConfig(rest, stdout, stderr)
 	case "iam":
 		return runIAM(rest, os.Stdin, stdout, stderr)
-	case "chart":
-		return runChart(rest, stdout, stderr)
 	case "migrate":
 		return runMigrate(rest, stdout, stderr)
 	case "budgets":
@@ -219,8 +215,6 @@ Usage:
                               or resume it: its holder, its lead, or fleet:operate
   crewlet secrets <cmd>       Read and rotate the encrypted secret store
   crewlet config <cmd>        Import, inspect and activate company revisions
-  crewlet chart <cmd>         The company's org chart: show it, check it against
-                              the settings, read its history, export it
   crewlet iam <cmd>           The company's people, credentials and sessions:
                               invite, grant, bind, suspend, revoke, audit
   crewlet llm <cmd>           Log in, verify and export the subscription CLI backends
@@ -251,7 +245,7 @@ Environment:
   %s
             The credential a command that talks to a RUNNING node sends
             (budgets, backup, retention, work, seats, secrets, config,
-            chart, iam):
+            iam):
             one of the node's api.auth.tokens values, or a machine token
             minted by "crewlet iam token". It is never a flag — a flag is in
             the shell history and in ps — and never read out of the config
@@ -1216,7 +1210,7 @@ func runEngine(args []string, stderr io.Writer) (err error) {
 	// The surface a DISCONNECT removes a block through. Until it is set
 	// the loop refuses a disconnect rather than running the teardown at
 	// the third-party app and leaving the block behind.
-	e.UseConfigWriter(engineConfigWriter{surface: configSurface, engine: e})
+	e.UseConfigWriter(engineConfigWriter{surface: configSurface})
 
 	// ONE PROCESS IS BOTH ENGINE AND API, sharing one broker and one store,
 	// and it is the only shape an API is served in. The API half is what
@@ -1466,7 +1460,7 @@ const apiShutdownGrace = 5 * time.Second
 
 // seedPauses puts every paused seat on the live projection, by the agent id the
 // projection keys seats by. A pause whose seat the company no longer has is
-// skipped: the chart write that removed the seat clears it.
+// skipped: the activation that removed the seat clears it.
 func seedPauses(ctx context.Context, e *engine.Engine, live *livestate.LiveState) error {
 	pauses, err := e.Backends().Fleet.ListSeatPauses(ctx)
 	if err != nil {
@@ -1481,8 +1475,8 @@ func seedPauses(ctx context.Context, e *engine.Engine, live *livestate.LiveState
 		// BY THE SEAT'S IDENTITY, which is what the record is keyed on:
 		// a pause names the seat it was taken on, never the handle it
 		// answered to then, so a rename keeps it and a hire on the freed
-		// handle inherits nothing. A seat the chart no longer holds has
-		// no row to draw a pause on.
+		// handle inherits nothing. A seat the company no longer holds
+		// has no row to draw a pause on.
 		if company.Org.AgentSeatByID(p.Seat) == nil {
 			continue
 		}
@@ -1495,15 +1489,13 @@ func seedPauses(ctx context.Context, e *engine.Engine, live *livestate.LiveState
 	return nil
 }
 
-// companyConfig is the engine's CURRENT company document, or nil.
-// companyConfig is the company this node is serving: the SETTINGS a revision
-// stores and the ORG it composed from its chart rows.
+// companyConfig is the company this node is serving: the document a revision
+// stores and the ORG the engine built from it, or nil for both.
 //
 // ONE READ OF THE EPOCH giving BOTH halves, which is the whole reason it is a
-// pair rather than two accessors: a company is republished by an activation
-// AND by a chart write, so two reads can straddle a publish and a screen that
-// took the integrations from one and the roster from the next would describe a
-// company that never existed.
+// pair rather than two accessors: two reads can straddle an activation, and a
+// screen that took the integrations from one revision and the roster from the
+// next would describe a company that never existed.
 func companyConfig(e *engine.Engine) (*config.Company, *org.Organization) {
 	if company := e.Company(); company != nil {
 		return company.Config, company.Org
@@ -1573,9 +1565,9 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 	// readable only on the node that served the request.
 	//
 	// THE IDENTITY ESTATE, which the surfaces below read — the rotation's
-	// second half here, and who holds a seat for /chart and /health. It is
-	// the engine's CORE,
-	// opened on every node from boot, company or none, so an engine holding
+	// second half here, and who holds a seat for /config and /health. It is
+	// the engine's CORE, opened on every node from boot, company or none, so
+	// an engine holding
 	// none is one engine.New did not build: refused here by name rather than
 	// handed to each surface as the nil it reads as "no directory to ask".
 	// It used to be exactly that nil on a node that had met no company, and
@@ -1592,72 +1584,6 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 		// AND THE IDENTITY ESTATE'S HALF of a rotation, which only a
 		// record can move.
 		Identity: keyring,
-	})
-	if err != nil {
-		return nil, err
-	}
-	// THE ORG CHART, which left the company document and needed a surface
-	// of its own: until this one there was nowhere to hire, move, rename or
-	// edit anybody after a node's first chart was seeded from the company
-	// file at boot, and /config refuses a body carrying one BY NAME.
-	//
-	// HANDED OVER ONCE, because the chart is the engine's CORE and open on
-	// every node from boot — a node with no company builds its first one
-	// through it. It used to be looked up per request, for a node that had
-	// met no company and so opened no chart; there is no such node, and an
-	// engine holding none is one engine.New did not build, refused here by
-	// name rather than handed to the surface as a typed nil.
-	chartReader, chartWriter := e.Chart(), e.ChartWriter()
-	if chartReader == nil || chartWriter == nil {
-		return nil, errors.New("api: the engine opened no org chart — " +
-			"engine.New opens it on every node, company or not")
-	}
-	chartSurface, err := chartapi.New(chartapi.Options{
-		Reader: chartReader,
-		// WHO HOLDS A SEAT, in ONE snapshot of this node's own directory.
-		// THE CALLER'S CONTEXT, which the seam carries: every evaluation is
-		// made for a request — /chart/check, /health, the seat listing — so
-		// a read for one that has gone has nobody to answer.
-		Held: directory.HeldSeats,
-		// HOW THIS NODE RESOLVES A ${VAR}, for the report's one finding
-		// that has to compare sealed addresses by what they hold.
-		Resolve: e.LookupSecret,
-		// ONE WRITER PER PARTY, derived from the node's own. The chart's
-		// author is a property of the writer and never of the call — a
-		// chart whose author field is chosen by the caller is not an
-		// audit trail — and the party's GRANTS travel with it, because
-		// internal/chart refuses a record the party may not author — and
-		// so does the credential it acted through, which is the only
-		// thing telling a write made through somebody's token from one
-		// they made themselves.
-		Authority: func(actor string, kind chart.AuthorKind, grants []iam.Grant,
-			provenance chart.Provenance) chartapi.Writer {
-			return chartWriter.As(actor, kind, grants, provenance)
-		},
-		// WHO IS ASKING, THREE-VALUED, straight from what the guard
-		// resolved. It used to be a blunt translation beside the
-		// guard — a recognised token became a machine principal
-		// holding every grant — and that was a second security
-		// decision about one request: the guard admitted a credential
-		// and this told the authority table it could do anything. The
-		// guard composes the principal now, from the token's own
-		// declared grants intersected with this node's ceiling, and
-		// the seat binding travels with it.
-		Principal: func(r *http.Request) (iam.Principal, iam.Resolution) {
-			return iam.From(r.Context())
-		},
-		// WHO LEADS WHOM, three-valued: a node that is booting, applying
-		// a revision or behind the log answers "cannot tell" rather than
-		// telling every lead in the company that they lead nothing.
-		Chart: engine.ChartAuthorityOf(e),
-		// WHETHER A ROLLING UPGRADE IS STILL IN PROGRESS. An import
-		// rewrites every placement in the chart and every node applies
-		// it, so one running an older build would apply it under its
-		// own reading of what a placement means.
-		Fleet: e,
-		// The pair the continuous report evaluates, and the SAME
-		// accessor the roster and /health read.
-		Company: func() (*config.Company, *org.Organization) { return companyConfig(e) },
 	})
 	if err != nil {
 		return nil, err
@@ -1692,11 +1618,6 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 	setupSurface, err := setupapi.New(setupapi.Options{
 		Company: func() (*config.Company, *org.Organization) { return companyConfig(e) },
 		Config:  configSurface,
-		// THE OTHER HALF OF A COMPANY. A seat's own document is the org
-		// chart's, not the stored revision's, so a per-seat submission
-		// writes through the engine rather than through the config
-		// surface beside it.
-		Seats: e,
 		// The fleet's own store, sealed with the same keyring — the one
 		// every node holds, since Tier A refuses a file without it.
 		Secrets: fleetsecrets.New(e.Backends().Fleet, cipher),
@@ -2004,14 +1925,6 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 		Config:  configSurface,
 		Secrets: secretSurface,
 		Setup:   setupSurface,
-		Chart:   chartSurface,
-		// THE SAME ANSWER /chart/check reads, so a gauge on /health and
-		// the screen that renders the report cannot disagree.
-		SeatHeld: directory.HeldSeats,
-		// AND THIS NODE'S OWN RESOLUTION, which the report compares
-		// addresses through: the chart seals every address, so its rows
-		// carry references only a node that resolves them can compare.
-		Resolve: e.LookupSecret,
 		// WHETHER THIS NODE'S REPLICATED COPY IS FIT TO ANSWER FROM, for
 		// /ready. The ENGINE's own verdict rather than a second one built
 		// here: it is the same question that decides whether this node may
@@ -2705,15 +2618,10 @@ func operatorLogFormat() logging.Format {
 	return logging.ParseFormat(os.Getenv("CREWLET_LOG_FORMAT"))
 }
 
-// engineConfigWriter is the engine's own way back onto the company, and it
-// reaches TWO surfaces because a company is two things: the settings, through
-// the same PATCH /config surface every other write uses — one merge, one
-// validation, one compare-and-set onto the document — and the org chart,
-// through the engine itself.
-type engineConfigWriter struct {
-	surface *configapi.Service
-	engine  *engine.Engine
-}
+// engineConfigWriter is the engine's own way back onto the company: the same
+// PATCH /config surface every other write uses — one merge, one validation,
+// one compare-and-set onto the document.
+type engineConfigWriter struct{ surface *configapi.Service }
 
 func (w engineConfigWriter) Apply(ctx context.Context, patch []byte, summary string,
 	by iam.Actor) error {
@@ -2731,18 +2639,23 @@ func (w engineConfigWriter) Reload(ctx context.Context, summary string, by iam.A
 	return err
 }
 
-// Seat and SetSeat are the per-seat write, THROUGH THE CHART: a seat is not
-// part of the stored configuration any more, so there is no entity to splice
-// and no revision to store. See [engine.Engine.SeatDocument] for the document
-// the two carry and why its shape moved with them.
+// Seat and SetSeat are the per-seat write, through the entity route: a seat
+// is addressed by its handle, because a merge patch cannot reach one element
+// of a list without replacing the list.
 func (w engineConfigWriter) Seat(ctx context.Context, handle string) ([]byte, error) {
-	return w.engine.SeatDocument(ctx, handle)
+	entity, err := w.surface.Entity(ctx, "roles", handle)
+	if err != nil {
+		return nil, err
+	}
+	return json.Marshal(entity)
 }
 
 func (w engineConfigWriter) SetSeat(
 	ctx context.Context, handle string, body []byte, summary string, by iam.Actor,
 ) error {
-	_, err := w.engine.SetSeatDocument(ctx, handle, body, summary, by)
+	_, err := w.surface.ApplyEntity(ctx, configapi.ApplyEntityRequest{
+		Kind: "roles", ID: handle, Body: body, Summary: summary, By: by,
+	})
 	return err
 }
 
@@ -2752,7 +2665,7 @@ func (w engineConfigWriter) SetSeat(
 // pass its check and panic on the first press.
 //
 // NOT THE TRACKER'S WRITER, which is what this was: that wrote the tracker's
-// log alone, so an eviction lifted one log's pin and left the pages, chart and
+// log alone, so an eviction lifted one log's pin and left the pages and
 // identity logs counting the node for ever — and a company whose tracker is
 // external, which still runs every log, could not evict anybody at all.
 func nodeGate(e *engine.Engine) api.NodeGate {

@@ -663,18 +663,6 @@ type Role struct {
 	// wire form: it is derived, and a caller building a Role leaves it empty.
 	AutoManaged []string `yaml:"-" json:"-"`
 
-	// Incomplete marks a seat the chart has created and no content write
-	// has filled yet — a hire whose second record has not landed, or never
-	// will. It has a place and a kind and nothing else: no backstory, no
-	// model chain, no name. Such a seat is in the organization, so the
-	// structure around it reads whole, and nothing RUNS it: a node that
-	// claimed it would give a mailbox to a turn loop with nothing to run.
-	//
-	// Derived from the chart row ([chart.Seat.HasContent]) and never
-	// written: a Role built from a document is complete by construction,
-	// which is why the zero value is the complete one.
-	Incomplete bool `yaml:"-" json:"-"`
-
 	BehavioralGuidelines []string `yaml:"behavioral_guidelines,omitempty" json:"behavioral_guidelines,omitempty"`
 
 	// TokenBudget caps this seat's spend per calendar window; a window it
@@ -957,29 +945,14 @@ func (r *Role) Validate() error {
 			name, ErrInvalidHandle, r.Handle(), len(r.Handle()), iam.MaxLogin))
 	}
 
-	errs = append(errs, r.runtimeFaults(name)...)
+	errs = append(errs, r.fieldFaults(name)...)
 	return errors.Join(errs...)
 }
 
-// ValidateRuntime reports every rule this seat's RUNTIME HALF breaks, joined
-// — the rules about the fields a seat's chart row does not carry, judged
-// against its kind — each a [SeatError] as [Role.Validate] reports it.
-//
-// THE CHART'S DOOR TO THE SAME RULES. A seat written through the org chart
-// carries its runtime half as an opaque document the chart cannot read
-// (runtime.go), so a ceiling of 0, a window that is no window or a schedule
-// with no cron reached every node with nothing refusing it — config validates
-// a company FILE, and a chart write is not one. [RuntimeShape.Check] decodes
-// the half onto a seat of the row's kind and asks this, so a chart write is
-// held to exactly what a company file is.
-func (r *Role) ValidateRuntime() error {
-	return errors.Join(r.runtimeFaults(strings.TrimSpace(r.Name))...)
-}
-
-// runtimeFaults is every rule about the runtime half: the fields a seat of the
-// other kind may not carry, the contact's own, the schedules' and the token
-// ceilings'.
-func (r *Role) runtimeFaults(name string) []error {
+// fieldFaults is every rule about what the seat carries beside its name and
+// handle: the fields a seat of the other kind may not carry, the contact's own,
+// the schedules' and the token ceilings'.
+func (r *Role) fieldFaults(name string) []error {
 	var errs []error
 	add := func(field []any, err error) {
 		errs = append(errs, &SeatError{Seat: r, Field: field, Err: err})

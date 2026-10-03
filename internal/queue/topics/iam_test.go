@@ -73,7 +73,6 @@ func TestTheIamPathRefusesWhatItDidNotBuild(t *testing.T) {
 		topics.TrackerLogPrefix + ".task.1",
 		topics.TrackerVectorsPrefix + ".source.1",
 		topics.PagesLogPrefix + ".page.1",
-		topics.ChartLogPrefix + ".seat.1",
 	} {
 		if kind, id, ok := topics.IamLogPath(subject); ok {
 			t.Errorf("%q was read as kind %q id %q and is not a subject on the "+

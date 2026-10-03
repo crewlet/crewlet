@@ -8,11 +8,9 @@ import (
 
 	"github.com/crewlet/crewlet/internal/agent/builtin"
 	"github.com/crewlet/crewlet/internal/changefeed"
-	"github.com/crewlet/crewlet/internal/chart"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/iamdomain"
-	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/pages"
 	"github.com/crewlet/crewlet/internal/queue/jetstream"
 	"github.com/crewlet/crewlet/internal/search"
@@ -418,87 +416,6 @@ func register() []registration {
 				return domainCeiling{Bytes: bytes,
 					Field: "stream.pages_log_max_bytes", Explicit: !derived,
 					Floor: config.PagesLogMaxBytesFloor}
-			},
-		},
-		{
-			Domain: chart.Domain{},
-			NewApplier: func(s *stateLog) (statelog.Applier, error) {
-				// THE VIEW'S TRIGGER. Every committed batch nudges the
-				// rebuild — on this node, which is the only node whose
-				// view these rows are. The object list is not read: a
-				// rebuild derives the whole tree, because lead
-				// inheritance and manages expansion make one seat's move
-				// a fact about its descendants.
-				//
-				// It cannot be the change feed instead: a feed relays a
-				// record to ONE node, and a derived view is held by
-				// every node — so the rest would go on serving a chart
-				// they had already applied and could not see they had.
-				//
-				// AND THE RECORDER, so a change the apply declines
-				// rather than writes is counted as well as logged.
-				return chart.NewApplier(s.nodeID, func([]chart.ObjectRef) {
-					if s.nudgeChart != nil {
-						s.nudgeChart()
-					}
-				}).WithMetrics(s.metrics), nil
-			},
-			NewSeams: func(s *stateLog, appendTo *jetstream.DomainLog,
-				runner *statelog.Runner) (writeSeams, error) {
-
-				rows, err := chart.NewRows(s.db)
-				if err != nil {
-					return writeSeams{}, err
-				}
-				fence := chart.NewFence(s.db, s.nodeID)
-				name := chart.Domain{}.Name()
-				fence.Floor = s.floorOf(name)
-				fence.Ends = s.logEndsOf(name, appendTo, runner)
-				fence.Committed = runner.Committed
-				return writeSeams{Rows: rows, Fence: fence,
-					Gates: chart.NewGates(s.db), Evicted: fence.Evicted}, nil
-			},
-			Barrier:    chart.EncodeBarrier,
-			Generation: chart.GenerationRecord{},
-			NewGate: func(s *stateLog, _ *runningDomain,
-				publisher *statelog.Publisher) (gateWrite, error) {
-
-				w, err := chart.NewWriter(chart.WriterDeps{
-					Publisher: publisher, DB: s.db,
-					// NOTHING A GATE WRITES IS SEALED, but the writer
-					// refuses to exist without the shape it would seal by.
-					Runtime: org.RuntimeShape{},
-					Actor:   s.nodeID, ActorKind: chart.AuthorOperator,
-				})
-				if err != nil {
-					return nil, err
-				}
-				return func(ctx context.Context, by iam.Principal, opID, node string,
-					readmit bool) (statelog.Result, error) {
-
-					// THE OPERATOR'S OWN GRANTS, which the chart asks
-					// `fleet:operate` of ([chart.ClassNodeGate]) — never
-					// the node's, which would admit any party the route
-					// had let through.
-					a := iam.ActorFor(by)
-					as := w.As(a.Name, chart.AuthorKindOf(a.Kind), by.Grants,
-						chart.Provenance{OperatorID: a.OperatorID})
-					if readmit {
-						return as.ReadmitNode(ctx, opID, node)
-					}
-					return as.EvictNode(ctx, opID, node)
-				}, nil
-			},
-			OpsRetention: statelog.OpsRetention,
-			// THE ONE CEILING THAT IGNORES THE FREE BYTES, and the
-			// signature keeps the parameter so the table stays one
-			// shape: a chart is sized from the corpus rather than from
-			// the operator's disk — see [config.Stream.ChartMaxBytes].
-			Ceiling: func(stream config.Stream, _ int64) domainCeiling {
-				bytes, derived := stream.ChartMaxBytes()
-				return domainCeiling{Bytes: bytes,
-					Field: "stream.chart_log_max_bytes", Explicit: !derived,
-					Floor: config.ChartLogMaxBytesFloor}
 			},
 		},
 		{

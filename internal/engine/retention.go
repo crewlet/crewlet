@@ -9,7 +9,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/crewlet/crewlet/internal/chart"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/iamdomain"
@@ -878,19 +877,17 @@ type evictionLister interface {
 	Evictions(ctx context.Context, db *store.DB) ([]statelog.EvictionRow, error)
 }
 
-// The four identity-claiming domains this build registers, held to the
+// The three identity-claiming domains this build registers, held to the
 // interface — and to the log probe a stranded node asks
 // ([statelog.EvictionProbe]) — at compile time, so a reshaped method is a
 // build failure rather than a boot refusal.
 var (
 	_ evictionLister = tracker.Domain{}
 	_ evictionLister = pages.Domain{}
-	_ evictionLister = chart.Domain{}
 	_ evictionLister = iamdomain.Domain{}
 
 	_ statelog.EvictionProbe = tracker.Domain{}
 	_ statelog.EvictionProbe = pages.Domain{}
-	_ statelog.EvictionProbe = chart.Domain{}
 	_ statelog.EvictionProbe = iamdomain.Domain{}
 )
 

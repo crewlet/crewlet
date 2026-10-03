@@ -324,6 +324,11 @@ func TestOnlyAPauseThatAsksToStopClosesTheFence(t *testing.T) {
 
 // A REMOVED SEAT LEAVES NO PAUSE BEHIND. The record has no age, so without a
 // published company clearing it the record would outlive the seat for ever.
+//
+// AND ONLY THE FLEET'S CURRENT COMPANY CLEARS ONE: a node applying a revision
+// the fleet has since replaced does not have a seat the newer one added, and
+// would delete a pause a person had just placed on it. The control is that
+// company, applied from an earlier activation: it clears nothing.
 func TestARemovedSeatLeavesNoPauseBehind(t *testing.T) {
 	t.Parallel()
 	e, _, fleet := pausingEngine(t)
@@ -335,12 +340,30 @@ func TestARemovedSeatLeavesNoPauseBehind(t *testing.T) {
 		_, b, _ := e.pauseOf(ghost)
 		return a && b
 	})
-	e.clearRemovedSeatPauses(t.Context(), companyFor(t, `
+	earlier, err := fleet.Activate(t.Context(), coord.ActivationRequest{
+		RevisionID: "rev-1", Payload: []byte("{}"), At: time.Now()})
+	if err != nil {
+		t.Fatalf("Activate: %v", err)
+	}
+	current, err := fleet.Activate(t.Context(), coord.ActivationRequest{
+		RevisionID: "rev-2", Payload: []byte("{}"), At: time.Now()})
+	if err != nil {
+		t.Fatalf("Activate: %v", err)
+	}
+	next := companyFor(t, `
 name: Acme
 roles:
   - name: CEO
     handle: ceo
-`))
+`)
+	next.ActivatedAt = earlier.At
+	e.clearRemovedSeatPauses(t.Context(), next)
+	if all, err := fleet.ListSeatPauses(t.Context()); err != nil || len(all) != 2 {
+		t.Fatalf("a company the fleet has moved past cleared pauses: %+v (%v)", all, err)
+	}
+
+	next.ActivatedAt = current.At
+	e.clearRemovedSeatPauses(t.Context(), next)
 	all, err := fleet.ListSeatPauses(t.Context())
 	if err != nil {
 		t.Fatalf("ListSeatPauses: %v", err)

@@ -4,25 +4,21 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"net/http"
 	"net/http/httptest"
 	"testing"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/api"
 	"github.com/crewlet/crewlet/internal/api/auth"
-	"github.com/crewlet/crewlet/internal/api/chartapi"
 	"github.com/crewlet/crewlet/internal/api/configapi"
 	"github.com/crewlet/crewlet/internal/api/queries"
 	"github.com/crewlet/crewlet/internal/api/secretsapi"
 	"github.com/crewlet/crewlet/internal/api/setupapi"
 	"github.com/crewlet/crewlet/internal/api/webhooks"
 	"github.com/crewlet/crewlet/internal/backup"
-	"github.com/crewlet/crewlet/internal/chart"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/engine"
 	"github.com/crewlet/crewlet/internal/fleetsecrets"
-	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/observe"
 	"github.com/crewlet/crewlet/internal/org"
 )
@@ -62,10 +58,9 @@ func serveAPI(
 // it is [api.New] or [setupapi.New] refusing by name, at run time, in THIS
 // package. And this package declares internal/solo, so `make test` never
 // reaches it: the refusal lands only in `make test-solo`, which is a separate
-// CI job. Measured: the chart surface and the per-seat write path were added
-// to cmd/crewlet and missed here, and every cluster case failed four bring-up
-// attempts with `setupapi: Options.Seats required` while the shared suite
-// stayed green.
+// CI job. Measured: a surface and a write path were added to cmd/crewlet and
+// missed here, and every cluster case failed four bring-up attempts with a
+// `setupapi: Options.… required` refusal while the shared suite stayed green.
 //
 // When you add a required seam to cmd/crewlet, add it here in the same
 // change, and run BOTH suites. CLAUDE.md says the same thing in one line: a
@@ -169,12 +164,8 @@ func wireAPI(
 		return fail("integration status", err)
 	}
 	setupSurface, err := setupapi.New(setupapi.Options{
-		Company: company,
-		Config:  configSurface,
-		// THE OTHER HALF OF A COMPANY, exactly as cmd/crewlet passes it:
-		// a seat's own document is the org chart's rather than the stored
-		// revision's, so a per-seat submission writes through the engine.
-		Seats:       e,
+		Company:     company,
+		Config:      configSurface,
 		Secrets:     fleetsecrets.New(backends.Fleet, cipher),
 		Resolve:     e.LookupSecret,
 		Passes:      e.SetupRunner(),
@@ -211,43 +202,12 @@ func wireAPI(
 		stops = append(stops, func() { humans.SignIn.Stop(context.WithoutCancel(ctx)) })
 	}
 
-	// The chart surface, wired as cmd/crewlet wires it. It is REQUIRED by
-	// api.New rather than optional, because a narrower answer built around
-	// a nil — an absent route, a 503 — reads as deliberate and hides the
-	// wiring mistake.
-	chartSurface, err := chartapi.New(chartapi.Options{
-		Reader: e.Chart(),
-		Authority: func(actor string, kind chart.AuthorKind,
-			grants []iam.Grant, provenance chart.Provenance) chartapi.Writer {
-			return e.ChartWriter().As(actor, kind, grants, provenance)
-		},
-		// WHO IS ASKING, THREE-VALUED, straight from what the guard
-		// resolved. It used to be a blunt translation beside the
-		// guard — a recognised token became a machine principal
-		// holding every grant — and that was a second security
-		// decision about one request: the guard admitted a credential
-		// and this told the authority table it could do anything. The
-		// guard composes the principal now, from the token's own
-		// declared grants intersected with this node's ceiling, and
-		// the seat binding travels with it.
-		Principal: func(r *http.Request) (iam.Principal, iam.Resolution) {
-			return iam.From(r.Context())
-		},
-		Chart:   engine.ChartAuthorityOf(e),
-		Fleet:   e,
-		Company: company,
-	})
-	if err != nil {
-		return fail("chart surface", err)
-	}
-
 	workSource, pageSource, backlinkSource, searchSource := api.NativeSources(e)
 	opts := api.Options{
 		Bootstrap:    boot,
 		SeatBindings: auth.SeatBindings{Directory: e, Chart: engine.SeatViewOf(e)},
 		Runtime:      runtime,
 		Inbox:        e,
-		Chart:        chartSurface,
 		QueueBackend: backends.Queue.Backend(),
 		EventLog:     backends.Store.Events(),
 		Sources: queries.Sources{

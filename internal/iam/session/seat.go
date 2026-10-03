@@ -63,6 +63,10 @@ type Seat struct {
 	// Unit is the key of the unit the seat sits in, which a principal
 	// carries so a gate does not re-walk the chart per request.
 	Unit string
+
+	// Name is the seat's display name, for a page that shows a person
+	// which seat they are being given. Nothing decides on it.
+	Name string
 }
 
 // SeatKindHuman is the only kind a person may be bound to.

@@ -145,9 +145,7 @@ func TestTheEntityQueryRefusesWhatItCannotAddress(t *testing.T) {
 		{"no kind at all", map[string]any{}},
 		{"a kind nothing addresses", map[string]any{"kind": "widgets"}},
 		{"an id nothing carries", map[string]any{"kind": configapi.EntityLLMProviders, "id": "nobody"}},
-		// THE ORG CHART IS NOT A COLLECTION OF THE SETTINGS, so naming it
-		// is a kind nothing addresses rather than an empty one.
-		{"a chart collection", map[string]any{"kind": "roles"}},
+		{"a seat nothing carries", map[string]any{"kind": configapi.EntityRoles, "id": "nobody"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()

@@ -388,11 +388,10 @@ func TestAnEntityWriteNeverRenames(t *testing.T) {
 			if !strings.Contains(res.Body.String(), tc.id) {
 				t.Errorf("the refusal does not name %q: %s", tc.id, res.Body.String())
 			}
-			// AND IT SAYS WHERE A RENAME CAN BE MADE. Most of what names a
-			// server is the org chart's, which no write to /config can see,
-			// so a refusal pointing at PUT /config would send the caller to
-			// a rename that strands every `mcp_env` block just the same.
-			if !strings.Contains(res.Body.String(), "crewlet config import") {
+			// AND IT SAYS WHERE A RENAME CAN BE MADE: the whole document,
+			// where everything that names the entity — a seat's `mcp_env`
+			// block, a model chain — is visible and moves with it.
+			if !strings.Contains(res.Body.String(), "PUT /config") {
 				t.Errorf("the refusal does not say where a rename can be made: %s",
 					res.Body.String())
 			}

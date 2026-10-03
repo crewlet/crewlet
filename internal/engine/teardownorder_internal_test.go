@@ -7,15 +7,14 @@ import (
 	"time"
 )
 
-// THE VIEW TRIGGERS COME DOWN BEFORE ANYTHING THEY RE-ARM.
+// THE VIEW TRIGGER COMES DOWN BEFORE ANYTHING IT READS FROM.
 //
-// A chart or directory trigger is not a reader so much as a WRITER of what a
-// company derives: a rebuild ends in [Engine.convergeOn], which re-arms the
-// scheduler, re-ensures the mailboxes and rebuilds the party registry. They
-// were ended with the logs at the bottom of the teardown, so a chart record
-// landing after the scheduler had been stopped re-armed a loop nothing would
-// ever stop again — ticking against a store and a broker the teardown then
-// closed. And the native half comes down before the core whose logs it reads.
+// The directory trigger is not a reader so much as a WRITER of what a company
+// routes by: a rebuild registers every seat's contact identities in a new
+// party registry. Ended with the logs at the bottom of the teardown, an
+// identity record landing after the vendor wiring had been stopped rebuilt a
+// registry over transports nothing serves. And the native half comes down
+// before the core whose logs it reads.
 //
 // Read from the SOURCE, for [TestEveryVendorReconcilerRunsOnApply]'s reason:
 // the window is a race no case can open on demand. Mutation: move
@@ -35,8 +34,8 @@ func TestTheViewTriggersStopBeforeWhatTheyReArm(t *testing.T) {
 	for _, rearmed := range []string{"stopScheduler", "stopNotifications",
 		"stopMaintenance", "stopSandbox"} {
 		if at("stopViewTriggers") > at(rearmed) {
-			t.Errorf("the teardown ends %s before the view triggers, which "+
-				"re-arm what it stopped on the next chart record", rearmed)
+			t.Errorf("the teardown ends %s before the view trigger, which "+
+				"rebuilds over what it stopped on the next identity record", rearmed)
 		}
 	}
 	if at("stopNative") > at("stopCore") {
@@ -129,33 +128,33 @@ func TestTheAnswerersAndTheHoldsStopBeforeTheCore(t *testing.T) {
 	}
 }
 
-// AND ENDING THEM ENDS THEM: a nudge left after stopViewTriggers is one nothing
+// AND ENDING IT ENDS IT: a nudge left after stopViewTriggers is one nothing
 // consumes, where a running trigger takes it within moments. The control runs
 // first, on the same node, so a nudge that sat unconsumed is the stop's doing
 // rather than a trigger that never ran.
-func TestEndingTheViewTriggersStopsTheChartRebuilding(t *testing.T) {
+func TestEndingTheViewTriggersStopsTheDirectoryRebuilding(t *testing.T) {
 	t.Parallel()
 	e, _, _ := trimmedTracker(t)
 	consumed := func() bool {
 		deadline := time.Now().Add(5 * time.Second)
 		for time.Now().Before(deadline) {
-			if len(e.chartNudge) == 0 {
+			if len(e.directoryNudge) == 0 {
 				return true
 			}
 			time.Sleep(10 * time.Millisecond)
 		}
 		return false
 	}
-	e.nudgeChart()
+	e.nudgeDirectory()
 	if !consumed() {
 		t.Fatal("the control: a running trigger never took the nudge")
 	}
 	e.stopViewTriggers()
-	e.nudgeChart()
+	e.nudgeDirectory()
 	time.Sleep(200 * time.Millisecond)
-	if len(e.chartNudge) == 0 {
-		t.Error("a nudge after the view triggers were ended was consumed: " +
-			"something is still rebuilding the chart view")
+	if len(e.directoryNudge) == 0 {
+		t.Error("a nudge after the view trigger was ended was consumed: " +
+			"something is still rebuilding the party registry")
 	}
 }
 

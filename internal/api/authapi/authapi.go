@@ -418,6 +418,11 @@ type Options struct {
 	Directory Directory
 	Writer    Writer
 
+	// Seats is the organisation this node runs, which an invitation's view
+	// names its seat from. Optional: with none, the view names the seat by
+	// the handle the invitation holds and nothing more.
+	Seats session.Chart
+
 	// Signer mints and validates bearers. REQUIRED — a deployment whose
 	// keyring cannot sign for the fleet is refused at construction by
 	// internal/iam/session rather than here.
@@ -491,6 +496,7 @@ type Service struct {
 	boot      *config.Bootstrap
 	directory Directory
 	writer    Writer
+	seats     session.Chart
 	signer    *session.Signer
 	hasher    *credential.Hasher
 	throttle  *credential.Throttle
@@ -560,6 +566,7 @@ func New(opts Options) (*Service, error) {
 		sessions: auth.SessionSubjects(opts.Bootstrap, opts.Sessions),
 		sealer:   opts.Sealer,
 		clients:  opts.Clients, audit: opts.Audit, now: opts.Now,
+		seats: opts.Seats,
 	}
 	if s.now == nil {
 		s.now = func() time.Time { return time.Now().UTC() }

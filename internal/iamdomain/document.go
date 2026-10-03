@@ -335,14 +335,12 @@ type Credential struct {
 // CLI, a duty or a test publishes.
 const (
 	// MaxName bounds a person's display name before it is sealed: two
-	// hundred and fifty-six bytes, the org chart's cap on a seat's name
-	// (chart.MaxName) and for its reason — it has to fit on a roster
-	// row and beside every change they make.
+	// hundred and fifty-six bytes, because it has to fit on a roster row
+	// and beside every change they make.
 	MaxName = 256
 
 	// MaxAddress bounds a person's address before it is sealed: three
-	// hundred and twenty bytes, the longest RFC 5321 permits and the org
-	// chart's cap on a seat's (chart.MaxEmail).
+	// hundred and twenty bytes, the longest RFC 5321 permits.
 	MaxAddress = 320
 
 	// MaxHeldCredentials is the most credentials one person's document

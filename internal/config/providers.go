@@ -23,9 +23,8 @@ type Providers struct {
 	// LLM is the named provider chain seats select from by key. A seat
 	// naming a key that is not here falls back to `default`, else the first
 	// provider declared — a model nobody chose for it — so the keys are the
-	// company's model vocabulary: a company file naming one is refused at
-	// Validate, and a running company's chart naming one is reported by
-	// /chart/check (provider_unknown).
+	// company's model vocabulary, and a company naming one is refused at
+	// Validate.
 	LLM map[string]LLMProvider `yaml:"llm,omitempty" json:"llm,omitempty" desc:"Named LLM providers; seats select one by key."`
 
 	// LLMOrder is the order the providers were DECLARED in, preserved

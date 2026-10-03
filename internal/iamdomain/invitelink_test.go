@@ -6,7 +6,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/crewlet/crewlet/internal/chart"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/iamdomain"
 	"github.com/crewlet/crewlet/internal/statelog"
@@ -176,8 +175,7 @@ func TestARedemptionPresentsItsLinksSecret(t *testing.T) {
 // Each refusal is one the person the link is sent to could do nothing about: a
 // seat nobody created, an agent's seat — a person bound to one is refused on
 // every request — and a seat a colleague is already bound to. What it records
-// is the seat's IDENTITY, the handle it was created under, so a rename between
-// the issue and the redemption binds the same seat.
+// is the seat's handle, which is its identity.
 //
 // Mutation: drop the kind check and the agent seat is issued; drop the holder
 // check and the held seat is.
@@ -186,8 +184,7 @@ func TestAnInvitationBindsOnlyAHumanSeatNobodyHolds(t *testing.T) {
 	rig := newWriteRig(t)
 	rig.seatOnly("platform-lead")
 	rig.seatOnly("held-seat")
-	rig.seatRow(chart.Seat{V: chart.DocumentVersion, Handle: "release-bot",
-		Kind: chart.SeatAgent})
+	rig.agentSeat("release-bot")
 	const colleague = "018f3a9c-0000-7000-8000-0000000000c1"
 	if err := rig.enrol(iamdomain.Enrolment{
 		PersonID: colleague, Kind: iam.KindPerson, Stage: iam.StageActive,
@@ -224,8 +221,7 @@ func TestAnInvitationBindsOnlyAHumanSeatNobodyHolds(t *testing.T) {
 		t.Errorf("refused issues left invitations behind: %v", rows)
 	}
 
-	rig.renameSeat("platform-lead", "eng-lead")
-	issued, err := inviteFor(t, rig, "lead@example.com", "eng-lead")
+	issued, err := inviteFor(t, rig, "lead@example.com", "platform-lead")
 	if err != nil {
 		t.Fatalf("an invitation binding a human seat nobody holds was refused: %v", err)
 	}
@@ -235,19 +231,14 @@ func TestAnInvitationBindsOnlyAHumanSeatNobodyHolds(t *testing.T) {
 		t.Fatalf("decode the stored invitation: %v", err)
 	}
 	if stored.Seat != "platform-lead" {
-		t.Errorf("the invitation recorded seat %q, want the identity the seat "+
-			"was created under (platform-lead) rather than the handle typed", stored.Seat)
+		t.Errorf("the invitation recorded seat %q, want platform-lead", stored.Seat)
 	}
 }
 
-// A REDEMPTION BINDS THE SEAT ITS INVITATION NAMED — that seat, by its
-// identity, whatever the chart calls it now, and nothing else.
+// A REDEMPTION BINDS THE SEAT ITS INVITATION NAMED, and nothing else.
 //
-// The reader shows the seat as the chart calls it TODAY, which is the name the
-// person joining should see; the binding lands on the identity, which is what
-// every reader of a seat binding finds it by. A redemption naming another seat,
-// or none, asks for something the invitation did not offer and is refused
-// before the first claim.
+// A redemption naming another seat, or none, asks for something the invitation
+// did not offer and is refused before the first claim.
 //
 // Mutation: drop the seat comparison from the person record's basis and the
 // redemption naming no seat spends the link without the binding.
@@ -260,19 +251,15 @@ func TestARedemptionBindsTheSeatItsInvitationNamed(t *testing.T) {
 	if err != nil {
 		t.Fatalf("invite: %v", err)
 	}
-	rig.renameSeat("platform-lead", "eng-lead")
-
 	row, err := rig.reader(t).InvitationByID(t.Context(), issued.ID)
 	if err != nil {
 		t.Fatalf("read the invitation: %v", err)
 	}
-	if row.Seat != "platform-lead" || row.SeatHandle != "eng-lead" {
-		t.Errorf("the row names seat %q shown as %q, want the identity "+
-			"platform-lead shown as the chart calls it now, eng-lead",
-			row.Seat, row.SeatHandle)
+	if row.Seat != "platform-lead" {
+		t.Errorf("the row names seat %q, want platform-lead", row.Seat)
 	}
 
-	for _, other := range []string{"", "other-seat", "eng-lead"} {
+	for _, other := range []string{"", "other-seat"} {
 		if _, err := redeemAs(t, rig, issued, "lead@example.com", issued.Secret,
 			other); !errors.Is(err, iamdomain.ErrRefused) {
 			t.Errorf("a redemption binding %q, where the invitation binds "+
@@ -291,7 +278,7 @@ func TestARedemptionBindsTheSeatItsInvitationNamed(t *testing.T) {
 	person, _ := iamdomain.InvitedPersonID(issued.ID)
 	if got := rig.column(`SELECT seat_id FROM iam_people WHERE id = ?`,
 		person); len(got) != 1 || got[0] != "platform-lead" {
-		t.Errorf("the person holds seat %v, want the identity platform-lead", got)
+		t.Errorf("the person holds seat %v, want platform-lead", got)
 	}
 }
 

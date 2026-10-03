@@ -61,14 +61,9 @@ type Engine struct {
 	// apply and never mutated. See epoch.go.
 	epoch epoch
 
-	// chartNudge carries the chart applier's post-commit signal to the
-	// rebuild loop. ONE SLOT, which is the coalescing window — see
-	// [Engine.nudgeChart].
-	chartNudge chan struct{}
-
 	// directoryNudge carries the identity applier's post-commit signal to
-	// the party registry's rebuild loop, on chartNudge's terms — see
-	// [Engine.nudgeDirectory].
+	// the party registry's rebuild loop. ONE SLOT, which is the coalescing
+	// window — see [Engine.nudgeDirectory].
 	directoryNudge chan struct{}
 
 	backends *Backends
@@ -365,31 +360,19 @@ type Engine struct {
 
 	// env is this node's ${VAR} resolver and the store snapshot it answers
 	// from: the secret store in front of the process environment, refreshed
-	// on every apply, and the org chart's own sealed values re-read whenever
-	// the rows naming them move (chartsecrets.go). One per node rather than
-	// one per call site — see secrets.go for why that matters.
+	// on every apply and after a provisioning pass seals a credential. One
+	// per node rather than one per call site — see secrets.go for why that
+	// matters.
 	//
-	// ONE POINTER TO BOTH, because the chart's re-read merges into the
-	// snapshot the resolver was built from: two pointers could be read
-	// torn, a resolver from one snapshot beside another's values.
+	// ONE POINTER TO BOTH, so a reader never takes a resolver from one
+	// snapshot beside another's values.
 	env atomic.Pointer[secretView]
 
-	// secretsMu serialises every writer of env — the whole-store refresh
-	// and the chart's re-read — so neither builds on a snapshot the other
-	// has replaced: a re-read merging into the snapshot an apply just
-	// superseded would put the rotation that apply picked up back.
+	// secretsMu serialises every writer of env — an apply's refresh and a
+	// provisioning pass's — so the store is read under the same lock the
+	// snapshot is installed under: whichever runs later read the store
+	// later, and neither installs a snapshot older than the other's.
 	secretsMu sync.Mutex
-
-	// chartSecretsStale says the last re-read of the chart's sealed values
-	// failed, and chartSecretsGap is the set of names the rows reference
-	// and the store does not hold, as last logged. Both are the view
-	// rebuild's, touched only under its claim; see chartsecrets.go.
-	chartSecretsStale atomic.Bool
-	chartSecretsGap   string
-
-	// chartSeals is the orphan sweep's memory of what it has seen nothing
-	// name; see chartsweep.go.
-	chartSeals chartSealSightings
 
 	// republish coalesces the re-activations a provisioning pass asks for
 	// when it seals a credential. See republish.go.
@@ -480,22 +463,6 @@ type Engine struct {
 		built    *Company
 		material webhooks.Secrets
 	}
-
-	// converging serializes [Engine.convergeOn] and remembers the company
-	// it last ran for.
-	//
-	// A MUTEX RATHER THAN A COMPARE-AND-SWAP, because the steps are not
-	// safe to run alongside themselves: two goroutines refiling one seat's
-	// tools would race two retire-then-reconcile loops against each other,
-	// and two mailbox passes would each create what the other is about to.
-	// It is taken by a config apply and by the chart view's rebuild, which
-	// are genuinely concurrent.
-	converging   sync.Mutex
-	convergedFor *Company
-
-	// convergedSteps is what the last convergence ran, so a second caller
-	// for the same company reports the same trail rather than an empty one.
-	convergedSteps []string
 
 	// embeddings is the company's vector backend, swapped on apply. An
 	// atomic pointer rather than a mutex because it is read on the turn's
@@ -853,11 +820,9 @@ func New(ctx context.Context, opts Options) (_ *Engine, err error) {
 		// numbers into it, and before node.New, which hands the same
 		// value to every seat attachment.
 		batch: queue.DefaultBatchOptions(),
-		// BEFORE startCore, which threads the nudge into the chart's
+		// BEFORE startCore, which threads the nudge into the identity
 		// applier: a nil channel there would make every send block for
 		// ever on the apply loop's own goroutine.
-		chartNudge: make(chan struct{}, 1),
-		// And the identity applier's, for the same reason.
 		directoryNudge: make(chan struct{}, 1),
 	}
 	// THE EVENT LOG FILES AN EVENT UNDER EVERY AGENT IT INVOLVES, by the
@@ -1043,12 +1008,10 @@ func New(ctx context.Context, opts Options) (_ *Engine, err error) {
 		if err := e.startNative(ctx, company); err != nil {
 			return nil, err
 		}
-		// NOT THE PROJECTS AND THE CONTAINERS HERE. They are derived from
-		// the org CHART, which the seed below writes and the view
-		// composes, and they are stamped with the position on the chart's
-		// log that view was composed at — so they follow the published
-		// company through [Engine.convergeOn], which the end of this
-		// constructor runs.
+		// NOT THE PROJECTS AND THE CONTAINERS HERE. They follow the
+		// published company through [Engine.followCompany], which the
+		// end of this constructor runs, stamped with the activation the
+		// company was applied from.
 		// EQUIPPED BEFORE PUBLISHED. A turn can start the instant the
 		// epoch is current, and one that found an empty registry would run
 		// a seat with no tools at all — a company that boots cleanly and
@@ -1057,48 +1020,8 @@ func New(ctx context.Context, opts Options) (_ *Engine, err error) {
 		if err := e.equip(ctx, company); err != nil {
 			return nil, err
 		}
-		// THE FILE'S OWN CHART, BEFORE THE FIRST EPOCH IS COMPOSED. A
-		// company has to start somewhere, and what an operator has on a
-		// first run is a file — without this a fresh deployment boots
-		// with an empty chart, which is a company with no seats and no
-		// line saying so. It is an import keyed on the chart's own
-		// content, so a second boot over the same structure publishes
-		// nothing and an edited file places what it names without
-		// touching whoever was hired through the API. See seed.go.
-		e.seedChartAtBoot(ctx, company.Config)
 	}
-	// AND A CHART AN OFFLINE IMPORT STAGED, WITH A COMPANY OR WITHOUT ONE:
-	// it needs the chart, which is the core's, and not the company file.
-	// It is the opposite of the seed above and runs after it for that
-	// reason: the seed bootstraps an EMPTY chart from a file, and a stage
-	// is an operator's explicit "this file is the chart again", performed
-	// at a node they had deliberately stopped. Ordering it second is what
-	// makes a first boot that both seeds and redeems settle on the staged
-	// structure — and on a node with no company it makes the seed at the
-	// first apply find the chart already there, and publish nothing over
-	// it. See seed.go.
-	e.publishStagedChartAtBoot(ctx)
-	if company != nil {
-		// AND THE VIEW THE SEED JUST WROTE. The composition prefers the
-		// view where there is one, so building it here is what makes the
-		// engine's first published company the one derived from rows
-		// rather than the document's own tree.
-		//
-		// A FAILURE IS NOT A REFUSAL, for the seed's own reason: the
-		// composition falls back to the document, the periodic trigger
-		// retries, and a node that refused to boot on a slow applier
-		// would be refusing over a state that clears itself.
-		//nolint:govet // shadow: scoped to this block; see .golangci.yml
-		if _, err := e.refreshChart(ctx); err != nil {
-			log.WarnContext(ctx, "chart_view_unbuilt_at_boot", "error", err,
-				"detail", "this node serves the company file's own tree until "+
-					"its chart view builds; the periodic rebuild retries")
-		}
-	}
-	// COMPOSED ONCE, here, and handed to the install: the registry is
-	// indexed for the value a reader will load, so that value has to exist
-	// before it is published. See [Engine.installEpoch].
-	e.installEpoch(ctx, company, e.epoch.withView(company))
+	e.installEpoch(ctx, company)
 
 	// SET BEFORE the node, because the node is handed this exact value —
 	// two constructions of it would be two places to disagree about what
@@ -1327,23 +1250,22 @@ func New(ctx context.Context, opts Options) (_ *Engine, err error) {
 	// apply calls the same thing for every later epoch.
 	e.reconcileSkills(e.Company())
 
-	// AND THE CONVERGENCE, LAST, over the company this node is now
-	// serving: the same list an apply and a chart write run, through the
-	// same function. See [Engine.convergeOn].
+	// AND WHAT FOLLOWS A PUBLISHED COMPANY, LAST, over the company this node
+	// is now serving: the same list an apply runs, through the same
+	// function. See [Engine.followCompany].
 	//
-	// # It is a safety net here rather than the mechanism
+	// # It is a safety net here rather than the mechanism, for most of it
 	//
-	// Boot brings each of these up by its own route and in its own order —
+	// Boot brings most of these up by its own route and in its own order —
 	// the registry with the epoch, the mailboxes with the seat host, the
 	// scheduler with its loop — because each has a construction step this
-	// does not. What running the list anyway buys is that the three paths
+	// does not. What running the list anyway buys is that the two paths
 	// that publish a company cannot DISAGREE about what follows one: a step
-	// added to the convergence is a step boot takes too, without anybody
-	// remembering to add it here.
-	//
-	// It also records this company as converged, so the view's first tick
-	// after boot costs one comparison rather than the whole list.
-	e.convergeOn(ctx, e.Company())
+	// added to the list is a step boot takes too, without anybody
+	// remembering to add it here. The tracker's projects and the knowledge
+	// containers have no other route at boot: this is where a company
+	// booted on an activated revision is charted.
+	e.followCompany(ctx, e.Company())
 	booted = true
 	return e, nil
 }
@@ -1667,13 +1589,10 @@ func (e *Engine) Stop(ctx context.Context) {
 // it stops was never started, and the node is absent entirely where the
 // failure came before [node.New].
 func (e *Engine) teardown(ctx context.Context) {
-	// FIRST, THE TRIGGERS THAT RE-DERIVE A COMPANY: the chart view's and the
-	// party registry's. A rebuild ends in [Engine.convergeOn], which
-	// re-arms the scheduler, re-ensures the mailboxes and rebuilds the
-	// registry — so one left running past the stops below re-armed a
-	// scheduler loop nothing would ever stop again. They were ended with
-	// the logs, at the bottom of this list, and a chart record landing in
-	// between was all it took.
+	// FIRST, THE TRIGGER THAT RE-DERIVES WHAT A COMPANY ROUTES BY: the
+	// party registry's. A rebuild over vendor wiring the stops below had
+	// already ended would register identities nothing serves, so it is
+	// ended before anything it reads from is.
 	e.stopViewTriggers()
 	// After the drain: the waiter's keepalive is what stops a running box
 	// being reaped, so stopping it first would start the orphan clock on

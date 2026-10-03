@@ -44,14 +44,17 @@ type Role struct {
 	// ~4h".
 	Availability string `yaml:"availability,omitempty" json:"availability,omitempty" desc:"Human seats: free-text availability shown in rosters."`
 
-	// Handle is the canonical identity slug, derived from Name when empty,
-	// and WHAT EVERY REFERENCE TO THIS SEAT RESOLVES: a unit's `lead:` and
-	// every `manages:` entry.
+	// Handle is the canonical identity slug, and WHAT EVERY REFERENCE TO
+	// THIS SEAT RESOLVES: a unit's `lead:` and every `manages:` entry. A
+	// document that declares none has one written in when it is read
+	// ([MintHandles]), derived from Name, so every stored revision carries
+	// it and editing the name never moves it.
 	//
-	// EFFECTIVELY PERMANENT: the seat's durable id is derived from the
-	// company name and this handle, so changing either orphans that seat's
-	// diary, onboarding markers and counterparty profiles.
-	Handle string `yaml:"handle,omitempty" json:"handle,omitempty" js:"pattern=^[a-z0-9][a-z0-9-]*$" desc:"Canonical slug, and how lead and manages name this seat. Effectively permanent: it derives the seat's durable id."`
+	// IMMUTABLE: the seat's durable id is derived from the company name and
+	// this handle, so changing it is a removal and a creation — the old
+	// seat's diary, onboarding markers and counterparty profiles stay with
+	// the old handle.
+	Handle string `yaml:"handle,omitempty" json:"handle,omitempty" js:"pattern=^[a-z0-9][a-z0-9-]*$" desc:"Canonical slug, and how lead and manages name this seat. Immutable: it derives the seat's durable id, so changing it removes the seat and creates another."`
 
 	Email string `yaml:"email,omitempty" json:"email,omitempty" desc:"Seat email; plus-addressing derives from the handle."`
 
@@ -635,10 +638,8 @@ func (r *Role) Seat() *org.Role {
 	return seat
 }
 
-// IdentityKey is the seat's address inside its list — the derived handle, so
-// it is the same identity `PATCH /chart/seats/{handle}` writes. It is NOT what
-// the agent id is built from: that is the handle a seat was CREATED under
-// (ADR-0026), which a rename leaves behind and a file cannot state.
+// IdentityKey is the seat's address inside its list — its handle, which
+// `PUT /config/roles/{handle}` addresses and the agent id is derived from.
 //
 // A VALUE receiver, because the redaction walker holds the prior document by
 // value and cannot take an address inside it.
@@ -860,6 +861,23 @@ func MintUnitIDs(units []Unit) {
 			units[i].ID = MintUnitID(units[i].Name)
 		}
 		MintUnitIDs(units[i].Children)
+	}
+}
+
+// MintHandles writes every seat's handle into its `handle` field, at any depth,
+// where the document declares none: the handle the name derives
+// ([org.Slugify]), so a seat whose name later changes keeps the identity it
+// was created under.
+//
+// Applied at the ONE place a Tier B document is decoded ([ParseCompanyNode]),
+// beside [MintUnitIDs] and for its reason. Deterministic and idempotent: a seat
+// that already declares a handle keeps it, and a second parse of the same file
+// mints the same handles.
+func MintHandles(c *Company) {
+	for role := range c.EachRole() {
+		if strings.TrimSpace(role.Handle) == "" {
+			role.Handle = role.Seat().Handle()
+		}
 	}
 }
 

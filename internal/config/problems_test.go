@@ -97,24 +97,27 @@ func TestAnOrgRuleIsLocatedWhereItWasWritten(t *testing.T) {
 			// wrote: two seats of one name that declare no handle derive
 			// one, and it is the HANDLE they collide on — a name alone is
 			// prose and collides with nothing.
+			// AT THE HANDLE, which is the seat's identity and the field
+			// to change — here written in from a name both seats carry,
+			// since neither declares one.
 			name: "two seats of one name deriving one handle",
 			doc: "name: Acme\nroles:\n  - name: Software Engineer\n" +
 				"units:\n  - name: Eng\n    roles:\n      - name: Software Engineer\n",
 			messageHas: "duplicate handle",
 			want: []located{
-				{"roles[0].name", "conflict", "software-engineer", ""},
-				{"units[0].roles[0].name", "conflict", "software-engineer", ""},
+				{"roles[0].handle", "conflict", "software-engineer", ""},
+				{"units[0].roles[0].handle", "conflict", "software-engineer", ""},
 			},
 		},
 		{
-			// A written handle is the line to change; a derived one is
-			// changed by renaming the seat.
+			// A written handle and one written in from a name collide the
+			// same way, at the handle.
 			name: "two seats on one handle",
 			doc: "name: Acme\nroles:\n  - name: Dev\n" +
 				"units:\n  - name: Eng\n    roles:\n      - name: Developer\n        handle: dev\n",
 			messageHas: "duplicate handle",
 			want: []located{
-				{"roles[0].name", "conflict", "dev", ""},
+				{"roles[0].handle", "conflict", "dev", ""},
 				{"units[0].roles[0].handle", "conflict", "dev", ""},
 			},
 		},

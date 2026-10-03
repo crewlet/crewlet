@@ -293,7 +293,7 @@ func (c *Company) validateUnitIDs() error {
 // runs exactly as it did.
 func (c *Company) validateHumanSeatApps() error {
 	var p problems
-	for role, path := range c.eachRole() {
+	for role, path := range c.EachRole() {
 		if role.Kind != org.KindHuman || role.Integrations.GitHub == nil {
 			continue
 		}
@@ -326,7 +326,7 @@ func (c *Company) validateSetupStepNames() error {
 	if c.Providers.Sandbox != nil {
 		p.wrap(uniqueSetupStepNames(at(at(field("providers"), "sandbox"), "setup"), c.Providers.Sandbox.Setup))
 	}
-	for role, path := range c.eachRole() {
+	for role, path := range c.EachRole() {
 		if role.Sandbox != nil {
 			p.wrap(uniqueSetupStepNames(at(at(path, "sandbox"), "setup"), role.Sandbox.Setup))
 		}
@@ -414,37 +414,40 @@ func (c *Company) validateRunnable(o *org.Organization) error {
 		p.add(field("timezone"), ErrUnknownValue, "%v", err)
 	}
 
-	// A SEAT MAY NOT BE CALLED WHAT "NOBODY" IS CALLED, and that is refused
-	// by the file rule every reserved chart name is ([validateReservedNames]),
-	// not here: a second list of the words the chart reserves is the one
-	// that drifts.
+	// A SEAT MAY NOT BE CALLED WHAT "NOBODY" IS CALLED.
 	//
-	// THE FALLBACK MUST NAME SOMEBODY WHO CAN BE WOKEN. `route_to` is
+	// Datadog's fallback takes a seat handle or DatadogIgnore, and a company
+	// with a seat of that name would have it silenced by its own name: every
+	// alert meant for it dismissed, on a screen reporting the configuration
+	// exactly as written. Refusing the name is the only place this can be
+	// caught, because by the time the parser reads a fallback the two are
+	// the same string.
+	//
+	// AND THE FALLBACK MUST NAME SOMEBODY WHO CAN BE WOKEN. `route_to` is
 	// the only routing floor in this file, and the two ways it silently
 	// fails are a handle no seat has — resolving to nothing, one
 	// `notification_undeliverable` warning per untagged alert, for ever —
 	// and one naming a HUMAN seat, which resolves fine and is then dropped
 	// as a self-action. Both read as correct configuration on every screen,
-	// which is the state the field exists to prevent. A FILE is the one
-	// place either can be REFUSED: the parser deliberately does not consult
+	// which is the state the field exists to prevent. This is the only
+	// place either can be caught: the parser deliberately does not consult
 	// the roster (a bad monitor TAG must stay visible as the operator's
 	// typo it is), and the setup form is one of three write paths.
-	//
-	// ONLY A DOCUMENT CARRYING A CHART IS ASKED ABOUT ITS SEATS
-	// ([Company.CarriesChart]). A settings document holds none, so asked
-	// the same question it refused every write and every apply with
-	// Datadog enabled as "declares no agent seat at all". The seat it names
-	// there is the RUNNING chart's, and the continuous report judges that
-	// pair; what no chart can change — a value that is not a handle — is
-	// refused either way.
 	fallback := ""
 	if dd := c.Integrations.Datadog; dd != nil && dd.Enabled {
 		fallback = strings.TrimSpace(dd.RouteTo)
 	}
 	agents, handles := 0, make([]string, 0, 8)
 	routed := false
-	for role := range c.eachRole() {
+	for role, path := range c.EachRole() {
 		seat := role.Seat()
+		if seat.Handle() == DatadogIgnore {
+			p.add(at(path, "handle"), ErrUnknownValue,
+				"a seat cannot be called %q: it is what integrations.datadog.route_to "+
+					"means by nobody, so a seat of that name would be silenced by "+
+					"its own handle. %q derives that handle from its name",
+				DatadogIgnore, role.Name)
+		}
 		if !seat.IsAgent() {
 			continue
 		}
@@ -462,8 +465,6 @@ func (c *Company) validateRunnable(o *org.Organization) error {
 					"digits and hyphens starting with a letter or digit, so "+
 					"this names no seat and every untagged alert is verified, "+
 					"counted and delivered to nobody", fallback)
-		case !c.CarriesChart():
-			// A settings document: the running chart answers this.
 		case agents == 0:
 			p.add(field("integrations.datadog.route_to"), ErrUnknownValue,
 				"%q names no seat: this company declares no agent seat at all, "+
@@ -989,7 +990,7 @@ func (c *Company) validateProviderKeys() error {
 	}
 	known := slices.Sorted(maps.Keys(c.Providers.LLM))
 
-	for role, path := range c.eachRole() {
+	for role, path := range c.EachRole() {
 		// Both written surfaces are checked, and each is reported at the
 		// path the operator typed. Validating the RESOLVED chain instead
 		// would hide half of them: the flat field wins over the mapping,
@@ -1028,22 +1029,17 @@ func (c *Company) validateProviderKeys() error {
 	return p.err()
 }
 
-// DeclaresIntegration reports whether this company's SETTINGS still declare the
-// named external surface at all.
+// DeclaresIntegration reports whether this company still uses the named
+// external surface at all.
 //
-// # It answers for half a company, and the caller owns the other half
+// # Why it lives on the whole document rather than on Integrations
 //
-// For seven of the eight it is entirely a question about the `integrations:`
-// block. For SLACK it is not: every agent carries its own app under
-// `role.integrations.slack`, so a company with seven working Slack apps and no
-// company-level `slack:` block genuinely uses Slack — and a seat is ORG CHART
-// content, which a settings document does not contain at all.
-//
-// So this answers the settings half and the ENGINE composes the other, over
-// the seats of the company it is running ([engine.Company.DeclaresIntegration]).
-// Written here as a walk of `roles:` and `units:` it silently became a walk of
-// nothing the moment a stored revision stopped carrying them, and answered "no"
-// for every company on earth.
+// For seven of the eight it IS a question about the `integrations:` block, and
+// putting it there would be tidier. For Slack it is not: every agent carries
+// its own app under `role.integrations.slack`, and the company-level `slack:`
+// block holds working-indicator settings that a company using Slack heavily
+// may never write. Asked of the block alone, a company with seven working
+// Slack apps answers "no".
 //
 // That answer is not academic. Its one caller deletes a surface's fleet status
 // row on false, and Slack's row is the only place the engine records the public
@@ -1089,9 +1085,15 @@ func (c *Company) DeclaresIntegration(surface string) bool {
 	case "atlassian":
 		return in.Atlassian != nil
 	case "slack":
-		// THE COMPANY-LEVEL BLOCK ONLY. A seat's own app is chart
-		// content; see the doc above for who asks about that.
-		return in.Slack != nil
+		if in.Slack != nil {
+			return true
+		}
+		for role := range c.EachRole() {
+			if role.Integrations.Slack != nil {
+				return true
+			}
+		}
+		return false
 	default:
 		// A SURFACE THIS BUILD DOES NOT KNOW, which on a rolling upgrade is
 		// a peer's. True rather than false, because the only caller deletes
@@ -1101,8 +1103,8 @@ func (c *Company) DeclaresIntegration(surface string) bool {
 	}
 }
 
-// eachRole yields EVERY seat this DOCUMENT declares, with the path an operator
-// typed: the top-level `roles:` and every seat inside `units:`, to any depth.
+// EachRole yields EVERY seat in the company, with the path an operator typed:
+// the top-level `roles:` and every seat inside `units:`, to any depth.
 //
 // It exists because the walk was written inline once and covered only the
 // top-level list, so a cross-field rule silently exempted every seat that
@@ -1112,26 +1114,15 @@ func (c *Company) DeclaresIntegration(surface string) bool {
 // mistakes have no run-time symptom to find them by.
 //
 // AN ITERATOR rather than a callback, so a caller looking for ONE seat can
-// stop at it.
+// stop at it: the engine's per-seat sandbox lookup ran the whole org chart to
+// the end on every launch because a callback has no way to say "found it".
 //
-// # Why it is UNEXPORTED, and what that is protecting
-//
-// This walks the FILE. A company's seats are the org chart's own log now, and
-// a stored revision carries no `roles:` and no `units:` at all — so outside
-// this package the walk answers an EMPTY list for every running company, with
-// no error and no symptom: the party registry, the seat tool surfaces, the
-// per-seat webhook secrets, the code host's bot logins and the setup roster
-// each read a company with nobody in it and reported exactly that.
-//
-// The callers that remain are this package's own validators, and they are
-// correct: `crewlet validate` reads an authored file whole, and what they are
-// checking IS the document. Everything that needs the seats a company RUNS
-// reads [org.Organization] instead — the composed view, derived from the chart
-// rows this node has applied.
-//
-// So the unexport is the enforcement. Exported, "walk the document" and "walk
-// the company" were one call that meant two things, and the wrong one compiled.
-func (c *Company) eachRole() iter.Seq2[*Role, Path] {
+// EXPORTED because the ENGINE needs the same walk: a seat's sandbox block is
+// looked up by name at launch, and a lookup that stopped at the top level
+// answered nil for every seat in a unit — so run_sandbox refused each of them
+// with "this seat's sandbox is not enabled" on a seat whose block said
+// otherwise. One walker, so the two can never disagree about which seats exist.
+func (c *Company) EachRole() iter.Seq2[*Role, Path] {
 	return func(yield func(*Role, Path) bool) {
 		for i := range c.Roles {
 			if !yield(&c.Roles[i], idx(field("roles"), i)) {
@@ -1156,21 +1147,6 @@ func (c *Company) eachRole() iter.Seq2[*Role, Path] {
 		}
 		walk(c.Units, field("units"))
 	}
-}
-
-// CarriesChart reports whether this document holds an org chart at all — a
-// seat or a unit anywhere in it.
-//
-// THE ONE QUESTION EVERY RULE ABOUT THE PAIR ASKS FIRST. An authored FILE
-// carries both halves; a stored revision, and every body `PUT /config` and
-// `PATCH /config` take, carry the settings alone, because the chart is a log
-// of its own. A rule comparing a setting against the seats — a reference that
-// names one, a fallback that must wake one — can only be asked of a document
-// that carries them: asked of a settings document it answers that every seat
-// is missing, which is not a conservative answer but a wrong one, on every
-// company at once. The running pair is the continuous report's to judge.
-func (c *Company) CarriesChart() bool {
-	return len(c.Roles) > 0 || len(c.Units) > 0
 }
 
 // SandboxPlacements is every cell a seat could ACTUALLY land in, each mapped
@@ -1203,7 +1179,7 @@ func (c *Company) SandboxPlacements() map[Placement]string {
 		}
 		reached[run] = where
 	}
-	for role, path := range c.eachRole() {
+	for role, path := range c.EachRole() {
 		gate := role.Sandbox
 		if gate == nil || !gate.Enabled || gate.RunIn == "" || !gate.RunIn.NeedsBackend() {
 			continue
@@ -1247,7 +1223,7 @@ func (c *Company) agentModeExecutorKeys() []string {
 		return nil
 	}
 	seen := map[string]struct{}{}
-	for role := range c.eachRole() {
+	for role := range c.EachRole() {
 		key, entry, resolved := c.executorProvider(role, fallback)
 		if !resolved || !entry.CLI.AgentMode() {
 			continue
@@ -1338,7 +1314,7 @@ func (c *Company) validateSandboxPlacement() error {
 	var p problems
 	catalogue := c.Providers.Sandbox
 
-	for role, path := range c.eachRole() {
+	for role, path := range c.EachRole() {
 		gate := role.Sandbox
 		if gate == nil || !gate.Enabled {
 			continue

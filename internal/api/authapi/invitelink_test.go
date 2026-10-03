@@ -11,21 +11,33 @@ import (
 
 	"github.com/crewlet/crewlet/internal/api/authapi"
 	"github.com/crewlet/crewlet/internal/events/types"
+	"github.com/crewlet/crewlet/internal/iam/session"
 	"github.com/crewlet/crewlet/internal/iamdomain"
 )
 
-// seatedInvitation is [sealedInvitation] binding a seat — recorded by the
-// identity it was created under and shown as the chart calls it now.
+// seatedInvitation is [sealedInvitation] binding a seat by its handle, which
+// the view names as the running company calls it.
 type seatedInvitation struct{ sealedInvitation }
 
 func (seatedInvitation) InvitationByID(ctx context.Context, id string) (
 	iamdomain.InvitationRow, error) {
 
 	row, err := sealedInvitation{}.InvitationByID(ctx, id)
-	row.Seat, row.SeatHandle, row.SeatName = "platform-lead", "eng-lead",
-		"Engineering lead"
+	row.Seat = "eng-lead"
 	return row, err
 }
+
+// companySeats is the running company's seats, as the view asks it.
+type companySeats map[string]session.Seat
+
+func (c companySeats) Seat(_ context.Context, handle string) (session.Seat, bool, error) {
+	seat, found := c[handle]
+	return seat, found, nil
+}
+
+// engLead is the company holding the seat the invitation binds.
+var engLead = companySeats{"eng-lead": {Handle: "eng-lead",
+	Kind: session.SeatKindHuman, Name: "Engineering lead"}}
 
 // issuedInvitation is [sealedInvitation] under one id and nothing under any
 // other, so a case can present an id nobody issued beside one somebody did.
@@ -61,6 +73,7 @@ func TestAGetOnAnInviteRendersAndNeverSpends(t *testing.T) {
 	mux := http.NewServeMux()
 	buildWith(t, bootstrapFor(t), func(o *authapi.Options) {
 		o.Directory = seatedInvitation{}
+		o.Seats = engLead
 		o.Sealer = stubSealer{address: "dana@example.com"}
 		o.Writer = writer
 	}).Routes(mux)
@@ -92,7 +105,7 @@ func TestAGetOnAnInviteRendersAndNeverSpends(t *testing.T) {
 		if view.Seat == nil || view.Seat.Handle != "eng-lead" ||
 			view.Seat.Name != "Engineering lead" {
 			t.Errorf("the view shows seat %+v, want the seat it binds as the "+
-				"chart calls it now", view.Seat)
+				"running company calls it", view.Seat)
 		}
 	}
 	if len(writer.enrolled) != 0 || len(writer.spent) != 0 || len(writer.opened()) != 0 {
@@ -115,7 +128,7 @@ func TestAGetOnAnInviteRendersAndNeverSpends(t *testing.T) {
 			"of each", len(writer.enrolled), len(writer.spent))
 	}
 	enrolled := writer.enrolled[0]
-	if enrolled.Seat != "platform-lead" || enrolled.InvitationSecret != invitationSecret {
+	if enrolled.Seat != "eng-lead" || enrolled.InvitationSecret != invitationSecret {
 		t.Errorf("the enrolment binds seat %q presenting secret %q, want the "+
 			"invitation's own seat by its identity and the link's secret",
 			enrolled.Seat, enrolled.InvitationSecret)
@@ -124,7 +137,7 @@ func TestAGetOnAnInviteRendersAndNeverSpends(t *testing.T) {
 		Seat string `json:"seat"`
 	}
 	_ = json.Unmarshal(redeemed.Body.Bytes(), &answer)
-	if answer.Seat != "platform-lead" {
+	if answer.Seat != "eng-lead" {
 		t.Errorf("the sign-in answered seat %q, want the seat the person now holds",
 			answer.Seat)
 	}
@@ -228,7 +241,7 @@ func TestARedemptionWhoseSeatWasTakenSaysSo(t *testing.T) {
 		o.Directory = seatedInvitation{}
 		o.Sealer = stubSealer{address: "dana@example.com"}
 		o.Writer = refusingWriter{err: &iamdomain.ErrClaimed{
-			Kind: iamdomain.KindSeat, Token: "platform-lead", Holder: holder}}
+			Kind: iamdomain.KindSeat, Token: "eng-lead", Holder: holder}}
 	}).Routes(mux)
 	rec := postJSON(t, mux, "/auth/invite/"+invitationID, map[string]string{
 		"secret": invitationSecret, "login": "dana.sre", "name": "Dana",

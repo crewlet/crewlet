@@ -93,15 +93,9 @@ func slackEngine(t *testing.T) (*Engine, *seatWriter) {
 	return e, writer
 }
 
-// seatWriterFor seeds the package's seat-document fake from a whole company
-// document, so the seam serves the seats a teardown will actually walk rather
-// than one hand-built literal.
-//
-// THROUGH [config.Role.Seat], which is what makes the fixture the RUNTIME
-// seat: that is the shape the chart's blob holds and the shape
-// [Engine.SeatDocument] carries, so a vendor identity sits at the top level
-// rather than under `integrations`. Seeding the authored shape instead would
-// make every case here pass against a document the engine never sees.
+// seatWriterFor seeds the package's config-surface fake from a whole company
+// document, so the entity route serves the seats a teardown will actually
+// walk rather than one hand-built literal.
 //
 // A REAL ROUND TRIP matters here: what is under test is what the written body
 // CONTAINS, and a recorder that only counted writes would pass a teardown
@@ -109,8 +103,8 @@ func slackEngine(t *testing.T) (*Engine, *seatWriter) {
 func seatWriterFor(t *testing.T, cfg *config.Company) *seatWriter {
 	t.Helper()
 	w := &seatWriter{seats: map[string]map[string]any{}}
-	eachAuthoredSeat(cfg, func(role *config.Role) {
-		body, err := json.Marshal(role.Seat())
+	for role := range cfg.EachRole() {
+		body, err := json.Marshal(role)
 		if err != nil {
 			t.Fatalf("marshal %s: %v", role.Name, err)
 		}
@@ -119,7 +113,7 @@ func seatWriterFor(t *testing.T, cfg *config.Company) *seatWriter {
 			t.Fatalf("decode %s: %v", role.Name, err)
 		}
 		w.seats[role.Seat().Handle()] = seat
-	})
+	}
 	return w
 }
 
@@ -127,7 +121,8 @@ func seatWriterFor(t *testing.T, cfg *config.Company) *seatWriter {
 func (w *seatWriter) block(handle, kind string) (map[string]any, bool) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	got, ok := w.seats[handle][kind].(map[string]any)
+	integrations, _ := w.seats[handle]["integrations"].(map[string]any)
+	got, ok := integrations[kind].(map[string]any)
 	return got, ok
 }
 

@@ -146,16 +146,15 @@ func (e *Engine) clearSlackSeat(ctx context.Context, handle string, by iam.Actor
 	if decodeErr := json.Unmarshal(body, &role); decodeErr != nil {
 		return fmt.Errorf("engine: decode the seat %s: %w", handle, decodeErr)
 	}
-	// `slack` RATHER THAN `integrations.slack`: this is the RUNTIME seat,
-	// which is the shape the chart's own blob holds. See
-	// [Engine.SeatDocument].
-	if _, held := role["slack"]; !held {
+	integrations, _ := role["integrations"].(map[string]any)
+	if _, held := integrations["slack"]; !held {
 		// ALREADY GONE, which is what a retry finds, and a retry is how
 		// this runs whenever a later seat failed. Every step here is
 		// "remove this if it is there".
 		return nil
 	}
-	delete(role, "slack")
+	delete(integrations, "slack")
+	role["integrations"] = integrations
 	updated, err := json.Marshal(role)
 	if err != nil {
 		return fmt.Errorf("engine: encode the seat %s: %w", handle, err)

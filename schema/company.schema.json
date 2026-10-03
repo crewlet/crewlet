@@ -1153,7 +1153,7 @@
           "type": "string"
         },
         "handle": {
-          "description": "Canonical slug, and how lead and manages name this seat. Effectively permanent: it derives the seat's durable id.",
+          "description": "Canonical slug, and how lead and manages name this seat. Immutable: it derives the seat's durable id, so changing it removes the seat and creates another.",
           "pattern": "^[a-z0-9][a-z0-9-]*$",
           "type": "string"
         },

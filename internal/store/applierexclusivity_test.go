@@ -403,12 +403,6 @@ var allowedReplicatedWriter = []allowance{
 			"committed record.",
 	},
 	{
-		Prefix: "internal/chart/apply", Kind: mechanism,
-		Why: "The org chart's applier, across the files it is split over: " +
-			"the record and its two gates, the object rows, the structure " +
-			"and the history.",
-	},
-	{
 		Prefix: "internal/iamdomain/apply", Kind: mechanism,
 		Why: "The identity estate's applier, across the files it is split " +
 			"over: the record and its two gates, the person and their " +

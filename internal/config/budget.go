@@ -403,7 +403,7 @@ func (i IdleCeiling) Sentence(handle string) string {
 // go anyway.
 func (c *Company) budgetWarnings() []Warning {
 	out := c.TokenBudget.warnings(field("token_budget"))
-	for role, path := range c.eachRole() {
+	for role, path := range c.EachRole() {
 		seat := role.Seat()
 		if !seat.IsAgent() {
 			continue

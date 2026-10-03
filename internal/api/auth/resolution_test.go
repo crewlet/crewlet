@@ -5,7 +5,6 @@ import (
 	"go/parser"
 	"go/token"
 	"path/filepath"
-	"strings"
 	"testing"
 )
 
@@ -41,7 +40,7 @@ func TestNoCallSiteDiscardsTheUnknownArm(t *testing.T) {
 	// covering a package somebody moved, and the point of this gate is
 	// that it cannot stop covering anything quietly.
 	roots := []string{
-		"..", "../auth", "../chartapi", "../configapi", "../operator",
+		"..", "../auth", "../configapi", "../operator",
 		"../queries", "../secretsapi", "../setupapi", "../stream",
 		"../../e2e",
 	}
@@ -110,53 +109,4 @@ func isFromCall(e ast.Expr) bool {
 func blank(e ast.Expr) bool {
 	id, ok := e.(*ast.Ident)
 	return ok && id.Name == "_"
-}
-
-// AND THE ONE DELIBERATE EXCEPTION IS NAMED, rather than left for a reader to
-// find and wonder about.
-//
-// internal/api/chartapi's `writerFor` reads the principal with the resolution
-// discarded, and it is correct there for a reason no walk can see: the guard
-// beside it has already refused an unknown one with a 503, so a request
-// reaching that function carries an answer. Asking again would be a second
-// decision about one request, and the two would drift the day somebody changed
-// one of them.
-//
-// It is in a package this walk covers, so the walk would flag it — which is
-// why it does not write `iam.From` at all: it goes through the surface's own
-// seam. This case pins that, so the exception cannot quietly become a direct
-// call again.
-func TestTheChartWriterGoesThroughItsOwnSeam(t *testing.T) {
-	t.Parallel()
-	source, err := parser.ParseFile(token.NewFileSet(), "../chartapi/write.go", nil, 0)
-	if err != nil {
-		t.Fatalf("parse: %v", err)
-	}
-	ast.Inspect(source, func(n ast.Node) bool {
-		expr, ok := n.(ast.Expr)
-		if ok && isFromCall(expr) {
-			t.Error("chartapi/write.go calls iam.From directly; the surface's " +
-				"own Principal seam is what the guard beside it already decided " +
-				"against, and two readings of one request eventually disagree")
-		}
-		return true
-	})
-	// The control: the file this points at is the one that holds the
-	// writer, and a path that moved would otherwise certify nothing.
-	if !strings.Contains(renderDecls(source), "writerFor") {
-		t.Fatal("chartapi/write.go no longer declares writerFor; this case is " +
-			"reading the wrong file")
-	}
-}
-
-// renderDecls is the names of a file's top-level declarations, for a control
-// that has to know it is reading the right file.
-func renderDecls(file *ast.File) string {
-	var names []string
-	for _, decl := range file.Decls {
-		if fn, ok := decl.(*ast.FuncDecl); ok {
-			names = append(names, fn.Name.Name)
-		}
-	}
-	return strings.Join(names, " ")
 }

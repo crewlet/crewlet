@@ -464,26 +464,21 @@ func (e *Engine) liftPauseHold(ctx context.Context, seat uuid.UUID, why string) 
 // have different ids, so the hire never inherits the leaver's pause.
 //
 // CALLED WHEREVER THE ROSTER CAN CHANGE, which is every published company
-// ([Engine.convergeOn], which an apply and a chart write both reach). Seats are
-// the chart's, and a removal moves no settings revision — run from the apply
-// alone, a seat removed through /chart kept its pause record until somebody
-// next applied settings.
-//
-// AND ONLY ON A COMPANY THAT HOLDS EVERY HIRE ([Engine.wholeRoster]), the rule
-// the mailbox sweep judges a seat absent by. A node behind the chart log —
-// lagging, or holding a hire's record it could not apply — does not have a seat
-// hired on another node, and a pause somebody put on that new seat would read
+// ([Engine.followCompany]) — and ONLY ON THE FLEET'S CURRENT ONE
+// ([Engine.fleetCompany]), the rule the mailbox sweep judges a seat absent by.
+// A node applying a revision the fleet has since replaced does not have a seat
+// the newer one added, and a pause somebody put on that new seat would read
 // here as a pause on a seat the company does not have: the node would delete a
-// pause a person had just placed. A company short of the log's end clears
-// nothing; a node that has caught up, or the next convergence here, does.
+// pause a person had just placed. A company that is not the fleet's clears
+// nothing; the apply that catches this node up does.
 func (e *Engine) clearRemovedSeatPauses(ctx context.Context, next *Company) {
 	if next == nil || next.Org == nil || e.backends == nil || e.backends.Fleet == nil {
 		return
 	}
-	if _, err := e.wholeRoster(ctx, func() *Company { return next }); err != nil {
+	if _, err := e.fleetCompany(ctx, next); err != nil {
 		log.DebugContext(ctx, "seat_pauses_not_swept", "reason", err.Error(),
-			"detail", "a removed seat's pause is cleared by a company that holds "+
-				"every hire; this one does not yet")
+			"detail", "a removed seat's pause is cleared by the company the fleet "+
+				"is pointed at; this one is not it yet")
 		return
 	}
 	e.pauses.mu.Lock()

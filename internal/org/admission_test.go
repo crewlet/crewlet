@@ -128,7 +128,7 @@ func TestAMissingIdentityIsNeverReportedAsADuplicate(t *testing.T) {
 // A UNIT KEY IS FOLDED EXACTLY AS THE CHART FOLDS AN ADDRESS.
 //
 // The file is checked so its import is not declined, and the chart's
-// [chart.NormalizeKey] lower-cases a key and turns its whitespace into a
+// [NormalizeKey] lower-cases a key and turns its whitespace into a
 // hyphen: `Product Team` and `product-team` are one address there, so they are
 // one key here, and so are two cases of one name on units that declare no id.
 // The fold is ToLower's, which is why "İstanbul" and "Istanbul" are one key.

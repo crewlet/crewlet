@@ -302,18 +302,15 @@ func TestDatadogAcceptsTheDismissFallback(t *testing.T) {
 	}
 }
 
-// A SETTINGS DOCUMENT NAMES A SEAT IT DOES NOT CARRY, AND THAT IS NOT A FAULT.
+// THE FALLBACK MUST NAME AN AGENT SEAT OF THE DOCUMENT IT IS IN.
 //
-// The org chart is a log of its own, so a stored revision — and every body
-// `PUT /config` and `PATCH /config` take — is the settings half alone and
-// holds no seat. Held to "names an agent seat in THIS document", every such
-// document with Datadog enabled was refused as "declares no agent seat at
-// all": the setup form could not connect Datadog, and a revision imported
-// from a whole file was then refused by every node that applied it. Only a
-// document that carries a chart can be asked about one; the running pair is
-// the continuous report's to judge. A file carrying a chart is still refused
-// for a fallback naming none of its seats (above).
-func TestASettingsDocumentMayNameASeatItDoesNotCarry(t *testing.T) {
+// A company's seats are part of its document, so a revision routing untagged
+// alerts to a handle it does not declare is refused where it is written —
+// including the document that declares no agent seat at all, which has
+// nobody an untagged alert could wake.
+//
+// The control is the same document with the seat it names: accepted.
+func TestDatadogFallbackMustNameAnAgentSeat(t *testing.T) {
 	t.Parallel()
 	doc := `
 name: Acme
@@ -326,19 +323,19 @@ integrations:
   datadog:
 ` + completeDatadog + `
 `
-	c, err := config.ParseCompany([]byte(doc))
-	if err != nil {
-		t.Fatalf("a settings document routing to a seat was refused: %v", err)
+	_, err := config.ParseCompany([]byte(doc))
+	if err == nil {
+		t.Fatal("a document routing alerts to a seat it does not declare was accepted")
 	}
-	if err := c.ValidateRunnable(); err != nil {
-		t.Errorf("ValidateRunnable() = %v: every node applying this revision would refuse it", err)
+	if !strings.Contains(err.Error(), "route_to") ||
+		!strings.Contains(err.Error(), "no agent seat at all") {
+		t.Errorf("error %q does not say the document declares no agent seat", err)
 	}
-	// AND THE SHAPE IS STILL THE DOCUMENT'S: no chart can make a value that
-	// is not a handle name a seat.
-	shape := strings.Replace(doc, "route_to: swe", `route_to: "SRE Lead"`, 1)
-	if _, err := config.ParseCompany([]byte(shape)); err == nil ||
-		!strings.Contains(err.Error(), "not a seat handle") {
-		t.Errorf("a settings document routing to %q = %v, want the shape refused", "SRE Lead", err)
+	withSeat := doc + `roles:
+  - {name: SWE, llm: fast}
+`
+	if _, err := config.ParseCompany([]byte(withSeat)); err != nil {
+		t.Errorf("the same document declaring the seat was refused: %v", err)
 	}
 }
 

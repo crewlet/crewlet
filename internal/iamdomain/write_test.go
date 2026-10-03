@@ -3,7 +3,6 @@ package iamdomain_test
 import (
 	"context"
 	"database/sql"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"path/filepath"
@@ -16,9 +15,9 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/crewlet/crewlet/internal/chart"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/iam"
+	"github.com/crewlet/crewlet/internal/iam/session"
 	"github.com/crewlet/crewlet/internal/iamdomain"
 	js "github.com/crewlet/crewlet/internal/queue/jetstream"
 	"github.com/crewlet/crewlet/internal/secrets"
@@ -59,6 +58,10 @@ type writeRig struct {
 	// publisher is the rig's one, for a case that needs a second writer
 	// over the same log with a different seam.
 	publisher *statelog.Publisher
+
+	// seats is the organisation the rig's writers check a seat bind
+	// against: the running company's seats, by handle and kind.
+	seats *rigSeats
 
 	// node is the rig's NODE writer, built as `internal/engine` builds a
 	// running node's own — see [nodeWriter] — and nodeDeps what it was
@@ -205,8 +208,10 @@ func newWriteRigWith(t *testing.T,
 		t.Fatalf("build the sealer: %v", err)
 	}
 	announced := &writerEvents{}
+	seats := &rigSeats{}
 	writer, err := iamdomain.NewWriter(iamdomain.WriterDeps{
 		Publisher: publisher, DB: db, Blinds: blinder, Sealer: sealer,
+		Seats:  seats,
 		Events: announced, Actor: "ana.admin", ActorKind: iam.KindPerson,
 		// THE RIG'S PARTY AUTHORS EVERYTHING — and holds every grant,
 		// because an enrolment may confer only what its writer holds —
@@ -225,6 +230,7 @@ func newWriteRigWith(t *testing.T,
 	// credential, and the node acts on nobody's.
 	nodeDeps := iamdomain.WriterDeps{
 		Publisher: publisher, DB: db, Blinds: blinder, Sealer: sealer,
+		Seats:  seats,
 		Events: announced, Actor: "node-a", ActorKind: iam.KindMachine,
 		Grants: []iam.Grant{iam.GrantFleetOperate, iamdomain.AdminGrant},
 		Now:    func() time.Time { return brokerAt },
@@ -235,7 +241,7 @@ func newWriteRigWith(t *testing.T,
 	}
 	rig := &writeRig{
 		t: t, db: db, log: log, writer: writer, waiter: waiter,
-		events:   announced,
+		events: announced, seats: seats,
 		verifier: testVerifier(t),
 		sealer:   sealer, publisher: publisher, node: node, nodeDeps: nodeDeps,
 	}
@@ -1127,81 +1133,57 @@ func TestInvalidatingEverySessionTakesBothHats(t *testing.T) {
 	}
 }
 
-// seatOnly puts one seat row in the chart's table and nothing else, so the
-// bind's advisory existence check passes.
+// seatOnly puts one HUMAN seat in the running company and nothing else, so
+// the bind's advisory existence check passes.
 func (r *writeRig) seatOnly(handle string) {
 	r.t.Helper()
-	r.seatRow(chart.Seat{V: chart.DocumentVersion, Handle: handle,
-		Kind: chart.SeatHuman})
+	r.seats.put(handle, session.SeatKindHuman)
 }
 
-// seatRow writes one seat's chart row whole, in the shape the chart's own
-// applier writes it: the handle and the retired handles as columns, and the
-// document every resolution decodes the seat's identity out of.
-func (r *writeRig) seatRow(seat chart.Seat) {
+// agentSeat puts one AGENT seat in the running company.
+func (r *writeRig) agentSeat(handle string) {
 	r.t.Helper()
-	document, err := chart.EncodeSeat(seat)
-	if err != nil {
-		r.t.Fatalf("encode seat %s: %v", seat.Handle, err)
-	}
-	former := seat.FormerHandles
-	if former == nil {
-		former = []string{}
-	}
-	formerJSON, err := json.Marshal(former)
-	if err != nil {
-		r.t.Fatalf("encode the retired handles of %s: %v", seat.Handle, err)
-	}
-	if err := r.db.Replicated().Tx(r.t.Context(), func(tx *sql.Tx) error {
-		_, err := tx.ExecContext(r.t.Context(), `
-			INSERT INTO chart_seats
-				(handle, former_keys_json, kind, created_at, updated_at, version, document)
-			VALUES (?, ?, ?, 0, 0, 1, ?)
-			ON CONFLICT (handle) DO UPDATE SET
-				former_keys_json = excluded.former_keys_json,
-				kind = excluded.kind, document = excluded.document`,
-			seat.Handle, string(formerJSON), string(seat.Kind), document)
-		return err
-	}); err != nil {
-		r.t.Fatalf("seed seat %s: %v", seat.Handle, err)
-	}
+	r.seats.put(handle, "agent")
 }
 
-// renameSeat moves a seat's row onto a new handle the way the chart's rekey
-// does: the handle it was created under frozen as its origin by the first
-// rename, and the handle it leaves retired at the front of its aliases.
-func (r *writeRig) renameSeat(from, to string) {
-	r.t.Helper()
-	var document []byte
-	if err := r.db.Replicated().Read(r.t.Context(), func(tx *sql.Tx) error {
-		return tx.QueryRowContext(r.t.Context(),
-			`SELECT document FROM chart_seats WHERE handle = ?`, from).Scan(&document)
-	}); err != nil {
-		r.t.Fatalf("read seat %s: %v", from, err)
-	}
-	seat, err := chart.DecodeSeat(document)
-	if err != nil {
-		r.t.Fatalf("decode seat %s: %v", from, err)
-	}
-	if seat.OriginHandle == "" {
-		seat.OriginHandle = from
-	}
-	seat.Handle = to
-	seat.FormerHandles = append([]string{from}, seat.FormerHandles...)
-	r.dropSeat(from)
-	r.seatRow(seat)
-}
-
-// dropSeat deletes a seat's chart row, as a removal does.
+// dropSeat takes a seat out of the running company, as an applied revision
+// that no longer holds it does.
 func (r *writeRig) dropSeat(handle string) {
 	r.t.Helper()
-	if err := r.db.Replicated().Tx(r.t.Context(), func(tx *sql.Tx) error {
-		_, err := tx.ExecContext(r.t.Context(),
-			`DELETE FROM chart_seats WHERE handle = ?`, handle)
-		return err
-	}); err != nil {
-		r.t.Fatalf("drop seat %s: %v", handle, err)
+	r.seats.drop(handle)
+}
+
+// rigSeats is the running company a rig's writers check a seat bind against —
+// [iamdomain.SeatLookup] over a map, safe for the cases that bind from two
+// goroutines.
+type rigSeats struct {
+	mu    sync.Mutex
+	kinds map[string]string
+}
+
+func (s *rigSeats) put(handle, kind string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.kinds == nil {
+		s.kinds = map[string]string{}
 	}
+	s.kinds[handle] = kind
+}
+
+func (s *rigSeats) drop(handle string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.kinds, handle)
+}
+
+func (s *rigSeats) Seat(_ context.Context, handle string) (session.Seat, bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	kind, held := s.kinds[handle]
+	if !held {
+		return session.Seat{}, false, nil
+	}
+	return session.Seat{Handle: handle, Kind: kind}, true, nil
 }
 
 // THE ADMINISTRATIVE GRANT IS people:manage, AND IT IS NOT config:write.
