@@ -240,6 +240,23 @@ when you touch it:
   is required and when its answer does not cover the rule in force, so a skip on
   doubt would stall every bump with nothing red to show. Weakening any of them
   makes the workflow run *more*, never fail.
+- **`.github/workflows/dependabot-recreate.yml`'s filter, its token and its
+  triggers.** It comments `@dependabot recreate`, which throws away every commit
+  on the branch, so the `jq` filter that spares a branch holding anything that
+  is neither Dependabot's nor marked `[dependabot skip]` (a commit with no
+  resolvable author included) is what stands between a person's work and the
+  comment; weaken it and the workflow discards commits, quietly. The comment has
+  to be made by a user account (Dependabot ignores a bot or an App) with the
+  Actions secret `DEPENDABOT_RECREATE_TOKEN`, held by the one command that posts
+  and nothing else, and the token has to stay fine-grained, for this repository
+  alone, at **Issues: read and write**: add Pull requests and it can approve
+  them, which counts toward `main`'s required review, and never reuse the bundle
+  token, because an Actions secret is readable by every workflow that runs from
+  the repository and that one can push. The `schedule` trigger is load-bearing,
+  not a convenience: bumps merge with `GITHUB_TOKEN`, GitHub starts no `push`
+  workflow for that, and without the schedule a conflict a bump made is never
+  asked about. The token expires, so the date wants a calendar entry. Weakening
+  the filter makes it reach *more*; the rest fail loudly.
 - **`.github/workflows/dependabot-dashboard.yml`'s guard, its two-job split, its
   pins and the token's scope.** The `push` job holds a personal access token that
   can write to a branch, and its `if:` (author AND actor both Dependabot,

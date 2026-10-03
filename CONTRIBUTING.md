@@ -745,23 +745,70 @@ What Dependabot will not rebase is a branch holding a commit *without* the
 marker (a person's, or the merge commit **Update branch** makes) or a bump left
 open for 30 days. It answers `@dependabot rebase` there with "edited by someone
 other than Dependabot", and a conflicted pull request runs no workflows, so it
-stays stuck until a person with push access comments `@dependabot recreate`.
-It has to be a user account. Dependabot answers that command from
-`github-actions[bot]`, or from any GitHub App, with "Sorry, only users with push
-access can use that command"
+stays stuck until somebody comments `@dependabot recreate`.
+
+[`.github/workflows/dependabot-recreate.yml`](.github/workflows/dependabot-recreate.yml)
+comments it. On every push to `main`, and every six hours, it looks at each open
+Dependabot pull request, and for one that conflicts with `main` it comments
+`@dependabot recreate`, once per head commit: Dependabot makes the branch again
+from `main` and the bundle workflow pushes a fresh bundle onto it. The schedule
+is not decoration. A bump that merges itself is queued with `GITHUB_TOKEN`, and
+GitHub starts no workflow for an event that token caused — the merge commits of
+#167, #170, #171 and #173 have no push-event run — so the push trigger sees what
+a person merges and is blind to what the bumps merge. The six hours bound how
+long a conflict made by a bump goes unasked; a pass that finds nothing costs a
+few API reads.
+
+It will not discard anyone's work. `recreate` throws away every commit on the
+branch, so a conflicted bump is asked for one only when every commit on it is
+Dependabot's own or carries `[dependabot skip]` (the marker Dependabot itself
+reads as "overwrite me"). A bump carrying anything else is named in the run's
+summary, with a warning, and left to whoever added the commit, who may be
+resolving the conflict by hand: rebase it yourself, or comment `@dependabot
+recreate` and accept losing the commit. A commit whose author GitHub cannot
+resolve to an account counts as a person's. If a request stands unanswered for
+twelve hours the run says so as a warning rather than asking again, because the
+one thing a live run can still show is whether Dependabot acts on this account.
+
+The comment has to come from a user account. Dependabot answers that command
+from `github-actions[bot]`, or from any GitHub App, with "Sorry, only users with
+push access can use that command"
 ([dependabot-core#9147](https://github.com/dependabot/dependabot-core/issues/9147)),
-but it obeys an account with push access, which is what `DASHBOARD_BUNDLE_TOKEN`
-is. A workflow could comment with it, and none does: commenting needs Pull
-requests: write, and a token that can write to pull requests can also approve
-them, and an approval from an account with write access counts toward `main`'s
-required review. That widens what this credential can do well past pushing a
-bundle, so it is a decision to make on purpose and not a side effect.
+and obeys an account with push access. So the comment is made with a second
+secret, **`DEPENDABOT_RECREATE_TOKEN`**, and it is deliberately not
+`DASHBOARD_BUNDLE_TOKEN`:
+
+- **A fine-grained personal access token for this repository only, with Issues:
+  read and write and nothing else.** A pull request is an issue to the comments
+  API, and GitHub serves that endpoint under Issues as well as under Pull
+  requests. Pull requests: write would do the same and also approve a pull
+  request, which counts toward `main`'s required review; Issues: write cannot,
+  so a leaked token can comment but cannot sign off a change. The account needs
+  Write access to the repository, because that is what Dependabot checks in the
+  commenter; the account that owns `DASHBOARD_BUNDLE_TOKEN` will do. It expires
+  like any fine-grained token, so put the date in the same calendar. An empty
+  secret fails every run by name; an expired one passes that check and fails
+  the next time a bump needs asking, with a 401 from the comment.
+- **An *Actions* secret, not a Dependabot one** — the opposite of the bundle
+  token, for the reverse reason: this run is started by a merge or the clock,
+  and a run only sees the secrets of the kind that started it. It is also why
+  the two tokens must differ. An Actions secret can be read by every workflow
+  that runs from this repository, so the credential that can push to a branch
+  must not be one.
+
+The token is held by one command, the one that posts: everything else the job
+reads, it reads with the workflow's own `GITHUB_TOKEN`, and no part of a pull
+request (title, branch name, body) reaches a shell, only numbers, SHAs and
+timestamps.
 
 Nothing checks any of this for you, and the workflow holds a credential that can
 write to a branch. Read the `if:` on both jobs, each job's `permissions:`, the
 pins on the actions in the second one and the token's scope on any diff that
 touches
 [`.github/workflows/dependabot-dashboard.yml`](.github/workflows/dependabot-dashboard.yml).
+The same goes for `dependabot-recreate.yml`, which holds a credential that can
+speak as a person on this repository: read the filter that spares a person's
+commits, which command holds the token, and the token's scope.
 
 ## Releasing
 

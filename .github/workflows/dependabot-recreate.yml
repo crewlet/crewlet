@@ -1,0 +1,204 @@
+name: dependabot-recreate
+
+# Asks Dependabot to RECREATE a bump that has stopped merging because `main`
+# moved under it. Dependabot rebases a conflicted bump by itself, but only
+# while every commit on the branch is its own or carries `[dependabot skip]`
+# (the bundle commit dependabot-dashboard.yml adds does), and it can be slow or
+# give up; `@dependabot recreate` is the command that works regardless, and
+# what it does to a bump is what a rebuilt bundle needs anyway: the branch is
+# made again from `main`, and dependabot-dashboard.yml pushes a fresh bundle
+# onto it.
+#
+# THE COMMENT HAS TO BE A PERSON'S. Dependabot ignores commands written by
+# `github-actions[bot]` and by GitHub Apps (dependabot-core#9147) and obeys a
+# user account with write access. That is why this is not posted with the
+# workflow's own token, and why it needs a secret nothing else in the
+# repository does: DEPENDABOT_RECREATE_TOKEN, a fine-grained personal access
+# token for this repository with **Issues: read and write** and nothing else.
+# That permission is enough to comment on a pull request (the endpoint is
+# served under Issues as well as Pull requests) and, unlike Pull requests:
+# write, it cannot approve one, so a leaked token can talk but cannot sign off a
+# change that `main`'s ruleset counts. Read access comes from the workflow's own
+# token, so the PAT is held only by the one command that posts.
+#
+# It is an ACTIONS secret and not a Dependabot one, and that is the opposite of
+# DASHBOARD_BUNDLE_TOKEN, for the same reason in reverse: a run Dependabot
+# started sees Dependabot secrets, and this one is started by a merge or by the
+# clock. It is also a different token from that one on purpose. An Actions
+# secret is readable by every workflow that runs from this repository, so it
+# must not be the one that can push.
+#
+# WHAT IT WILL NOT DO is discard somebody's work. `recreate` throws away every
+# commit on the branch, so a conflicted bump is only asked for one when EVERY
+# commit on it is Dependabot's own or carries `[dependabot skip]` (the marker
+# Dependabot itself treats as "overwrite me"). A bump carrying anything else is
+# named in the run's summary and left for the person who added it, who may be
+# in the middle of resolving the conflict by hand. A commit whose author GitHub
+# cannot resolve to an account counts as a person's.
+#
+# WHEN IT RUNS. On every push to `main`, which is the moment a conflict is
+# made, and every six hours. The schedule is not decoration. A bump that merges
+# itself is queued with `GITHUB_TOKEN`, and GitHub starts no workflow for an
+# event that token caused: the merge commits of #167, #170, #171 and #173 have
+# no push-event run at all. So the push trigger sees what a person merges and
+# is blind to what the bumps merge, and the schedule is what bounds how long a
+# conflict made by a bump goes unasked. Six hours because a no-op pass costs a
+# handful of API reads, Dependabot's own rebase lands in minutes, and a
+# conflict this workflow exists for has already outlived that.
+#
+# ASKING IS ONCE PER HEAD. A comment of ours newer than the head commit means
+# the question has been put; when Dependabot recreates the branch the head is
+# new and the bump is eligible again. If the request has stood unanswered long
+# enough that Dependabot can fairly be said to have ignored it, that is a
+# warning on the run rather than a second comment.
+#
+# TWO THINGS ONLY A LIVE RUN SHOWS: whether Dependabot acts on a comment made
+# with a token that holds only Issues: write (it checks the commenter, and the
+# unanswered-request warning is what notices if it does not), and whether
+# GitHub has already marked a bump's mergeability stale when the push-triggered
+# run looks (the schedule covers the case where it has not).
+
+on:
+  push:
+    branches: [main]
+  schedule:
+    # Off the hour, where scheduled workflows queue.
+    - cron: "17 */6 * * *"
+  workflow_dispatch:
+
+# Nothing by default; the one job asks for what it uses.
+permissions: {}
+
+# One run at a time, the newest winning. Two runs would each see "not yet
+# asked" and both comment, and a run that is cancelled loses nothing: the next
+# one reads the same state from GitHub and finishes what it began.
+concurrency:
+  group: dependabot-recreate
+  cancel-in-progress: true
+
+jobs:
+  recreate:
+    name: ask Dependabot to recreate conflicted bumps
+    runs-on: ubuntu-latest
+
+    # A fork has none of the secrets and would fail on every push to its own
+    # `main`. Asked of the event rather than spelled as `crewlet/crewlet`, so a
+    # transfer or a rename does not switch this off with nothing to say so.
+    if: ${{ !github.event.repository.fork }}
+
+    # Reading pull requests, their commits and their comments. There is no
+    # checkout, and no part of a pull request (its title, its branch name, its
+    # body) reaches a shell: only numbers, SHAs and timestamps do.
+    permissions:
+      contents: read
+      pull-requests: read
+
+    # A hang detector, not a budget. Every bump waiting out its full two
+    # minutes for GitHub to compute mergeability is still well inside it.
+    timeout-minutes: 30
+
+    steps:
+      # A missing secret is what the first run will meet, and it should say so
+      # by name rather than as a 401 from a command a minute later. It fails on
+      # every run, not only when there is something to ask: a check that stays
+      # quiet until the moment it matters finds out then.
+      - name: the token is configured
+        env:
+          TOKEN: ${{ secrets.DEPENDABOT_RECREATE_TOKEN }}
+        run: |
+          if [ -z "$TOKEN" ]; then
+            echo "::error::DEPENDABOT_RECREATE_TOKEN must be set as an ACTIONS secret."
+            echo "Settings -> Secrets and variables -> Actions. The Dependabot tab is the wrong one here:"
+            echo "this workflow is started by a merge or the schedule, not by Dependabot."
+            echo "The token is a fine-grained personal access token for this repository only, with Issues: read and write and nothing else."
+            echo "See the header of .github/workflows/dependabot-recreate.yml."
+            exit 1
+          fi
+
+      - name: ask for the conflicted bumps
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ASK_TOKEN: ${{ secrets.DEPENDABOT_RECREATE_TOKEN }}
+          # GitHub computes mergeability when it is first asked and answers
+          # null until it has; asking again is what finds the result. Fifteen
+          # seconds is long enough for it to be ready more often than not and
+          # short enough not to idle, and eight tries is two minutes, which is
+          # several times what a computation was observed to take. A bump still
+          # unknown after that is left to the next scheduled run, and said so.
+          POLL_SECONDS: "15"
+          POLL_TRIES: "8"
+          # Twelve hours: two full passes of the schedule over one unanswered
+          # request, against a Dependabot that normally answers in minutes.
+          UNANSWERED_HOURS: "12"
+        run: |
+          set -euo pipefail
+          repo="$GITHUB_REPOSITORY"
+          note() { echo "- $*" >> "$GITHUB_STEP_SUMMARY"; }
+
+          numbers="$(gh api --paginate \
+            "repos/$repo/pulls?state=open&base=main&per_page=100" \
+            --jq '.[] | select(.user.login == "dependabot[bot]") | .number')"
+          if [ -z "$numbers" ]; then
+            note "No open Dependabot pull requests."
+            exit 0
+          fi
+
+          # The first request is what starts GitHub computing, so make it for
+          # all of them before waiting on any: by the time the loop below asks
+          # about the last, the first answers are ready.
+          for n in $numbers; do
+            gh api "repos/$repo/pulls/$n" --jq .number > /dev/null
+          done
+
+          for n in $numbers; do
+            mergeable=null
+            for ((try = 0; try < POLL_TRIES; try++)); do
+              pr="$(gh api "repos/$repo/pulls/$n")"
+              mergeable="$(jq -r '.mergeable' <<<"$pr")"
+              [ "$mergeable" != null ] && break
+              sleep "$POLL_SECONDS"
+            done
+            case "$mergeable" in
+              true)
+                note "#$n: mergeable."
+                continue
+                ;;
+              false) ;;
+              *)
+                note "#$n: GitHub had not computed whether it conflicts; the next scheduled run will look again."
+                continue
+                ;;
+            esac
+
+            # Anything that is not Dependabot's, and not marked as disposable,
+            # makes recreate destructive. A commit with no resolvable author
+            # has a null login, which is not Dependabot's either.
+            foreign="$(gh api --paginate "repos/$repo/pulls/$n/commits?per_page=100" \
+              --jq '.[] | select(.author.login != "dependabot[bot]" and ((.commit.message | contains("[dependabot skip]")) | not)) | .sha[0:7]')"
+            if [ -n "$foreign" ]; then
+              note "#$n: conflicts with main, but carries commits that are neither Dependabot's nor marked [dependabot skip] ($(tr '\n' ' ' <<<"$foreign")); recreating it would discard them, so it is left for whoever added them."
+              echo "::warning::#$n conflicts with main and carries a person's commits; recreate would discard them."
+              continue
+            fi
+
+            head="$(jq -r '.head.sha' <<<"$pr")"
+            head_date="$(gh api "repos/$repo/commits/$head" --jq '.commit.committer.date')"
+            asked="$(gh api --paginate "repos/$repo/issues/$n/comments?per_page=100" \
+              --jq '.[] | select(.body | startswith("@dependabot recreate")) | .created_at' \
+              | sort | tail -n 1)"
+
+            # Both are UTC ISO-8601 with a trailing Z, which sorts as text.
+            if [ -n "$asked" ] && [[ "$asked" > "$head_date" ]]; then
+              age=$(( $(date +%s) - $(date -d "$asked" +%s) ))
+              if [ "$age" -gt $((UNANSWERED_HOURS * 3600)) ]; then
+                echo "::warning::#$n still conflicts with main $((age / 3600))h after it was asked to recreate. Dependabot may not be acting on this account's comments; comment it yourself."
+              fi
+              note "#$n: conflicts; already asked at $asked."
+              continue
+            fi
+
+            # The one command that holds the personal access token.
+            GH_TOKEN="$ASK_TOKEN" gh api "repos/$repo/issues/$n/comments" \
+              -f body='@dependabot recreate' --silent
+            note "#$n: conflicts; asked Dependabot to recreate it."
+          done
