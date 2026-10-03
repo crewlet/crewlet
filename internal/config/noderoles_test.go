@@ -108,15 +108,6 @@ func TestRolesThatContradictTheNodeAreRefused(t *testing.T) {
 		{"a leaf listener on an in-memory stream",
 			"stream:\n  leaf:\n    port: 7422\ncoordination:\n  type: embedded-kv\n",
 			"stream.store_dir", ErrMissing},
-		{"a stateless node holding objects",
-			"node:\n  roles: [seats]\nstore:\n  scratch: true\n  objects:\n    weight: 2\n" +
-				"stream:\n  leaf:\n    urls: [\"nats-leaf://a.example.com:7422\"]\n" +
-				"coordination:\n  type: embedded-kv\n",
-			"store.objects", ErrConflict},
-		{"an object weight past the ceiling",
-			"store:\n  objects:\n    weight: 65\n", "store.objects.weight", ErrOutOfRange},
-		{"a negative object weight",
-			"store:\n  objects:\n    weight: -1\n", "store.objects.weight", ErrOutOfRange},
 		{"a stateless node on local coordination",
 			"node:\n  roles: [seats]\nstore:\n  scratch: true\n" +
 				"stream:\n  leaf:\n    urls: [\"nats-leaf://a.example.com:7422\"]\n",
@@ -133,38 +124,19 @@ func TestRolesThatContradictTheNodeAreRefused(t *testing.T) {
 	}
 }
 
-// A DATA NODE THAT NAMES NO WEIGHT OFFERS THE DEFAULT SHARE, and one that
-// names a weight offers exactly it. The share rides the object store's own
-// lease, which only a data node claims — so a node without `data` offers none
-// by never claiming one, and nothing here has to say so.
-func TestADataNodeOffersTheShareItNames(t *testing.T) {
+// A NODE WITHOUT DATA CARRIES THE OBJECTS BLOCK TOO: it uploads and downloads
+// the company's files exactly as a data node does, through the same backend.
+func TestAStatelessNodeNamesTheObjectBackend(t *testing.T) {
 	t.Parallel()
-	for _, tc := range []struct {
-		name    string
-		objects StoreObjects
-		want    int
-	}{
-		{"no block", StoreObjects{}, DefaultObjectWeight},
-		{"a weight named", StoreObjects{Weight: 5}, 5},
-	} {
-		if got := tc.objects.ObjectWeight(); got != tc.want {
-			t.Errorf("%s: object weight %d, want %d", tc.name, got, tc.want)
-		}
+	doc := "node:\n  roles: [seats]\nstore:\n  scratch: true\n" +
+		"  objects:\n    backend: s3\n    s3:\n      bucket: files\n      region: us-east-1\n" +
+		"stream:\n  leaf:\n    urls: [\"nats-leaf://a.example.com:7422\"]\n" +
+		"coordination:\n  type: embedded-kv\n"
+	b, err := ParseBootstrap([]byte(doc), EnvOnly())
+	if err != nil {
+		t.Fatalf("a stateless node naming the backend was refused: %v", err)
 	}
-}
-
-// THE CHUNK DIRECTORY RESOLVES AGAINST THE STORE, for the reason the snapshot
-// directory does: the same file is run from a container and from a shell.
-func TestTheObjectsDirectoryResolvesAgainstTheStore(t *testing.T) {
-	t.Parallel()
-	for _, tc := range []struct{ dir, want string }{
-		{"", "/var/lib/crewlet/objects"},
-		{"chunks", "/var/lib/crewlet/chunks"},
-		{"/mnt/objects/", "/mnt/objects"},
-	} {
-		s := Store{Path: "/var/lib/crewlet/crewlet.db", Objects: StoreObjects{Dir: tc.dir}}
-		if got := s.ObjectsDirFor(); got != tc.want {
-			t.Errorf("dir %q resolves to %q, want %q", tc.dir, got, tc.want)
-		}
+	if b.Store.Objects.BackendOrDefault() != ObjectBackendS3 {
+		t.Fatalf("backend %q", b.Store.Objects.BackendOrDefault())
 	}
 }

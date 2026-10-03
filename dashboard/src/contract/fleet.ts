@@ -1,8 +1,9 @@
 /**
- * The fleet's own maps and broker, as the engine bounds them: the kinds a
- * node's broker can be and the disagreements named between the two records of
- * its membership, the states of the estate map and of a partition's holders,
- * how long a removal may take, and the lengths a hold is offered at.
+ * The fleet's own maps, broker and object store, as the engine bounds them:
+ * the kinds a node's broker can be and the disagreements named between the
+ * two records of its membership, the states of the estate map and of a
+ * partition's holders, how long a removal may take, the lengths a hold is
+ * offered at, and the states of the object store's report.
  *
  * Each is a COPY of something the engine owns, because this is a separate
  * build that cannot import a Go identifier — held to the engine's in both
@@ -73,8 +74,16 @@ export const PARTITION_STATES = [
 ] as const;
 
 /**
- * The lengths a hold on either placement map is offered at, the longest being
+ * The lengths a hold on the estate map is offered at, the longest being
  * the engine's own ceiling (`membership.MaxHold`): a hold nobody releases must
  * still end, and a longer choice would be refused `invalid_hold`.
  */
 export const HOLD_LENGTHS = ["30m", "1h", "2h", "4h", "8h", "24h"] as const;
+
+/**
+ * Which of the three things the object collector's record was when the fleet
+ * view read it — `queries.ObjectsStates`. `not_yet` is a fleet whose collector
+ * has not finished a pass; `unavailable` a record the coordination store
+ * would not give up.
+ */
+export const OBJECTS_STATES = ["unavailable", "not_yet", "reported"] as const;

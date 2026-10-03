@@ -13,15 +13,10 @@ import (
 // one path at the broker and wrote another into every node's row would leave
 // the arbitrated path held by nothing and the written one held by two.
 //
-// AND EVERY CHUNK IS A VALID ADDRESS, because the row's slot is DERIVED from it
-// ([explodeFileChunks]) and a string that is not sixty-four lowercase hex
-// digits has none. Filed anyway, it would be a row every pass over its group
-// refuses — the passes read each name back through [objstore.ParseHash] — so
-// that group's repair and collection would stop for good, on every node.
-// Lowercase matters for the rows written before slots too: replicated
-// migration 0032 computed theirs from the chunk's text with an expression that
-// reads lowercase hex only, which is sound because this refusal was already in
-// force when every one of them was applied.
+// AND EVERY CHUNK IS A VALID ADDRESS: the collector and the backup read each
+// name back through [objstore.ParseHash], so a row naming something that is
+// not sixty-four lowercase hex digits would stop every collection pass and
+// every backup for good, on every node.
 func fileMatches(c applyContext, id string, file File) error {
 	path, err := NormalizeFilePath(file.Path)
 	switch {
@@ -42,15 +37,8 @@ func fileMatches(c applyContext, id string, file File) error {
 }
 
 // explodeFileChunks rebuilds a file's chunk rows from its record — the rows
-// the object store reads a placement group's references from. A removed file
-// has none, which is what lets its chunks go.
-//
-// Each row carries its chunk's SLOT, computed here from the hash. Computing
-// is safe on an applier, which must produce identical rows on every node,
-// because the slot is a function of the content address alone — no map, no
-// group count, no configuration another node could hold differently — and it
-// is what lets a pass read one group's references as one range of
-// `tracker_file_chunks_slot_idx` at whatever group count the map has.
+// the object store's collector reads its references from. A removed file has
+// none, which is what lets its chunks go.
 func (a *Applier) explodeFileChunks(ctx context.Context, tx *sql.Tx, id string,
 	c applyContext) (int, error) {
 
@@ -71,12 +59,12 @@ func (a *Applier) explodeFileChunks(ctx context.Context, tx *sql.Tx, id string,
 		rows = append(rows, numbered{seq: i, chunk: chunk})
 	}
 	return insertMany(ctx, tx, c.maxVariables, `
-		INSERT INTO tracker_file_chunks (file_id, seq, chunk, size, slot)
+		INSERT INTO tracker_file_chunks (file_id, seq, chunk, size)
 		VALUES`,
-		`(?,?,?,?,?)`,
+		`(?,?,?,?)`,
 		`ON CONFLICT (file_id, seq) DO UPDATE SET
-			chunk = excluded.chunk, size = excluded.size, slot = excluded.slot`,
+			chunk = excluded.chunk, size = excluded.size`,
 		rows, func(r numbered) []any {
-			return []any{id, r.seq, string(r.chunk.Hash), r.chunk.Size, r.chunk.Hash.Slot()}
+			return []any{id, r.seq, string(r.chunk.Hash), r.chunk.Size}
 		})
 }

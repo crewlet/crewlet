@@ -480,8 +480,9 @@ units:
 		},
 
 		{
-			name: "a company's files kept across zones", tier: TierCompany,
-			yaml: "name: Acme\nobjects:\n  replicas: 5\n  failure_domain: zone\n",
+			name: "a company's files in an S3 bucket", tier: TierBootstrap,
+			yaml: "store:\n  objects:\n    backend: s3\n    s3:\n      bucket: files\n" +
+				"      region: auto\n      endpoint: https://example.com\n      prefix: acme/\n",
 		},
 		{
 			name: "a five-member fleet at the broker's ceiling", tier: TierBootstrap,
@@ -647,27 +648,19 @@ units:
 			yaml: "name: Acme\nroles:\n  - {name: Builder, placement: {node: \"${BUILDER_NODE}\"}}\n",
 		},
 		{
-			name: "more object copies than the map keeps", tier: TierCompany, editorCatches: true,
-			yaml: "name: Acme\nobjects:\n  replicas: 11\n",
-		},
-		{
-			name: "negative object copies", tier: TierCompany, editorCatches: true,
-			yaml: "name: Acme\nobjects:\n  replicas: -1\n",
-		},
-		{
-			name: "a misspelt objects key", tier: TierCompany, editorCatches: true,
-			yaml: "name: Acme\nobjects:\n  replica: 3\n",
+			name: "a misspelt objects key", tier: TierBootstrap, editorCatches: true,
+			yaml: "store:\n  objects:\n    backnd: s3\n",
 		},
 		{
 			name: "more stream copies than JetStream keeps", tier: TierBootstrap, editorCatches: true,
 			yaml: "stream:\n  replicas: 6\n",
 		},
-		// A LABEL KEY NO NODE COULD CARRY — the grammar is a validator's
-		// (whitespace and unprintable runes), not a pattern the schema
-		// states, so only the engine refuses it.
+		// A BUCKET WITH NO REGION — a field the s3 backend needs and
+		// every other backend refuses, which is a cross-field rule the
+		// schema is not asked to carry.
 		{
-			name: "a failure domain with a space", tier: TierCompany, validatorOnly: true,
-			yaml: "name: Acme\nobjects:\n  failure_domain: \"zone a\"\n",
+			name: "an s3 backend with no region", tier: TierBootstrap, validatorOnly: true,
+			yaml: "store:\n  objects:\n    backend: s3\n    s3:\n      bucket: files\n",
 		},
 		// MORE COPIES THAN THE CLUSTER NAMES MEMBERS — a cross-field
 		// bound the schema is not asked to carry.

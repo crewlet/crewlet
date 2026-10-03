@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"strings"
 	"time"
@@ -465,3 +466,8 @@ func (a *App) answerEstate(w http.ResponseWriter, gesture, operator, node, parti
 		"partition", partition, "landed", answer.Landed, "epoch", answer.Epoch)
 	writeJSON(w, http.StatusOK, answer)
 }
+
+// maxHold is the engine's ceiling on a hold as the refusals spell it, "24h"
+// rather than time's "24h0m0s" — read off [membership.MaxHold] so the sentence
+// cannot outlive a change to the ceiling.
+var maxHold = fmt.Sprintf("%gh", membership.MaxHold.Hours())

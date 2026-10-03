@@ -56,9 +56,8 @@ func TestEveryTableThatNamesAChunkIsDeclared(t *testing.T) {
 		case ref.Column != references.ChunkColumn:
 			t.Errorf("%s names its chunks %q; every referencing table calls the column %q, "+
 				"which is what lets this gate find one", ref.Table, ref.Column, references.ChunkColumn)
-		case !slices.Contains(have, ref.Column) || !slices.Contains(have, ref.Slot):
-			t.Errorf("%s is declared with columns %q and %q and has %v",
-				ref.Table, ref.Column, ref.Slot, have)
+		case !slices.Contains(have, ref.Column):
+			t.Errorf("%s is declared with column %q and has %v", ref.Table, ref.Column, have)
 		}
 	}
 	for table, have := range columns {

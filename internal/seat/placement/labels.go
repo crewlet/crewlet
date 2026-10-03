@@ -23,10 +23,9 @@ var ErrLabelKey = errors.New("not a node label key")
 // that does not print.
 //
 // ONE GRAMMAR, here, because a key is written in more than one place and
-// matched EXACTLY between them: node.labels on every node, and the label the
-// object placement map spreads copies across (its failure domain). Two
-// validators that disagree never raise — a key one accepts and the other
-// refuses is a failure domain nobody can name, or a label nothing can match.
+// matched EXACTLY between them: node.labels on every node, and the selector a
+// role's placement names. Two validators that disagree never raise — a key one
+// accepts and the other refuses is a label nothing can match.
 // Whitespace is refused rather than trimmed because it is the one difference a
 // reader cannot see: "zone" and "zone " look identical in both files and
 // match nothing.

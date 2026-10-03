@@ -366,11 +366,9 @@ func buildMember(ctx context.Context, t *testing.T, relays *jetstreamtest.Relays
 	// than n nodes that happen to share a log. The default, `local`, keeps
 	// every lease in this process — Tier A refuses it on a clustered stream
 	// for exactly that reason — and under it each member claimed every seat
-	// and every duty for itself and saw no peer's presence at all. The
-	// object store is where that stopped being invisible: its membership is
-	// a lease, so each member's map duty saw only its OWN objects lease and
-	// counted every other member absent on every tick, and a member could
-	// never be taken out, because the ones it would leave were always absent.
+	// and every duty for itself and saw no peer's presence at all — every
+	// fleet singleton ran once per member, and every membership read counted
+	// one node.
 	//
 	// It went unnoticed because nothing between this struct and the broker
 	// held it to Tier A: the loader validates a FILE, and this bootstrap is

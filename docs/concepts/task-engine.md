@@ -39,8 +39,8 @@ What it does carry is what an agent company actually uses — a key, a type from
 a per-project catalogue, a status from a closed set of six in four groups, an
 assignee, a thread, a history, subtasks, tags, typed custom fields,
 saved views in five shapes, and a project's **files** — whose rows are the
-tracker's and whose bytes the [object store](object-store.md) places across the
-data nodes rather than copying onto every one. The line is between **structure a
+tracker's and whose bytes the [object store](object-store.md) keeps in one store the
+whole fleet shares rather than in every data node's database. The line is between **structure a
 company records** and **process a tool enforces**: the first is here, the
 second is not. There is no gate that refuses a transition, no scheme that
 hides a field from a role, and no setup form standing between a

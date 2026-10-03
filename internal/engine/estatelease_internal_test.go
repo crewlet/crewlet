@@ -317,3 +317,17 @@ func TestADataNodeHoldsItsEstateLeaseWhileItsRuntimeRuns(t *testing.T) {
 		t.Errorf("a node with no company holds estate leases %+v (%v)", live, err)
 	}
 }
+
+// recordingLeases is a lease store that notes when a lease is given back.
+type recordingLeases struct {
+	coord.Backend
+	mu    *sync.Mutex
+	order *[]string
+}
+
+func (r recordingLeases) Release(ctx context.Context, resource, owner string, epoch int64) (bool, error) {
+	r.mu.Lock()
+	*r.order = append(*r.order, "membership")
+	r.mu.Unlock()
+	return r.Backend.Release(ctx, resource, owner, epoch)
+}

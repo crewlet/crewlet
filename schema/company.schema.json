@@ -1784,33 +1784,6 @@
         "null"
       ]
     },
-    "Objects": {
-      "additionalProperties": false,
-      "properties": {
-        "failure_domain": {
-          "description": "A node label key (e.g. zone); no two copies of a chunk share its value when enough values exist. Empty spreads across nodes only.",
-          "type": [
-            "string",
-            "number",
-            "boolean",
-            "null"
-          ]
-        },
-        "replicas": {
-          "description": "Copies of every file chunk, each on a different data node, 1..10; 0 is the default, 3. A fleet with fewer data nodes keeps one copy on each.",
-          "maximum": 10,
-          "minimum": 0,
-          "type": [
-            "integer",
-            "null"
-          ]
-        }
-      },
-      "type": [
-        "object",
-        "null"
-      ]
-    },
     "PersonalMemory": {
       "additionalProperties": false,
       "properties": {
@@ -3848,9 +3821,6 @@
         "integer",
         "null"
       ]
-    },
-    "objects": {
-      "$ref": "#/$defs/Objects"
     },
     "policies": {
       "description": "Company-wide rules injected into every seat's prompt.",

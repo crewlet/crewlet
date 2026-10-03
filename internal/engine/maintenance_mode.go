@@ -55,8 +55,8 @@ import (
 // the seat host never claims here ([Engine.seatsAdmitted]), and this node's own
 // WRITERS, which no surface is handed ([Engine.writeSide]). And everything that
 // would append to a log on its own: the duties and schedulers the constructor's
-// gate never starts, the object store's repair and collection, which pin the
-// estate with a barrier ([Engine.startNativePasses]), and every barrier a read
+// gate never starts, the object store's collector, which pins the estate
+// with a barrier ([Engine.startNativeCollector]), and every barrier a read
 // would append ([statelog.RefuseMaintenance]).
 
 // ErrNotPublishing is an operator gesture that appends a record to a state log

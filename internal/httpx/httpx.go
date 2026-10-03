@@ -98,3 +98,26 @@ var Transport = sync.OnceValue(func() http.RoundTripper {
 func Client(timeout time.Duration) *http.Client {
 	return &http.Client{Transport: Transport(), Timeout: timeout}
 }
+
+// Customized is a client on a CLONE of [Transport] with opts applied — the one
+// way to build an outbound client whose transport differs from the shared one.
+//
+// IT EXISTS FOR A CLIENT WHOSE TLS GENUINELY DIFFERS, and for nothing else: an
+// S3 bucket behind a private certificate authority (`AWS_CA_BUNDLE`) needs
+// that bundle in the transport's root pool, which is a property of a
+// transport and cannot ride the shared one without changing every other
+// client's trust. The clone keeps
+// the proxy, HTTP/2 and pool settings the shared transport has, and is a pool
+// of its own — the cost [Transport]'s doc counts against a per-client clone,
+// paid only where the TLS genuinely differs.
+func Customized(timeout time.Duration, opts ...func(*http.Transport)) *http.Client {
+	base, ok := Transport().(*http.Transport)
+	if !ok {
+		return Client(timeout)
+	}
+	t := base.Clone()
+	for _, opt := range opts {
+		opt(t)
+	}
+	return &http.Client{Transport: t, Timeout: timeout}
+}

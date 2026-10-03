@@ -1060,17 +1060,13 @@ mode. None of them is what a window needs — a participant that will not
 acknowledge is excluded from the operation, not evicted from the logs — and
 each would move the usage the window is measuring.
 
-The [object store](../concepts/object-store.md)'s **repair, collection and scrub
-do not run** in either mode. Every repair and collection first pins the estate
-with a `linearizable` read, which is exactly the barrier the mode refuses;
-started, each would fail at that pin and retry for the whole window. They lose
-nothing they would have done: no node moves the placement map while none
-publishes, and no write lands a file whose chunks a repair would fetch or a
-collection would free. Chunks are still **served** to every node that asks, and
-all three passes resume — the scrub from where its cursor stopped — when the
-node restarts in normal mode. A node in a window runs no trim and so evaluates
-no alarm, `objects_degraded` included, which is why it does not report a repair
-it deliberately did not run.
+The [object store](../concepts/object-store.md)'s **collection and audit do
+not run** in either mode: the `object-collector` duty is a duty, and a node in
+a window claims none — and each pass first pins the estate with a
+`linearizable` read, which is exactly the barrier the mode refuses. They lose
+nothing they would have done: no write lands a file whose chunks a collection
+would free, and a pass that is due runs on the duty's next turn once a node is
+back in normal mode.
 
 ### Who has to acknowledge
 
@@ -1639,9 +1635,9 @@ it comes from an assumed 125 linearizable reads a day per agent seat, which is
 12 500 for the reference company's 100 seats. The
 [`census_drift`](../reference/alarms.md) alarm holds every log to that
 assumption: a log is expected to take 125 reads a day per seat, divided across
-its domain's logs, plus what the engine reads on its own — every data node's
-object-store repair and collection pin the tracker's log 168 times a day, on
-each of its logs — and the alarm fires on the one furthest past twice its share.
+its domain's logs, plus what the engine reads on its own — the object store's
+collector, one in the fleet, pins the tracker's log 25 times a day (24
+collections and one audit), on each of its logs — and the alarm fires on the one furthest past twice its share.
 The rate is the log's, counted where every node applies it, and each barrier is
 counted in the hour it was **committed**: a node back from days away, or
 adopting a snapshot a day old, replays days of barriers in minutes, and they

@@ -329,9 +329,8 @@ type Engine struct {
 	dataView     *coord.LeaseView
 	stopDataView func()
 
-	// objects is this node's part in the fleet's object store: its own
-	// chunks on a data node, and on every node the map it places by and
-	// the client it writes and reads through. See objects.go.
+	// objects is this node's object store and, on a data node, the
+	// collector's duty. See objects.go.
 	objects *objectStore
 
 	// estateMaintainer is the estate map duty's loop, nil until the node
@@ -993,18 +992,16 @@ func New(ctx context.Context, opts Options) (*Engine, error) {
 	// heartbeat: the object store's membership below is the first, and the
 	// node's seats and the mailbox retirement follow.
 	e.leaseTTL = effectiveLeaseTTL(opts.Bootstrap, backends.Coord)
-	// AND THE OBJECT STORE, on the same terms: a data node answers for its
-	// chunks from boot, whatever mode it started in, because a reader on
-	// another node may need the only copy it holds — and claims its
-	// membership from then, because a member serving its chunks is a member.
+	// AND THE OBJECT STORE, over the backend the backends opened: every
+	// node reads and writes files through it from boot, whatever mode it
+	// started in.
 	//nolint:govet // shadow: scoped to this block; see .golangci.yml
-	if err := e.startObjects(ctx, opts.Bootstrap); err != nil {
+	if err := e.startObjects(); err != nil {
 		return nil, err
 	}
 	// AND THE ESTATE MAP'S GESTURES, on every node that reaches the
-	// coordination store and in every mode, as the object map's are: a
-	// gesture is a compare-and-set on one record, not work this node
-	// publishes. Under the single-file layout every one of them answers
+	// coordination store and in every mode: a gesture is a compare-and-set
+	// on one record, not work this node publishes. Under the single-file layout every one of them answers
 	// that there is no map — see estatecontrol.go.
 	if backends.Fleet != nil {
 		e.estateControl = &EstateControl{store: backends.Fleet, running: LayoutZero(), now: time.Now}
@@ -1261,12 +1258,6 @@ func New(ctx context.Context, opts Options) (*Engine, error) {
 		return nil, fmt.Errorf("engine: sandbox waiter: %w", err)
 	}
 	e.startMaintenance(ctx)
-	// AND THE OBJECT STORE'S MAP, a singleton on the same terms: two nodes
-	// maintaining it at once would each read the other's write as a lost
-	// race, which is safe and is a map that moves twice as often.
-	if err := e.startObjectMap(ctx); err != nil {
-		return nil, err
-	}
 	// AND THE ESTATE MAP'S, a singleton on the same terms. Under the
 	// single-file layout it writes nothing but its own duty lease — see
 	// estatemap.go — and it is armed all the same, so a map a partitioned
@@ -1286,9 +1277,9 @@ func New(ctx context.Context, opts Options) (*Engine, error) {
 	// here: they are [Engine.Start]'s, after the host runs — see
 	// [Engine.startBudgetReports].
 	e.startNativeDuties(ctx)
-	// AND THIS DATA NODE'S OBJECT PASSES, behind the same gate: each pins
+	// AND THE OBJECT STORE'S COLLECTOR, behind the same gate: each pass pins
 	// the estate with a barrier, which a capacity window refuses.
-	e.startNativePasses(ctx)
+	e.startNativeCollector(ctx)
 	// Beside the sweep, and a fleet singleton on the same terms: two nodes
 	// reconciling one third-party app at the same moment can each create an identity
 	// for one seat, and no later pass can detect or repair that.
@@ -1684,12 +1675,12 @@ func (e *Engine) teardown(ctx context.Context) {
 	// paid summarisation against a closed database.
 	e.stopLearning()
 	e.stopScheduler()
-	// THE OBJECT STORE'S MAP DUTY with the other duty loops, and only that
-	// half of the object store: the loop claims its duty afresh every turn,
-	// so one still running past the release below takes it straight back
-	// and the node exits holding the placement map. The passes, the chunk
-	// server and the directory stay below, for their own reasons.
-	e.stopObjectMap()
+	// THE OBJECT STORE'S COLLECTOR with the other duty loops: the loop
+	// claims its duty afresh every turn, so one still running past the
+	// release below takes it straight back and the node exits holding it.
+	// AND BEFORE the native runtime below, whose tracker reader it reads
+	// the references through.
+	e.stopObjectCollector()
 	// AND THE ESTATE MAP'S, for the same reason.
 	e.stopEstateMap()
 	// AFTER every duty loop above has stopped and waited out its tick, so no
@@ -1702,13 +1693,6 @@ func (e *Engine) teardown(ctx context.Context) {
 	e.stopSkillSync(ctx)
 	e.stopServingEstate(ctx)
 	e.stopServingFleetBroker(ctx)
-	// THE REST OF THE OBJECT STORE — the passes first, then the chunk
-	// server, then the directory — and BEFORE the native runtime below,
-	// whose tracker reader the passes read the references through.
-	// The server goes with it for the estate's reason above: a node that
-	// is going away stops being asked for chunks before it stops being
-	// able to answer them.
-	e.stopObjects(ctx)
 	// BEFORE backends.Close, for the same reason and with more at stake:
 	// the projectors and the indexer both write, and an apply landing
 	// after the close would fail its transaction mid-batch and leave the

@@ -56,8 +56,8 @@ var ReproducibleTables = []string{
 	// FIGURE reads it: a collection inside a document cannot be indexed,
 	// and a query that decodes every row's document is a full scan wearing
 	// an index's name. A file's chunks are the sharpest case — the object
-	// store reads one placement group's references at a time, and a
-	// manifest inside a document is every file decoded to find them.
+	// store's collector asks which of a batch of chunks any file names, and
+	// a manifest inside a document is every file decoded to find them.
 	"tracker_task_closure",
 	"tracker_collaborators",
 	"tracker_watchers", "tracker_task_tags", "tracker_field_values",

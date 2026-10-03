@@ -78,7 +78,7 @@ import { plural } from "~/lib/format.ts";
 import { useNow } from "~/lib/clock.ts";
 import type { FleetAnswer, FleetDutyLease, FleetNode, FleetSeatLease } from "~/protocol/index.ts";
 import { BrokerKindTag, BrokerMembership } from "./FleetBroker.tsx";
-import { ObjectPlacement } from "./ObjectPlacement.tsx";
+import { FileStorage } from "./FileStorage.tsx";
 
 /**
  * The lease table has no push behind it, so it polls — at 15 seconds, chosen
@@ -123,7 +123,7 @@ export function BrokerCell({ broker }: { broker?: string }) {
 function FleetScreen() {
   const seatBadge = useSeatBadgeOf();
   const now = useNow();
-  const { data, loading, error, refetch } = useQuery("fleet", undefined, { pollMs: POLL_MS });
+  const { data, loading, error } = useQuery("fleet", undefined, { pollMs: POLL_MS });
   // THE BROKER'S MEMBERSHIP, polled beside the lease table on the same
   // cadence: a member that died is noticed on both at once.
   const broker = useQuery("fleet_broker", undefined, { pollMs: POLL_MS });
@@ -538,7 +538,7 @@ function FleetScreen() {
             </Card>
           </div>
 
-          <ObjectPlacement objects={data.objects} now={now} onChanged={refetch} />
+          <FileStorage objects={data.objects} now={now} />
 
           <BrokerMembership
             answer={broker.data ?? undefined}

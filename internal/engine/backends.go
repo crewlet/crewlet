@@ -15,6 +15,9 @@ import (
 	coordmem "github.com/crewlet/crewlet/internal/coord/memory"
 	"github.com/crewlet/crewlet/internal/jsapi"
 	"github.com/crewlet/crewlet/internal/jsprovision"
+	"github.com/crewlet/crewlet/internal/objstore"
+	"github.com/crewlet/crewlet/internal/objstore/natsobj"
+	"github.com/crewlet/crewlet/internal/objstore/s3obj"
 	"github.com/crewlet/crewlet/internal/observe"
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/queue/jetstream"
@@ -52,6 +55,18 @@ type Backends struct {
 	// to be agreed across the fleet to mean anything. See coord/fleet.go
 	// for what each was doing while it was per-node.
 	Fleet coord.Fleet
+
+	// Objects is where the company's files are kept — the backend Tier A's
+	// store.objects names, opened here and checked against the fleet's
+	// recorded one before anything can write to it (see [openObjects]).
+	Objects objstore.Backend
+
+	// objectsIdentity names that backend as the fleet records it, and
+	// objectsStream the broker stream it lives in — empty for a backend
+	// outside the broker — for the backup, which copies no chunk a stream
+	// snapshot already carries.
+	objectsIdentity string
+	objectsStream   string
 
 	// Store is this node's local materialized index — the third thing a
 	// node runs on, and the one that is not replicated. It is opened here
@@ -103,6 +118,9 @@ func (b *Backends) Complete() error {
 	}
 	if b.Store == nil {
 		missing = append(missing, "Store")
+	}
+	if b.Objects == nil {
+		missing = append(missing, "Objects")
 	}
 	if len(missing) == 0 {
 		return nil
@@ -413,7 +431,61 @@ func openNATS(ctx context.Context, b *config.Bootstrap) (*Backends, error) {
 		out.Close(ctx)
 		return nil, err
 	}
+	if err = openObjects(ctx, b, out, js); err != nil {
+		out.Close(ctx)
+		return nil, err
+	}
 	return out, nil
+}
+
+// openObjects opens the backend the company's files are kept in, once the
+// fleet has agreed it is the fleet's.
+//
+// AGREED BEFORE OPENED. The first node to open a store records which backend
+// it is ([coord.ObjectStores]), and every node after compares its own Tier A
+// against that record: a node pointed at another bucket — or at the broker
+// where the fleet uses a bucket — would split the company's files between two
+// stores, each side's uploads readable on that side alone, with nothing
+// failing. Refused here, by name, it is a node that does not start.
+func openObjects(ctx context.Context, b *config.Bootstrap, out *Backends, js natsjs.JetStream) error {
+	objects := b.Store.Objects
+	identity := objects.Identity()
+	agreed, err := out.Fleet.AgreeObjectBackend(ctx, identity)
+	if err != nil {
+		return fmt.Errorf("engine: check store.objects against the fleet's object store: %w", err)
+	}
+	if agreed != identity {
+		return fmt.Errorf("engine: store.objects names %q and the fleet keeps its files in %q: "+
+			"every node must name the same object store, or the company's files split "+
+			"between the two — set store.objects on this node to match the others",
+			identity, agreed)
+	}
+	out.objectsIdentity = identity
+	switch objects.BackendOrDefault() {
+	case config.ObjectBackendS3:
+		s3 := objects.S3
+		backend, err := s3obj.Open(ctx, s3obj.Config{
+			Endpoint: s3.Endpoint, Region: s3.Region, Bucket: s3.Bucket, Prefix: s3.Prefix,
+			PathStyle: s3.PathStyle, AccessKeyID: s3.AccessKeyID, SecretAccessKey: s3.SecretAccessKey,
+		})
+		if err != nil {
+			return fmt.Errorf("engine: the object store (store.objects.s3): %w", err)
+		}
+		out.Objects = backend
+	default:
+		openCtx, cancel := context.WithTimeout(ctx,
+			jsprovision.Clustered(clusteredStream(b)).SequenceBudget())
+		defer cancel()
+		backend, err := natsobj.Open(openCtx, js, natsobj.Config{
+			Replicas: b.Stream.Replicas, Clustered: clusteredStream(b),
+		})
+		if err != nil {
+			return fmt.Errorf("engine: the object store (store.objects.backend: nats): %w", err)
+		}
+		out.Objects = backend
+		out.objectsStream = natsobj.Stream
+	}
+	return nil
 }
 
 // openStream dials or starts the broker, and answers the connection
@@ -550,6 +622,7 @@ func openFleet(ctx context.Context, js natsjs.JetStream, replicas int, clustered
 		BudgetRetention:  coord.BudgetRetention,
 		StatusFreshness:  coord.StatusFreshness,
 		CustodyRetention: coord.CustodyRetention,
+		ChunkLockTTL:     coord.ChunkLockTTL,
 		Replicas:         replicas,
 		Clustered:        clustered,
 	})

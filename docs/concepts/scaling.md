@@ -112,15 +112,17 @@ held once per data node, so the storage forecast scales with the data nodes
 rather than with the fleet — see [Retention](../guides/retention.md).
 
 **Files are the exception, and the only one.** The content of a company's files
-grows without bound, so it is *placed* rather than held whole: each chunk is
-kept by as many data nodes as the company's `objects.replicas`, spread across
-its `objects.failure_domain` and chosen by a weighted map whose placement groups
-split as the fleet grows, so a data node added to the fleet adds space instead
-of another copy of everything. The row that names a file is still an ordinary
-replicated row, so listing a project's files is as local as any other read;
-only reading the bytes may cross to a peer. What does *not* divide is the rest:
-every data node still holds the whole estate and is a member of the broker, so
-adding data nodes for space adds broker members too. See
+grows without bound, so it is not in any data node's database: its chunks are
+kept in **one store the whole fleet shares**, which every node reaches
+directly. On the default `nats` backend that store is a bucket on the fleet's
+own broker, so the files' copies follow `stream.replicas` on the broker's
+members with the same quorum arithmetic as the logs — three members at three
+replicas keep writing files with one down, two members at two replicas cannot
+write with either down — and every member holding a copy holds every chunk, so
+adding data nodes does not add space for files. On `s3` no node holds a chunk
+at all: capacity and copies are the bucket's. The row that names a file is
+still an ordinary replicated row, so listing a project's files is as local as
+any other read; only reading the bytes goes to the store. See
 [Object Store](object-store.md#how-far-it-scales).
 
 **The node id must be distinct and stable across restarts.** It comes from the
@@ -174,14 +176,14 @@ stopping it.
 
 | Slot | Answers | Documented in |
 |---|---|---|
-| `leases` | Which node runs which seat, which node holds which duty, which nodes are alive at all, and which data nodes hold a place in the object store | [Seat Ownership](seat-ownership.md#the-lease) |
+| `leases` | Which node runs which seat, which node holds which duty, which nodes are alive at all, and — once the estate is partitioned — which data nodes are members of the estate map | [Seat Ownership](seat-ownership.md#the-lease) |
 | `config` · `status` | Which company revision is current, and which nodes have reached it | [Control Plane](control-plane.md) |
 | `ledger` | Has this trigger already been worked — read before a turn, written after one | [The completion ledger](seat-ownership.md#the-completion-ledger) |
 | `claims` | Has this inbound delivery been seen — the dedupe that used to be a per-process map, and that GitHub and GitLab did not have at all | [Event System](event-system.md) |
 | `cooldowns` | Which provider key is cooling after a 429. Per-process monotonic values are not even *comparable* across nodes | [Deployment](../guides/deployment.md) |
 | `rate` | The notification valve | [Event System](event-system.md) |
 | `budgets` | Org and per-seat spend against the cap. Caps stay config-derived in memory; only *usage* is shared | [Deployment § Token budgets](../guides/deployment.md#token-budgets) |
-| `objects` | Which data nodes hold each placement group of the company's files, at the copies the company asks for | [Object Store](object-store.md#the-map) |
+| `objects` | Which store the company's files are in — recorded by the first node, so a node configured with another refuses to boot — and what the object store's collector last found | [Object Store](object-store.md#one-store-per-fleet) |
 
 The full list, what each retention is sized from, and what deliberately stays
 node-local are in [Coordination](coordination.md).
@@ -335,7 +337,7 @@ theoretical one:
   and [A seat's memory follows it](seat-ownership.md#a-seats-memory-follows-it).
 - **Per-company singletons remain singletons.** They sit behind leases so any
   node can host them, but the scheduler tick, the curator, clustering, the
-  sandbox waiter and the object store's placement map are each one logical
+  sandbox waiter and the object store's collector are each one logical
   instance at a time. A fleet does not parallelise them.
 - **A rolling upgrade across a protocol bump has a visible outage window**, and
   a rollback across one needs a full drain. See

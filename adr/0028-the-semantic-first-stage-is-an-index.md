@@ -79,7 +79,7 @@ centroid sets under one number.
 
 **A float k-means** ranks the same lists in all but the last bit, and the last
 bit is the point: two CPUs that disagree there file one document in two lists,
-which is ADR-0027's objection to a float logarithm, again.
+which is the objection to a float in anything every node must compute alike.
 
 **A fixed probe count** is a recall promise nobody measured. At a hundred and
 twenty thousand sources the topical fixture meets the floor at an eighth of

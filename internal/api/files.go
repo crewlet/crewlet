@@ -39,7 +39,7 @@ import (
 type ProjectFiles interface {
 	File(ctx context.Context, project, path string, fresh statelog.Freshness) (tracker.FileDetail, error)
 	Open(ctx context.Context, m objstore.Manifest) (io.ReadCloser, error)
-	PutChunk(ctx context.Context, h objstore.Hash, data []byte) (int, error)
+	PutChunk(ctx context.Context, h objstore.Hash, data []byte) error
 	PutFileAs(ctx context.Context, operator, opID string, put tracker.FilePut) (tracker.WriteResult, error)
 	RemoveFileAs(ctx context.Context, operator, opID, project, path string,
 		ifMatch uint64) (tracker.WriteResult, error)
@@ -292,7 +292,7 @@ func (a *App) serveFileUpload(w http.ResponseWriter, r *http.Request) {
 	}
 	manifest, err := objstore.Split(r.Context(), body, tracker.MaxFileBytes,
 		func(ctx context.Context, c objstore.Chunk, data []byte) error {
-			if _, putErr := a.files.PutChunk(ctx, c.Hash, data); putErr != nil {
+			if putErr := a.files.PutChunk(ctx, c.Hash, data); putErr != nil {
 				return putErr
 			}
 			return body.next()

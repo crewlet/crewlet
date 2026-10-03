@@ -96,10 +96,10 @@ type Sources struct {
 	// Plane is the control plane, for the config columns of the fleet view.
 	Plane coord.Plane
 
-	// Objects is the object store's stored placement map, for the fleet
-	// view's placement card. Nil leaves the card out of the answer rather
-	// than reporting a fleet with no map.
-	Objects ObjectMapReader
+	// Objects is the fleet's record of the object store, for the fleet
+	// view's file-storage card. Nil leaves the card out of the answer rather
+	// than reporting a fleet whose collector never ran.
+	Objects ObjectsReader
 
 	// Estate is the estate map's stored record and the layout this node
 	// runs, for the estate question. Nil — or no Coord to list the estate
@@ -328,11 +328,6 @@ type Sources struct {
 	// Now is injectable so a test can pin the lease countdowns and the
 	// next-run projection.
 	Now func() time.Time
-
-	// layouts is the stored placement map's layout, kept per map by
-	// [Register] so the fleet question computes one when the map changes
-	// rather than on every poll — see [objectLayouts].
-	layouts *objectLayouts
 }
 
 // ScheduleRuns is the dispatch history a schedules answer reads.
@@ -457,9 +452,6 @@ func Register(r *Registry, s Sources) {
 		// was the one destination of the five where the client claimed
 		// a guard the server did not keep, and on a node with
 		// `api.allow_anonymous_read` an anonymous GET read all of it.
-		if s.Objects != nil {
-			s.layouts = &objectLayouts{}
-		}
 		r.RegisterOperator("fleet", s.fleet)
 		// WHAT EACH MCP SERVER DID ON EACH NODE, off the same lease
 		// table: every node re-publishes its starts on its presence

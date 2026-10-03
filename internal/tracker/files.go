@@ -115,12 +115,8 @@ type File struct {
 // FileChunk is one piece of a file's content.
 //
 // NO PLACEMENT ON THE RECORD. Where a chunk lives is the object store's
-// question, answered by its map, and the one fact a row needs to be found by a
-// pass over a placement group — the chunk's SLOT — is a pure function of the
-// hash that no configuration can move ([objstore.Hash.Slot]), so the applier
-// derives it rather than trusting a writer to state it. A group number carried
-// here was redundant with the hash while the group count was fixed, and wrong
-// on every record written before the map split its groups.
+// question, and its answer is one backend the whole fleet shares: the hash is
+// the chunk's whole address there.
 type FileChunk struct {
 	Hash objstore.Hash `json:"hash"`
 	Size int64         `json:"size"`
@@ -152,7 +148,7 @@ func chunksOf(m objstore.Manifest) []FileChunk {
 // [objstore.ReferenceTable] for why a table missing from that list is the
 // mistake that deletes files.
 var FileChunkReferences = objstore.ReferenceTable{
-	Domain: Domain{}.Name(), Table: "tracker_file_chunks", Column: "chunk", Slot: "slot",
+	Domain: Domain{}.Name(), Table: "tracker_file_chunks", Column: "chunk",
 }
 
 // NormalizeFilePath is a path as it is stored and addressed: slash-separated

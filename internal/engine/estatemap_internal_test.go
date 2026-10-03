@@ -96,7 +96,6 @@ func TestTheEstateMapTakesTheCompanyStampedWithItsActivation(t *testing.T) {
 	}
 
 	zoned := *cfg
-	zoned.Objects = config.Objects{Replicas: 7, FailureDomain: "rack"}
 	zoned.Estate = config.Estate{Replicas: 5, FailureDomain: "zone"}
 	e.epoch.current.Store(&Company{Config: &zoned, ActivatedAt: activated.Add(time.Second)})
 	got, _ = e.estateCompany()

@@ -442,6 +442,85 @@
         "null"
       ]
     },
+    "ObjectsS3": {
+      "additionalProperties": false,
+      "properties": {
+        "access_key_id": {
+          "description": "Access key id, as a ${VAR} reference; with secret_access_key, or neither to use the environment or the instance's role.",
+          "type": [
+            "string",
+            "number",
+            "boolean",
+            "null"
+          ]
+        },
+        "bucket": {
+          "description": "The bucket's name; required.",
+          "type": [
+            "string",
+            "number",
+            "boolean",
+            "null"
+          ]
+        },
+        "endpoint": {
+          "description": "The S3 API's base URL; empty is Amazon S3's own for the region.",
+          "type": [
+            "string",
+            "number",
+            "boolean",
+            "null"
+          ]
+        },
+        "path_style": {
+          "anyOf": [
+            {
+              "pattern": "^(?:y|Y|yes|Yes|YES|n|N|no|No|NO|on|On|ON|off|Off|OFF)$"
+            },
+            {
+              "pattern": "^\\$\\{[A-Za-z_][A-Za-z0-9_]*\\}$"
+            }
+          ],
+          "description": "Address the bucket in the path rather than the host name; MinIO and most self-hosted gateways need it.",
+          "type": [
+            "boolean",
+            "string",
+            "null"
+          ]
+        },
+        "prefix": {
+          "description": "Prepended to every key, so one bucket can hold more than one company; e.g. acme/.",
+          "type": [
+            "string",
+            "number",
+            "boolean",
+            "null"
+          ]
+        },
+        "region": {
+          "description": "The bucket's region; required (R2: auto, MinIO: us-east-1).",
+          "type": [
+            "string",
+            "number",
+            "boolean",
+            "null"
+          ]
+        },
+        "secret_access_key": {
+          "description": "Secret access key, as a ${VAR} reference.",
+          "type": [
+            "string",
+            "number",
+            "boolean",
+            "null"
+          ]
+        }
+      },
+      "type": [
+        "object",
+        "null"
+      ]
+    },
     "Retention": {
       "additionalProperties": false,
       "properties": {
@@ -649,8 +728,8 @@
     "StoreObjects": {
       "additionalProperties": false,
       "properties": {
-        "dir": {
-          "description": "Where this node keeps its share of the object store; empty is \u003cdir of store.path\u003e/objects.",
+        "backend": {
+          "description": "Where the company's files are kept: nats (the default — a bucket on the fleet's own broker, replicated at stream.replicas) or s3 (an S3-compatible bucket, named under s3).",
           "type": [
             "string",
             "number",
@@ -658,22 +737,8 @@
             "null"
           ]
         },
-        "weight": {
-          "anyOf": [
-            {
-              "maximum": 64,
-              "minimum": 0,
-              "type": [
-                "integer",
-                "null"
-              ]
-            },
-            {
-              "pattern": "^\\$\\{[A-Za-z_][A-Za-z0-9_]*\\}$",
-              "type": "string"
-            }
-          ],
-          "description": "This node's share of the object store relative to the other data nodes, 1..64; 0 is the default, 1."
+        "s3": {
+          "$ref": "#/$defs/ObjectsS3"
         }
       },
       "type": [

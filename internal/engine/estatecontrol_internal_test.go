@@ -347,3 +347,6 @@ func TestAnEstateGestureThatCannotLandSaysWhy(t *testing.T) {
 		t.Errorf("it answered %+v rather than the map as it stands", got.State.TakenOut)
 	}
 }
+
+// gestureNow is the instant every gesture in these cases is made at.
+var gestureNow = time.Date(2026, 9, 27, 10, 0, 0, 0, time.UTC)

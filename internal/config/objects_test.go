@@ -5,65 +5,40 @@ import (
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/config"
-	mapplacement "github.com/crewlet/crewlet/internal/placement"
 )
 
-// AN UNSET REPLICA COUNT IS THE DEFAULT, never zero copies. A company that
-// says nothing about its object store keeps three copies of every chunk, and a
-// named count is kept exactly.
-func TestTheObjectReplicaCountDefaultsToThree(t *testing.T) {
-	t.Parallel()
-	for _, tc := range []struct {
-		set, want int
-	}{
-		{0, config.DefaultObjectReplicas},
-		{1, 1},
-		{5, 5},
-	} {
-		o := config.Objects{Replicas: tc.set}
-		if got := o.ReplicaCount(); got != tc.want {
-			t.Errorf("replicas %d resolves to %d, want %d", tc.set, got, tc.want)
-		}
-	}
-	if config.DefaultObjectReplicas != 3 {
-		t.Errorf("the default is %d: three is the smallest count that survives a "+
-			"loss while a second copy is being rebuilt", config.DefaultObjectReplicas)
-	}
-}
-
-// THE CEILING IS THE MAP'S. A count this accepted and the placement map
-// refused would be a revision every node applies and no maintainer can write.
-func TestTheObjectReplicaCeilingIsThePlacementMaps(t *testing.T) {
-	t.Parallel()
-	if config.MaxObjectReplicas != mapplacement.MaxReplicas {
-		t.Fatalf("config allows %d copies, the map %d", config.MaxObjectReplicas,
-			mapplacement.MaxReplicas)
-	}
-}
-
-// THE BLOCK IS VALIDATED WHERE IT WAS WRITTEN: a count outside 0..10 and a
-// failure domain that no node label could carry are refused naming the field,
-// and a well-formed block is accepted.
+// THE BLOCK IS VALIDATED WHERE IT WAS WRITTEN: an unknown backend, an s3
+// backend with no bucket or region or with half a key, and a bucket named
+// under a backend that would not use it are refused naming the field; the
+// zero block is the nats backend, and a complete bucket is accepted.
 func TestTheObjectsBlockIsValidated(t *testing.T) {
 	t.Parallel()
+	bucket := config.ObjectsS3{Region: "us-east-1", Bucket: "files"}
 	for name, tc := range map[string]struct {
-		objects config.Objects
+		objects config.StoreObjects
 		refuse  string // "" = accepted
 	}{
-		"the zero block":         {config.Objects{}, ""},
-		"copies across zones":    {config.Objects{Replicas: 5, FailureDomain: "zone"}, ""},
-		"the most copies":        {config.Objects{Replicas: config.MaxObjectReplicas}, ""},
-		"negative copies":        {config.Objects{Replicas: -1}, "objects.replicas"},
-		"more copies than a map": {config.Objects{Replicas: config.MaxObjectReplicas + 1}, "objects.replicas"},
-		"a domain with a space":  {config.Objects{FailureDomain: "zone "}, "objects.failure_domain"},
-		"a domain too long":      {config.Objects{FailureDomain: strings.Repeat("z", 64)}, "objects.failure_domain"},
+		"the zero block": {config.StoreObjects{}, ""},
+		"nats named":     {config.StoreObjects{Backend: config.ObjectBackendNATS}, ""},
+		"a bucket":       {config.StoreObjects{Backend: config.ObjectBackendS3, S3: bucket}, ""},
+		"a bucket with keys": {config.StoreObjects{Backend: config.ObjectBackendS3, S3: config.ObjectsS3{
+			Region: "auto", Bucket: "files", Endpoint: "https://example.com",
+			AccessKeyID: "AKIAEXAMPLE", SecretAccessKey: "example"}}, ""},
+		"an unknown backend": {config.StoreObjects{Backend: "disk"}, "store.objects.backend"},
+		"s3 and no bucket": {config.StoreObjects{Backend: config.ObjectBackendS3,
+			S3: config.ObjectsS3{Region: "us-east-1"}}, "store.objects.s3.bucket"},
+		"s3 and no region": {config.StoreObjects{Backend: config.ObjectBackendS3,
+			S3: config.ObjectsS3{Bucket: "files"}}, "store.objects.s3.region"},
+		"half a key": {config.StoreObjects{Backend: config.ObjectBackendS3, S3: config.ObjectsS3{
+			Region: "us-east-1", Bucket: "files", AccessKeyID: "AKIAEXAMPLE"}}, "store.objects.s3"},
+		"a bucket nats would ignore": {config.StoreObjects{S3: bucket}, "store.objects.s3"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
-			c := config.DefaultCompany()
-			c.Name = "Acme"
-			c.Objects = tc.objects
-			err := c.Validate()
+			b := config.DefaultBootstrap()
+			b.Stream.StoreDir = t.TempDir()
+			b.Store.Objects = tc.objects
+			err := b.Validate()
 			if tc.refuse == "" {
 				if err != nil {
 					t.Fatalf("refused: %v", err)
@@ -80,59 +55,31 @@ func TestTheObjectsBlockIsValidated(t *testing.T) {
 	}
 }
 
-// A DATA NODE MISSING THE COMPANY'S FAILURE-DOMAIN LABEL IS WARNED ABOUT, at
-// the label it should carry. Neither tier can see it alone — the company names
-// the key, the node carries the labels — and a node without it is placed as a
-// domain of its own, which can put two copies in one real zone.
-//
-// A WARNING, NEVER A REFUSAL: a fleet half-way through labelling its nodes is
-// a correct state, and a node that holds no data is placed on by nobody.
-func TestADataNodeMissingTheFailureDomainLabelIsWarned(t *testing.T) {
+// THE IDENTITY NAMES WHERE THE FILES ARE, and nothing else: two nodes reaching
+// one bucket with different keys are one store, and two buckets — or one
+// bucket under two prefixes — are two.
+func TestTheObjectsIdentityNamesWhereTheFilesAre(t *testing.T) {
 	t.Parallel()
-	for name, tc := range map[string]struct {
-		domain string
-		labels map[string]string
-		roles  []string
-		warn   bool
-	}{
-		"a labelled data node":           {"zone", map[string]string{"zone": "a"}, nil, false},
-		"an unlabelled data node":        {"zone", map[string]string{"rack": "r1"}, nil, true},
-		"no failure domain at all":       {"", nil, nil, false},
-		"an unlabelled stateless node":   {"zone", nil, []string{"seats"}, false},
-		"a data node labelled otherwise": {"zone", nil, []string{"data"}, true},
-	} {
-		t.Run(name, func(t *testing.T) {
-			t.Parallel()
-			b := config.DefaultBootstrap()
-			b.Stream.StoreDir = t.TempDir()
-			b.Node.Labels = tc.labels
-			b.Node.Roles = tc.roles
-			c := config.DefaultCompany()
-			c.Name = "Acme"
-			c.Objects.FailureDomain = tc.domain
-
-			if err := config.CheckTiers(&b, &c); err != nil {
-				t.Fatalf("a missing label refused the pair: %v", err)
-			}
-			got := config.TierWarnings(&b, &c)
-			if !tc.warn {
-				if len(got) != 0 {
-					t.Fatalf("warned: %+v", got)
-				}
-				return
-			}
-			if len(got) != 1 {
-				t.Fatalf("got %d warnings, want the one: %+v", len(got), got)
-			}
-			if got[0].Path != "node.labels.zone" || got[0].Kind != config.WarningAdvisory {
-				t.Errorf("warning at %q (%s), want an advisory at node.labels.zone",
-					got[0].Path, got[0].Kind)
-			}
-			if !strings.Contains(got[0].Message, "objects.failure_domain") {
-				t.Errorf("the warning does not say what asked for the label: %q",
-					got[0].Message)
-			}
-		})
+	nats := config.StoreObjects{}
+	if got := nats.Identity(); got != "nats" {
+		t.Fatalf("the default identity is %q", got)
+	}
+	a := config.StoreObjects{Backend: config.ObjectBackendS3, S3: config.ObjectsS3{
+		Endpoint: "https://s3.example.com/", Region: "us-east-1", Bucket: "files", Prefix: "acme/",
+		AccessKeyID: "one", SecretAccessKey: "x"}}
+	b := a
+	b.S3.AccessKeyID, b.S3.Endpoint = "another", "https://s3.example.com"
+	if a.Identity() != b.Identity() {
+		t.Errorf("one bucket reached with two keys is two identities: %q, %q", a.Identity(), b.Identity())
+	}
+	c := a
+	c.S3.Prefix = "other/"
+	d := a
+	d.S3.Bucket = "files2"
+	for _, other := range []config.StoreObjects{c, d, nats} {
+		if other.Identity() == a.Identity() {
+			t.Errorf("%q is the same identity as %q", other.Identity(), a.Identity())
+		}
 	}
 }
 

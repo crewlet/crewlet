@@ -108,11 +108,11 @@ type fakeObjects struct {
 
 func newFakeObjects() *fakeObjects { return &fakeObjects{chunks: map[objstore.Hash][]byte{}} }
 
-func (o *fakeObjects) Put(_ context.Context, h objstore.Hash, data []byte) (int, error) {
+func (o *fakeObjects) Put(_ context.Context, h objstore.Hash, data []byte) error {
 	o.mu.Lock()
 	defer o.mu.Unlock()
 	o.chunks[h] = append([]byte(nil), data...)
-	return 1, nil
+	return nil
 }
 
 func (o *fakeObjects) ReadAt(_ context.Context, m objstore.Manifest, off, n int64) ([]byte, error) {

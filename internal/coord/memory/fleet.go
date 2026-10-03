@@ -45,8 +45,16 @@ type Fleet struct {
 	secrets      map[string]coord.SecretRecord
 	integrations map[string][]byte
 	mailboxes    map[string]coord.MailboxRecord
-	objectMap    versioned
 	estateMap    versioned
+
+	// objectBackend is the fleet's recorded object backend, empty until a
+	// node records one; chunkLocks every chunk lock not yet let go, with
+	// the instant it was taken, aged at chunkLockTTL as the KV bucket ages
+	// its keys.
+	objectBackend    string
+	objectCollection []byte
+	chunkLocks       map[string]chunkLock
+	chunkLockTTL     time.Duration
 
 	// estateWatches is every open watch of the estate map, each handed
 	// every write of it under mu.
@@ -116,6 +124,8 @@ func NewFleet() *Fleet {
 		integrations: map[string][]byte{},
 		mailboxes:    map[string]coord.MailboxRecord{},
 		pauses:       map[string]coord.SeatPause{},
+		chunkLocks:   map[string]chunkLock{},
+		chunkLockTTL: coord.ChunkLockTTL,
 	}
 }
 

@@ -462,12 +462,6 @@ func (b *Bootstrap) ValidateRoles() error {
 					"of the replicated estate, and a node without %q holds none",
 				placement.RoleData)
 		}
-		if b.Store.Objects != (StoreObjects{}) {
-			p.add(field("store.objects"), ErrConflict,
-				"is a node's share of the object store, and a node without %q "+
-					"holds none — it reads and writes objects through the nodes "+
-					"that do", placement.RoleData)
-		}
 		if b.Store.Estate != (StoreEstate{}) {
 			p.add(field("store.estate"), ErrConflict,
 				"is a node's share of the replicated estate, and a node without "+
@@ -1195,22 +1189,16 @@ type Store struct {
 	// `data` from a node that had it must say so twice.
 	Scratch bool `yaml:"scratch,omitempty" json:"scratch,omitempty" desc:"Delete this node's store at every boot. Required on a node without the data role, refused on one with it."`
 
-	// Objects is this node's share of the fleet's object store: where it
-	// keeps the chunks placed on it, and how large a share it offers.
-	//
-	// UNDER store. FOR SNAPSHOT_DIR'S REASON — it is a fact about this
-	// node's disk rather than about the company — and every data node
-	// holds a share, so there is nothing to switch on: a node with the
-	// `data` role and this block unset holds an equal share beside its
-	// store. Refused on a node without `data`, which holds nothing.
+	// Objects is where the company's files are kept — see [StoreObjects].
+	// Every node carries the same block, data or not.
 	Objects StoreObjects `yaml:"objects,omitempty" json:"objects,omitzero"`
 
 	// Estate is this node's part in the estate map: how large a share of
 	// the replicated estate's partitions it offers to hold, once a layout
 	// divides the estate into them.
 	//
-	// UNDER store. FOR OBJECTS' REASON — a fact about this node's disk
-	// rather than about the company — and refused on a node without `data`,
+	// UNDER store. FOR SNAPSHOT_DIR'S REASON — a fact about this node's
+	// disk rather than about the company — and refused on a node without `data`,
 	// which holds none. Under the single-file layout every data node holds
 	// the whole estate whatever its weight: the weight rides its estate
 	// lease, and the map it is read by is written only once the estate is
@@ -1246,33 +1234,6 @@ func (e StoreEstate) EstateWeight() int {
 // equal to every other node that names none.
 const DefaultEstateWeight = 1
 
-// StoreObjects is one data node's part in the object store.
-type StoreObjects struct {
-	// Dir is where the chunks placed on this node are kept. Absolute, or
-	// relative to the store's directory; empty is `objects` beside the
-	// store. A separate volume is the production shape once a company's
-	// files outgrow the one its database is on.
-	Dir string `yaml:"dir,omitempty" json:"dir,omitempty" desc:"Where this node keeps its share of the object store; empty is <dir of store.path>/objects."`
-
-	// Weight is this node's share relative to the other data nodes': a
-	// node of weight 2 is placed on about twice as many objects as one of
-	// weight 1. Set it in proportion to the space each node's Dir has.
-	// 0 is the default share, 1.
-	Weight int `yaml:"weight,omitempty" json:"weight,omitempty" js:"min=0;max=64" desc:"This node's share of the object store relative to the other data nodes, 1..64; 0 is the default, 1."`
-}
-
-// ObjectWeight is the share this node offers, with the default applied.
-func (o StoreObjects) ObjectWeight() int {
-	if o.Weight == 0 {
-		return DefaultObjectWeight
-	}
-	return o.Weight
-}
-
-// DefaultObjectWeight is a data node's share when it names none: equal to
-// every other node that names none.
-const DefaultObjectWeight = 1
-
 func (s *Store) validate(path Path) error {
 	var p problems
 	if s.Path == "" {
@@ -1297,10 +1258,7 @@ func (s *Store) validate(path Path) error {
 		p.add(at(path, "busy_timeout_seconds"), ErrOutOfRange,
 			"must be 0 (the store default) or positive, got %v", s.BusyTimeoutSeconds)
 	}
-	if w := s.Objects.Weight; w < 0 || w > mapplacement.MaxWeight {
-		p.add(at(at(path, "objects"), "weight"), ErrOutOfRange,
-			"must be 0 (the default share) or 1..%d, got %d", mapplacement.MaxWeight, w)
-	}
+	p.wrap(s.Objects.validate(at(path, "objects")))
 	if w := s.Estate.Weight; w < 0 || w > mapplacement.MaxWeight {
 		p.add(at(at(path, "estate"), "weight"), ErrOutOfRange,
 			"must be 0 (the default share) or 1..%d, got %d", mapplacement.MaxWeight, w)

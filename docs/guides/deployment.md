@@ -410,10 +410,12 @@ uses, on every start and idempotently: the seven engine streams
 domain streams (`CREWLET_TRACKER_LOG`, `CREWLET_TRACKER_VECTORS`,
 `CREWLET_PAGES_LOG`, `CREWLET_USAGE_LOG`), a stream per extra subject namespace a company
 publishes under, one durable consumer per seat mailbox (an ordinary API
-call, measured at 1.7 ms), and the twenty-two `crewlet_*` KV buckets:
+call, measured at 1.7 ms), the twenty-three `crewlet_*` KV buckets:
 three in the lease store, holding the seat and presence leases, the duty
-leases and the fencing epochs, and nineteen in the fleet store holding the
-shared records — the object store's placement map among them. A credential
+leases and the fencing epochs, and twenty in the fleet store holding the
+shared records — the object store's backend record and its chunk locks among
+them — and, on the default `nats` object store, the `crewlet_files` object
+store bucket (its stream is `OBJ_crewlet_files`). A credential
 scoped to publishing and consuming fails at boot, on the first stream it
 tries to create.
 

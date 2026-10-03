@@ -29,6 +29,7 @@ import type { FleetEstate } from "./estate.ts";
 // every contract import in this directory: it is also built alone as
 // `protocol.js`, where the `~` alias does not exist.
 import type { BUDGET_WINDOWS } from "../contract/config.ts";
+import type { OBJECTS_STATES } from "../contract/fleet.ts";
 import type { BudgetState, GROUPS } from "../contract/spend.ts";
 import type { AccessAnswer } from "../contract/access.ts";
 import type { McpServersStatusAnswer } from "../contract/mcp.ts";
@@ -1420,23 +1421,71 @@ export interface FleetNode {
 }
 
 /**
- * The object store's placement block on the fleet answer, and the gesture
- * routes' answers — `queries.FleetObjects` and `api.ObjectsAnswer`.
+ * The fleet answer's object-store block — `queries.FleetObjects`.
  *
- * THE ENGINE'S OWN RENDERING IS THIS SCREEN'S FIXTURE: the fleet suite reads
- * `internal/api/testdata/objects_answer.json`, which the Go renderers write,
+ * THE ENGINE'S OWN RENDERING IS THIS SCREEN'S FIXTURE: the card's suite reads
+ * `internal/api/testdata/objects_answer.json`, which the Go renderer writes,
  * so a field renamed on either side fails a test until the other follows it.
  */
 
-/** Which of the four things the stored map was when the fleet view read it. */
-export type ObjectMapState = "unavailable" | "no_map" | "unreadable" | "placed";
+/** One of [OBJECTS_STATES]. */
+export type ObjectsState = (typeof OBJECTS_STATES)[number];
+
+/** One collection pass: what the store held, and what no row named any more. */
+export interface ObjectCollect {
+  at: string;
+  /** Listed the whole store and judged every chunk old enough to judge. */
+  completed: boolean;
+  listed: number;
+  /** Past the day's grace, and so judged. */
+  aged: number;
+  deleted: number;
+  referenced: number;
+  /** Written again while the pass judged them, and kept. */
+  refreshed: number;
+  /** Why the pass deleted nothing; absent when it ran in full. */
+  skipped?: string;
+  error?: string;
+}
+
+/** One audit: every chunk a row names, asked of the store. */
+export interface ObjectAudit {
+  at: string;
+  /** Asked about every named chunk, over an estate that was complete. */
+  completed: boolean;
+  referenced: number;
+  missing: number;
+  /** The first hundred missing, to restore first; `missing` is the whole count. */
+  missing_chunks?: string[];
+  error?: string;
+}
+
+/** The collector's last report, every field but the passes present. */
+export interface ReportedObjects {
+  state: "reported";
+  /** `nats`, or `s3:<endpoint>/<bucket>/<prefix>` — the store the fleet agreed on. */
+  backend: string;
+  /** The data node that ran the passes. */
+  node: string;
+  /** Absent until a pass of that kind has ended. */
+  collect?: ObjectCollect;
+  audit?: ObjectAudit;
+}
+
+/**
+ * Where the company's files are kept, and what the collector last found.
+ *
+ * THREE STATES NAMED APART rather than folded into an empty report: a store
+ * that would not give the record up, a fleet whose collector has not reported
+ * yet, and a report.
+ */
+export type FleetObjects = { state: Exclude<ObjectsState, "reported"> } | ReportedObjects;
 
 /*
  * WHO IS IN A PLACEMENT MAP — `MapAbsence`, `MapProbation`, `MapMember`,
- * `MapHold` and `MapRemoval` — is ONE lifecycle both maps run
- * (`internal/membership`), rendered once for both by
- * `internal/api/queries/membership.go`: the object store's placement map
- * below and the estate map (`protocol/estate.ts`) alike.
+ * `MapHold` and `MapRemoval` — is the estate map's lifecycle
+ * (`internal/membership`), rendered by `internal/api/queries/membership.go`
+ * and read by `protocol/estate.ts`.
  */
 
 /**
@@ -1515,86 +1564,6 @@ export interface MapMember {
   absence?: MapAbsence;
 }
 
-/** A member's store health, as its objects lease reports it. */
-export interface ObjectHealth {
-  /** `ok`, `nearfull`, `full` or `failed` — a string, so a newer state is shown. */
-  state: string;
-  detail?: string;
-  used_percent: number;
-}
-
-/**
- * A member's last repair pass. `pending` is what the map places on it that it
- * still did not hold when the pass ended — a zero that means anything only at
- * the map's own `epoch`, and only when the pass `completed`.
- */
-export interface ObjectRepair {
-  epoch: number;
-  completed: boolean;
-  placed: number;
-  held: number;
-  pending: number;
-  unreachable: number;
-  missing: number;
-  at?: string;
-}
-
-/**
- * Where a member's scrub is in its cycle, and what this cycle found: chunks
- * intact, `rotten` (no longer matching their names) and `unreadable` (bytes the
- * disk would not return). The scrub steps past every one, so a count of
- * unreadable chunks that keeps rising is a disk failing chunk by chunk rather
- * than a scrub that stopped; `error` is what stopped it last, absent while it
- * runs.
- */
-export interface ObjectScrub {
-  cycle_started?: string;
-  /** How far through the slots this cycle is, 0..1. */
-  progress: number;
-  verified: number;
-  rotten: number;
-  unreadable: number;
-  error?: string;
-}
-
-/**
- * One member as the fleet view renders it. `health`, `repair`, `scrub` and
- * `strays` are ABSENT when the member reported none — never zero, which would
- * read as a reading.
- */
-export interface FleetObjectMember extends MapMember {
-  /** Its measured share of every group copy the stored map places, 0..100. */
-  share_percent: number;
-  /** Whether it holds a live objects lease — what the maintainer counts presence by. */
-  live: boolean;
-  health?: ObjectHealth;
-  repair?: ObjectRepair;
-  scrub?: ObjectScrub;
-  /**
-   * Referenced copies it holds beyond what the map places on it — shed by a
-   * member taken out, KEPT by one on probation for when it is placed on again.
-   */
-  strays?: number;
-}
-
-/**
- * The map's last measurement of how evenly it spreads the copies over its
- * members' weights. `deviation_percent` is the largest difference between any
- * placeable member's copies and its target, as a percentage of that target;
- * `converged` whether that is within `tolerance_percent`. `rounds` is how many
- * layouts the balance that set the shares ran, at most 60 — fewer only on
- * converging or where no share could move — and 0 when no balance ran: a
- * split's placement, measured close enough to leave as it was. `epoch` is the
- * placement measured, one behind the map's for the tick after a split.
- */
-export interface ObjectBalance {
-  epoch: number;
-  deviation_percent: number;
-  tolerance_percent: number;
-  converged: boolean;
-  rounds: number;
-}
-
 /** An operator's hold: no member is removed however long it is gone, until `until`. */
 export interface MapHold {
   until: string;
@@ -1617,57 +1586,6 @@ export interface MapRemoval {
   gone: number;
   forget_after_ticks: number;
   placed_after_ticks: number;
-}
-
-/** A placed map, every field present. */
-export interface PlacedObjects {
-  state: "placed";
-  generation: string;
-  epoch: number;
-  /** The copies the company asks for, and how many the map places — fewer while short. */
-  replicas: number;
-  copies: number;
-  /** How many placement groups the slots are divided into. */
-  pgs: number;
-  failure_domain?: string;
-  distinct_domains: number;
-  /** Fewer failure domains than copies: some groups keep two copies in one. */
-  domain_limited: boolean;
-  /** A hold in force now; absent when there is none or it has expired. */
-  hold?: MapHold;
-  /** Groups with a copy on a member that is absent or whose store has failed. */
-  degraded_groups: number;
-  /** Absent for a map nothing has measured — never a zero that reads as perfectly even. */
-  balance?: ObjectBalance;
-  members: FleetObjectMember[];
-  /** Removed and not seen back — a node back on probation is on its member row instead. */
-  removed: MapRemoval[];
-}
-
-/**
- * The object store's placement map, as `internal/api/queries/objects.go`
- * reads it from the store every node reads it from.
- *
- * FOUR STATES NAMED APART rather than folded into an empty member list: a
- * store that would not answer, a fleet with no map yet (where no upload can
- * land), a map a newer build wrote that this one cannot read, and a map.
- */
-export type FleetObjects = { state: Exclude<ObjectMapState, "placed"> } | PlacedObjects;
-
-/**
- * What a gesture on the placement map answered: whether the stored map now
- * says what was asked, and the map as it stands.
- */
-export interface ObjectsGestureAnswer {
-  /** False only when every attempt lost its race: nothing asked is in the map. */
-  landed: boolean;
-  epoch: number;
-  node?: string;
-  /** The member as the map now describes it; absent for a node it does not hold. */
-  member?: MapMember;
-  hold?: MapHold;
-  /** What to do next, where there is something — in no surface's vocabulary. */
-  hint?: string;
 }
 
 /**
@@ -2026,7 +1944,7 @@ export interface FleetAnswer {
   this_node: string;
   /** The epoch every node is meant to converge on. A number, not an id. */
   target_epoch: number;
-  /** Where the company's files are placed; absent where the node reads no map. */
+  /** Where the company's files are kept; absent where the node reads no record. */
   objects?: FleetObjects;
 }
 

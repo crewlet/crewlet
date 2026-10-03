@@ -37,9 +37,8 @@ its holders — so it is **one record in the coordination store**
 compare-and-set and watched by every node. It has two halves:
 
 - The **target** is where each partition *should* be: the company's
-  `estate.replicas` copies, drawn over the map's members by the same integer
-  straw2 draw the [object store](object-store.md) uses, under a salt of the
-  estate map's own so a partition's holders are never an object group's. One
+  `estate.replicas` copies, drawn over the map's members by an integer
+  straw2 draw, under a salt of the estate map's own. One
   draw covers every partition of every space, with balanced shares so a node of
   twice the weight holds about twice the partitions, and copies spread across
   `estate.failure_domain` while there are enough values of it to go round.
@@ -56,7 +55,7 @@ stateDiagram-v2
     [*] --> joining: the target names the node
     joining --> serving: its lease says serving,\nhaving read the map that named it
     joining --> leaving: the target moved away\nbefore it served
-    serving --> leaving: the target no longer names it,\nand every target node serves\n(ADR-0026's two conditions)
+    serving --> leaving: the target no longer names it,\nand every target node serves\n(both retirement conditions)
     leaving --> serving: wanted again,\nand it has not started to drain
     leaving --> [*]: its lease says released
     serving --> [*]: membership removed the node
@@ -226,7 +225,7 @@ holds of each partition: `adopting`, `catching_up`, `serving`, `faulted`,
 the node has stopped serving every partition, so a draining node never reads as
 one that has gone.
 
-Membership is the object store's lifecycle, shared: absence counted in the
+Membership has a lifecycle of its own: absence counted in the
 maintainer's own fifteen-second ticks and never on a clock, removal after forty
 of them (ten minutes) and never onto nothing, probation for a removed node seen
 back, and an operator's out and hold. A lease that does not **say** its store is
@@ -248,7 +247,7 @@ The `estate-map` duty runs one step per partition per tick:
    established copy serving, one still being built joining or leaving, and
    any copy of a barred node leaving.
 5. A serving holder the target no longer names is retired only under **both**
-   of ADR-0026's conditions: every target node serves the partition by the map
+   of two conditions: every target node serves the partition by the map
    *and* by its own lease, and has acted on the map that made it a server. The
    last server is never retired.
 6. Every target node not yet holding the partition joins it — at most one
@@ -381,8 +380,7 @@ An out **moves copies and never drops one**. It is refused
 (`nowhere_to_rebuild`) where no other member could take the copies the node
 holds — as many placeable members as `estate.replicas`, three data nodes at
 three copies — because every partition would keep one copy fewer once the node
-was let go rather than have its copy rebuilt. That is one rule for both
-placement maps, the object store's as well: a fleet shrinks by lowering
+was let go rather than have its copy rebuilt. A fleet shrinks by lowering
 `estate.replicas` first, the company deciding to keep fewer copies, and never as
 a side effect of a gesture about one node. The out is judged by the MAP's count,
 which the map takes on its duty's next tick after the configuration is

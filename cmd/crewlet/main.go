@@ -216,8 +216,8 @@ Usage:
   crewlet work <cmd>          The gestures on work items that belong to a person:
                               purge, which destroys a task and every row it
                               produced and which nothing undoes
-  crewlet objects <cmd>       Where the company's files are placed, and the gestures
-                              on it: take a data node out, put it back, hold the map
+  crewlet objects status      Where the company's files are kept, and what the
+                              object store's collector last found missing
   crewlet estate <cmd>        Which data nodes hold each partition of the estate, and
                               the gestures on the estate map: out, in, hold, release,
                               move a partition's copy off a node
@@ -1571,7 +1571,7 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 		// Every chunk the store copy names, read from whichever node
 		// holds it: this node holds only its share, and a backup of the
 		// company carries all of them.
-		Objects: &backup.Objects{Get: e.GetChunk},
+		Objects: &backup.Objects{Get: e.GetChunk, Stream: e.ObjectsStream()},
 		// THE PROCESS'S OWN RECORDER, never a second one: the copy's
 		// duration is a catalogued instrument, and two recorders in one
 		// process would be two sets of series for one fleet.
@@ -1638,7 +1638,7 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 			Company: func() *config.Company { return companyConfig(e) },
 			Coord:   e.Backends().Coord,
 			Plane:   e.Backends().Fleet,
-			// The object store's placement map, read from the store
+			// The object collector's last report, read from the store
 			// every node reads it from, for the fleet view's card.
 			Objects: e.Backends().Fleet,
 			Runs:    sqlledger.New(e.Backends().Store.SQL()),
@@ -1804,14 +1804,8 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 		// read and write chunks through this node's object client and
 		// the rows through its tracker, attributed to the operator.
 		Files: api.EngineFiles(e),
-		// THE OBJECT STORE'S GESTURES — taking a data node out of the
-		// placement map, putting it back, holding the map through planned
-		// maintenance — made through this node because the map lives in
-		// the coordination store its broker holds. Nil, and the routes
-		// unmounted, on a node that runs no object store.
-		Objects: api.EngineObjects(e),
 		// THE ESTATE MAP — which data nodes hold each partition — and the
-		// gestures on it, through this node for the object map's reason:
+		// gestures on it, through this node because
 		// the map lives in the coordination store its broker holds. One
 		// seam serves GET /estate and the routes under it. Under layout 0
 		// the read answers that every data node holds the whole estate,

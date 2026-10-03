@@ -122,30 +122,22 @@ func TestADataNodesEstateWeightIsItsShare(t *testing.T) {
 	}
 }
 
-// ONE WARNING PER MISSING LABEL KEY, naming every block that spreads across
-// it. The object store and the estate read a failure domain the same way, so a
-// data node missing the key both name is one label it lacks, said once; two
-// keys it lacks are two labels to set. A node that holds no data is placed on
-// by neither map and is warned about nothing.
-func TestAMissingFailureDomainLabelIsOneWarningPerKey(t *testing.T) {
+// A DATA NODE MISSING THE ESTATE'S FAILURE-DOMAIN LABEL IS WARNED ABOUT, at the
+// label it should carry, naming the block that asked for it. A node that holds
+// no data is placed on by nobody and is warned about nothing.
+func TestAMissingFailureDomainLabelIsWarned(t *testing.T) {
 	t.Parallel()
 	for name, tc := range map[string]struct {
-		objects, estate string
-		labels          map[string]string
-		roles           []string
-		want            map[string][]string // path → blocks it must name
+		estate string
+		labels map[string]string
+		roles  []string
+		want   map[string][]string // path → blocks it must name
 	}{
-		"the estate's key missing": {"", "zone", nil, nil,
+		"the estate's key missing": {"zone", nil, nil,
 			map[string][]string{"node.labels.zone": {"estate.failure_domain"}}},
-		"the estate's key carried": {"", "zone", map[string]string{"zone": "a"}, nil, nil},
-		"one key both blocks name": {"zone", "zone", nil, nil,
-			map[string][]string{"node.labels.zone": {"objects.failure_domain", "estate.failure_domain"}}},
-		"two keys, both missing": {"zone", "rack", nil, nil, map[string][]string{
-			"node.labels.zone": {"objects.failure_domain"},
-			"node.labels.rack": {"estate.failure_domain"}}},
-		"two keys, one carried": {"zone", "rack", map[string]string{"rack": "r1"}, nil,
-			map[string][]string{"node.labels.zone": {"objects.failure_domain"}}},
-		"a stateless node": {"zone", "zone", nil, []string{"seats"}, nil},
+		"the estate's key carried": {"zone", map[string]string{"zone": "a"}, nil, nil},
+		"no failure domain":        {"", nil, nil, nil},
+		"a stateless node":         {"zone", nil, []string{"seats"}, nil},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
@@ -155,7 +147,6 @@ func TestAMissingFailureDomainLabelIsOneWarningPerKey(t *testing.T) {
 			b.Node.Roles = tc.roles
 			c := config.DefaultCompany()
 			c.Name = "Acme"
-			c.Objects.FailureDomain = tc.objects
 			c.Estate.FailureDomain = tc.estate
 
 			got := config.TierWarnings(&b, &c)

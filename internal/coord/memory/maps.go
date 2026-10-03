@@ -11,12 +11,9 @@ import (
 
 // ---- the placement maps ------------------------------------------------ //
 //
-// Two records, each changed only by compare-and-set — the object store's
-// placement map and the estate map — held by one implementation, as the KV
-// backend holds them: the maps differ in what they place and in who watches
-// them, never in how a version is arbitrated. Only the estate map is watched.
+// The estate map: one record changed only by compare-and-set, and watched.
 
-// versioned is one placement map's record, and nil until one is written.
+// versioned is the map's record, and nil until one is written.
 type versioned struct {
 	value   []byte
 	version uint64
@@ -28,34 +25,6 @@ func (v *versioned) readLocked() ([]byte, uint64, bool) {
 		return nil, 0, false
 	}
 	return slices.Clone(v.value), v.version, true
-}
-
-// ObjectMap reads the object placement map.
-func (f *Fleet) ObjectMap(context.Context) (coord.ObjectMapRecord, bool, error) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	value, version, found := f.objectMap.readLocked()
-	return coord.ObjectMapRecord{Value: value, Version: version}, found, nil
-}
-
-// CreateObjectMap writes the first object placement map, leaving an existing
-// one alone.
-func (f *Fleet) CreateObjectMap(_ context.Context, value []byte) (coord.ObjectMapRecord, bool, error) {
-	version, created, err := f.writeMap(&f.objectMap, value, 0, true, "an object map")
-	if !created || err != nil {
-		return coord.ObjectMapRecord{}, false, err
-	}
-	return coord.ObjectMapRecord{Value: slices.Clone(value), Version: version}, true, nil
-}
-
-// UpdateObjectMap writes the object placement map at the version it was read
-// at.
-func (f *Fleet) UpdateObjectMap(_ context.Context, value []byte, version uint64) (coord.ObjectMapRecord, bool, error) {
-	version, won, err := f.writeMap(&f.objectMap, value, version, false, "an object map")
-	if !won || err != nil {
-		return coord.ObjectMapRecord{}, false, err
-	}
-	return coord.ObjectMapRecord{Value: slices.Clone(value), Version: version}, true, nil
 }
 
 // EstateMap reads the estate map.

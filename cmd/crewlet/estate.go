@@ -680,3 +680,33 @@ func estateMove(args []string, stdout, stderr io.Writer) error {
 		strings.Join(answer.Target, ", "), *from, partition, *from, *from, *from)
 	return nil
 }
+
+type objectsRemovalView struct {
+	Node             string `json:"node"`
+	Reason           string `json:"reason"`
+	Detail           string `json:"detail"`
+	Gone             int    `json:"gone"`
+	ForgetAfterTicks int    `json:"forget_after_ticks"`
+	PlacedAfterTicks int    `json:"placed_after_ticks"`
+}
+
+type objectsHoldView struct {
+	Until  time.Time `json:"until"`
+	By     string    `json:"by"`
+	Reason string    `json:"reason"`
+}
+
+// ONLY A UNIT'S OWN ZERO IS DROPPED: the seconds when a larger unit precedes
+// them, then the minutes when the hours do. Trimming the bare text "0s" and
+// "0m" cut into a unit's own digits — "10s" came out "1", "50m0s" "5" and
+// "1h30m0s" "1h3".
+func shortDuration(d time.Duration) string {
+	s := d.String()
+	if strings.HasSuffix(s, "m0s") {
+		s = strings.TrimSuffix(s, "0s")
+	}
+	if strings.HasSuffix(s, "h0m") {
+		s = strings.TrimSuffix(s, "0m")
+	}
+	return s
+}

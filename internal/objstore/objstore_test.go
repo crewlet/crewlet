@@ -3,12 +3,9 @@ package objstore
 import (
 	"bytes"
 	"context"
-	"crypto/sha256"
 	"errors"
 	"strings"
 	"testing"
-
-	"github.com/crewlet/crewlet/internal/objstore/placement"
 )
 
 // A SPLIT CUTS AT THE CHUNK SIZE, HANDS OVER EVERY PIECE IN ORDER, AND ITS
@@ -121,47 +118,26 @@ func TestOnlyLowercaseHexIsAHash(t *testing.T) {
 // chunk unnamed.
 func TestADeclarationIsReadOnlyWhenItIsSafeToWrite(t *testing.T) {
 	t.Parallel()
-	good := ReferenceTable{Domain: "tracker", Table: "tracker_file_chunks", Column: "chunk", Slot: "slot"}
-	query, err := good.ChunksIn()
+	good := ReferenceTable{Domain: "tracker", Table: "tracker_file_chunks", Column: "chunk"}
+	query, err := good.ChunksAmong(3)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if want := "SELECT DISTINCT chunk FROM tracker_file_chunks WHERE slot >= ? AND slot < ?"; query != want {
+	if want := "SELECT DISTINCT chunk FROM tracker_file_chunks WHERE chunk IN (?, ?, ?)"; query != want {
 		t.Errorf("statement = %q, want %q", query, want)
 	}
+	if _, err := good.ChunksAmong(0); err == nil {
+		t.Error("a question about no chunks was built")
+	}
 	for name, bad := range map[string]ReferenceTable{
-		"no domain":        {Table: "t", Column: "chunk", Slot: "slot"},
-		"a table injected": {Domain: "tracker", Table: "t; DROP TABLE t", Column: "chunk", Slot: "slot"},
-		"a quoted column":  {Domain: "tracker", Table: "t", Column: `"chunk"`, Slot: "slot"},
-		"no slot":          {Domain: "tracker", Table: "t", Column: "chunk"},
-		"upper case":       {Domain: "tracker", Table: "T", Column: "chunk", Slot: "slot"},
+		"no domain":        {Table: "t", Column: "chunk"},
+		"a table injected": {Domain: "tracker", Table: "t; DROP TABLE t", Column: "chunk"},
+		"a quoted column":  {Domain: "tracker", Table: "t", Column: `"chunk"`},
+		"no column":        {Domain: "tracker", Table: "t"},
+		"upper case":       {Domain: "tracker", Table: "T", Column: "chunk"},
 	} {
 		if _, err := bad.Chunks(); err == nil {
 			t.Errorf("%s: a statement was built", name)
-		}
-	}
-}
-
-// A CHUNK'S SLOT IS ITS ADDRESS'S FIRST TWO BYTES, read straight off the hex —
-// the same number placement computes from the raw bytes, so a row and a map
-// can never disagree about which slot a chunk is in — and an address that is
-// not one is slot 0 rather than a panic.
-func TestASlotIsTheAddresssFirstTwoBytes(t *testing.T) {
-	t.Parallel()
-	for _, data := range []string{"", "a", "chunk", "another chunk"} {
-		h := HashOf([]byte(data))
-		sum := sha256.Sum256([]byte(data))
-		if got, want := h.Slot(), placement.SlotOf(sum[:]); got != want {
-			t.Errorf("%q: Slot = %#x, placement says %#x", data, got, want)
-		}
-	}
-	if got := Hash("abcd" + strings.Repeat("0", 60)).Slot(); got != 0xabcd {
-		t.Errorf("Slot = %#x, want 0xabcd", got)
-	}
-	for _, bad := range []Hash{"", "abcd", Hash("ABCD" + strings.Repeat("0", 60)),
-		Hash("zzzz" + strings.Repeat("0", 60))} {
-		if got := bad.Slot(); got != 0 {
-			t.Errorf("%q: Slot = %#x, want 0", bad, got)
 		}
 	}
 }

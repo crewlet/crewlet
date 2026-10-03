@@ -476,6 +476,7 @@ func TestAnUndecodableSecretIsRaisedNotSkipped(t *testing.T) {
 		FollowRetention: time.Minute, RebaseRetention: time.Minute,
 		CooldownMax: time.Minute, StatusFreshness: time.Minute,
 		CustodyRetention: time.Minute,
+		ChunkLockTTL:     time.Minute,
 		BudgetRetention:  time.Minute,
 		BucketPrefix:     prefix,
 	})
@@ -1119,6 +1120,7 @@ func openFleet(t *testing.T, nc *nats.Conn) *FleetStore {
 		FollowRetention: time.Minute, RebaseRetention: time.Minute,
 		CooldownMax: time.Minute, StatusFreshness: time.Minute,
 		CustodyRetention: time.Minute,
+		ChunkLockTTL:     time.Minute,
 		BudgetRetention:  time.Minute,
 		BucketPrefix:     fmt.Sprintf("f%d", bucketSeq.Add(1)),
 	})

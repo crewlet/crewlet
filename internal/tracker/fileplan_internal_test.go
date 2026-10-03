@@ -6,11 +6,11 @@ import (
 	"testing"
 )
 
-// chunksIn is the statement the object store's passes read a run of slots'
-// references with, built from this package's own declaration.
-func chunksIn(t *testing.T) string {
+// chunksAmong is the statement the object store's collector asks which of a
+// batch of chunks any file names, built from this package's own declaration.
+func chunksAmong(t *testing.T, n int) string {
 	t.Helper()
-	statement, err := FileChunkReferences.ChunksIn()
+	statement, err := FileChunkReferences.ChunksAmong(n)
 	if err != nil {
 		t.Fatalf("the declaration builds no statement: %v", err)
 	}
@@ -20,10 +20,9 @@ func chunksIn(t *testing.T) string {
 // THE TWO FILE INDEXES SERVE THE TWO QUERIES THEY NAME, read off the planner
 // for [TestEveryIndexServesARegisteredQuery]'s reason: a comment naming a
 // reader is a claim, and the plan is what checks it. The chunk read is the one
-// that matters most — the object store's passes run it once per placement
-// group per pass on every data node, and without its index each run is every
-// chunk row of every file in the company. It is a RANGE over slots rather than
-// an equality, which is what lets one index serve a group at any group count.
+// that matters most — the object store's collector runs it once per batch of
+// the store's listing, and without its index each run is every chunk row of
+// every file in the company.
 func TestTheFileIndexesServeTheirQueries(t *testing.T) {
 	t.Parallel()
 	db := planStore(t)
@@ -49,11 +48,13 @@ func TestTheFileIndexesServeTheirQueries(t *testing.T) {
 		},
 		{
 			// THE DECLARATION'S OWN STATEMENT, built exactly as the
-			// passes build it, over the widest run of slots one group
-			// covers — a group at the smallest count the map has,
-			// 256 slots of the 65 536.
-			"one group's references", "tracker_file_chunks", "tracker_file_chunks_slot_idx",
-			chunksIn(t), []any{17 << 8, 18 << 8},
+			// collector builds it, over a batch of three.
+			"a batch's references", "tracker_file_chunks", "tracker_file_chunks_chunk_idx",
+			chunksAmong(t, 3), []any{
+				"0000000000000000000000000000000000000000000000000000000000000001",
+				"8000000000000000000000000000000000000000000000000000000000000000",
+				"ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+			},
 		},
 	} {
 		t.Run(c.name, func(t *testing.T) {

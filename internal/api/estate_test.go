@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -340,7 +341,7 @@ func TestTheEstateSurfacesAreAbsentWithoutAStore(t *testing.T) {
 		"/estate/release?" + generation,
 		"/estate/move/tracker.002?from=data-a&confirm=data-a",
 		"/estate/move/tracker.002/cancel?from=data-a&confirm=data-a"} {
-		if status, body := postObjects(t, a, path); status != http.StatusNotFound ||
+		if status, body := postEstate(t, a, path); status != http.StatusNotFound ||
 			body["error"] != "no_route" {
 			t.Errorf("%s answered %d %v on a node with no coordination store", path, status, body)
 		}
@@ -370,7 +371,7 @@ func TestEveryEstateGestureNeedsItsConfirmation(t *testing.T) {
 		"/estate/release", "/estate/release?confirm=release",
 	}
 	for _, path := range append(byNode, byMap...) {
-		status, body := postObjects(t, a, path)
+		status, body := postEstate(t, a, path)
 		if status != http.StatusBadRequest || body["error"] != "confirm_required" ||
 			body["detail"] == "" || body["hint"] == "" {
 			t.Errorf("%s answered %d %v, want 400 confirm_required with a detail and a hint",
@@ -407,7 +408,7 @@ func TestAMoveNamesAPartitionAndAHoldALength(t *testing.T) {
 		"/estate/release?confirm=" + uuid.NewString():                "other_estate_map",
 		"/estate/move/tracker.002/cancel?from=data-z&confirm=data-z": "",
 	} {
-		status, body := postObjects(t, a, path)
+		status, body := postEstate(t, a, path)
 		if code == "" {
 			// A CANCEL OF A MOVE THAT DOES NOT EXIST answers the map as
 			// it is, so a resent cancel writes nothing.
@@ -433,7 +434,7 @@ func TestAnEstateGestureAnswersWhatTheMapNowSays(t *testing.T) {
 	t.Parallel()
 	f := newFakeEstate()
 	a := estateApp(t, f)
-	status, body := postObjects(t, a, "/estate/move/tracker.003?from=data-f&confirm=data-f&reason=probation")
+	status, body := postEstate(t, a, "/estate/move/tracker.003?from=data-f&confirm=data-f&reason=probation")
 	move, _ := body["move"].(map[string]any)
 	target, _ := body["target"].([]any)
 	if status != http.StatusOK || body["landed"] != true || body["epoch"] != float64(9) ||
@@ -445,17 +446,17 @@ func TestAnEstateGestureAnswersWhatTheMapNowSays(t *testing.T) {
 			t.Errorf("the moved partition's target still names the node it moved off: %v", target)
 		}
 	}
-	status, body = postObjects(t, a, "/estate/move/tracker.003/cancel?from=data-f&confirm=data-f")
+	status, body = postEstate(t, a, "/estate/move/tracker.003/cancel?from=data-f&confirm=data-f")
 	if status != http.StatusOK || body["landed"] != true || body["move"] != nil {
 		t.Errorf("a cancel answered %d %v, want no move in force", status, body)
 	}
-	status, body = postObjects(t, a, "/estate/out/data-c?confirm=data-c&reason=retiring")
+	status, body = postEstate(t, a, "/estate/out/data-c?confirm=data-c&reason=retiring")
 	member, _ := body["member"].(map[string]any)
 	if status != http.StatusOK || member["out"] != true || member["out_reason"] != "retiring" ||
 		body["epoch"] != float64(9) {
 		t.Errorf("an out answered %d %v", status, body)
 	}
-	status, body = postObjects(t, a, "/estate/hold?for=2h&reason=rack+work&"+generation)
+	status, body = postEstate(t, a, "/estate/hold?for=2h&reason=rack+work&"+generation)
 	hold, _ := body["hold"].(map[string]any)
 	if status != http.StatusOK || hold["until"] != clock.Add(2*time.Hour).Format(time.RFC3339Nano) ||
 		body["generation"] != estateGeneration.String() {
@@ -486,7 +487,7 @@ func TestPuttingBackABarredNodeIsRefusedAndTheBarStays(t *testing.T) {
 	f.state = barred
 	a := estateApp(t, f)
 	for _, node := range []string{"data-d", "data-e"} {
-		status, body := postObjects(t, a, "/estate/in/"+node+"?confirm="+node)
+		status, body := postEstate(t, a, "/estate/in/"+node+"?confirm="+node)
 		hint, _ := body["hint"].(string)
 		if status != http.StatusConflict || body["error"] != "barred_member" ||
 			!strings.Contains(hint, "readmission") {
@@ -522,7 +523,7 @@ func TestUnderLayoutZeroEveryEstateGestureIsRefusedWhole(t *testing.T) {
 		"/estate/release?" + generation,
 		"/estate/move/tracker.002?from=data-a&confirm=data-a",
 		"/estate/move/tracker.002/cancel?from=data-a&confirm=data-a"}, unconfirmed...) {
-		status, body := postObjects(t, a, path)
+		status, body := postEstate(t, a, path)
 		if status != http.StatusConflict || body["error"] != "estate_whole" ||
 			!strings.Contains(body["detail"].(string), partmap.WholeEstate) {
 			t.Errorf("%s under layout 0 answered %d %v", path, status, body)
@@ -530,7 +531,7 @@ func TestUnderLayoutZeroEveryEstateGestureIsRefusedWhole(t *testing.T) {
 	}
 	f.running = engine.DefaultLayoutOne()
 	for _, path := range append([]string{"/estate/out/data-a?confirm=data-a"}, unconfirmed...) {
-		status, body := postObjects(t, a, path)
+		status, body := postEstate(t, a, path)
 		if status != http.StatusServiceUnavailable || body["error"] != "no_estate_map" {
 			t.Errorf("%s on a partitioned fleet with no map answered %d %v, want 503 "+
 				"no_estate_map", path, status, body)
@@ -846,4 +847,19 @@ func TestNoEstateHintNamesACommandLineFlag(t *testing.T) {
 			}
 		}
 	}
+}
+
+// postEstate runs one authenticated gesture.
+func postEstate(t *testing.T, a *api.App, path string) (int, map[string]any) {
+	t.Helper()
+	req := httptest.NewRequest(http.MethodPost, path, nil)
+	req.Header.Set("Authorization", "Bearer secret")
+	rec := httptest.NewRecorder()
+	a.ServeHTTP(rec, req)
+	var body map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("%s answered %d with a body that is not JSON: %q", path, rec.Code,
+			rec.Body.String())
+	}
+	return rec.Code, body
 }

@@ -21,7 +21,6 @@ import (
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/eventfan"
 	"github.com/crewlet/crewlet/internal/membership"
-	"github.com/crewlet/crewlet/internal/objstore/disk"
 )
 
 // The thresholds an alarm fires at.
@@ -152,18 +151,17 @@ type Census struct {
 
 	// Background is the barrier records a day the ENGINE'S OWN periodic
 	// reads put on this log, whatever the company's seats do — the object
-	// store's passes, which pin the estate on every data node on a fixed
-	// cadence (the engine's figure for them is upkeep.PinsPerDay per node
-	// that runs them). NOT DIVIDED across the domain's logs: each pin is a
-	// barrier on every log it reads, so each log takes all of them.
+	// store's collector, which pins the estate on a fixed cadence from one
+	// data node at a time (the engine's figure is collect.PinsPerDay). NOT
+	// DIVIDED across the domain's logs: each pin is a barrier on every log
+	// it reads, so each log takes all of them.
 	//
-	// It exists because the seats' term alone was not what a log receives.
-	// A one-seat company on one data node, reading exactly its census, put
-	// 293 barriers a day on a log expected to take 125, and three data
-	// nodes of an idle two-seat company put 504 on one expected to take
-	// 250 — census_drift fired on companies whose sizing was right, and it
-	// fired LOUDER the smaller the company, since the engine's own reads do
-	// not shrink with it.
+	// It exists because the seats' term alone is not what a log receives,
+	// and the engine's own reads do not shrink with the company: when every
+	// data node pinned the estate on its own passes, a one-seat company on
+	// one data node reading exactly its census put 293 barriers a day on a
+	// log expected to take 125, and census_drift fired on companies whose
+	// sizing was right — LOUDER the smaller the company.
 	Background int
 }
 
@@ -246,9 +244,6 @@ const (
 	KindPoolStarved         Kind = "pool_starved"
 	KindCensusDrift         Kind = "census_drift"
 	KindObjectsMissing      Kind = "objects_missing"
-	KindObjectsDegraded     Kind = "objects_degraded"
-	KindObjectsUnhealthy    Kind = "objects_store_unhealthy"
-	KindObjectsNearFull     Kind = "objects_store_nearfull"
 	KindEstateUnserved      Kind = "estate_partition_unserved"
 	KindEstateShort         Kind = "estate_under_replicated"
 	KindEstateMoveStalled   Kind = "estate_move_stalled"
@@ -393,46 +388,14 @@ type Reading struct {
 	LinearizableReads, LinearizableReadsExpected int
 	CensusLog                                    string
 
-	// ObjectsMissing is how many chunks the estate names, and the map
-	// places on this node, that its last COMPLETED repair pass found
-	// DEFINITIVELY absent — every member it asked ANSWERED that it holds no
-	// copy — or more, where a later pass that stopped short counted more.
-	// Never fewer on the word of a pass that stopped short: it counts only
-	// the groups it reached, so its zero is not evidence that a known loss
-	// is over. Parts of files nobody can read in full. Any value above zero
-	// is an alarm, for the gated record's reason: there is no threshold
-	// below which a file that cannot be opened is acceptable.
-	//
-	// ONLY WHAT WAS ANSWERED. A chunk a member that did not answer may hold
-	// is not missing, it is unreachable (ObjectsUnreachable), and counting
-	// it here paged an operator about lost data whenever one peer was slow.
+	// ObjectsMissing is how many chunks the estate names that the object
+	// store does not hold, as the collector's last COMPLETED audit found —
+	// on the node holding the collector's duty, and zero on every other,
+	// since the store is one the whole fleet shares and one node's count of
+	// it is the fleet's. Parts of files nobody can read in full. Any value
+	// above zero is an alarm, for the gated record's reason: there is no
+	// threshold below which a file that cannot be opened is acceptable.
 	ObjectsMissing int
-
-	// ObjectsPending is how many chunks the map places on this node that
-	// it still did not hold after its last COMPLETED repair pass at the
-	// map's current epoch — copies the fleet is short of until a pass finds
-	// them — and ObjectsUnreachable how many of those that pass could not
-	// fetch because a member that may hold one did not answer. Zero on a
-	// node whose last completed pass is at an older epoch: that pass says
-	// nothing about the current placement, and ObjectsUnrepairedFor is
-	// what describes it.
-	ObjectsPending, ObjectsUnreachable int
-
-	// ObjectsUnrepairedFor is how long this node has gone without a repair
-	// pass completing at the map's current epoch — since the last one that
-	// did, or since it first placed by that epoch if none has, whichever is
-	// later — and ObjectsRepairInterval the interval a pass runs on — the
-	// object store's own repair interval, SUPPLIED rather than named here
-	// because the passes import this package. A zero interval is a node
-	// running no passes, which has nothing to be overdue on.
-	ObjectsUnrepairedFor, ObjectsRepairInterval time.Duration
-
-	// ObjectsHealth is this node's object store's own account of itself,
-	// empty on a node holding none; ObjectsHealthDetail says why it is not
-	// ok, and ObjectsUsedPercent how full its volume is, for the detail.
-	ObjectsHealth       disk.HealthState
-	ObjectsHealthDetail string
-	ObjectsUsedPercent  float64
 
 	// EstateUnserved is how many partitions of the estate map no copy can
 	// answer for — no holder the map lists serving whose node it counts
@@ -863,95 +826,13 @@ var table = []rule{
 	{
 		kind: KindObjectsMissing,
 		fires: func(r Reading) (string, bool) {
-			return fmt.Sprintf("%d chunk(s) placed on this node are held by no "+
-				"member of the fleet: every member asked answered that it has "+
-				"none", r.ObjectsMissing), r.ObjectsMissing > 0
+			return fmt.Sprintf("%d chunk(s) the company's files are made of are not "+
+				"in the object store", r.ObjectsMissing), r.ObjectsMissing > 0
 		},
-		remedy: "Bring back any data node that is down: a chunk whose every copy " +
-			"is on nodes that are gone reads as missing until one of them returns, " +
-			"and repair copies it here the next pass. If none is coming back, " +
-			"restore the chunks from a backup's objects/ directory into this " +
-			"node's store.objects.dir — see docs/guides/backup.md.",
-	},
-	{
-		// TWO CONDITIONS, ONE FACT: the copies the map places here are
-		// not all here. Either a pass that reached every group still left
-		// some behind, or no pass has reached every group for too long —
-		// counted from the last one that did at this epoch, or, if none
-		// has, from when this node first placed by it — and the second is
-		// the one a stalled repair loop shows, since it never gets far
-		// enough to count anything, whether or not the map moved.
-		//
-		// AT TWICE THE REPAIR INTERVAL the passes already run on, never a
-		// number of this table's own. Measured from the last completed
-		// pass, a healthy node's reading passes ONE interval every cycle:
-		// the next pass is due an interval after the last one ended, is
-		// noticed on the passes' next poll, and completes only after its
-		// own duration — so at one interval it would fire on every
-		// healthy node once a cycle. The second interval covers that, and
-		// is the retry budget besides: a pass that fails is tried again
-		// from thirty seconds, doubling up to the interval, so a node with
-		// no completed pass for two intervals has missed its scheduled
-		// pass and every retry after it — a repair that is not keeping
-		// up, rather than one that is merely running.
-		kind: KindObjectsDegraded,
-		fires: func(r Reading) (string, bool) {
-			if r.ObjectsPending > 0 {
-				return fmt.Sprintf("%d chunk(s) the placement map puts on this node "+
-					"were not here after its last completed repair (%d could not "+
-					"be fetched from a member that did not answer)",
-					r.ObjectsPending, r.ObjectsUnreachable), true
-			}
-			return fmt.Sprintf("no repair pass has completed at the placement "+
-					"map's current epoch for %s, and one is due every %s",
-					spoken(r.ObjectsUnrepairedFor), spoken(r.ObjectsRepairInterval)),
-				r.ObjectsRepairInterval > 0 && r.ObjectsUnrepairedFor > 2*r.ObjectsRepairInterval
-		},
-		remedy: "Some copies of the company's files are not where the placement " +
-			"map puts them, so those files have fewer copies than the company " +
-			"asked for. Look for a data node that is down or not answering — " +
-			"the health column of the objects members on /fleet, and `crewlet " +
-			"objects status`, name them — and bring it back; repair copies " +
-			"what is missing on its next pass. Do not stop another data node " +
-			"until this clears on every member.",
-	},
-	{
-		// THE STORE'S OWN VERDICT, never a second reading of the volume:
-		// failed and full are decided by internal/objstore/disk against
-		// its own ratios and error count, and an alarm judging the same
-		// numbers again would be the second opinion this table forbids.
-		kind: KindObjectsUnhealthy,
-		fires: func(r Reading) (string, bool) {
-			switch r.ObjectsHealth {
-			case disk.HealthFailed:
-				return fmt.Sprintf("this node's object store has failed: %s",
-					r.ObjectsHealthDetail), true
-			case disk.HealthFull:
-				return fmt.Sprintf("this node's object store is full (%.1f%% used) "+
-					"and takes no new chunk", r.ObjectsUsedPercent), true
-			}
-			return "", false
-		},
-		remedy: "Check the volume under store.objects.dir. A FAILED store holds " +
-			"nothing new and the placement map counts it absent, moving its " +
-			"share to the other members once the absence grace has passed — " +
-			"fix or replace the volume and restart the node, and repair " +
-			"refills it. A FULL store still serves what it holds while writes " +
-			"go to the other members; add space, or lower this node's " +
-			"store.objects.weight so the map places less on it.",
-	},
-	{
-		kind: KindObjectsNearFull,
-		fires: func(r Reading) (string, bool) {
-			return fmt.Sprintf("this node's object store volume is %.1f%% used; "+
-					"new chunks are refused at %.0f%%", r.ObjectsUsedPercent,
-					disk.FullRatio*100),
-				r.ObjectsHealth == disk.HealthNearFull
-		},
-		remedy: "Add space under store.objects.dir, add a data node, or lower " +
-			"this node's store.objects.weight. Past the full mark this node " +
-			"refuses every new chunk and writes go to the other members, which " +
-			"fills them in turn.",
+		remedy: "The backend lost bytes it had acknowledged: check its own health " +
+			"(the NATS bucket OBJ_crewlet_files on the data nodes, or the S3 " +
+			"bucket) and restore the missing chunks from a backup — see " +
+			"docs/guides/backup.md. `crewlet objects status` names them.",
 	},
 	{
 		// THE EVENT ITSELF, with no threshold: a partition no copy can

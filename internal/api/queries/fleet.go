@@ -27,13 +27,7 @@ func (s Sources) fleet(ctx context.Context, _ Params) (any, error) {
 	// unreadable one must not answer an empty company" is three chances
 	// for one of them to stop saying it.
 	//
-	// THE OBJECTS LEASES WITH THEM, where the view renders the placement
-	// card: a member's lease is what says whether it is live and healthy,
-	// and a card drawn without them would show every member as gone.
 	classes := []coord.Class{coord.ClassNode, coord.ClassSeat, coord.ClassWorker}
-	if s.Objects != nil {
-		classes = append(classes, coord.ClassObjects)
-	}
 	live := map[coord.Class][]coord.Lease{}
 	for _, class := range classes {
 		leases, err := s.Coord.ListLive(ctx, class)
@@ -179,7 +173,7 @@ func (s Sources) fleet(ctx context.Context, _ Params) (any, error) {
 		"activation":   target.detail,
 	}
 	if s.Objects != nil {
-		out["objects"] = s.objectMap(ctx, live[coord.ClassObjects])
+		out["objects"] = s.objects(ctx)
 	}
 	return out, nil
 }

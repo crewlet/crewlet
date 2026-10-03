@@ -40,8 +40,8 @@
 // least one live lease. One pass ended after `node.n1@4 pending=1` and
 // `node.n3@8 pending=0`; n0, n2 and n4 — all three live throughout — arrived
 // after the marker at revisions 353 to 355. Every membership read is a listing
-// (seat placement divides by ListLive(ClassNode), the object map is built from
-// ListLive(ClassObjects)), so a miss is a live node that looks gone; and the
+// (seat placement divides by ListLive(ClassNode), the estate map is built from
+// ListLive(ClassEstate)), so a miss is a live node that looks gone; and the
 // trim takes a MINIMUM across the positions rows every node heartbeats, so a
 // missed row raises the floor and deletes log records that node still needs.
 //

@@ -11,30 +11,12 @@ import (
 
 // ---- the placement maps ------------------------------------------------ //
 
-// mapFamily is one placement map's three verbs, reduced to the bytes and the
-// version, so the object map and the estate map are held to ONE set of
-// compare-and-set cases: they differ in what they place, never in how a
-// version is arbitrated, and two copies of the cases would drift the way two
-// copies of the implementation would.
+// mapFamily is the estate map's three verbs, reduced to the bytes and the
+// version the compare-and-set cases are written in.
 type mapFamily struct {
 	read   func(h *fleetHarness) ([]byte, uint64, bool, error)
 	create func(h *fleetHarness, value []byte) (uint64, bool, error)
 	update func(h *fleetHarness, value []byte, version uint64) (uint64, bool, error)
-}
-
-var objectMaps = mapFamily{
-	read: func(h *fleetHarness) ([]byte, uint64, bool, error) {
-		r, found, err := h.f.ObjectMap(h.ctx)
-		return r.Value, r.Version, found, err
-	},
-	create: func(h *fleetHarness, value []byte) (uint64, bool, error) {
-		r, ok, err := h.f.CreateObjectMap(h.ctx, value)
-		return r.Version, ok, err
-	},
-	update: func(h *fleetHarness, value []byte, version uint64) (uint64, bool, error) {
-		r, ok, err := h.f.UpdateObjectMap(h.ctx, value, version)
-		return r.Version, ok, err
-	},
 }
 
 var estateMaps = mapFamily{
@@ -130,8 +112,6 @@ func casCases(m mapFamily) []fleetCase {
 	}}
 }
 
-var objectMapCases = casCases(objectMaps)
-
 // watchWait bounds how long a case waits for a watch to deliver one version.
 // Far above what either backend takes — a write lands on the twin's queue
 // under the write's own lock, and on the broker in a round trip — so a case
@@ -225,46 +205,6 @@ func (h *fleetHarness) through(ch <-chan coord.EstateMapRecord, written map[uint
 }
 
 var estateMapCases = append(casCases(estateMaps), []fleetCase{{
-	// THE TWO MAPS ARE TWO RECORDS. They share every verb's shape and, in a
-	// backend, most of an implementation — which is exactly how one ends up
-	// writing the other's key: every estate-map change would then overwrite
-	// the object store's placement, and a watch of the estate map would hand
-	// a router the object map. Neither map's write moves the other's value or
-	// version, and the watch delivers the estate map's own versions only.
-	name: "the estate map and the object map are separate records",
-	fn: func(h *fleetHarness) {
-		objects, ok, err := h.f.CreateObjectMap(h.ctx, []byte(`{"objects":1}`))
-		if err != nil || !ok {
-			h.t.Fatalf("CreateObjectMap = (%v, %v)", ok, err)
-		}
-		if _, found, readErr := h.f.EstateMap(h.ctx); readErr != nil || found {
-			h.t.Fatalf("writing the object map wrote an estate map (found=%v, err=%v)", found, readErr)
-		}
-		ch, _ := h.watch()
-		e1 := h.writeEstate(`{"estate":1}`, 0)
-		requireObjects := func(value string, version uint64) {
-			h.t.Helper()
-			got, found, readErr := h.f.ObjectMap(h.ctx)
-			if readErr != nil || !found || string(got.Value) != value || got.Version != version {
-				h.t.Fatalf("the object map reads %s at %d (found=%v, err=%v), want %s at %d",
-					got.Value, got.Version, found, readErr, value, version)
-			}
-		}
-		requireObjects(`{"objects":1}`, objects.Version)
-		objects, ok, err = h.f.UpdateObjectMap(h.ctx, []byte(`{"objects":2}`), objects.Version)
-		if err != nil || !ok {
-			h.t.Fatalf("UpdateObjectMap = (%v, %v)", ok, err)
-		}
-		if got, _, readErr := h.f.EstateMap(h.ctx); readErr != nil ||
-			string(got.Value) != `{"estate":1}` || got.Version != e1 {
-			h.t.Fatalf("an object-map write moved the estate map to %s at %d (err=%v)",
-				got.Value, got.Version, readErr)
-		}
-		e2 := h.writeEstate(`{"estate":2}`, e1)
-		requireObjects(`{"objects":2}`, objects.Version)
-		h.through(ch, map[uint64]string{e1: `{"estate":1}`, e2: `{"estate":2}`}, e2)
-	},
-}, {
 	// A NODE THAT STARTS WATCHING IS HANDED WHERE THE MAP IS, then how it
 	// moves: a router routes by the current map at once, and a joiner
 	// learns it was named by the write that named it, not an interval

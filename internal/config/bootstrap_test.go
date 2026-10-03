@@ -24,9 +24,9 @@ func TestBootstrapValidatorRejections(t *testing.T) {
 		{"unknown node role", "node:\n  roles: [ingres]\n", "node.roles", ErrUnknownValue},
 		{"empty node roles", "node:\n  roles: []\n", "node.roles", ErrMissing},
 		{"blank label key", "node:\n  labels:\n    \"\": eu\n", "node.labels", ErrMissing},
-		// ONE KEY GRAMMAR, the placement vocabulary's: the object map's
-		// failure domain names one of these keys, so a key this accepted
-		// and the map refused would be a domain nobody could name.
+		// ONE KEY GRAMMAR, the placement vocabulary's: a role's placement
+		// selector names one of these keys, so a key this accepted and the
+		// selector refused would be a label nothing could match.
 		{"label key with a space", "node:\n  labels:\n    \"my zone\": eu\n", "node.labels.my zone", ErrUnknownValue},
 		{"label key too long", "node:\n  labels:\n    " + strings.Repeat("k", 64) + ": eu\n", "node.labels." + strings.Repeat("k", 64), ErrUnknownValue},
 

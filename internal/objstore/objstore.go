@@ -1,33 +1,34 @@
-// Package objstore is the fleet's object store: bytes too large and too many
-// to hold on every node, placed across the data nodes and addressed by their
+// Package objstore is the fleet's object store: bytes too large to carry in a
+// replicated row, kept in ONE store every node reaches and addressed by their
 // content.
 //
-// # What is divided, and what is replicated
+// # What is replicated, and where the bytes go
 //
 // ADR-0026. Everything the company has to agree on — that a file exists, what
 // it is called, which project it is in, which chunks it is made of — stays in
 // the replicated estate, held whole on every data node and derived from a
-// state log like any other row. What is DIVIDED is the bytes: each chunk is
-// held by the members of its placement group ([placement]), and nobody else.
-// A company whose attachments outgrow one disk grows by adding data nodes,
-// where holding them on every node would have grown every disk.
+// state log like any other row. The BYTES go to a [Backend]: the fleet's own
+// NATS JetStream object store by default (natsobj), replicated across the
+// broker's members exactly as every stream is, or an S3-compatible bucket
+// (s3obj) where the deployment has one. Either is one store the whole fleet
+// shares, so no node decides on its own what to hold, fetch or repair — the
+// backend does the copies.
 //
 // # Content-addressed and immutable
 //
 // A chunk's name is the SHA-256 of its bytes, so a chunk is never rewritten —
-// a changed file is new chunks and a new manifest — and a copy is verified by
-// the name it is stored under. That is what lets every node decide on its own
-// what to hold, fetch and delete: two copies of one name are the same bytes,
-// and there is no version to agree on.
+// a changed file is new chunks and a new manifest — and every read is checked
+// against the name it was stored under ([Store]). Two files sharing a chunk
+// share one copy of it.
 //
 // # The inventory is the estate
 //
-// Which chunks SHOULD exist is not a list this package keeps. Every data node
-// holds the whole replicated estate, and every row that refers to an object
-// names its chunks — so every data node can compute, from its own rows, every
-// chunk the company references and which of them its placement says it
-// should hold. Repair fetches what is missing; garbage collection deletes
-// what nothing references and nobody has just written.
+// Which chunks SHOULD exist is not a list this package keeps: every row that
+// refers to an object names its chunks, and the declared tables
+// (internal/objstore/references) are the whole inventory. The collector
+// (internal/objstore/collect) deletes what nothing references once it is past
+// a grace, and the [Locks] a writer and the collector share are what stop a
+// chunk being deleted while a new file is re-using it.
 package objstore
 
 import (
@@ -39,8 +40,6 @@ import (
 	"io"
 	"regexp"
 	"strings"
-
-	"github.com/crewlet/crewlet/internal/objstore/placement"
 )
 
 // ChunkSize is the most bytes one chunk holds.
@@ -88,21 +87,6 @@ func (h Hash) Valid() bool {
 	return true
 }
 
-// Slot is h's placement slot: the first two bytes of the address
-// ([placement.SlotOf]), fixed for ever whatever the map groups them into. An
-// invalid hash is slot 0, which nothing reaches: every entry point refuses one
-// first.
-func (h Hash) Slot() int {
-	if !h.Valid() {
-		return 0
-	}
-	raw, err := hex.DecodeString(string(h[:4]))
-	if err != nil {
-		return 0
-	}
-	return placement.SlotOf(raw)
-}
-
 // Chunk is one piece of an object.
 type Chunk struct {
 	Hash Hash  `json:"hash"`
@@ -113,8 +97,8 @@ type Chunk struct {
 // it is made of in order.
 //
 // It is what a consumer stores in its row — the chunk list IS the reference
-// the collector and the repair read — and what a reader needs to put the bytes
-// back together.
+// the collector reads — and what a reader needs to put the bytes back
+// together.
 type Manifest struct {
 	Hash   Hash    `json:"hash"`
 	Size   int64   `json:"size"`
@@ -192,12 +176,12 @@ func Split(ctx context.Context, r io.Reader, limit int64,
 //
 // DECLARED BY THE CONSUMER that owns the table, and collected in one list
 // (internal/objstore/references) that everything asking which chunks exist
-// reads — the collector, the repair and the backup, each building its query
-// from the declaration rather than from a statement of its own. A table that
-// names chunks and is missing from that list is the one mistake here that
-// destroys data: its chunks read as unreferenced and are collected a day
-// after they were written. So the list is held against the schema by a test
-// rather than by a reader's memory.
+// reads — the collector and the backup, each building its query from the
+// declaration rather than from a statement of its own. A table that names
+// chunks and is missing from that list is the one mistake here that destroys
+// data: its chunks read as unreferenced and are collected a day after they
+// were written. So the list is held against the schema by a test rather than
+// by a reader's memory.
 type ReferenceTable struct {
 	// Domain is the state log whose applier writes the table. A pass must
 	// be current on THAT log before it may call a chunk unnamed, so the
@@ -207,14 +191,6 @@ type ReferenceTable struct {
 
 	Table  string
 	Column string
-
-	// Slot is the column holding each chunk's slot ([Hash.Slot]), so a
-	// pass over one placement group — at whatever group count the map has,
-	// since every group is a run of slots — reads one range of an index
-	// rather than the table. The SLOT and never the group: a slot is fixed
-	// for ever by the chunk's bytes, where a group number stored in a row
-	// would be wrong the moment the map split its groups.
-	Slot string
 }
 
 // identifier is what a declared table or column may be spelled as, since each
@@ -227,7 +203,7 @@ func (t ReferenceTable) Validate() error {
 	if strings.TrimSpace(t.Domain) == "" {
 		return fmt.Errorf("objstore: %s names chunks and no state log that writes it", t.Table)
 	}
-	for _, name := range []string{t.Table, t.Column, t.Slot} {
+	for _, name := range []string{t.Table, t.Column} {
 		if !identifier.MatchString(name) {
 			return fmt.Errorf("objstore: %q (declared by %s) is not an identifier "+
 				"this package will write into a statement", name, t.Table)
@@ -244,12 +220,18 @@ func (t ReferenceTable) Chunks() (string, error) {
 	return `SELECT DISTINCT ` + t.Column + ` FROM ` + t.Table, nil
 }
 
-// ChunksIn is the statement answering every chunk the table names in a run of
-// slots, whose two arguments are the first slot and the one past the last.
-func (t ReferenceTable) ChunksIn() (string, error) {
+// ChunksAmong is the statement answering which of n given chunks the table
+// names, its n arguments the chunks asked about. The collector asks it of a
+// BATCH of the chunks a backend listed, so a pass holds one batch in memory
+// rather than the company's whole inventory, and each question is n seeks of
+// the column's index rather than a scan.
+func (t ReferenceTable) ChunksAmong(n int) (string, error) {
+	if n <= 0 {
+		return "", fmt.Errorf("objstore: a question about %d chunks", n)
+	}
 	all, err := t.Chunks()
 	if err != nil {
 		return "", err
 	}
-	return all + ` WHERE ` + t.Slot + ` >= ? AND ` + t.Slot + ` < ?`, nil
+	return all + ` WHERE ` + t.Column + ` IN (?` + strings.Repeat(`, ?`, n-1) + `)`, nil
 }

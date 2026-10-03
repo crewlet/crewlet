@@ -160,6 +160,16 @@ const (
 	// together.
 	CustodyRetention = 32 * 24 * time.Hour
 
+	// ChunkLockTTL is how long a chunk lock outlives a holder that never let
+	// it go — the age of the bucket the locks are in (see [ObjectStores]).
+	//
+	// A MINUTE: what anybody does under one lock is one stat and one delete,
+	// or one put of at most a mebibyte, and internal/objstore bounds that
+	// work at a third of this, so a lock lapses only under a holder that has
+	// already abandoned its request. The cost of the length is how long a
+	// writer waits behind a collector that died holding one.
+	ChunkLockTTL = time.Minute
+
 	// SandboxRunRetention is absent for the same reason as the channel
 	// bucket's, one step sharper: a detached coding run can sit parked on
 	// a person's answer for DAYS (see sandbox.StatusAwaiting), and its
@@ -1144,7 +1154,7 @@ type Fleet interface {
 	Secrets
 	Integrations
 	Mailboxes
-	ObjectMaps
+	ObjectStores
 	EstateMaps
 	SeatPauses
 	PositionRegister
@@ -1156,48 +1166,56 @@ type Fleet interface {
 	Custody
 }
 
-// ObjectMapRecord is the fleet's object placement map as the store holds it.
+// ObjectStores is what the whole fleet has to agree on about the object store
+// (ADR-0026): which backend its files are in, and who may touch one chunk at a
+// time.
 //
-// THE VALUE IS OPAQUE BYTES here, the way a sandbox run's record is: the map's
-// shape and every rule about it belong to internal/objstore/placement, and a
-// coordination package that decoded it would be a second place to decide what
-// a valid map is.
-type ObjectMapRecord struct {
-	Value []byte
+// # The backend is the fleet's, and recorded once
+//
+// Every node reads and writes files through the backend its own Tier A names,
+// and two nodes naming different ones split the company's files between them
+// with nothing failing — each side's uploads read back on that side alone,
+// and the collector running on one side deletes nothing the other wrote. So
+// the first node to open the store records which backend it is, create-only
+// and with no age, and every node after compares its own against it and
+// refuses to boot on a mismatch.
+//
+// # Chunk locks, aged at [ChunkLockTTL]
+//
+// The collector deletes a chunk no row names once it is past a grace, and a
+// file re-using such a chunk re-puts it to make it young again. The one race
+// that loses a file's bytes is a delete landing after that re-put, so the two
+// take the chunk's lock around their check and their write (internal/objstore,
+// Locks). A lock is a create-only key in a bucket whose age is the lock's
+// lifetime, so a holder that dies holding one is let go by the bucket rather
+// than by anybody's clock.
+type ObjectStores interface {
+	// AgreeObjectBackend records identity as the fleet's object backend
+	// unless one is recorded, and answers the recorded one: identity
+	// itself, or what the first node recorded. An error is UNKNOWN — the
+	// caller must not open a backend it could not check.
+	AgreeObjectBackend(ctx context.Context, identity string) (string, error)
 
-	// Version is the store's version as read. OPAQUE, like
-	// [Record.Version]: pass back exactly what a read or a write handed you.
-	Version uint64
-}
+	// LockChunk takes chunk's lock for owner, answering false while
+	// another owner holds it. Taking a lock this owner already holds
+	// answers true, so a retried take whose answer was lost is not a
+	// second holder.
+	LockChunk(ctx context.Context, chunk, owner string) (bool, error)
 
-// ObjectMaps holds the ONE placement map every node places objects by.
-//
-// # Why coordination, and why one record
-//
-// Which data nodes hold which objects is a question the whole company has to
-// answer the same way NOW — a node that placed a group on different holders
-// from its peers would write an object where nobody reads it — which is the
-// definition of a coordination record (ADR-0003). It is one record because it
-// is one value: a placement is a function of the WHOLE map, so a map split
-// across keys could be read half-changed.
-//
-// # COMPARE-AND-SET, and no retention
-//
-// One duty maintains it, and a duty can move between nodes mid-write, so every
-// change is conditioned on the version its writer read and a false answer is a
-// lost race to re-read. The bucket has no age: the map is standing state, and
-// one that expired would read as a fleet with nowhere to put anything.
-type ObjectMaps interface {
-	// ObjectMap reads the map, reporting false when none was ever written.
-	ObjectMap(ctx context.Context) (ObjectMapRecord, bool, error)
+	// UnlockChunk lets go of chunk's lock if owner holds it, and does
+	// nothing otherwise — a lock that aged out and was taken by somebody
+	// else is theirs.
+	UnlockChunk(ctx context.Context, chunk, owner string) error
 
-	// CreateObjectMap writes the first map, reporting false when one
-	// already exists — the second writer re-reads and updates instead.
-	CreateObjectMap(ctx context.Context, value []byte) (ObjectMapRecord, bool, error)
+	// RecordObjectCollection stores what the collector last found, an
+	// opaque value its owner (internal/engine) encodes, replacing the last
+	// one: the duty moves between nodes, and every node's status surface
+	// reads the latest report whoever wrote it.
+	RecordObjectCollection(ctx context.Context, value []byte) error
 
-	// UpdateObjectMap writes value at version, reporting false when that
-	// version no longer holds.
-	UpdateObjectMap(ctx context.Context, value []byte, version uint64) (ObjectMapRecord, bool, error)
+	// ObjectCollection reads the last report, false when none was ever
+	// written.
+	ObjectCollection(ctx context.Context) ([]byte, bool, error)
 }
 
 // EstateMapRecord is the fleet's estate map as the store holds it: which data

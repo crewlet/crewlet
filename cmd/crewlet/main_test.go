@@ -160,24 +160,6 @@ func TestBothTiersAreReportedTogether(t *testing.T) {
 	}
 }
 
-// THE PAIR'S OWN WARNING IS PRINTED, beside each tier's. A company that spreads
-// its file copies across a node label and a data node that does not carry it is
-// valid twice over — and places that node as a domain of its own, which can
-// put two copies in one real zone — so only the two-file form can say so, and
-// it does without failing: a fleet half-way through labelling is correct.
-func TestValidatingBothTiersWarnsAboutAMissingFailureDomainLabel(t *testing.T) {
-	t.Parallel()
-	company := "name: Acme\nobjects:\n  failure_domain: zone\n"
-	var out, errOut bytes.Buffer
-	args := append([]string{"validate"}, configPair(t, "", company)...)
-	if err := run(args, &out, &errOut); err != nil {
-		t.Fatalf("a missing label failed validation: %v", err)
-	}
-	if !strings.Contains(out.String(), "node.labels.zone") {
-		t.Errorf("the output does not name the label to set:\n%s", out.String())
-	}
-}
-
 func TestAMissingConfigNamesTheFileNotTheField(t *testing.T) {
 	t.Parallel()
 	// The default paths are relative, so a first run in the wrong

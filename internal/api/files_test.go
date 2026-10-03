@@ -108,12 +108,12 @@ func (f *fakeFiles) Open(_ context.Context, m objstore.Manifest) (io.ReadCloser,
 	return io.NopCloser(&fetchingReader{f: f, chunks: m.Chunks}), nil
 }
 
-func (f *fakeFiles) PutChunk(_ context.Context, h objstore.Hash, data []byte) (int, error) {
+func (f *fakeFiles) PutChunk(_ context.Context, h objstore.Hash, data []byte) error {
 	f.mu.Lock()
 	f.chunks[h] = append([]byte(nil), data...)
 	f.mu.Unlock()
 	f.log.add(fmt.Sprintf("stored %d", len(data)))
-	return 3, nil
+	return nil
 }
 
 func (f *fakeFiles) PutFileAs(_ context.Context, _, _ string, put tracker.FilePut) (tracker.WriteResult, error) {

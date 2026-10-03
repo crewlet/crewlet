@@ -314,6 +314,17 @@ func appendPastTheNode(t *testing.T, e *Engine, q *jetstream.Queue) (
 		t.Fatal("the tracker domain is not running")
 	}
 
+	// THE OBJECT COLLECTOR FINISHES ITS FIRST PASS AND STOPS: each pass pins
+	// the tracker's estate with a barrier of its own, and its first runs as
+	// the node boots — so left running, a pin lands between the two staged
+	// below and moves where they land. Stopping it mid-pass is not enough:
+	// a barrier's publish outlives the read that asked for it.
+	waitUntil(t, 20*time.Second, "the collector's first pass to be recorded", func() bool {
+		_, found, err := ObjectCollection(t.Context(), e.backends.Fleet)
+		return err == nil && found
+	})
+	e.stopObjectCollector()
+
 	// Settle: whatever the boot wrote to the tracker's log is applied.
 	waitUntil(t, 20*time.Second, "the node to catch up on its own log", func() bool {
 		_, end, err := log.Bounds(t.Context())

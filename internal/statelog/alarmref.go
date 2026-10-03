@@ -3,8 +3,6 @@ package statelog
 import (
 	"fmt"
 	"strings"
-
-	"github.com/crewlet/crewlet/internal/objstore/disk"
 )
 
 // AlarmReference renders the alarm table as the published markdown page.
@@ -88,21 +86,11 @@ var alarmMeaning = map[Kind]string{
 		"their query starts.",
 	KindCensusDrift: "A log is taking more than twice the linearizable reads " +
 		"its share of the census allows — 125 a day per agent seat, over its " +
-		"domain's logs, plus what each data node's object-store passes read " +
-		"on their own schedule — so every sizing decision under it is stale.",
-	KindObjectsMissing: "Parts of the company's files that the placement map " +
-		"puts on this node are held by no member of the fleet — every member " +
-		"asked answered that it has no copy — so those files cannot be read " +
-		"in full.",
-	KindObjectsDegraded: "Copies the placement map puts on this node are not " +
-		"here: its last completed repair at the map's current epoch left some " +
-		"behind, or none has completed for more than twice the repair " +
-		"interval — counted from the last one that did at that epoch, or, if " +
-		"none has, from when this node first placed by it. Those files have " +
-		"fewer copies than the company asked for.",
-	KindObjectsUnhealthy: "This node's object store has failed, or its volume " +
-		"is full. A failed store is taken out of the placement map after the " +
-		"absence grace; a full one keeps serving while writes go elsewhere.",
+		"domain's logs, plus what the object store's collector reads on its " +
+		"own schedule — so every sizing decision under it is stale.",
+	KindObjectsMissing: "Parts of the company's files are not in the object " +
+		"store: the collector's last audit asked the store for every chunk the " +
+		"estate names, and some were not there. Those files cannot be read in full.",
 	KindEstateUnserved: "A partition of the estate map has no copy that can answer: every " +
 		"holder the map lists serving it is on a node the map counts absent or unhealthy, " +
 		"or it has none — or, under layout 0, every live data node's copy of the estate " +
@@ -116,10 +104,6 @@ var alarmMeaning = map[Kind]string{
 		"not been confirmed within the age past which it is unknown: the staleness bound " +
 		"every cached coordination fact is held to, or the estate leases' TTL where that " +
 		"is shorter.",
-	// The two marks are the store's own, named once in internal/objstore/disk.
-	KindObjectsNearFull: fmt.Sprintf("This node's object store volume is past "+
-		"%.0f%% used. At %.0f%% it refuses every new chunk.",
-		disk.NearFullRatio*100, disk.FullRatio*100),
 }
 
 const alarmHeader = `# Alarms

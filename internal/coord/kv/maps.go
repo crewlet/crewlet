@@ -73,38 +73,7 @@ func (f *FleetStore) updateMap(ctx context.Context, kv jetstream.KeyValue, value
 	return revision, true, nil
 }
 
-const (
-	objectMapWhat = "the object placement map"
-	estateMapWhat = "the estate map"
-)
-
-// ObjectMap reads the object placement map.
-func (f *FleetStore) ObjectMap(ctx context.Context) (coord.ObjectMapRecord, bool, error) {
-	value, version, found, err := f.readMap(ctx, f.objects, objectMapWhat)
-	if !found || err != nil {
-		return coord.ObjectMapRecord{}, false, err
-	}
-	return coord.ObjectMapRecord{Value: value, Version: version}, true, nil
-}
-
-// CreateObjectMap writes the first object placement map.
-func (f *FleetStore) CreateObjectMap(ctx context.Context, value []byte) (coord.ObjectMapRecord, bool, error) {
-	version, created, err := f.createMap(ctx, f.objects, value, objectMapWhat)
-	if !created || err != nil {
-		return coord.ObjectMapRecord{}, false, err
-	}
-	return coord.ObjectMapRecord{Value: value, Version: version}, true, nil
-}
-
-// UpdateObjectMap writes the object placement map at the version it was read
-// at.
-func (f *FleetStore) UpdateObjectMap(ctx context.Context, value []byte, version uint64) (coord.ObjectMapRecord, bool, error) {
-	version, won, err := f.updateMap(ctx, f.objects, value, version, objectMapWhat)
-	if !won || err != nil {
-		return coord.ObjectMapRecord{}, false, err
-	}
-	return coord.ObjectMapRecord{Value: value, Version: version}, true, nil
-}
+const estateMapWhat = "the estate map"
 
 // EstateMap reads the estate map.
 func (f *FleetStore) EstateMap(ctx context.Context) (coord.EstateMapRecord, bool, error) {

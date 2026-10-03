@@ -11,9 +11,8 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/objstore"
-	"github.com/crewlet/crewlet/internal/objstore/placement"
+	"github.com/crewlet/crewlet/internal/objstore/collect"
 	"github.com/crewlet/crewlet/internal/objstore/references"
-	"github.com/crewlet/crewlet/internal/objstore/upkeep"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tracker"
 )
@@ -45,27 +44,26 @@ func (r *roundTrip) putFile(op, path string, content []byte) tracker.WriteResult
 	return res
 }
 
-// chunkRows is how many chunk rows name h at its own slot — what the object
-// store reads.
+// chunkRows is 1 when the collector's references read finds h named, and 0
+// when it does not — what the collector deletes by.
 func (r *roundTrip) chunkRows(t *testing.T, h objstore.Hash) int {
 	t.Helper()
-	if r.referencedIn(t, h.Slot(), h.Slot()+1)[h] {
+	if r.referenced(t, h)[h] {
 		return 1
 	}
 	return 0
 }
 
-// referencedIn is every chunk the references read answers for the slots
-// [lo, hi).
-func (r *roundTrip) referencedIn(t *testing.T, lo, hi int) map[objstore.Hash]bool {
+// referenced is which of among the collector's references read finds named.
+func (r *roundTrip) referenced(t *testing.T, among ...objstore.Hash) map[objstore.Hash]bool {
 	t.Helper()
-	// THROUGH THE DECLARED LIST, exactly as the engine builds the passes'
-	// sources, so this reads the statement the collector runs.
-	sources, err := upkeep.Sources(references.All, tracker.ObjectEstate{Reader: r.reader})
+	// THROUGH THE DECLARED LIST, exactly as the engine builds the
+	// collector's sources, so this reads the statement the collector runs.
+	sources, err := collect.Sources(references.All, tracker.ObjectEstate{Reader: r.reader})
 	if err != nil {
 		t.Fatal(err)
 	}
-	set, complete, err := sources[0].Referenced(t.Context(), lo, hi, statelog.Position{})
+	set, complete, err := sources[0].Referenced(t.Context(), among, statelog.Position{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -75,6 +73,24 @@ func (r *roundTrip) referencedIn(t *testing.T, lo, hi int) map[objstore.Hash]boo
 	out := make(map[objstore.Hash]bool, len(set))
 	for h := range set {
 		out[h] = true
+	}
+	return out
+}
+
+// every is every chunk the collector's audit walk finds named.
+func (r *roundTrip) every(t *testing.T) map[objstore.Hash]bool {
+	t.Helper()
+	sources, err := collect.Sources(references.All, tracker.ObjectEstate{Reader: r.reader})
+	if err != nil {
+		t.Fatal(err)
+	}
+	out := map[objstore.Hash]bool{}
+	complete, err := sources[0].Each(t.Context(), statelog.Position{}, func(h objstore.Hash) error {
+		out[h] = true
+		return nil
+	})
+	if err != nil || !complete {
+		t.Fatalf("the audit walk = %v (complete %v)", err, complete)
 	}
 	return out
 }
@@ -155,35 +171,31 @@ func TestAFileIsWrittenReadAndRemoved(t *testing.T) {
 	}
 }
 
-// A CHUNK ROW IS FILED AT ITS CHUNK'S SLOT, AND ONLY THERE — the applier
-// derives the slot from the hash rather than trusting a record to state it,
-// and a pass reads one group as one run of slots. A chunk found outside its
-// own slot would be read by the wrong group's pass; one missing from its own
-// would be deleted by the right one.
-func TestAChunkRowIsFiledAtItsSlot(t *testing.T) {
+// THE COLLECTOR'S TWO READS AGREE WITH WHAT WAS WRITTEN: a batch question
+// answers exactly the chunks of it some file names, and the audit's walk
+// answers every chunk named, each once. A chunk the batch read missed would be
+// deleted; one the walk missed would never be counted lost.
+func TestTheCollectorsReadsFindEveryNamedChunk(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
-	// Enough chunks that their slots are spread across the range rather
-	// than one lucky value, each written as its own small file.
 	var chunks []objstore.Hash
 	for i := range 8 {
-		content := []byte(fmt.Sprintf("chunk %d of the slot fixture", i))
-		r.putFile(fmt.Sprintf("op-%d", i), fmt.Sprintf("slots/%d.md", i), content)
+		content := []byte(fmt.Sprintf("chunk %d of the reference fixture", i))
+		r.putFile(fmt.Sprintf("op-%d", i), fmt.Sprintf("refs/%d.md", i), content)
 		chunks = append(chunks, objstore.HashOf(content))
 	}
+	stranger := objstore.HashOf([]byte("a chunk no file names"))
+	got := r.referenced(t, append([]objstore.Hash{stranger}, chunks...)...)
+	if got[stranger] {
+		t.Error("a chunk no file names was answered named")
+	}
 	for _, h := range chunks {
-		slot := h.Slot()
-		if !r.referencedIn(t, slot, slot+1)[h] {
-			t.Errorf("chunk %s is not read at its own slot %d", h, slot)
-		}
-		if r.referencedIn(t, 0, slot)[h] || r.referencedIn(t, slot+1, placement.Slots)[h] {
-			t.Errorf("chunk %s is read outside its slot %d — the row carries "+
-				"some other slot than its hash's", h, slot)
+		if !got[h] {
+			t.Errorf("chunk %s is named and the batch read missed it", h)
 		}
 	}
-	if all := r.referencedIn(t, 0, placement.Slots); len(all) != len(chunks) {
-		t.Fatalf("the whole slot range answers %d chunks, want the %d written",
-			len(all), len(chunks))
+	if all := r.every(t); len(all) != len(chunks) {
+		t.Fatalf("the audit walk answers %d chunks, want the %d written", len(all), len(chunks))
 	}
 }
 

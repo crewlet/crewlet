@@ -24,6 +24,7 @@ func openMapsFleet(t *testing.T) *FleetStore {
 		FollowRetention: time.Minute, BudgetRetention: time.Minute, RebaseRetention: time.Minute,
 		CooldownMax: time.Minute, StatusFreshness: time.Minute,
 		CustodyRetention: time.Minute,
+		ChunkLockTTL:     time.Minute,
 	})
 	if err != nil {
 		t.Fatalf("OpenFleet: %v", err)

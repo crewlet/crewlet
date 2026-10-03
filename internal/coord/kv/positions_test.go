@@ -135,6 +135,7 @@ func openFleetWithTTL(t *testing.T, nc *nats.Conn, ttl time.Duration) *FleetStor
 		BudgetRetention:  ttl,
 		StatusFreshness:  ttl,
 		CustodyRetention: ttl,
+		ChunkLockTTL:     ttl,
 	})
 	if err != nil {
 		t.Fatalf("OpenFleet: %v", err)

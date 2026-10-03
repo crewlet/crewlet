@@ -77,11 +77,6 @@ type App struct {
 	// with no native tracker or no object store.
 	files ProjectFiles
 
-	// objects makes the operator's gestures on the object store's
-	// placement map. Nil leaves the routes unmounted, on a node that runs
-	// no object store.
-	objects ObjectsControl
-
 	// estate makes the operator's gestures on the estate map. Nil leaves
 	// the routes unmounted, on a node with no coordination store.
 	estate EstateControl
@@ -246,11 +241,6 @@ type Options struct {
 	// [FleetBrokerControl].
 	FleetBroker FleetBrokerControl
 
-	// Objects makes the operator's gestures on the object store's
-	// placement map. Nil leaves the routes unmounted — see
-	// [ObjectsControl].
-	Objects ObjectsControl
-
 	// Estate reads the estate map and makes the operator's gestures on it.
 	// Nil leaves the routes unmounted and the estate question unregistered
 	// — see [EstateControl].
@@ -393,7 +383,6 @@ func New(opts Options) (*App, error) {
 	a.files = opts.Files
 	a.capacity = opts.Capacity
 	a.fleetBroker = opts.FleetBroker
-	a.objects = opts.Objects
 	a.estate = opts.Estate
 
 	mux := http.NewServeMux()
@@ -413,15 +402,10 @@ func New(opts Options) (*App, error) {
 	// anonymous-read posture allows. See retention.go.
 	a.mountRetention(mux)
 	a.mountFiles(mux)
-	// The object store's gestures: taking a data node out of the placement
-	// map, putting it back, holding the map through planned maintenance.
-	// POSTs for the retention gestures' reason — moving a member's share
-	// across the fleet is not a read. See objects.go.
-	a.mountObjects(mux)
 	// The estate map's gestures: taking a data node out of every
 	// partition's target, putting it back, holding the map, and moving one
-	// partition's copy off one node. POSTs for the same reason. See
-	// estate.go.
+	// partition's copy off one node. POSTs for the retention gestures'
+	// reason. See estate.go.
 	a.mountEstate(mux)
 	// The capacity window's own control surface. It is the one thing a
 	// maintenance-mode node serves that a publishing one does not need,

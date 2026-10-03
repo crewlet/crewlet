@@ -237,12 +237,12 @@ func (r *Reader) File(ctx context.Context, project, path string,
 	return detail, nil
 }
 
-// ObjectEstate is this domain as the object store's passes read it: a barrier
-// on the tracker's log, and a read of this node's rows that says whether it
-// covers every record. WHICH rows is not here — the passes build that from the
-// declared tables ([FileChunkReferences]), so a statement written beside the
-// declaration can never disagree with it. See internal/objstore/upkeep's
-// Estate.
+// ObjectEstate is this domain as the object store's collector reads it: a
+// barrier on the tracker's log, and a read of this node's rows that says
+// whether it covers every record. WHICH rows is not here — the collector
+// builds that from the declared tables ([FileChunkReferences]), so a
+// statement written beside the declaration can never disagree with it. See
+// internal/objstore/collect's Estate.
 type ObjectEstate struct {
 	Reader *Reader
 }

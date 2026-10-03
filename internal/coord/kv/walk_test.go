@@ -133,6 +133,7 @@ func openFleetVia(t *testing.T, client jetstream.JetStream, prefix string) *Flee
 		BudgetRetention:  time.Hour,
 		StatusFreshness:  10 * time.Minute,
 		CustodyRetention: 10 * time.Minute,
+		ChunkLockTTL:     10 * time.Minute,
 	})
 	if err != nil {
 		t.Fatalf("OpenFleet: %v", err)
@@ -807,7 +808,7 @@ const churnListings = 300
 // A LEASE RENEWED THROUGHOUT A LISTING IS IN IT. The regression.
 //
 // Every membership read is ListLive: seat placement divides the company by
-// ListLive(ClassNode), the object map is built from ListLive(ClassObjects). A
+// ListLive(ClassNode), the estate map is built from ListLive(ClassEstate). A
 // renew is an overwrite, and on a bucket keeping one revision per key an
 // overwrite of a key the pass has not reached removes the revision it was
 // about to deliver — measured at 848 misses in 3634 listings, each a live
@@ -1133,6 +1134,7 @@ func TestAKeyThePassLostIsReadBackOnTheEmbeddedFleetsDomain(t *testing.T) {
 		RebaseRetention:  10 * time.Minute,
 		StatusFreshness:  10 * time.Minute,
 		CustodyRetention: 10 * time.Minute,
+		ChunkLockTTL:     10 * time.Minute,
 	})
 	if err != nil {
 		t.Fatalf("OpenFleet: %v", err)

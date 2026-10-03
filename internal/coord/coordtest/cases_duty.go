@@ -128,7 +128,7 @@ var dutyCases = []testCase{
 		h.claim(coord.NodeResource("node-a"), coord.AcquireOptions{
 			Owner: "node-a:1", TTL: LongTTL, Ungated: true,
 		})
-		h.claim(coord.ObjectsResource("node-a"), coord.AcquireOptions{
+		h.claim(coord.EstateResource("node-a"), coord.AcquireOptions{
 			Owner: "node-a:1", TTL: LongTTL, Ungated: true,
 		})
 
@@ -143,12 +143,11 @@ var dutyCases = []testCase{
 		// a duty counted into it is every node believing the fleet is
 		// larger than it is and leaving seats dark.
 		h.requireResources("live nodes", h.listLive(coord.ClassNode), "node:node-a")
-		// And the object store's membership read, which the placement map
-		// is maintained from: a duty or a presence lease counted into it
-		// is a member that holds no chunks, and every write placed on it
-		// is a copy short.
-		h.requireResources("live object-store members", h.listLive(coord.ClassObjects),
-			"objects:node-a")
+		// And the estate map's membership read, which its holders are
+		// drawn from: a duty or a presence lease counted into it is a
+		// member that holds no partition.
+		h.requireResources("live estate-map members", h.listLive(coord.ClassEstate),
+			"estate:node-a")
 
 		// ListOwned narrows by nothing at all, because the owner is in the
 		// record rather than in the key, so it is the one read that has to
@@ -156,7 +155,7 @@ var dutyCases = []testCase{
 		// converge to empty: a duty it never listed is a node that reports
 		// itself drained while its duty is still running.
 		h.requireResources("everything node-a:1 holds", h.listOwned("node-a:1"),
-			"node:node-a", "objects:node-a", "seat:ceo", "worker:scheduler",
+			"estate:node-a", "node:node-a", "seat:ceo", "worker:scheduler",
 			"worker:sandbox-waiter")
 	}},
 

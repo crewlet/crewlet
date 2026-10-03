@@ -68,7 +68,6 @@ var companyFields = map[string]classified{
 	"NotificationCoalesceWindowSeconds": {exposure: exposureGuarded, why: "an operational setting"},
 	"NotificationCoalesceMaxBatch":      {exposure: exposureGuarded, why: "an operational setting"},
 	"Workers":                           {exposure: exposureGuarded, why: "operational configuration of the delegate surface"},
-	"Objects":                           {exposure: exposureGuarded, why: "how many copies of every file the fleet keeps and the node label it spreads them across: a map of the deployment's failure domains"},
 	"Estate":                            {exposure: exposureGuarded, why: "how many copies of each partition of the replicated estate and the node label they are spread across: a map of the deployment's failure domains"},
 	"Roles":                             {exposure: exposurePublic, why: "the tree itself"},
 	"Units":                             {exposure: exposurePublic, why: "the tree itself"},

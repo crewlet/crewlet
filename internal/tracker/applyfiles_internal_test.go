@@ -9,8 +9,8 @@ import (
 
 // A FILE RECORD THAT IS NOT THE FILE ITS SUBJECT ARBITRATED IS REFUSED, and so
 // is one naming a chunk that is not a content address: the first would leave
-// the arbitrated path held by nothing, the second a row with no slot, which
-// every object-store pass over the group it landed in would refuse to read.
+// the arbitrated path held by nothing, the second a row the collector and the
+// backup refuse to read, stopping both for good.
 func TestTheApplierRefusesAFileThatIsNotItsSubject(t *testing.T) {
 	t.Parallel()
 	h := objstore.HashOf([]byte("content"))
@@ -25,9 +25,8 @@ func TestTheApplierRefusesAFileThatIsNotItsSubject(t *testing.T) {
 		"an unnormalised": {Project: "ENG", Path: "/a/b.md", Chunks: good.Chunks},
 		"an invalid chunk": {Project: "ENG", Path: "a/b.md",
 			Chunks: []FileChunk{{Hash: h, Size: 7}, {Hash: "zz", Size: 7}}},
-		// UPPERCASE IS NOT AN ADDRESS here, and it is the refusal replicated
-		// migration 0032's backfill leaned on: its expression reads
-		// lowercase hex only.
+		// UPPERCASE IS NOT AN ADDRESS: a name is read back through
+		// objstore.ParseHash, which takes lowercase hex only.
 		"an uppercase chunk": {Project: "ENG", Path: "a/b.md",
 			Chunks: []FileChunk{{Hash: objstore.Hash(strings.ToUpper(string(h))), Size: 7}}},
 	} {

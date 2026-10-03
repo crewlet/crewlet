@@ -2156,10 +2156,10 @@ streams a download without either passing through a model.
 
 **The bytes are not in the tracker.** A file is a row saying where it lives,
 what it is and which **chunks** make it up; the chunks are in the
-[object store](../concepts/object-store.md), placed on a few data nodes rather
-than copied to every one. So a project can hold far more than any one node's
-disk, and a node that holds no data at all reads and writes files as any other
-node does. Every upload stores its bytes **before** it writes the row naming
+[object store](../concepts/object-store.md) — one store the whole fleet
+shares, a bucket on the fleet's own broker or an S3 bucket — rather than in
+every data node's database. So a node that holds no data at all reads and
+writes files as any other node does. Every upload stores its bytes **before** it writes the row naming
 them, so a file that is listed is always a file that can be read.
 
 | | |
@@ -2167,7 +2167,7 @@ them, so a file that is listed is always a file that can be read.
 | Largest file | 1 GiB — larger artefacts belong in a store built for them, with a link in the project |
 | Path | up to 1 024 bytes, `/` between folders; no empty folder, no `.` or `..`, no backslash or control character. A leading `/` and surrounding spaces are dropped |
 | Version | every write moves it; `if_version` (tools) or `If-Match` (REST) refuses a write when the file has changed since it was read |
-| Removing | the file leaves the project's listing and its history records who removed it and when; its content is deleted from storage by the object store's [hourly collection](../concepts/object-store.md#keeping-the-copies-where-the-map-says) once no file names it and it was last written more than a day ago, so write it again to bring it back |
+| Removing | the file leaves the project's listing and its history records who removed it and when; its content is deleted from storage by the object store's [hourly collection](../concepts/object-store.md#collection-and-audit) once no file names it and it was last written more than a day ago, so write it again to bring it back |
 
 A file's changes are history rows like any other — `file_written` and
 `file_removed` — naming who made them. They wake nobody: a file is read from its

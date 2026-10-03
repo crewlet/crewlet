@@ -14,8 +14,6 @@ import (
 	"github.com/crewlet/crewlet/internal/backup"
 	"github.com/crewlet/crewlet/internal/coord/memory"
 	"github.com/crewlet/crewlet/internal/objstore"
-	"github.com/crewlet/crewlet/internal/objstore/disk"
-	"github.com/crewlet/crewlet/internal/objstore/transfer"
 	"github.com/crewlet/crewlet/internal/store"
 	"github.com/crewlet/crewlet/internal/store/storetest"
 )
@@ -33,8 +31,8 @@ func fileWithChunks(t *testing.T, db *store.DB, chunks ...[]byte) {
 		for i, c := range chunks {
 			h := objstore.HashOf(c)
 			if _, err := tx.ExecContext(t.Context(), `INSERT INTO tracker_file_chunks
-				(file_id, seq, chunk, size, slot) VALUES ('ENG.x', ?, ?, ?, ?)`,
-				i, string(h), len(c), h.Slot()); err != nil {
+				(file_id, seq, chunk, size) VALUES ('ENG.x', ?, ?, ?)`,
+				i, string(h), len(c)); err != nil {
 				return err
 			}
 		}
@@ -44,8 +42,9 @@ func fileWithChunks(t *testing.T, db *store.DB, chunks ...[]byte) {
 	}
 }
 
-// A BACKUP CARRIES EVERY CHUNK THE STORE COPY NAMES, in the layout a node's own
-// chunk directory has — so a restore is a directory copy — and says how many.
+// A BACKUP CARRIES EVERY CHUNK THE STORE COPY NAMES, one file per chunk named
+// by its hash — the key layout an S3 backend's bucket has, so a restore is one
+// sync of the directory — and says how many.
 func TestABackupCarriesTheChunksItsCopyNames(t *testing.T) {
 	t.Parallel()
 	db := openStore(t)
@@ -76,34 +75,42 @@ func TestABackupCarriesTheChunksItsCopyNames(t *testing.T) {
 		manifest.Objects.Bytes != int64(len("one chunk")+len("another chunk")) {
 		t.Fatalf("manifest objects = %+v", manifest.Objects)
 	}
-	// IN THE LAYOUT, AS WRITTEN — checked before anything opens the
-	// directory as a store, because opening one moves every chunk it finds
-	// out of place to where it belongs, and would hide a backup written in
-	// some other shape behind a store that quietly repaired it.
-	for h := range held {
-		if _, err := os.Stat(filepath.Join(dir, manifest.Objects.Dir, disk.Layout(h))); err != nil {
-			t.Fatalf("chunk %s is not where a node's chunk directory keeps it: %v", h, err)
-		}
-	}
-	// RESTORABLE AS A DIRECTORY: opened as a chunk store, it serves every
-	// chunk under its name.
-	restored, err := disk.Open(filepath.Join(dir, manifest.Objects.Dir))
+	restoresWhole(t, filepath.Join(dir, manifest.Objects.Dir), held)
+}
+
+// A BACKUP WHOSE CHUNKS LIVE IN A STREAM IT SNAPSHOTS COPIES NONE BESIDE IT:
+// the NATS backend's bucket is a stream, and its snapshot is the copy.
+func TestABackupOfChunksInAStreamNamesTheStream(t *testing.T) {
+	t.Parallel()
+	db := openStore(t)
+	fileWithChunks(t, db, []byte("one chunk"), []byte("another"))
+	fleet := memory.NewFleet()
+	svc := build(t, backup.Options{
+		Store: db, Partitions: holdsTheEstate, NodeID: "n", Holds: fleet, Backups: fleet,
+		Now: func() time.Time { return clock },
+		Objects: &backup.Objects{Stream: "OBJ_crewlet_files",
+			Get: func(context.Context, objstore.Hash) ([]byte, error) {
+				t.Error("a chunk was fetched although the stream snapshot carries it")
+				return nil, errors.New("not expected")
+			}},
+	})
+	dir := filepath.Join(t.TempDir(), "in-stream")
+	manifest, err := svc.Take(t.Context(), dir)
 	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("Take: %v", err)
 	}
-	defer restored.Close()
-	for h, want := range held {
-		got, err := restored.Get(h)
-		if err != nil || string(got) != string(want) {
-			t.Fatalf("chunk %s from the backup = %q, %v", h, got, err)
-		}
+	if o := manifest.Objects; o == nil || o.Stream != "OBJ_crewlet_files" || o.Chunks != 2 || o.Dir != "" {
+		t.Fatalf("manifest objects = %+v, want the stream named and no directory", o)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "objects")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatal("a chunk directory was written beside a stream that carries the chunks")
 	}
 }
 
 // A COPY NAMING A CHUNK NOBODY COULD SUPPLY — AND WHOSE ABSENCE IS NOT
 // DEFINITE — IS NOT A BACKUP: no manifest is written, because the chunk may be
-// intact on a member that did not answer, and a restore from it would bring
-// back files whose bytes the fleet still had.
+// intact in a store that did not answer, and a restore from it would bring
+// back files whose bytes the store still had.
 func TestABackupMissingAChunkWritesNoManifest(t *testing.T) {
 	t.Parallel()
 	for name, objects := range map[string]*backup.Objects{
@@ -132,13 +139,13 @@ func TestABackupMissingAChunkWritesNoManifest(t *testing.T) {
 	}
 }
 
-// A CHUNK THE FLEET HAS LOST IS RECORDED, NOT REFUSED. Refused, it refused
+// A CHUNK THE STORE HAS LOST IS RECORDED, NOT REFUSED. Refused, it refused
 // every later backup too, and the trim's backup term — which waits on a backup
 // it can see — stopped every log in the fleet from being trimmed over one
-// file's missing mebibyte. A chunk every member ANSWERED it does not hold is
-// gone whatever the backup does; the backup carries the rest, names the lost
-// one, and is announced like any other.
-func TestABackupRecordsAChunkTheFleetHasLostAndCompletes(t *testing.T) {
+// file's missing mebibyte. A chunk the store ANSWERED it does not hold is gone
+// whatever the backup does; the backup carries the rest, names the lost one,
+// and is announced like any other.
+func TestABackupRecordsAChunkTheStoreHasLostAndCompletes(t *testing.T) {
 	t.Parallel()
 	db := openStore(t)
 	kept, lost := []byte("still held"), []byte("held by nobody")
@@ -154,7 +161,7 @@ func TestABackupRecordsAChunkTheFleetHasLostAndCompletes(t *testing.T) {
 			if h == objstore.HashOf(kept) {
 				return kept, nil
 			}
-			return nil, fmt.Errorf("%w: %s (a: not held; b: not held)", transfer.ErrNotFound, h)
+			return nil, fmt.Errorf("%w: %s", objstore.ErrNotFound, h)
 		}},
 	})
 	dir := filepath.Join(t.TempDir(), "with-a-lost-chunk")
@@ -242,7 +249,7 @@ func TestABackupTakesWhatItsPreviousBackupHolds(t *testing.T) {
 	// A ROTTEN COPY IN THE EARLIER ARTEFACT IS FETCHED AGAIN. The second
 	// backup linked the first's files, so a third is the one that finds the
 	// rot — written over the second's copy, the newest previous backup.
-	rotten := filepath.Join(second, manifest.Objects.Dir, disk.Layout(objstore.HashOf(one)))
+	rotten := filepath.Join(second, manifest.Objects.Dir, string(objstore.HashOf(one)))
 	if err := os.Remove(rotten); err != nil {
 		t.Fatal(err)
 	}
@@ -266,17 +273,12 @@ func TestABackupTakesWhatItsPreviousBackupHolds(t *testing.T) {
 	}
 }
 
-// restoresWhole fails unless dir, opened as a chunk store, serves every chunk
-// of held under its name.
+// restoresWhole fails unless dir holds every chunk of held as a file named by
+// its hash — the layout a sync into an S3 bucket's prefix restores.
 func restoresWhole(t *testing.T, dir string, held map[objstore.Hash][]byte) {
 	t.Helper()
-	restored, err := disk.Open(dir)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer restored.Close()
 	for h, want := range held {
-		got, err := restored.Get(h)
+		got, err := os.ReadFile(filepath.Join(dir, string(h)))
 		if err != nil || string(got) != string(want) {
 			t.Fatalf("chunk %s from %s = %q, %v", h, dir, got, err)
 		}

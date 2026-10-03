@@ -151,10 +151,10 @@ func wireAPI(
 		Company: company,
 		NodeID:  nodeID,
 		// THE FLEET VIEW, over the lease table, the control plane and the
-		// stored placement map, as cmd/crewlet reads it: the seat states
-		// the dashboard is served read placement from the leases, and a
-		// case that makes a gesture on one member reads its effect off
-		// another's view of the fleet.
+		// object collector's recorded report, as cmd/crewlet reads it: the
+		// seat states the dashboard is served read placement from the
+		// leases, and a member that ran no pass reads the collector's
+		// report off the store every member reads.
 		Coord:   backends.Coord,
 		Plane:   backends.Fleet,
 		Objects: backends.Fleet,
@@ -191,10 +191,6 @@ func wireAPI(
 		// an upload on one member and a download from another cross the
 		// object store the way a deployment's do.
 		Files: api.EngineFiles(e),
-		// THE OBJECT STORE'S GESTURES, through the adapter `crewlet run`
-		// uses, so a case taking a member out crosses the same seam a
-		// deployment's does.
-		Objects: api.EngineObjects(e),
 		// AND THE ESTATE MAP'S, the one seam GET /estate and its gestures
 		// read through, as `crewlet run` wires it.
 		Estate: api.EngineEstate(e),

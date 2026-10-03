@@ -214,6 +214,7 @@ var contract = []Entry{
 	{"HOLDER_STATES", ReadLiteral, "internal/api.TestTheDashboardKnowsEveryEstateState"},
 	{"PARTITION_STATES", ReadLiteral, "internal/api.TestTheDashboardKnowsEveryEstateState"},
 	{"HOLD_LENGTHS", ReadLiteral, "internal/api.TestTheDashboardOffersHoldLengthsTheEngineAccepts"},
+	{"OBJECTS_STATES", ReadLiteral, "internal/api.TestTheDashboardKnowsEveryObjectsState"},
 
 	// links.ts
 	{"PAGE_ADDRESS_PREFIX", ReadScalar, "internal/pages.TestTheDashboardAddressesAPageTheWayTheBacklinksReadIt"},

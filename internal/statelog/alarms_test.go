@@ -8,7 +8,6 @@ import (
 
 	"github.com/crewlet/crewlet/internal/eventfan"
 	"github.com/crewlet/crewlet/internal/membership"
-	"github.com/crewlet/crewlet/internal/objstore/disk"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/statelog/metrics"
 )
@@ -156,43 +155,10 @@ func TestEveryAlarmFiresOnItsConditionAndOnNothingElse(t *testing.T) {
 				CensusLog: "tracker@tracker.007"},
 			"on tracker@tracker.007 against the 1000",
 		},
-		"chunks no member holds": {
+		"chunks the object store lost": {
 			statelog.KindObjectsMissing,
 			statelog.Reading{ObjectsMissing: 2},
-			"held by no member",
-		},
-		"copies a completed repair left behind": {
-			statelog.KindObjectsDegraded,
-			statelog.Reading{ObjectsPending: 7, ObjectsUnreachable: 3},
-			"7 chunk(s)",
-		},
-		"a map epoch no repair has completed at": {
-			statelog.KindObjectsDegraded,
-			statelog.Reading{ObjectsUnrepairedFor: time.Hour,
-				ObjectsRepairInterval: 10 * time.Minute},
-			"no repair pass has completed",
-		},
-		"a repair past its second interval": {
-			statelog.KindObjectsDegraded,
-			statelog.Reading{ObjectsUnrepairedFor: 20*time.Minute + time.Second,
-				ObjectsRepairInterval: 10 * time.Minute},
-			"for 20m 1s, and one is due every 10m",
-		},
-		"a failed object store": {
-			statelog.KindObjectsUnhealthy,
-			statelog.Reading{ObjectsHealth: disk.HealthFailed,
-				ObjectsHealthDetail: "3 operations in a row failed"},
-			"3 operations in a row failed",
-		},
-		"a full object store": {
-			statelog.KindObjectsUnhealthy,
-			statelog.Reading{ObjectsHealth: disk.HealthFull, ObjectsUsedPercent: 96},
-			"full (96.0% used)",
-		},
-		"a nearly full object store": {
-			statelog.KindObjectsNearFull,
-			statelog.Reading{ObjectsHealth: disk.HealthNearFull, ObjectsUsedPercent: 88},
-			"88.0% used",
+			"2 chunk(s) the company's files are made of are not in the object store",
 		},
 		"a partition no copy can answer for": {
 			statelog.KindEstateUnserved,
@@ -309,33 +275,12 @@ func TestTheIndexRecallAlarmFiresAtTheEvaluationsFloor(t *testing.T) {
 	}
 }
 
-// THE OBJECT STORE ALARMS FIRE AT THE THRESHOLDS THE STORE ALREADY DECIDED,
-// and are silent short of them: a repair still inside the interval the passes
-// run on is a repair on schedule, a store the disk calls ok is ok, and a chunk
-// a member did not answer for is unreachable rather than missing.
-//
-// AND A PASS DUE BUT NOT YET DONE IS ON SCHEDULE TOO. The reading runs from
-// the last completed pass, so every healthy node passes one interval each
-// cycle — the next pass starts an interval after the last one ended and
-// finishes only after its own duration — and the alarm waits a second
-// interval before it calls that a repair that is not keeping up.
-func TestTheObjectStoreAlarmsAreSilentShortOfTheirThresholds(t *testing.T) {
+// THE MISSING-CHUNK ALARM IS SILENT ON NOTHING MISSING — including a reading
+// from a node that holds no collector duty, which reports no audit at all.
+func TestTheObjectStoreAlarmIsSilentWithNothingMissing(t *testing.T) {
 	t.Parallel()
-	for name, r := range map[string]statelog.Reading{
-		"a repair on schedule": {ObjectsUnrepairedFor: 9 * time.Minute,
-			ObjectsRepairInterval: 10 * time.Minute},
-		"a pass due and still running": {ObjectsUnrepairedFor: 12 * time.Minute,
-			ObjectsRepairInterval: 10 * time.Minute},
-		"exactly two intervals": {ObjectsUnrepairedFor: 20 * time.Minute,
-			ObjectsRepairInterval: 10 * time.Minute},
-		"a node running no passes":    {ObjectsUnrepairedFor: time.Hour},
-		"a healthy store":             {ObjectsHealth: disk.HealthOK, ObjectsUsedPercent: 60},
-		"a store that has not said":   {ObjectsHealth: "", ObjectsUsedPercent: 99},
-		"unreachable but not pending": {ObjectsUnreachable: 4},
-	} {
-		if got := statelog.Evaluate(r); len(got) != 0 {
-			t.Errorf("%s raised %v", name, kindsOf(got))
-		}
+	if got := statelog.Evaluate(statelog.Reading{}); len(got) != 0 {
+		t.Errorf("an empty reading raised %v", kindsOf(got))
 	}
 }
 

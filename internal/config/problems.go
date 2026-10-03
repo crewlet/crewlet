@@ -802,8 +802,6 @@ func TierWarnings(boot *Bootstrap, company *Company) []Warning {
 	// revision there would refuse the one that asks for the spreading.
 	if data {
 		out = append(out, missingDomainLabels(boot.Node.Labels, []spreadBlock{
-			{field: "objects.failure_domain", key: company.Objects.FailureDomain,
-				copies: "copies of its files"},
 			{field: "estate.failure_domain", key: company.Estate.FailureDomain,
 				copies: "copies of its estate's partitions"},
 		})...)

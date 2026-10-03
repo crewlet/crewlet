@@ -307,9 +307,9 @@ type Options struct {
 	// behind it — the most confusing shape this gate has.
 	Backups coord.BackupRegister
 
-	// Objects is how the chunks the copy names are read. Nil is a node that
-	// runs no object store, which is refused only when the copy names a
-	// chunk — see [ErrObjectsUnreachable].
+	// Objects is how the chunks the copy names are reached. Nil is a node
+	// that runs no object store, which is refused only when the copy names
+	// a chunk — see [ErrObjectsUnreachable].
 	Objects *Objects
 
 	// Metrics is where the copy's duration is recorded. Nil records
@@ -502,10 +502,9 @@ func (s *Service) Take(ctx context.Context, dir string) (Manifest, error) {
 		if lost := manifest.Objects; lost != nil && len(lost.Lost) > 0 {
 			log.WarnContext(ctx, "backup_objects_lost",
 				"dir", dir, "lost", len(lost.Lost), "chunks", len(hashes),
-				"detail", "the copy names chunks no member of the placement map holds; "+
+				"detail", "the copy names chunks the object store does not hold; "+
 					"the backup carries everything else and lists them in its "+
-					"manifest — the objects_missing alarm names the node that "+
-					"should hold each")
+					"manifest, and the objects_missing alarm counts them")
 		}
 		// READING A DATABASE CREATES SIDECARS, even for a read, so the
 		// copy is folded back into one file — a -wal left inside the

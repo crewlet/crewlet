@@ -46,8 +46,8 @@ import (
 // narrow table, 8× smaller, and because HAMMING arithmetic is integer: two
 // CPUs agree on it to the bit, where a float k-means disagrees in the last
 // place across architectures and two nodes would file one document in two
-// lists. That is ADR-0027's objection to a float logarithm in placement, and
-// it binds here for the same reason.
+// lists. A float in anything every node must compute alike is a value two
+// architectures can disagree on, and an index is exactly such a thing.
 //
 // # What it costs, and what it loses — measured, never assumed
 //

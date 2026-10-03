@@ -157,8 +157,7 @@ func orEvery(roles string) string {
 
 // THE RULES ABOUT THE DISK TURN ON `data`, WHATEVER THE BROKER: a data node
 // never has a scratch store, and a node without data always has one and keeps
-// no estate and no share of the object store — on a leaf and on an external
-// cluster alike.
+// no estate — on a leaf and on an external cluster alike.
 func TestTheDiskRulesFollowTheDataRoleOnEveryBroker(t *testing.T) {
 	t.Parallel()
 	for _, kind := range []placement.BrokerKind{placement.BrokerLeaf, placement.BrokerClient} {
@@ -167,8 +166,6 @@ func TestTheDiskRulesFollowTheDataRoleOnEveryBroker(t *testing.T) {
 				"store:\n  path: /var/n.db\n", "store.scratch", "missing"},
 			"a node without data keeping an estate": {
 				"store:\n  scratch: true\n  replicated_path: /var/r.db\n", "store", "conflict"},
-			"a node without data holding objects": {
-				"store:\n  scratch: true\n  objects:\n    weight: 2\n", "store.objects", "conflict"},
 			"a node without data offering an estate share": {
 				"store:\n  scratch: true\n  estate:\n    weight: 2\n", "store.estate", "conflict"},
 		} {

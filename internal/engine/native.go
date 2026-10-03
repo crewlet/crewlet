@@ -18,8 +18,8 @@ import (
 	"github.com/crewlet/crewlet/internal/estate"
 	"github.com/crewlet/crewlet/internal/knowledge"
 	"github.com/crewlet/crewlet/internal/notify"
+	"github.com/crewlet/crewlet/internal/objstore/collect"
 	"github.com/crewlet/crewlet/internal/objstore/references"
-	"github.com/crewlet/crewlet/internal/objstore/upkeep"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/pages"
 	"github.com/crewlet/crewlet/internal/queue"
@@ -417,8 +417,8 @@ func (e *Engine) startNative(ctx context.Context, boot *config.Bootstrap, c *Com
 	e.native.Store(n)
 	// THE RUNTIME IS THE ENGINE'S FROM HERE, so the cleanup above stands
 	// down and [Engine.stopNative] — the same shutdown — is what ends it.
-	// Its object passes are NOT started here: they append, and a runtime
-	// built in a capacity window must not ([Engine.startNativePasses]).
+	// Its object collector is NOT started here: it appends, and a runtime
+	// built in a capacity window must not ([Engine.startNativeCollector]).
 	started = true
 	log.InfoContext(ctx, "native_backends_started",
 		"tracker", runTracker, "knowledge", wiki)
@@ -428,16 +428,16 @@ func (e *Engine) startNative(ctx context.Context, boot *config.Bootstrap, c *Com
 // objectEstates is every domain of this runtime whose rows may name chunks,
 // as the object store's passes read them — empty where it runs none.
 //
-// EVERY DOMAIN A DECLARATION NAMES must be here: [upkeep.Sources] refuses a
+// EVERY DOMAIN A DECLARATION NAMES must be here: [collect.Sources] refuses a
 // declared table whose domain has no estate, and the engine's own test builds
 // the sources from this list against internal/objstore/references, so a
 // consumer declaring a table in a new domain fails the build here rather
 // than leaving the passes unstarted in production.
-func (n *native) objectEstates() []upkeep.Estate {
+func (n *native) objectEstates() []collect.Estate {
 	if n.trackerReader == nil {
 		return nil
 	}
-	return []upkeep.Estate{tracker.ObjectEstate{Reader: n.trackerReader}}
+	return []collect.Estate{tracker.ObjectEstate{Reader: n.trackerReader}}
 }
 
 // startNativeFor brings the native runtime up for a company an APPLY hands a
@@ -487,42 +487,37 @@ func (e *Engine) startNativeFor(ctx context.Context, c *Company) (bool, error) {
 	}
 	if e.mode.Publishes() {
 		e.startNativeDuties(ctx)
-		e.startNativePasses(ctx)
+		e.startNativeCollector(ctx)
 		e.startNativeFeeds(ctx)
 	}
 	return true, nil
 }
 
-// startNativePasses runs this data node's object passes — the repair, the
-// collection and the scrub — which measure the chunks on its disk against the
-// files the tracker's rows name: without a tracker there are no files, and
-// nothing to repair or collect against. ONE CALL FOR BOTH CALLERS, [New] and
-// [Engine.startNativeFor], for [Engine.startNativeDuties]'s reason.
+// startNativeCollector starts the object store's collector duty on this data
+// node: it deletes chunks no row names and audits what the store has lost,
+// both against the files the tracker's rows name — without a tracker there are
+// no files, and nothing to collect against. ONE CALL FOR BOTH CALLERS, [New]
+// and [Engine.startNativeFor], for [Engine.startNativeDuties]'s reason.
 //
 // # Only where the mode publishes
 //
 // Both callers reach it only past the gate that keeps every publisher off a
 // node in a maintenance mode — [New]'s, and [Engine.startNativeFor]'s beside
 // the duties — rather than through a check of its own, for the reason that
-// gate gives. Every repair and every collection PINS the estate first — a linearizable
-// read of the tracker's log, which appends a barrier to it — and a node in a
-// capacity window appends nothing: its reader refuses that read
+// gate gives. Every pass PINS the estate first — a linearizable read of the
+// tracker's log, which appends a barrier to it — and a node in a capacity
+// window appends nothing: its reader refuses that read
 // ([statelog.RefuseMaintenance]), because a barrier is a record on a log whose
-// usage the window is measuring. Started there, every repair failed at its pin
-// and backed off from thirty seconds to ten minutes, a warning a time, for the
-// whole window; given a pin that appends nothing instead, a collection would
-// delete against an end nobody established, the one read the barrier exists
-// for. So the passes stand down with the duties, and the window costs them
-// nothing they would have done: no duty moves the map while no node publishes,
-// and no write lands a file whose chunks a repair would fetch or a collection
-// would free. The scrub stands down with them — it appends nothing, but what it
-// finds only a repair can act on, and its cursor is on disk, so the week's
-// cycle resumes where it stopped.
+// usage the window is measuring. Given a pin that appends nothing instead, a
+// collection would delete against an end nobody established, the one read the
+// barrier exists for. So the collector stands down with the duties, and the
+// window costs it nothing: no write lands a file whose chunks a collection
+// would free.
 //
 // THE DECLARED LIST, read through each domain's estate — never a source written
 // here — so the tables the collector keeps alive are the ones the backup
 // carries and the schema gate holds.
-func (e *Engine) startNativePasses(ctx context.Context) {
+func (e *Engine) startNativeCollector(ctx context.Context) {
 	n := e.native.Load()
 	if n == nil {
 		return
@@ -531,12 +526,12 @@ func (e *Engine) startNativePasses(ctx context.Context) {
 	if len(estates) == 0 {
 		return
 	}
-	refs, err := upkeep.Sources(references.All, estates...)
+	refs, err := collect.Sources(references.All, estates...)
 	if err == nil {
-		err = e.startObjectPasses(ctx, refs)
+		err = e.startObjectCollector(ctx, refs)
 	}
 	if err != nil {
-		log.WarnContext(ctx, "object_passes_not_started", "error", err)
+		log.WarnContext(ctx, "object_collector_not_started", "error", err)
 	}
 }
 

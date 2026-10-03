@@ -292,43 +292,6 @@ See the [Scheduling](../concepts/scheduling.md) concept doc for delivery
 modes (`each` / `lead`), at-most-once semantics, catchup, and the
 per-task wall-clock timeout.
 
-### Objects
-
-How the company keeps the bytes of its files in the
-[object store](../concepts/object-store.md): how many copies of every chunk,
-and what those copies are spread across.
-
-```yaml
-objects:                                 # optional — the zero block is the default
-  replicas: 3                            # copies of every chunk, each on a different
-                                         #   data node, 1..10; 0 or unset is 3
-  failure_domain: zone                   # a node label KEY; no two copies of a chunk
-                                         #   share its value while enough values exist
-```
-
-**`replicas`** is the company's, not a node's: every node applies it from the
-same activation, and a node applying an older revision late cannot set it back.
-Three is the default because it is the smallest count that survives losing a
-copy *while* a second is being rebuilt. A fleet with fewer data nodes than this
-keeps one copy on each rather than refusing to store anything, and reaches the
-full count as nodes join. Every write sends this many copies across the broker,
-which is why the ceiling is 10. It is **not** `stream.replicas` (Tier A), which
-is how many copies the broker keeps of its own streams.
-
-**`failure_domain`** names a key every data node sets under
-[`node.labels`](../concepts/configuration.md#nodelabels) — `zone`, `rack`,
-`host` — and copies of a chunk are spread so no two share its value. With
-fewer distinct values than copies, some chunks keep two copies in one domain
-rather than fewer copies. A data node **missing** the label counts as a domain
-of its own, which is the safe degradation and a silent one, so `crewlet
-validate` given both files warns about it at `node.labels.<key>`. The key
-follows the node-label grammar: at most 63 bytes, no whitespace or unprintable
-character. Unset spreads copies across nodes with no further constraint.
-
-A revision that changes either takes effect at the map duty's next tick, with
-no restart; changing either re-places data, so the fleet copies chunks to
-their new holders before anything is deleted from the old ones.
-
 ### Estate
 
 How the company keeps its **replicated estate** — its tracker, its knowledge
@@ -352,9 +315,9 @@ finds no partitioned layout, and writes nothing. It is validated and carried
 now so that the revision a company is running when its estate is partitioned
 already says how many copies it wants.
 
-**`replicas`** is the company's, not a node's, for `objects.replicas`' reason:
-every node applies it from the same activation, and a node applying an older
-revision late cannot set it back. Three is the default because it is the
+**`replicas`** is the company's, not a node's: every node applies it from the
+same activation, and a node applying an older revision late cannot set it
+back. Three is the default because it is the
 smallest count that survives losing a copy *while* a second is being rebuilt,
 and the smallest at which a partition still holds the two verified snapshots
 its logs' trim waits for while one of its holders has lost its store. A fleet
@@ -363,9 +326,15 @@ files warns about `replicas: 1` on a data node that is one of a fleet: each
 partition would be kept on one disk, and a disk lost would be every partition
 it held.
 
-**`failure_domain`** reads exactly as [`objects.failure_domain`](#objects)
-does, and a data node missing the key is warned about the same way — once, if
-both blocks name the same key.
+**`failure_domain`** names a key every data node sets under
+[`node.labels`](../concepts/configuration.md#nodelabels) — `zone`, `rack`,
+`host` — and copies of a partition are spread so no two share its value. With
+fewer distinct values than copies, some partitions keep two copies in one
+domain rather than fewer copies. A data node **missing** the label counts as a
+domain of its own, which is the safe degradation and a silent one, so `crewlet
+validate` given both files warns about it at `node.labels.<key>`. The key
+follows the node-label grammar: at most 63 bytes, no whitespace or unprintable
+character. Unset spreads copies across nodes with no further constraint.
 
 ---
 
@@ -615,8 +584,9 @@ stream:
                                     #   without peers is refused: this node has
                                     #   nothing to replicate to. It is the
                                     #   BROKER's copies of its streams and
-                                    #   buckets; the object store's copies of a
-                                    #   file are the company's `objects.replicas`
+                                    #   buckets — the company's files among
+                                    #   them under the default `nats` object
+                                    #   store (`store.objects`)
   # cluster:                        # an EMBEDDED server joining its peers, which
   #   name: crewlet                 #   is the fleet topology: every node embeds
                                     #   one member of one cluster. REQUIRED once
@@ -940,27 +910,45 @@ store:
                                     #   lock. Raise it on a node doing bulk
                                     #   applies, where `store_tx_retry` in the
                                     #   log names it; see guides/replication.md
-  # objects:                        # this node's share of the OBJECT STORE,
-                                    #   where a company's file bytes live — see
-                                    #   concepts/object-store.md. Every data
-                                    #   node holds a share, so there is nothing
-                                    #   to switch on; REFUSED on a node without
-                                    #   `data`, which holds none
-  #   dir: "./crewlet-data/objects" #   where the chunks placed on this node are
-                                    #   kept. Absolute, or relative to the
-                                    #   store's directory; empty is `objects`
-                                    #   beside `path`. A separate volume is the
-                                    #   production shape once files outgrow the
-                                    #   database's. One engine per directory:
-                                    #   a second is refused rather than letting
-                                    #   it delete the first one's chunks
-  #   weight: 1                     #   this node's share relative to the other
-                                    #   data nodes', 1..64 — a node of weight 2
-                                    #   holds about twice what a weight-1 node
-                                    #   does. Set it in proportion to the space
-                                    #   `dir` has. 0 is the default, 1. It rides
-                                    #   the store's own membership lease, with
-                                    #   `node.labels` and the store's health
+  # objects:                        # where the company's FILES are kept — see
+                                    #   concepts/object-store.md. EVERY node
+                                    #   carries the same block, a node without
+                                    #   `data` included: an upload or a download
+                                    #   goes to the store from the node serving
+                                    #   it. The first node to boot records the
+                                    #   store in the coordination store, and a
+                                    #   node configured with another refuses to
+                                    #   boot, naming both
+  #   backend: nats                 #   nats (the default, and what an absent
+                                    #   block means): a JetStream object store
+                                    #   bucket, `crewlet_files`, on the fleet's
+                                    #   own broker, kept at `stream.replicas`
+                                    #   copies on its members like every stream
+                                    #   and backed up with them. s3: an
+                                    #   S3-compatible bucket, named below
+  #   s3:                           #   REFUSED unless backend is s3
+  #     endpoint: ""                #   the S3 API's base URL; empty is Amazon
+                                    #   S3's own for the region. R2, MinIO,
+                                    #   Ceph's gateway and GCS's interoperability
+                                    #   endpoint each name theirs here
+  #     region: eu-west-1           #   REQUIRED — every request is signed for
+                                    #   a region, even where the provider
+                                    #   ignores it (R2: auto, MinIO: us-east-1)
+  #     bucket: acme-files          #   REQUIRED. Checked at boot: a node that
+                                    #   cannot reach it, or whose credentials it
+                                    #   refuses, does not start
+  #     prefix: ""                  #   prepended to every key (`<prefix><hash>`),
+                                    #   so one bucket can hold more than one
+                                    #   company; e.g. `acme/`
+  #     path_style: false           #   address the bucket in the path rather
+                                    #   than the host name; MinIO and most
+                                    #   self-hosted gateways need it
+  #     access_key_id: ${S3_ACCESS_KEY_ID}         # both as ${VAR} references,
+  #     secret_access_key: ${S3_SECRET_ACCESS_KEY} #   or NEITHER, which takes
+                                    #   the SDK's own chain: the environment, a
+                                    #   shared profile, a web identity or the
+                                    #   instance's role. A private CA is read
+                                    #   from AWS_CA_BUNDLE
   # estate:                         # this node's part in the ESTATE MAP, which
                                     #   places the replicated estate's
                                     #   partitions once a layout divides it —

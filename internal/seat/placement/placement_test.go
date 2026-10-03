@@ -817,10 +817,9 @@ func assertProfile(t *testing.T, got, want NodeProfile) {
 	}
 }
 
-// PRESENCE SAYS NOTHING ABOUT THE OBJECT STORE. Membership in it is a lease of
-// its own (coord.ClassObjects), and a share written onto presence as well would
-// be a second answer to "does this node hold objects" — one that a shutdown
-// drain withdraws while the node is still serving every chunk it holds.
+// PRESENCE IS A NODE'S PROFILE AND NOTHING ELSE. A share written onto it would
+// be a second answer to what the node holds — one that a shutdown drain
+// withdraws, at its first step, while the node is still serving.
 func TestPresenceCarriesNoObjectShare(t *testing.T) {
 	t.Parallel()
 	meta := NodeProfile{ID: "n1", Roles: Roles(RoleData)}.Meta()

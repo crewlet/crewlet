@@ -11,39 +11,46 @@ import (
 	"sync"
 
 	"github.com/crewlet/crewlet/internal/objstore"
-	"github.com/crewlet/crewlet/internal/objstore/disk"
-	"github.com/crewlet/crewlet/internal/objstore/transfer"
 	"github.com/crewlet/crewlet/internal/store"
 )
 
-// objectsDirName holds the chunks a backup carries, in the layout a node's own
-// chunk directory has — so restoring them is copying the directory into
-// `store.objects.dir` (docs/guides/backup.md).
+// objectsDirName holds the chunks a backup carries, one file per chunk named
+// by its hash — the key layout an S3 backend's bucket has under its prefix, so
+// restoring them is one sync of the directory into the bucket
+// (docs/guides/backup.md).
 const objectsDirName = "objects"
 
-// Objects is how a backup reads a chunk from wherever the fleet holds it.
+// Objects is how a backup reaches the company's file chunks.
 //
-// # Why a backup carries every chunk, and not this node's share
+// # Why a backup carries every chunk the copy names
 //
-// A node holds only the chunks the placement map puts on it, so a copy of its
-// disk is a fraction of the company's files — and a restore from it would be
-// a tracker naming files whose bytes are nowhere. The backup is a copy of the
-// COMPANY, taken from one node: so it reads every chunk the store copy refers
-// to, from this node's disk where it can and from a peer where it must.
+// A tracker restored without the bytes of its files names files nobody can
+// open, and the collector deletes a removed file's chunks a day after it was
+// removed — so a restore from a week-old backup brings back rows whose chunks
+// a live store may no longer hold. The backup is a copy of the COMPANY, so it
+// carries every chunk the store copy refers to.
 //
 // WHICH CHUNKS is not an option: the copy is read against
 // internal/objstore/references, the one list its schema gate holds, so a
 // backup can never be built knowing fewer referencing tables than the
 // collector does.
 type Objects struct {
-	// Get reads one chunk from wherever the fleet holds it.
+	// Get reads one chunk from the object store.
 	Get func(ctx context.Context, h objstore.Hash) ([]byte, error)
+
+	// Stream, when set, is the broker stream the chunks already live in —
+	// the NATS backend's bucket — which the backup snapshots with every
+	// other stream, so it copies no chunk beside it: the snapshot is the
+	// copy, restored with the streams it was taken with.
+	Stream string
 }
 
 // ObjectArtifact describes the chunks inside a backup.
 type ObjectArtifact struct {
-	// Dir is where they are, relative to the backup directory.
-	Dir string `json:"dir"`
+	// Dir is where they are, relative to the backup directory — or, when
+	// Stream is set, empty: the chunks are in that stream's snapshot.
+	Dir    string `json:"dir,omitempty"`
+	Stream string `json:"stream,omitempty"`
 
 	// Chunks and Bytes are how many and how large — every chunk the
 	// artefact holds, a reused one included, since shipping the directory
@@ -61,8 +68,8 @@ type ObjectArtifact struct {
 	Reused     int    `json:"reused,omitempty"`
 	ReusedFrom string `json:"reused_from,omitempty"`
 
-	// Lost is every chunk the copy names that the fleet no longer holds:
-	// every member of the placement map ANSWERED that it has no copy.
+	// Lost is every chunk the copy names that the object store answered it
+	// does not hold, or holds only as bytes that no longer match the name.
 	//
 	// RECORDED RATHER THAN REFUSED. Refusing would not bring the chunk
 	// back, and every later backup would be refused for the same chunk —
@@ -71,15 +78,15 @@ type ObjectArtifact struct {
 	// mebibyte. The artefact restores everything else, the files these
 	// chunks belong to restore with their bytes missing exactly as they are
 	// missing now, and the `objects_missing` alarm is what sends somebody
-	// to replace them. A chunk a member could not ANSWER about is another
+	// to replace them. A chunk the store could not ANSWER about is another
 	// matter — it may be intact there — and still refuses the backup
 	// ([ErrObjectsUnreachable]).
 	Lost []objstore.Hash `json:"lost,omitempty"`
 }
 
 // ErrObjectsUnreachable is a copy that names chunks this backup could not
-// read and whose absence is not definite — a member that may hold them did
-// not answer, refused, or could not read its own copy. The backup is refused
+// read and whose absence is not definite — the object store did not answer
+// for them. The backup is refused
 // rather than written without them: they may well exist, a later attempt may
 // reach them, and a restore missing them would bring back files whose bytes
 // the fleet still had.
@@ -87,12 +94,11 @@ var ErrObjectsUnreachable = errors.New("backup: the copy names chunks the backup
 
 // backupFetchConcurrency is how many chunks a backup fetches at once.
 //
-// FOUR, the repair's own recovery throttle (objstore/upkeep's
-// fetchConcurrency) and for its reason: a backup is background work riding
-// the broker every upload and read also rides, so it may overlap round trips
-// but must not saturate it. One at a time made a backup's duration the corpus
-// times a round trip — about an hour and a half for a million chunks at five
-// milliseconds each, while the trim waited on it.
+// FOUR: a backup is background work sharing the object store with every
+// upload and read the company's seats make, so it may overlap round trips but
+// must not saturate the store. One at a time made a backup's duration the
+// corpus times a round trip — about an hour and a half for a million chunks
+// at five milliseconds each, while the trim waited on it.
 const backupFetchConcurrency = 4
 
 // referencedIn is every chunk the replicated copy at path names.
@@ -143,15 +149,20 @@ func referencedIn(ctx context.Context, path string, tables []objstore.ReferenceT
 
 // copyObjects writes every chunk the copy names into the backup, taking each
 // from prev — the chunk directory of this node's previous backup, empty when
-// there is none — where it is there and intact, and fetching the rest.
+// there is none — where it is there and intact, and fetching the rest. Where
+// the chunks live in a stream the backup snapshots anyway, it copies none and
+// names the stream.
 func copyObjects(ctx context.Context, dir string, hashes []objstore.Hash, objs *Objects,
 	prev string) (*ObjectArtifact, error) {
 	if len(hashes) == 0 {
 		return nil, nil
 	}
 	if objs == nil || objs.Get == nil {
-		return nil, fmt.Errorf("%w: %d chunks, and this node runs no object client",
+		return nil, fmt.Errorf("%w: %d chunks, and this node runs no object store",
 			ErrObjectsUnreachable, len(hashes))
+	}
+	if objs.Stream != "" {
+		return &ObjectArtifact{Stream: objs.Stream, Chunks: len(hashes)}, nil
 	}
 	root := filepath.Join(dir, objectsDirName)
 	out := &ObjectArtifact{Dir: objectsDirName}
@@ -180,7 +191,7 @@ func copyObjects(ctx context.Context, dir string, hashes []objstore.Hash, objs *
 					if reused {
 						out.Reused++
 					}
-				case errors.Is(err, transfer.ErrNotFound):
+				case errors.Is(err, objstore.ErrNotFound), errors.Is(err, objstore.ErrCorrupt):
 					out.Lost = append(out.Lost, h)
 				case errors.Is(err, errDestination):
 					// THE DESTINATION, not the fleet: every other chunk
@@ -219,10 +230,9 @@ feed:
 		if len(shown) > 5 {
 			shown = append(shown[:5:5], fmt.Sprintf("and %d more", len(unreachable)-5))
 		}
-		return nil, fmt.Errorf("%w: %d of %d (%v) — the objects_degraded alarm fires on "+
-			"the node that could not reach a member that may hold one; take the backup "+
-			"again once it answers", ErrObjectsUnreachable, len(unreachable),
-			len(hashes), shown)
+		return nil, fmt.Errorf("%w: %d of %d (%v) — the object store did not answer for "+
+			"them; take the backup again once it does", ErrObjectsUnreachable,
+			len(unreachable), len(hashes), shown)
 	}
 	sort.Slice(out.Lost, func(i, j int) bool { return out.Lost[i] < out.Lost[j] })
 	return out, nil
@@ -233,7 +243,7 @@ feed:
 var errDestination = errors.New("backup: the destination")
 
 // placeChunk puts one chunk into the backup: from prev when it holds an intact
-// copy, else from the fleet. It answers the chunk's size and whether it was
+// copy, else from the object store. It answers the chunk's size and whether it was
 // reused.
 func placeChunk(ctx context.Context, root, prev string, h objstore.Hash,
 	objs *Objects) (int64, bool, error) {
@@ -261,10 +271,10 @@ func placeChunk(ctx context.Context, root, prev string, h objstore.Hash,
 // refused, a previous backup on another filesystem among them. Either way the
 // bytes are READ BACK against the name before they count: a copy that rotted
 // in the earlier artefact would otherwise be carried into every later one, and
-// reading a local file is still a fraction of fetching it across the fleet.
+// reading a local file is still a fraction of fetching it from the store.
 func reuseChunk(root, prev string, h objstore.Hash) (int64, bool, error) {
-	src := filepath.Join(prev, disk.Layout(h))
-	dst := filepath.Join(root, disk.Layout(h))
+	src := filepath.Join(prev, string(h))
+	dst := filepath.Join(root, string(h))
 	if err := os.MkdirAll(filepath.Dir(dst), 0o700); err != nil {
 		return 0, false, fmt.Errorf("%w: create %s: %w", errDestination, filepath.Dir(dst), err)
 	}
@@ -304,10 +314,10 @@ func intactAt(path string, h objstore.Hash) ([]byte, bool) {
 	return data, true
 }
 
-// writeChunk writes one chunk, synced, at its place in the layout. Every
-// failure is the destination's ([errDestination]).
+// writeChunk writes one chunk, synced, under its own name. Every failure is
+// the destination's ([errDestination]).
 func writeChunk(root string, h objstore.Hash, data []byte) error {
-	path := filepath.Join(root, disk.Layout(h))
+	path := filepath.Join(root, string(h))
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return fmt.Errorf("%w: create %s: %w", errDestination, filepath.Dir(path), err)
 	}

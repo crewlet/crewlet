@@ -145,7 +145,7 @@ func TestOnlyAnEstateLeaseIsAPresence(t *testing.T) {
 	if p, ok := PresenceOf(coord.Lease{Resource: coord.EstateResource("data-00"), Meta: meta}); !ok || p.Node != "data-00" {
 		t.Fatalf("an estate lease read as (%+v, %v)", p, ok)
 	}
-	for _, resource := range []string{coord.NodeResource("data-00"), coord.ObjectsResource("data-00")} {
+	for _, resource := range []string{coord.NodeResource("data-00"), coord.SeatResource("data-00")} {
 		if _, ok := PresenceOf(coord.Lease{Resource: resource, Meta: meta}); ok {
 			t.Errorf("%s read as an estate presence", resource)
 		}

@@ -578,7 +578,7 @@ to the adopted log.
 
 | Bucket | What it holds |
 |---|---|
-| **`crewlet_leases`** | `node:` · `seat:` ownership; `objects:` — a data node's membership in the object store, carrying its weight, labels and its store's health; and `estate:` — a data node's membership in the estate map, claimed by its estate runtime once it is up and released last in a drain, carrying its weight, the layout it runs, the map epoch it acted on and what it holds of each partition (while the estate is one file, layout 0's one partition, held whole). The bucket's age **is** the lease TTL |
+| **`crewlet_leases`** | `node:` · `seat:` ownership; and `estate:` — a data node's membership in the estate map, claimed by its estate runtime once it is up and released last in a drain, carrying its weight, the layout it runs, the map epoch it acted on and what it holds of each partition (while the estate is one file, layout 0's one partition, held whole). The bucket's age **is** the lease TTL |
 | **`crewlet_duties`** | `worker:` ownership. Each record is judged by its own duty's deadline; the bucket's age only has to outlive the longest duty |
 | **`crewlet_epochs`** | The monotonic fencing counter. No age at all — see below |
 | **`crewlet_config`** | The activation pointer and its payload — the pointer's own revision **is** the epoch |
@@ -588,7 +588,8 @@ to the adopted log.
 | **`crewlet_token_windows`** · `crewlet_rate` · `crewlet_cooldowns` | The token counters — one record per scope, a slot for each calendar window, aged 32 days past its last charge — the notification valve, benched credentials |
 | **`crewlet_secrets`** · `crewlet_channels` · `crewlet_sandbox_runs` | The company's sealed credentials, open A2A channels, detached coding runs |
 | `crewlet_follows` | The chat threads each seat follows, so the next reply wakes it whichever node claims that delivery. The bucket's age, 90 days, is the last-activity horizon |
-| `crewlet_objects` | The object store's **placement map**: the copies the company asks for and the label they are spread across, how many placement groups the slots are divided into, and every data node's weight, balanced share, domain and whether it is taken out or on probation — plus what the duty has to carry between ticks: each absent member's count of ticks, the nodes it removed and each one's probation, an operator's hold. One key, written by compare-and-set by the `object-map` duty — and by the node serving an operator's out, in, hold or release, the same way. **No age** — an expired map would read as a fleet with nowhere to put a file |
+| `crewlet_objects` | The [object store](object-store.md)'s **backend record** — `nats` or `s3:<endpoint>/<bucket>/<prefix>`, written create-only by the first node to boot and compared by every node after it, which refuses to boot configured with another store — and the `object-collector` duty's **last report**, replaced by each pass so every node's `/fleet` shows it whoever ran it. **No age** — an expired record would let the next node record a different store and split the company's files between two |
+| `crewlet_chunk_locks` | One key per file chunk being deleted by the collector or re-stored by a writer, so a deletion can never land between a re-upload of a chunk and the row that names it. Create-only; the bucket's age, **one minute**, is the lock's lifetime, so a holder that dies holding one is let go by the bucket |
 | `crewlet_estate_map` | Which data nodes hold each partition of the replicated estate once it is divided into partitions, and what the map's maintainer carries between ticks. One key, written only by compare-and-set and **watched** by every node — hence a bucket of its own. Created on every node and empty while every data node holds the whole estate. **No age** — an expired map would read as an estate nobody holds |
 | `crewlet_custody` | Which data node keeps each batch of a stateless node's events: claimed create-only by the data node that wrote the batch, after it wrote it, so exactly one node's log keeps it ([custody](../guides/deployment.md#custody-the-rows-of-a-node-without-data)). The bucket's age, 32 days, outlasts the event log's retention, so a node settling a batch it wrote before a crash always finds the answer |
 | `crewlet_integrations` · `crewlet_mailboxes` | Each surface's reconcile status, and the seat mailboxes that may exist so a removed seat's can be retired |
@@ -609,18 +610,22 @@ to the adopted log.
 | **`CREWLET_TRACKER_VECTORS`** | `crewlet.tracker.vectors.>` — the same shape for embeddings, **compacted**: one message retained per subject, because the current embedding of a source is the only one anybody wants and a history of superseded vectors is a bill nobody asked for |
 | **`CREWLET_PAGES_LOG`** | `crewlet.pages.log.>`, **the ordered log the replicated estate's knowledge base is derived from**, and the state log's third domain. The same shape as the tracker's: one subject per object, so two writers saving one page contend at the broker and two saving different pages never do. Retention is bounded by what every node has already applied rather than by age, because a page is a fact for the life of the deployment and removing one is a decision somebody takes rather than a horizon that reaps it while a person is still reading it |
 | **`CREWLET_USAGE_LOG`** | `crewlet.usage.log.>` — the state log's fourth domain, **compacted**: one message per (kind, node, company day, seat or schedule), each the object's whole cumulative value, republished by the node that owns the day whenever it moves and aged out after 181 days. The node is part of every subject, so each object has exactly one writer and nothing is arbitrated |
+| `OBJ_crewlet_files` | `$O.crewlet_files.>` — the [object store](object-store.md)'s bucket, `crewlet_files`, on the default `nats` backend only: one object per file chunk, named by its hash. An ordinary stream at `stream.replicas` copies, so the company's files survive what its logs survive and every backup snapshots it with the rest. Absent when `store.objects.backend` is `s3` |
 
-**Placed, not replicated — the object store.** One kind of state answers "who
+**Named, not replicated — the object store.** One kind of state answers "who
 has to agree on it?" with *the row does, and the bytes do not*: the content of
 a company's files. The row naming a file — its path, its version, the hashes of
 its chunks — is in the replicated store like every other tracker row. The
-chunks themselves are kept only by the data nodes the placement map in
-`crewlet_objects` puts them on — as many as the company's `objects.replicas`,
-spread across its `objects.failure_domain` — under each node's
-`store.objects.dir`, so adding a data node adds space rather than another copy
-of everything. Nothing here is derived by replay: repair copies a chunk from a
-node that holds it, a scrub finds the copies that rotted, and a chunk nothing
-names is collected. See [Object Store](object-store.md).
+chunks themselves, 1 MiB each and named by their SHA-256, are kept in **one
+store the whole fleet shares**, named by every node's Tier A `store.objects`:
+by default a JetStream object store bucket on the fleet's own broker,
+`crewlet_files`, backed by the stream **`OBJ_crewlet_files`** at
+`stream.replicas` copies like every other stream, or an S3-compatible bucket.
+Every node reaches it directly, a node without `data` included. Nothing here is
+derived by replay, and the engine places nothing: the store keeps its own
+copies, and the one thing the engine runs beside it is the `object-collector`
+duty, which deletes the chunks no row names and audits that every chunk a row
+names is there. See [Object Store](object-store.md).
 
 **Mailboxes and event history are different kinds of stream.** The two
 mailbox streams use *interest* retention — a message lives until its durable
@@ -704,10 +709,10 @@ on the same heartbeat as its seats, carrying its roles, its labels and its
 status. Reading `node:*` back is the whole of fleet discovery — no gossip, no
 coordinator, no registry to configure — which is why adding a node is starting
 a process and removing one is stopping it. Dropping that row is the first thing
-a drain does — which is why the object store does not read membership from it:
-a data node keeps serving chunks through its drain, so its place in the
-placement map is a lease of its own, `objects:{ID}`, given back only once its
-chunk server has stopped.
+a drain does — which is why the estate map does not read membership from it:
+a data node keeps serving its partitions through its drain, so its place in
+the estate map is a lease of its own, `estate:{ID}`, given back only once it
+serves none.
 
 **Placement is deliberately dumb.** Every node greedily claims up to a fair
 share — `ceil(seats / live nodes)`, live nodes being the presence leases of

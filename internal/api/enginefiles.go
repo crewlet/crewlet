@@ -7,7 +7,6 @@ import (
 	"github.com/crewlet/crewlet/internal/engine"
 	"github.com/crewlet/crewlet/internal/estate"
 	"github.com/crewlet/crewlet/internal/objstore"
-	"github.com/crewlet/crewlet/internal/objstore/transfer"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tracker"
 )
@@ -43,7 +42,7 @@ func EngineFiles(e *engine.Engine) ProjectFiles {
 type engineFiles struct {
 	reader  estate.Work
 	as      func(estate.Actor) estate.WorkWriter
-	objects *transfer.Client
+	objects *objstore.Store
 }
 
 func (f engineFiles) File(ctx context.Context, project, path string,
@@ -55,7 +54,7 @@ func (f engineFiles) Open(ctx context.Context, m objstore.Manifest) (io.ReadClos
 	return f.objects.Open(ctx, m)
 }
 
-func (f engineFiles) PutChunk(ctx context.Context, h objstore.Hash, data []byte) (int, error) {
+func (f engineFiles) PutChunk(ctx context.Context, h objstore.Hash, data []byte) error {
 	return f.objects.Put(ctx, h, data)
 }
 

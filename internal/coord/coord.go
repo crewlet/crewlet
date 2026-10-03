@@ -8,7 +8,7 @@
 // kind of thing the lease is for. That is not decoration: the key a resource
 // becomes carries its class as a subject token of its own, so a whole class
 // is a wildcard the broker can match and a listing asks for one kind rather
-// than reading every lease in the fleet. Five classes name five kinds:
+// than reading every lease in the fleet. Four classes name four kinds:
 //
 //   - seat:{handle} — one agent seat this node runs.
 //   - worker:{duty} — a fleet singleton: the maintenance sweep, the
@@ -23,26 +23,17 @@
 //     roster, and the fair-share target every node computes for itself is
 //     ceil(seats / that count). A node that stops renewing its presence is
 //     not merely idle — it raises everyone else's share.
-//   - objects:{id} — a data node's membership in the OBJECT STORE, and the
-//     health of the store that membership offers. A class of its own
-//     rather than a field of node presence, for two reasons each of which
-//     cost a placement once. Presence is the SEAT HOST's, and a shutdown
-//     drain gives it up at its first step while the node is still serving
-//     every chunk it holds — so a drain longer than the map's grace moved
-//     the node's whole share away and then back. And presence carries
-//     what the node was CONFIGURED with, so a node whose objects volume had
-//     failed stayed placed on for ever. The objects lease is claimed by the
-//     object store itself, renewed on its own loop, released only once its
-//     chunk server has stopped, and carries the store's own account of its
-//     health (see internal/objstore's ObjectsMeta).
 //   - estate:{id} — a data node's membership in the ESTATE MAP, which
 //     places the partitions of the replicated estate, and what the node
 //     holds of it: per partition, whether it is adopting, catching up,
 //     serving or leaving, and the map epoch it last acted on. A class of its
-//     own, rather than presence or the objects lease, for the objects
-//     lease's two reasons and a third: it is released LAST in a drain,
-//     after the node has stopped serving every partition it held, so the
-//     map's maintainer never reads a node still serving as one that left.
+//     own rather than a field of presence, for two reasons. Presence is the
+//     SEAT HOST's, and a shutdown drain gives it up at its first step while
+//     the node is still serving — and this lease is released LAST in a
+//     drain, after the node has stopped serving every partition it held, so
+//     the map's maintainer never reads a node still serving as one that
+//     left. And presence carries what the node was CONFIGURED with, where
+//     this carries whether its store is healthy.
 //     What the lease carries is internal/estate/partmap's.
 //
 // What belongs here rather than in a node's own database is ADR-0003, the
@@ -420,14 +411,7 @@ type AcquireOptions struct {
 	// seats by a count that excludes it and each take a larger share,
 	// while its own capacity also excludes itself.
 	//
-	// Object-store membership, for presence's reason with a longer tail: a
-	// data node that could not claim its `objects:` lease during an upgrade
-	// reads to the placement map as ABSENT, and past the map's grace its
-	// whole share of the company's files is copied to the other members —
-	// and copied back when the upgrade finishes — for a node that never
-	// stopped serving a chunk.
-	//
-	// Estate-map membership, for the object store's reason: a data node
+	// Estate-map membership, for presence's reason with a longer tail: a data node
 	// that could not claim its `estate:` lease during an upgrade reads to
 	// the estate map as ABSENT, and past the map's grace every partition it
 	// holds is rebuilt on the other members — and a capacity window no
@@ -544,8 +528,7 @@ type Backend interface {
 
 	// ListLive returns the live leases of one resource class. Both
 	// membership reads are built on this: the fleet's — ListLive(ClassNode)
-	// — the object store's, ListLive(ClassObjects), and the estate map's,
-	// ListLive(ClassEstate).
+	// — and the estate map's, ListLive(ClassEstate).
 	ListLive(ctx context.Context, class Class) ([]Lease, error)
 
 	// PreferredResources returns resources of this class whose stickiness
@@ -623,7 +606,7 @@ const ResourceSeparator = ":"
 // key, and a listing that returns nothing is indistinguishable from a class
 // with no members at every caller. [Class.Valid] is what refuses one.
 //
-// Classes are deliberately NOT enumerated here. This package owns the five
+// Classes are deliberately NOT enumerated here. This package owns the four
 // the fleet itself leases; the tracker's claims are leases in the same bucket
 // under classes of their own, and an enumeration here would either be wrong
 // or drag every caller's vocabulary into this package.
@@ -631,11 +614,10 @@ type Class string
 
 // The classes the fleet leases directly.
 const (
-	ClassSeat    Class = "seat"
-	ClassWorker  Class = "worker"
-	ClassNode    Class = "node"
-	ClassObjects Class = "objects"
-	ClassEstate  Class = "estate"
+	ClassSeat   Class = "seat"
+	ClassWorker Class = "worker"
+	ClassNode   Class = "node"
+	ClassEstate Class = "estate"
 )
 
 // Valid reports whether this class can address a key.
@@ -737,14 +719,6 @@ func WorkerResource(duty string) string { return ClassWorker.Resource(duty) }
 // seat.
 func NodeResource(nodeID string) string { return ClassNode.Resource(nodeID) }
 
-// ObjectsResource names a data node's object-store membership lease.
-//
-// Claimed by the OBJECT STORE rather than by the seat host, and held for as
-// long as the node's chunk server answers — see the package doc for what
-// reading membership off presence cost. What the lease carries is the
-// store's, and is read and written by internal/objstore.
-func ObjectsResource(nodeID string) string { return ClassObjects.Resource(nodeID) }
-
 // EstateResource names a data node's estate-map membership lease.
 //
 // Claimed by the node's ESTATE RUNTIME rather than by the seat host, once that
@@ -768,13 +742,8 @@ func SeatHandle(resource string) (string, bool) { return ClassSeat.Name(resource
 // NodeID recovers the node id from a presence resource name.
 func NodeID(resource string) (string, bool) { return ClassNode.Name(resource) }
 
-// ObjectsNode recovers the node id from an object-store membership resource
-// name, reporting false for a resource of any other class — a presence lease
-// included, which names the same node and says nothing about its store.
-func ObjectsNode(resource string) (string, bool) { return ClassObjects.Name(resource) }
-
 // EstateNode recovers the node id from an estate-map membership resource name,
-// reporting false for a resource of any other class — the node's presence and
-// its objects lease included, which name the same node and say nothing about
-// what it holds of the estate.
+// reporting false for a resource of any other class — the node's presence
+// included, which names the same node and says nothing about what it holds of
+// the estate.
 func EstateNode(resource string) (string, bool) { return ClassEstate.Name(resource) }

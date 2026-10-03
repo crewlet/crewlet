@@ -1,89 +1,123 @@
 package config
 
 import (
-	mapplacement "github.com/crewlet/crewlet/internal/placement"
-	"github.com/crewlet/crewlet/internal/seat/placement"
+	"slices"
+	"strings"
 )
 
-// Objects is the company's object store: how many copies of every file chunk
-// it keeps, and what those copies are spread across.
+// StoreObjects is where the company's files are kept: which backend every node
+// reads and writes their chunks through (ADR-0026).
 //
-// # Why this is the company's and not the node's
+// # Why Tier A, and why every node
 //
-// The copies a file has are a decision about the company's DATA, taken once
-// for the whole fleet. It used to be read off whichever node held the
-// placement map's duty — that node's own `stream.replicas` — and the duty moves
-// between nodes on a lease: the day it landed on a node left at the default of
-// one, every group dropped to a single copy and every collector in the fleet
-// deleted the rest. A Tier B value is one document every node applies, stamped
-// with the activation it came from, so a node a revision behind cannot set it
-// back.
+// The backend is infrastructure, like the stream: an endpoint, a bucket and
+// the credentials to reach it are the operator's, and a node needs them before
+// it can serve a single upload. Every node carries the same block — a node
+// without `data` uploads and downloads files exactly as a data node does — and
+// the fleet records the first node's choice in the coordination store, so a
+// node configured with another backend refuses to boot rather than splitting
+// the company's files between two stores (coord.ObjectStores).
 //
-// What stays on the node is what is genuinely a fact about the node — where
-// its chunks live and how large a share its disk offers (`store.objects`, Tier
-// A) — and the labels its failure domain is read from (`node.labels`).
-type Objects struct {
-	// Replicas is how many copies of every chunk the fleet keeps, on that
-	// many different data nodes. Zero takes [DefaultObjectReplicas].
-	//
-	// A fleet with fewer data nodes keeps one copy per node rather than
-	// refusing to store anything, and reaches the full count as nodes join.
-	Replicas int `yaml:"replicas,omitempty" json:"replicas,omitempty" js:"min=0;max=10" desc:"Copies of every file chunk, each on a different data node, 1..10; 0 is the default, 3. A fleet with fewer data nodes keeps one copy on each."`
+// # Why no copies or failure domain here
+//
+// The backend keeps its own: the NATS backend's bucket is a stream replicated
+// at `stream.replicas` across the broker's members like every other, and a
+// bucket keeps whatever copies its provider promises. The engine places
+// nothing, so there is nothing for it to spread.
+type StoreObjects struct {
+	// Backend is where the chunks live. Empty is `nats`.
+	Backend ObjectBackend `yaml:"backend,omitempty" json:"backend,omitempty" desc:"Where the company's files are kept: nats (the default — a bucket on the fleet's own broker, replicated at stream.replicas) or s3 (an S3-compatible bucket, named under s3)."`
 
-	// FailureDomain is a node label KEY (one written under `node.labels` on
-	// every data node — `zone`, `rack`, `host`): no two copies of a chunk
-	// are placed on nodes sharing that label's value, as long as there are
-	// enough distinct values to go round. Empty spreads copies across nodes
-	// with no further constraint.
-	//
-	// A data node that does not carry the label counts as a domain of its
-	// own, so a half-labelled fleet degrades to node-level spreading rather
-	// than refusing to place — and `crewlet validate` warns on the node
-	// missing it ([TierWarnings]).
-	FailureDomain string `yaml:"failure_domain,omitempty" json:"failure_domain,omitempty" desc:"A node label key (e.g. zone); no two copies of a chunk share its value when enough values exist. Empty spreads across nodes only."`
+	// S3 is the bucket, for the `s3` backend; refused for any other.
+	S3 ObjectsS3 `yaml:"s3,omitempty" json:"s3,omitzero"`
 }
 
-// DefaultObjectReplicas is the copies a company keeps when it names none.
-//
-// THREE, Ceph's default pool size, for Ceph's reason: it is the smallest count
-// that survives losing one copy WHILE a second is being rebuilt. At two, the
-// window in which a member is being replaced is a window with one copy, and a
-// disk failing inside it loses data; at three it costs a second simultaneous
-// failure.
-const DefaultObjectReplicas = 3
+// ObjectBackend is a backend the object store can keep chunks in.
+type ObjectBackend string
 
-// MaxObjectReplicas is the most copies a company may ask for — the placement
-// map's own ceiling, referenced rather than restated, because a count this
-// accepted and the map refused would be a revision every node applies and no
-// maintainer can write.
-const MaxObjectReplicas = mapplacement.MaxReplicas
+const (
+	// ObjectBackendNATS keeps chunks in the fleet's own JetStream object
+	// store. The default.
+	ObjectBackendNATS ObjectBackend = "nats"
+	// ObjectBackendS3 keeps chunks in an S3-compatible bucket.
+	ObjectBackendS3 ObjectBackend = "s3"
+)
 
-// ReplicaCount is the copies the company keeps, with the default applied.
-func (o *Objects) ReplicaCount() int {
-	if o.Replicas == 0 {
-		return DefaultObjectReplicas
+// ObjectBackends is every backend in the order the docs name them.
+var ObjectBackends = []ObjectBackend{ObjectBackendNATS, ObjectBackendS3}
+
+// Valid reports whether b is a backend this build speaks.
+func (b ObjectBackend) Valid() bool { return slices.Contains(ObjectBackends, b) }
+
+// ObjectsS3 is an S3-compatible bucket.
+type ObjectsS3 struct {
+	// Endpoint is the S3 API's base URL; empty is Amazon's own for the
+	// region. R2, MinIO, GCS's interoperability endpoint and Ceph's gateway
+	// each name theirs here.
+	Endpoint string `yaml:"endpoint,omitempty" json:"endpoint,omitempty" desc:"The S3 API's base URL; empty is Amazon S3's own for the region."`
+	// Region is the bucket's region — required by the signature even where
+	// the provider ignores it (R2 takes auto, MinIO us-east-1).
+	Region string `yaml:"region,omitempty" json:"region,omitempty" desc:"The bucket's region; required (R2: auto, MinIO: us-east-1)."`
+	// Bucket is the bucket's name.
+	Bucket string `yaml:"bucket,omitempty" json:"bucket,omitempty" desc:"The bucket's name; required."`
+	// Prefix is prepended to every key, so one bucket can hold more than
+	// one company.
+	Prefix string `yaml:"prefix,omitempty" json:"prefix,omitempty" desc:"Prepended to every key, so one bucket can hold more than one company; e.g. acme/."`
+	// PathStyle addresses the bucket in the URL's path rather than its host
+	// name, which MinIO and most self-hosted gateways need.
+	PathStyle bool `yaml:"path_style,omitempty" json:"path_style,omitempty" desc:"Address the bucket in the path rather than the host name; MinIO and most self-hosted gateways need it."`
+	// AccessKeyID and SecretAccessKey are the credentials, as ${VAR}
+	// references. Both empty takes the SDK's own chain — the environment,
+	// a shared profile, a web identity or the instance's role.
+	AccessKeyID     string `yaml:"access_key_id,omitempty" json:"access_key_id,omitempty" desc:"Access key id, as a ${VAR} reference; with secret_access_key, or neither to use the environment or the instance's role."`
+	SecretAccessKey string `yaml:"secret_access_key,omitempty" json:"secret_access_key,omitempty" desc:"Secret access key, as a ${VAR} reference."`
+}
+
+// BackendOrDefault is the backend with the default applied.
+func (o StoreObjects) BackendOrDefault() ObjectBackend {
+	if o.Backend == "" {
+		return ObjectBackendNATS
 	}
-	return o.Replicas
+	return o.Backend
 }
 
-func (o *Objects) validate(path Path) error {
+// Identity names the store the chunks are in, for the fleet's record of it:
+// two nodes whose identities differ would write the company's files into two
+// different places. The credentials are not part of it — two nodes may reach
+// one bucket with different keys.
+func (o StoreObjects) Identity() string {
+	if o.BackendOrDefault() != ObjectBackendS3 {
+		return string(ObjectBackendNATS)
+	}
+	return "s3:" + strings.TrimSuffix(o.S3.Endpoint, "/") + "/" + o.S3.Bucket + "/" + o.S3.Prefix
+}
+
+func (o StoreObjects) validate(path Path) error {
 	var p problems
-	if o.Replicas < 0 || o.Replicas > MaxObjectReplicas {
-		p.add(at(path, "replicas"), ErrOutOfRange,
-			"must be 0 (the default, %d) or 1..%d, got %d: every write sends "+
-				"this many copies across the broker, and past %d a write costs "+
-				"more than any failure it survives", DefaultObjectReplicas,
-			MaxObjectReplicas, o.Replicas, MaxObjectReplicas)
+	if o.Backend != "" && !o.Backend.Valid() {
+		p.add(at(path, "backend"), ErrUnknownValue,
+			"must be one of %v, got %q", ObjectBackends, o.Backend)
 	}
-	// THE LABEL GRAMMAR node.labels IS HELD TO, and exactly it: the key is
-	// matched against every data node's labels, so one this accepted and a
-	// node's labels could never carry would spread copies across nothing.
-	if o.FailureDomain != "" {
-		if err := placement.CheckLabelKey(o.FailureDomain); err != nil {
-			p.add(at(path, "failure_domain"), ErrUnknownValue,
-				"%v — it names the node label (under node.labels on every "+
-					"data node) whose values copies are spread across", err)
+	s3 := at(path, "s3")
+	switch {
+	case o.BackendOrDefault() == ObjectBackendS3:
+		if strings.TrimSpace(o.S3.Bucket) == "" {
+			p.add(at(s3, "bucket"), ErrMissing, "the s3 backend keeps the files in a bucket; name it")
 		}
+		if strings.TrimSpace(o.S3.Region) == "" {
+			p.add(at(s3, "region"), ErrMissing,
+				"every S3 request is signed for a region, even where the provider "+
+					"ignores it; name the bucket's (R2: auto, MinIO: us-east-1)")
+		}
+		if (o.S3.AccessKeyID == "") != (o.S3.SecretAccessKey == "") {
+			p.add(s3, ErrConflict,
+				"access_key_id and secret_access_key are given together, or neither "+
+					"to take the environment's or the instance's credentials")
+		}
+	case o.S3 != (ObjectsS3{}):
+		p.add(s3, ErrConflict,
+			"names a bucket, and store.objects.backend is %q; set backend: s3 to use it",
+			o.BackendOrDefault())
 	}
 	return p.err()
 }

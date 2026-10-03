@@ -254,10 +254,10 @@ node:
 
 | Role | What it does |
 |---|---|
-| `data` | Keeps the company's durable state on this node's disk: a full copy of the replicated estate (the tracker, the knowledge base, the vectors), the event log, and a share of the [object store](../concepts/object-store.md) where the company's files are kept. The one role that is a promise about the **disk** rather than about work — see [Nodes that hold no data](#nodes-that-hold-no-data). It says nothing about the broker, which is the node's [broker kind](#the-broker-members-and-leaves) |
+| `data` | Keeps the company's durable state on this node's disk: a full copy of the replicated estate (the tracker, the knowledge base, the vectors) and the event log. The company's files are not under it: they are in the [object store](../concepts/object-store.md), which on the default `nats` backend is a stream the broker's members keep. The one role that is a promise about the **disk** rather than about work — see [Nodes that hold no data](#nodes-that-hold-no-data). It says nothing about the broker, which is the node's [broker kind](#the-broker-members-and-leaves) |
 | `ingress` | Serves the HTTP API: webhooks from every integration, the dashboard, the REST endpoints |
 | `seats` | Claims seat leases, spawns the agents, consumes their inboxes, runs turns. Serves its own seats' `/mcp/{token}` tool bridge when `CREWLET_MCP_BRIDGE_URL` is set, because a bridged session lives in the process that opened it |
-| `workers` | The company-wide singleton duties: the scheduler tick, the maintenance sweep (retention and removed-seat mailbox retirement), the state-log trim, the embedding duty, the object store's placement map, the sandbox waiter, the integration reconcile loop, and the learning passes (skill clustering, curation, episode compaction, promotion) on one lease |
+| `workers` | The company-wide singleton duties: the scheduler tick, the maintenance sweep (retention and removed-seat mailbox retirement), the state-log trim, the embedding duty, the object store's collector, the sandbox waiter, the integration reconcile loop, and the learning passes (skill clustering, curation, episode compaction, promotion) on one lease |
 
 A role is subtracted from **this node, not from the company**. That means
 a fleet can be assembled, node by node, into a shape where a whole job is
@@ -306,13 +306,14 @@ node's seats do, and each of those tools asks a data node over the broker:
 - **Its audit trail is kept by a data node.** What it publishes about its
   turns is handed to a data node's event log, where `GET /events` on that node
   shows it.
-- **Its files are kept by the data nodes.** A seat on it reads and writes a
-  project's files as any seat does, and the bytes travel to and from the data
-  nodes the [placement map](../concepts/object-store.md) puts them on; none
-  are kept on the stateless node, and `store.objects` is refused there.
+- **Its files go straight to the object store.** A seat on it reads and writes
+  a project's files as any seat does, and the bytes travel to and from the one
+  [object store](../concepts/object-store.md) the fleet shares — the broker's
+  bucket across its leaf link, or the S3 bucket directly — so it carries the
+  same `store.objects` block as every other node; none are kept on the
+  stateless node.
 - **It is never counted as a copy.** The trim waits on the positions of data
-  nodes only, the search fan-out divides its buckets between data nodes only,
-  and the object store places chunks on data nodes only — a stateless node
+  nodes only, and the search fan-out divides its buckets between data nodes only — a stateless node
   publishes to no state log. A capacity operation asks the data nodes and
   every broker **member** to acknowledge, whatever their roles; a leaf's broker
   queues nothing, so a stateless leaf is not asked
@@ -436,7 +437,7 @@ and left unserved:
 | Part | Rule |
 |---|---|
 | `node` | A node id, under `node.id`'s own rule: starts with a letter or digit, then letters, digits, `.`, `_` or `-`, at most 64 characters. A `${VAR}` is **not** resolved here — Tier B compares the pin as written — so write the node id itself. The published schema carries the same pattern, so an editor flags a malformed pin as you type |
-| label key | 1 to 63 bytes of UTF-8 with no whitespace and no unprintable character. Dots, slashes and non-ASCII letters are fine (`topology.example.com/zone`). The same grammar governs `node.labels` in Tier A and the object store's `failure_domain`, so a key one of them accepts the others accept too |
+| label key | 1 to 63 bytes of UTF-8 with no whitespace and no unprintable character. Dots, slashes and non-ASCII letters are fine (`topology.example.com/zone`). The same grammar governs `node.labels` in Tier A and the estate's `failure_domain`, so a key one of them accepts the others accept too |
 | label value | Any string, compared exactly: interior spaces and the empty string are both values a node can carry. What a selector's value may **not** have is whitespace around it — every node's label values are trimmed of theirs when its Tier A file loads, so `" eu"` could never match; it is refused rather than trimmed, because the difference is the one you cannot see in the file |
 
 A document with several bad keys reports every one of them, in the same
@@ -507,47 +508,23 @@ and a `Retry-After` rather than accepted, which sends it to a peer; reads
 and the dashboard keep answering. See
 [During a drain](../reference/api-endpoints.md#during-a-drain).
 
-**A data node's files stay put through its drain.** Its place in the
-[object store](../concepts/object-store.md) is a lease of its own, given back
-only once the node has stopped serving chunks, so a drain moves none of the
-company's files — and neither does a restart, if the node is back within ten
-minutes. Back after longer, its share has been re-placed, but what it still
-holds is read from the moment it returns: it rejoins the map **on probation**,
-placed on again only once it has stayed ten minutes. Between one data node and
-the next, wait for
-[`crewlet objects status`](../reference/cli.md#crewlet-objects-status) to say
-the fleet has settled: every member has repaired at the placement map's epoch
-with nothing pending. At three copies the fleet survives one data node down,
-not two. For maintenance that will keep a node away longer than ten minutes,
-hold the map first (`crewlet objects hold -for 2h`), so its share is not copied
-away and then back.
+**A data node's drain moves no files.** The company's files are in the
+[object store](../concepts/object-store.md), not on any one node: on `nats`
+the chunks are a stream at `stream.replicas` copies on the broker's members,
+with the same quorum arithmetic as the logs — three members at three replicas
+keep writing files with one down, two members at two replicas cannot write with
+either down — and a member that comes back is caught up by the broker as for
+every stream. On `s3` no node holds a chunk at all. So between one data node
+and the next, wait for what the logs need, and nothing more for the files.
 
 ### Removing a data node for good
 
-Take it **out** of the object store first, and stop it only once its data has
-moved:
-
-1. `crewlet objects out <node> -confirm <node>`. The placement map stops
-   placing on it, and its share is copied to the other data nodes *from it*,
-   while it keeps serving — so no chunk is a copy short at any point. On a
-   fleet with no data node to spare — as many as `objects.replicas`, three at
-   three copies — the out is refused (`nowhere_to_rebuild`), since the share
-   would have nowhere to go: add the node's replacement first, or lower
-   `objects.replicas` if the company means to keep fewer copies and send the
-   out again once `crewlet objects status` shows the lower count — the map
-   takes it on its duty's next tick after the activation, not when it is
-   applied.
-2. Run `crewlet objects status` until it says the node **may be stopped for
-   good**: every member has repaired at the map's epoch with nothing pending,
-   and the node holds no strays. It counts those in a collection that starts
-   within about half a minute of the last member finishing its repair, not on
-   the hour.
-3. Stop it. Its seats and duties move as they would for any stopped node, and
-   the map removes it ten minutes later.
-
-Stopping a data node without taking it out first is a **recovery** instead:
-ten minutes later its share is re-placed and rebuilt from the copies on the
-others. See [Taking a data node away](../concepts/object-store.md#taking-a-data-node-away).
+There is nothing to drain for the files. On `nats` the node is a broker member,
+and taking it away is taking any member away: stop it, then remove it from the
+broker's membership as [A member that is gone for good](#a-member-that-is-gone-for-good)
+describes, and the broker re-places its copies of every stream — the files'
+included — on the members that remain, where there are enough of them. On `s3` it held no chunk. See
+[Taking a data node away](../concepts/object-store.md#taking-a-data-node-away).
 
 **Upgrade one node at a time, and let each one finish.** Seat leases
 carry a protocol version, and a node refuses to claim seats while any
@@ -610,12 +587,10 @@ The consequences worth stating plainly:
 - **`seats_unplaceable`** — a seat nobody may run. Fix the selector, or
   start a node that matches.
 - **`seat_claims_blocked_by_older_protocol`** — an unfinished upgrade.
-- **`objects_degraded`** — some of the company's files have fewer copies than
-  it asked for; do not stop another data node until it clears on every member.
-  **`objects_missing`** is worse: a chunk no member holds. And
-  **`objects_store_unhealthy`** is a data node whose store has failed or
-  filled. `crewlet objects status` names the node and what the fleet is
-  waiting for.
+- **`objects_missing`** — the object store's collector audited the company's
+  files and found chunks a row names that the store does not hold, so those
+  files cannot be downloaded. Check the store's own health and restore the
+  chunks from a backup; `crewlet objects status` lists them.
 - **`history_partial`** — history reads are coming back without a node: it
   did not answer inside the fleet read budget. Every such answer names the
   node in its `coverage`.

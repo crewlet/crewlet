@@ -48,7 +48,7 @@ type FileWriter interface {
 
 // ObjectStore is the fleet's object store as these tools need it.
 type ObjectStore interface {
-	Put(ctx context.Context, h objstore.Hash, data []byte) (int, error)
+	Put(ctx context.Context, h objstore.Hash, data []byte) error
 	ReadAt(ctx context.Context, m objstore.Manifest, off, n int64) ([]byte, error)
 }
 
@@ -391,8 +391,7 @@ func (t *writeProjectFile) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	// THE BYTES FIRST — see the file's head.
 	manifest, err := objstore.Split(ctx, bytes.NewReader(content), tracker.MaxFileBytes,
 		func(ctx context.Context, c objstore.Chunk, data []byte) error {
-			_, putErr := t.deps.Objects.Put(ctx, c.Hash, data)
-			return putErr
+			return t.deps.Objects.Put(ctx, c.Hash, data)
 		})
 	if err != nil {
 		return failed(fmt.Sprintf("%s: %s was not written, and nothing was recorded: "+
