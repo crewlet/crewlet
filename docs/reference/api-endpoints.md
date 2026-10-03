@@ -3167,6 +3167,16 @@ person who made it in the file's history, never the process that relayed it.
 present only where the write is known to have landed. An `unknown` is retried
 by sending the same request again with the `op_id` it answered.
 
+**Each mebibyte has 30 seconds to cross**, in either direction: an upload's
+next mebibyte to arrive once the last one is stored, a download's next to be
+taken by the client once it has been fetched — a floor of about 35 KB/s, far
+under any real link. A whole-body deadline cannot bound a stream of up to a
+gibibyte without capping real uploads, and none at all let a client trickle one
+a byte at a time, or open a download and never read it, holding the handler and
+its connection for as long as it liked. An upload that stops arriving answers
+`400 unreadable_body` and records nothing; a download the client stops taking
+is cut, which the client sees as a body shorter than its `Content-Length`.
+
 **A download is served as an attachment**, with the file's own type and the
 same `default-src 'none'` policy every non-dashboard response carries, so a file
 somebody uploaded as HTML downloads rather than running on the dashboard's
@@ -3176,6 +3186,7 @@ origin.
 |---|---|---|
 | `400` | `bad_path` | The path is empty, longer than 1024 bytes, not UTF-8, ends in `/`, has an empty folder or a `.` or `..` in it, or carries a control character or a backslash. A leading `/` is dropped rather than refused |
 | `400` | `bad_if_match` | `If-Match` is not a version |
+| `400` | `unreadable_body` | The upload's body stopped arriving: the connection closed, or a mebibyte of it took more than 30 seconds (see below) |
 | `403` | `operator_required` | A write whose credential names no operator |
 | `404` | `no_project` / `no_file` | No such project, or no file at that path |
 | `412` | `version_moved` | `If-Match` names a version the file has moved past |

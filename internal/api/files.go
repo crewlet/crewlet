@@ -11,8 +11,10 @@ import (
 	"path"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/crewlet/crewlet/internal/api/auth"
+	"github.com/crewlet/crewlet/internal/api/httpjson"
 	"github.com/crewlet/crewlet/internal/api/queries"
 	"github.com/crewlet/crewlet/internal/objstore"
 	"github.com/crewlet/crewlet/internal/statelog"
@@ -53,10 +55,69 @@ func (a *App) mountFiles(mux *http.ServeMux) {
 	mux.Handle("DELETE /work/files/{project}/{path...}", http.HandlerFunc(a.serveFileRemove))
 }
 
+// fileChunkPace is how long one chunk of a file may take to cross the
+// connection, in either direction: an upload's next mebibyte to arrive once
+// the last one is stored, a download's next mebibyte to be taken by the client
+// once it has been fetched.
+//
+// [httpjson.BodyReadTimeout], PER CHUNK rather than per body. The server's
+// ReadTimeout and WriteTimeout are deliberately unset (cmd/crewlet's
+// apiIdleTimeout says why), so a route that streams a body bounds it itself —
+// and these two bounded nothing: a client could trickle a gibibyte upload a
+// byte at a time, or open a download and never read it, and hold a handler, a
+// connection slot and the chunks read ahead for it as long as it liked. One
+// deadline over the whole body cannot be the bound either, because a file of
+// [tracker.MaxFileBytes] is a gibibyte and any single figure is either a cap
+// on real uploads or no bound on a trickle. Thirty seconds a mebibyte is a
+// floor of about 35 KB/s, far under any real link and far over a trickle.
+//
+// AND MEASURED FROM WHEN THE CLIENT IS WAITED ON, never across the server's
+// own work: storing a chunk can take a member's whole attempt budget, and
+// fetching one for a download can walk a ranking, and neither is the client's
+// time to spend.
+const fileChunkPace = httpjson.BodyReadTimeout
+
+// errFileBody is an upload whose body could not be read to its end — the
+// client's connection, not the store, so it answers 400 rather than 503.
+var errFileBody = errors.New("the file's body could not be read")
+
+// pacedBody is an upload's body, each chunk of it read under its own
+// [fileChunkPace] deadline.
+type pacedBody struct {
+	r  io.Reader
+	rc *http.ResponseController
+}
+
+// next gives the next chunk its whole window.
+//
+// http.ErrNotSupported is ignored, as [httpjson.ReadBody] ignores it: a writer
+// that cannot carry a deadline has no connection to bound.
+func (b *pacedBody) next() error {
+	if err := b.rc.SetReadDeadline(time.Now().Add(fileChunkPace)); err != nil &&
+		!errors.Is(err, http.ErrNotSupported) {
+		return fmt.Errorf("%w: %w", errFileBody, err)
+	}
+	return nil
+}
+
+// Read reads the body, tagging a failure as the client's. The end of the body
+// is passed through untouched: the chunker reads with io.ReadFull, which
+// recognises io.EOF by equality, and a tagged one would read as a failure.
+func (b *pacedBody) Read(p []byte) (int, error) {
+	n, err := b.r.Read(p)
+	if err != nil && !errors.Is(err, io.EOF) {
+		err = fmt.Errorf("%w: %w", errFileBody, err)
+	}
+	return n, err
+}
+
 // fileRefusal answers a file route's failure with the status its cause
 // deserves.
 func fileRefusal(w http.ResponseWriter, err error) {
 	switch {
+	case errors.Is(err, errFileBody):
+		httpjson.FailWith(w, http.StatusBadRequest, httpjson.CodeUnreadableBody,
+			map[string]string{"detail": err.Error()})
 	case errors.Is(err, tracker.ErrNoProject):
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "no_project", "detail": err.Error()})
 	case errors.Is(err, tracker.ErrNoFile):
@@ -121,12 +182,38 @@ func (a *App) serveFileDownload(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Disposition",
 		mime.FormatMediaType("attachment", map[string]string{"filename": path.Base(f.Path)}))
 	w.WriteHeader(http.StatusOK)
-	if _, err := io.Copy(w, io.MultiReader(bytes.NewReader(head), body)); err != nil {
+	if err := sendPaced(w, io.MultiReader(bytes.NewReader(head), body)); err != nil {
 		// THE STATUS IS SENT, so the one honest signal left is a body
 		// shorter than its Content-Length: aborting the handler closes
 		// the connection rather than ending the response cleanly.
 		log.Warn("api_file_download_cut", "project", f.Project, "path", f.Path, "error", err)
 		panic(http.ErrAbortHandler)
+	}
+}
+
+// sendPaced writes src to the client a chunk at a time, each chunk under its
+// own [fileChunkPace] write deadline, set once the chunk is in hand — so the
+// time spent fetching it from a peer is never the client's.
+func sendPaced(w http.ResponseWriter, src io.Reader) error {
+	rc := http.NewResponseController(w)
+	buf := make([]byte, objstore.ChunkSize)
+	for {
+		n, err := io.ReadFull(src, buf)
+		if n > 0 {
+			if derr := rc.SetWriteDeadline(time.Now().Add(fileChunkPace)); derr != nil &&
+				!errors.Is(derr, http.ErrNotSupported) {
+				return derr
+			}
+			if _, werr := w.Write(buf[:n]); werr != nil {
+				return werr
+			}
+		}
+		switch {
+		case err == io.EOF, err == io.ErrUnexpectedEOF:
+			return nil
+		case err != nil:
+			return err
+		}
 	}
 }
 
@@ -196,11 +283,19 @@ func (a *App) serveFileUpload(w http.ResponseWriter, r *http.Request) {
 	if contentType == "" {
 		contentType = mime.TypeByExtension(path.Ext(filePath))
 	}
-	// THE BYTES FIRST — see the file's head.
-	manifest, err := objstore.Split(r.Context(), r.Body, tracker.MaxFileBytes,
+	// THE BYTES FIRST — see the file's head — each chunk read under its own
+	// deadline, the next one's window opening once this one is stored.
+	body := &pacedBody{r: r.Body, rc: http.NewResponseController(w)}
+	if deadlineErr := body.next(); deadlineErr != nil {
+		fileRefusal(w, deadlineErr)
+		return
+	}
+	manifest, err := objstore.Split(r.Context(), body, tracker.MaxFileBytes,
 		func(ctx context.Context, c objstore.Chunk, data []byte) error {
-			_, putErr := a.files.PutChunk(ctx, c.Hash, data)
-			return putErr
+			if _, putErr := a.files.PutChunk(ctx, c.Hash, data); putErr != nil {
+				return putErr
+			}
+			return body.next()
 		})
 	if err != nil {
 		fileRefusal(w, err)
