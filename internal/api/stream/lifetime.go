@@ -331,32 +331,59 @@ func keepDecided(ctx context.Context, conn *websocket.Conn, client *Client,
 	l *listener, cred credential, now func() time.Time,
 	resync func(Audience) map[string]any, rewatch func(context.Context)) {
 
-	// ONE TIMER, ARMED ONCE: a credential's own end is fixed when it is
-	// issued — no re-issue moves an absolute deadline, and a machine token's
-	// expiry is minted with it — so the handshake's reading is the one. A
-	// guard that still serves the credential once the timer has fired
-	// disagrees with this clock, and the guard is the authority: the socket
-	// is decided again on its next signal rather than in a loop against
-	// the same instant.
+	// ONE TIMER, ARMED AT THE HANDSHAKE'S READING: a credential's own end is
+	// fixed when it is issued — no re-issue moves an absolute deadline, and
+	// a machine token's expiry is minted with it — so the instant to wake
+	// at is known from the start.
+	//
+	// AND ARMED AGAIN WHEN THE GUARD STILL SERVES IT, because the timer and
+	// the guard read two different clocks: the timer runs on the
+	// monotonic clock from the wall-clock difference measured when it was
+	// armed, and the guard compares the WALL clock against the deadline.
+	// A wall clock stepped back after the arming (an NTP correction, a
+	// hypervisor resuming a VM) fires the timer while the guard still
+	// sees the credential live — and a timer dropped there left the
+	// socket with no deadline at all, open past the one limit no record
+	// will ever state, until something unrelated happened to decide it.
+	// Re-armed for the wall clock's own distance to the deadline, a clock
+	// that is behind is asked again when it reaches it; floored at
+	// [expiryRetry], a guard whose clock disagrees costs one decision per
+	// interval rather than a loop against the same instant.
+	var timer *time.Timer
 	var expiry <-chan time.Time
 	if !cred.ends.IsZero() {
-		timer := time.NewTimer(time.Until(cred.ends))
+		timer = time.NewTimer(time.Until(cred.ends))
 		defer timer.Stop()
 		expiry = timer.C
 	}
 	for {
+		fired := false
 		select {
 		case <-ctx.Done():
 			return
 		case <-l.wake:
 		case <-expiry:
-			expiry = nil
+			fired = true
 		}
 		if !decideOnce(ctx, conn, client, cred, now, resync, rewatch) {
 			return
 		}
+		if fired {
+			timer.Reset(max(time.Until(cred.ends), expiryRetry))
+		}
 	}
 }
+
+// expiryRetry is the shortest interval at which a socket whose credential's
+// own end has passed is decided again, while the guard still serves it.
+//
+// ONE SECOND, because it is what a disagreement between this node's clocks
+// costs and nothing else: the decision is a keyed read of one person's rows,
+// and the disagreement lasts as long as the wall clock's step — seconds after
+// an NTP correction — so a second bounds both the read rate and how long past
+// its deadline a socket can be served to the same small figure. Shorter buys
+// nothing a person could see; longer serves an ended credential longer.
+const expiryRetry = time.Second
 
 // decideOnce decides the socket's credential once, and reports whether the
 // socket is still open.

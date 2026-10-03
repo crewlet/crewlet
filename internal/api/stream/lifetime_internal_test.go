@@ -437,6 +437,45 @@ func TestASocketIsClosedAtItsCredentialsOwnEnd(t *testing.T) {
 	lasting.open(t)
 }
 
+// AN END THE GUARD STILL SERVES IS DECIDED AGAIN, and the socket still closes.
+//
+// The timer runs on the monotonic clock and the guard compares the wall clock,
+// so a wall clock stepped back after the handshake fires the timer while the
+// guard still serves the credential. Nothing else may ever decide that socket
+// again — no record is written at a deadline — so the timer has to: here the
+// guard serves for a while past the end the socket was told and then refuses,
+// and no move, no publish, nothing else is sent. The socket must close 4401,
+// and must not have been decided in a loop meanwhile.
+//
+// Mutations: drop the re-arm and the socket stays open past the read's bound;
+// re-arm with no floor and it is decided over and over against the same
+// instant.
+func TestAnEndTheGuardStillServesIsDecidedAgain(t *testing.T) {
+	t.Parallel()
+	svc := newDecidingService(t, authz.NoChart{})
+	ana := person("ana")
+	ends := time.Now().Add(200 * time.Millisecond)
+	servesUntil := ends.Add(600 * time.Millisecond)
+	s := serve(t, svc, socketCase{principal: ana, opened: sessionOf(ana), ends: ends,
+		decide: func(r *http.Request) (*http.Request, *auth.Refusal) {
+			if time.Now().Before(servesUntil) {
+				return resolvedAs(ana)(r)
+			}
+			return r.WithContext(iam.WithAnonymous(r.Context())), nil
+		}})
+
+	if got := s.closedWith(t); got != CloseUnauthenticated {
+		t.Fatalf("a socket the guard served past its end, and then refused, "+
+			"closed %d, want %d", got, CloseUnauthenticated)
+	}
+	// AS IT STARTED LISTENING, AT THE END, AND ONCE A RETRY LATER — not
+	// a decision per scheduler tick in between.
+	if got := s.decisions.Load(); got > 4 {
+		t.Fatalf("the socket was decided %d times across a %s disagreement, "+
+			"want at most 4", got, servesUntil.Sub(ends))
+	}
+}
+
 // A PUBLISHED COMPANY DECIDES EVERY SOCKET AGAIN.
 //
 // The org chart a seat binding resolves through may have moved — a seat
