@@ -47,7 +47,16 @@ type probeApplier struct {
 	// It is how a case stages the re-run no healthy store produces.
 	lockedOnce uint64
 	lockedHit  bool
+
+	// hooks is every post-commit call the framework made, in order: a
+	// "retained N" for each [statelog.RetentionHook] call and a
+	// "committed" for each [statelog.Applier.Committed].
+	hooks []string
 }
+
+// THE PROBE TAKES THE OPTIONAL HOOK, as every applier that implements it must
+// assert: the framework finds it by a type assertion.
+var _ statelog.RetentionHook = (*probeApplier)(nil)
 
 func newProbeApplier() *probeApplier {
 	return &probeApplier{gated: map[uint64]bool{}, rowsPer: 1}
@@ -100,6 +109,20 @@ func (a *probeApplier) Committed(context.Context) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	a.commits++
+	a.hooks = append(a.hooks, "committed")
+}
+
+func (a *probeApplier) Retained(_ context.Context, records int) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.hooks = append(a.hooks, fmt.Sprintf("retained %d", records))
+}
+
+// hooksSeen is every post-commit call so far, in order.
+func (a *probeApplier) hooksSeen() []string {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return append([]string(nil), a.hooks...)
 }
 
 func (a *probeApplier) seen() []statelog.Position {
@@ -749,6 +772,63 @@ func TestARecordOverAStaleScopeIsRetainedRatherThanApplied(t *testing.T) {
 	if deferred != 2 {
 		t.Fatalf("%d record(s) retained, want 2 — the second is the one whose "+
 			"rows the first made stale", deferred)
+	}
+}
+
+// AN APPLIER IS TOLD WHAT A COMMITTED BATCH RETAINED, before it is told the
+// batch committed — and is told nothing of the kind about a batch that
+// retained nothing.
+//
+// A retained record never reaches Apply, so an applier that says after a batch
+// what the batch moved says nothing about it — while every read its scope
+// covers became unknown at that commit. The identity estate is why this
+// exists: a session a newer peer's record revoked is refused by every REST
+// route on a node that retained the record, and a dashboard socket held open
+// on that session heard nothing until its applier was told. Both retain arms
+// count — a record this build cannot read, and a readable one whose scope that
+// record covers — and the hook comes BEFORE Committed, because an applier
+// folds it into what Committed hands over.
+//
+// Mutation: drop the hook call from the runner and the second batch reports
+// no retention.
+func TestAnApplierIsToldWhatABatchRetained(t *testing.T) {
+	t.Parallel()
+	h := newApplyHarness(t, probeDomain{})
+	h.fetch.offer(1, env(1, "edit", "a", "op-1", 1))
+	h.fetch.offer(2, env(2, "edit", "b", "op-2", 1))
+	if err := h.run(2); err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	for _, hook := range h.applier.hooksSeen() {
+		if hook != "committed" {
+			t.Fatalf("a batch that retained nothing called %q", hook)
+		}
+	}
+
+	// A record above this build, and a readable one inside its scope.
+	h.fetch.offer(3, env(3, "edit", "c", "op-3", 9, "project/ENG"))
+	h.fetch.offer(4, env(4, "edit", "d", "op-4", 1, "project/ENG/object/d"))
+	h.fetch.offer(5, env(5, "edit", "e", "op-5", 1, "project/OPS/object/e"))
+	if err := h.run(5); err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	hooks := h.applier.hooksSeen()
+	retained := 0
+	for i, hook := range hooks {
+		var n int
+		if _, err := fmt.Sscanf(hook, "retained %d", &n); err != nil {
+			continue
+		}
+		retained += n
+		if i+1 >= len(hooks) || hooks[i+1] != "committed" {
+			t.Errorf("the hook calls ran %v — Retained must come immediately "+
+				"before the Committed of its own batch", hooks)
+		}
+	}
+	if retained != 2 {
+		t.Fatalf("the applier was told of %d retained record(s) across %v, want "+
+			"2 — the record this build cannot read and the one its scope "+
+			"covers", retained, hooks)
 	}
 }
 

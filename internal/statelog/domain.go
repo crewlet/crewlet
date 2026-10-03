@@ -618,6 +618,53 @@ type Applier interface {
 	Committed(ctx context.Context)
 }
 
+// RetentionHook is the optional half of the [Applier] contract: an applier that
+// has a consequence to act on when a committed batch RETAINED records rather
+// than applying them implements it, and the framework calls Retained after the
+// commit, IMMEDIATELY BEFORE [Applier.Committed] for the same batch, with how
+// many records the batch retained.
+//
+// # Why a retained record needs a hook of its own
+//
+// Committed's consequences are the ones an applier gathered in Apply, and a
+// retained record never reaches Apply: a record a newer build wrote, one signed
+// under a keyring key this node does not hold, and one whose scope a record
+// already retained covers are each filed in the deferral index and consumed
+// without a row. So an applier that says after a batch what the batch MOVED
+// says nothing about one that retained — and what moved is what this node can
+// vouch for: every read whose scope the record covers is unknown from that
+// commit on ([Runner.Deferred], the readers' coverage answers). A listener held
+// on a decision made before the commit has to hear that it may no longer stand,
+// and only the applier knows who that listener is.
+//
+// # A count, not the records
+//
+// What a retained record is ABOUT is inside the payload this node could not
+// read; its envelope names a scope, and a scope is the domain's own address
+// for what a reader asks rather than a list of whom the record moves. So the
+// hook says THAT the batch retained and how much, and an applier that cannot
+// say whose standing that leaves unknown says everyone's.
+//
+// # When it is not called
+//
+// Only for a batch that retained at least one record. A record the reprocess
+// at a loop's start KEEPS — still above this build's version, still signed
+// under a key it lacks — calls nothing: it was retained before, and was
+// announced then, by this process or by one that ran before any listener this
+// process holds was registered.
+//
+// OPTIONAL, because most domains have no consequence of a record they cannot
+// read beyond the deferral the framework already records: a wake is derived
+// when the record applies, and a reader asks the deferral index itself. An
+// applier that implements it asserts so at compile time
+// (`var _ statelog.RetentionHook = (*Applier)(nil)`), since the framework finds
+// it by a type assertion that a misspelt method would silently fail.
+type RetentionHook interface {
+	// Retained runs after the commit and before Committed, on the apply
+	// loop's own goroutine. It must not block.
+	Retained(ctx context.Context, records int)
+}
+
 // ApplyOptions carries every value an applier would otherwise read from the
 // world.
 //
