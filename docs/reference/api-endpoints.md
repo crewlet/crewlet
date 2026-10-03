@@ -3598,6 +3598,16 @@ something could have changed the answer:
 - and **once as it starts listening**, so a record that landed between the
   handshake and that moment is not missed.
 
+A node decides its open sockets **one at a time, and once per credential**.
+Each decision is a read of the identity estate on the one connection the store
+reserves for identity reads — the one every REST request authenticates on —
+and a published company or a move naming everyone decides every socket at
+once, so a node with many tabs open takes them in turn rather than queueing
+one read per tab ahead of every request. Sockets whose handshakes presented
+the same credential — a person's tabs on one cookie, a script's connections on
+one token — share one decision per move; a credential's own deadline is always
+decided afresh.
+
 A session's **idle** deadline does not end an open socket: an open live view is
 activity, and a socket can never be re-issued a cookie, so the session is
 decided on what its records say and its absolute deadline. The browser's own

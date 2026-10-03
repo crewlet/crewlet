@@ -275,7 +275,12 @@ work marked as **identity work** (resolving who is acting, before a route, a
 query or a tool call can decide anything) ever runs on it. Identity reads
 serialise on that one connection, which is exactly what "one connection's
 worth" means, and it is enough because an identity read is a keyed lookup
-rather than a scan.
+rather than a scan. The dashboard's open sockets are decided again on the same
+connection whenever the identity estate or the company moves, and one move can
+decide every socket on the node at once — so a node takes those decisions **one
+at a time**, sharing one between the sockets opened with the same credential,
+and a REST request's own identity read waits behind at most one of them rather
+than one per open tab.
 
 The failure it stops has the same shape as the one the pinned writers exist to
 break:

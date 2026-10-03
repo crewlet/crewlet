@@ -59,6 +59,12 @@ import (
 // minute and still let a revocation stand for up to that minute; what decides
 // a socket now is the record itself, delivered when it applies.
 //
+// AND A DECISION IS TAKEN IN THE NODE'S TURN, once per credential: several of
+// these events decide every socket at once, every decision is a read on the
+// one connection the store reserves for identity work — the one every REST
+// request authenticates on — and sockets opened with one credential are
+// resolved alike. See decisions.go.
+//
 // # What each answer does
 //
 //   - RESOLVED: the socket carries on, and the principal every later query is
@@ -217,6 +223,11 @@ type credential struct {
 
 	// decide is the guard, over the handshake request.
 	decide decideFunc
+
+	// key names the credential the handshake presented
+	// ([auth.Guard.PresentedKey]): every socket opened with an equal key
+	// shares one decision per move — see decisions.go.
+	key string
 }
 
 // deciderFor is the decision an open socket repeats: the guard's
@@ -327,9 +338,18 @@ func (ls *listeners) signal(matches func(opened) bool) {
 //
 // NEVER BLOCKS: its caller is the identity applier's post-commit hook, on the
 // apply loop's own goroutine with the next batch waiting behind it. Each socket
-// decides on its own goroutine.
+// is woken on its own goroutine and decided in the node's turn — see
+// decisions.go.
 func (s *Service) CredentialsMoved(m Moved) {
-	s.listeners.signal(func(o opened) bool { return o.movedBy(m) })
+	s.wake(func(o opened) bool { return o.movedBy(m) })
+}
+
+// wake counts a move and then signals every listener matches names: counted
+// FIRST, so a socket the signal wakes needs a decision whose read began after
+// it — see [decisions].
+func (s *Service) wake(matches func(opened) bool) {
+	s.decisions.moved()
+	s.listeners.signal(matches)
 }
 
 // keepDecided decides this socket's credential again on every signal and at
@@ -341,9 +361,16 @@ func (s *Service) CredentialsMoved(m Moved) {
 // no longer covers from the next one on and the screen has to lose what it was
 // already showing under the old grant rather than keep it until a reload.
 // rewatch decides the watched seat again, as whoever the decision resolved.
+//
+// Each decision is asked of d, in the node's turn and shared with every socket
+// opened with the same credential — see decisions.go: a wake needs one whose
+// read began after the signal, and the credential's own end one of its own.
 func keepDecided(ctx context.Context, conn *websocket.Conn, client *Client,
-	l *listener, cred credential, now func() time.Time,
+	l *listener, cred credential, d *decisions, now func() time.Time,
 	resync func(Audience) map[string]any, rewatch func(context.Context)) {
+
+	held, release := d.hold(cred.key)
+	defer release()
 
 	// ONE TIMER, ARMED AT THE HANDSHAKE'S READING: a credential's own end is
 	// fixed when it is issued — no re-issue moves an absolute deadline, and
@@ -371,15 +398,20 @@ func keepDecided(ctx context.Context, conn *websocket.Conn, client *Client,
 		expiry = timer.C
 	}
 	for {
+		var need uint64
 		fired := false
 		select {
 		case <-ctx.Done():
 			return
 		case <-l.wake:
+			need = d.woken()
 		case <-expiry:
 			fired = true
+			need = d.expired()
 		}
-		if !decideOnce(ctx, conn, client, cred, now, resync, rewatch) {
+		r, refusal, ok := d.decide(ctx, held, need, cred.decide)
+		if !ok || !decideOnce(ctx, conn, client, cred.who, r, refusal, now,
+			resync, rewatch) {
 			return
 		}
 		if fired {
@@ -399,20 +431,24 @@ func keepDecided(ctx context.Context, conn *websocket.Conn, client *Client,
 // nothing a person could see; longer serves an ended credential longer.
 const expiryRetry = time.Second
 
-// decideOnce decides the socket's credential once, and reports whether the
-// socket is still open.
+// decideOnce acts on one decision of the socket's credential — the guard's
+// resolution r and its refusal — and reports whether the socket is still open.
+//
+// THE DECISION MAY BE ANOTHER SOCKET'S, read over its own handshake: two
+// handshakes presenting one credential are resolved alike, so what r carries
+// is who this socket is too — see decisions.go.
 func decideOnce(ctx context.Context, conn *websocket.Conn, client *Client,
-	cred credential, now func() time.Time,
+	who *asking, r *http.Request, refusal *auth.Refusal, now func() time.Time,
 	resync func(Audience) map[string]any, rewatch func(context.Context)) bool {
 
-	r, refusal := cred.decide(ctx)
 	if ctx.Err() != nil {
 		return false
 	}
-	// THE DECISION'S REQUEST CARRIES ctx: [deciderFor] clones the
-	// handshake onto it before resolving. contextcheck follows a context
-	// through a returned request no further than the call.
-	//nolint:contextcheck // derived from ctx; see the paragraph above
+	// THE DECISION'S REQUEST CARRIES ITS RESOLUTION: [deciderFor] clones
+	// the handshake onto a context and the guard resolves into it.
+	// contextcheck follows a context through a returned request no further
+	// than the call.
+	//nolint:contextcheck // the resolution's own; see the paragraph above
 	principal, how := iam.From(r.Context())
 	switch {
 	case refusal != nil && refusal.Applies(r):
@@ -444,12 +480,12 @@ func decideOnce(ctx context.Context, conn *websocket.Conn, client *Client,
 			string(iam.GrantStateRead))
 		return false
 	}
-	cred.who.set(principal)
+	who.set(principal)
 	// AND THE SEAT IT WATCHES, as whoever this decision resolved: a lead
 	// moved off a team stops following a former report's inbox here
 	// rather than at the next reconnect.
 	if rewatch != nil {
-		rewatch(cred.who.context(ctx))
+		rewatch(who.context(ctx))
 	}
 	audience := AudienceOf(principal.Grants)
 	if client.SetAudience(audience) {

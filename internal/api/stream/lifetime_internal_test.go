@@ -63,12 +63,16 @@ func (s *switched) answer(r *http.Request) (*http.Request, *auth.Refusal) {
 
 // socketCase is one socket a case serves: who its handshake resolved, what it
 // was opened with, when its credential ends, and how it is decided again.
+//
+// key is the credential its handshake presented, which decides which other
+// sockets share its decisions; left empty, it is a credential of its own.
 type socketCase struct {
 	principal iam.Principal
 	opened    opened
 	ends      time.Time
 	decide    answer
 	query     Query
+	key       string
 }
 
 // served is one socket, through the same serveSocket the handler uses.
@@ -123,6 +127,9 @@ func dial(t *testing.T, svc *Service, c socketCase) *served {
 			return nil, nil
 		}
 	}
+	if c.key == "" {
+		c.key = uuid.NewString()
+	}
 	s := &served{}
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		conn, err := websocket.Accept(w, r, nil)
@@ -137,6 +144,7 @@ func dial(t *testing.T, svc *Service, c socketCase) *served {
 				s.decisions.Add(1)
 				return c.decide(r.Clone(ctx))
 			},
+			key: c.key,
 		})
 	}))
 	t.Cleanup(srv.Close)

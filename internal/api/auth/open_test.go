@@ -3,6 +3,7 @@ package auth_test
 import (
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -147,5 +148,57 @@ func TestACredentialsLifetimeIsItsOwnEnd(t *testing.T) {
 	if at, ok := auth.Lifetime(r.Context()); !ok || !at.Equal(m.row.ExpiresAt) {
 		t.Errorf("a machine token's lifetime is %v (%v), want its expiry %v", at, ok,
 			m.row.ExpiresAt)
+	}
+}
+
+// A PRESENTED KEY NAMES THE CREDENTIAL A REQUEST PRESENTS, and only that.
+//
+// One decision of an open connection answers for every connection whose
+// handshake carries an equal key, so two keys must be equal EXACTLY when the
+// guard would resolve the two requests from the same credential: the same
+// cookie twice, the same bearer twice, or nothing twice. A cookie and a bearer
+// of the same bytes are two credentials to the guard, and a request carrying
+// both is resolved from its bearer, so its key is the bearer's — read the
+// other way, a tab whose cookie had been ended would share the decision of a
+// script holding a good token. And the key is never the value: it sits in a
+// map for as long as the connection is open.
+func TestAPresentedKeyNamesTheCredentialPresented(t *testing.T) {
+	t.Parallel()
+	o := newOpenRig(t)
+	g := o.guard()
+	request := func(bearer string, cookie bool) *http.Request {
+		r := httptest.NewRequest(http.MethodGet, auth.SocketPath, nil)
+		if bearer != "" {
+			r.Header.Set("Authorization", "Bearer "+bearer)
+		}
+		if cookie {
+			o.withCookie(r)
+		}
+		return r
+	}
+	cookie := g.PresentedKey(request("", true))
+	for _, c := range []struct {
+		name string
+		a, b *http.Request
+		same bool
+	}{
+		{"the same cookie twice", request("", true), request("", true), true},
+		{"the same bearer twice", request("a-tier-a-token", false),
+			request("a-tier-a-token", false), true},
+		{"nothing twice", request("", false), request("", false), true},
+		{"two bearers", request("a-tier-a-token", false),
+			request("another-token", false), false},
+		{"a cookie and nothing", request("", true), request("", false), false},
+		{"a bearer and a cookie of its bytes", request(o.cookie, false),
+			request("", true), false},
+		{"a bearer beside a cookie is the bearer", request("a-tier-a-token", true),
+			request("a-tier-a-token", false), true},
+	} {
+		if got := g.PresentedKey(c.a) == g.PresentedKey(c.b); got != c.same {
+			t.Errorf("%s: keys equal %v, want %v", c.name, got, c.same)
+		}
+	}
+	if strings.Contains(cookie, o.cookie) || len(cookie) != 64 {
+		t.Errorf("the key %q is not a digest of the cookie", cookie)
 	}
 }

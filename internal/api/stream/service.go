@@ -118,6 +118,11 @@ type Service struct {
 	// arrives here: an identity move, a published company.
 	listeners listeners
 
+	// decisions is the node's one queue those sockets are decided through,
+	// one decision per credential per move — see decisions.go. The service
+	// holds it because it is shared by every socket on the node.
+	decisions *decisions
+
 	// queries is the node's ceiling on every socket's queries together —
 	// see [queryCeiling]. The service holds it because it outlives every
 	// socket and is shared by all of them.
@@ -280,6 +285,7 @@ func NewService(state *livestate.LiveState, opts Options) (*Service, error) {
 		now:       opts.Now,
 		interval:  opts.HealthInterval,
 		queries:   make(chan struct{}, queryCeiling(opts.Readers)),
+		decisions: newDecisions(),
 	}
 	if s.now == nil {
 		s.now = func() time.Time { return time.Now().UTC() }
@@ -544,7 +550,7 @@ func (s *Service) CompanyPublished() {
 	} {
 		s.hub.Broadcast(Push(push.kind, push.data, now))
 	}
-	s.listeners.signal(func(opened) bool { return true })
+	s.wake(func(opened) bool { return true })
 }
 
 // InboxChange is the payload of an `inbox_changed` frame: whose inbox moved,

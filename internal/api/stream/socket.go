@@ -318,6 +318,7 @@ func Handler(guard *auth.Guard, origins CrossSite, svc *Service, query Query) ht
 			opened: openedWith(r.Context(), principal),
 			ends:   ends,
 			decide: deciderFor(guard, r),
+			key:    guard.PresentedKey(r),
 		}
 
 		// THE HANDSHAKE'S ORIGIN IS JUDGED BY THE WRITES' RULE, and only
@@ -429,7 +430,8 @@ func serveSocket(ctx context.Context, conn *websocket.Conn,
 	defer svc.listeners.add(l)()
 	var deciding sync.WaitGroup
 	deciding.Go(func() {
-		keepDecided(ctx, conn, client, l, cred, svc.now, svc.Snapshot, seats.recheck)
+		keepDecided(ctx, conn, client, l, cred, svc.decisions, svc.now, svc.Snapshot,
+			seats.recheck)
 	})
 	defer deciding.Wait()
 
