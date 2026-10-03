@@ -1014,38 +1014,11 @@ type Stream struct {
 	// append rather than shedding history.
 	PagesLogMaxBytes int64 `yaml:"pages_log_max_bytes,omitempty" json:"pages_log_max_bytes,omitempty" js:"min=1073741824;max=274877906944" desc:"Byte ceiling on the knowledge base's log; unset derives a quarter of the mutation log's derived value, 1 GiB..16 GiB."`
 
-	// ChartLogMaxBytes is the byte ceiling on the org chart's log, the
-	// ordered stream every change to the company's own structure goes
-	// through.
-	//
-	// UNSET TAKES A FLAT 64 MiB, and like the identity estate's and the
-	// usage log's it is NOT derived from the disk. The reason is that the
-	// corpus-sized logs grow with a corpus the operator's volume has
-	// something to say about, and this one does not: a chart is hundreds of
-	// objects, it changes when somebody is hired, moved or promoted, and
-	// 64 MiB is about two and a half years of a COMPLETELY BLOCKED trim at
-	// the modelled rate, once the gate reserve its largest record sizes is
-	// kept. A quarter of a storage array would be disk reserved for records
-	// no company will ever write, and a quarter of a laptop would be the
-	// same number by coincidence.
-	//
-	// SMALLER THAN THE CORPUS-SIZED LOGS' FLOOR, deliberately: the broker
-	// grants a stream its whole ceiling when it creates it, so this number
-	// is free space a node must have before it can boot at all. See
-	// [DefaultChartLogMaxBytes] for the boot this cost at a gibibyte.
-	//
-	// It shares the state logs' one budget, and what the mutation log's
-	// field says about it holds here unchanged: the value is the one the
-	// stream is CREATED with, a derived value is scaled with the others to
-	// fit the broker and a set one is not, and crossing it refuses the
-	// append rather than shedding history.
-	ChartLogMaxBytes int64 `yaml:"chart_log_max_bytes,omitempty" json:"chart_log_max_bytes,omitempty" js:"min=67108864;max=17179869184" desc:"Byte ceiling on the org chart's log; unset takes a flat 64 MiB, 64 MiB..16 GiB."`
-
 	// IamLogMaxBytes is the byte ceiling on the identity estate's log —
 	// the ordered stream every person, credential, invitation and session
 	// goes through.
 	//
-	// UNSET TAKES A FLAT 512 MiB, and like the org chart's it is NOT
+	// UNSET TAKES A FLAT 512 MiB, and like the usage log's it is NOT
 	// derived from the disk: what this log grows with is the company's
 	// HEADCOUNT and how often people sign in, neither of which the
 	// operator's volume has anything to say about.
@@ -1060,8 +1033,8 @@ type Stream struct {
 	// is around eighteen months of a COMPLETELY BLOCKED trim at that rate
 	// and about five years at a realistic one.
 	//
-	// THE FLOOR IS THE ORG CHART'S 64 MiB rather than the gibibyte every
-	// other log takes, because the broker grants a stream its whole ceiling
+	// THE FLOOR IS 64 MiB rather than the gibibyte the corpus-sized logs
+	// take, because the broker grants a stream its whole ceiling
 	// when it creates it: this number is free space a node must have before
 	// it can boot at all, and a ten-person company writing a fiftieth of
 	// the reference rate should not have to reserve half a gibibyte to
@@ -1089,8 +1062,8 @@ type Stream struct {
 	// share of the disk, because a census is a property of the fleet's
 	// seats and schedules and a larger volume buys no more of them.
 	//
-	// THE FLOOR IS THE ORG CHART'S 64 MiB rather than the gibibyte the
-	// corpus-sized logs take, because the broker grants a stream its whole
+	// THE FLOOR IS 64 MiB rather than the gibibyte the corpus-sized logs
+	// take, because the broker grants a stream its whole
 	// ceiling when it creates it: this number is free space a node must
 	// have before it can boot at all, and a ten-seat node's 181-day census
 	// is about 12 MB. See [UsageLogMaxBytesFloor].
@@ -1274,11 +1247,11 @@ func (c StreamCluster) IsZero() bool {
 // This was a CROSS-TIER rule (`config.CheckTiers`, now gone) while a node's
 // state log waited for its first company: only a company started one, so
 // only the pair could say whether one would run. Every node runs the core
-// runtime from boot now — the org chart and the identity estate on every
-// domain's log, company or none — so the answer is Tier A's alone, and the
-// pair's check let exactly the node it should refuse through: one started
-// with no company, which put its first person's invitation and the chart the
-// org builder wrote on a stream its first restart emptied.
+// runtime from boot now — every domain's log and the identity estate on it,
+// company or none — so the answer is Tier A's alone, and the pair's check let
+// exactly the node it should refuse through: one started with no company,
+// which put its first person's invitation on a stream its first restart
+// emptied.
 //
 // ASKED TWICE, from ONE implementation: by [Bootstrap.Validate], and by the
 // engine at its own door for a Bootstrap that did not come through that one —
@@ -1292,8 +1265,8 @@ func (s *Stream) durable(path Path) error {
 	}
 	var p problems
 	p.add(at(path, "store_dir"), ErrMissing,
-		"every node keeps its state logs on this stream from boot — the org "+
-			"chart and the identity estate whatever company it runs, or none "+
+		"every node keeps its state logs on this stream from boot — the "+
+			"identity estate among them, whatever company it runs, or none "+
 			"— and an embedded stream with no store directory keeps its "+
 			"streams in memory: a restart recreates every log empty and this "+
 			"node refuses to serve them permanently. Name a directory")
@@ -1415,8 +1388,6 @@ func (s *Stream) validate(path Path) error {
 		TrackerVectorsMaxBytesFloor, TrackerVectorsMaxBytesCeiling)
 	bytesInRange(&p, path, "pages_log_max_bytes", s.PagesLogMaxBytes,
 		PagesLogMaxBytesFloor, PagesLogMaxBytesCeiling)
-	bytesInRange(&p, path, "chart_log_max_bytes", s.ChartLogMaxBytes,
-		ChartLogMaxBytesFloor, ChartLogMaxBytesCeiling)
 	bytesInRange(&p, path, "iam_log_max_bytes", s.IamLogMaxBytes,
 		IamLogMaxBytesFloor, IamLogMaxBytesCeiling)
 	bytesInRange(&p, path, "usage_log_max_bytes", s.UsageLogMaxBytes,
@@ -1445,22 +1416,20 @@ func (s *Stream) validate(path Path) error {
 	// the refusal itself, which names this limit, what was already spoken
 	// for, and the field the ceiling came from.
 	declared := s.TrackerLogMaxBytes + s.TrackerVectorsMaxBytes +
-		s.PagesLogMaxBytes + s.ChartLogMaxBytes + s.IamLogMaxBytes +
-		s.UsageLogMaxBytes
+		s.PagesLogMaxBytes + s.IamLogMaxBytes + s.UsageLogMaxBytes
 	if s.StoreMaxBytes > 0 && declared > s.StoreMaxBytes {
 		p.add(at(path, "store_max_bytes"), ErrConflict,
 			"%d bytes is smaller than the stream ceilings declared inside it "+
 				"(tracker_log_max_bytes %d + tracker_vectors_max_bytes %d + "+
-				"pages_log_max_bytes %d + chart_log_max_bytes %d + "+
-				"iam_log_max_bytes %d + usage_log_max_bytes %d = %d): the broker "+
+				"pages_log_max_bytes %d + iam_log_max_bytes %d + "+
+				"usage_log_max_bytes %d = %d): the broker "+
 				"refuses a stream whose ceiling it cannot back, so this node would "+
 				"fail to provision one of them. Raise store_max_bytes, or lower the "+
 				"ceilings — and leave headroom, because the state logs reserve only "+
 				"a share of this limit and every other stream on the broker grows "+
 				"inside it",
 			s.StoreMaxBytes, s.TrackerLogMaxBytes, s.TrackerVectorsMaxBytes,
-			s.PagesLogMaxBytes, s.ChartLogMaxBytes, s.IamLogMaxBytes,
-			s.UsageLogMaxBytes, declared)
+			s.PagesLogMaxBytes, s.IamLogMaxBytes, s.UsageLogMaxBytes, declared)
 	}
 	p.wrap(s.TrackerRetention.validate(at(path, "tracker_retention")))
 	// Refused here rather than at the broker. nats-server validates an

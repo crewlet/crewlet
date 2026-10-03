@@ -83,14 +83,13 @@ func TestTheDeclaredCeilingIsTierAsDefault(t *testing.T) {
 			config.IamLogMaxBytesFloor, config.IamLogMaxBytesCeiling)
 	}
 	// AND IT IS NOT THE FLOOR, which is the whole measurement: this log
-	// grows every morning where the org chart's changes when somebody is
-	// hired, and at the chart's 64 MiB the pessimistic rate fills it in
-	// under three months.
-	if got <= config.ChartLogMaxBytesFloor {
-		t.Errorf("the identity log's default is %d, at or below the org "+
-			"chart's floor of %d — sessions are what size this log and the "+
-			"chart writes nothing daily, so the two cannot share a number",
-			got, config.ChartLogMaxBytesFloor)
+	// grows every morning, and at its 64 MiB floor the pessimistic rate
+	// fills it in under three months.
+	if got <= config.IamLogMaxBytesFloor {
+		t.Errorf("the identity log's default is %d, at or below its own "+
+			"floor of %d — sessions are what size this log, and the floor "+
+			"is what a ten-person company pays, not what a reference one "+
+			"writes in a year", got, config.IamLogMaxBytesFloor)
 	}
 }
 

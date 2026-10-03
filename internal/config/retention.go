@@ -86,73 +86,19 @@ const (
 	PagesLogMaxBytesFloor   int64 = 1 << 30
 	PagesLogMaxBytesCeiling int64 = 256 << 30
 
-	// ChartLogMaxBytesFloor and ChartLogMaxBytesCeiling bound the org
-	// chart's log, and DefaultChartLogMaxBytes is what an unset value takes.
-	//
-	// THE DEFAULT IS THE FLOOR, and like the identity estate's and the
-	// usage log's this ceiling is not derived from the disk. The corpus-sized
-	// logs — the tracker's, the vectors' and the knowledge base's — grow with
-	// a corpus the operator's volume has something to say about; a chart
-	// does not. It is hundreds of objects — a company's units and its seats
-	// — and it changes when somebody is hired, moved or promoted rather than
-	// on every comment or every save.
-	//
-	// # Sixty-four mebibytes, and why it is not the gibibyte the others take
-	//
-	// At the reference company's rate — a few hundred structural records and
-	// a few thousand content records a year, a few kilobytes each, so under
-	// twenty mebibytes a year at the pessimistic end — the forty-nine
-	// mebibytes ordinary writes keep of it, the rest being the gate reserve
-	// its two-mebibyte largest record sizes, are ABOUT TWO AND A HALF YEARS
-	// of a COMPLETELY BLOCKED trim. A blocked trim is not a quiet state: the
-	// retention screen names its term from the first tick, a backup behind
-	// it that is missing or past the policy raises `backup_age`, and a trim
-	// blocked for longer than `min_age` and a tick while its log keeps
-	// records older than `min_age` raises `trim_blocked` — so somebody has
-	// been told within `min_age` (ninety days at the most) and a couple of
-	// trim ticks of the log first keeping what a working trim would have
-	// removed, and two years past that is not a window that refuses an
-	// append before anybody could act.
-	//
-	// It took a gibibyte first, on the reasoning that a gibibyte is the
-	// framework's own minimum domain ceiling ([engine.MinDomainCeiling]) and
-	// there was no smaller number worth having. That reasoning was wrong in
-	// a way a test then demonstrated. The floor is a property of the logs it
-	// was written for — a mutation log below a gibibyte really is a window
-	// that refuses appends within a week — and what it costs is RESERVED
-	// BYTES: the broker grants a stream its whole ceiling at create time, so
-	// a fourth domain at the same floor raised the free space a node needs
-	// to boot at all by a gibibyte, for a log that will not fill one this
-	// century. On a 3.4 GiB volume, where three domains fitted, the fourth
-	// made the node refuse to start.
-	//
-	// So a floor is per-log rather than universal, and this one is the
-	// chart's own. The engine's scaling already handles it without a change:
-	// a log that asks for less than [engine.MinDomainCeiling] keeps what it
-	// asked for, because scaling never raises.
-	//
-	// THE CEILING IS A TYPO GUARD rather than a policy, like the store
-	// limit's: 16 GiB is five orders of magnitude past the modelled
-	// year-five volume, so anything beyond it is a unit mistake and not a
-	// deployment.
-	DefaultChartLogMaxBytes int64 = 64 << 20
-	ChartLogMaxBytesFloor   int64 = 64 << 20
-	ChartLogMaxBytesCeiling int64 = 16 << 30
-
 	// IamLogMaxBytesFloor and IamLogMaxBytesCeiling bound the identity
 	// estate's log, and DefaultIamLogMaxBytes is what an unset value takes.
 	//
-	// THE DEFAULT IS NOT THE FLOOR HERE, which is the difference from the
-	// org chart's and the whole of the arithmetic below. Like the chart's,
-	// this ceiling is NOT derived from the disk: what it grows with is the
-	// company's headcount and how often people sign in, and a volume has
-	// nothing to say about either. Unlike the chart's, it genuinely grows.
+	// THE DEFAULT IS NOT THE FLOOR, and the arithmetic below is why. Like
+	// the usage log's, this ceiling is NOT derived from the disk: what it
+	// grows with is the company's headcount and how often people sign in,
+	// and a volume has nothing to say about either.
 	//
 	// # Half a gibibyte, and where the number comes from
 	//
 	// SESSIONS DOMINATE. People, credentials and invitations are hundreds
-	// of records a year at any company that fits on one broker — the
-	// chart's order of magnitude. A session writes one record when it opens
+	// of records a year at any company that fits on one broker. A session
+	// writes one record when it opens
 	// and one when it closes and nothing in between, because a rotation id
 	// is DERIVED from the lineage and the session's age rather than
 	// recorded; so the rate is about (people × sign-ins a day × 2).
@@ -172,24 +118,26 @@ const (
 	// long somebody has to act on a firing alarm, not how long until anyone
 	// notices.
 	//
-	// IT IS NOT 64 MiB. The chart's number is years because a chart
-	// changes when somebody is hired, moved or promoted; this log moves
-	// every morning, and at 64 MiB the pessimistic rate fills it in under
-	// three months — a window that could refuse an append before somebody
-	// got back from leave.
+	// IT IS NOT 64 MiB. This log moves every morning, and at 64 MiB the
+	// pessimistic rate fills it in under three months — a window that
+	// could refuse an append before somebody got back from leave.
 	//
-	// IT IS NOT THE GIBIBYTE [engine.MinDomainCeiling] names either, and
-	// the chart's own history is why: the broker grants a stream its whole
+	// IT IS NOT THE GIBIBYTE [engine.MinDomainCeiling] names either,
+	// because a FLOOR IS PER LOG: the broker grants a stream its whole
 	// ceiling at create time, so this number is free space a node must have
-	// BEFORE IT CAN BOOT AT ALL, and a fifth domain at the framework floor
-	// raises that by a gibibyte for a log that will not fill one. Half is
-	// the smallest power of two that clears a year at the pessimistic rate
-	// with margin.
+	// BEFORE IT CAN BOOT AT ALL, and a domain at the framework floor raises
+	// that by a gibibyte for a log that will not fill one. The framework
+	// floor is a property of the corpus-sized logs it was written for — a
+	// mutation log below a gibibyte really is a window that refuses appends
+	// within a week — and the engine's scaling needs no change for a log
+	// that asks for less: scaling never raises. Half a gibibyte is the
+	// smallest power of two that clears a year at the pessimistic rate with
+	// margin.
 	//
-	// THE FLOOR IS THE CHART'S so a small company can pay the small price:
-	// ten people write a fiftieth of the reference rate, for which 64 MiB
-	// is decades. THE CEILING IS A TYPO GUARD rather than a policy, like
-	// the store limit's — 16 GiB is orders of magnitude past any modelled
+	// THE FLOOR IS 64 MiB so a small company can pay the small price: ten
+	// people write a fiftieth of the reference rate, for which 64 MiB is
+	// decades. THE CEILING IS A TYPO GUARD rather than a policy, like the
+	// store limit's — 16 GiB is orders of magnitude past any modelled
 	// volume, so anything beyond it is a unit mistake and not a deployment.
 	DefaultIamLogMaxBytes int64 = 512 << 20
 	IamLogMaxBytesFloor   int64 = 64 << 20
@@ -208,15 +156,15 @@ const (
 	// and at a busy seat-day's ≈ 6.5 KiB that is about 217 MB: a gibibyte
 	// holds that window four times over, which is room for a fleet to grow
 	// before anybody has to touch the field. Beside the other logs it is
-	// the last gibibyte of the 4.5625 GiB that six unset ceilings reserve
-	// at their smallest, which is what [StoreMaxBytesFloor] is sized from.
+	// the last gibibyte of the 4.5 GiB that five unset ceilings reserve at
+	// their smallest, which is what [StoreMaxBytesFloor] is sized from.
 	//
-	// THE FLOOR IS THE ORG CHART'S 64 MiB, by the per-log rule
-	// [ChartLogMaxBytesFloor] records: the broker grants a stream its whole
-	// ceiling when it creates it, so a floor is free space a node must have
-	// before it boots, and a ten-seat node's 181-day census — ten seats ×
-	// 181 days × 6.5 KiB — is about 12 MB. A gibibyte floor would make a
-	// small company reserve eighty times what it can ever write.
+	// THE FLOOR IS 64 MiB, by the per-log rule [IamLogMaxBytesFloor]
+	// records: the broker grants a stream its whole ceiling when it creates
+	// it, so a floor is free space a node must have before it boots, and a
+	// ten-seat node's 181-day census — ten seats × 181 days × 6.5 KiB — is
+	// about 12 MB. A gibibyte floor would make a small company reserve
+	// eighty times what it can ever write.
 	//
 	// THE CEILING IS A TYPO GUARD rather than a policy: sixty-four times
 	// the default is a fleet two orders of magnitude past the reference
@@ -252,27 +200,20 @@ const (
 	//
 	// THE FLOOR IS SIX GIBIBYTES, which is the smallest limit the engine's
 	// own logs fit inside with room beside them. Every node reserves all
-	// SIX state-log domains' ceilings whatever it runs, and left unset
-	// they come to 4.5625 GiB at their smallest: the tracker's, the
-	// vectors', the knowledge base's and the usage log's at the gibibyte
-	// scaling stops at, the org chart's 64 MiB and the identity log's
-	// 512 MiB default (the last two are never scaled below what they ask).
-	// What is left, about 1.44 GiB, is for the mailboxes, the event stream
-	// and every coordination bucket, which reserve nothing and grow against
-	// the same number. Below it a node provisions its way to a refusal on
-	// whichever stream happens to be last.
+	// FIVE state-log domains' ceilings whatever it runs, and left unset
+	// they come to 4.5 GiB at their smallest: the tracker's, the vectors',
+	// the knowledge base's and the usage log's at the gibibyte scaling stops
+	// at, and the identity log's 512 MiB default (never scaled below what
+	// it asks). What is left, about 1.5 GiB, is for the mailboxes, the event
+	// stream and every coordination bucket, which reserve nothing and grow
+	// against the same number. Below it a node provisions its way to a
+	// refusal on whichever stream happens to be last.
 	//
-	// IT MOVED WITH THE SIXTH DOMAIN. At five gibibytes the usage log's
-	// gibibyte left the unreserved streams 0.44 GiB, about a third of what five
-	// domains had left them, so a document `crewlet validate` admits — every
+	// SIX AND NOT FIVE: at five gibibytes the unreserved streams would have
+	// half a gibibyte, so a document `crewlet validate` admits — every
 	// ceiling unset, which the cross-field check above cannot sum — would
-	// fail at boot on whichever stream the broker reached last. It moved
-	// with the fourth for the same reason: at four gibibytes the org
-	// chart's log was the one that did not fit — its floor was then the
-	// gibibyte the other logs take, so four explicit floors exactly filled
-	// the old limit, the cross-field check passed (it refuses only a sum
-	// GREATER than the limit), and the node failed at boot, which is the
-	// failure that check exists to move forward to `crewlet validate`.
+	// fail at boot on whichever stream the broker reached last, which is
+	// the failure that check exists to move forward to `crewlet validate`.
 	//
 	// THE CEILING IS A TYPO GUARD rather than a policy: 64 TiB is two
 	// orders of magnitude above the largest estate the domain ceilings can
@@ -448,27 +389,9 @@ func (s Stream) PagesMaxBytes(free int64) (int64, bool) {
 	return DerivedLogMaxBytes(free) / DerivedPagesLogDivisor, true
 }
 
-// ChartMaxBytes is the org chart's log ceiling, and whether it was derived.
-//
-// IT TAKES NO FREE-SPACE ARGUMENT, like the identity estate's and the usage
-// log's and unlike the corpus-sized ceilings, and the absence is the statement:
-// this default is a property of the CORPUS and not of the disk — see
-// [DefaultChartLogMaxBytes] — so a parameter it ignored would be a signature
-// claiming a relationship that does not exist.
-//
-// The second return is still what the engine logs when it sizes the stream, and
-// it still reports `true` for the default: a value nobody wrote is one the
-// shared-budget scaling may lower, and one an operator wrote is not.
-func (s Stream) ChartMaxBytes() (int64, bool) {
-	if s.ChartLogMaxBytes > 0 {
-		return s.ChartLogMaxBytes, false
-	}
-	return DefaultChartLogMaxBytes, true
-}
-
 // IamMaxBytes is the identity estate's log ceiling, and whether it was derived.
 //
-// IT TAKES NO FREE-SPACE ARGUMENT, like the org chart's and unlike every other
+// IT TAKES NO FREE-SPACE ARGUMENT, like the usage log's and unlike every other
 // ceiling here, and the absence is the statement: this default is a property of
 // the company's HEADCOUNT and its sign-in rate, not of the disk — see
 // [DefaultIamLogMaxBytes] — so a parameter it ignored would be a signature
@@ -512,18 +435,17 @@ func (s Stream) VectorsMaxBytes(free int64) (int64, bool) {
 
 // UsageMaxBytes is the usage log's ceiling, and whether it was derived.
 //
-// IT TAKES NO FREE-SPACE ARGUMENT, like the org chart's and the identity
-// estate's: the stream's size is a census of objects rather than a rate a
+// IT TAKES NO FREE-SPACE ARGUMENT, like the identity estate's: the stream's size is a census of objects rather than a rate a
 // larger disk should buy more of — see [DefaultUsageLogMaxBytes] — so a
 // parameter it ignored would be a signature claiming a relationship that does
 // not exist.
 //
 // The second return is what the engine logs when it sizes the stream, and it
-// reports `true` for the default, as its two siblings' do: a value nobody
+// reports `true` for the default, as its sibling's does: a value nobody
 // wrote is one the shared-budget scaling may lower, and one an operator wrote
 // is not. It used to report whether the operator SET it — the inverse of
 // every other ceiling's second return, read by a register that asks the same
-// question of all six.
+// question of all five.
 func (s Stream) UsageMaxBytes() (int64, bool) {
 	if s.UsageLogMaxBytes > 0 {
 		return s.UsageLogMaxBytes, false

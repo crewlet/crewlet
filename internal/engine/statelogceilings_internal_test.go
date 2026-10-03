@@ -27,17 +27,16 @@ const gib = int64(1) << 30
 // and a gate room beside it at every ceiling the log can reach, down to the
 // floor Tier A holds its field to. It was a sixteenth of the ceiling, argued
 // at a gibibyte called every log's floor, and asserted here against a hand
-// list of the three floors that were a gibibyte: the org chart's and the
-// identity estate's are 64 MiB, where a sixteenth was less than one append at
-// the transport's size. So the walk is over the REGISTER, each log at its own
+// list of the floors that were a gibibyte: the identity estate's is 64 MiB,
+// where a sixteenth was less than one append at the transport's size. So the walk is over the REGISTER, each log at its own
 // field's floor as Tier A's own validation finds it, and a log added to the
 // register is held to the rule without this test learning its name.
 //
 // And the other side, which is what makes the first a finding rather than a
 // tautology: the reserve is kept FROM ordinary writes, so a log whose largest
 // record is sized as though it were somebody else's keeps most of itself for
-// gate records at its floor. Ordinary writes keep at least half — the org
-// chart's declared at the transport's eight mebibytes would keep an eighth.
+// gate records at its floor. Ordinary writes keep at least half — the identity
+// estate's declared at the transport's eight mebibytes would keep a ninth.
 func TestTheGateReserveAtEveryFloorAbsorbsItsFleet(t *testing.T) {
 	t.Parallel()
 	keys := streamKeys(t)
@@ -89,9 +88,9 @@ func TestTheGateReserveAtEveryFloorAbsorbsItsFleet(t *testing.T) {
 //
 // A domain's declared ceiling is what the framework's own suites provision
 // its stream with, so they certify the log a node runs only if the two are
-// the same number. The org chart's declared a gibibyte while an unset Tier A
-// field created it at 64 MiB, so every suite exercised its gate reserve at
-// sixteen times the size any node had. A ceiling that follows the volume has
+// the same number. A log that declared a gibibyte while an unset Tier A field
+// created it at 512 MiB would have every suite exercise its gate reserve at
+// twice the size any node had. A ceiling that follows the volume has
 // no one number to agree with, and is left to its own derivation.
 func TestADomainsDeclaredCeilingIsItsFixedTierADefault(t *testing.T) {
 	t.Parallel()
@@ -142,12 +141,12 @@ func TestEveryRegisteredDomainIsSizedFromTierA(t *testing.T) {
 			// A NODE NEVER DERIVES A CEILING ITS OWN VALIDATION WOULD
 			// REFUSE TO BE TOLD, which is the invariant rather than a
 			// number: each field's floor is Tier A's to state, and they
-			// are not all the same. The org chart's is far below the
-			// corpus-sized logs' gibibyte, because a ceiling is granted
-			// in full at create time and a chart is a few thousand
-			// records a year — a fourth domain at the corpus floor
-			// raised the disk a node needs to boot by a gibibyte for a
-			// log that will not fill one this century.
+			// are not all the same. The identity estate's and the usage
+			// log's are far below the corpus-sized logs' gibibyte,
+			// because a ceiling is granted in full at create time and
+			// neither grows with a corpus — a domain at the corpus floor
+			// raises the disk a node needs to boot by a gibibyte for a
+			// log a small company will never fill.
 			//
 			// Asserted by round-tripping the derived value THROUGH Tier
 			// A's own validation rather than against a constant here,
@@ -664,9 +663,9 @@ func sizeAndProvision(t *testing.T, q *jetstream.Queue, stream config.Stream, fr
 // The broker's cap there is three quarters of the volume, 5.7 GiB. The tracker
 // and vector logs were scaled into half of the free space, 1.9 GiB each, and
 // the pages log then reserved its fixed 4 GiB on top: 7.8 GiB against 5.7.
-// Every log is sized inside one budget now, and all six fit — the org chart's,
-// the identity estate's and the usage log at their fixed defaults beside the
-// three that failed.
+// Every log is sized inside one budget now, and all five fit — the identity
+// estate's and the usage log at their fixed defaults beside the three that
+// failed.
 func TestTheStateLogsFitTheBrokerTheyBootOn(t *testing.T) {
 	t.Parallel()
 	// 7.6 GiB, in tenths so the arithmetic stays in integers.
@@ -727,9 +726,8 @@ func TestARestartSizesTheLogsAsTheFirstBootDid(t *testing.T) {
 // state logs are up, and every mode starts them: the refusal once offered it,
 // sending the operator to a verb that fails the same way.
 //
-// And WHERE THE CEILING CAME FROM is one of three facts. The org chart's and
-// the identity log's unset ceilings are their own fixed defaults, below the
-// gibibyte scaling stops at: read as derived, a refused 512 MiB identity log
+// And WHERE THE CEILING CAME FROM is one of three facts. The identity log's
+// unset ceiling is its own fixed default, below the gibibyte scaling stops at: read as derived, a refused 512 MiB identity log
 // was said to go no lower than a gibibyte and was never offered the smaller
 // ceiling its field accepts. The identity log is provisioned last, so on a
 // tight broker it is the likeliest refusal of all.
@@ -774,8 +772,7 @@ func TestARefusedReservationNamesWhatItNeededAndHad(t *testing.T) {
 			},
 		},
 		// THE IDENTITY LOG'S FIXED 512 MiB, refused with the three derived
-		// logs at their gibibyte floors and the chart's 64 MiB already
-		// reserved. Its field takes 64 MiB, so a smaller ceiling is on
+		// logs at their gibibyte floors already reserved. Its field takes 64 MiB, so a smaller ceiling is on
 		// offer — and nothing about a derivation or a gibibyte is said.
 		"the identity log's fixed default": {
 			headroom: 3*gib + gib/4,
@@ -968,7 +965,7 @@ func TestTheRoomClauseNeverSpellsAnUnknownAsANumber(t *testing.T) {
 //
 // The warning is the operator's one chance to choose the ceilings a missing
 // measurement shrinks, so it has to name exactly the unset ones that follow
-// the free space: not the org chart's or the identity log's, whose flat asks
+// the free space: not the identity log's or the usage log's, whose flat asks
 // the volume has no say in, and not a field the operator already set. It was a
 // list of three written beside the warning, which went on naming a set field.
 func TestAnUnmeasuredVolumeNamesTheCeilingsItDecides(t *testing.T) {
@@ -997,8 +994,8 @@ func TestAnUnmeasuredVolumeNamesTheCeilingsItDecides(t *testing.T) {
 					t.Errorf("the warning does not name %s: %s", field, detail)
 				}
 			}
-			for _, flat := range []string{"stream.chart_log_max_bytes",
-				"stream.iam_log_max_bytes"} {
+			for _, flat := range []string{"stream.iam_log_max_bytes",
+				"stream.usage_log_max_bytes"} {
 				if strings.Contains(detail, flat) {
 					t.Errorf("the warning names %s, whose ceiling no volume "+
 						"decides: %s", flat, detail)
