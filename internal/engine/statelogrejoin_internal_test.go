@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -15,6 +16,7 @@ import (
 	natsjs "github.com/nats-io/nats.go/jetstream"
 
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/iamdomain"
 	"github.com/crewlet/crewlet/internal/queue/jetstream"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/store"
@@ -406,6 +408,11 @@ func waitUntil(t *testing.T, within time.Duration, what string, cond func() bool
 // no donor, which is only reachable by a join that ran over an open estate.
 // With nothing missing — the state an earlier rejoin leaves when the artefact
 // it installed is what failed to open — the restore alone is the recovery.
+//
+// AND A REOPENED ESTATE DECIDES EVERY CREDENTIAL AGAIN, because the file it
+// opened may be a donor's whose revocations no committed batch here ever named
+// — while a rejoin that found nobody to ask changed no row and says nothing,
+// which is the control.
 func TestALostEstateIsReopenedBeforeAnythingIsAskedOfIt(t *testing.T) {
 	t.Parallel()
 	for _, c := range []struct {
@@ -428,6 +435,8 @@ func TestALostEstateIsReopenedBeforeAnythingIsAskedOfIt(t *testing.T) {
 			if err := back.Store.CloseReplicated(); err != nil {
 				t.Fatalf("close the replicated estate: %v", err)
 			}
+			heard := &heardMoves{}
+			e.SetOnIdentityMoved(heard.hear)
 
 			if err := s.restoreEstate(s.run); err != nil {
 				t.Fatalf("restore: %v", err)
@@ -435,6 +444,11 @@ func TestALostEstateIsReopenedBeforeAnythingIsAskedOfIt(t *testing.T) {
 			if back.Store.Replicated() == nil {
 				t.Fatal("the restore left the replicated estate closed — nothing " +
 					"else in a running node reopens it")
+			}
+			if got := heard.take(); !slices.ContainsFunc(got,
+				func(m iamdomain.Moved) bool { return m.Everyone }) {
+				t.Errorf("a reopened estate told the credential listener %+v, "+
+					"want everyone: its rows may be a donor's", got)
 			}
 			if !c.below {
 				return
@@ -444,6 +458,11 @@ func TestALostEstateIsReopenedBeforeAnythingIsAskedOfIt(t *testing.T) {
 					"node below the floor has nobody to ask, which only a join "+
 					"that could read its own checkpoints gets as far as learning",
 					err, errNoDonor)
+			}
+			if got := heard.take(); slices.ContainsFunc(got,
+				func(m iamdomain.Moved) bool { return m.Everyone }) {
+				t.Errorf("a rejoin that found no donor told the credential "+
+					"listener %+v: it changed no row", got)
 			}
 		})
 	}

@@ -27,6 +27,7 @@ import (
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/iam/authevents"
+	"github.com/crewlet/crewlet/internal/iamdomain"
 	"github.com/crewlet/crewlet/internal/integration"
 	"github.com/crewlet/crewlet/internal/learning"
 	"github.com/crewlet/crewlet/internal/learning/memread"
@@ -175,6 +176,11 @@ type Engine struct {
 	// onInbox is told whose inbox each committed tracker batch moved on
 	// this node. Nil tells nobody — see [Engine.SetOnInboxMoved].
 	onInbox atomic.Pointer[func([]tracker.InboxMovement)]
+
+	// onIdentity is told whose credentials each committed identity batch
+	// moved on this node. Nil tells nobody — see
+	// [Engine.SetOnIdentityMoved].
+	onIdentity atomic.Pointer[func(iamdomain.Moved)]
 
 	// ownsBackends says whether Stop closes them. Ownership is a separate
 	// fact from use: a borrowed Backends is still the one this engine
