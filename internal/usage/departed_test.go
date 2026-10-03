@@ -66,8 +66,12 @@ func joinFleet(t *testing.T, q *js.Queue, id string, now time.Time) *fleetNode {
 	if !found {
 		checkpoint.At.Generation = 1
 	}
+	// LAYOUT 0's LOG, as the engine places the domain: a runner applies
+	// one log of one layout, and drops a record its layout does not place.
 	runner, err := statelog.NewRunner(statelog.RunnerDeps{
-		Domain: usage.Domain{}, Applier: usage.NewApplier(), Fetch: consumer,
+		Domain: usage.Domain{}, Spec: spec,
+		Layout: statelog.EstateLayout(usage.Domain{}.Name()), LogID: statelog.EstateLog(usage.Domain{}),
+		Applier: usage.NewApplier(), Fetch: consumer,
 		Log: log, Node: db, DB: storetest.EstateOf(db),
 		Checkpoint: checkpoint.At, CheckpointStoredAt: checkpoint.StoredAt,
 		StreamCreatedAt: stats.CreatedAt.UTC(), NodeID: id,
@@ -79,9 +83,14 @@ func joinFleet(t *testing.T, q *js.Queue, id string, now time.Time) *fleetNode {
 	if err != nil {
 		t.Fatalf("%s: build the read seam: %v", id, err)
 	}
+	// ON THE SAME LOG, and on a node that serves its partition: the write
+	// authority refuses a log it cannot be told it serves.
 	authority, err := statelog.NewPublisher(statelog.Deps{
-		Domain: usage.Domain{}, Log: log, Rows: rows, Fence: usage.NewFence(),
-		Gates: usage.NewGates(), Waiter: runner, Identity: runner, NodeID: id,
+		Domain: usage.Domain{}, Spec: spec,
+		Layout: statelog.EstateLayout(usage.Domain{}.Name()), LogID: statelog.EstateLog(usage.Domain{}),
+		Holding: statelog.ServesOnly(statelog.EstatePartition),
+		Log:     log, Records: log, Rows: rows, Fence: usage.NewFence(),
+		Gates: usage.NewGates(), Waiter: runner, Voids: runner, Identity: runner, NodeID: id,
 		Generation:    func() uint32 { return runner.Committed().Generation },
 		ResolveBudget: 5 * time.Second,
 	})
