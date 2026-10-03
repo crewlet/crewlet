@@ -237,23 +237,26 @@ when you touch it:
   the merge until the checks `main` requires have reported. Weakening any of
   them makes the workflow run *more*, never fail.
 - **`.github/workflows/dependabot-dashboard.yml`'s guard, its two-job split, its
-  pins and the App's scope.** The `push` job holds a GitHub App key that can
-  write to a branch, and its `if:` (author AND actor both Dependabot, repeated
-  on the job that holds the key and not only the one that builds) is what stops
-  a run a person triggered from reaching it. The `build` job runs a
+  pins and the token's scope.** The `push` job holds a personal access token that
+  can write to a branch, and its `if:` (author AND actor both Dependabot,
+  repeated on the job that holds the token and not only the one that builds) is
+  what stops a run a person triggered from reaching it. The `build` job runs a
   dependency's install scripts, so it has to keep `contents: read`, no secrets
   and no persisted checkout credential — whatever it holds is whatever that
-  dependency can take. The `push` job's three actions stay pinned to full
+  dependency can take. The `push` job's two actions stay pinned to full
   commit SHAs (a major tag is re-pointed at each release) and its allowlist of
   file names stays an allowlist: `static/dashboard` is inside the Go module, so
-  a `.go` file in it would run on every contributor's machine. The App has to
-  stay at Contents: read and write — add Workflows and the key can rewrite the
-  workflows themselves — and `v*` needs a tag ruleset it cannot bypass, since
-  Contents: write can create a tag and an App push starts workflows. While
-  `main`'s ruleset keeps approvals across pushes, anything pushed onto an open
-  Dependabot branch merges once CI is green, so the App's scope is the only
-  limit on what its key can land. Weakening any of these makes the workflow
-  reach *more*, never fail.
+  a `.go` file in it would run on every contributor's machine. The token has to
+  stay fine-grained, for this repository alone, at Contents: read and write —
+  add Workflows and it can rewrite the workflows themselves, use a classic token
+  and it reaches every repository its account can, add Pull requests and it can
+  approve them — and `v*` needs a tag ruleset its account cannot bypass, since
+  Contents: write can create a tag and a push made with a token starts
+  workflows. It also expires, so the date wants a calendar entry. While `main`'s
+  ruleset keeps approvals across pushes, anything pushed onto an open Dependabot
+  branch merges once CI is green, so the token's scope is the only limit on what
+  it can land. Weakening any of these makes the workflow reach *more*, never
+  fail.
 
 ---
 

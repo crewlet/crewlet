@@ -16,31 +16,44 @@ name: dependabot-dashboard
 #
 # TWO THINGS OUTSIDE THIS FILE HAVE TO EXIST:
 #
-#   - A GitHub App installed on this repository with ONE permission, Contents:
-#     read and write. Not Workflows (which is what stops this credential
-#     rewriting a workflow file), not Pull requests, not Administration. Even
-#     so, Contents: write can create a tag, and a push made as an App starts
-#     workflows: keep `v*` behind a tag ruleset this App is not on the bypass
-#     list of, or a leaked key can cut a release.
-#   - Its client ID and private key as DEPENDABOT secrets (Settings -> Secrets
-#     and variables -> Dependabot): DASHBOARD_BUNDLE_CLIENT_ID and
-#     DASHBOARD_BUNDLE_PRIVATE_KEY. NOT Actions secrets: a run Dependabot
-#     triggers reads its own store and cannot see the Actions one, so a secret
-#     put on the wrong tab is simply empty here.
+#   - A FINE-GRAINED personal access token, preferably of an account made for
+#     the purpose: the commit is attributed to whoever owns the token, and a
+#     history that names a person for what a bot did is not true. Resource
+#     owner this organisation; repository access "Only select repositories",
+#     this one; and ONE permission, Contents: read and write. Not Workflows
+#     (which is what stops this credential rewriting a workflow file), not Pull
+#     requests, not Administration. The account needs Write access to the
+#     repository, and an owner has to approve the token if the organisation
+#     asks for that. NOT a classic token: its `repo` scope reaches every
+#     repository the account can. Even so, Contents: write can create a tag, and
+#     a push made with a token starts workflows: keep `v*` behind a tag ruleset
+#     the account is not on the bypass list of, or a leaked token can cut a
+#     release. It expires, a year at most, so the date belongs in a calendar.
+#   - That token as a DEPENDABOT secret (Settings -> Secrets and variables ->
+#     Dependabot): DASHBOARD_BUNDLE_TOKEN. NOT an Actions secret: a run
+#     Dependabot triggers reads its own store and cannot see the Actions one, so
+#     a secret put on the wrong tab is simply empty here.
 #
-# The push job checks the second and says so in its own words when a secret is
-# empty. It cannot check the first: an App that is not installed here, or lacks
-# Contents: write, fails inside create-github-app-token with that action's own
-# error.
+# The push job checks the second, and asks GitHub who the token is, which is how
+# an expired or revoked one is met by name. It cannot see the permissions of a
+# fine-grained token: one without Contents: write fails at the push, with git's
+# own error. It does warn about a classic one.
 #
-# WHY AN APP AND NOT `GITHUB_TOKEN`. A push made with the workflow's own token
+# WHY A TOKEN AND NOT `GITHUB_TOKEN`. A push made with the workflow's own token
 # does start the pull request's `synchronize` runs, but GitHub holds them in an
 # approval-required state until someone with write access clicks "Approve
 # workflows to run" — on purpose, so that automation cannot recurse without a
 # person. Every bundle commit would then wait for that click before `ci` ran on
 # it, and the auto-merge queued behind those checks would wait with it. A push
-# made as an App starts them at once. That is also why nothing here loops: the
-# run that push starts is skipped by the actor half of the guard below.
+# made with a personal access token starts them at once. That is also why
+# nothing here loops: the run that push starts is skipped by the actor half of
+# the guard below.
+#
+# A TOKEN, NOT AN APP, and the price is worth knowing. An App's installation
+# token lives an hour and belongs to no person; this one lives until it expires,
+# belongs to an account, and carries that account's role on the repository.
+# What limits it is the same for both: one repository, Contents only, and an
+# account that exists for this and holds nothing else.
 #
 # `main`'s protection rule needs nothing new, but it decides more than it did.
 # The push moves the head, and dependabot-merge.yml approves only the commit
@@ -50,7 +63,7 @@ name: dependabot-dashboard
 # with both off, as the ruleset stands today, it merges itself once CI is green.
 # The same setting means anything pushed onto an open Dependabot branch merges
 # once CI is green, whoever pushed it: a person with write access, or whoever
-# holds this App's key. That is what the App's one permission is for. See
+# holds this token. That is what the token's one permission is for. See
 # CONTRIBUTING.md.
 
 on:
@@ -69,7 +82,7 @@ on:
     # files of ITS OWN merge commit, and Dependabot's secrets are in scope for
     # the ones it opens. A bump of a GitHub Action edits `.github/workflows/`,
     # touches nothing under `dashboard/` and never starts this workflow, so the
-    # release it proposes does not run beside the App's key while it is still
+    # release it proposes does not run beside the token while it is still
     # an unmerged pull request. Once such a bump has merged it is simply the
     # action the push job runs, which is why that job pins its actions to SHAs.
     paths:
@@ -218,9 +231,9 @@ jobs:
           # keeps an artifact.
           retention-days: 1
 
-  # THE PRIVILEGED HALF. It holds an App key and runs nothing the bump brought
-  # in: the runner's own git, gh, find, cp and rm, and three actions pinned to
-  # commits. What it copies in is checked before it is committed. Splitting the
+  # THE PRIVILEGED HALF. It holds a token that can write to a branch and runs
+  # nothing the bump brought in: the runner's own git, gh, find, cp and rm, and
+  # two actions pinned to commits. What it copies in is checked before it is committed. Splitting the
   # jobs is what makes that true — a compromised package can do whatever it
   # likes to the runner it ran on, and this is a different one.
   push:
@@ -233,7 +246,7 @@ jobs:
     runs-on: ubuntu-latest
 
     # The built-in token is not used at all: every call below is made with the
-    # App's, which the first steps mint.
+    # personal access token.
     permissions: {}
 
     # Checkout, a download and a push. Anything slower is a network that has
@@ -241,61 +254,77 @@ jobs:
     timeout-minutes: 5
 
     steps:
-      # Missing credentials are the one failure this job is expected to meet on
-      # its first run, and the action's own message for it ("The 'client-id'
-      # (or deprecated 'app-id') input must be set to a non-empty string")
-      # names neither the secret nor the tab it lives on.
-      - name: the App credentials are configured
+      # A missing secret is the one failure this job is expected to meet on its
+      # first run, and what the next step would say about an empty token
+      # ("Bad credentials") names neither the secret nor the tab it lives on.
+      - name: the token is configured
         env:
-          CLIENT_ID: ${{ secrets.DASHBOARD_BUNDLE_CLIENT_ID }}
-          PRIVATE_KEY: ${{ secrets.DASHBOARD_BUNDLE_PRIVATE_KEY }}
+          TOKEN: ${{ secrets.DASHBOARD_BUNDLE_TOKEN }}
         run: |
-          if [ -z "$CLIENT_ID" ] || [ -z "$PRIVATE_KEY" ]; then
-            echo "::error::DASHBOARD_BUNDLE_CLIENT_ID and DASHBOARD_BUNDLE_PRIVATE_KEY must both be set as DEPENDABOT secrets."
+          if [ -z "$TOKEN" ]; then
+            echo "::error::DASHBOARD_BUNDLE_TOKEN must be set as a DEPENDABOT secret."
             echo "Settings -> Secrets and variables -> Dependabot. The Actions tab is the wrong one:"
             echo "a run Dependabot triggers cannot read Actions secrets, so a secret put there is empty here."
-            echo "The App they belong to needs Contents: read and write on this repository, and nothing else."
+            echo "The token is a fine-grained personal access token for this repository only, with Contents: read and write and nothing else."
             echo "See the header of .github/workflows/dependabot-dashboard.yml."
             exit 1
           fi
 
-      # THE THREE ACTIONS IN THIS JOB ARE PINNED TO FULL COMMIT SHAS, unlike
-      # the major tags the rest of the repository uses, because this is the job
-      # with the key in its environment. A major tag is re-pointed at every
-      # release (`v3` of this action now sits where v3.2.0 does, and v3.0.0,
-      # v3.1.0 and v3.1.1 are three other commits), so on a tag this job would
-      # run whatever the newest release is, with the key, and no pull request
-      # would ever have shown it. On a SHA the change arrives as a Dependabot
-      # pull request, which is at least somewhere to look; the trailing comment
-      # is what lets Dependabot read the version.
-      # It does not stop a compromised release that is then merged, which is a
-      # risk this repository takes for every action it runs.
+      # Who the token is, asked of GitHub rather than assumed. That is how an
+      # expired or revoked token is met here, by name, and not as an
+      # authentication failure from a git push a minute later. The commit is
+      # attributed to that account: a history that says who wrote a change is
+      # only worth having if it is true, and a noreply address carries the user
+      # id, which the API is the only source of.
       #
-      # One repository, one permission. The token is scoped to the repository
-      # this runs in by default, and `permission-contents` narrows it to the
-      # one thing the App is used for even if the App itself is later granted
-      # more. It is revoked when the job ends.
-      - uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
-        id: app-token
-        with:
-          client-id: ${{ secrets.DASHBOARD_BUNDLE_CLIENT_ID }}
-          private-key: ${{ secrets.DASHBOARD_BUNDLE_PRIVATE_KEY }}
-          permission-contents: write
-
-      # The commit is attributed to the App that made it, not to Dependabot
-      # and not to a person: a history that says who wrote a change is only
-      # worth having if it is true. A bot account's noreply address carries its
-      # user id, which the API is the only source of.
-      - name: the App's identity
+      # ONLY A 401 MEANS THE TOKEN IS BAD. Anything else GitHub answers to
+      # `GET /user` (a 403 for a token type the endpoint does not serve, a 5xx)
+      # says nothing about whether the token can push, and calling it "expired"
+      # would send somebody to rotate a good credential. The identity is only
+      # the commit's author line, so that case is reported with GitHub's own
+      # words and the commit is attributed to the Actions bot instead; a token
+      # that genuinely cannot push fails at the push, naming what it lacks.
+      #
+      # A CLASSIC token names its scopes in a response header and a fine-grained
+      # one sends none. `repo` on a classic token reaches every repository the
+      # account can, which is exactly what the fine-grained form exists to
+      # avoid, so it is a warning on the run rather than something to discover.
+      - name: the token's identity
         id: bot
         env:
-          GH_TOKEN: ${{ steps.app-token.outputs.token }}
-          SLUG: ${{ steps.app-token.outputs.app-slug }}
+          GH_TOKEN: ${{ secrets.DASHBOARD_BUNDLE_TOKEN }}
         run: |
-          id="$(gh api "/users/${SLUG}[bot]" --jq .id)"
-          echo "name=${SLUG}[bot]" >> "$GITHUB_OUTPUT"
-          echo "email=${id}+${SLUG}[bot]@users.noreply.github.com" >> "$GITHUB_OUTPUT"
+          set -uo pipefail
+          err="$(mktemp)"
+          if identity="$(gh api /user --jq '"\(.login) \(.id)"' 2>"$err")"; then
+            login="${identity% *}"
+            id="${identity#* }"
+            scopes="$(gh api -i /user 2>/dev/null | tr -d '\r' | sed -n 's/^[Xx]-[Oo][Aa]uth-[Ss]copes: *//p')" || scopes=""
+            if [ -n "$scopes" ]; then
+              echo "::warning::DASHBOARD_BUNDLE_TOKEN is a classic token (scopes: $scopes), which reaches every repository ${login} can. Replace it with a fine-grained token limited to this repository and Contents: read and write."
+            fi
+          elif grep -q 'HTTP 401' "$err"; then
+            echo "::error::GitHub refused DASHBOARD_BUNDLE_TOKEN: it is expired, revoked or mistyped. Create a new fine-grained token (see the header of .github/workflows/dependabot-dashboard.yml) and replace the Dependabot secret."
+            exit 1
+          else
+            echo "::warning::GitHub would not say who DASHBOARD_BUNDLE_TOKEN belongs to ($(tr '\n' ' ' < "$err")), so the bundle commit is attributed to github-actions[bot]. This does not mean the token is bad; the push below is what tests that."
+            login="github-actions[bot]"
+            id="41898282"
+          fi
+          echo "name=${login}" >> "$GITHUB_OUTPUT"
+          echo "email=${id}+${login}@users.noreply.github.com" >> "$GITHUB_OUTPUT"
 
+      # THE TWO ACTIONS BELOW ARE PINNED TO FULL COMMIT SHAS, unlike the major
+      # tags the rest of the repository uses, because this is the job with the
+      # token in its environment. A major tag is re-pointed at every release
+      # (`v7` of checkout now sits where v7.0.1 does, and v7.0.0 is another
+      # commit), so on a tag this job would run whatever the newest release is,
+      # with the token, and no pull request would ever have shown it. On a SHA
+      # the change arrives as a Dependabot pull request, which is at least
+      # somewhere to look; the trailing comment is what lets Dependabot read the
+      # version. It does not stop a compromised release that is then merged,
+      # which is a risk this repository takes for every action it runs.
+      #
       # The EXACT commit the rebuild ran against, not the branch. If Dependabot
       # has force-pushed since, this commit is no longer the branch's tip, the
       # push at the end is refused as a non-fast-forward, and nothing is
@@ -303,7 +332,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.event.pull_request.head.sha }}
-          token: ${{ steps.app-token.outputs.token }}
+          token: ${{ secrets.DASHBOARD_BUNDLE_TOKEN }}
 
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:

@@ -634,9 +634,9 @@ bundler execute whatever a dependency published this week, so that job holds a
 read-only token that is not left in the checkout and no secrets, and passes the
 next job nothing but a directory of files. The second job holds the credential
 and runs nothing the bump brought in: the runner's own `git`, `gh`, `find`, `cp`
-and `rm`, and three actions pinned to full commit SHAs — unlike the major tags
+and `rm`, and two actions pinned to full commit SHAs — unlike the major tags
 used everywhere else, because a tag is re-pointed at each release and this is
-the job with the key in its environment. It checks the bundle's file *names*
+the job with the token in its environment. It checks the bundle's file *names*
 against an allowlist of the kinds of file the bundle is made of (`static/dashboard`
 sits inside the Go module and is embedded, so a stray `zz_test.go` would be run
 by every `go test ./...`), refuses hidden names, replaces `static/dashboard`
@@ -652,30 +652,48 @@ That keeps the release an *open* GitHub Action bump proposes from running beside
 the credential; it does not stop one that has already merged, which is what the
 SHA pins are for and which they narrow rather than remove.
 
-**The push is made by a GitHub App, not by `GITHUB_TOKEN`**, and that is where
-the setup cost is. A push made with the workflow's own token does start the
-pull request's runs, but GitHub holds them in an approval-required state until
-someone with write access clicks *Approve workflows to run* — deliberately, so
-that automation cannot recurse without a person. Every bundle commit would wait
-for that click before `ci` ran on it, and the auto-merge queued behind those
-checks would wait with it. A push made as an App starts them at once. Two things
-outside this repository's files have to exist:
+**The push is made with a personal access token, not by `GITHUB_TOKEN`**, and
+that is where the setup cost is. A push made with the workflow's own token does
+start the pull request's runs, but GitHub holds them in an approval-required
+state until someone with write access clicks *Approve workflows to run* —
+deliberately, so that automation cannot recurse without a person. Every bundle
+commit would wait for that click before `ci` ran on it, and the auto-merge
+queued behind those checks would wait with it. A push made with a personal
+access token starts them at once. Two things outside this repository's files
+have to exist:
 
-- **A GitHub App installed on this repository with one permission: Contents,
-  read and write.** Not Workflows — its absence is what stops this credential
-  rewriting a workflow file — and not Pull requests or Administration. Contents:
-  write can still create a tag, and a push made as an App starts workflows, so
-  keep `v*` behind a tag ruleset this App is not on the bypass list of: without
-  one, a leaked key can push a tag and run the release pipeline.
-- **Its client ID and private key as Dependabot secrets**,
-  `DASHBOARD_BUNDLE_CLIENT_ID` and `DASHBOARD_BUNDLE_PRIVATE_KEY`, under
-  Settings → Secrets and variables → **Dependabot**. Not Actions secrets: a run
+- **A fine-grained personal access token, preferably of an account made for the
+  purpose.** The commit is attributed to whoever owns the token (the job asks
+  GitHub who that is; if GitHub declines to say, it warns and uses
+  `github-actions[bot]`, since only a 401 means the token is bad), so a person's
+  token puts a person's name on what a workflow did. Resource owner: the
+  organisation. Repository access: this repository only. One permission:
+  **Contents, read and write.** Not Workflows — its absence is what stops this
+  credential rewriting a workflow file — and not Pull requests or
+  Administration. The account needs Write access to the repository, and an owner
+  has to approve the token where the organisation asks for that. Not a classic
+  token: its `repo` scope reaches every repository the account can, and the job
+  warns when it sees one. Contents: write can still create a tag, and a push made
+  with a token starts workflows, so keep `v*` behind a tag ruleset the account is
+  not on the bypass list of: without one, a leaked token can push a tag and run
+  the release pipeline. A fine-grained token expires, a year at most. Put the
+  date in a calendar: after it the job fails on the next bump, saying the token
+  is expired, revoked or mistyped.
+- **That token as a Dependabot secret**, `DASHBOARD_BUNDLE_TOKEN`, under
+  Settings → Secrets and variables → **Dependabot**. Not an Actions secret: a run
   Dependabot triggers reads its own store and cannot see the Actions one, so a
   secret put on the wrong tab is empty there.
 
-The job fails naming both secrets when either is empty. It cannot check the
-App: one that is not installed here, or lacks Contents: write, fails inside
-`actions/create-github-app-token` with that action's own error.
+The job fails naming the secret when it is empty, and asks GitHub who the token
+is, which is how an expired or revoked one is met by name. It cannot see the
+permissions of a fine-grained token: one without Contents: write fails at the
+push, with git's own error.
+
+This is a token and not a GitHub App, and the price is worth knowing. An App's
+installation token lives an hour and belongs to no person; this one lives until
+it expires, belongs to an account and carries that account's role on the
+repository. What limits it is the same either way: one repository, Contents
+only, and an account that exists for this and holds nothing else.
 
 What the workflow does not do is decide anything. It approves nothing and queues
 no merge: [`dependabot-merge.yml`](.github/workflows/dependabot-merge.yml) queued
@@ -691,8 +709,8 @@ pushes), and that has a consequence beyond this workflow: the approval
 `dependabot-merge.yml` gives on `opened` stands, and the auto-merge it queued
 stands with it, so *anything* pushed onto an open Dependabot branch merges once
 CI is green — a bundle, but equally a commit from a person with write access or
-from whoever holds this App's key. CI is the only gate, which is the premise of
-that workflow, and the App's single permission is what keeps its reach to
+from whoever holds this token. CI is the only gate, which is the premise of
+that workflow, and the token's single permission is what keeps its reach to
 Dependabot's branches. If you would rather a person look at what lands, turn on
 **Dismiss stale pull request approvals when new commits are pushed**; the price
 is that every bump that changes the bundle then waits for an approval too.
@@ -713,15 +731,20 @@ marker (a person's, or the merge commit **Update branch** makes) or a bump left
 open for 30 days. It answers `@dependabot rebase` there with "edited by someone
 other than Dependabot", and a conflicted pull request runs no workflows, so it
 stays stuck until a person with push access comments `@dependabot recreate`.
-It has to be a person. Dependabot answers that command from `github-actions[bot]`,
-or from any GitHub App, with "Sorry, only users with push access can use that
-command" ([dependabot-core#9147](https://github.com/dependabot/dependabot-core/issues/9147)),
-so no workflow in this repository can do it without storing a maintainer's
-personal token — a standing credential this repository has chosen not to hold.
+It has to be a user account. Dependabot answers that command from
+`github-actions[bot]`, or from any GitHub App, with "Sorry, only users with push
+access can use that command"
+([dependabot-core#9147](https://github.com/dependabot/dependabot-core/issues/9147)),
+but it obeys an account with push access, which is what `DASHBOARD_BUNDLE_TOKEN`
+is. A workflow could comment with it, and none does: commenting needs Pull
+requests: write, and a token that can write to pull requests can also approve
+them, and an approval from an account with write access counts toward `main`'s
+required review. That widens what this credential can do well past pushing a
+bundle, so it is a decision to make on purpose and not a side effect.
 
 Nothing checks any of this for you, and the workflow holds a credential that can
 write to a branch. Read the `if:` on both jobs, each job's `permissions:`, the
-pins on the actions in the second one and the App's scope on any diff that
+pins on the actions in the second one and the token's scope on any diff that
 touches
 [`.github/workflows/dependabot-dashboard.yml`](.github/workflows/dependabot-dashboard.yml).
 
