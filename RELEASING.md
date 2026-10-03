@@ -251,6 +251,13 @@ when you touch it:
   workflows themselves — and `v*` needs a tag ruleset it cannot bypass, since
   Contents: write can create a tag and an App push starts workflows. Weakening
   any of these makes the workflow reach *more*, never fail.
+- **`.github/workflows/dependabot-recreate.yml`'s rule that every commit is a
+  bot's.** `@dependabot recreate` discards every commit on the branch, so the
+  workflow asks only when each one was made by a `[bot]` account, and treats a
+  commit whose author GitHub cannot resolve as a person's. Loosen that and it
+  silently destroys somebody's work on a conflicted bump. It holds
+  `pull-requests: write` and nothing else, and no part of a pull request reaches
+  a shell.
 
 ---
 

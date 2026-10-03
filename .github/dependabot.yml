@@ -66,7 +66,9 @@ updates:
   # `dashboard` job rebuilds and diffs static/dashboard, so a version bump that
   # changes the output fails until the output is committed with it. Dependabot
   # cannot do that, so .github/workflows/dependabot-dashboard.yml does: it
-  # rebuilds on Dependabot's pull request and pushes the result to its branch.
+  # rebuilds on Dependabot's pull request and pushes the result to its branch,
+  # and .github/workflows/dependabot-recreate.yml asks Dependabot to recreate the
+  # bumps that conflict once another one has merged.
   #
   # KEEP THAT MANIFEST INSTALLABLE BY DEPENDABOT, which runs its own node,
   # older than the one CI builds on. That is why package.json declares no
