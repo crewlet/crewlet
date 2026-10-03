@@ -218,14 +218,14 @@ they are deliberately different mechanisms.
 ### The socket's admission semaphore
 
 One **socket** may have **four queries running at once**
-(`stream.MaxInFlightQueries`). Queries run on their own goroutines so a store
-scan cannot stall the live feed, and the bound is a token pool taken **on the
-read loop's own goroutine**: a burst past it pauses the reader rather than
-piling up as blocked goroutines, so the backpressure is where it can be seen.
-Per socket, because that is what one tab needs: a person's second tab runs its
-own four rather than waiting on their first. (It used to be one budget per
-**principal**, shared across every socket a person held — which bounded one
-person, where what has to be bounded is the pool.)
+(`stream.MaxInFlightQueries`), on four goroutines of its own so a store scan
+cannot stall the live feed. A burst past the four waits in the socket's own
+**backlog** of 32 (`stream.MaxQueuedQueries`), in arrival order, and one past
+that is answered `unavailable` with a one-second retry hint; the read loop
+itself never waits. It used to: the bound was taken on the read loop, which
+was backpressure while the four ran on the socket's own reads and became
+something else once they waited at the node's ceiling below — a tab's fifth
+question then held its keepalive behind other sockets' bursts.
 
 **And every socket on the node together may run at most half the store's
 readers.** Nothing bounds how many sockets a caller holding `state:read` opens,
@@ -236,17 +236,28 @@ reserved connection below keeps exactly one read out of that queue, resolving
 who is acting, and nothing else; so the socket surface — the one reader
 population an outside caller drives — is held to **half of the store's
 ordinary readers** (`max(1, readers / 2)`), and the engine's own reads keep the
-other half. A query waits for that ceiling on its own goroutine, after taking
-its socket's slot, so a socket whose queries are waiting still answers its
-keepalive.
+other half. A query waits for that ceiling on its own goroutine, so a socket
+whose queries are waiting still answers its keepalive.
+
+**The ceiling is shared between callers in turn.** Served first come first
+served, it is one more thing a caller who opens sockets could take whole: three
+tabs at four queries each sat ahead of every colleague's first, and at the
+reader floor the ceiling is four, which one tab's standing reads fill. So each
+principal's queries wait in a lane of their own, and a slot that frees goes to
+the waiting principal **holding the fewest** — of those tied, the one served
+longest ago. However many queries one caller has queued, another caller's runs
+on the next free slot. A slot is never held back from a caller who is alone at
+the ceiling, because a dashboard query discloses nothing by when it runs and a
+held-back slot is a read nobody runs.
 
 **The floor below is sized from both.** The reader floor is eight: one full
 tab's four in the sockets' half, and the same again for the engine. So the
 semaphore, the ceiling and the floor are one decision stated three times, and
 changing one means changing the others. On a bigger host the pool is
 `GOMAXPROCS` readers and the ceiling moves with it, because a bigger node runs
-more seats whose reads need the other half. Tabs past the ceiling wait at it —
-which on a small host with several dashboards open is the design working — and
+more seats whose reads need the other half. Tabs past the ceiling wait at it,
+in their callers' turns — which on a small host with several dashboards open is
+the design working — and
 `store.max_open_conns` raises it, since the ceiling is half of whatever the
 pool holds.
 

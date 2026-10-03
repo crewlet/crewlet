@@ -123,10 +123,11 @@ type Service struct {
 	// holds it because it is shared by every socket on the node.
 	decisions *decisions
 
-	// queries is the node's ceiling on every socket's queries together —
-	// see [queryCeiling]. The service holds it because it outlives every
-	// socket and is shared by all of them.
-	queries chan struct{}
+	// queries is the node's ceiling on every socket's queries together,
+	// shared out between the principals asking — see [queryCeiling] and
+	// [queryGate]. The service holds it because it outlives every socket
+	// and is shared by all of them.
+	queries *queryGate
 
 	// tokensDirty means a phase completed since the last rollup went out.
 	// Set on the publish path and cleared on the tick — see flushTokens.
@@ -284,7 +285,7 @@ func NewService(state *livestate.LiveState, opts Options) (*Service, error) {
 		placement: opts.Placement,
 		now:       opts.Now,
 		interval:  opts.HealthInterval,
-		queries:   make(chan struct{}, queryCeiling(opts.Readers)),
+		queries:   newQueryGate(queryCeiling(opts.Readers)),
 		decisions: newDecisions(),
 	}
 	if s.now == nil {

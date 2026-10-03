@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/coder/websocket"
+	"github.com/google/uuid"
 
 	"github.com/crewlet/crewlet/internal/api/auth"
 	"github.com/crewlet/crewlet/internal/api/httpjson"
@@ -502,18 +503,55 @@ func writeLoop(ctx context.Context, conn *websocket.Conn, client *Client) {
 // healthEvery is the shared tick's cadence, which is when a degraded posture
 // can next change — the hint a query refused on one carries.
 //
-// node is the ceiling every socket on this node shares — see [queryCeiling].
+// node is the ceiling every socket on this node shares, in turn between the
+// principals asking — see [queryCeiling] and [queryGate].
 func readLoop(ctx context.Context, conn *websocket.Conn,
 	seats *watching, client *Client, query Query, who *asking,
-	healthEvery time.Duration, node chan struct{},
+	healthEvery time.Duration, node *queryGate,
 ) (websocket.StatusCode, string) {
-	// THIS SOCKET'S CONCURRENCY BOUND — see [MaxInFlightQueries] for why
-	// four, and why per socket. Queries run on their own goroutines so a
-	// store scan cannot stall the live feed, and a burst past the bound
-	// queues here rather than piling into the engine's connection pool.
-	slots := make(chan struct{}, MaxInFlightQueries)
+	// THIS SOCKET'S QUESTIONS — see [MaxInFlightQueries] for why four
+	// goroutines, and [MaxQueuedQueries] for the backlog behind them. They
+	// run off this loop so a store scan cannot stall the live feed, and
+	// NOTHING HERE WAITS for them: a question past the four joins the
+	// backlog, and one past the backlog is refused, so a ping or a watch is
+	// read however long somebody else's burst holds the node's ceiling.
+	questions := &socketQueries{}
 	var running sync.WaitGroup
 	defer running.Wait()
+	// THE LANE AT THE NODE'S CEILING, which is the principal's — see
+	// [queryGate]. A resolved principal always carries an id; a socket
+	// whose principal somehow did not is a lane of its own rather than one
+	// shared with every other such socket.
+	solo := uuid.New()
+	lane := func() uuid.UUID {
+		if id := who.current().ID; id != uuid.Nil {
+			return id
+		}
+		return solo
+	}
+	answer := func(req request) {
+		// AT THE NODE'S CEILING, in the principal's turn: what holds it
+		// may be other sockets' questions. A socket that closes while it
+		// waits runs nothing — there is nobody left to answer.
+		release, err := node.take(ctx, lane())
+		if err != nil {
+			return
+		}
+		defer release()
+		// AS WHOEVER THE LAST DECISION SAID, not whoever opened the
+		// socket: a grant narrowed an hour ago must not still answer
+		// here. See lifetime.go.
+		runQuery(who.context(ctx), client, query, req)
+	}
+	// ask is one of the socket's four goroutines: it answers the question
+	// it was started for, then each one the backlog holds, and ends when
+	// the backlog is empty or the socket has gone.
+	ask := func(req request) {
+		defer running.Done()
+		for more := true; more; req, more = questions.next(ctx) {
+			answer(req)
+		}
+	}
 
 	for {
 		_, raw, err := conn.Read(ctx)
@@ -566,32 +604,21 @@ func readLoop(ctx context.Context, conn *websocket.Conn,
 				client.Reply(queryError(req, CodeUnknownQuery))
 				continue
 			}
-			// NOT running.Go: the semaphore acquire has to happen on
-			// THIS goroutine, the reader. Moving it inside the spawned
-			// one would let the reader keep spawning past the cap and
-			// the backpressure would be a queue of blocked goroutines
-			// rather than a paused reader.
-			running.Add(1)
-			slots <- struct{}{}
-			go func() {
-				defer running.Done()
-				defer func() { <-slots }()
-				// AND THE NODE'S CEILING, waited for HERE rather than
-				// on the reader: what holds it may be another socket's
-				// burst, and this socket's keepalive must not wait on
-				// that. A socket that closes while it waits runs
-				// nothing — there is nobody left to answer.
-				select {
-				case node <- struct{}{}:
-				case <-ctx.Done():
-					return
-				}
-				defer func() { <-node }()
-				// AS WHOEVER THE LAST DECISION SAID, not whoever
-				// opened the socket: a grant narrowed an hour ago must
-				// not still answer here. See lifetime.go.
-				runQuery(who.context(ctx), client, query, req)
-			}()
+			// ADMITTED ON THIS GOROUTINE AND NEVER WAITED FOR: one of
+			// the socket's four goroutines runs it, now or once its own
+			// question ends; past the backlog, the client is told when
+			// to ask again. See [MaxQueuedQueries].
+			switch admitted, start := questions.admit(req); {
+			case start:
+				running.Add(1)
+				go ask(req)
+			case !admitted:
+				env := queryError(req, CodeUnavailable)
+				env.unavailable(Unavailable{
+					RetryAfter: httpjson.RetrySeconds(queryBacklogRetry),
+				})
+				client.Reply(env)
+			}
 		default:
 			// Unknown kinds are ignored, which is what makes new ones
 			// additive on both ends.

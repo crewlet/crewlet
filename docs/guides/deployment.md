@@ -1042,8 +1042,9 @@ a caller holding `state:read` opens, so the dashboard's queries together are
 held to half of what ordinary reads may hold — this pool less its reserve and
 its pinned writers — and the engine's own reads (a seat's tool lookups, the
 coverage probes, the `/health` body) keep the other half however many tabs are
-open. Past the ceiling a query waits at it rather than in this pool; raising
-this field raises the ceiling with it. See
+open. Past the ceiling a query waits at it rather than in this pool, and the
+ceiling is shared between callers in turn, so one caller's tabs cannot keep it
+from anybody else's; raising this field raises the ceiling with it. See
 [Scaling Out § The socket's admission semaphore](../concepts/scaling.md#the-sockets-admission-semaphore).
 
 **The reserved connection is held, not merely counted.** Connections are handed
