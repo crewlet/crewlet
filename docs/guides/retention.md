@@ -1509,15 +1509,20 @@ crewlet work purge <task-id> -project KEY -reason "why" -confirm <task-key>
 ```
 
 It removes every row the task's own records wrote, not only the task's: its
-comments and body revisions, and every history row, inbox notice, turn record
-and dependency-mirror row about it — a history row carries its record's whole
-change, so leaving those would leave the text the purge was run to destroy. One
-account survives, and it is the purge's own: its history row and the project
-lead's `purged` notice, which say that it happened, to which key, by whom and
-why.
+comments and body revisions, every inbox notice, turn record and
+dependency-mirror row about it, and the content of every history row — a
+history row carries its record's whole change, so leaving it would leave the
+text the purge was run to destroy. One account survives, and it is the purge's
+own: its history row and the project lead's `purged` notice, which say that it
+happened, to which key, by whom and why. Beside it stays a **skeleton** of the
+task's history and nothing more: the rows that moved a count — its creation, a
+removal or restore, and each change of its status, assignee or project — each
+cut to its kind, its instant and those three changes, because the work flow
+answers the past by walking them backward and a purge takes the task out of
+that series only from the moment it happened.
 
 That is what a purge **this build writes** does (a task purge at record version
-4 — see [what a rolling upgrade blocks](replication.md#what-a-rolling-upgrade-blocks)).
+13 — see [what a rolling upgrade blocks](replication.md#what-a-rolling-upgrade-blocks)).
 A purge written by an earlier build is applied, on every node and on every
 replay, exactly as that build applied it: the object rows go, and the task's
 history, notices, turn records and mirror rows stay, because every node that

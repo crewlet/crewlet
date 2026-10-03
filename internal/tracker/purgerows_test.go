@@ -31,9 +31,13 @@ import (
 // report and the docs said it was destroyed.
 //
 // What survives is the purge's own account — that it happened, to which key,
-// by whom and why — and the lead's `purged` notice, which is read through it.
-// The writer puts a purge on the log at record version 4, and it is version 4
-// that destroys these rows ([TestAPurgeDestroysWhatItsTaskWroteFromVersionFourOnly]).
+// by whom and why — the lead's `purged` notice, which is read through it, and
+// the census's SKELETON of the task: its creation and its status, assignee and
+// project changes with nothing else in them, because the flow census answers
+// the past from those rows and a purge takes a task out of it only from the
+// instant it happened. The writer puts a purge on the log at
+// [tracker.RewriteVersion], and it is that version that destroys these rows
+// ([TestAPurgeDestroysWhatItsTaskWroteFromItsRewriteVersionOnly]).
 func TestAPurgeLeavesNoCopyOfTheTaskBehind(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
@@ -43,13 +47,14 @@ func TestAPurgeLeavesNoCopyOfTheTaskBehind(t *testing.T) {
 
 	// THE CONTENT, in every place a record puts it: a comment that
 	// mentions somebody (a history row, its document and an inbox
-	// notice), a turn's spend, and a dependency whose mirror is a row on
-	// the task.
+	// notice) — somebody other than the writer, whom no notice names
+	// ([tracker.Reason.WakesActor]) — a turn's spend, and a dependency
+	// whose mirror is a row on the task.
 	if _, err := r.writer.UpdateTask(t.Context(), "op-comment", "t-1", "ENG",
 		tracker.NoIfMatch, tracker.TaskPatch{
 			Comment: &tracker.Comment{ID: "c-1", Body: secret, Author: "jane"},
 		}, tracker.ChangeComment, &tracker.Notify{
-			Kind: tracker.ChangeComment, Excerpt: secret, Mentions: []string{"ana"},
+			Kind: tracker.ChangeComment, Excerpt: secret, Mentions: []string{"bo"},
 		}); err != nil {
 		t.Fatalf("comment: %v", err)
 	}
@@ -104,9 +109,22 @@ func TestAPurgeLeavesNoCopyOfTheTaskBehind(t *testing.T) {
 	}
 	r.drain()
 
-	if got := about(histories); len(got) != 1 || got[0] != "op-purge" {
-		t.Errorf("after the purge the task's history is %v, want the purge's "+
-			"own row alone", got)
+	// THE PURGE'S OWN ROW, AND THE SKELETON THE CENSUS WALKS: every other
+	// row is a count the flow series undoes, carrying nothing but its kind,
+	// its instant and the three deltas.
+	if got := about(histories); !slices.Contains(got, "op-purge") {
+		t.Errorf("after the purge the task's history is %v, with no purge row", got)
+	}
+	if got := about(`SELECT id FROM tracker_history WHERE subject_id = ?
+		AND kind = 'created'`); len(got) != 1 {
+		t.Errorf("the task's creation is %v after the purge, want its one row — "+
+			"the census needs it to take the task out of the days before it existed", got)
+	}
+	if got := about(`SELECT id FROM tracker_history WHERE subject_id = ?
+		AND id <> 'op-purge' AND (excerpt <> '' OR comment_id <> ''
+		     OR CAST(document AS TEXT) <> '{}' OR kind = 'comment'
+		     OR json_extract(fields_json, '$.title') IS NOT NULL)`); len(got) != 0 {
+		t.Errorf("history rows %v still carry content after the purge", got)
 	}
 	if got := about(copies); len(got) != 0 {
 		t.Errorf("the purged comment survives in history rows %v", got)
@@ -131,15 +149,17 @@ func TestAPurgeLeavesNoCopyOfTheTaskBehind(t *testing.T) {
 	}
 }
 
-// A PURGE DESTROYS WHAT ITS TASK'S OWN RECORDS WROTE FROM RECORD VERSION 4, AND
-// A VERSION-1 PURGE APPLIES EXACTLY AS EVERY BUILD BEFORE VERSION 4 APPLIED IT —
-// through the real framework loop, over the real log.
+// A PURGE DESTROYS WHAT ITS TASK'S OWN RECORDS WROTE FROM
+// [tracker.RewriteVersion], AND A VERSION-1 PURGE APPLIES EXACTLY AS EVERY BUILD
+// BEFORE THAT VERSION APPLIED IT — through the real framework loop, over the
+// real log.
 //
-// Destroying the history, the notices, the turn records and the dependency
-// mirror changed what a purge's APPLY does, and a record's apply is a function
-// of its version ([tracker.RecordVersion]). Applied to a version-1 record the
-// new way, the same record would leave these rows on every node that applied
-// it before version 4 and remove them on every node replaying it now — after
+// Destroying the history's content, the notices, the turn records and the
+// dependency mirror changed what a purge's APPLY does, and a record's apply is
+// a function of its version ([tracker.RecordVersion]). Applied to a version-1
+// record the new way, the same record would leave these rows on every node
+// that applied it before the rewrite and remove them on every node replaying
+// it now — after
 // adopting a snapshot, or beside an older build in a rolling upgrade — and the
 // identity claim says every node holds the same rows.
 //
@@ -148,7 +168,7 @@ func TestAPurgeLeavesNoCopyOfTheTaskBehind(t *testing.T) {
 // census it lowered, and the three tables it only ADDED to (its deletion
 // marker, its own history row, the notices that row routed). Every other row
 // in every table the identity claim covers is byte-identical before and after.
-func TestAPurgeDestroysWhatItsTaskWroteFromVersionFourOnly(t *testing.T) {
+func TestAPurgeDestroysWhatItsTaskWroteFromItsRewriteVersionOnly(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
 	const secret = "the merger with Contoso"
@@ -163,7 +183,7 @@ func TestAPurgeDestroysWhatItsTaskWroteFromVersionFourOnly(t *testing.T) {
 		tracker.NoIfMatch, tracker.TaskPatch{
 			Comment: &tracker.Comment{ID: "c-1", Body: secret, Author: "jane"},
 		}, tracker.ChangeComment, &tracker.Notify{
-			Kind: tracker.ChangeComment, Excerpt: secret, Mentions: []string{"ana"},
+			Kind: tracker.ChangeComment, Excerpt: secret, Mentions: []string{"bo"},
 		}); err != nil {
 		t.Fatalf("comment: %v", err)
 	}
@@ -190,14 +210,14 @@ func TestAPurgeDestroysWhatItsTaskWroteFromVersionFourOnly(t *testing.T) {
 		t.Fatalf("the premise: record %d is a %s, want the purge", purgeAt, written.Op)
 	}
 
-	for _, version := range []int{1, 4} {
+	for _, version := range []int{1, tracker.RewriteVersion} {
 		t.Run("version "+itoa(version), func(t *testing.T) {
 			// THE SAME PURGE AT THIS VERSION. A version-1 one carries the
-			// scope every writer before version 4 stated: the task and its
-			// project.
+			// scope every writer before the rewrite version stated: the
+			// task and its project.
 			rec := written
 			rec.V = version
-			if version < 4 {
+			if version < tracker.RewriteVersion {
 				rec.Scope = tracker.ScopeSet{Subject: true, Container: "ENG"}
 			}
 			body, err := json.Marshal(rec)
@@ -214,8 +234,8 @@ func TestAPurgeDestroysWhatItsTaskWroteFromVersionFourOnly(t *testing.T) {
 			}) {
 				t.Fatal("the purged task's row survives the purge")
 			}
-			if version < 4 {
-				assertTheRuleBeforeVersionFour(t, before, after)
+			if version < tracker.RewriteVersion {
+				assertTheRuleBeforeTheRewrite(t, before, after)
 				return
 			}
 			assertTheTasksRecordsAreGone(t, after, secret)
@@ -223,11 +243,11 @@ func TestAPurgeDestroysWhatItsTaskWroteFromVersionFourOnly(t *testing.T) {
 	}
 }
 
-// assertTheRuleBeforeVersionFour fails unless a purge touched exactly what
-// every build before record version 4 did: its thirteen DELETE targets and the
-// project census, plus additions (never a removal) to its marker, its history
-// row and the notices that row routed.
-func assertTheRuleBeforeVersionFour(t *testing.T, before, after map[string][]string) {
+// assertTheRuleBeforeTheRewrite fails unless a purge touched exactly what
+// every build before [tracker.RewriteVersion] did: its thirteen DELETE targets
+// and the project census, plus additions (never a removal) to its marker, its
+// history row and the notices that row routed.
+func assertTheRuleBeforeTheRewrite(t *testing.T, before, after map[string][]string) {
 	t.Helper()
 	deleted := map[string]bool{
 		"tracker_references": true, "tracker_task_keys": true,
@@ -253,12 +273,12 @@ func assertTheRuleBeforeVersionFour(t *testing.T, before, after map[string][]str
 			for _, row := range was {
 				if !slices.Contains(is, row) {
 					t.Errorf("a version-1 purge removed a %s row every build before "+
-						"version 4 kept: %s", table, row)
+						"the rewrite version kept: %s", table, row)
 				}
 			}
 		case !slices.Equal(was, is):
-			t.Errorf("a version-1 purge changed %s, which no build before version "+
-				"4 touched:\n  before %v\n  after  %v", table, was, is)
+			t.Errorf("a version-1 purge changed %s, which no build before the "+
+				"rewrite version touched:\n  before %v\n  after  %v", table, was, is)
 		}
 	}
 	// The rows the fixture is about, named, so a failure above has a
@@ -271,18 +291,26 @@ func assertTheRuleBeforeVersionFour(t *testing.T, before, after map[string][]str
 }
 
 // assertTheTasksRecordsAreGone fails unless nothing the purged task's own
-// records wrote survives beside the purge's own account.
+// records wrote survives beside the purge's own account and the census's
+// skeleton of it.
 func assertTheTasksRecordsAreGone(t *testing.T, after map[string][]string, secret string) {
 	t.Helper()
 	for _, row := range after["tracker_history"] {
-		if strings.Contains(row, `"t-1"`) && !strings.HasPrefix(row, `["op-purge",`) {
-			t.Errorf("a version-4 purge left a history row about the task: %s", row)
+		if !strings.Contains(row, `"t-1"`) || strings.HasPrefix(row, `["op-purge",`) {
+			continue
+		}
+		// THE SKELETON MAY STAY — the census walks it — and nothing else
+		// of a row may: the comment's row goes whole, and a kept row
+		// holds no title, no excerpt and no document.
+		if strings.HasPrefix(row, `["op-comment",`) || strings.Contains(row, `title`) {
+			t.Errorf("a rewrite-version purge left content in a history row about "+
+				"the task: %s", row)
 		}
 	}
 	for table, rows := range after {
 		for _, row := range rows {
 			if strings.Contains(row, secret) {
-				t.Errorf("the purged comment survives a version-4 purge in %s: %s",
+				t.Errorf("the purged comment survives a rewrite-version purge in %s: %s",
 					table, row)
 			}
 		}
@@ -290,13 +318,13 @@ func assertTheTasksRecordsAreGone(t *testing.T, after map[string][]string, secre
 	for _, table := range []string{"tracker_turns", "tracker_task_dependents"} {
 		for _, row := range after[table] {
 			if strings.Contains(row, `"t-1"`) {
-				t.Errorf("a version-4 purge left a %s row naming the task: %s", table, row)
+				t.Errorf("a rewrite-version purge left a %s row naming the task: %s", table, row)
 			}
 		}
 	}
 	for _, row := range after["tracker_notifications"] {
 		if strings.Contains(row, `"t-1"`) && !strings.Contains(row, `"op-purge"`) {
-			t.Errorf("a version-4 purge left an inbox notice about the task: %s", row)
+			t.Errorf("a rewrite-version purge left an inbox notice about the task: %s", row)
 		}
 	}
 }

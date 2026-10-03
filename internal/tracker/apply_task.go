@@ -1127,7 +1127,7 @@ func activeOf(task Task) bool {
 // grandparent, or the root when the purged task was one — and its subtree's
 // ancestry is rebuilt. Depth can only fall, so no cap is crossed by the move.
 //
-// # From version 4, what it writes of OTHER tasks, it writes into their DOCUMENTS
+// # From [rewriteVersion], what it writes of OTHER tasks, it writes into their DOCUMENTS
 //
 // A task's derived rows — its parent pointer, its relations, its dependency
 // edges and its mirror of who waits on it — are a pure function of its own
@@ -1141,18 +1141,18 @@ func activeOf(task Task) bool {
 // stamped `scoped_through` rather than `version`: a record may move only its
 // own subject's version ([Task]).
 //
-// A PURGE BELOW VERSION 4 fixes the rows alone, as every build before it did
+// A PURGE BELOW [rewriteVersion] fixes the rows alone, as every build before it did
 // ([Applier.reparentRows]): applying an older record by the newer rule on a
 // node that replays it would give that node documents no other node holds
 // ([rewriteVersion]).
 //
-// # From version 4, it destroys what the task's own records wrote
+// # From [rewriteVersion], it destroys what the task's own records wrote
 //
 // The object tables are the smaller half of what a task leaves: every history
 // row keeps its record's whole mutation, every inbox notice an excerpt, every
 // turn record its spend, and the dependency mirror its edges
-// ([forgetRecords], [purgeDeletes]). A version-4 purge deletes them in the same
-// transaction. A purge BELOW version 4 leaves every one of them exactly where
+// ([forgetRecords], [purgeDeletes]). A purge at that version deletes them in the same
+// transaction. A purge BELOW it leaves every one of them exactly where
 // every build before it left them — the rows its nodes hold — because the
 // same record applied two ways is the divergence this log exists to prevent;
 // its content stays readable until the rows are otherwise replaced.
@@ -1219,7 +1219,7 @@ func (a *Applier) purgeTask(ctx context.Context, tx *sql.Tx, c applyContext) (in
 		written += n
 	}
 	// WHICH OTHER TASKS NAME IT, read while the rows that say so are still
-	// here: from version 4 each is rewritten below, once.
+	// here: from [rewriteVersion] each is rewritten below, once.
 	var others map[string]otherEdit
 	if c.record.V >= rewriteVersion {
 		if others, err = othersNaming(ctx, tx, id, children); err != nil {
@@ -1271,7 +1271,7 @@ func (a *Applier) purgeTask(ctx context.Context, tx *sql.Tx, c applyContext) (in
 	if err != nil {
 		return 0, err
 	}
-	// WHAT ITS OWN RECORDS WROTE, from version 4 alone — see the doc above.
+	// WHAT ITS OWN RECORDS WROTE, from [rewriteVersion] alone — see the doc above.
 	forgotten := 0
 	if c.record.V >= rewriteVersion {
 		if forgotten, err = forgetRecords(ctx, tx, id, historyID(c)); err != nil {
@@ -1290,7 +1290,7 @@ type purgeStatement struct {
 // purgeDeletes is every DELETE a purge of id at record version v issues
 // against the object tables, in the order it issues them.
 //
-// BELOW VERSION 4, EXACTLY THE LIST EVERY BUILD BEFORE IT ISSUED, and nothing
+// BELOW [rewriteVersion], EXACTLY THE LIST EVERY BUILD BEFORE IT ISSUED, and nothing
 // else: that list is what the nodes that applied such a record hold, and a
 // node replaying one — after adopting a snapshot, or on this build beside an
 // older one in a rolling upgrade — must write the same rows or hold ones no
@@ -1298,8 +1298,8 @@ type purgeStatement struct {
 // because the mirror table arrived after the list was written: the purged
 // task's own list of who waits on it, and every blocker's entry naming it.
 //
-// FROM VERSION 4 THE MIRROR GOES WITH THE REST, both halves, which is the
-// version-4 purge's half of the same fix [forgetRecords] is: a row keyed on
+// FROM [rewriteVersion] THE MIRROR GOES WITH THE REST, both halves, which is the
+// rewritten purge's half of the same fix [forgetRecords] is: a row keyed on
 // an id nothing resolves any more is a copy of the task's edges nobody can
 // reach and nothing removes.
 func purgeDeletes(id string, v int) []purgeStatement {
@@ -1328,11 +1328,12 @@ func purgeDeletes(id string, v int) []purgeStatement {
 	)
 }
 
-// forgetRecords deletes what a purged task's own records wrote beside its
-// rows: every history row but the purge's own (keep), the inbox notices those
-// rows routed, and the turn records. A VERSION-4 PURGE'S alone: below it a
-// purge leaves them, as every build before version 4 did ([purgeDeletes] says
-// why).
+// forgetRecords destroys what a purged task's own records wrote beside its
+// rows: the inbox notices its rows routed and its turn records go, and of its
+// history only a SKELETON stays — every row but the purge's own (keep) that
+// moves a count the flow census walks, with its content taken out. A
+// [rewriteVersion] purge's alone: below it a purge leaves every one of them, as
+// every build before that version did ([purgeDeletes] says why).
 //
 // THESE HOLD THE CONTENT, which is what a purge is for. A history row keeps
 // its record's whole mutation in `document` — every title, every body and
@@ -1342,9 +1343,30 @@ func purgeDeletes(id string, v int) []purgeStatement {
 // node for the life of the company, while this package's docs and the purge
 // report said it was destroyed.
 //
-// THE PURGE'S OWN ROW STAYS, and the notices it routed: that it happened, to
-// which key, by whom and why is the one account of the task that survives, and
-// the lead's `purged` wake is read through it.
+// # The skeleton, and why it is not destroyed too
+//
+// The flow census ([Reader.Flow]) answers the past by walking `tracker_history`
+// BACKWARD from today's rows, and its promise is that a purge takes a task out
+// of the census only from the instant it happened: the board two weeks ago
+// held the task, and the series says so. The walk reads exactly the rows
+// [historyMoves] selects — the task's creation, removal and restore, and
+// every change to its status, assignee or project — and of each only its kind,
+// its instant and those three deltas. So those rows stay with nothing else: no
+// excerpt, no comment, an empty document, and a `fields_json` holding the three
+// deltas alone. Deleted with the rest, they took the task out of every day
+// before its purge too, and a quarter's trend chart redrew itself the moment
+// somebody purged a duplicate.
+//
+// THE SAME PREDICATE CHOOSES THEM, as SQL, rather than a Go copy of it: the
+// rows the walk will read are by construction the rows kept. A status, an
+// assignee's handle and a project key are what the census is made of and
+// what the company feed labels a purged task's changes with (it resolves the
+// key through the deletion marker); a title, a body and a comment are what a
+// purge exists to destroy.
+//
+// THE PURGE'S OWN ROW STAYS WHOLE, and the notices it routed: that it
+// happened, to which key, by whom and why is the one account of the task that
+// survives, and the lead's `purged` wake is read through it.
 //
 // AFTER the purge's history row is written, so its effective instant is still
 // the maximum over every row about this subject — the closed form every node
@@ -1352,41 +1374,108 @@ func purgeDeletes(id string, v int) []purgeStatement {
 func forgetRecords(ctx context.Context, tx *sql.Tx, id, keep string) (int, error) {
 	kind := string(KindTask)
 	written := 0
-	for _, statement := range []struct {
-		sql  string
-		args []any
-	}{
-		// THE NOTICES FIRST, found through the history rows that routed
-		// them: a notice is keyed on its record, and this is a seek on
-		// that key where a match on its subject would scan every inbox.
-		{`DELETE FROM tracker_notifications WHERE record_id IN (
-			SELECT id FROM tracker_history
-			WHERE subject_id = ? AND subject_kind = ? AND id <> ?)`,
-			[]any{id, kind, keep}},
-		{`DELETE FROM tracker_history
-			WHERE subject_id = ? AND subject_kind = ? AND id <> ?`,
-			[]any{id, kind, keep}},
-		{`DELETE FROM tracker_turns WHERE task_id = ?`, []any{id}},
-	} {
-		res, err := tx.ExecContext(ctx, statement.sql, statement.args...)
+	exec := func(query string, args ...any) error {
+		res, err := tx.ExecContext(ctx, query, args...)
 		if err != nil {
-			return 0, err
+			return err
 		}
 		n, err := affected(res)
 		if err != nil {
-			return 0, err
+			return err
 		}
 		written += n
+		return nil
+	}
+	// THE NOTICES FIRST, found through the history rows that routed them: a
+	// notice is keyed on its record, and this is a seek on that key where a
+	// match on its subject would scan every inbox. Every one of them, the
+	// skeleton's included — an excerpt is content.
+	if err := exec(`DELETE FROM tracker_notifications WHERE record_id IN (
+		SELECT id FROM tracker_history
+		WHERE subject_id = ? AND subject_kind = ? AND id <> ?)`, id, kind, keep); err != nil {
+		return 0, err
+	}
+	skeleton, err := censusRows(ctx, tx, id, keep)
+	if err != nil {
+		return 0, err
+	}
+	if err := exec(`DELETE FROM tracker_history
+		WHERE subject_id = ? AND subject_kind = ? AND id <> ?
+		  AND NOT (`+historyMoves("")+`)`, id, kind, keep); err != nil {
+		return 0, err
+	}
+	for _, row := range skeleton {
+		if err := exec(`UPDATE tracker_history
+			SET excerpt = '', comment_id = '', document = ?, fields_json = ?
+			WHERE id = ?`, []byte("{}"), row.fields, row.id); err != nil {
+			return 0, err
+		}
+	}
+	if err := exec(`DELETE FROM tracker_turns WHERE task_id = ?`, id); err != nil {
+		return 0, err
 	}
 	return written, nil
 }
 
-// reparentRows is a purge's re-parenting BELOW VERSION 4: each child's
+// censusFields are the deltas a purged task's skeleton keeps: the three the
+// flow census and the feed's change kinds read ([historyMoves]).
+var censusFields = []string{"status", "assignee", "project"}
+
+// skeletonRow is one history row a purge keeps, and the fields it keeps.
+type skeletonRow struct {
+	id     string
+	fields string
+}
+
+// censusRows reads the purged task's history rows the census walks, each with
+// its `fields_json` cut to [censusFields]. Ordered by id, so every node issues
+// the same updates in the same order.
+func censusRows(ctx context.Context, tx *sql.Tx, id, keep string) ([]skeletonRow, error) {
+	rows, err := tx.QueryContext(ctx, `
+		SELECT id, fields_json FROM tracker_history
+		WHERE subject_id = ? AND subject_kind = ? AND id <> ?
+		  AND `+historyMoves("")+`
+		ORDER BY id`, id, string(KindTask), keep)
+	if err != nil {
+		return nil, fmt.Errorf("tracker: read what the census keeps of a purged task: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+	var out []skeletonRow
+	for rows.Next() {
+		var row skeletonRow
+		var raw string
+		if err := rows.Scan(&row.id, &raw); err != nil {
+			return nil, err
+		}
+		var all map[string]json.RawMessage
+		if err := json.Unmarshal([]byte(raw), &all); err != nil {
+			return nil, fmt.Errorf("tracker: history row %s carries fields that are "+
+				"not an object: %w", row.id, err)
+		}
+		kept := map[string]json.RawMessage{}
+		for _, name := range censusFields {
+			if delta, ok := all[name]; ok {
+				kept[name] = delta
+			}
+		}
+		// encoding/json SORTS A MAP'S KEYS, so every node writes the same
+		// bytes whatever order the original carried them in.
+		encoded, err := json.Marshal(kept)
+		if err != nil {
+			return nil, err
+		}
+		row.fields = string(encoded)
+		out = append(out, row)
+	}
+	return out, rows.Err()
+}
+
+// reparentRows is a purge's re-parenting BELOW [rewriteVersion]: each child's
 // pointer moves onto parent on the row alone, and its subtree's ancestry is
 // rebuilt.
 //
 // The rule every build before [rewriteVersion] applied, kept for the records
-// they wrote. Its flaw is the one version 4 exists for — the child's document
+// they wrote. Its flaw is the one that version exists for — the child's document
 // still names the purged task, and the child's next record puts the pointer
 // back — and it is not repaired here, because the nodes that applied such a
 // record hold exactly this.
@@ -1414,7 +1503,7 @@ func (a *Applier) reparentRows(ctx context.Context, tx *sql.Tx, children []strin
 	return written, nil
 }
 
-// otherEdit is everything a version-4 purge changes in ONE other task's
+// otherEdit is everything a rewritten purge changes in ONE other task's
 // document.
 //
 // GATHERED PER TASK, because a task can be reached by more than one of the
@@ -1438,7 +1527,7 @@ type otherEdit struct {
 	reparent bool
 }
 
-// othersNaming reads which OTHER tasks a version-4 purge of id rewrites, and
+// othersNaming reads which OTHER tasks a rewritten purge of id rewrites, and
 // what it changes in each: the tasks relating to it, the blockers listing it
 // among their dependents, and its direct children.
 //
@@ -1478,7 +1567,7 @@ func othersNaming(ctx context.Context, tx *sql.Tx, id string,
 	return edits, nil
 }
 
-// rewriteNaming is a version-4 purge's effect on every other task: each one's
+// rewriteNaming is a rewritten purge's effect on every other task: each one's
 // document rewritten ONCE with everything the purge changes in it
 // ([otherEdit]), and then each re-parented child's ancestry rebuilt.
 //

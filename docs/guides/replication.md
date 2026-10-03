@@ -628,8 +628,10 @@ build reading 11 does not know. Version 13 is a board drag and a task purge,
 whose shape did not change but whose apply did: from version 13 each writes the
 OTHER tasks it touches into their documents rather than only their rows, and a
 purge also destroys what the purged task's own records left beside its rows —
-its history, the inbox notices that history routed, its turn records and its
-dependency mirror. A drag or a purge written before version 13 keeps the rule
+the content of its history, the inbox notices that history routed, its turn
+records and its dependency mirror, keeping only the skeleton of the history the
+work flow walks backward (its creation and its status, assignee and project
+changes, with nothing else in them). A drag or a purge written before version 13 keeps the rule
 every node applied it by when it is replayed — a purge from an older build
 leaves that history, those notices, turn records and mirror rows where they are,
 because its peers kept them — so a node catching up from a snapshot holds

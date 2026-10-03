@@ -2210,11 +2210,18 @@ Its **children move rather than being destroyed**: each direct child
 re-parents onto the purged task's own parent, or becomes a root when the purged
 task was one. Destroying the subtree would destroy work nobody confirmed.
 
-**What its own records wrote goes with it** — its history, the inbox notices
-that history routed, its turn records and its dependency mirror — leaving the
-purge's own history row and the lead's notice as the one account of it. That
-is a purge this build writes; one an earlier build wrote keeps those rows on
-every node, as that build applied it ([Retention](retention.md#removal-deletion-and-what-a-purge-does-not-reach)).
+**What its own records wrote goes with it** — the content of its history, the
+inbox notices that history routed, its turn records and its dependency mirror —
+leaving the purge's own history row and the lead's notice as the one account
+of it. Of its history, only a **skeleton** stays: the rows that moved a count —
+its creation, a removal or restore, and each change of status, assignee or
+project — each holding its kind, its instant and those three changes and
+nothing else, no title, no body, no comment and no excerpt. They are what
+[the flow](#how-the-work-has-moved) walks backward to answer the past, and a purge takes a
+task out of that series only from the moment it happened: a board two weeks
+ago held the task, and the chart still says so. That is a purge this build
+writes; one an earlier build wrote keeps those rows whole on every node, as
+that build applied it ([Retention](retention.md#removal-deletion-and-what-a-purge-does-not-reach)).
 
 **Every other task that named it stops naming it**, for good: a task that
 waited on it is no longer blocked by it, a task it waited on no longer lists it
