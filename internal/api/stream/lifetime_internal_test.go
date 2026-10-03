@@ -105,6 +105,19 @@ func newDecidingService(t *testing.T, chart authz.Chart) *Service {
 // serve opens one socket on svc and reads its snapshot.
 func serve(t *testing.T, svc *Service, c socketCase) *served {
 	t.Helper()
+	s := dial(t, svc, c)
+	if got := s.read(t); got.Kind != KindSnapshot {
+		t.Fatalf("first frame is %q, want the snapshot", got.Kind)
+	}
+	return s
+}
+
+// dial opens one socket on svc and reads nothing: for a case whose socket may
+// be closed before its snapshot reaches the wire, which a decision taken as it
+// starts listening can do — the snapshot is queued for the socket's writer and
+// the close is written by the decision, and neither waits for the other.
+func dial(t *testing.T, svc *Service, c socketCase) *served {
+	t.Helper()
 	if c.query == nil {
 		c.query = func(context.Context, string, map[string]any) (any, error) {
 			return nil, nil
@@ -133,9 +146,6 @@ func serve(t *testing.T, svc *Service, c socketCase) *served {
 	}
 	t.Cleanup(func() { _ = conn.CloseNow() })
 	s.conn = conn
-	if got := s.read(t); got.Kind != KindSnapshot {
-		t.Fatalf("first frame is %q, want the snapshot", got.Kind)
-	}
 	return s
 }
 
@@ -397,7 +407,7 @@ func TestAnIdentityMoveReachesTheSocketsItNames(t *testing.T) {
 func TestARecordBeforeTheSocketListenedIsNotMissed(t *testing.T) {
 	t.Parallel()
 	ana := person("ana")
-	s := serve(t, newDecidingService(t, authz.NoChart{}), socketCase{
+	s := dial(t, newDecidingService(t, authz.NoChart{}), socketCase{
 		principal: ana, opened: sessionOf(ana),
 		decide: func(r *http.Request) (*http.Request, *auth.Refusal) {
 			return r.WithContext(iam.WithAnonymous(r.Context())), nil
