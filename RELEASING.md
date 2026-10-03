@@ -234,8 +234,12 @@ when you touch it:
   person pushed onto a Dependabot branch, the `commit_id` it names is the only
   thing stopping a late or re-run job approving whatever the head has become
   (`gh pr review --approve` names none), and `--auto` is the only thing holding
-  the merge until the checks `main` requires have reported. Weakening any of
-  them makes the workflow run *more*, never fail.
+  the merge until the checks `main` requires have reported. It approves only
+  while `reviewDecision` is neither `APPROVED` nor `CHANGES_REQUESTED`, and an
+  EMPTY decision must keep approving: GitHub leaves it empty both when no review
+  is required and when its answer does not cover the rule in force, so a skip on
+  doubt would stall every bump with nothing red to show. Weakening any of them
+  makes the workflow run *more*, never fail.
 - **`.github/workflows/dependabot-dashboard.yml`'s guard, its two-job split, its
   pins and the token's scope.** The `push` job holds a personal access token that
   can write to a branch, and its `if:` (author AND actor both Dependabot,

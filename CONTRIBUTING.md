@@ -589,13 +589,28 @@ request unapproved, because the run your click triggered is skipped;
 and recovers it. (Not `rebase`: the merge commit your click made is one
 Dependabot did not write, and it will not rebase a branch that holds one.)
 
+The approval is given only while GitHub still says one is needed. The job runs
+on every push to a bump's branch, and under a rule that keeps approvals across
+pushes (the one `main` has today) every run after the first finds the pull
+request already approved: approving again stacks a review on the timeline for
+each rebase and each bundle push and changes nothing about whether it merges.
+The job reads `reviewDecision`, GitHub's own answer for the rule that governs
+the base branch, and skips on `APPROVED` and on `CHANGES_REQUESTED` (somebody's
+standing objection, which this account's approval would not clear). Everything
+else approves, an empty answer included, and on purpose: GitHub leaves the
+decision empty both when nothing requires a review and when its answer does not
+account for the rule at hand, and a redundant approval costs one line on the
+timeline where a skipped one could stall every bump with nothing red to show for
+it. An approval a rule has since dismissed reads as `REVIEW_REQUIRED`, so the
+next push is approved again, which is what `synchronize` is in the trigger for.
+
 The approval names the commit the run was started for. `gh pr review --approve`
 sends no commit, and GitHub then attaches the review to whatever the head is at
 that moment — so a run whose approve step executes after a push has landed, or
 a maintainer re-running an old one (a re-run keeps its actor, so it passes the
-guard), would approve a commit no event named. Named explicitly, an approval of a commit that
-is no longer the head is stale from the moment it is made, which is how a rule
-that dismisses stale approvals is meant to see it.
+guard), would approve a commit no event named. Named explicitly, an approval of
+a commit that is no longer the head is stale from the moment it is made, which
+is how a rule that dismisses stale approvals is meant to see it.
 
 Because nothing retitles a bump before it becomes a permanent subject line, each
 entry in `.github/dependabot.yml` pins the prefix its commits carry, and every

@@ -77,6 +77,28 @@ jobs:
       # what decides whether this lands. A step whose outputs nothing reads is
       # a gate that is not there, and it reads like one that is.
 
+      # APPROVE ONLY WHILE GITHUB STILL SAYS ONE IS NEEDED. This job runs on
+      # `opened`, `reopened` and every `synchronize`, and with a rule that keeps
+      # approvals across pushes (the one `main` has today) all but the first of
+      # those find the pull request already approved: approving again stacks a
+      # review on the timeline for every rebase and every bundle push and
+      # changes nothing about whether it merges.
+      #
+      # `reviewDecision` is GitHub's own answer, computed against the rule that
+      # governs the base branch, so it also covers the cases a count of reviews
+      # cannot: an approval a protection rule has since dismissed reads as
+      # REVIEW_REQUIRED, and this approves again. Two values skip. APPROVED is
+      # the point of the check. CHANGES_REQUESTED is somebody's standing
+      # objection, which this account's approval does not clear.
+      #
+      # Everything else approves, and that includes an EMPTY decision, on
+      # purpose. GitHub leaves it empty both when nothing requires a review and
+      # when its answer does not account for the rule at hand; in the first an
+      # approval is harmless and in the second it is what unblocks the merge.
+      # Skipping on anything but a positive APPROVED would let a doubt stall
+      # every bump with nothing red to show for it, where a redundant review
+      # costs one line on the timeline.
+      #
       # The commit THIS run was started for is named, and that is what makes
       # the approval mean anything. `gh pr review --approve` sends no commit,
       # and GitHub then attaches the review to whatever the head is at that
@@ -88,12 +110,21 @@ jobs:
       # branch. Named explicitly, an approval of a commit that is no longer the
       # head is stale from the moment it is made, which is how a protection
       # rule that dismisses stale approvals is meant to see it.
-      - name: approve
+      - name: approve, if one is still needed
         run: |
+          decision="$(gh pr view "$PR_URL" --json reviewDecision --jq .reviewDecision)"
+          case "$decision" in
+            APPROVED | CHANGES_REQUESTED)
+              echo "Review decision is ${decision}: nothing to approve."
+              exit 0
+              ;;
+          esac
+          echo "Review decision is '${decision}': approving ${HEAD_SHA}."
           gh api --method POST \
             "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}/reviews" \
             -f event=APPROVE -f commit_id="$HEAD_SHA"
         env:
+          PR_URL: ${{ github.event.pull_request.html_url }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
