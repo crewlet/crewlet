@@ -253,7 +253,7 @@ func TestTheCeilingShortAlarmNamesItsDomain(t *testing.T) {
 // that has not ticked yet.
 func TestAMeasuredZeroRateSurvivesTheWireAndAnUnmeasuredOneIsAbsent(t *testing.T) {
 	t.Parallel()
-	idle := healthyDomain("chart", true)
+	idle := healthyDomain("pages", true)
 	idle.BytesPerDay = statelog.PerDay(0)
 	unmeasured := healthyDomain("iam", true)
 

@@ -446,7 +446,7 @@ func (r Reason) Retryable() bool {
 // all, which is the caller's to judge rather than this package's.
 //
 // ONE RULE FOR EVERY SURFACE that answers a refusal in a status code. Written
-// at each one, it drifted: /chart turned a refusal waiting cannot clear — a
+// at each one, it drifted: a surface turned a refusal waiting cannot clear — a
 // node holding a record it cannot decode, an evicted one — into `Retry-After:
 // 2`, and the work surface did the same to every write refusal, so a client
 // polled every two seconds a node that would not answer until somebody

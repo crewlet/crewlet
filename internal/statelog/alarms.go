@@ -267,7 +267,7 @@ type Reading struct {
 	// [DomainInputs] rather than by a node-wide caller.
 	//
 	// DeferredSheds is whether that log is a [Domain.ReadinessInput] — the
-	// tracker's, the knowledge base's and the chart's are; the identity
+	// tracker's and the knowledge base's are; the identity
 	// estate's and the vectors' are not — which is whether the grace is ALSO
 	// when this node's seats move. The alarm fires at the grace either way,
 	// because an upgrade is the remedy either way; what it may not do is tell
@@ -344,22 +344,23 @@ type Reading struct {
 	LinearizableReads, LinearizableReadsExpected int
 
 	// DanglingBindings is how many people this node's directory holds bound
-	// to a seat its org chart does not hold as a human one, and
+	// to a seat the company it applied does not hold as a human one, and
 	// DanglingBindingFor how long the OLDEST of them has persisted, with
 	// DanglingBindingSeat the seat it names — the half of the detail an
 	// operator acts on.
 	//
 	// A DURATION THIS NODE OBSERVED, NOT ONE A ROW STATES. Nothing records
-	// when a binding began to dangle: the residue is the product of two
-	// logs, and the moment it arose is the moment THIS node applied the
-	// later of a bind and a seat's removal, which no record carries. So
+	// when a binding began to dangle: the residue is the product of the
+	// identity log and the company revision, and the moment it arose is the
+	// moment THIS node applied the later of a bind and a revision that
+	// removed its seat, which no record carries. So
 	// the age is how long this node's own evaluations have kept finding
 	// the residue, from the first that found it to the latest — never a
 	// persistence nobody saw.
 	//
 	// It is what the stall grace is compared against, and that is the
 	// point of carrying a duration rather than a count: a bind and a
-	// removal racing, or a hire this node's chart applier has not reached
+	// removal racing, or a hire in a revision this node has not applied
 	// yet, is a residue for seconds, and alarming on its first sighting
 	// would page somebody for a state that was already clearing.
 	DanglingBindings    int
@@ -834,9 +835,10 @@ var table = []rule{
 	},
 	{
 		// A LEGAL RESIDUE, NAMED. The binding lives on the identity log
-		// and the seat on the chart's, and nothing orders the two: a
-		// bind and a seat's removal each pass their own decide and both
-		// land, and a node can apply a bind before the hire it names.
+		// and the seat in the company revision, and nothing orders the
+		// two: a bind checked against one revision and a revision that
+		// removes the seat can both land, and a node can apply a bind
+		// before the revision whose hire it names.
 		// Neither is corruption, and each is repaired by one record —
 		// but a person in either state is refused or held off on every
 		// request, so it is worth a page once it has outlived the
@@ -848,8 +850,8 @@ var table = []rule{
 		// in flight.
 		kind: KindBindingDangling,
 		fires: func(r Reading) (string, bool) {
-			return fmt.Sprintf("%d person(s) are bound to a seat this node's "+
-					"org chart does not hold as a human seat; the oldest, on "+
+			return fmt.Sprintf("%d person(s) are bound to a seat the company "+
+					"this node applied does not hold as a human seat; the oldest, on "+
 					"%q, has been for %s", r.DanglingBindings,
 					r.DanglingBindingSeat, spoken(r.DanglingBindingFor)),
 				r.DanglingBindings > 0 && r.DanglingBindingFor > StallGrace
@@ -857,8 +859,9 @@ var table = []rule{
 		remedy: "Run `crewlet iam check`, which names who and why. A seat that " +
 			"was removed or is not a human seat needs its person unbound " +
 			"(`crewlet iam unbind`) or bound to another (`crewlet iam bind`) — " +
-			"one record either way. A seat this node's chart has not reached " +
-			"yet is its chart applier: read `apply_lag` first.",
+			"one record either way. A seat in a revision this node has not " +
+			"applied yet is its apply status: read `applied_epoch` and " +
+			"`posture` on the node's `/health` first.",
 	},
 }
 

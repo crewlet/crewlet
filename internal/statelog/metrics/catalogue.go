@@ -413,7 +413,7 @@ func Catalogue() []Instrument {
 			Attributes: []string{"domain"},
 			Shows: "How much of the ceiling ordinary writes are held to is " +
 				"left — on every log that claims identity (the tracker, the " +
-				"pages, the org chart and the identity estate), the ceiling " +
+				"pages and the identity estate), the ceiling " +
 				"less the gate reserve kept above it for evictions. At zero the log " +
 				"refuses every write AND every linearizable read, and the " +
 				"remedy is a fleet-wide maintenance cycle, so this is the one " +
@@ -532,24 +532,6 @@ func Catalogue() []Instrument {
 				"drops a seat. Absent where the company configures no " +
 				"embeddings and while the corpus cannot be measured — an " +
 				"unreadable corpus is neither covered nor uncovered.",
-		},
-
-		// ---- the org chart --------------------------------------------
-		{
-			Name: ChartApplyDeclined, Kind: KindCounter, Unit: UnitCount,
-			Attributes: []string{"op", "reason"},
-			Shows: "Chart changes an apply declined to write, by what was " +
-				"declined (`place`, `create`, `move`, `set_lead`, `set_kind`, " +
-				"`set_manages`, `rename`, `content`) " +
-				"and why (`reserved`, `shape`, `removed`, `taken`, " +
-				"`identity`, `alias`, `present`, `absent`, `parent`). A " +
-				"decline is how " +
-				"a rule the write path could not see is held at the apply " +
-				"without stalling the log — every node reaches it " +
-				"identically — and the change it drops is one its writer was " +
-				"told had landed, so a rise here is a write somebody believes " +
-				"in that nothing holds. The log line beside it names the " +
-				"object and the record.",
 		},
 
 		// ---- the change feed ------------------------------------------

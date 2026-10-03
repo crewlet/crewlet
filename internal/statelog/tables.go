@@ -939,19 +939,18 @@ func (t tables) deferredBelow(ctx context.Context, tx *sql.Tx, s ScopeSet, below
 
 	// THE ROOTS ARE A ROW SET, NEVER A CHAIN OF `OR`s.
 	//
-	// A scope's roots are one per OBJECT the operation writes, so an import
-	// carries as many as the batch has members — five hundred, where the org
-	// chart caps one. Written as
+	// A scope's roots are one per OBJECT the operation writes, so a batch
+	// carries as many as it has members. Written as
 	// `... OR s.path = ? OR s.path LIKE ? ...` that is two chained terms per
 	// root, and a chained `OR` parses LEFT-DEEP: the expression tree's depth
 	// grows with the list. Turso refuses one past a hundred with
 	// `Parse error: Expression tree is too large (maximum depth 100)`, so a
-	// company file with fifty-odd seats failed its own boot seed — measured,
-	// with the whole chart lost and the node serving a company of nobody.
+	// batch of fifty-odd objects failed its own apply — measured, with the
+	// whole batch lost.
 	//
 	// A CTE of `SELECT ? UNION ALL …` is a compound SELECT rather than one
 	// expression, so its depth does not grow with the list: probed clean at
-	// a thousand prefixes, twice the largest batch this engine accepts.
+	// a thousand prefixes.
 	//
 	// The EXACT match stays an `IN` list, which is flat for the same reason
 	// and which the roots join: a root is both a path the query is about and
