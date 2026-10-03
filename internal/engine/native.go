@@ -1585,7 +1585,7 @@ type trackerWriter interface {
 
 	// RecordTurn is the one write the ENGINE makes as a seat rather than a
 	// tool: a turn's spend onto the task it was spent on. On both halves
-	// for the reason every tool's write is — see [Engine.recordTaskSpend].
+	// for the reason every tool's write is — see [Engine.recordTurnSpend].
 	RecordTurn(ctx context.Context, opID string, turn tracker.TurnRecord) (tracker.WriteResult, error)
 }
 
