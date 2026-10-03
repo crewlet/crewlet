@@ -882,12 +882,14 @@ func publishChart(ctx context.Context, boot *config.Bootstrap, t importTarget,
 // state was placed by the import record before the first of them went out.
 //
 // ONE DASHBOARD TAB'S QUERY ALLOWANCE, and not more: an import is one caller
-// against one node, and internal/store sizes that node's reader pool for two
-// tabs' worth of stream.MaxInFlightQueries. Each write takes one snapshot to
-// decide in, so at this bound an import occupies one tab's share of the pool
-// and leaves the other for whoever is watching while it runs. What a
+// against one node, and internal/store sizes that node's reader pool, at its
+// floor, as one tab's stream.MaxInFlightQueries in the sockets' half and the
+// same again for everything else. Each write takes one snapshot to decide in,
+// so at this bound an import holds no more of the pool than one tab may, and
+// leaves the rest for the seats and whoever is watching while it runs. What a
 // wider bound would buy is shorter imports of very large companies; what it
-// would cost is the dashboard queueing behind the import on a small host.
+// would cost is the engine's own reads and the dashboard queueing behind the
+// import on a small host.
 const chartContentWriters = stream.MaxInFlightQueries
 
 // contentWrite is one object's content write in an import.

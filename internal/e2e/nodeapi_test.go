@@ -251,6 +251,7 @@ func wireAPI(
 		Chart:        chartSurface,
 		QueueBackend: backends.Queue.Backend(),
 		EventLog:     backends.Store.Events(),
+		Readers:      backends.Store.Readers(),
 		Sources: queries.Sources{
 			// THE ENGINE'S OWN fleet reader, as cmd/crewlet wires it, so
 			// the node the harness serves answers history the way a real

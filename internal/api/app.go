@@ -323,6 +323,16 @@ type Options struct {
 	// company's state until it closed on its own.
 	Credentials CredentialFeed
 
+	// Readers is how many connections ordinary reads may hold at once on
+	// this node's store (store.DB.Readers), which the dashboard socket's
+	// queries together take at most half of, so the engine's own reads keep
+	// the rest — see internal/api/stream's query ceiling.
+	//
+	// REQUIRED, and never zero: the store beside the API always answers it,
+	// a ceiling of zero would run no socket query at all, and one derived
+	// here would be a second copy of the store's pool arithmetic.
+	Readers int
+
 	// State is the projection to serve. Nil builds an empty one.
 	State *livestate.LiveState
 
@@ -612,6 +622,10 @@ func New(opts Options) (*App, error) {
 		// the frames are pushed to.
 		Holders: opts.Sources.Holders,
 
+		// THE STORE'S READERS, of which every socket's queries together
+		// take at most half — see [stream.Options.Readers].
+		Readers: opts.Readers,
+
 		Now:            now,
 		HealthInterval: opts.HealthInterval,
 	})
@@ -818,6 +832,7 @@ func (o Options) missing() error {
 		{"Runtime", o.Runtime == nil},
 		{"Inbox", o.Inbox == nil},
 		{"Credentials", o.Credentials == nil},
+		{"Readers", o.Readers <= 0},
 		{"Sources.Company", o.Sources.Company == nil},
 		{"EventLog", o.EventLog == nil},
 		{"Sources.Events", o.Sources.Events == nil},

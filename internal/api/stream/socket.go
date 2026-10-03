@@ -433,7 +433,8 @@ func serveSocket(ctx context.Context, conn *websocket.Conn,
 	})
 	defer deciding.Wait()
 
-	code, reason := readLoop(ctx, conn, seats, client, query, who, svc.interval)
+	code, reason := readLoop(ctx, conn, seats, client, query, who, svc.interval,
+		svc.queries)
 
 	// Unregister closes the client's queue, which is what ends the writer.
 	svc.Hub().Unregister(client)
@@ -498,9 +499,11 @@ func writeLoop(ctx context.Context, conn *websocket.Conn, client *Client) {
 //
 // healthEvery is the shared tick's cadence, which is when a degraded posture
 // can next change — the hint a query refused on one carries.
+//
+// node is the ceiling every socket on this node shares — see [queryCeiling].
 func readLoop(ctx context.Context, conn *websocket.Conn,
 	seats *watching, client *Client, query Query, who *asking,
-	healthEvery time.Duration,
+	healthEvery time.Duration, node chan struct{},
 ) (websocket.StatusCode, string) {
 	// THIS SOCKET'S CONCURRENCY BOUND — see [MaxInFlightQueries] for why
 	// four, and why per socket. Queries run on their own goroutines so a
@@ -571,6 +574,17 @@ func readLoop(ctx context.Context, conn *websocket.Conn,
 			go func() {
 				defer running.Done()
 				defer func() { <-slots }()
+				// AND THE NODE'S CEILING, waited for HERE rather than
+				// on the reader: what holds it may be another socket's
+				// burst, and this socket's keepalive must not wait on
+				// that. A socket that closes while it waits runs
+				// nothing — there is nobody left to answer.
+				select {
+				case node <- struct{}{}:
+				case <-ctx.Done():
+					return
+				}
+				defer func() { <-node }()
 				// AS WHOEVER THE LAST DECISION SAID, not whoever
 				// opened the socket: a grant narrowed an hour ago must
 				// not still answer here. See lifetime.go.

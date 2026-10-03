@@ -79,6 +79,11 @@ func buildService(t *testing.T, opts stream.Options) *stream.Service {
 		// NO LEASE READ YET, which claims no seat is unplaced.
 		opts.Placement = func() (map[string]bool, error) { return map[string]bool{}, nil }
 	}
+	if opts.Readers == 0 {
+		// A STORE WIDE ENOUGH that no case meets the node's query ceiling
+		// unless it is about that ceiling and says how wide its store is.
+		opts.Readers = 64
+	}
 	s, err := stream.NewService(livestate.New(), opts)
 	if err != nil {
 		t.Fatalf("stream.NewService: %v", err)
@@ -101,7 +106,7 @@ func TestNewServiceRefusesEveryMissingFunctionByName(t *testing.T) {
 	}
 	for _, field := range []string{
 		"Health", "Posture", "Seats", "Roster", "Org", "Tools", "Schedules", "Placement",
-		"Chart", "Holders",
+		"Chart", "Holders", "Readers",
 	} {
 		if !strings.Contains(err.Error(), "Options."+field) {
 			t.Errorf("the refusal does not name Options.%s: %v", field, err)

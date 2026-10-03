@@ -1029,17 +1029,21 @@ process — the database engine is embedded, so a query is not a round trip to a
 server — and a connection that cannot get a core buys queue depth rather than
 concurrency. GOMAXPROCS is therefore the honest ceiling, and 8 is the floor
 because the dashboard's socket admits four concurrent queries **per socket**
-and a company is routinely watched from more than one tab — so the floor is
-two full dashboards. It was a flat `4` before: a number describing one socket,
+and every socket on the node together may hold at most **half** the readers —
+so the floor is one full tab in the sockets' half and the same again for the
+engine's own reads. It was a flat `4` before: a number describing one socket,
 on a host of any size, so three tabs offered twelve concurrent scans to a pool
 of four and the engine's own reads queued behind whichever four arrived first —
 on a 16-core node exactly as on a laptop. Nothing said so, and the only fix was
 to set this field by hand on every deployment that outgrew one tab.
 
-The **unit** is the socket, which is what the floor counts: a person with three
-tabs open offers twelve concurrent queries, which wait in the pool's own queue
-past its size, while the one read that must never wait behind them — resolving
-who is acting — runs on the connection reserved for it below. See
+**Half the readers is the sockets' ceiling.** Nothing bounds how many sockets
+a caller holding `state:read` opens, so the dashboard's queries together are
+held to half of what ordinary reads may hold — this pool less its reserve and
+its pinned writers — and the engine's own reads (a seat's tool lookups, the
+coverage probes, the `/health` body) keep the other half however many tabs are
+open. Past the ceiling a query waits at it rather than in this pool; raising
+this field raises the ceiling with it. See
 [Scaling Out § The socket's admission semaphore](../concepts/scaling.md#the-sockets-admission-semaphore).
 
 **The reserved connection is held, not merely counted.** Connections are handed
@@ -1059,7 +1063,9 @@ rather than being added to it, and at `1` nothing is held back at all (a
 backup's own single-connection handle is exactly that case — an identity read
 there queues with everybody else). Raise it if the `pool_starved` alarm fires —
 see [Alarms](../reference/alarms.md) — which means reads are queuing before
-they start.
+they start. A dashboard query waiting at the sockets' ceiling is not one of
+them: that is the ceiling keeping the engine's half free, and the alarm does
+not count it.
 
 The load-bearing tables:
 

@@ -118,6 +118,11 @@ type Service struct {
 	// arrives here: an identity move, a published company.
 	listeners listeners
 
+	// queries is the node's ceiling on every socket's queries together —
+	// see [queryCeiling]. The service holds it because it outlives every
+	// socket and is shared by all of them.
+	queries chan struct{}
+
 	// tokensDirty means a phase completed since the last rollup went out.
 	// Set on the publish path and cleared on the tick — see flushTokens.
 	tokensDirty atomic.Bool
@@ -140,12 +145,13 @@ type PlacementFunc func() (map[string]bool, error)
 
 // Options configure a service.
 //
-// Health, Posture, Seats, Roster, Org, Tools, Schedules, Placement, Chart and
-// Holders are REQUIRED, and [NewService] refuses a missing one by name. Each is something
-// the engine beside the API always answers, so a missing one is a wiring
-// mistake, and serving around it would push a confident answer where there is
-// none: a health frame reading "ok", an empty catalogue, an organization with
-// no seats, a lead told they may not watch their own report.
+// Health, Posture, Seats, Roster, Org, Tools, Schedules, Placement, Chart,
+// Holders and Readers are REQUIRED, and [NewService] refuses a missing one by
+// name. Each is something the engine beside the API always answers, so a
+// missing one is a wiring mistake, and serving around it would push a
+// confident answer where there is none: a health frame reading "ok", an empty
+// catalogue, an organization with no seats, a lead told they may not watch
+// their own report, a socket surface that never runs a query.
 type Options struct {
 	Health HealthFunc
 
@@ -219,6 +225,14 @@ type Options struct {
 	// without it would refuse every such watch as undecidable for the life
 	// of the process.
 	Holders iam.Holders
+
+	// Readers is how many connections ordinary reads may hold at once on
+	// this node's store (internal/store's DB.Readers), which every socket's
+	// queries together take at most half of — see [queryCeiling]. REQUIRED
+	// and never zero: a ceiling of zero runs no query at all, and a number
+	// this package derived for itself would be a second copy of the store's
+	// pool arithmetic, wrong the day `store.max_open_conns` moved.
+	Readers int
 }
 
 // NewService builds the fan-out over a projection, or refuses a missing
@@ -239,6 +253,7 @@ func NewService(state *livestate.LiveState, opts Options) (*Service, error) {
 		{"Chart", opts.Chart == nil},
 		{"Holders", opts.Holders == nil},
 		{"Placement", opts.Placement == nil},
+		{"Readers", opts.Readers <= 0},
 	} {
 		if field.absent {
 			missing = append(missing, "Options."+field.name)
@@ -264,6 +279,7 @@ func NewService(state *livestate.LiveState, opts Options) (*Service, error) {
 		placement: opts.Placement,
 		now:       opts.Now,
 		interval:  opts.HealthInterval,
+		queries:   make(chan struct{}, queryCeiling(opts.Readers)),
 	}
 	if s.now == nil {
 		s.now = func() time.Time { return time.Now().UTC() }

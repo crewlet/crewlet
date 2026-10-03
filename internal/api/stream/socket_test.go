@@ -764,16 +764,16 @@ func TestQueriesRunConcurrentlyUpToTheBound(t *testing.T) {
 }
 
 // EACH SOCKET HAS ITS OWN IN-FLIGHT BUDGET, and one tab's burst does not hold
-// back another's — the same person's included.
+// back another's — the same person's included — while the node has room.
 //
-// The bound is a tab's share of the reader pool, which internal/store sizes as
-// "two full dashboards at four queries each", so it is counted in the unit the
-// pool was sized in: a socket. It used to be shared by every socket one
-// principal held, which made a person's second tab wait on their first; what
-// keeps a burst from starving the engine is the store's reserved connection
-// for identity reads, not a cap spanning tabs. Two sockets presenting ONE
-// credential is the case: the first takes its whole budget and holds it, and
-// the second still runs its own four.
+// The bound is what one tab needs running at once, so it is counted per
+// socket. It used to be shared by every socket one principal held, which made
+// a person's second tab wait on their first while bounding the wrong thing:
+// what keeps sockets from starving the engine's own reads is the node's
+// ceiling on all of them together, the next case. Two sockets presenting ONE
+// credential is the case, on a store wide enough that the ceiling is not met:
+// the first takes its whole budget and holds it, and the second still runs its
+// own four.
 func TestEachSocketHasItsOwnInFlightBudget(t *testing.T) {
 	t.Parallel()
 	entered := make(chan struct{}, stream.MaxInFlightQueries*8)
@@ -826,6 +826,72 @@ func TestEachSocketHasItsOwnInFlightBudget(t *testing.T) {
 	case <-entered:
 		t.Errorf("more than %d queries ran on one socket", stream.MaxInFlightQueries)
 	case <-time.After(250 * time.Millisecond):
+	}
+}
+
+// EVERY SOCKET ON A NODE SHARES ONE CEILING, at half the store's readers, and
+// a socket waiting on it still answers its keepalive.
+//
+// Nothing bounds how many sockets a caller holding `state:read` opens, so
+// without a node-wide ceiling N sockets at four queries each take every reader
+// the store has and the engine's own reads — a seat's tool lookups, the
+// coverage probes, the /health body — queue behind them. Here the store has
+// two readers, so every socket together may run one query: a second socket's
+// query waits while the first runs, runs the moment it finishes, and the
+// waiting socket's ping is answered meanwhile because the wait is not on its
+// read loop.
+//
+// Mutation: drop the node's ceiling and both queries run at once.
+func TestEverySocketOnANodeSharesOneQueryCeiling(t *testing.T) {
+	t.Parallel()
+	entered := make(chan struct{}, 4)
+	release := make(chan struct{})
+	f := newSocketWith(t, nil, func(ctx context.Context, _ string, _ map[string]any) (any, error) {
+		entered <- struct{}{}
+		select {
+		case <-release:
+		case <-ctx.Done():
+		}
+		return nil, nil
+	}, stream.Options{Readers: 2})
+	defer close(release)
+
+	first, _, err := f.dial(t, "")
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	next(t, first)
+	second, _, err := f.dial(t, "")
+	if err != nil {
+		t.Fatalf("dial a second tab: %v", err)
+	}
+	next(t, second)
+
+	write(t, first, map[string]any{"kind": "query", "id": 1, "what": "events"})
+	select {
+	case <-entered:
+	case <-time.After(10 * time.Second):
+		t.Fatal("the first socket's query never ran")
+	}
+	write(t, second, map[string]any{"kind": "query", "id": 2, "what": "events"})
+	select {
+	case <-entered:
+		t.Fatal("a second socket's query ran beside the first on a node whose " +
+			"ceiling is one")
+	case <-time.After(250 * time.Millisecond):
+	}
+	// THE WAITING SOCKET STILL ANSWERS ITS KEEPALIVE, whatever pushes
+	// arrive first.
+	write(t, second, map[string]any{"kind": "ping"})
+	for kindOf(next(t, second)) != stream.KindPong {
+		// another push, read past
+	}
+
+	release <- struct{}{}
+	select {
+	case <-entered:
+	case <-time.After(10 * time.Second):
+		t.Fatal("the second socket's query never ran once the first finished")
 	}
 }
 

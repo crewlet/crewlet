@@ -1822,6 +1822,11 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 		// THIS NODE'S OWN event store, which the webhook edge writes the
 		// deliveries it accepts into.
 		EventLog: e.Backends().Store.Events(),
+		// AND HOW MANY OF ITS CONNECTIONS ordinary reads may hold, of
+		// which the dashboard socket's queries together take at most
+		// half, so a node full of open tabs still leaves its seats and
+		// its health probe the other half.
+		Readers: e.Backends().Store.Readers(),
 		// A question the read surface has no source for comes back
 		// unknown rather than empty, which is the difference between
 		// "this node has no event log" and "the company has done

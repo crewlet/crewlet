@@ -141,19 +141,22 @@ const (
 	// is anchored to the ONE component that reads this store concurrently
 	// with the engine writing it.
 	//
-	// EIGHT, which is two full dashboards: the socket's query channel
-	// admits four concurrent queries per SOCKET
-	// (internal/api/stream.MaxInFlightQueries), and a company is routinely
-	// watched from more than one tab. The two numbers are one decision
-	// stated twice, so a change to either is a change to both.
+	// EIGHT, which is one full dashboard tab and the same again for the
+	// engine: the socket's query channel admits four concurrent queries
+	// per SOCKET (internal/api/stream.MaxInFlightQueries), and every socket
+	// on the node together may hold at most HALF of [DB.Readers] — so at
+	// this floor one tab's four fit in the sockets' half and the engine's
+	// own reads (a seat's tool lookups, the coverage probes, the health
+	// body) keep the other four. The numbers are one decision stated
+	// twice, so a change to either is a change to both.
 	//
-	// More tabs than that offer more queries than the floor holds, and the
-	// surplus waits in this pool's own queue — which is safe because the
-	// one read that must never wait behind it, resolving who is acting,
-	// runs on the connection [identityReserve] keeps for it.
-	// The floor exists for the small host, where GOMAXPROCS is 1 or 2 and
-	// the derivation below would otherwise size the pool for the CPU and
-	// leave a single dashboard queueing against itself.
+	// More tabs than that wait at the sockets' ceiling rather than in this
+	// pool, which is what keeps the engine's half free of them; the one
+	// read that must never wait behind ANY burst, the engine's included —
+	// resolving who is acting — runs on the connection [identityReserve]
+	// keeps for it. The floor exists for the small host, where GOMAXPROCS
+	// is 1 or 2 and the derivation below would otherwise size the pool for
+	// the CPU and leave a single dashboard queueing against itself.
 	minReaderConns = 8
 
 	// identityReserve is how many of this pool's connections ordinary work
@@ -162,10 +165,9 @@ const (
 	//
 	// ONE. It is a reservation rather than extra headroom because headroom
 	// is exactly what a burst consumes: database/sql hands connections out
-	// first-come-first-served, so a socket storm — N tabs × four
-	// in-flight queries each, every one of them a scan — takes every
-	// connection and
-	// the identity read queues behind all of them. That inverts the
+	// first-come-first-served, so a burst — the sockets' half full of
+	// scans and the engine's own reads taking the rest — takes every
+	// connection and the identity read queues behind all of them. That inverts the
 	// dependency: the reads that are waiting are the ones identity has to
 	// clear, so the queue feeds itself, exactly as the reader/writer loop
 	// [Writer] exists to break does. One connection is enough because an
@@ -194,9 +196,10 @@ const (
 // watched from three tabs offered twelve concurrent scans to a pool of four,
 // and the engine's own reads — a seat's tool lookups, the coverage probes, the
 // health body — queued behind whichever eight of them arrived first. (Three
-// tabs still offer twelve, and the surplus over the pool still queues — but
-// no longer in front of the identity reads, which run on the connection
-// [identityReserve] keeps.) Worse, it
+// tabs still offer twelve, but every socket on a node together now holds at
+// most half of [DB.Readers], so the surplus waits at the sockets' ceiling and
+// the engine's reads keep the other half; the identity reads run on the
+// connection [identityReserve] keeps.) Worse, it
 // did not move with the machine: a 16-core node ran the same four connections
 // as a laptop, so the one knob that would have fixed it (`store.max_open_conns`)
 // had to be set by hand on every deployment that outgrew one tab, and nothing
@@ -218,6 +221,44 @@ const (
 // [Options.forEstate] for the arithmetic and [DB.admit] for what enforces it.
 func defaultReaderConns() int {
 	return max(minReaderConns, runtime.GOMAXPROCS(0))
+}
+
+// Readers is how many connections ORDINARY reads may hold at once on this
+// node's store: each estate's pool less the connections somebody else holds —
+// its pinned writers and the identity reserve — and, on the node handle, the
+// smaller of its own and its replicated peer's, because a reader of this node
+// reads both files.
+//
+// IT EXISTS FOR WHOEVER BOUNDS A SHARE OF IT. The dashboard socket's queries
+// are the one reader population an outside caller drives, so the API caps them
+// at a share of this number (internal/api/stream's query ceiling) and the
+// engine's own reads keep the rest; a share computed from the configuration
+// instead would be a second copy of [Options.forEstate]'s arithmetic, and
+// would be wrong the day `store.max_open_conns` or a pin count moved.
+//
+// NEVER BELOW ONE: a handle with no connection left for ordinary reads serves
+// nobody, and a caller sizing a share from zero would admit nothing at all.
+func (d *DB) Readers() int {
+	n := d.ownReaders()
+	if peer := d.replicated.Load(); peer != nil {
+		n = min(n, peer.ownReaders())
+	}
+	return max(n, 1)
+}
+
+// ownReaders is [DB.Readers] for this handle alone.
+func (d *DB) ownReaders() int {
+	d.pins.mu.Lock()
+	pins := d.pins.declared
+	d.pins.mu.Unlock()
+	d.reserve.mu.Lock()
+	held := d.reserve.held
+	d.reserve.mu.Unlock()
+	n := d.pool - pins
+	if held {
+		n -= identityReserve
+	}
+	return n
 }
 
 // Options configures Open. The zero value is valid.

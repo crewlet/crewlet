@@ -43,6 +43,42 @@ func TestTheReaderPoolIsDerivedFromTheMachineAndKeepsItsFloor(t *testing.T) {
 	}
 }
 
+// TestReadersIsWhatOrdinaryReadsMayHoldOnBothEstates.
+//
+// The dashboard socket's queries are capped at a share of this number so the
+// engine's own reads keep the rest, so it has to be the number ordinary reads
+// can actually hold: each estate's pool less what somebody else holds — the
+// replicated estate's pinned writers, each estate's identity reserve — and
+// the SMALLER of the two estates, since a reader of this node reads both. A
+// share of the configured pool instead would hand the sockets the pins and the
+// reserve too, and leave the engine's reads less than it promised.
+func TestReadersIsWhatOrdinaryReadsMayHoldOnBothEstates(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name string
+		opts Options
+		want int
+	}{
+		{"the derived pool: the readers it was derived for",
+			Options{PinnedWriters: 1}, defaultReaderConns()},
+		{"a fixed pool: the replicated estate's pins and both reserves come out",
+			Options{MaxOpenConns: 6, PinnedWriters: 2}, 3},
+		{"no room for the replicated estate's reserve: it does not come out",
+			Options{MaxOpenConns: 2, PinnedWriters: 1}, 1},
+	} {
+		db, err := Open(t.Context(), filepath.Join(t.TempDir(), "node.db"), tc.opts)
+		if err != nil {
+			t.Fatalf("%s: open: %v", tc.name, err)
+		}
+		if got := db.Readers(); got != tc.want {
+			t.Errorf("%s: Readers() = %d, want %d", tc.name, got, tc.want)
+		}
+		if err := db.Close(); err != nil {
+			t.Errorf("%s: close: %v", tc.name, err)
+		}
+	}
+}
+
 // TestTheReserveIsSkippedWhereThereIsNoRoomForIt.
 //
 // A handle opened at one connection owns its own arithmetic and has to be able
