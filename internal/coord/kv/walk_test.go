@@ -122,16 +122,17 @@ func openFleetForTest(t *testing.T, nc *nats.Conn, prefix string) *FleetStore {
 func openFleetVia(t *testing.T, client jetstream.JetStream, prefix string) *FleetStore {
 	t.Helper()
 	store, err := OpenFleet(context.Background(), client, FleetConfig{
-		BucketPrefix:    prefix,
-		RateWindow:      time.Minute,
-		ClaimTTL:        10 * time.Minute,
-		LedgerRetention: 10 * time.Minute,
-		FireRetention:   10 * time.Minute,
-		FollowRetention: 10 * time.Minute,
-		RebaseRetention: 10 * time.Minute,
-		CooldownMax:     time.Hour,
-		BudgetRetention: time.Hour,
-		StatusFreshness: 10 * time.Minute,
+		BucketPrefix:     prefix,
+		RateWindow:       time.Minute,
+		ClaimTTL:         10 * time.Minute,
+		LedgerRetention:  10 * time.Minute,
+		FireRetention:    10 * time.Minute,
+		FollowRetention:  10 * time.Minute,
+		RebaseRetention:  10 * time.Minute,
+		CooldownMax:      time.Hour,
+		BudgetRetention:  time.Hour,
+		StatusFreshness:  10 * time.Minute,
+		CustodyRetention: 10 * time.Minute,
 	})
 	if err != nil {
 		t.Fatalf("OpenFleet: %v", err)
@@ -1129,8 +1130,9 @@ func TestAKeyThePassLostIsReadBackOnTheEmbeddedFleetsDomain(t *testing.T) {
 		RateWindow:   time.Minute, ClaimTTL: 10 * time.Minute,
 		LedgerRetention: 10 * time.Minute, FireRetention: 10 * time.Minute,
 		FollowRetention: 10 * time.Minute, BudgetRetention: time.Minute, CooldownMax: time.Hour,
-		RebaseRetention: 10 * time.Minute,
-		StatusFreshness: 10 * time.Minute,
+		RebaseRetention:  10 * time.Minute,
+		StatusFreshness:  10 * time.Minute,
+		CustodyRetention: 10 * time.Minute,
 	})
 	if err != nil {
 		t.Fatalf("OpenFleet: %v", err)

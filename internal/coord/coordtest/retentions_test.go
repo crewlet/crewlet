@@ -8,6 +8,7 @@ import (
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/schedule"
 	"github.com/crewlet/crewlet/internal/statelog"
+	"github.com/crewlet/crewlet/internal/store"
 )
 
 // The retentions have to stay consistent with the cadences they are sized
@@ -66,6 +67,17 @@ func TestTheRetentionsOutlastWhatTheyCover(t *testing.T) {
 	if coord.RebaseRetention != statelog.OpsRetention {
 		t.Errorf("coord.RebaseRetention %v has drifted from statelog.OpsRetention %v",
 			coord.RebaseRetention, statelog.OpsRetention)
+	}
+
+	// A custody record names the data node that keeps a stateless node's
+	// batch, and a node that never learned whether it kept one asks it
+	// later. Aged out while the batch's rows are still in the event log, it
+	// answers that nobody keeps the batch, and the asking node keeps a
+	// second copy of what another node holds.
+	if coord.CustodyRetention <= store.EventRetention {
+		t.Errorf("coord.CustodyRetention %v can age out the keeper of a batch whose "+
+			"rows the event log still holds (%v), so a node keeps a second copy",
+			coord.CustodyRetention, store.EventRetention)
 	}
 
 	// The thread-follow horizon is the one here that is not sized from

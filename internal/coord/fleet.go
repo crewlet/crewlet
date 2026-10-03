@@ -143,6 +143,23 @@ const (
 	// costs a record nobody reads.
 	BudgetRetention = 32 * 24 * time.Hour
 
+	// CustodyRetention is how long the record of which data node keeps a
+	// batch of a stateless node's event records lasts — see [Custody] —
+	// and so the bucket's age.
+	//
+	// A DAY PAST THE EVENT LOG'S OWN RETENTION (store.EventRetention). A
+	// node that wrote a batch and never learned whether it kept it asks
+	// this record later — at its next pass, or at boot after a crash — and
+	// a record aged out while the batch's rows were still in the log would
+	// answer that nobody keeps it, so the node would keep a second copy of
+	// a batch another node already holds. The rows go at the event log's
+	// retention, so a record that outlives them by a day — the sweep's
+	// slack — is never asked about a batch it no longer describes. Longer
+	// keeps a record per batch nobody can ask about. This package cannot
+	// import the store, so coordtest's retention guard holds the two
+	// together.
+	CustodyRetention = 32 * 24 * time.Hour
+
 	// SandboxRunRetention is absent for the same reason as the channel
 	// bucket's, one step sharper: a detached coding run can sit parked on
 	// a person's answer for DAYS (see sandbox.StatusAwaiting), and its
@@ -691,6 +708,38 @@ type Fires interface {
 	ClaimFire(ctx context.Context, key string, at time.Time) (bool, error)
 }
 
+// Custody decides which data node keeps each batch of a stateless node's event
+// records (ADR-0025).
+//
+// # Why the whole company has to agree on it
+//
+// A node without `data` keeps no event log of its own, so it publishes its
+// records in batches onto one durable topic and the data nodes take them from
+// one fleet-wide group, each writing what it takes into its own log. A group
+// delivers a batch whose acknowledgement was lost AGAIN, to whichever member
+// asks next — so without a decision a batch can land in two logs, and every
+// figure derived from a node's own log counts it twice: the usage domain sums
+// each node's day, so a stateless node's spend would be billed once per data
+// node that happened to write it.
+//
+// # Create-only, written AFTER the rows, and the loser deletes
+//
+// A data node writes a batch into its own log first and claims it second:
+// whoever creates the key keeps the batch, and any other node that wrote it
+// deletes its copy. The other order — claim, then write — leaves a claimant
+// that died between the two holding a batch nobody wrote. In this order the
+// worst a crash leaves is a written copy whose claim is unknown, which the
+// node settles the same way on its next pass, and a batch is acknowledged only
+// once its keeper is decided, so the group keeps offering it until then.
+type Custody interface {
+	// ClaimCustody records node as the keeper of batch unless a keeper is
+	// already recorded, and answers the keeper: node itself, or the node
+	// that claimed first. An error is the third answer — the store could
+	// not say — and the caller must neither keep nor delete its copy on
+	// it.
+	ClaimCustody(ctx context.Context, batch, node string) (string, error)
+}
+
 // Rebases is the fleet's record of the instant a unit of work's derived
 // operation ids are minted at, for the work whose own start is too old for the
 // operation ledger to vouch for.
@@ -1104,6 +1153,7 @@ type Fleet interface {
 	BackupRegister
 	MaintenanceRegister
 	Markers
+	Custody
 }
 
 // ObjectMapRecord is the fleet's object placement map as the store holds it.

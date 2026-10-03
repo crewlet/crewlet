@@ -360,7 +360,7 @@ func createKeyValue(ctx context.Context, js jetstream.JetStream, clustered bool,
 
 // The fleet-shared state on JetStream KV.
 //
-// # Why EIGHTEEN buckets and not one
+// # Why NINETEEN buckets and not one
 //
 // The package doc records the constraint this whole file is shaped by: a
 // bucket's TTL is its stream's MaxAge, and jetstream.KeyTTL is create-only —
@@ -430,6 +430,11 @@ func createKeyValue(ctx context.Context, js jetstream.JetStream, clustered bool,
 //	           beside the object map because it is WATCHED by every node,
 //	           and a watch over a bucket holding one record delivers that
 //	           record and nothing else
+//	custody    a day past the event log's own retention, thirty-two days:
+//	           the record names which data node keeps a stateless node's
+//	           batch, and a node that wrote one and never learned whether it
+//	           kept it asks later — so the record has to outlive every row
+//	           it can be asked about, and nothing longer
 //	positions  none at all, and this is the one where an age would be
 //	           worst: a node's position is what the trim reads to decide
 //	           what every other node may delete, and a key that expired
@@ -467,6 +472,7 @@ const (
 	mailboxesSuffix    = "_mailboxes"
 	objectsSuffix      = "_objects"
 	estateSuffix       = "_estate_map"
+	custodySuffix      = "_custody"
 	activationKey      = "activation"
 	// payloadKey holds the CURRENT revision's sealed body, in the same
 	// bucket as the pointer and for the same reason: neither may expire,
@@ -530,6 +536,10 @@ type FleetConfig struct {
 	// StatusFreshness is how long a node's apply status counts as current.
 	StatusFreshness time.Duration
 
+	// CustodyRetention is how long the record of which data node keeps a
+	// stateless node's batch is kept — see [coord.CustodyRetention].
+	CustodyRetention time.Duration
+
 	// Replicas is the JetStream replica count for every bucket.
 	Replicas int
 
@@ -568,6 +578,7 @@ func (c *FleetConfig) normalize() error {
 		{"CooldownMax", c.CooldownMax},
 		{"BudgetRetention", c.BudgetRetention},
 		{"StatusFreshness", c.StatusFreshness},
+		{"CustodyRetention", c.CustodyRetention},
 	}
 	for _, field := range required {
 		switch {
@@ -607,6 +618,7 @@ type FleetStore struct {
 	mailboxes    jetstream.KeyValue
 	objects      jetstream.KeyValue
 	estate       jetstream.KeyValue
+	custody      jetstream.KeyValue
 
 	// positions is the register every ageless key class the fleet still
 	// composes shares: a node's log positions, a trim hold, a backup point,
@@ -656,7 +668,7 @@ var _ coord.Fleet = (*FleetStore)(nil)
 // The buckets below are opened one after another and each takes its own
 // provisioning budget, so without a ceiling the real bound on this call is the
 // PRODUCT rather than the term: a wedged cluster is rediscovered once per
-// bucket, eighteen buckets in a row, and a boot that nobody meant to allow ten
+// bucket, nineteen buckets in a row, and a boot that nobody meant to allow ten
 // minutes gets it. Nothing declared that number, which is the shape of a limit
 // that is not a decision. [jsprovision.SequenceBudget] is the decision,
 // applied once here.
@@ -743,6 +755,9 @@ func OpenFleet(ctx context.Context, js jetstream.JetStream, cfg FleetConfig) (*F
 			"Crewlet object placement map; NO TTL — an expired map is a fleet with nowhere to put anything", 0},
 		{&store.estate, estateSuffix,
 			"Crewlet estate map; NO TTL — an expired map is an estate nobody holds", 0},
+		{&store.custody, custodySuffix,
+			"Crewlet stateless-node event custody; the bucket TTL outlasts the event log's retention",
+			cfg.CustodyRetention},
 		{&store.positions, positionsSuffix,
 			"Crewlet per-node state-log positions; NO TTL — an expired position reads as a node that applied nothing", 0},
 	} {
@@ -2339,6 +2354,63 @@ func (f *FleetStore) ClaimFire(ctx context.Context, key string, at time.Time) (b
 // reads it out of the bucket — and nothing branches on it.
 type fireRecord struct {
 	At time.Time `json:"at"`
+}
+
+// ---- the custody claims ----------------------------------------------- //
+
+// custodyRecord is one batch's keeper on the wire. The instant is diagnostic,
+// and nothing branches on it.
+type custodyRecord struct {
+	Node string    `json:"node"`
+	At   time.Time `json:"at"`
+}
+
+// ClaimCustody records node as the keeper of batch unless one is recorded,
+// answering the keeper.
+//
+// A refused create is read back FROM THE LEADER ([FleetStore.get]): the key
+// exists, and a replica behind the create would answer that it does not, so a
+// caller would be told nobody keeps a batch somebody does — and keep a second
+// copy. A key that has gone between the refusal and the read — aged out, which
+// needs a month — is created again rather than answered, a bounded number of
+// times.
+func (f *FleetStore) ClaimCustody(ctx context.Context, batch, node string) (string, error) {
+	if batch == "" || node == "" {
+		return "", errors.New("coord/kv: a custody claim needs a batch and a node")
+	}
+	raw, err := json.Marshal(custodyRecord{Node: node, At: time.Now().UTC()})
+	if err != nil {
+		return "", fmt.Errorf("coord/kv: encode the custody claim: %w", err)
+	}
+	key := encodeKey(batch)
+	for range fleetCASRetries {
+		_, err = f.create(ctx, f.custody, key, raw)
+		switch {
+		case err == nil:
+			return node, nil
+		case !errors.Is(err, jetstream.ErrKeyExists):
+			return "", unavailable("claim custody of batch "+batch, err)
+		}
+		entry, err := f.get(ctx, f.custody, key)
+		switch {
+		case errors.Is(err, jetstream.ErrKeyNotFound):
+			continue
+		case err != nil:
+			return "", unavailable("read the keeper of batch "+batch, err)
+		}
+		// RAISED, never answered as a keeper: a record that cannot be read,
+		// or names nobody, cannot decide whose copy goes, and guessing
+		// either way loses the batch or keeps it twice.
+		var held custodyRecord
+		if err := json.Unmarshal(entry.Value(), &held); err != nil {
+			return "", fmt.Errorf("coord/kv: the keeper of batch %s is unreadable: %w", batch, err)
+		}
+		if held.Node == "" {
+			return "", fmt.Errorf("coord/kv: the keeper of batch %s names no node", batch)
+		}
+		return held.Node, nil
+	}
+	return "", contended("ClaimCustody", batch)
 }
 
 // ---- the rebases -------------------------------------------------------- //

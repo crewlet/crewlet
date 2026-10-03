@@ -475,8 +475,9 @@ func TestAnUndecodableSecretIsRaisedNotSkipped(t *testing.T) {
 		LedgerRetention: time.Minute, FireRetention: time.Minute,
 		FollowRetention: time.Minute, RebaseRetention: time.Minute,
 		CooldownMax: time.Minute, StatusFreshness: time.Minute,
-		BudgetRetention: time.Minute,
-		BucketPrefix:    prefix,
+		CustodyRetention: time.Minute,
+		BudgetRetention:  time.Minute,
+		BucketPrefix:     prefix,
 	})
 	if err != nil {
 		t.Fatalf("OpenFleet: %v", err)
@@ -1117,8 +1118,9 @@ func openFleet(t *testing.T, nc *nats.Conn) *FleetStore {
 		LedgerRetention: time.Minute, FireRetention: time.Minute,
 		FollowRetention: time.Minute, RebaseRetention: time.Minute,
 		CooldownMax: time.Minute, StatusFreshness: time.Minute,
-		BudgetRetention: time.Minute,
-		BucketPrefix:    fmt.Sprintf("f%d", bucketSeq.Add(1)),
+		CustodyRetention: time.Minute,
+		BudgetRetention:  time.Minute,
+		BucketPrefix:     fmt.Sprintf("f%d", bucketSeq.Add(1)),
 	})
 	if err != nil {
 		t.Fatalf("OpenFleet: %v", err)

@@ -39,6 +39,7 @@ type Fleet struct {
 	channels     map[string]coord.Channel
 	follows      map[string]followEntry
 	fires        map[string]time.Time
+	custody      map[string]string
 	rebases      map[string]rebaseEntry
 	runs         map[string]coord.Record
 	secrets      map[string]coord.SecretRecord
@@ -108,6 +109,7 @@ func NewFleet() *Fleet {
 		channels:     map[string]coord.Channel{},
 		follows:      map[string]followEntry{},
 		fires:        map[string]time.Time{},
+		custody:      map[string]string{},
 		rebases:      map[string]rebaseEntry{},
 		runs:         map[string]coord.Record{},
 		secrets:      map[string]coord.SecretRecord{},
@@ -629,6 +631,24 @@ func (f *Fleet) ClaimFire(_ context.Context, key string, at time.Time) (bool, er
 	}
 	f.fires[key] = at.UTC()
 	return true, nil
+}
+
+// ---- the custody claims ----------------------------------------------- //
+
+// ClaimCustody records node as the keeper of batch unless one is recorded,
+// answering the keeper. The bucket's age is not modelled, for the completion
+// ledger's reason.
+func (f *Fleet) ClaimCustody(_ context.Context, batch, node string) (string, error) {
+	if batch == "" || node == "" {
+		return "", errors.New("coord/memory: a custody claim needs a batch and a node")
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if held, ok := f.custody[batch]; ok {
+		return held, nil
+	}
+	f.custody[batch] = node
+	return node, nil
 }
 
 // ---- the rebases -------------------------------------------------------- //

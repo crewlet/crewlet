@@ -540,17 +540,18 @@ func attachCoordination(ctx context.Context, b *config.Bootstrap, out *Backends,
 // the subsystem that reads it already uses, named at its own package.
 func openFleet(ctx context.Context, js natsjs.JetStream, replicas int, clustered bool) (coord.Fleet, error) {
 	return kv.OpenFleet(ctx, js, kv.FleetConfig{
-		RateWindow:      coord.RateWindow,
-		ClaimTTL:        coord.ClaimTTL,
-		LedgerRetention: coord.LedgerRetention,
-		FireRetention:   coord.FireRetention,
-		FollowRetention: coord.FollowRetention,
-		RebaseRetention: coord.RebaseRetention,
-		CooldownMax:     coord.CooldownMax,
-		BudgetRetention: coord.BudgetRetention,
-		StatusFreshness: coord.StatusFreshness,
-		Replicas:        replicas,
-		Clustered:       clustered,
+		RateWindow:       coord.RateWindow,
+		ClaimTTL:         coord.ClaimTTL,
+		LedgerRetention:  coord.LedgerRetention,
+		FireRetention:    coord.FireRetention,
+		FollowRetention:  coord.FollowRetention,
+		RebaseRetention:  coord.RebaseRetention,
+		CooldownMax:      coord.CooldownMax,
+		BudgetRetention:  coord.BudgetRetention,
+		StatusFreshness:  coord.StatusFreshness,
+		CustodyRetention: coord.CustodyRetention,
+		Replicas:         replicas,
+		Clustered:        clustered,
 	})
 }
 
