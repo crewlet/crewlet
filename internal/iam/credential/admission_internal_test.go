@@ -128,31 +128,50 @@ func TestARehashNeverQueuesForTheCap(t *testing.T) {
 // A slot a finishing derivation frees goes to a request already waiting for
 // it; a rewrite nobody waits on that took it instead would push the sign-in
 // behind it back by a derivation, under exactly the load the cap exists for.
+// The property is about the INSTANT of release, so the case asks for the slot
+// at that instant: the slot is given back and the rehash asks for it in the
+// same goroutine with nothing between them, before the waiter has been
+// scheduled at all. That it is refused is Go's own hand-off — a receive from a
+// full buffered channel moves a blocked sender's value into the buffer under
+// the channel's lock — so the correct cap refuses it every time.
 //
-// Mutation: release a slot by draining it into a free pool the rehash can see
-// before the waiter does, and a rehash fired at the moment of release derives.
+// Mutation: wait for a slot by polling it rather than by blocking on the send
+// — a free pool the rehash can see before the waiter does — and the rehash
+// derives in the slot the waiter was owed.
 func TestARehashNeverTakesAFreedSlotFromAWaiter(t *testing.T) {
 	t.Parallel()
 	g := newGated(t, 1)
-	running := g.verifyIn(t.Context(), "running")
-	g.begun(t)
+	const rewrite = "a rewrite nobody waits on"
+	gate := g.work
+	g.work = func(password string, salt []byte, params Params) []byte {
+		if password == rewrite { // RECORDED, AND NEVER HELD
+			g.started <- password
+			return make([]byte, params.KeyLen)
+		}
+		return gate(password, salt, params)
+	}
+
+	release, err := g.take(t.Context()) // THE ONLY SLOT, HELD BY HAND
+	if err != nil {
+		t.Fatalf("an empty cap had no slot: %v", err)
+	}
 	waiting := g.verifyIn(t.Context(), "waiting")
 	g.idle(t, "with the cap held, the waiter")
 
-	g.finish <- struct{}{} // THE SLOT FREES, AND THE WAITER HAS IT
-	if err := <-running; err != nil {
-		t.Fatal(err)
+	release() // THE SLOT FREES — AND AT THAT INSTANT A REHASH ASKS FOR IT
+	if _, err := g.Rehash(rewrite); !errors.Is(err, ErrSaturated) {
+		t.Fatalf("a rehash at the instant a slot freed answered %v, want %v — "+
+			"the slot was the waiting sign-in's", err, ErrSaturated)
 	}
 	if got := g.begun(t); got != "waiting" {
 		t.Fatalf("the freed slot went to %q, want the waiter", got)
 	}
-	if _, err := g.Rehash("a rewrite nobody waits on"); !errors.Is(err, ErrSaturated) {
-		t.Fatalf("a rehash with the freed slot already the waiter's answered %v, "+
-			"want %v", err, ErrSaturated)
-	}
 	g.finish <- struct{}{}
 	if err := <-waiting; err != nil {
 		t.Fatal(err)
+	}
+	if held := g.held(); held != 0 {
+		t.Errorf("after the waiter finished, %d slots are held", held)
 	}
 }
 
