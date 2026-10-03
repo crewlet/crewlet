@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"sync"
+	"time"
 
 	"github.com/crewlet/crewlet/internal/chart"
 	"github.com/crewlet/crewlet/internal/config"
@@ -490,6 +491,29 @@ func (e *Engine) AnyPerson(ctx context.Context) (bool, error) {
 		return false, fmt.Errorf("%w: %w", statelog.ErrUnavailable, err)
 	}
 	return c.iamReader.AnyPerson(ctx, end)
+}
+
+// SessionStanding is who holds one named session and whether this node's rows
+// hold it live — the question a named sign-out asks — with "nobody holds it"
+// PROVED against the identity log's end, which is read first
+// ([iamdomain.Reader.SessionStanding]).
+//
+// PROVED for [Engine.AnyPerson]'s reason: a session opened through a peer is a
+// row this node holds only once its applier catches up, and read bare its
+// absence told an administrator ending a stolen laptop's session that it had
+// ended. A log end this node cannot read is the unknown arm too.
+func (e *Engine) SessionStanding(ctx context.Context, lineage string,
+	now time.Time) (string, bool, error) {
+
+	c := e.core.Load()
+	if c == nil {
+		return "", false, errNoCoreRuntime
+	}
+	end, err := e.IdentityLogEnd(ctx)
+	if err != nil {
+		return "", false, fmt.Errorf("%w: %w", statelog.ErrUnavailable, err)
+	}
+	return c.iamReader.SessionStanding(ctx, lineage, now, end)
 }
 
 // IAMWriter is this node's identity write side, or nil on an engine with no

@@ -464,7 +464,11 @@ func (s *Service) LogoutOne(w http.ResponseWriter, r *http.Request) {
 	if owner == "" {
 		// ABSENT IS NOT AN ERROR HERE. A session that has already ended
 		// is exactly what the caller asked for, and a 404 would send
-		// somebody looking for a session they successfully closed.
+		// somebody looking for a session they successfully closed. It is
+		// an absence the directory PROVED against the identity log's end
+		// ([Directory.SessionStanding]): read bare, a node that had not
+		// applied the session's start answered `ended` about a session
+		// still running, and wrote nothing.
 		//
 		// IT IS NOT THE ANSWER A SESSION SOMEBODY ELSE HOLDS GETS BELOW,
 		// which is the table's refusal, so the difference says a lineage

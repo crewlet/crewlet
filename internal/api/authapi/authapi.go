@@ -157,12 +157,17 @@ type Directory interface {
 	// somebody has been invited.
 	InvitationByID(ctx context.Context, id string) (iamdomain.InvitationRow, error)
 
-	// SessionStanding is who holds one session, or empty for a lineage this
-	// node does not hold, and whether this node's rows still hold it LIVE.
-	// It is what makes ending a NAMED session a check against this node's
-	// own rows rather than a claim the caller made — and what keeps a
-	// session a record already ended from being ended, and announced,
-	// again.
+	// SessionStanding is who holds one session, or empty for a lineage
+	// nobody holds, and whether this node's rows still hold it LIVE. It is
+	// what makes ending a NAMED session a check against this node's own
+	// rows rather than a claim the caller made — and what keeps a session a
+	// record already ended from being ended, and announced, again.
+	//
+	// EMPTY IS PROVED, never read bare: a lineage these rows hold no record
+	// of is nobody's only where they hold every record the identity log
+	// does, and otherwise the answer is an error — a node behind the log is
+	// missing the row of a session that is still running, and "ended" would
+	// be a lie about it. See [iamdomain.Reader.SessionStanding].
 	SessionStanding(ctx context.Context, lineage string, now time.Time) (
 		owner string, live bool, err error)
 }

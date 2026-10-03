@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -162,6 +163,72 @@ func TestTheEstateSaysWhetherAnybodyIsEnrolled(t *testing.T) {
 	if !held {
 		t.Error("an estate holding a person reports itself empty, so its " +
 			"operator goes on being told nobody is in")
+	}
+}
+
+// A NAMED SESSION THESE ROWS DO NOT HOLD IS NOBODY'S ONLY WHERE THEY HOLD THE
+// WHOLE LOG.
+//
+// A named sign-out answers "ended" for a lineage nobody holds — the session is
+// over, or never was. On rows that have not applied the session's start that
+// was a session still running reported closed, with nothing written: an
+// administrator ending a stolen laptop's session on a node behind the one that
+// listed it was told it was done. So the absence is proved against the log's
+// end, read first, exactly as [iamdomain.Reader.AnyPerson]'s "nobody" is. The
+// controls: a held session is answered whatever the end, live and then over,
+// and a lineage nobody opened is nobody's on rows that hold the whole log.
+//
+// Mutation: drop the proof from the absent arm and the behind case answers
+// ("", false, nil).
+func TestANamedSessionTheseRowsDoNotHoldIsNobodysOnlyWhereTheyHoldTheLog(t *testing.T) {
+	t.Parallel()
+	rig := newWriteRig(t)
+	reader := rig.reader(t)
+	person := uuid.New().String()
+	if err := rig.enrol(iamdomain.Enrolment{
+		PersonID: person, Kind: iam.KindPerson, Stage: iam.StageActive,
+		Name: "Sarah Chen", Email: "sarah.chen@example.com",
+		Login: "sarah.chen", OpID: "enrol-sarah", Reason: "the joiner",
+	}); err != nil {
+		t.Fatalf("enrol: %v", err)
+	}
+	wall := time.Now().UTC()
+	held := rig.openSession(person, wall.Add(24*time.Hour))
+	end, err := rig.end(t.Context())
+	if err != nil {
+		t.Fatalf("read the log's end: %v", err)
+	}
+	behind, err := rig.behind(t.Context())
+	if err != nil {
+		t.Fatalf("read the log's end: %v", err)
+	}
+
+	for _, at := range []uint64{end, behind} {
+		owner, live, err := reader.SessionStanding(t.Context(), held, wall, at)
+		if err != nil || owner != person || !live {
+			t.Errorf("a held session against end %d answered (%q, %v, %v), "+
+				"want its owner, live", at, owner, live, err)
+		}
+	}
+	nobody := uuid.Must(uuid.NewV7()).String()
+	if owner, live, err := reader.SessionStanding(t.Context(), nobody, wall,
+		end); err != nil || owner != "" || live {
+		t.Errorf("a lineage nobody opened, on rows holding the whole log, "+
+			"answered (%q, %v, %v), want nobody's", owner, live, err)
+	}
+	owner, live, err := reader.SessionStanding(t.Context(), nobody, wall, behind)
+	if !errors.Is(err, iamdomain.ErrNotCurrent) ||
+		!errors.Is(err, statelog.ErrUnavailable) || owner != "" || live {
+		t.Errorf("a lineage these rows do not hold, on rows behind the log, "+
+			"answered (%q, %v, %v), want the unknown arm — the record they "+
+			"have not applied may be that session's start", owner, live, err)
+	}
+
+	rig.closeSession(person, held, "logout")
+	if owner, live, err := reader.SessionStanding(t.Context(), held, wall,
+		end); err != nil || owner != person || live {
+		t.Errorf("an ended session answered (%q, %v, %v), want its owner, "+
+			"not live", owner, live, err)
 	}
 }
 

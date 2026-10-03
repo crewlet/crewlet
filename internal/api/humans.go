@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/crewlet/crewlet/internal/agent/builtin"
 	"github.com/crewlet/crewlet/internal/agent/colleague"
@@ -186,7 +187,11 @@ func signInSurface(boot *config.Bootstrap, e *engine.Engine) (
 	}
 	surface, err := authapi.New(authapi.Options{
 		Bootstrap: boot,
-		Directory: reader,
+		// THE READER, with a named session's standing asked of the ENGINE,
+		// which reads the identity log's end first so a lineage this
+		// node's rows do not hold is answered as nobody's only where they
+		// hold every record the log does — see [signInDirectory].
+		Directory: signInDirectory{Reader: reader, engine: e},
 		// THE NODE'S OWN WRITER, which acts as the deployment. What the
 		// routes do with it is create people and open sessions, both of
 		// which are the deployment's to do on somebody's behalf — a
@@ -237,6 +242,23 @@ func signInSurface(boot *config.Bootstrap, e *engine.Engine) (
 		return nil, nil, fmt.Errorf("api: the session arm: %w", err)
 	}
 	return surface, sessions, nil
+}
+
+// signInDirectory is the sign-in surface's [authapi.Directory]: this node's
+// identity reader, with the one read that turns on a row being MISSING — whose
+// is a named session — proved against the identity log's end by the engine
+// ([engine.Engine.SessionStanding]), because the reader cannot read the log's
+// end itself and a missing row on a node behind the log is a session still
+// running.
+type signInDirectory struct {
+	*iamdomain.Reader
+	engine *engine.Engine
+}
+
+func (d signInDirectory) SessionStanding(ctx context.Context, lineage string,
+	now time.Time) (string, bool, error) {
+
+	return d.engine.SessionStanding(ctx, lineage, now)
 }
 
 // directorySurface builds /iam, on every node for [signInSurface]'s reason.

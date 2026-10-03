@@ -705,30 +705,39 @@ func (r *Reader) AnyPerson(ctx context.Context, end uint64) (bool, error) {
 		if held {
 			return nil
 		}
-		prefix, err := statelog.PrefixIn(ctx, tx, Domain{})
-		if err != nil {
-			return fmt.Errorf("iamdomain: read how much of the log these rows "+
-				"hold: %w", err)
-		}
-		if behind := CoversLog(prefix, end); behind != nil {
-			return fmt.Errorf("%w: %w — so its empty directory may be a "+
-				"company whose first person it has not applied yet",
-				statelog.ErrUnavailable, behind)
-		}
-		retained, err := deferredFor(ctx, tx, "")
-		if err != nil {
-			return err
-		}
-		if retained {
-			return fmt.Errorf("%w: iamdomain: this node holds a record it "+
-				"could not apply, so its empty directory may be a company "+
-				"whose first person it has not written — ask a node that is "+
-				"not retaining one, or retry once this one applies it",
-				statelog.ErrUnavailable)
-		}
-		return nil
+		return provedAbsent(ctx, tx, end, "the company's first person")
 	})
 	return held, err
+}
+
+// provedAbsent is the proof a missing row needs before it is read as "there is
+// none": these rows applied every record the log held at end, and retain none
+// they could not apply. what names the record a node behind would be missing,
+// for the error an operator reads.
+//
+// THE WHOLE DEFERRAL INDEX, never one bucket's: the row is missing, so nothing
+// here says whose bucket the missing record would be filed under.
+func provedAbsent(ctx context.Context, tx *sql.Tx, end uint64, what string) error {
+	prefix, err := statelog.PrefixIn(ctx, tx, Domain{})
+	if err != nil {
+		return fmt.Errorf("iamdomain: read how much of the log these rows "+
+			"hold: %w", err)
+	}
+	if behind := CoversLog(prefix, end); behind != nil {
+		return fmt.Errorf("%w: %w — so a row missing from them may be %s "+
+			"this node has not applied yet", statelog.ErrUnavailable, behind,
+			what)
+	}
+	retained, err := deferredFor(ctx, tx, "")
+	if err != nil {
+		return err
+	}
+	if retained {
+		return fmt.Errorf("%w: %w — this node holds a record it could not "+
+			"apply, which may be %s", statelog.ErrUnavailable, ErrNotCurrent,
+			what)
+	}
+	return nil
 }
 
 // ErrNotCurrent reports a snapshot of the identity estate that cannot vouch for
@@ -1018,8 +1027,21 @@ func fromMillis(ms int64) time.Time {
 // ended, not past its absolute deadline, not opened before the company's last
 // invalidation, and at its person's current revocation epoch. An absent row is
 // never live.
+//
+// # And an absent row is PROVED against the log's end, or not said
+//
+// end is the identity log's last sequence, read BEFORE this snapshot (see
+// [CoversLog]), and a lineage these rows hold no record of is answered as
+// nobody's only where they hold every record the log held then. A named
+// sign-out answers "ended" for nobody's lineage — the session is over, or never
+// was — and on rows that had not yet applied the session's start that was a
+// session still running reported closed: an administrator ending a stolen
+// laptop's session on a node behind the one that listed it was told it had
+// ended and wrote nothing. Rows that cannot vouch for the absence answer
+// [ErrNotCurrent] under [statelog.ErrUnavailable], which a surface serves as
+// "ask again".
 func (r *Reader) SessionStanding(ctx context.Context, lineage string,
-	now time.Time) (string, bool, error) {
+	now time.Time, end uint64) (string, bool, error) {
 
 	if lineage == "" {
 		return "", false, nil
@@ -1038,7 +1060,7 @@ func (r *Reader) SessionStanding(ctx context.Context, lineage string,
 		switch {
 		case errors.Is(err, sql.ErrNoRows):
 			owner = ""
-			return nil
+			return provedAbsent(ctx, tx, end, "the session's start")
 		case err != nil:
 			return fmt.Errorf("iamdomain: read a session's owner: %w", err)
 		}

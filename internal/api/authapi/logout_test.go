@@ -3,6 +3,7 @@ package authapi_test
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"slices"
@@ -17,6 +18,7 @@ import (
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/iam/session"
+	"github.com/crewlet/crewlet/internal/iamdomain"
 	"github.com/crewlet/crewlet/internal/runtoken"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
@@ -381,4 +383,46 @@ func TestEndingSomebodyElsesNamedSessionIsTheTablesToDecide(t *testing.T) {
 			}
 		})
 	}
+}
+
+// A NAMED SESSION THIS NODE CANNOT PROVE NOBODY HOLDS IS NOT ENDED.
+//
+// The directory proves a lineage it holds no row for against the identity
+// log's end; one whose rows are behind answers the unknown arm, and the route
+// serves it as "ask again" — never `ended`, which would tell an administrator a
+// stolen laptop's session is over while it runs, and never a close of a
+// session it cannot name the owner of. Mutation: read an error from the
+// directory as an absent row and this answers 200.
+func TestANamedSessionThisNodeCannotProveAbsentIsNotEnded(t *testing.T) {
+	t.Parallel()
+	r := newSignInRigWith(t, func(o *authapi.Options) {
+		o.Directory = behindDirectory{o.Directory}
+	})
+	rec := r.asPerson(http.MethodPost,
+		"/auth/logout/0192f00d-0000-7000-8000-0000000000bb", "")
+	var body map[string]any
+	_ = json.Unmarshal(rec.Body.Bytes(), &body)
+	if rec.Code != http.StatusServiceUnavailable ||
+		body["error"] != "identity_unavailable" || rec.Header().Get("Retry-After") == "" {
+		t.Fatalf("answered %d %v (Retry-After %q), want 503 identity_unavailable "+
+			"saying when to ask again", rec.Code, body, rec.Header().Get("Retry-After"))
+	}
+	r.estate.mu.Lock()
+	closes := len(r.estate.closes)
+	r.estate.mu.Unlock()
+	if emitted, _ := r.audit.snapshot(); closes != 0 || len(emitted) != 0 {
+		t.Errorf("an unproved absence closed %d sessions and announced %v",
+			closes, emitted)
+	}
+}
+
+// behindDirectory is a directory whose rows are behind the identity log, so a
+// lineage it holds no row for is one it cannot say nobody holds.
+type behindDirectory struct{ authapi.Directory }
+
+func (behindDirectory) SessionStanding(context.Context, string, time.Time) (
+	string, bool, error) {
+
+	return "", false, fmt.Errorf("%w: %w", statelog.ErrUnavailable,
+		iamdomain.ErrNotCurrent)
 }
