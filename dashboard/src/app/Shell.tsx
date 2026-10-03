@@ -329,7 +329,7 @@ function Frame({ children }: { children: ReactNode }) {
   const nav = useNavigator();
   const { socket } = useClient();
   const toast = useToast();
-  const { connected, authRejected, accessRefused, identityUnverifiable } = useConnection();
+  const { connected, authRejected, accessRefused } = useConnection();
   const viewer = useViewer();
   const engine = useEngineHealth();
   // A ZONE OR A DATE FORMAT CHANGED IN THE PREFERENCES REPAINTS EVERY
@@ -448,7 +448,6 @@ function Frame({ children }: { children: ReactNode }) {
     authRejected,
     accessRefused,
     connected,
-    identityUnverifiable,
     configured: engine?.configured,
     onSignIn: goSignIn,
     onRetry: () => socket.reconnect(),

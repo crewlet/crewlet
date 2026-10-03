@@ -89,11 +89,9 @@ export function healthReading(input: {
   authRejected: boolean;
   /** Why the engine will not serve a browser it knows, or null. */
   accessRefused?: string | null;
-  /** The engine could not verify this socket's session at its last check. */
-  identityUnverifiable?: boolean;
   health: EngineHealth | null;
 }): HealthReading {
-  const { connected, authRejected, accessRefused = null, identityUnverifiable, health } = input;
+  const { connected, authRejected, accessRefused = null, health } = input;
   const alarms = alarmLine(health);
   if (authRejected) {
     return {
@@ -113,14 +111,6 @@ export function healthReading(input: {
   }
   if (!connected) {
     return { tone: "warning", title: "Reconnecting", detail: "Showing the last state received" };
-  }
-  if (identityUnverifiable) {
-    return {
-      tone: "warning",
-      title: "Session unverified",
-      detail: "The engine cannot verify your session right now, and checks again on its own",
-      ...(alarms ? { alarms } : {}),
-    };
   }
   if (health?.shutting_down) {
     return {

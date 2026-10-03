@@ -75,7 +75,6 @@ export function degradationOf({
   authRejected,
   accessRefused = null,
   connected,
-  identityUnverifiable = false,
   configured,
   onSignIn,
   onRetry,
@@ -86,8 +85,6 @@ export function degradationOf({
   /** Why the engine will not serve this surface to a browser it knows, or null. */
   accessRefused?: string | null;
   connected: boolean;
-  /** The engine could not verify this socket's credential at its last check. */
-  identityUnverifiable?: boolean;
   configured: boolean | undefined;
   onSignIn: () => void;
   /** Re-dial after a refusal an administrator has since repaired. */
@@ -128,14 +125,6 @@ export function degradationOf({
       variant: "warning",
       icon: <RotateCwGlyph size="md" />,
       message: "Reconnecting to the engine — showing the last state received, polling meanwhile.",
-    };
-  }
-  if (identityUnverifiable) {
-    return {
-      variant: "warning",
-      icon: <RotateCwGlyph size="md" />,
-      message:
-        "The engine cannot verify your session right now, so live updates are paused and questions wait. It checks again every minute — nothing to do.",
     };
   }
   if (configured === false) {

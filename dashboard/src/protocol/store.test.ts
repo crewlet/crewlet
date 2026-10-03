@@ -253,28 +253,10 @@ describe("connection state", () => {
     expect(store.state.authRejected).toBe(true);
   });
 
-  test("an unverifiable identity is this socket's, and a new socket starts clear", () => {
-    // The engine degrades ONE socket whose credential it cannot check while
-    // the node itself stays healthy — so the hold arrives on its own frame and
-    // never rides the node's health, and it belongs to the socket that
-    // reported it: a reconnect's handshake resolved the credential afresh.
-    const store = new Store();
-    store.applyHealth({ status: "ok" });
-    store.applyIdentity({ state: "unverifiable" });
-    expect(store.state.identityUnverifiable).toBe(true);
-    expect(store.state.health.status).toBe("ok");
-    store.applyIdentity({ state: "verified" });
-    expect(store.state.identityUnverifiable).toBe(false);
-
-    store.applyIdentity({ state: "unverifiable" });
-    store.setConnected(false);
-    expect(store.state.identityUnverifiable).toBe(false);
-  });
-
   test("refused access is a reason, and survives the disconnect it caused", () => {
-    // Unlike an identity hold, a refusal is not a fact about the socket that
-    // reported it: the socket stops because of it, so a disconnect clearing it
-    // would leave a page saying "reconnecting" that never will.
+    // A refusal is not a fact about the socket that reported it: the socket
+    // stops because of it, so a disconnect clearing it would leave a page
+    // saying "reconnecting" that never will.
     const store = new Store();
     store.setAccessRefused("grant withdrawn: state:read");
     store.setConnected(false);
@@ -562,7 +544,6 @@ describe("a kind this build does not dispatch", () => {
       socket.onMessage(JSON.stringify({ kind, data: {} }));
     }
     socket.onMessage(JSON.stringify({ kind: "inbox_changed", data: { handle: "ada" } }));
-    socket.onMessage(JSON.stringify({ kind: "identity", data: { state: "verified" } }));
     socket.onMessage(JSON.stringify({ kind: "result", id: 99, data: {} }));
     socket.onMessage(JSON.stringify({ kind: "error", id: 99, error: "not_found" }));
     expect(store.unknownPushes.size).toBe(0);
