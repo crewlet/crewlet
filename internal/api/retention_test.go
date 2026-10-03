@@ -382,6 +382,10 @@ func TestTheDeploymentControlsRefuseInTheEnvelope(t *testing.T) {
 
 // fakeNodeGate answers the two gestures with what it was built with and
 // remembers what it was asked.
+//
+// SAFE FOR CONCURRENT CALLS, because the app every default test builds holds
+// one and the posture matrix drives its routes from parallel subtests: an
+// unguarded append raced there.
 type fakeNodeGate struct {
 	readmit error
 	evict   error
@@ -390,11 +394,14 @@ type fakeNodeGate struct {
 	// log applied.
 	result *engine.GateResult
 
+	mu    sync.Mutex
 	asked []engine.GateRequest
 }
 
 func (f *fakeNodeGate) answer(req engine.GateRequest, refusal error) (engine.GateResult, error) {
+	f.mu.Lock()
 	f.asked = append(f.asked, req)
+	f.mu.Unlock()
 	if refusal != nil {
 		return engine.GateResult{}, refusal
 	}
