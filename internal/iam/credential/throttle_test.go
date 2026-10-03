@@ -694,6 +694,66 @@ func TestTheCurveIsBounded(t *testing.T) {
 	}
 }
 
+// ONLY A FAILURE CAN PUSH A CLIMBING PAIR OUT OF THE CURVE.
+//
+// The curve's memory is bounded, and the bound is what lets a pair be forgotten
+// early — which is why it is set where forgetting one costs a guesser 16384
+// FAILURES, each an argon2id derivation. Admission used to file every attempt
+// in that same memory the moment it was admitted, so a burst of fresh names
+// that were never verified — admitted, then abandoned before their turn at the
+// verify cap — evicted a climbing pair for the price of the requests alone,
+// and the run at the account it had been slowing started its curve again.
+//
+// Mutation: hold an admitted attempt in the bounded memory rather than beside
+// it, and the climbing pair is forgotten by attempts nobody verified.
+func TestOnlyAFailureCanPushAClimbingPairOut(t *testing.T) {
+	t.Parallel()
+	th, _, _ := newThrottle(t)
+	target := credential.Attempt{Source: "198.51.100.9", Subject: "sarah.chen"}
+	for range 3 {
+		if err := failOnce(t, th, target); err != nil {
+			t.Fatal(err)
+		}
+	}
+	owed := func() time.Duration {
+		t.Helper()
+		ticket, err := th.Admit(t.Context(), target)
+		if err == nil {
+			ticket.Release()
+			return 0
+		}
+		if !errors.Is(err, credential.ErrThrottled) {
+			t.Fatalf("the target's next attempt answered %v", err)
+		}
+		return credential.RetryAfter(err)
+	}
+	before := owed()
+	if before != 7*time.Second {
+		t.Fatalf("three failures owe %s, want the 7s the curve gives them", before)
+	}
+
+	// MORE FRESH NAMES THAN THE CURVE HOLDS, all in flight at once — a
+	// burst of requests waiting for the verify cap — then abandoned.
+	tickets := make([]*credential.Ticket, 0, credential.MaxPairs+1)
+	for i := range credential.MaxPairs + 1 {
+		ticket, err := th.Admit(t.Context(), credential.Attempt{
+			Source: "203.0.113.50", Subject: fmt.Sprintf("name.%d", i)})
+		if err != nil {
+			t.Fatalf("fresh name %d was refused: %v", i, err)
+		}
+		tickets = append(tickets, ticket)
+	}
+	for _, ticket := range tickets {
+		ticket.Release()
+	}
+
+	if after := owed(); after != before {
+		t.Errorf("after a burst of attempts nobody verified, the climbing pair "+
+			"owes %s, want the %s it owed — it was forgotten without a single "+
+			"failure", after, before)
+	}
+}
+
 // AN UNIDENTIFIABLE SOURCE IS ADMITTED, NOT REFUSED — AND SO IS AN ATTEMPT
 // THAT NAMES NOBODY.
 //

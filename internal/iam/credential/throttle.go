@@ -197,13 +197,12 @@ const (
 	// against a morning.
 	DelayedCap = 64
 
-	// MaxPairs is how many pairs one throttle holds, the least recently
-	// used forgotten past it: 16384. Every pair costs at most [pairKeep]
-	// failure instants and its pending attempts, beside its digest and
-	// its place in the order — about half a kilobyte — so the bound is
-	// under ten megabytes of memory an unauthenticated caller cannot
-	// grow, where a map walked on every failure was both unbounded and
-	// O(keys) per write.
+	// MaxPairs is how many pairs' failures one throttle holds, the least
+	// recently used forgotten past it: 16384. Every pair costs at most
+	// [pairKeep] failure instants, beside its digest and its place in the
+	// order — about half a kilobyte — so the bound is under ten megabytes
+	// of memory an unauthenticated caller cannot grow, where a map walked
+	// on every failure was both unbounded and O(keys) per write.
 	//
 	// A PAIR FORGOTTEN EARLY STARTS ITS CURVE AGAIN, which is what the
 	// bound costs, and why it is set this high: to push one climbing pair
@@ -275,8 +274,23 @@ type Throttle struct {
 	now   func() time.Time
 	sleep func(context.Context, time.Duration)
 
-	mu      sync.Mutex
-	pairs   *lru
+	mu    sync.Mutex
+	pairs *lru
+
+	// pending are the start instants of attempts admitted and not yet
+	// resolved, by pair, each counted against its pair as a failure until
+	// it resolves.
+	//
+	// APART FROM pairs, and that is the bound's whole meaning: forgetting
+	// a climbing pair early has to cost a guesser [MaxPairs] FAILURES,
+	// each a verification. Filed in the bounded memory at admission, a
+	// burst of fresh names that were never verified — admitted, then
+	// abandoned before their turn at the verify cap — evicted a climbing
+	// pair for the price of the requests alone. This map needs no bound
+	// of its own: an entry is an attempt in flight, so it is bounded by
+	// the requests this node holds open, and it is gone when they are.
+	pending map[string][]time.Time
+
 	delayed int
 }
 
@@ -296,7 +310,7 @@ type ThrottleDeps struct {
 func NewThrottle(deps ThrottleDeps) *Throttle {
 	t := &Throttle{
 		key: randomKey(), now: deps.Now, sleep: deps.Sleep,
-		pairs: newLRU(MaxPairs),
+		pairs: newLRU(MaxPairs), pending: map[string][]time.Time{},
 	}
 	if t.now == nil {
 		t.now = time.Now
@@ -389,7 +403,7 @@ func (t *Throttle) admit(ctx context.Context, pair string) (*Ticket, error) {
 		return nil, &Throttled{RetryAfter: wait}
 	}
 	start := now.Add(wait)
-	t.pairs.take(pair).pend(start)
+	t.pend(pair, start)
 	if wait > 0 {
 		t.delayed++
 	}
@@ -450,18 +464,19 @@ func (k *Ticket) Fail() (reachedCeiling bool) {
 	if at.Before(k.at) {
 		at = k.at
 	}
+	t.unpend(k.pair, k.at)
 	p := t.pairs.take(k.pair)
-	p.unpend(k.at)
 	p.prune(now.Add(-Window))
 	before := len(p.fails)
 	p.fail(at)
 	return before < CurveSteps && len(p.fails) >= CurveSteps
 }
 
-// Succeed resolves the attempt as a credential that proved itself: its pair is
-// forgotten — and NOTHING ELSE is, which is what keeps an account holder from
-// wiping the record of their guesses at somebody else's by signing in as
-// themselves between them.
+// Succeed resolves the attempt as a credential that proved itself: its pair's
+// failures are forgotten — and NOTHING ELSE is, which is what keeps an account
+// holder from wiping the record of their guesses at somebody else's by signing
+// in as themselves between them. Other attempts at the pair still in flight
+// go on counting until they resolve themselves.
 func (k *Ticket) Succeed() {
 	if k == nil || !k.done.CompareAndSwap(false, true) {
 		return
@@ -469,6 +484,7 @@ func (k *Ticket) Succeed() {
 	t := k.t
 	t.mu.Lock()
 	defer t.mu.Unlock()
+	t.unpend(k.pair, k.at)
 	t.pairs.drop(k.pair)
 }
 
@@ -484,12 +500,32 @@ func (k *Ticket) Release() {
 	t := k.t
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	if p := t.pairs.get(k.pair); p != nil {
-		p.unpend(k.at)
-		if p.empty(t.now()) {
-			t.pairs.drop(k.pair)
+	t.unpend(k.pair, k.at)
+	if p := t.pairs.get(k.pair); p != nil && p.empty(t.now()) {
+		t.pairs.drop(k.pair)
+	}
+}
+
+// pend counts an admitted attempt on pair that starts at. Held under the lock.
+func (t *Throttle) pend(pair string, at time.Time) {
+	t.pending[pair] = append(t.pending[pair], at)
+}
+
+// unpend resolves one admitted attempt on pair that started at, forgetting the
+// pair's entry once nothing of it is in flight. Held under the lock.
+func (t *Throttle) unpend(pair string, at time.Time) {
+	held := t.pending[pair]
+	for i, p := range held {
+		if p.Equal(at) {
+			held = append(held[:i], held[i+1:]...)
+			break
 		}
 	}
+	if len(held) == 0 {
+		delete(t.pending, pair)
+		return
+	}
+	t.pending[pair] = held
 }
 
 // waitLocked is how long an attempt on pair must wait at now. Held under the
@@ -501,11 +537,17 @@ func (k *Ticket) Release() {
 // the clock it was scheduled at. The lead is what serialises a burst at one
 // pair.
 func (t *Throttle) waitLocked(pair string, now time.Time) time.Duration {
-	s := t.pairs.get(pair)
-	if s == nil {
-		return 0
+	var count int
+	var last time.Time
+	if s := t.pairs.get(pair); s != nil {
+		count, last = s.weight(now)
 	}
-	count, last := s.weight(now)
+	for _, at := range t.pending[pair] {
+		count++
+		if at.After(last) {
+			last = at
+		}
+	}
 	delay := delayFor(count)
 	if delay == 0 {
 		return 0
@@ -654,19 +696,15 @@ func (l *lru) drop(key string) {
 // len is how many keys this holds.
 func (l *lru) len() int { return l.order.Len() }
 
-// standing is what one pair has against it.
+// standing is what one pair's failures are.
 type standing struct {
 	// fails are the pair's failures inside the window, in the order they
 	// were recorded, the latest [pairKeep] of them.
 	fails []time.Time
-
-	// pending are the start instants of attempts admitted and not yet
-	// resolved, each counted as a failure until it is.
-	pending []time.Time
 }
 
-// weight is how many failures count against this pair at now, pending
-// attempts included, and the latest instant among them.
+// weight is how many failures count against this pair at now, and the latest
+// of them. Its attempts in flight are the throttle's to add.
 func (s *standing) weight(now time.Time) (int, time.Time) {
 	s.prune(now.Add(-Window))
 	var last time.Time
@@ -675,12 +713,7 @@ func (s *standing) weight(now time.Time) (int, time.Time) {
 			last = at
 		}
 	}
-	for _, at := range s.pending {
-		if at.After(last) {
-			last = at
-		}
-	}
-	return len(s.fails) + len(s.pending), last
+	return len(s.fails), last
 }
 
 // prune drops the failures that have aged out of the window.
@@ -695,24 +728,10 @@ func (s *standing) prune(cut time.Time) {
 	s.fails = kept
 }
 
-// empty reports a standing that can delay nobody: no failure in the window and
-// nothing pending.
+// empty reports a standing with no failure left in the window.
 func (s *standing) empty(now time.Time) bool {
 	s.prune(now.Add(-Window))
-	return len(s.fails) == 0 && len(s.pending) == 0
-}
-
-// pend counts an admitted attempt that starts at.
-func (s *standing) pend(at time.Time) { s.pending = append(s.pending, at) }
-
-// unpend resolves one admitted attempt that started at.
-func (s *standing) unpend(at time.Time) {
-	for i, p := range s.pending {
-		if p.Equal(at) {
-			s.pending = append(s.pending[:i], s.pending[i+1:]...)
-			return
-		}
-	}
+	return len(s.fails) == 0
 }
 
 // fail records a failure, keeping the newest [pairKeep].

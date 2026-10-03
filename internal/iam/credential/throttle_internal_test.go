@@ -1,10 +1,13 @@
 package credential
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"fmt"
 	"strings"
 	"testing"
+	"time"
 )
 
 // THE THROTTLE NEVER HOLDS WHAT WAS TYPED.
@@ -36,5 +39,40 @@ func TestTheThrottleNeverHoldsWhatWasTyped(t *testing.T) {
 			t.Errorf("the throttle holds %q, which carries what was typed or "+
 				"where from", key)
 		}
+	}
+}
+
+// NOTHING IN FLIGHT IS HELD ONCE IT RESOLVES.
+//
+// An admitted attempt is counted apart from the bounded memory of failures,
+// and what keeps that count from growing for the life of the process is that
+// every way a ticket resolves — a failure, a success, a release — takes its
+// attempt back out of it. Mutation: leave the attempt counted on any one of
+// the three and an entry outlives the request it stood for.
+func TestNothingInFlightIsHeldOnceItResolves(t *testing.T) {
+	t.Parallel()
+	th := NewThrottle(ThrottleDeps{Sleep: func(context.Context, time.Duration) {}})
+	resolve := []func(*Ticket){
+		func(k *Ticket) { k.Fail() },
+		func(k *Ticket) { k.Succeed() },
+		func(k *Ticket) { k.Release() },
+	}
+	var tickets []*Ticket
+	for i := range 30 {
+		ticket, err := th.Admit(t.Context(), Attempt{Source: "203.0.113.7",
+			Subject: fmt.Sprintf("name.%d", i%10)})
+		if err != nil {
+			t.Fatal(err)
+		}
+		tickets = append(tickets, ticket)
+	}
+	for i, ticket := range tickets {
+		resolve[i%len(resolve)](ticket)
+	}
+	th.mu.Lock()
+	defer th.mu.Unlock()
+	if len(th.pending) != 0 {
+		t.Errorf("with every attempt resolved, %d pairs still count attempts "+
+			"in flight", len(th.pending))
 	}
 }
