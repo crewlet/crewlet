@@ -1197,13 +1197,16 @@ generation too, for [a restore's reason](#two-counters-and-why-there-are-two).
 
 **A token manages no proof.** It is stepped up by construction — it has
 nothing else to present — so what keeps it off every gesture about *how its
-owner proves who they are* is the credential the request presented, which each
-of those refuses before anything is decided: it cannot mint
-another token, enrol or replace a second factor, regenerate the recovery codes,
-or answer a step-up, and `DELETE /iam/credentials/{id}` from one revokes
-machine tokens (itself included) and nothing else. Whoever finds a token leaked
-can withdraw it from wherever they found it; nobody holding one can take the
-account it belongs to.
+owner proves who they are* is the credential the request presented, which the
+authority table refuses on every such gesture's row (`token_refused`, see
+[Some gestures ask how recently you proved who you are](#some-gestures-ask-how-recently-you-proved-who-you-are)):
+it cannot enrol or replace a second factor or regenerate the recovery codes,
+and `DELETE /iam/credentials/{id}` from one revokes machine tokens (itself
+included) and nothing else — refused with nothing written whether or not the
+node it asks had listed the credential yet. Nor can it mint another token or
+answer a step-up, which those two routes refuse themselves. Whoever finds a
+token leaked can withdraw it from wherever they found it; nobody holding one
+can take the account it belongs to.
 
 **Three answers, and the third is not the second.** A node that knows the
 token is no good answers `401`. A node that cannot tell answers `503` and a

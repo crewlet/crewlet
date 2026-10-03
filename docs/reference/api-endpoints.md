@@ -1010,7 +1010,7 @@ list and nothing ever will be.
 | `POST /iam/people/{id}/mfa/reset` | `people:manage` |
 | `GET /iam/credentials[?person=]` | the person themselves, `people:manage` or `audit:read` |
 | `POST /iam/credentials[?person=]` | the person themselves, from their own session; `people:manage` for a **service account** only; never a request presenting a machine token |
-| `DELETE /iam/credentials/{id}[?person=]` | the person themselves or `people:manage`; revoking a password, a second factor or the recovery codes needs a person present, so a machine token revokes machine tokens only — `403 token_refused`, before anything is written |
+| `DELETE /iam/credentials/{id}[?person=]` | the person themselves or `people:manage`; revoking a password, a second factor or the recovery codes needs a person present, so a machine token revokes machine tokens only — `403 token_refused` with nothing written, on a node that had listed the credential before the write and on one that had not alike |
 | `POST /iam/invalidate-all` | `fleet:operate` **and** `people:manage` — the deployment's grant and the directory's, both, as the record layer holds too. Ends every session **and every machine token** |
 | `GET /iam/check` | `people:manage` or `audit:read` |
 | `GET /iam/node-tokens` | `people:manage` or `audit:read` |

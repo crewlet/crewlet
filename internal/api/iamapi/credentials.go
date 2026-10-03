@@ -321,10 +321,10 @@ const mintUnknown = "no token was issued: this node cannot establish whether " +
 // The proof verb is decided ONCE, at the request's instant, and both reads key
 // on that one answer: the read of which credential the id names, which
 // refuses BEFORE anything is written, and the snapshot that revokes, which
-// revokes a credential that is not a token only for a request the proof verb
-// admitted. The method of a credential id never changes, so the two reads
-// agree about it, and an id this node could not read yet is never a way round
-// the first.
+// refuses a credential that is not a token to a request the proof verb did
+// not admit, publishing nothing ([errProofRefused]). The method of a
+// credential id never changes, so the two reads agree about it, and an id this
+// node could not read yet is answered as the first refuses it.
 func (s *Service) DeleteCredential(w http.ResponseWriter, r *http.Request) {
 	person := s.subjectOf(r)
 	if person == "" {
@@ -373,15 +373,20 @@ func (s *Service) DeleteCredential(w http.ResponseWriter, r *http.Request) {
 			found, method = false, ""
 			out := make([]iamdomain.Credential, 0, len(held))
 			for _, c := range held {
-				// ONLY WHAT WAS ADMITTED: anything but a token is
-				// revoked only by a request the proof verb admitted, so
-				// a credential this node could not name before the
-				// decide is not revoked past the refusal above.
-				if c.ID == id && c.RevokedAt.IsZero() &&
-					(mayProve || c.Method == iamdomain.MethodToken) {
-					c.RevokedAt = now
-					found, method = true, c.Method
+				if c.ID != id || !c.RevokedAt.IsZero() {
+					out = append(out, c)
+					continue
 				}
+				// ONLY WHAT WAS ADMITTED: anything but a token is
+				// revoked only by a request the proof verb admitted,
+				// and REFUSED here rather than stepped over, so a
+				// credential this node could not name before the
+				// decide is answered exactly as the refusal above.
+				if c.Method != iamdomain.MethodToken && !mayProve {
+					return nil, errProofRefused
+				}
+				c.RevokedAt = now
+				found, method = true, c.Method
 				out = append(out, c)
 			}
 			return out, nil
@@ -389,6 +394,10 @@ func (s *Service) DeleteCredential(w http.ResponseWriter, r *http.Request) {
 		OpID:   op.id,
 		Reason: reason,
 	})
+	if errors.Is(err, errProofRefused) {
+		authz.EnvelopeRefusal(w, r, proof, proved)
+		return
+	}
 	if err != nil || !landed(revoked) {
 		// NOTHING IS SAID OF A REVOCATION NOTHING CAN CONFIRM — neither
 		// "nothing changed" nor the event: each is a verdict the decide
@@ -430,6 +439,21 @@ func (s *Service) DeleteCredential(w http.ResponseWriter, r *http.Request) {
 	})
 	s.answerWrite(w, r, opID, revoked, nil, map[string]any{"id": id})
 }
+
+// errProofRefused is a revocation's snapshot finding the credential it names is
+// one only the proof verb may revoke, for a request that verb did not admit.
+//
+// A REFUSAL AND NOT A SKIP, which is what it was: the snapshot stepped over the
+// credential and published the set unchanged, so a token naming its owner's
+// password before this node had listed it landed a record on the person —
+// a version and an `iam_history` row saying a credential was revoked, written
+// as the token — and answered 200 "no live credential with that id … nothing
+// changed" about a credential that exists and is live, where the node that had
+// listed it answered 403. [iamdomain.CredentialSet.Apply] may refuse with
+// nothing published, and the handler answers the proof verb's own refusal, so
+// both node states give one answer.
+var errProofRefused = errors.New("iamapi: revoking this credential changes " +
+	"how its owner proves who they are, which this request may not do")
 
 // credentialByID is the row one id names among a person's credentials, live or
 // not.

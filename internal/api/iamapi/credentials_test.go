@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -279,40 +280,49 @@ func TestATierATokenNamesWhoATokenIsFor(t *testing.T) {
 	}
 }
 
-// A TOKEN REVOKES TOKENS, ITSELF INCLUDED, AND NEVER ITS OWNER'S PROOF.
+// A TOKEN REVOKES TOKENS, ITSELF INCLUDED, AND NEVER ITS OWNER'S PROOF — and
+// says so the same way whichever node it asks.
 //
 // A token acts as its owner and is stepped up by construction, so the route's
 // own verb admits it as it admits them — and without the proof verb's row
 // needing a person present, a leaked token could withdraw the owner's second
 // factor: the first half of taking the account. The listed password is
-// refused by the table's own word (`token_refused`). And not only where the
-// route could name the credential first: one this node's directory did not
-// list yet is held to the same answer inside the snapshot that revokes.
+// refused by the table's own word (`token_refused`) before anything is
+// written. And a password this node's directory did not list yet is refused
+// INSIDE the snapshot that revokes, with the same answer and nothing
+// published: it used to be stepped over there, landing a record on the person
+// (a version, and a trail row saying a credential was revoked, as the token)
+// and answering 200 "nothing changed" about a credential that exists and is
+// live. The control is the owner at a keyboard, who revokes the same unlisted
+// password.
 //
 // Mutations: read the proof verb as admitted before the write and the listed
-// password is revoked by a request carrying the token; drop the snapshot's
-// condition and the unlisted one is.
+// password is revoked by a request carrying the token; step over the unlisted
+// one in the snapshot again and it answers 200 and publishes.
 func TestATokenRevokesTokensAndNotItsOwnersProof(t *testing.T) {
 	t.Parallel()
+	const password = "018f3a9c-0000-7000-8000-00000000000a"
 	for _, tc := range []struct {
 		name     string
 		target   string
 		unlisted bool
+		keyboard bool
 		want     int
 		revoked  bool
 	}{
-		{"its owner's password", "018f3a9c-0000-7000-8000-00000000000a",
+		{"its owner's password", password, false, false,
+			http.StatusForbidden, false},
+		{"its owner's password, before this node lists it", password, true,
 			false, http.StatusForbidden, false},
-		{"its owner's password, before this node lists it",
-			"018f3a9c-0000-7000-8000-00000000000a", true, http.StatusOK, false},
-		{"itself", tokenID, false, http.StatusOK, true},
+		{"itself", tokenID, false, false, http.StatusOK, true},
+		{"the owner at a keyboard, before this node lists it", password, true,
+			true, http.StatusOK, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			r := newRig(t)
 			r.writer.held = []iamdomain.Credential{
-				{ID: "018f3a9c-0000-7000-8000-00000000000a",
-					Method: iamdomain.MethodPassword},
+				{ID: password, Method: iamdomain.MethodPassword},
 				{ID: tokenID, Method: iamdomain.MethodToken},
 			}
 			// THE DIRECTORY HOLDS WHAT THE SNAPSHOT HOLDS, unless the case
@@ -321,25 +331,38 @@ func TestATokenRevokesTokensAndNotItsOwnersProof(t *testing.T) {
 			if !tc.unlisted {
 				r.directory.creds = map[string][]iamdomain.CredentialRow{
 					alice.String(): {
-						{ID: "018f3a9c-0000-7000-8000-00000000000a",
-							PersonID: alice.String(), Method: iamdomain.MethodPassword},
+						{ID: password, PersonID: alice.String(),
+							Method: iamdomain.MethodPassword},
 						{ID: tokenID, PersonID: alice.String(),
 							Method: iamdomain.MethodToken},
 					},
 				}
 			}
-			presented, row := aliceToken(t)
-			rec := throughTheGuard(t, r, row, http.MethodDelete,
-				"/iam/credentials/"+tc.target, presented)
-			if rec.Code != tc.want {
-				t.Fatalf("status %d, want %d: %s", rec.Code, tc.want,
-					rec.Body.String())
+			var status int
+			var body map[string]any
+			if tc.keyboard {
+				got := r.as(administrator(), http.MethodDelete,
+					"/iam/credentials/"+tc.target, nil)
+				status, body = got.status, got.body
+			} else {
+				presented, row := aliceToken(t)
+				rec := throughTheGuard(t, r, row, http.MethodDelete,
+					"/iam/credentials/"+tc.target, presented)
+				status, body = rec.Code, decodeBody(t, rec)
+			}
+			if status != tc.want {
+				t.Fatalf("status %d, want %d: %v", status, tc.want, body)
 			}
 			if tc.want == http.StatusForbidden {
-				body := decodeBody(t, rec)
 				if body[authz.DetailReason] != string(authz.ReasonTokenRefused) {
 					t.Errorf("refused with %v, want the table's %s", body,
 						authz.ReasonTokenRefused)
+				}
+				if slices.Contains(r.writer.calls, "credentials") {
+					t.Error("a refused revocation published a record on the person")
+				}
+				if seen := r.audit.all(); len(seen) != 0 {
+					t.Errorf("a refused revocation announced %v", seen)
 				}
 			}
 			for _, c := range r.writer.held {
