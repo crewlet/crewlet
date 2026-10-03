@@ -221,6 +221,34 @@ type Result struct {
 	Transcript string
 }
 
+// usageFloored is r with every count of what the run spent made non-negative,
+// and whether any had to be.
+//
+// A RUN REPORTS ITS OWN USAGE, parsed out of the coding CLI's last line of
+// output — and that line is printed inside a box the run's own agent can run
+// any command in. A negative count there is a REFUND: the charge would
+// subtract it from the seat's budget counter, and the phase record from every
+// rollup that sums it, so a run could buy itself headroom by printing a
+// number. Nothing a run spends is negative, so a negative count is read as
+// nothing spent, and the caller says so. Floored where every collected result
+// enters the coordinator, so every backend's parser is covered by one rule.
+func (r Result) usageFloored() (Result, bool) {
+	floored := false
+	floor := func(n *int) {
+		if *n < 0 {
+			*n, floored = 0, true
+		}
+	}
+	floor(&r.InputTokens)
+	floor(&r.OutputTokens)
+	floor(&r.CacheReadTokens)
+	floor(&r.CacheWriteTokens)
+	if r.CostUSD < 0 {
+		r.CostUSD, floored = 0, true
+	}
+	return r, floored
+}
+
 // Sandbox is one live, isolated execution environment.
 type Sandbox interface {
 	// ID is the provider's handle for this box, and what a reconnect needs.
