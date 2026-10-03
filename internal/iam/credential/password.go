@@ -111,10 +111,15 @@ type Hasher struct {
 	// what keeps the queue from saying which names exist.
 	slots chan struct{}
 
-	// dummy is the verifier a subject with nothing to check is verified
-	// against ([Hasher.Decoy]): a well-formed verifier at this hasher's own
-	// cost, over a salt and a digest drawn once for the life of the process.
-	dummy string
+	// dummySalt and dummyDigest are the verifier a subject with nothing to
+	// check is verified against ([Hasher.Decoy]): at this hasher's own cost,
+	// over a salt and a digest drawn once for the life of the process. HELD
+	// AS BYTES, never as a PHC string the decoy decodes, because the decoy
+	// is also what [Hasher.Verify] answers an unreadable verifier with — a
+	// decoy that went back through Verify recursed without end, until the
+	// stack overflowed and took the process with it, for a hasher whose own
+	// dummy did not decode.
+	dummySalt, dummyDigest []byte
 
 	// work is the derivation. A hasher's own suite replaces it, to decide
 	// from outside when a derivation ends and to see what it was asked to
@@ -142,20 +147,31 @@ func Default() Params {
 
 // NewHasher builds one. A zero Params takes [Default]; a zero cap takes
 // [VerifyCap].
+//
+// IT PANICS on a cost argon2 cannot derive at ([Params.derivable]): zero
+// passes, zero lanes or an empty digest. [Params] is a test's and [Default]
+// is derivable, so such a hasher is a programming error — and built, every
+// password it hashed or verified would panic inside argon2 with a derivation
+// slot held, and every verifier it wrote would be one [decode] refuses.
 func NewHasher(params Params, cap int) *Hasher {
 	if params == (Params{}) {
 		params = Default()
 	}
+	if !params.derivable() {
+		panic(fmt.Sprintf("credential: NewHasher given %+v, a cost argon2 "+
+			"cannot derive at — it needs at least one pass (Time), one lane "+
+			"(Threads) and one byte of digest (KeyLen)", params))
+	}
 	if cap <= 0 {
 		cap = VerifyCap()
 	}
-	h := &Hasher{params: params, slots: make(chan struct{}, cap), work: argon2id}
-	// THE DUMMY IS DRAWN, NEVER DERIVED: a verification against it costs
-	// exactly what one against a real verifier at this cost does, and what
-	// it is compared with is never read — so a digest of random bytes is as
-	// good as a digest of anything, and the process pays nothing to make it.
-	h.dummy = h.encode(random(SaltLen), random(int(params.KeyLen)))
-	return h
+	return &Hasher{params: params, slots: make(chan struct{}, cap), work: argon2id,
+		// THE DUMMY IS DRAWN, NEVER DERIVED: a verification against it
+		// costs exactly what one against a real verifier at this cost
+		// does, and what it is compared with is never read — so a digest
+		// of random bytes is as good as a digest of anything, and the
+		// process pays nothing to make it.
+		dummySalt: random(SaltLen), dummyDigest: random(int(params.KeyLen))}
 }
 
 // random is n bytes of crypto/rand.
@@ -255,11 +271,15 @@ func (h *Hasher) Verify(ctx context.Context, verifier, password string) (
 //
 // If an unknown login were refused without a derivation, it would answer in
 // microseconds where a real one pays an argon2id verification, and a
-// stopwatch would read the roster off the difference. So a miss runs
-// [Hasher.Verify] itself, against a verifier this hasher drew once for the life
-// of the process: the same decode, one derivation at the same cost under the
-// same cap, the same constant-time compare. The derivation is what dominates
-// a sign-in's time, and it is now the same work on both arms.
+// stopwatch would read the roster off the difference. So a miss does what
+// [Hasher.Verify] does past reading the verifier, against a salt and a digest
+// this hasher drew once for the life of the process: one derivation at the
+// same cost under the same cap, and the same constant-time compare. The
+// derivation is what dominates a sign-in's time, and it is the same work on
+// both arms. What it skips is the decode, a split of a short string — and it
+// skips it on purpose, because Verify answers an unreadable verifier with a
+// decoy, so a decoy that went back through Verify is a loop whose only exit is
+// its own dummy decoding.
 //
 // WHAT IT DOES NOT EQUALISE, stated rather than hidden: the directory read
 // before it, which a name nobody holds answers a little sooner than a real
@@ -276,8 +296,14 @@ func (h *Hasher) Verify(ctx context.Context, verifier, password string) (
 // branch on, because a decoy whose answer could be read would be a second
 // oracle. The error is ctx's when the request went away before a slot freed.
 func (h *Hasher) Decoy(ctx context.Context, presented string) error {
-	_, _, err := h.Verify(ctx, h.dummy, presented)
-	return err
+	got, err := h.derive(ctx, presented, h.dummySalt, h.params)
+	if err != nil {
+		return err
+	}
+	// THE COMPARE A VERIFICATION MAKES, and its answer thrown away: the
+	// compare is part of what a hit costs, and nothing may branch on it.
+	_ = subtle.ConstantTimeCompare(got, h.dummyDigest)
+	return nil
 }
 
 // weakerThan reports whether p is a WEAKER cost than q: below it in at least
@@ -462,7 +488,7 @@ func decode(verifier string) (Params, []byte, []byte, error) {
 // ([decode]) and answers as a wrong password does, rather than taking a
 // derivation slot and crashing the request that presented it — which is what a
 // verifier stating zero passes did, since only the lanes and the digest were
-// checked.
+// checked — and a hasher outside it is never built ([NewHasher]).
 func (p Params) derivable() bool {
 	return p.Time >= 1 && p.Threads >= 1 && p.KeyLen >= 1
 }

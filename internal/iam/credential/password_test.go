@@ -256,3 +256,38 @@ func TestAnUnreadableVerifierRefusesLikeAWrongPassword(t *testing.T) {
 		})
 	}
 }
+
+// A HASHER IS NEVER BUILT AT A COST ARGON2 CANNOT DERIVE AT.
+//
+// argon2 panics at zero passes or zero lanes, and a verifier with an empty
+// digest is one decode refuses — so a hasher built at any of them panicked
+// inside argon2 on every password it touched, and its decoy, which went back
+// through Verify against a dummy verifier that did not decode, recursed until
+// the stack overflowed and the process died. It is refused at construction,
+// by name.
+//
+// Mutation: drop the check in NewHasher and each case builds a hasher.
+func TestAHasherIsNeverBuiltAtACostArgon2CannotDerive(t *testing.T) {
+	t.Parallel()
+	for name, params := range map[string]credential.Params{
+		"zero passes":  {Memory: 8 * 1024, Time: 0, Threads: 1, KeyLen: 32},
+		"zero lanes":   {Memory: 8 * 1024, Time: 1, Threads: 0, KeyLen: 32},
+		"empty digest": {Memory: 8 * 1024, Time: 1, Threads: 1, KeyLen: 0},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			defer func() {
+				refusal := recover()
+				if refusal == nil {
+					t.Errorf("NewHasher built a hasher at %+v", params)
+					return
+				}
+				if msg, _ := refusal.(string); !strings.Contains(msg, "NewHasher") {
+					t.Errorf("NewHasher refused %+v with %v, want a refusal "+
+						"naming itself", params, refusal)
+				}
+			}()
+			credential.NewHasher(params, 1)
+		})
+	}
+}
