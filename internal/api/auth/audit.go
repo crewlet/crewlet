@@ -107,8 +107,9 @@ func PresentedTierA(ctx context.Context) (config.APIToken, bool) {
 	return use.entry, ok && use.presented && use.entry.ID != ""
 }
 
-// refusedKey carries the credential [Guard.Resolve] checked and turned away,
-// from the resolution to the one arm of the middleware that counts it.
+// refusedKey marks a request whose presented credential [Guard.Resolve]
+// checked and turned away, from the resolution to the one arm of the
+// middleware that counts it.
 type refusedKey struct{}
 
 // refusedCredential marks a request whose presented credential this node
@@ -117,26 +118,23 @@ type refusedKey struct{}
 //
 // A MARK AND NOT A COUNT: whether the refusal is somebody's failed attempt
 // depends on whether the route needed the credential, which the resolution
-// does not know and the middleware does. See the file doc.
-//
-// THE VALUE RIDES ON THE REQUEST'S OWN CONTEXT under an unexported key, and
-// goes no further than the trail, which keys it under a secret of its own
-// the moment it arrives — so what leaves the process is how many DIFFERENT
-// values one client sprayed in a minute, never any of them.
-func refusedCredential(ctx context.Context, presented string) context.Context {
-	return context.WithValue(ctx, refusedKey{}, presented)
+// does not know and the middleware does. See the file doc. And ONLY a mark:
+// what was presented is not carried, because nothing the trail keeps is
+// about it — a failure is counted per source.
+func refusedCredential(ctx context.Context) context.Context {
+	return context.WithValue(ctx, refusedKey{}, true)
 }
 
 // refused counts the credential a request's resolution refused, if it
 // refused one — called by the middleware on a guarded route's 401 and
 // nowhere else.
 func (g *Guard) refused(r *http.Request) {
-	presented, marked := r.Context().Value(refusedKey{}).(string)
+	marked, _ := r.Context().Value(refusedKey{}).(bool)
 	if g.audit == nil || !marked {
 		return
 	}
 	g.audit.Failed(r.Context(), authevents.Failure{
-		Client: g.Client(r), Method: types.FailBearer, Subject: presented,
+		Source: g.Client(r), Method: types.FailBearer,
 	})
 }
 

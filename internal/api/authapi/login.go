@@ -156,14 +156,10 @@ func (s *Service) Login(w http.ResponseWriter, r *http.Request) {
 	defer adm.ticket.Release()
 
 	held, method := s.resolve(r.Context(), in.Login)
-	// THE ATTEMPT AS THE AUDIT TRAIL COUNTS IT: the value typed goes in as
-	// the subject — keyed in memory and never kept — and the person only
-	// once THIS ENGINE resolved one, so a failure names somebody real
-	// rather than whatever the caller claimed to be.
-	attempt := authevents.Failure{
-		Client: source, Method: types.FailPassword, Subject: in.Login,
-		Person: held.ID,
-	}
+	// THE ATTEMPT AS THE AUDIT TRAIL COUNTS IT: where it came from and
+	// which door it pushed on, and nothing about who — neither what was
+	// typed nor whom it resolved to.
+	attempt := authevents.Failure{Source: source, Method: types.FailPassword}
 	// THE DECOY RUNS ON THE MISS, and it is not optional. Without it the
 	// no-such-login arm returns in microseconds and the wrong-password arm
 	// pays an argon2 verify — a difference a stopwatch reads as a roster.
@@ -844,7 +840,7 @@ func (s *Service) proveSecondFactor(w http.ResponseWriter, r *http.Request,
 	if use.factor == types.FactorRecovery {
 		s.audit.Emit(r.Context(), types.IAMRecoveryCodeUsed{
 			Person: held.ID, Login: held.Login, Remaining: use.remaining,
-			Remote: attempt.Client,
+			Remote: attempt.Source,
 		})
 	}
 	return use, true
@@ -860,7 +856,7 @@ func (s *Service) refuseSecondFactor(w http.ResponseWriter, r *http.Request,
 
 	if curve.Fail() {
 		s.audit.Emit(r.Context(), types.IAMSecondFactorThrottled{
-			Person: held.ID, Login: held.Login, Remote: attempt.Client,
+			Person: held.ID, Login: held.Login, Remote: attempt.Source,
 		})
 	}
 	s.refuseSignIn(w, r, adm, attempt, why)

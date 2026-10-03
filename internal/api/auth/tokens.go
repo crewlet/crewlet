@@ -133,8 +133,7 @@ var errTokenUnavailable = errors.New("auth: this node could not establish " +
 	"whether this token is live")
 
 // token resolves a request presenting a machine token.
-func (g *Guard) token(r *http.Request, presented credential.Token,
-	candidate string) (*http.Request, *Refusal) {
+func (g *Guard) token(r *http.Request, presented credential.Token) (*http.Request, *Refusal) {
 
 	ctx := r.Context()
 	now := g.machine.now()
@@ -158,8 +157,7 @@ func (g *Guard) token(r *http.Request, presented credential.Token,
 		// one code for all of them.
 		log.InfoContext(ctx, "api_token_refused",
 			"credential", presented.ID, "detail", check.Detail)
-		return r.WithContext(refusedCredential(iam.WithAnonymous(ctx),
-			candidate)), nil
+		return r.WithContext(refusedCredential(iam.WithAnonymous(ctx))), nil
 	}
 
 	owner := row.Owner

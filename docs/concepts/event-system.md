@@ -389,11 +389,11 @@ iam_session_started        # method, second factor, lineage, client address
 iam_session_ended          # logout / logout_all / revoked / person_removed.
                            # A session past its own idle or absolute deadline
                            # is no row: an expiry nobody authored
-iam_login_failures         # ONE per client per minute, from the engine's own
-                           # flush loop: counts, the distinct-subject count,
-                           # the methods (a rejected bearer is `bearer`), how
-                           # many the throttle turned away, and any person the
-                           # engine resolved. Never what was presented
+iam_login_failures         # ONE per node per minute that had a failure, from
+                           # the engine's own flush loop: each source's count
+                           # of failed attempts, at most 64 sources and the
+                           # rest one overflow count. Never what was
+                           # presented, and never whom it named
 iam_stepup_completed       # a signed-in person confirming who they are
 iam_credential_minted, iam_credential_revoked, iam_mfa_reset
 iam_grants_changed         # one per person write, from the writer that
@@ -479,14 +479,14 @@ can author millions a day for nothing, so a row per attempt hands the size of
 the store — and of every artefact taken from it — to whoever is making the
 attempts, with no credential to revoke and no identity on the row. The
 per-attempt fact is the `crewlet.auth.attempts.failed` counter; what becomes a
-row is `iam_login_failures`, one per client per minute, published by the
-engine's own flush loop and therefore rated by the engine. It carries counts
-and never the presented value — not a mistyped login, not a password typed
-into the login box, and not an unsalted hash of either, which would reverse
-against the company's own roster in one pass. Past a fixed number of clients
-in one minute the rest fold into a single `*` row that says how many there
-were, so a distributed attack's size is recorded without its address pool
-deciding how many rows the minute writes. A type that must stay out for this
+row is `iam_login_failures`, one per node per minute that had a failure,
+published by the engine's own flush loop and therefore rated by the engine. It
+carries a count per source and never the presented value — not a mistyped
+login, not a password typed into the login box, and not a hash of either, which
+would reverse against the company's own roster in one pass. Past a fixed number
+of sources in one minute the rest fold into one overflow count, so a
+distributed attack's size is recorded without its address pool deciding how
+large the row is. A type that must stay out for this
 reason is excluded with the cause `anonymous_rate`.
 
 Two facts are kept out by having **no type at all**: a per-request

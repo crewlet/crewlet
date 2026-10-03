@@ -75,7 +75,7 @@ A few things worth knowing when deploying Crewlet:
   only be keyed on the address, and one was a way for any stranger at an
   address to hold every token used from it at `429`. A bearer's protection is its length and randomness (a Tier A value is
   refused under 26 characters), and every refused one is counted in the audit
-  trail's per-client failure tally. Behind a proxy, name it in
+  trail's per-minute failure count by source. Behind a proxy, name it in
   `api.trusted_proxies`: otherwise every caller is the proxy, and a stranger
   guessing at somebody's login slows that person's own sign-in. The curve is
   each node's own and is not shared through the coordination store, so on a

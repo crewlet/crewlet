@@ -260,8 +260,8 @@ func (g *Guard) Resolve(w http.ResponseWriter, r *http.Request) (
 				return r.WithContext(iam.WithUnresolved(r.Context(), errIdentityUnavailable)), answer.refusal
 			}
 			ctx := iam.WithAnonymous(r.Context())
-			if answer.malformed != "" {
-				ctx = refusedCredential(ctx, answer.malformed)
+			if answer.malformed {
+				ctx = refusedCredential(ctx)
 			}
 			return r.WithContext(ctx), answer.refusal
 		}
@@ -279,7 +279,7 @@ func (g *Guard) bearer(r *http.Request, candidate string) (*http.Request, *Refus
 		// one that does not is refused below like any other. See
 		// tokens.go.
 		if presented, isToken := credential.ParseToken(candidate); isToken {
-			return g.token(r, presented, candidate)
+			return g.token(r, presented)
 		}
 	}
 	if !ok {
@@ -294,7 +294,7 @@ func (g *Guard) bearer(r *http.Request, candidate string) (*http.Request, *Refus
 		// route's bearer was not this guard's to check. See
 		// audit.go.
 		return r.WithContext(refusedCredential(
-			iam.WithAnonymous(r.Context()), candidate)), nil
+			iam.WithAnonymous(r.Context()))), nil
 	}
 	principal, how, refusal := g.principalFor(r.Context(), entry, g.now())
 	if how == iam.Unknown {

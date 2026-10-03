@@ -981,7 +981,7 @@ A credential that **names nobody** — an invitation link — meets no curve at
 all: there is no subject to pair with its address, and its secret is 256 bits
 from `crypto/rand`, so a curve on the address alone would only have been a way
 for one stranger to hold every invitation from that address shut. Every
-refusal of one is still a failed attempt in the tally.
+refusal of one is still a failed attempt in the per-minute count.
 
 An attempt still being checked counts as a failure against its pair until it
 resolves, so a burst of concurrent guesses at one account is served one after
@@ -1046,9 +1046,8 @@ guess the same way — and would still let a stranger at the address close the
 one route a break-glass holder uses to reach the dashboard.
 
 What a guess costs the guesser is **visibility**: every refused bearer on a
-guarded route is a failed attempt in the audit trail's per-client, per-minute
-tally — `iam_login_failures`, naming the client and how many different values
-it tried.
+guarded route is a failed attempt in the audit trail's per-minute count —
+`iam_login_failures`, naming the source and how many attempts it failed.
 
 An **unguarded** route never compares a bearer at all — `/health`, the
 dashboard's assets, the webhooks, the sign-in routes. Nothing there acts on
@@ -1898,7 +1897,7 @@ Identity has **two trails**, and they answer different questions.
 | `iam_session_started` | The sign-in surface, on a password, app-code, invitation or token sign-in | Once per session |
 | `iam_stepup_completed` | The sign-in surface, when a signed-in person confirms who they are: the person, the new session and the one it replaced, the second factor presented and the client — and never which surface it was for, because a step-up proves the session for every surface until `reauth_at`, and the request that prompted it is refused before it and never reaches it, so the only source would be the client's word | Once per step-up |
 | `iam_session_ended` | A logout (`logout`, `logout_all`) or an administrator (`revoked`, `person_removed`) | Once per ending, by whoever wrote the record that ended it. A session past its own idle or absolute deadline is not announced at all — see below |
-| `iam_login_failures` | The engine's own flush loop | One row per client per minute; see below |
+| `iam_login_failures` | The engine's own flush loop | One row per node per minute that had a failure, counting each source; see below |
 | `iam_recovery_code_used` | The sign-in surface | Once per code, with how many are left |
 | `iam_second_factor_throttled` | The sign-in surface, when a person's second-factor curve reaches its ceiling — somebody holding their password is guessing at their code, so the password is what to rotate | On the wrong code that takes the curve to its ceiling, per node — a run held there announces nothing more, and one that has aged back down announces its next climb — naming the address that code came from |
 | `iam_credential_minted`, `iam_credential_revoked` | The directory (a machine token) and the sign-in surface (an app code or a new set of recovery codes) | Once per gesture |
@@ -1923,7 +1922,7 @@ things and publish nothing:
 - add one to the `crewlet.auth.attempts.failed` counter, by `method` and
   whether the throttle turned it away — the per-attempt number, for a
   dashboard or an alert (see [Metrics](../reference/metrics.md));
-- fold into a tally keyed on the client and the minute.
+- add one to its source's count for the minute.
 
 A credential the guard never relied on is not an attempt. The routes served
 without one — the webhooks, the sign-in routes, the per-run sandbox paths —
@@ -1936,23 +1935,25 @@ the credential it connected with. A refusal is counted where a route that
 needs a credential answered `401` because of it.
 
 When the minute has closed, the engine publishes **one `iam_login_failures`
-row per client** carrying the number of attempts, how many the throttle turned
-away, the methods tried, how many *different* names were tried, and the ids of
-any people the engine itself resolved an attempt to. A node that stops
+row for the node**: each source that failed in it — the client address as the
+trusted proxies resolve it — with how many of its attempts failed, the
+busiest first. A minute with no failure writes nothing, and a node that stops
 publishes the minute it is still holding on the way down.
 
-**It never carries what was typed.** Not the login, not the password somebody
-typed into the login box, not a token, and not an unsalted hash of any of them,
-which would reverse against the company's own roster in one pass. The count of
-different names is taken over digests under a key the process generates at
-start and never writes anywhere, and the digests are discarded with the
-minute.
+**It carries nothing about who.** Not the login, not the password somebody
+typed into the login box, not a token, not a hash of any of them — which
+would reverse against the company's own roster in one pass — and not who the
+engine resolved a failure to, which would make the row a list of the people
+being guessed at. A spray across the directory and a run at one person both
+show as one source's count climbing; which door it was pushing on is the
+counter's `method`.
 
-Every size here is bounded rather than chosen by the caller: at most 64
-clients are named in one minute and the rest fold into a single `*` row that
-says how many there were, a distinct-name count saturates at 256, and a row
-names at most 16 people. A count at its cap reads "at least", never less than
-happened.
+The one size here an attacker would otherwise choose is bounded: a row names
+at most **64 sources**, and every further source's failures fold into one
+`overflow` count. A minute with more distinct failing sources than that is a
+distributed attack, and what is worth recording is its size — without the cap
+the row would grow with the attacker's address pool, and an IPv6 `/64` alone
+is 2<sup>64</sup> addresses.
 
 ### A token's use is on its records, and its overreach is a log line
 

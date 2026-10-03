@@ -313,12 +313,7 @@ func (s *Service) StepUp(w http.ResponseWriter, r *http.Request) {
 		httpjson.Unavailable(w, httpjson.CodeIdentityUnavailable, auth.RetryIdentity(err))
 		return
 	}
-	// THE CALLER IS KNOWN here, so the subject is who they signed in as and
-	// the person is whoever this node resolved that login to.
-	attempt := authevents.Failure{
-		Client: source, Method: types.FailPassword, Subject: principal.Login,
-		Person: held.ID,
-	}
+	attempt := authevents.Failure{Source: source, Method: types.FailPassword}
 	if held.ID == "" || !stageAdmits(held.Stage) {
 		s.refuseSignIn(w, r, adm, attempt, "step-up subject not active")
 		return

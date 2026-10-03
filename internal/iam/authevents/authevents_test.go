@@ -2,12 +2,6 @@ package authevents
 
 import (
 	"context"
-	"crypto/md5"  //nolint:gosec // the digests a leak would take the shape of, computed to be searched for
-	"crypto/sha1" //nolint:gosec // the same
-	"crypto/sha256"
-	"encoding/base64"
-	"encoding/hex"
-	"encoding/json"
 	"reflect"
 	"slices"
 	"strconv"
@@ -104,119 +98,77 @@ func failuresOf(t *testing.T, published []*events.Event) []types.IAMLoginFailure
 	return out
 }
 
-// NOTHING AN ATTEMPT PRESENTED LEAVES THE PROCESS — not the value, and not an
-// unsalted hash of it.
+// A FAILURE CARRIES NOTHING ABOUT WHO, AND NEITHER DOES ITS ROW.
 //
-// Two halves, because they fail differently. The TYPE half walks the payload's
-// wire keys against the list of things this row is allowed to say: a field
-// added to carry "just a hash of the subject" is a new key, and it is caught
-// here whatever it is called. The INSTANCE half publishes a real row from
-// attempts whose presented values are distinctive — one of them a password
-// typed into the login box, which is exactly where a real one ends up — and
-// searches the bytes that went to the publisher for each value and for every
-// unsalted digest of it an implementation would plausibly reach for.
+// A failed attempt is authored by whoever can reach the listener, and what it
+// presented is where a password typed into the login box lands. The tally
+// this replaced kept HMAC digests of it to count distinct names, and the ids
+// of the people the engine resolved failures to; neither is kept now, and the
+// way to keep it that way is to hold the SHAPES: what a surface can hand the
+// trail, and what the row can say. A field added to carry "just a hash of the
+// subject" is a new field, and it is caught here whatever it is called.
 //
-// Mutation: put `hex(sha256(subject))` into the row's people and the instance
-// half goes red naming the sha256 digest; add a `subject_digest` field to the
-// payload and the type half goes red naming it.
-func TestLoginFailuresCarryNoPresentedString(t *testing.T) {
+// Mutation: add a Subject to [Failure], or a key to the row or to a source's
+// entry, and its half goes red naming it.
+func TestAFailureCarriesNothingAboutWho(t *testing.T) {
 	t.Parallel()
-
-	// THE TYPE: every key the row can carry is one of these, and none of
-	// them is a place the presented value could go.
-	allowed := []string{"attempts", "client", "clients", "methods", "minute",
-		"people", "subjects", "throttled"}
-	rt := reflect.TypeFor[types.IAMLoginFailures]()
-	var keys []string
-	for i := range rt.NumField() {
-		tag := strings.Split(rt.Field(i).Tag.Get("json"), ",")[0]
-		keys = append(keys, tag)
-	}
-	slices.Sort(keys)
-	if !slices.Equal(keys, allowed) {
-		t.Errorf("iam_login_failures carries keys %v, want exactly %v: a new "+
-			"key on a row whose rate an unauthenticated caller authors is a "+
-			"new place for what they typed to land", keys, allowed)
-	}
-
-	// THE INSTANCE.
-	trail, pub, clk, _ := newTrail(t)
-	presented := []string{
-		"jane.doe@example.com",
-		"Tr0ub4dor&3-correct-horse",         // a password in the login box
-		"cwl_pat_0192f00d_Zm9vYmFyYmF6cXV4", // a bearer somebody sprayed
-	}
-	for i, value := range presented {
-		trail.Failed(context.Background(), Failure{
-			Client: "203.0.113.9", Method: types.FailPassword, Subject: value,
-			Person: "p-" + strconv.Itoa(i),
-		})
-	}
-	clk.Set(noon.Add(time.Minute))
-	trail.Flush(context.Background())
-	published := pub.published()
-	if len(published) != 1 {
-		t.Fatalf("published %d rows, want one for the client's minute", len(published))
-	}
-	raw, err := json.Marshal(published[0])
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, value := range presented {
-		for form, needle := range leakedForms(value) {
-			if strings.Contains(string(raw), needle) {
-				t.Errorf("the published row carries the presented value as %s "+
-					"(%q): %s", form, needle, raw)
+	fieldsOf := func(rt reflect.Type, tagged bool) []string {
+		var out []string
+		for i := range rt.NumField() {
+			name := rt.Field(i).Name
+			if tagged {
+				name = strings.Split(rt.Field(i).Tag.Get("json"), ",")[0]
 			}
+			out = append(out, name)
+		}
+		slices.Sort(out)
+		return out
+	}
+	for _, shape := range []struct {
+		what   string
+		rt     reflect.Type
+		tagged bool
+		want   []string
+	}{
+		{"a failure a surface hands the trail", reflect.TypeFor[Failure](), false,
+			[]string{"Method", "Source", "Throttled"}},
+		{"iam_login_failures", reflect.TypeFor[types.IAMLoginFailures](), true,
+			[]string{"minute", "overflow", "sources"}},
+		{"a source's entry on it", reflect.TypeFor[types.SourceFailures](), true,
+			[]string{"failures", "source"}},
+	} {
+		if got := fieldsOf(shape.rt, shape.tagged); !slices.Equal(got, shape.want) {
+			t.Errorf("%s carries %v, want exactly %v: a new field on a fact "+
+				"whose rate an unauthenticated caller authors is a new place "+
+				"for what they presented, or whom it named, to land",
+				shape.what, got, shape.want)
 		}
 	}
-	if got := failuresOf(t, published)[0].Subjects; got != len(presented) {
-		t.Errorf("subjects = %d, want %d: the count is the one thing the "+
-			"presented values may contribute", got, len(presented))
-	}
 }
 
-// leakedForms is every shape a presented value could reach a row in: itself,
-// its lower-cased form, and the unsalted digests a careless implementation
-// would reach for, in the encodings they are usually written in.
-func leakedForms(value string) map[string]string {
-	out := map[string]string{"cleartext": value, "lower-cased": strings.ToLower(value)}
-	sums := map[string][]byte{}
-	s256 := sha256.Sum256([]byte(value))
-	sums["sha256"] = s256[:]
-	s1 := sha1.Sum([]byte(value)) //nolint:gosec // searched for, never used
-	sums["sha1"] = s1[:]
-	m5 := md5.Sum([]byte(value)) //nolint:gosec // searched for, never used
-	sums["md5"] = m5[:]
-	for name, sum := range sums {
-		out[name+" hex"] = hex.EncodeToString(sum)
-		out[name+" hex prefix"] = hex.EncodeToString(sum)[:16]
-		out[name+" base64"] = base64.StdEncoding.EncodeToString(sum)
-		out[name+" base64url"] = base64.RawURLEncoding.EncodeToString(sum)
-	}
-	return out
-}
-
-// ONE ROW PER CLIENT PER MINUTE, published only once the minute has CLOSED.
+// ONE ROW PER NODE PER MINUTE, counting each source, published only once the
+// minute has CLOSED.
 //
 // The row count is the engine's decision and the attempt count is the
 // caller's; this is the property that keeps the second from becoming the
-// first. Mutation: publish from Failed and the first assertion fails with a
-// row per attempt; flush the open minute and the second does.
-func TestOneRowPerClientPerMinute(t *testing.T) {
+// first. A throttled attempt is a failure like any other on the row, and the
+// metric is where the method and the outcome are told apart.
+//
+// Mutation: publish from Failed and the first assertion fails with a row per
+// attempt; flush the open minute and the second does; publish a row per
+// source and the closed minute has two.
+func TestOneRowPerNodePerMinute(t *testing.T) {
 	t.Parallel()
 	trail, pub, clk, count := newTrail(t)
 	ctx := context.Background()
 
 	for range 40 {
-		trail.Failed(ctx, Failure{Client: "203.0.113.9", Method: types.FailPassword,
-			Subject: "jane.doe"})
+		trail.Failed(ctx, Failure{Source: "203.0.113.9", Method: types.FailPassword})
 	}
-	trail.Failed(ctx, Failure{Client: "203.0.113.9", Method: types.FailBearer,
-		Subject: "a-wrong-token"})
-	trail.Failed(ctx, Failure{Client: "203.0.113.9", Method: types.FailPassword,
+	trail.Failed(ctx, Failure{Source: "203.0.113.9", Method: types.FailBearer})
+	trail.Failed(ctx, Failure{Source: "203.0.113.9", Method: types.FailPassword,
 		Throttled: true})
-	trail.Failed(ctx, Failure{Client: "198.51.100.4", Method: types.FailInvite})
+	trail.Failed(ctx, Failure{Source: "198.51.100.4", Method: types.FailInvite})
 	if got := len(pub.published()); got != 0 {
 		t.Fatalf("%d rows published on the request path: a failed attempt must "+
 			"never publish, or the caller who failed paces the estate", got)
@@ -225,41 +177,31 @@ func TestOneRowPerClientPerMinute(t *testing.T) {
 	trail.Flush(ctx)
 	if got := len(pub.published()); got != 0 {
 		t.Fatalf("%d rows published for a minute still open: its row would be "+
-			"one of several for the same client and minute", got)
+			"one of several for the same minute", got)
 	}
 
 	// The next minute opens; one more attempt lands in it.
 	clk.Set(noon.Add(time.Minute))
-	trail.Failed(ctx, Failure{Client: "203.0.113.9", Method: types.FailPassword,
-		Subject: "jane.doe"})
+	trail.Failed(ctx, Failure{Source: "203.0.113.9", Method: types.FailPassword})
 	trail.Flush(ctx)
 	rows := failuresOf(t, pub.published())
-	if len(rows) != 2 {
-		t.Fatalf("published %d rows for the closed minute, want one per client "+
-			"(2): %+v", len(rows), rows)
+	if len(rows) != 1 {
+		t.Fatalf("published %d rows for the closed minute, want one for the "+
+			"node: %+v", len(rows), rows)
 	}
-	byClient := map[string]types.IAMLoginFailures{}
-	for _, row := range rows {
-		byClient[row.Client] = row
-		if !row.Minute.Equal(noon.Truncate(time.Minute)) {
-			t.Errorf("row minute = %v, want the minute the attempts fell in", row.Minute)
-		}
+	row := rows[0]
+	if !row.Minute.Equal(noon.Truncate(time.Minute)) {
+		t.Errorf("row minute = %v, want the minute the attempts fell in", row.Minute)
 	}
-	guesser := byClient["203.0.113.9"]
-	if guesser.Attempts != 41 || guesser.Throttled != 1 {
-		t.Errorf("attempts/throttled = %d/%d, want 41/1", guesser.Attempts, guesser.Throttled)
+	want := []types.SourceFailures{
+		{Source: "203.0.113.9", Failures: 42}, {Source: "198.51.100.4", Failures: 1},
 	}
-	if guesser.Subjects != 2 {
-		t.Errorf("subjects = %d, want 2 (one login, one bearer)", guesser.Subjects)
-	}
-	if want := []types.FailureMethod{types.FailBearer, types.FailPassword}; !slices.Equal(guesser.Methods, want) {
-		t.Errorf("methods = %v, want %v, sorted and distinct", guesser.Methods, want)
-	}
-	if byClient["198.51.100.4"].Attempts != 1 {
-		t.Errorf("the second client's row = %+v", byClient["198.51.100.4"])
+	if !slices.Equal(row.Sources, want) || row.Overflow != 0 {
+		t.Errorf("row = %+v, want %v — every source's count, most first", row, want)
 	}
 
-	// AND THE COUNTER SAW EVERY ONE, which is where the rate lives.
+	// AND THE COUNTER SAW EVERY ONE, by method and outcome, which is where
+	// the rate and the door live.
 	if got := count.seen[metrics.AuthAttemptsFailed+"|password|refused"]; got != 41 {
 		t.Errorf("password refusals counted = %d, want 41", got)
 	}
@@ -270,60 +212,45 @@ func TestOneRowPerClientPerMinute(t *testing.T) {
 	// The minute that is still open is published by a later flush, alone.
 	clk.Set(noon.Add(2 * time.Minute))
 	trail.Flush(ctx)
-	if got := len(pub.published()); got != 3 {
-		t.Errorf("after the second minute closed, %d rows in total, want 3", got)
+	if got := len(pub.published()); got != 2 {
+		t.Errorf("after the second minute closed, %d rows in total, want 2", got)
 	}
 }
 
-// PAST THE PER-MINUTE CAP, CLIENTS FOLD INTO ONE ROW THAT SAYS HOW MANY.
+// PAST THE PER-MINUTE CAP, SOURCES FOLD INTO ONE OVERFLOW COUNT.
 //
-// Without it the rows a minute writes are bounded by the attacker's address
-// pool. Mutation: give every client its own row regardless and the count goes
-// to 74.
-func TestClientsPastTheCapFoldIntoOneRow(t *testing.T) {
+// Without it a minute's row — and the memory it is counted in — grows with the
+// attacker's address pool. A source already named keeps its name.
+//
+// Mutation: name every source regardless and the row names 74; fold a named
+// source's later failure into the overflow and its count stays at one.
+func TestSourcesPastTheCapFoldIntoTheOverflow(t *testing.T) {
 	t.Parallel()
 	trail, pub, clk, _ := newTrail(t)
 	ctx := context.Background()
 	const extra = 10
-	for i := range MaxClientsPerMinute + extra {
-		trail.Failed(ctx, Failure{Client: "2001:db8::" + strconv.Itoa(i),
-			Method: types.FailBearer, Subject: "x" + strconv.Itoa(i)})
+	for i := range MaxSourcesPerMinute + extra {
+		trail.Failed(ctx, Failure{Source: "2001:db8::" + strconv.Itoa(i),
+			Method: types.FailBearer})
 	}
+	trail.Failed(ctx, Failure{Source: "2001:db8::0", Method: types.FailBearer})
 	clk.Set(noon.Add(time.Minute))
 	trail.Flush(ctx)
 	rows := failuresOf(t, pub.published())
-	if len(rows) != MaxClientsPerMinute+1 {
-		t.Fatalf("%d rows, want %d named clients and one folded row",
-			len(rows), MaxClientsPerMinute)
+	if len(rows) != 1 {
+		t.Fatalf("%d rows, want one", len(rows))
 	}
-	folded := rows[0] // "*" sorts before every digit and letter
-	if folded.Client != "*" || folded.Clients != extra || folded.Attempts != extra {
-		t.Errorf("folded row = %+v, want client * covering %d clients", folded, extra)
+	row := rows[0]
+	if len(row.Sources) != MaxSourcesPerMinute || row.Overflow != extra {
+		t.Errorf("row names %d sources with overflow %d, want %d and %d",
+			len(row.Sources), row.Overflow, MaxSourcesPerMinute, extra)
 	}
-}
-
-// A COUNT AN ATTACKER DRIVES SATURATES AT ITS CAP rather than growing the
-// memory it is counted in.
-func TestCountsSaturateAtTheirCaps(t *testing.T) {
-	t.Parallel()
-	trail, pub, clk, _ := newTrail(t)
-	ctx := context.Background()
-	for i := range MaxSubjectsCounted + 50 {
-		trail.Failed(ctx, Failure{Client: "c", Method: types.FailBearer,
-			Subject: "token-" + strconv.Itoa(i), Person: "p-" + strconv.Itoa(i)})
+	if first := row.Sources[0]; first.Source != "2001:db8::0" || first.Failures != 2 {
+		t.Errorf("the busiest source is %+v, want the named one still counted "+
+			"under its name", first)
 	}
-	clk.Set(noon.Add(time.Minute))
-	trail.Flush(ctx)
-	row := failuresOf(t, pub.published())[0]
-	if row.Subjects != MaxSubjectsCounted {
-		t.Errorf("subjects = %d, want it saturated at %d", row.Subjects, MaxSubjectsCounted)
-	}
-	if len(row.People) != MaxPeopleNamed {
-		t.Errorf("people named = %d, want at most %d", len(row.People), MaxPeopleNamed)
-	}
-	if row.Attempts != MaxSubjectsCounted+50 {
-		t.Errorf("attempts = %d: a saturated subject set must not stop the count",
-			row.Attempts)
+	if got := row.Total(); got != MaxSourcesPerMinute+extra+1 {
+		t.Errorf("the row totals %d, want every attempt", got)
 	}
 }
 
@@ -331,7 +258,7 @@ func TestCountsSaturateAtTheirCaps(t *testing.T) {
 func TestRunFlushesWhatItHoldsWhenItStops(t *testing.T) {
 	t.Parallel()
 	trail, pub, _, _ := newTrail(t)
-	trail.Failed(context.Background(), Failure{Client: "c", Method: types.FailPassword})
+	trail.Failed(context.Background(), Failure{Source: "c", Method: types.FailPassword})
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
 	go func() { trail.Run(ctx); close(done) }()

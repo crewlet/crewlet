@@ -207,7 +207,7 @@ func (s *Service) RedeemInvite(w http.ResponseWriter, r *http.Request) {
 			// as the first attempt's, so the ledger collapses the two.
 			s.spendInvitation(r, held, person, opID)
 		}
-		s.refuseInvitation(w, r, adm, held.ID, true)
+		s.refuseInvitation(w, r, adm, true)
 		return
 	}
 	email, err := s.openSealed(r, held)
@@ -388,10 +388,10 @@ func (s *Service) presentedInvitation(w http.ResponseWriter, r *http.Request,
 	}
 	switch {
 	case held.ID == "" || !held.Admits(secret):
-		s.refuseInvitation(w, r, adm, id, false)
+		s.refuseInvitation(w, r, adm, false)
 		return iamdomain.InvitationRow{}, false
 	case held.Spent(s.now()):
-		s.refuseInvitation(w, r, adm, id, true)
+		s.refuseInvitation(w, r, adm, true)
 		return iamdomain.InvitationRow{}, false
 	}
 	return held, true
@@ -418,15 +418,11 @@ func (s *Service) presentedInvitation(w http.ResponseWriter, r *http.Request,
 // link — every one of them is refused the same way — so it tells a guesser
 // nothing.
 func (s *Service) refuseInvitation(w http.ResponseWriter, r *http.Request,
-	adm admission, id string, proved bool) {
+	adm admission, proved bool) {
 
 	if !proved {
 		s.audit.Failed(r.Context(), authevents.Failure{
-			Client: adm.source, Method: types.FailInvite,
-			// THE ID PRESENTED, keyed in memory and never kept: how many
-			// DIFFERENT links one client tried in a minute is the
-			// difference between a stale bookmark and a walk.
-			Subject: id,
+			Source: adm.source, Method: types.FailInvite,
 		})
 	}
 	httpjson.Fail(w, http.StatusGone, httpjson.CodeInviteSpent)

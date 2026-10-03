@@ -207,17 +207,18 @@ func TestSummaries(t *testing.T) {
 		payload: IAMSessionEnded{Person: "p-1", Reason: EndLogoutAll, By: "jane.doe"},
 		want:    "Every session of p-1 ended (logout_all)",
 	}, {
-		// THE COUNT IS BOTH ARMS: an attacker the throttle turned away
-		// made those requests too, and a line counting only the verified
-		// ones reads as a quieter minute than it was.
-		name: "a minute of failures counts every arm and names the methods",
-		payload: IAMLoginFailures{Client: "203.0.113.9", Attempts: 4, Throttled: 2,
-			Methods: []FailureMethod{FailBearer, FailPassword}},
-		want: "6 failed attempt(s) from 203.0.113.9 in one minute (bearer, password; 2 throttled)",
+		// THE COUNT IS EVERY SOURCE'S, and the one that sent most of it
+		// leads, because that is what a reader of the feed sorts by.
+		name: "a minute of failures counts every source and leads with the busiest",
+		payload: IAMLoginFailures{Sources: []SourceFailures{
+			{Source: "203.0.113.9", Failures: 6}, {Source: "198.51.100.4", Failures: 1}}},
+		want: "7 failed attempt(s) in one minute from 2 source(s); most from 203.0.113.9 (6)",
 	}, {
-		name:    "the overflow row says how many clients it folded",
-		payload: IAMLoginFailures{Client: "*", Clients: 300, Attempts: 900},
-		want:    "900 failed attempt(s) from 300 clients past the per-minute cap in one minute",
+		name: "the overflow counts what came from sources past the cap",
+		payload: IAMLoginFailures{Sources: []SourceFailures{{Failures: 2}},
+			Overflow: 900},
+		want: "902 failed attempt(s) in one minute from 1 source(s); most from an " +
+			"unidentified client (2); 900 from sources past the per-minute cap",
 	}, {
 		name: "an unverifiable record names the key and what the node holds",
 		payload: RecordUnverifiable{Domain: "iam", KeyID: "k3",

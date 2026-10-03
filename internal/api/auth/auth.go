@@ -48,7 +48,7 @@
 // VPN's egress, or the whole internet behind a proxy this deployment does not
 // trust. What makes guessing hopeless is the value — crypto/rand bytes, a
 // keyring HMAC, a Tier A value config refuses short — and what a guess costs is
-// a line in the audit trail's failure tally. bearers.go carries the argument,
+// a count on the audit trail's failure row. bearers.go carries the argument,
 // including the curve that was tried and what it cost.
 //
 // # And two gates beside it
@@ -678,7 +678,7 @@ func (g *Guard) Middleware(next http.Handler) http.Handler {
 // a refused one returns after a map compare, so `Authorization: Bearer
 // <guess>` against /health, /favicon.ico or /static answered a right value and
 // a wrong one at different speeds, as fast as they were sent, on routes whose
-// refusals the audit trail's failure tally does not count. So the value is
+// refusals the audit trail's failure count does not include. So the value is
 // never looked at here: the request is anonymous.
 //
 // THE REFUSAL [Guard.Resolve] RETURNS IS DISCARDED ON PURPOSE. It is only ever

@@ -5,51 +5,42 @@
 //
 // # Two kinds of fact, and they reach the estate by different doors
 //
-// A fact a VERIFIED credential authored — a sign-in, a logout, a token minted
-// by somebody holding a session — is published as it happens, through
+// A fact a VERIFIED credential or the engine itself authored — a sign-in, a
+// logout, a token minted by somebody holding a session, a person's second
+// factor reaching its ceiling — is published as it happens, through
 // [Trail.Emit]. It is attributable (there is a credential to revoke and a name
 // on the row) and it is paced by somebody the engine already trusts.
 //
 // A FAILED ATTEMPT is the opposite on both counts, and internal/events refuses
 // to admit a type whose rate such a caller authors. So [Trail.Failed] never
-// publishes anything. It adds one to a metrics counter and folds the attempt
-// into an in-memory tally keyed on (client, minute), and [Trail.Run] — the
-// engine's own loop — publishes each tally ONCE, after its minute has closed,
-// as `iam_login_failures`. The caller decides how many attempts there are; the
-// ticker decides how many rows there are. The design this replaced wrote a
+// publishes anything. It adds one to a metrics counter and one to its
+// source's count for the minute, and [Trail.Run] — the engine's own loop —
+// publishes each minute ONCE, after it has closed, as one `iam_login_failures`
+// for the node. The caller decides how many attempts there are; the ticker
+// decides how many rows there are. The design this replaced wrote a
 // synchronous row per attempt, which was 6.9 million rows a day from one host.
 //
-// # What a tally holds, and what it is never allowed to hold
+// # A row holds counts per source, and nothing that was presented
 //
-// Counts, the methods tried, how many the throttle turned away, and the ids of
-// people the ENGINE resolved a failed attempt to. It also answers "how many
-// DIFFERENT names did this client try", and that is the one number that needs
-// the presented value — so the value is keyed under an HMAC key this process
-// generated at start and never wrote anywhere, the digest is truncated to eight
-// bytes, and the set is thrown away when the minute is published. Nothing
-// leaves the process but the size of the set.
+// How many attempts failed from each source — the client address as the
+// trusted proxies resolve it — and how many from sources past the cap. Never
+// what was typed or sent: the presented value is where a password typed into
+// the login box lands, and an unsalted hash of it reverses against the
+// company's own roster in one pass. The tally this replaced also counted the
+// DIFFERENT names each client tried, over digests under a key the process
+// generated, and named the people the engine resolved a failure to; a spray
+// across the directory and a run at one person both show as a source's count
+// climbing, and the metric's `method` says which door it was pushing on.
 //
-// The alternatives were each measured against what they leak. The presented
-// value itself is where a password typed into the login box ends up. An
-// UNSALTED hash of it is reversible against the company's own roster in one
-// pass — the attacker who can read the audit trail has the roster too. A salted
-// hash that is published is a per-deployment rainbow table away from the same
-// thing. A digest under a key nobody can read is none of those, and it is the
-// only one that is.
+// # The one bound here is stated where it is enforced
 //
-// # Every bound here is stated where it is enforced
-//
-// The number of clients one minute names ([MaxClientsPerMinute]), the distinct
-// subjects one tally can count ([MaxSubjectsCounted]), the people one row names
-// ([MaxPeopleNamed]) and the clients the overflow row can count
-// ([MaxFoldedClients]) are all things an attacker would otherwise choose. Each
-// is a constant with its reason at its definition, and a count that reaches
-// its cap SATURATES rather than being dropped, so a row reads "at least"
-// rather than understating what happened.
+// How many sources one minute names ([MaxSourcesPerMinute]) is a number an
+// attacker would otherwise choose, so past it every further source's failures
+// fold into one overflow count rather than a name each.
 //
 // # No fact is coalesced per window
 //
-// There was a second door, a once-per-window dedupe with a bounded set per
+// There was a third door, a once-per-window dedupe with a bounded set per
 // class of fact: a Tier A token's first use in an hour and its overreach, a
 // session noticed past its own deadline, a person's second factor at its
 // ceiling. Each went the way that needs no remembered set. A token's use is
@@ -60,14 +51,10 @@
 package authevents
 
 import (
+	"cmp"
 	"context"
-	"crypto/hmac"
-	"crypto/rand"
-	"crypto/sha256"
 	"errors"
-	"fmt"
 	"log/slog"
-	"maps"
 	"slices"
 	"sync"
 	"time"
@@ -116,79 +103,41 @@ type Options struct {
 }
 
 // Failure is one failed attempt, as the surface that refused it saw it.
+//
+// NOTHING ABOUT WHO: not what was presented, and not whom the engine resolved
+// it to. A failure is counted per source, and the metric is split by method
+// and outcome; see the package doc for what the tally used to hold and why it
+// does not.
 type Failure struct {
-	// Client is the address the throttle keys on: resolved through
+	// Source is the address the throttle keys on: resolved through
 	// `api.trusted_proxies`, so behind a proxy it is the caller rather
-	// than the proxy. Empty is folded under the empty client, which is
+	// than the proxy. Empty is counted under the empty source, which is
 	// what a request with no resolvable address honestly is.
-	Client string
+	Source string
 
 	// Method is what the attempt tried to prove itself with.
 	Method types.FailureMethod
 
-	// Subject is WHAT WAS PRESENTED AS WHO: the login or address typed, or
-	// the bearer value sent. It is keyed under this process's own secret
-	// the moment it arrives and never held, logged or published — see the
-	// package doc. Empty for an attempt that named nobody (an invitation
-	// link nobody issued), which is then not a subject at all.
-	Subject string
-
-	// Person is the id of somebody the ENGINE resolved the attempt to —
-	// a wrong password for a real login — or empty.
-	Person string
-
 	// Throttled says the attempt was answered 429 before anything was
 	// verified — the throttle's curve owed its key a longer wait than a
-	// request is held open for. It is counted apart, because "this client
-	// came back before its wait was over" is a different fact from "this
-	// client guessed wrong".
+	// request is held open for. The metric counts it apart; the row
+	// counts it as a failure like any other, because a source that keeps
+	// going after it was told to wait is pushing exactly as hard.
 	Throttled bool
 }
 
-// The bounds on what a caller can make this package hold.
-const (
-	// MaxClientsPerMinute is how many clients one minute names a row for.
-	// Past it, every further client folds into ONE row whose client is
-	// "*" and whose `clients` field says how many were folded.
-	//
-	// SIXTY-FOUR, because it is where a row per client stops telling an
-	// operator anything a single row would not: a minute with more
-	// distinct guessers than that is a distributed attack, and what is
-	// worth writing down is its size, which the folded row carries. It
-	// also makes the rows a minute can write a constant — sixty-five a
-	// minute, about ninety-four thousand a day at the very worst — where
-	// without it the ceiling is the attacker's address pool, and an IPv6
-	// /64 alone is 2^64 of those.
-	MaxClientsPerMinute = 64
-
-	// MaxSubjectsCounted is how many distinct subjects one tally counts
-	// before it saturates.
-	//
-	// 256, well past any honest caller: somebody mistyping their own login
-	// presents one or two. What presents hundreds of distinct values in a
-	// minute from one client is a spray — one password across the
-	// directory, or bearers — and no curve slows either, because the
-	// sign-in curve is keyed on the pair and a bearer's value is its own
-	// protection; for a spray, "at least 256" is already all an operator
-	// does anything with. At eight bytes a digest it bounds the counting to
-	// about 130 KiB across every tally a minute can hold.
-	MaxSubjectsCounted = 256
-
-	// MaxPeopleNamed is how many resolved people one row names.
-	//
-	// SIXTEEN, which is past every account a TARGETED run aims at — a
-	// handful of people worth becoming — so a row names all of them, while
-	// a spray across the directory is told apart by the distinct-subject
-	// count beside the names rather than by a list of everybody it tried,
-	// which would put the company's roster in one row. Past it, an attempt
-	// is still COUNTED — only the name list stops growing.
-	MaxPeopleNamed = 16
-
-	// MaxFoldedClients is how many distinct clients the "*" row counts
-	// before its `clients` field saturates, which is the same "at least"
-	// reading [MaxSubjectsCounted] has. 4096 eight-byte digests is 32 KiB.
-	MaxFoldedClients = 4096
-)
+// MaxSourcesPerMinute is how many sources one minute's row names. Past it,
+// every further source's failures fold into the row's overflow count.
+//
+// SIXTY-FOUR, because it is where naming another source stops telling an
+// operator anything the count would not: a minute with more distinct failing
+// sources than that is a distributed attack, and what is worth writing down is
+// its size, which the overflow carries. It also bounds the row — sixty-four
+// addresses and counts is a few kilobytes, inside any event — and the memory a
+// minute holds, where without it both would grow with the attacker's address
+// pool, and an IPv6 /64 alone is 2^64 of those. A source keeps its place once
+// it has one, so a source already named goes on being counted under its name.
+const MaxSourcesPerMinute = 64
 
 // PublishBudget bounds one publish.
 //
@@ -211,32 +160,18 @@ type Trail struct {
 	now     func() time.Time
 	logger  *slog.Logger
 
-	// key keys the subject digests. Per process, random, never written
-	// anywhere: see the package doc for why nothing weaker will do.
-	key []byte
-
 	mu      sync.Mutex
 	minutes map[time.Time]*minute
 }
 
 // minute is every failed attempt one minute held.
 type minute struct {
-	clients map[string]*tally
+	// sources is each named source's failures, at most
+	// [MaxSourcesPerMinute] of them.
+	sources map[string]int
 
-	// overflow is the "*" row: every client past [MaxClientsPerMinute].
-	overflow *tally
-}
-
-// tally is one row's worth of failed attempts.
-type tally struct {
-	attempts  int
-	throttled int
-	subjects  map[[8]byte]struct{}
-	methods   map[types.FailureMethod]struct{}
-	people    map[string]struct{}
-
-	// folded counts distinct clients, on the overflow row only.
-	folded map[[8]byte]struct{}
+	// overflow is the failures from every source past the cap.
+	overflow int
 }
 
 // New builds a trail, or refuses a missing dependency by name.
@@ -250,13 +185,9 @@ func New(opts Options) (*Trail, error) {
 			"is the source on every row, and a fleet reading several nodes' " +
 			"trails side by side cannot tell whose a row is without it")
 	}
-	key := make([]byte, sha256.Size)
-	if _, err := rand.Read(key); err != nil {
-		return nil, fmt.Errorf("authevents: read the subject key: %w", err)
-	}
 	t := &Trail{
 		pub: opts.Publisher, counter: opts.Counter, node: opts.Node,
-		now: opts.Now, logger: opts.Logger, key: key,
+		now: opts.Now, logger: opts.Logger,
 		minutes: map[time.Time]*minute{},
 	}
 	if t.now == nil {
@@ -294,12 +225,12 @@ func (t *Trail) Emit(ctx context.Context, payload events.Payload) {
 	}
 }
 
-// Failed records one failed attempt: a counter now, and a share of the row its
-// client's minute publishes once it has closed.
+// Failed records one failed attempt: a counter now, and one on its source's
+// count for the minute, which the row publishes once the minute has closed.
 //
 // IT NEVER PUBLISHES, and that is the admission rule rather than an
 // optimisation: the caller who failed decides how often this runs.
-func (t *Trail) Failed(ctx context.Context, f Failure) {
+func (t *Trail) Failed(_ context.Context, f Failure) {
 	if t == nil {
 		return
 	}
@@ -313,12 +244,6 @@ func (t *Trail) Failed(ctx context.Context, f Failure) {
 		})
 	}
 
-	var subject [8]byte
-	named := f.Subject != ""
-	if named {
-		subject = t.digest("subject", f.Subject)
-	}
-
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	// THE CLOCK IS READ UNDER THE LOCK, which is what makes a minute's row
@@ -329,60 +254,14 @@ func (t *Trail) Failed(ctx context.Context, f Failure) {
 	start := t.now().Truncate(time.Minute)
 	m := t.minutes[start]
 	if m == nil {
-		m = &minute{clients: map[string]*tally{}}
+		m = &minute{sources: map[string]int{}}
 		t.minutes[start] = m
 	}
-	row := m.clients[f.Client]
-	if row == nil {
-		if len(m.clients) < MaxClientsPerMinute {
-			row = newTally()
-			m.clients[f.Client] = row
-		} else {
-			if m.overflow == nil {
-				m.overflow = newTally()
-				m.overflow.folded = map[[8]byte]struct{}{}
-			}
-			row = m.overflow
-			if len(row.folded) < MaxFoldedClients {
-				row.folded[t.digest("client", f.Client)] = struct{}{}
-			}
-		}
+	if _, named := m.sources[f.Source]; named || len(m.sources) < MaxSourcesPerMinute {
+		m.sources[f.Source]++
+		return
 	}
-	if f.Throttled {
-		row.throttled++
-	} else {
-		row.attempts++
-	}
-	if f.Method != "" {
-		row.methods[f.Method] = struct{}{}
-	}
-	if named && len(row.subjects) < MaxSubjectsCounted {
-		row.subjects[subject] = struct{}{}
-	}
-	if f.Person != "" && len(row.people) < MaxPeopleNamed {
-		row.people[f.Person] = struct{}{}
-	}
-}
-
-func newTally() *tally {
-	return &tally{
-		subjects: map[[8]byte]struct{}{},
-		methods:  map[types.FailureMethod]struct{}{},
-		people:   map[string]struct{}{},
-	}
-}
-
-// digest is a value keyed under this process's secret, truncated to eight
-// bytes. The class keeps a subject and a client in different namespaces even
-// where their strings coincide.
-func (t *Trail) digest(class, value string) [8]byte {
-	mac := hmac.New(sha256.New, t.key)
-	mac.Write([]byte(class))
-	mac.Write([]byte{0})
-	mac.Write([]byte(value))
-	var out [8]byte
-	copy(out[:], mac.Sum(nil))
-	return out
+	m.overflow++
 }
 
 // Run publishes each minute's failures once it has closed, until ctx ends —
@@ -430,55 +309,39 @@ func (t *Trail) Flush(ctx context.Context) { t.flush(ctx, false) }
 func (t *Trail) flush(ctx context.Context, all bool) {
 	t.mu.Lock()
 	current := t.now().Truncate(time.Minute)
-	var rows []*types.IAMLoginFailures
+	var rows []types.IAMLoginFailures
 	for start, m := range t.minutes {
 		if !all && !start.Before(current) {
 			continue
 		}
-		rows = append(rows, m.rows(start)...)
+		rows = append(rows, m.row(start))
 		delete(t.minutes, start)
 	}
 	t.mu.Unlock()
 
-	// ORDERED BY MINUTE THEN CLIENT, so two flushes of the same state
-	// publish in the same order and a reader of the feed sees minutes in
-	// the order they happened.
-	slices.SortFunc(rows, func(a, b *types.IAMLoginFailures) int {
-		if c := a.Minute.Compare(b.Minute); c != 0 {
-			return c
-		}
-		switch {
-		case a.Client < b.Client:
-			return -1
-		case a.Client > b.Client:
-			return 1
-		}
-		return 0
+	// IN THE ORDER THE MINUTES HAPPENED, so a reader of the feed sees them
+	// that way however the map iterated.
+	slices.SortFunc(rows, func(a, b types.IAMLoginFailures) int {
+		return a.Minute.Compare(b.Minute)
 	})
 	for _, row := range rows {
-		t.Emit(ctx, *row)
+		t.Emit(ctx, row)
 	}
 }
 
-// rows renders one minute as the events it publishes.
-func (m *minute) rows(start time.Time) []*types.IAMLoginFailures {
-	out := make([]*types.IAMLoginFailures, 0, len(m.clients)+1)
-	for client, row := range m.clients {
-		out = append(out, row.event(client, start, 1))
+// row is one minute as the event it publishes: its sources most failures
+// first — the order an operator reads them in — and by address between
+// equals, so two flushes of one state publish one row.
+func (m *minute) row(start time.Time) types.IAMLoginFailures {
+	sources := make([]types.SourceFailures, 0, len(m.sources))
+	for source, failures := range m.sources {
+		sources = append(sources, types.SourceFailures{Source: source, Failures: failures})
 	}
-	if m.overflow != nil {
-		out = append(out, m.overflow.event("*", start, len(m.overflow.folded)))
-	}
-	return out
-}
-
-// event is one tally as the row it publishes.
-func (row *tally) event(client string, start time.Time, clients int) *types.IAMLoginFailures {
-	return &types.IAMLoginFailures{
-		Client: client, Minute: start,
-		Attempts: row.attempts, Throttled: row.throttled,
-		Subjects: len(row.subjects), Clients: clients,
-		Methods: slices.Sorted(maps.Keys(row.methods)),
-		People:  slices.Sorted(maps.Keys(row.people)),
-	}
+	slices.SortFunc(sources, func(a, b types.SourceFailures) int {
+		if c := cmp.Compare(b.Failures, a.Failures); c != 0 {
+			return c
+		}
+		return cmp.Compare(a.Source, b.Source)
+	})
+	return types.IAMLoginFailures{Minute: start, Sources: sources, Overflow: m.overflow}
 }

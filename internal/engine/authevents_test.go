@@ -98,7 +98,7 @@ func TestStoppingANodePublishesTheFailuresItStillHolds(t *testing.T) {
 	heard := &feed{}
 	heard.listen(e)
 	e.AuthEvents().Failed(t.Context(), authevents.Failure{
-		Client: "203.0.113.9", Method: types.FailPassword, Subject: "someone",
+		Source: "203.0.113.9", Method: types.FailPassword,
 	})
 	e.Stop(context.Background())
 	rows := heard.of((types.IAMLoginFailures{}).EventType())

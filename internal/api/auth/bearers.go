@@ -41,6 +41,6 @@ package auth
 // reach the dashboard.
 //
 // WHAT A GUESS STILL COSTS THE GUESSER is visibility: every refused bearer on a
-// guarded route is a failed attempt in the audit trail's per-client, per-minute
-// tally (audit.go), so a spray is a row an operator reads, naming the client
-// and how many different values it tried.
+// guarded route is a failed attempt in the audit trail's per-minute count
+// (audit.go), so a spray is a row an operator reads, naming the source and how
+// many attempts it failed.

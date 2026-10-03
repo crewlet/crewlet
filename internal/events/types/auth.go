@@ -31,15 +31,17 @@ import (
 // and not an unsalted hash of any of them — a hash of a typed login is
 // reversible against the company's own roster in one pass, and a password
 // typed into the login box is exactly what a failed sign-in would otherwise
-// carry into every backup. A failure is COUNTED (see [IAMLoginFailures]); an
-// identity appears only once this engine resolved one itself.
+// carry into every backup. A failure is COUNTED per source (see
+// [IAMLoginFailures]), and an identity appears only on a fact a verified
+// credential or the engine itself authored.
 //
 // # Who authors the rate, type by type
 //
 // internal/events files each of these with its [events.RateAuthor], and the
 // split is the design: a failed attempt is authored by whoever can reach the
 // listener, so it is never a type at all — it is a metrics counter plus the
-// one COALESCED row per client per minute the engine's own loop publishes.
+// one row per node per minute, counted per source, the engine's own loop
+// publishes.
 // Everything else here follows a credential this engine verified, or the
 // engine's own loop deciding once per key, and says so in its category entry.
 //
@@ -161,8 +163,8 @@ const (
 	// FailInvite is an invitation link that did not prove itself: an id
 	// nobody issued, or a secret that is not the id's link's — each a
 	// 410. THE LINK IS THE CREDENTIAL, so a source presenting ids or
-	// secrets that open nothing is guessing at one, and the tally's count
-	// of distinct values is what shows the walk. A link that DID prove
+	// secrets that open nothing is guessing at one, and its failure count
+	// climbing is what shows the walk. A link that DID prove
 	// itself and is spent — redeemed, aged out, its address enrolled — is
 	// the same 410 and NOT a failure: it is the link's holder, or a mail
 	// scanner re-reading it, and counting it named a scanner's address as
@@ -308,89 +310,80 @@ func (e IAMSessionEnded) Summary() string {
 		orSomebody(e.Person, ""), why)
 }
 
-// IAMLoginFailures is every failed attempt one client made inside one minute,
-// counted.
+// IAMLoginFailures is every failed attempt one node refused inside one minute,
+// counted per source.
 //
-// # ONE ROW PER CLIENT PER MINUTE, published by the engine's own loop
+// # ONE ROW PER NODE PER MINUTE, published by the engine's own loop
 //
 // A failed sign-in is authored by whoever can reach the listener. A row per
 // attempt hands the size of the node estate — and of every backup, snapshot
 // and integrity check taken from it — to them: the design this replaced wrote
 // one synchronous row per attempt, which was 6.9 million rows a day from one
 // host. So each attempt is a counter on the metrics recorder, and what becomes
-// a row is this, paced by a ticker rather than by the caller.
+// a row is this, paced by a ticker rather than by the caller, and only for a
+// minute that had a failure in it.
 //
 // # What it carries, and what it never carries
 //
-// Counts. The DISTINCT-SUBJECT count is computed under a key this process
-// generated and never wrote anywhere, so it says how many different names one
-// client tried without being able to say which — and nothing here is the
-// presented value or an unsalted hash of it, since the latter reverses against
-// the company's own roster in one pass. A person's id appears only where the
-// ENGINE resolved one: a wrong password for somebody real.
+// A count per source, and the count from sources past the cap. Never what was
+// presented — not a login somebody mistyped, not a password typed into the
+// login box, not a bearer — and not a hash of any of them, which would reverse
+// against the company's own roster in one pass; and not who the engine
+// resolved a failure to, which would make a row a list of who was being
+// guessed at.
 type IAMLoginFailures struct {
-	// Client is the address the throttle keys on, or "*" for the one row
-	// a minute folds every client past the per-minute cap into.
-	Client string `json:"client"`
-
 	// Minute is the start of the minute these attempts fell in, UTC.
 	Minute time.Time `json:"minute"`
 
-	// Attempts is how many attempts were verified and refused.
-	Attempts int `json:"attempts"`
+	// Sources are the sources that failed in this minute, most failures
+	// first, at most the per-minute cap stated in internal/iam/authevents.
+	Sources []SourceFailures `json:"sources"`
 
-	// Throttled is how many were answered 429 before anything was
-	// verified: the throttle's curve owed their key a longer wait than a
-	// request is held open for. A wait short enough to serve inside the
-	// request is not counted here — the attempt went on to be verified,
-	// and is in Attempts if it failed.
-	Throttled int `json:"throttled"`
+	// Overflow is how many failed attempts came from sources past that
+	// cap — the size of a distributed attack rather than a name per
+	// address in its pool.
+	Overflow int `json:"overflow,omitempty"`
+}
 
-	// Subjects is how many DISTINCT names or bearers the attempts
-	// presented. It saturates at a cap stated in internal/iam/authevents,
-	// so a value at the cap reads "at least".
-	Subjects int `json:"subjects"`
+// SourceFailures is one source's failed attempts in a minute.
+type SourceFailures struct {
+	// Source is the client address the sign-in throttle keys on, resolved
+	// through `api.trusted_proxies`; empty for a request with no
+	// resolvable address.
+	Source string `json:"source"`
 
-	// Clients is how many distinct clients this row covers: one, except
-	// on the "*" row, where it is the size of what was folded — which is
-	// the size of a distributed attack rather than of one guesser.
-	Clients int `json:"clients"`
-
-	// Methods are what the attempts tried to prove themselves with,
-	// sorted and distinct.
-	Methods []FailureMethod `json:"methods,omitempty"`
-
-	// People are the persons the engine resolved a failed attempt to —
-	// a wrong password for a real login — sorted, distinct and capped.
-	People []string `json:"people,omitempty"`
+	// Failures is how many of its attempts were refused, the ones the
+	// throttle turned away before verifying anything included.
+	Failures int `json:"failures"`
 }
 
 // EventType is the "iam_login_failures" wire type.
 func (IAMLoginFailures) EventType() string { return "iam_login_failures" }
 
-// Summary leads with the count and the client, which is what somebody reading
-// a feed of these is sorting by.
+// Total is every failed attempt the row counts, named sources and overflow
+// alike.
+func (e IAMLoginFailures) Total() int {
+	total := e.Overflow
+	for _, s := range e.Sources {
+		total += s.Failures
+	}
+	return total
+}
+
+// Summary leads with the count and the source that sent most of it, which is
+// what somebody reading a feed of these is sorting by.
 func (e IAMLoginFailures) Summary() string {
-	client := e.Client
-	switch {
-	case client == "*":
-		client = strconv.Itoa(e.Clients) + " clients past the per-minute cap"
-	case client == "":
-		client = "an unidentified client"
+	line := fmt.Sprintf("%d failed attempt(s) in one minute from %d source(s)",
+		e.Total(), len(e.Sources))
+	if len(e.Sources) > 0 {
+		top := e.Sources[0]
+		line += fmt.Sprintf("; most from %s (%d)",
+			orSomebody(top.Source, "an unidentified client"), top.Failures)
 	}
-	methods := make([]string, 0, len(e.Methods))
-	for _, m := range e.Methods {
-		methods = append(methods, string(m))
+	if e.Overflow > 0 {
+		line += fmt.Sprintf("; %d from sources past the per-minute cap", e.Overflow)
 	}
-	detail := strings.Join(methods, ", ")
-	if e.Throttled > 0 {
-		detail = joinDetail(detail, strconv.Itoa(e.Throttled)+" throttled")
-	}
-	if detail != "" {
-		detail = " (" + detail + ")"
-	}
-	return fmt.Sprintf("%d failed attempt(s) from %s in one minute%s",
-		e.Attempts+e.Throttled, client, detail)
+	return line
 }
 
 // IAMStepUpCompleted is a signed-in person confirming who they are again, which
@@ -762,16 +755,4 @@ func heldKeys(held []string) string {
 	sorted := slices.Clone(held)
 	slices.Sort(sorted)
 	return strings.Join(sorted, ", ")
-}
-
-// joinDetail joins two clauses of a parenthetical, either of which may be
-// empty.
-func joinDetail(a, b string) string {
-	switch {
-	case a == "":
-		return b
-	case b == "":
-		return a
-	}
-	return a + "; " + b
 }

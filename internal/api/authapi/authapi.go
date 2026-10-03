@@ -606,7 +606,7 @@ func (s *Service) refuseSignIn(w http.ResponseWriter, r *http.Request,
 		// reader reconstruct who was being guessed at from a feed an
 		// operator's screen renders.
 		"reason", why, "method", string(attempt.Method), "route", r.URL.Path,
-		"source", attempt.Client)
+		"source", attempt.Source)
 	httpjson.Fail(w, http.StatusUnauthorized, httpjson.CodeSignInRefused)
 }
 
@@ -646,7 +646,7 @@ func (s *Service) admit(w http.ResponseWriter, r *http.Request,
 	}
 	if errors.Is(err, credential.ErrThrottled) {
 		s.audit.Failed(r.Context(), authevents.Failure{
-			Client: attempt.Source, Method: method, Throttled: true,
+			Source: attempt.Source, Method: method, Throttled: true,
 		})
 		httpjson.Throttled(w, credential.RetryAfter(err))
 		return admission{}, false

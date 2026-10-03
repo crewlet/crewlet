@@ -322,16 +322,16 @@ func appCode(t *testing.T, at time.Time) string {
 	return code
 }
 
-// A FAILED SIGN-IN IS COUNTED WITH WHAT WAS TYPED AS ITS SUBJECT, AND NEVER
-// ANNOUNCED.
+// A FAILED SIGN-IN IS COUNTED AGAINST ITS SOURCE, AND NEVER ANNOUNCED.
 //
-// The subject goes to the trail, which keys it in memory and publishes only
-// how many different ones a client tried; the person goes with it only where
-// THIS ENGINE resolved one. Nothing is emitted: a failed attempt is authored
-// by whoever can reach the listener.
+// The trail counts it per source, on the door it pushed on — and is handed
+// nothing about who, neither what was typed nor whom it resolved to, which a
+// [authevents.Failure] has no field for. Nothing is emitted: a failed attempt
+// is authored by whoever can reach the listener.
 //
 // Mutation: announce the refusal as an event and the emitted count is not
-// zero; drop the resolved person and the second case names nobody.
+// zero; count it against anything but the request's own source and the
+// source is wrong.
 func TestAFailedSignInIsCountedAndNeverAnnounced(t *testing.T) {
 	t.Parallel()
 	r := newSignInRig(t)
@@ -348,14 +348,16 @@ func TestAFailedSignInIsCountedAndNeverAnnounced(t *testing.T) {
 	if len(failures) != 2 {
 		t.Fatalf("counted %d failures, want 2", len(failures))
 	}
-	unknown, wrong := failures[0], failures[1]
-	if unknown.Method != types.FailPassword || unknown.Subject != "nobody.here" ||
-		unknown.Person != "" || unknown.Client != "203.0.113.9" {
-		t.Errorf("unknown-login failure = %+v", unknown)
+	for _, f := range failures {
+		if f.Method != types.FailPassword || f.Source != "203.0.113.9" || f.Throttled {
+			t.Errorf("a refused sign-in counted as %+v, want a password failure "+
+				"from the request's own source", f)
+		}
 	}
-	if wrong.Person != r.estate.person.ID {
-		t.Errorf("a wrong password for a real login named person %q, want %q",
-			wrong.Person, r.estate.person.ID)
+	if failures[0] != failures[1] {
+		t.Errorf("an unknown login counted as %+v and a wrong password as %+v: "+
+			"two failures a reader of the trail can tell apart", failures[0],
+			failures[1])
 	}
 }
 
@@ -487,9 +489,8 @@ func TestAThrottledAttemptIsCountedAsThrottled(t *testing.T) {
 	}
 	_, failures := r.audit.snapshot()
 	last := failures[len(failures)-1]
-	if !last.Throttled || last.Method != types.FailPassword || last.Subject != "" {
+	if !last.Throttled || last.Method != types.FailPassword || last.Source != "203.0.113.9" {
 		t.Errorf("throttled failure = %+v: want it marked throttled, on the "+
-			"route's method, and naming nobody — it was refused before the "+
-			"login was looked up", last)
+			"route's method, from the request's source", last)
 	}
 }

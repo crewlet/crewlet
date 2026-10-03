@@ -594,9 +594,10 @@ func Catalogue() []Instrument {
 				"curve (`outcome`). It is " +
 				"the ONLY per-attempt record there is, by design: an " +
 				"unauthenticated caller authors this rate, so the event log " +
-				"gets one coalesced `iam_login_failures` row per client per " +
-				"minute and the rate itself lives here, where a guessing run " +
-				"costs a counter increment rather than a row in every backup.",
+				"gets one `iam_login_failures` row per node per minute, " +
+				"counting each source, and the rate itself lives here, where " +
+				"a guessing run costs a counter increment rather than a row " +
+				"in every backup.",
 		},
 		// ---- alarms ---------------------------------------------------
 		{

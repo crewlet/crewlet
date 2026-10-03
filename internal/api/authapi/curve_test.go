@@ -225,9 +225,9 @@ func TestWrongCodesFromManyAddressesClimbThePersonsCurve(t *testing.T) {
 	_, failures := r.audit.snapshot()
 	last := failures[len(failures)-1]
 	if !last.Throttled || last.Method != types.FailSecondFactor ||
-		last.Person != r.estate.person.ID {
+		last.Source != "2001:db8:4::1" {
 		t.Errorf("the turned-away code counted as %+v, want a throttled "+
-			"second-factor attempt naming the person", last)
+			"second-factor attempt from the fourth address", last)
 	}
 	if got := announced(); len(got) != 0 {
 		t.Fatalf("the curve was announced at its fourth failure: %+v", got)

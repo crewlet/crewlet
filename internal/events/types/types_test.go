@@ -368,7 +368,7 @@ var wireTags = map[string][]string{
 	"raw_webhook":                     {"body", "body_raw", "forge_atlassian_id", "handle", "headers"},
 	"iam_session_started":             {"expires_at", "lineage", "login", "method", "person", "remote", "second_factor"},
 	"iam_session_ended":               {"by", "lineage", "operator_id", "person", "reason"},
-	"iam_login_failures":              {"attempts", "client", "clients", "methods", "minute", "people", "subjects", "throttled"},
+	"iam_login_failures":              {"minute", "overflow", "sources"},
 	"iam_stepup_completed":            {"lineage", "login", "person", "remote", "replaces", "second_factor"},
 	"iam_credential_minted":           {"by", "credential", "expires_at", "grants", "kind", "operator_id", "owner", "reason"},
 	"iam_credential_revoked":          {"by", "credential", "kind", "operator_id", "owner", "reason"},

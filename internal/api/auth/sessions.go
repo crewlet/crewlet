@@ -430,12 +430,12 @@ type sessionAnswer struct {
 	tierA *config.APIToken
 	via   string
 
-	// malformed is the cookie value when it is not a bearer of this format
-	// at all — forged, truncated, or signed under a key this deployment
-	// does not hold — which is a credential presented and refused. The
-	// guard MARKS it and a guarded route's refusal counts it; see
-	// audit.go for why the count is not taken here.
-	malformed string
+	// malformed is a cookie that is not a bearer of this format at all —
+	// forged, truncated, or signed under a key this deployment does not
+	// hold — which is a credential presented and refused. The guard MARKS
+	// it and a guarded route's refusal counts it; see audit.go for why the
+	// count is not taken here.
+	malformed bool
 }
 
 // resolve turns a cookie into an answer, or reports that this request carries
@@ -486,9 +486,7 @@ func (s *Sessions) resolve(w http.ResponseWriter, r *http.Request,
 			http.SetCookie(w, clear)
 		}
 		answer := sessionAnswer{how: iam.Anonymous, presented: true}
-		if v.Row == session.RowMalformed {
-			answer.malformed = cookie
-		}
+		answer.malformed = v.Row == session.RowMalformed
 		return answer
 	}
 

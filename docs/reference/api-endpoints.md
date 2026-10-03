@@ -462,8 +462,8 @@ everybody else — including the break-glass Tier A token. What protects a
 bearer is its value: 32 bytes of `crypto/rand` in a machine token, an HMAC
 under the fleet's keyring in a session cookie, and at least 26 characters in a
 Tier A value, which `crewlet validate` refuses shorter. Every refused bearer on
-a guarded route is still a failed attempt in the audit trail's per-client,
-per-minute tally, so a spray is seen; it is never answered `429`, however many
+a guarded route is still a failed attempt in the audit trail's per-minute
+count by source, so a spray is seen; it is never answered `429`, however many
 valid or refused requests the address has in flight. An unguarded route —
 `/health`, `/ready`, the dashboard's shell and assets, the webhooks, the
 sign-in routes — never compares a bearer at all: the request is anonymous

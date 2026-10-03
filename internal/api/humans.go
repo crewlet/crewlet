@@ -210,8 +210,8 @@ func signInSurface(boot *config.Bootstrap, e *engine.Engine) (
 		Clients: auth.NewClients(boot),
 		// THE NODE'S ONE AUDIT TRAIL, which the guard and the directory
 		// hand what they saw to as well: a failed sign-in and a refused
-		// bearer fold into one row per client per minute only because
-		// both reach the same tally.
+		// bearer from one source are one count on the minute's row only
+		// because both reach the same trail.
 		Audit: e.AuthEvents(),
 	})
 	if err != nil {

@@ -1170,8 +1170,8 @@ either counts is a copy of the whole of it. A failed login is the case to hold
 in mind — anyone who can reach the API can author millions a day for free — so
 the per-attempt fact is the `crewlet.auth.attempts.failed` counter on the
 [metrics](../reference/metrics.md) exporter, and what becomes a row is
-`iam_login_failures`: one per client per minute, carrying counts and never
-what was presented, published by the engine's own flush loop and therefore
+`iam_login_failures`: one per node per minute, carrying a count per source and
+never what was presented, published by the engine's own flush loop and therefore
 paced by the engine. A type kept out for this reason is excluded with the cause
 `anonymous_rate`. The rule is enforced by a test over the taxonomy, not by
 review.
