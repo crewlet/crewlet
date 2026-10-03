@@ -31,8 +31,9 @@ import "slices"
 //
 // A listener told about somebody nothing happened to re-reads a row and
 // changes nothing. A listener NOT told leaves a revoked credential serving an
-// open connection until it closes on its own. So wherever an apply cannot
-// name whose row it moved, it sets [Moved.Everyone] rather than guessing.
+// open connection until it closes on its own. So an apply names everybody whose
+// row it moved — a release reads who held the claim before it clears it — and
+// [Moved.Everyone] is left for the few moves that cannot name anyone.
 type Moved struct {
 	// Seats is whether a seat's STANDING may have moved — a person's
 	// stage, a seat bound or released, a removal — which is what this
@@ -41,27 +42,32 @@ type Moved struct {
 	Seats bool
 
 	// People are the persons whose row a committed record moved — their
-	// content (grants, colleague level, the credentials and machine tokens
-	// they hold), their stage, their revocation epoch, a claim bound to
-	// them, their removal — by id, each once. Every credential acting FOR
-	// one of them, a session they signed in with or a machine token they
-	// own, may now be over or may carry other grants.
+	// content (grants, the credentials and machine tokens they hold),
+	// their stage, their revocation epoch, a claim bound to them or taken
+	// off them, their removal — by id, each once. Every credential acting
+	// FOR one of them, a session they signed in with or a machine token
+	// they own, may now be over or may carry other grants.
 	People []string
+
+	// Logins are the logins those people held when their row moved, and
+	// every login a claim gave or took — each once. A credential composed
+	// from configuration (a Tier A token) is bound through the directory
+	// row under its own login, `token:<id>`, whose person id it never
+	// learns, so the login is the one name that reaches it.
+	Logins []string
 
 	// Sessions are the lineages a committed record ended: a sign-out, a
 	// step-up replacing the session it was made from, an administrator
 	// ending one by name. Each once.
 	Sessions []string
 
-	// Everyone is a move no list above can name, so every credential is
-	// to be decided again: the fleet-wide session generation moved, which
-	// ends every session and machine token in the company at once; or a
-	// record took a claim off whoever held it without naming them — a
-	// release, or the residue a claim clears off a stale holder; or the
-	// batch RETAINED a record this node cannot read, whose person is
-	// inside the payload it could not open ([Applier.Retained]). The
-	// engine sets it too, when an adoption or a reopened estate replaced
-	// the rows with no committed batch to say what moved.
+	// Everyone is a move no list above can name: the fleet-wide session
+	// generation moved, which ends every session and machine token in the
+	// company at once; or the batch RETAINED a record this node cannot
+	// read, whose person is inside the payload it could not open
+	// ([Applier.Retained]). The engine sets it too, when an adoption or a
+	// reopened estate replaced the rows with no committed batch to say what
+	// moved, and when this node stops vouching for its rows.
 	Everyone bool
 }
 
@@ -72,13 +78,17 @@ func (m Moved) Empty() bool { return !m.Seats && !m.Credentials() }
 // every field but [Moved.Seats], which is about routing rather than about who
 // may act.
 func (m Moved) Credentials() bool {
-	return m.Everyone || len(m.People) > 0 || len(m.Sessions) > 0
+	return m.Everyone || len(m.People) > 0 || len(m.Logins) > 0 ||
+		len(m.Sessions) > 0
 }
 
-// person records that the row of person id moved.
-func (m *Moved) person(id string) {
+// person records that the row of person id, holding login, moved.
+func (m *Moved) person(id, login string) {
 	if id != "" && !slices.Contains(m.People, id) {
 		m.People = append(m.People, id)
+	}
+	if login != "" && !slices.Contains(m.Logins, login) {
+		m.Logins = append(m.Logins, login)
 	}
 }
 

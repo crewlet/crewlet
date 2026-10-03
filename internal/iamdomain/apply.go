@@ -106,6 +106,59 @@ func (a *Applier) Committed(context.Context) {
 	}
 }
 
+// movedPerson records that the row of person id moved, under the login the row
+// holds — see [heldLogin].
+func (a *Applier) movedPerson(ctx context.Context, tx *sql.Tx, id string) error {
+	login, err := heldLogin(ctx, tx, id)
+	if err != nil {
+		return err
+	}
+	a.moved.person(id, login)
+	return nil
+}
+
+// heldLogin is the login person id's row holds, read in the apply's own
+// transaction, or "" for a row that holds none or does not exist. A move names
+// it beside the person so a credential bound through that login — a Tier A
+// token's `token:<id>` row — is named too ([Moved.Logins]).
+func heldLogin(ctx context.Context, tx *sql.Tx, id string) (string, error) {
+	var login string
+	err := tx.QueryRowContext(ctx,
+		`SELECT login FROM iam_people WHERE id = ?`, id).Scan(&login)
+	if err != nil && !errorsIsNoRows(err) {
+		return "", fmt.Errorf("iamdomain: read the login of person %s, whose "+
+			"row this record moved: %w", id, err)
+	}
+	return login, nil
+}
+
+// movedHolders records every person whose row holds token in column — read
+// BEFORE a statement takes it off them, so a release names whom it released
+// rather than nobody. except is a person the record itself names, left out.
+//
+// THE COLUMN IS ONE OF THE CLAIM COLUMNS [Applier.writeToken] chose by kind,
+// never a caller's string.
+func (a *Applier) movedHolders(ctx context.Context, tx *sql.Tx, column, token,
+	except string, at applyContext) error {
+
+	rows, err := tx.QueryContext(ctx, `
+		SELECT id, login FROM iam_people
+		WHERE `+column+` = ? AND id <> ? AND scoped_through < ?`,
+		token, except, at.packed)
+	if err != nil {
+		return fmt.Errorf("iamdomain: read who holds %s: %w", token, err)
+	}
+	defer func() { _ = rows.Close() }()
+	for rows.Next() {
+		var id, login string
+		if err := rows.Scan(&id, &login); err != nil {
+			return fmt.Errorf("iamdomain: read who holds %s: %w", token, err)
+		}
+		a.moved.person(id, login)
+	}
+	return rows.Err()
+}
+
 // THE APPLIER HEARS WHAT A BATCH RETAINED: see [Applier.Retained].
 var _ statelog.RetentionHook = (*Applier)(nil)
 
@@ -120,12 +173,10 @@ var _ statelog.RetentionHook = (*Applier)(nil)
 // the commit did change is what this node can vouch for: every read of a
 // person in that bucket answers unknown from now on (the deferral the
 // framework just recorded), and the guard refuses their REST requests 503. A
-// connection held open on a decision made before the commit — a revocation
-// or a suspension this node cannot read is exactly what such a record may be
-// — has to be decided again so that it reaches the same answer; decided
-// again, a credential outside every retained bucket is decided exactly as
-// before. NOT [Moved.Seats]: the contact routing is rebuilt from rows, and a
-// retained record wrote none.
+// connection held open on a decision made before the commit — a revocation or
+// a suspension this node cannot read is exactly what such a record may be — is
+// one only the move naming everyone reaches. NOT [Moved.Seats]: the contact
+// routing is rebuilt from rows, and a retained record wrote none.
 func (a *Applier) Retained(context.Context, int) {
 	a.moved.Everyone = true
 }

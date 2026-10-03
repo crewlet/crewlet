@@ -104,6 +104,18 @@ func (a *Applier) writeToken(ctx context.Context, tx *sql.Tx, at applyContext,
 	if kind == KindSeat {
 		stale += ", chart_position = 0"
 	}
+	if kind != KindEmail {
+		// A LOGIN OR A SEAT TAKEN OFF SOMEBODY THIS RECORD DOES NOT NAME,
+		// so whoever it was is read before it is taken: a credential
+		// acting for them acts as that login or seat no longer. An
+		// address names nothing a credential acts as, so taking one moves
+		// no credential.
+		err = a.movedHolders(ctx, tx, column, at.record.Subject.ID,
+			at.record.Person, at)
+		if err != nil {
+			return 0, err
+		}
+	}
 	cleared, err := tx.ExecContext(ctx, `
 		UPDATE iam_people
 		SET `+stale+`, updated_at = ?, scoped_through = ?
@@ -114,13 +126,6 @@ func (a *Applier) writeToken(ctx context.Context, tx *sql.Tx, at applyContext,
 			kind, at.record.Subject.ID, err)
 	}
 	written, _ := cleared.RowsAffected()
-	if written > 0 && kind != KindEmail {
-		// A LOGIN OR A SEAT TAKEN OFF SOMEBODY THIS RECORD DOES NOT NAME,
-		// so whoever it was is found by deciding every credential again —
-		// see [Moved.Everyone]. An address names nothing a credential
-		// acts as, so taking one moves no credential.
-		a.moved.Everyone = true
-	}
 
 	// AN UPSERT, NOT AN UPDATE, and this is the shape an enrolment's own
 	// order forces. The claims are taken BEFORE the person's content is
@@ -145,6 +150,15 @@ func (a *Applier) writeToken(ctx context.Context, tx *sql.Tx, at applyContext,
 	// as a statement about the seat in the same row. A claim that set the
 	// handle and left a stale position behind would tell every reader that
 	// this node's view covers a decision it does not.
+	// THE LOGIN THE PERSON HELD BEFORE, for a login claim: the claim takes
+	// it off them, and a credential bound through it is bound through
+	// nothing once it lands.
+	var prior string
+	if kind == KindLogin {
+		if prior, err = heldLogin(ctx, tx, at.record.Person); err != nil {
+			return 0, err
+		}
+	}
 	assign := column + " = excluded." + column
 	if kind == KindSeat {
 		assign += ", chart_position = excluded.chart_position"
@@ -174,8 +188,13 @@ func (a *Applier) writeToken(ctx context.Context, tx *sql.Tx, at applyContext,
 	written += bound
 	if bound > 0 {
 		// THE PERSON IT WAS BOUND TO, whose login or seat a credential
-		// acting for them carries.
-		a.moved.person(at.record.Person)
+		// acting for them carries — under the login the row holds now,
+		// which for a login claim is the one just bound, and the one it
+		// replaced.
+		a.moved.person(at.record.Person, prior)
+		if err = a.movedPerson(ctx, tx, at.record.Person); err != nil {
+			return int(written), err
+		}
 	}
 	if kind == KindSeat && bound > 0 {
 		// AND IT ENDS THE SAY OF EVERY REMOVAL THAT RELEASED THIS SEAT.
@@ -239,6 +258,16 @@ func (a *Applier) releaseToken(ctx context.Context, tx *sql.Tx, at applyContext,
 	if kind == KindSeat {
 		clear += ", chart_position = 0"
 	}
+	if kind != KindEmail {
+		// THE HOLDER, read before the column is cleared on them: a
+		// credential acting for them acts as this login or seat no
+		// longer, and a credential bound through the login released is
+		// bound through nothing.
+		if err := a.movedHolders(ctx, tx, column, at.record.Subject.ID, "",
+			at); err != nil {
+			return 0, err
+		}
+	}
 	result, err := tx.ExecContext(ctx, `
 		UPDATE iam_people
 		SET `+clear+`, updated_at = ?, scoped_through = ?
@@ -253,13 +282,6 @@ func (a *Applier) releaseToken(ctx context.Context, tx *sql.Tx, at applyContext,
 		// AN UNBIND hands the seat back to the chart, which is a move in
 		// its standing — see [Reader.SeatHolders].
 		a.moved.Seats = true
-	}
-	if kind != KindEmail && written > 0 {
-		// THE HOLDER IS NOT NAMED — a release clears the column on
-		// whoever holds it — so every credential is decided again: an
-		// unbound person's sockets act as their seat no longer. See
-		// [Moved.Everyone].
-		a.moved.Everyone = true
 	}
 	return int(written), nil
 }
