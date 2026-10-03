@@ -655,6 +655,39 @@ func (p PersonRow) Binding() SeatBinding {
 	}
 }
 
+// HoldersOf is who this node's directory binds to each of seats, read in ONE
+// snapshot: every person with a row, at whatever stage — a reservation, an
+// invited or suspended person, an active one — because a removal deletes the
+// row and every other stage is somebody the seat still names. A seat nobody
+// holds is absent from the answer, and a seat two people hold (a duplicate a
+// restore left behind) names both.
+//
+// It is the company write's question — may this seat leave the company? — so
+// it answers about the seats asked and no others. Three-valued like everything
+// here: an error is the unknown arm, never "nobody".
+func (r *Reader) HoldersOf(ctx context.Context, seats []string) (
+	map[string][]SeatBinding, error) {
+
+	if len(seats) == 0 {
+		return map[string][]SeatBinding{}, nil
+	}
+	asked := make(map[string]bool, len(seats))
+	for _, seat := range seats {
+		asked[seat] = true
+	}
+	bindings, err := r.SeatBindings(ctx)
+	if err != nil {
+		return nil, err
+	}
+	out := map[string][]SeatBinding{}
+	for _, b := range bindings {
+		if asked[b.Seat] {
+			out[b.Seat] = append(out[b.Seat], b)
+		}
+	}
+	return out, nil
+}
+
 // SeatBindings is every person this node's directory binds to a seat, read in
 // ONE snapshot and ordered by seat.
 //

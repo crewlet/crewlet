@@ -1202,6 +1202,10 @@ func runEngine(args []string, stderr io.Writer) (err error) {
 		// And the nudge, so an operator's change lands on every node in
 		// milliseconds rather than at the next reconcile poll.
 		Queue: e.Backends().Queue,
+		// THE DIRECTORY, so a write that takes away a human seat somebody
+		// is bound to is refused naming them. Every node runs the identity
+		// domain from boot, company or none.
+		Holders: configapi.DirectoryHolders(e.IAM()),
 	})
 	if err != nil {
 		e.Stop(context.WithoutCancel(ctx))

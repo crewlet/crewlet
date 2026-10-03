@@ -255,6 +255,57 @@ func TestSeatBindingsIsEveryBindingAndNothingElse(t *testing.T) {
 	}
 }
 
+// WHO HOLDS A SEAT A COMPANY WRITE WOULD TAKE AWAY IS EVERY PERSON WITH A ROW.
+//
+// It is the question a company write asks before it removes a human seat, so
+// a suspended person still holds theirs — suspending somebody is not giving
+// their seat away — while a removed one and an unbound one do not, and a seat
+// the write did not ask about is not answered.
+func TestHoldersOfNamesEveryUnremovedHolderOfTheSeatsAsked(t *testing.T) {
+	t.Parallel()
+	rig := newWriteRig(t)
+	reader := rig.reader(t)
+
+	sarah := bindNew(t, rig, "sarah.chen", "sarah-chen")
+	priya := bindNew(t, rig, "priya.shah", "platform-lead")
+	if _, err := rig.writer.SetStage(t.Context(), priya, iam.StageSuspended,
+		"op-suspend", "on leave"); err != nil {
+		t.Fatalf("suspend: %v", err)
+	}
+	rig.drain()
+	omar := bindNew(t, rig, "omar.haddad", "ops-lead")
+	if _, err := rig.writer.Remove(t.Context(), omar, "op-remove",
+		"left the company"); err != nil {
+		t.Fatalf("remove: %v", err)
+	}
+	rig.drain()
+	lena := bindNew(t, rig, "lena.fischer", "support-lead")
+	if _, err := rig.writer.Release(t.Context(), iamdomain.KindSeat, "support-lead",
+		lena, "op-unbind", "moved teams"); err != nil {
+		t.Fatalf("unbind: %v", err)
+	}
+	rig.drain()
+
+	held, err := reader.HoldersOf(t.Context(),
+		[]string{"platform-lead", "ops-lead", "support-lead", "nobody"})
+	if err != nil {
+		t.Fatalf("HoldersOf: %v", err)
+	}
+	if len(held) != 1 || len(held["platform-lead"]) != 1 ||
+		held["platform-lead"][0].Person != priya ||
+		held["platform-lead"][0].Login != "priya.shah" ||
+		held["platform-lead"][0].Stage != iam.StageSuspended {
+		t.Errorf("HoldersOf = %+v, want the suspended platform lead alone — a "+
+			"removed holder, an unbound one and a seat nobody held hold nothing, "+
+			"and a seat not asked about is not answered", held)
+	}
+	// THE CONTROL: the active holder is answered when asked about.
+	if held, err := reader.HoldersOf(t.Context(), []string{"sarah-chen"}); err != nil ||
+		len(held["sarah-chen"]) != 1 || held["sarah-chen"][0].Person != sarah {
+		t.Errorf("HoldersOf(sarah-chen) = %+v (%v), want Sarah", held, err)
+	}
+}
+
 // A REMOVAL'S SAY ENDS AT THE NEXT BIND.
 //
 // Omar holds the ops seat and is removed, which leaves a tombstone naming it;

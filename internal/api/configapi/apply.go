@@ -258,6 +258,8 @@ type prepared struct {
 //   - Its hierarchy, DERIVED BEFORE IT IS JUDGED, because a refusal carries
 //     it too.
 //   - Its rules, and what an answer reports about it.
+//   - Whether it takes a human seat away from somebody bound to it, which
+//     is the one step that reads outside this node (seatheld.go).
 func (s *Service) prepare(ctx context.Context, d draft) (*prepared, error) {
 	active, found, err := s.configs.Active(ctx)
 	if err != nil {
@@ -298,6 +300,11 @@ func (s *Service) prepare(ctx context.Context, d draft) (*prepared, error) {
 	derived := config.Derive(company)
 	if invalid := d.rules(company); invalid != nil {
 		return nil, &ValidationError{Err: invalid, Derived: derived}
+	}
+	// AFTER THE RULES, because a document that is refused anyway takes no
+	// seat away, and it is the one step here that reads outside this node.
+	if err := s.checkHeldSeats(ctx, b.prior, company); err != nil {
+		return nil, err
 	}
 	p := &prepared{document: document, warnings: company.Warnings(),
 		derived: derived}

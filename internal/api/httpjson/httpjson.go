@@ -294,7 +294,7 @@ const (
 	CodeUnknownKind Code = "unknown_kind"
 	// CodeSeatRequired is a per-seat gesture that named no seat.
 	CodeSeatRequired Code = "seat_required"
-	// CodeNoSuchSeat is a seat the org chart does not hold.
+	// CodeNoSuchSeat is a seat the company does not hold.
 	CodeNoSuchSeat Code = "no_such_seat"
 	// CodeLiteralInConfig is a credential the company document carries as a
 	// literal where a ${VAR} pointer belongs, which the setup surface will
@@ -367,6 +367,11 @@ const (
 	// CodeNotCreatable is a create-only entity write to a collection whose
 	// members have a place the path cannot name — a seat, a unit.
 	CodeNotCreatable Code = "not_creatable"
+
+	// CodeSeatHeld is a write that would take a human seat out of the
+	// company while the identity directory binds somebody to it. The
+	// refusal names every such seat and who holds it.
+	CodeSeatHeld Code = "seat_held"
 
 	// CodeConflictingPreconditions is a write carrying both
 	// `If-None-Match: *` and `If-Match`, which describe two different
@@ -910,6 +915,9 @@ var codes = map[Code]string{
 	CodeNotCreatable: "A seat or a unit has a place in the company that this " +
 		"address cannot name, so it is not added here. Add it through the " +
 		"whole configuration, or the unit it belongs in.",
+	CodeSeatHeld: "This change removes a person's seat, or makes it an agent's, " +
+		"while somebody is still bound to it, so nothing was changed. Unbind " +
+		"or remove them first — the detail says who.",
 	CodeConflictingPreconditions: "A create (If-None-Match: *) and an edit " +
 		"(If-Match) were both asked for. Send one of them.",
 	CodeValidationError: "The configuration this change would produce is not " +

@@ -85,6 +85,30 @@ type surface struct {
 	// caller replaces the Tier A token [surface.do] attaches, for a case
 	// about who a write is recorded as.
 	caller *iam.Principal
+
+	// held is who the directory this surface asks binds to each seat, and
+	// directoryDown makes every read of it fail; asked is every list of
+	// seats the surface asked about, in order.
+	held          map[string][]configapi.SeatHolder
+	directoryDown error
+	asked         [][]string
+}
+
+// holders is the directory a case's surface asks, answering from s.held.
+func (s *surface) holders(_ context.Context, seats []string) (
+	map[string][]configapi.SeatHolder, error) {
+
+	s.asked = append(s.asked, slices.Clone(seats))
+	if s.directoryDown != nil {
+		return nil, s.directoryDown
+	}
+	out := map[string][]configapi.SeatHolder{}
+	for _, seat := range seats {
+		if held := s.held[seat]; len(held) > 0 {
+			out[seat] = held
+		}
+	}
+	return out, nil
 }
 
 // newSurface is the service over a store, a plane and a KEYRING of the case's
@@ -124,7 +148,8 @@ func newSurfaceWith(t *testing.T, mutate func(*configapi.Options)) *surface {
 	}
 	opts := configapi.Options{
 		Store: db, Plane: s.plane, Cipher: testCipher(t),
-		Now: func() time.Time { return pinned },
+		Holders: s.holders,
+		Now:     func() time.Time { return pinned },
 	}
 	if mutate != nil {
 		mutate(&opts)
@@ -150,11 +175,6 @@ func (s *surface) service() *configapi.Service { return s.svc }
 // resolved rather than stored.
 // companyJSONDoc is the smallest document PUT /config accepts, for the cases
 // that write to a node with nothing on it yet.
-//
-// NO CHART IN IT, like every body this surface takes: `roles:` and `units:`
-// are the org chart's own domain and the door refuses a body carrying either
-// (see chartdoor.go), so a fixture that carried one would be testing the
-// refusal rather than the write.
 const companyJSONDoc = `{"name":"Acme","providers":{"llm":{"zulu":` +
 	`{"type":"anthropic","model":"claude-sonnet-5","api_keys":["k"]}}}}`
 
@@ -1240,10 +1260,14 @@ func TestNewRefusesAMissingStorePlaneOrKeyring(t *testing.T) {
 	t.Cleanup(func() { _ = db.Close() })
 	fleet, cipher := coordmemory.NewFleet(), testCipher(t)
 
+	nobody := func(context.Context, []string) (map[string][]configapi.SeatHolder, error) {
+		return nil, nil
+	}
 	for field, opts := range map[string]configapi.Options{
-		"Store":  {Plane: fleet, Cipher: cipher},
-		"Plane":  {Store: db, Cipher: cipher},
-		"Cipher": {Store: db, Plane: fleet},
+		"Store":   {Plane: fleet, Cipher: cipher, Holders: nobody},
+		"Plane":   {Store: db, Cipher: cipher, Holders: nobody},
+		"Cipher":  {Store: db, Plane: fleet, Holders: nobody},
+		"Holders": {Store: db, Plane: fleet, Cipher: cipher},
 	} {
 		svc, err := configapi.New(opts)
 		if err == nil {
@@ -1254,8 +1278,9 @@ func TestNewRefusesAMissingStorePlaneOrKeyring(t *testing.T) {
 			t.Errorf("the refusal does not name Options.%s: %v", field, err)
 		}
 	}
-	if _, err := configapi.New(configapi.Options{Store: db, Plane: fleet, Cipher: cipher}); err != nil {
-		t.Errorf("a store, a plane and a keyring were refused: %v", err)
+	if _, err := configapi.New(configapi.Options{Store: db, Plane: fleet,
+		Cipher: cipher, Holders: nobody}); err != nil {
+		t.Errorf("a store, a plane, a keyring and a directory were refused: %v", err)
 	}
 }
 

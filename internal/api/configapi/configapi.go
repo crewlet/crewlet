@@ -80,6 +80,7 @@ type Service struct {
 	plane   coord.Plane
 	queue   queue.Publisher
 	cipher  secrets.Cipher
+	holders Holders
 	now     func() time.Time
 }
 
@@ -100,6 +101,13 @@ type Options struct {
 	// which the reconciler authenticates a peer's revision under.
 	// Required: [New] refuses to build without it.
 	Cipher secrets.Cipher
+
+	// Holders reads who the identity directory binds to a seat, so a write
+	// that takes a human seat away while somebody holds it is refused
+	// naming them (seatheld.go). Required: every node runs the identity
+	// domain from boot, and a surface that skipped the check would remove
+	// a colleague's seat from under them with nothing said.
+	Holders Holders
 
 	// Queue publishes the activation NUDGE, so an operator's change lands
 	// on every node in milliseconds instead of at the next reconcile poll.
@@ -136,6 +144,10 @@ func New(opts Options) (*Service, error) {
 		return nil, errors.New("configapi: Options.Cipher is required: every " +
 			"revision is sealed under the keyring (secrets.keys) every node holds, " +
 			"and one written without it is a revision no node applies")
+	case opts.Holders == nil:
+		return nil, errors.New("configapi: Options.Holders is required: a write " +
+			"that removes a human seat is refused while the identity directory " +
+			"binds somebody to it, and that needs the directory")
 	}
 	now := opts.Now
 	if now == nil {
@@ -143,7 +155,7 @@ func New(opts Options) (*Service, error) {
 	}
 	return &Service{
 		configs: opts.Store.Configs(), plane: opts.Plane,
-		cipher: opts.Cipher, queue: opts.Queue, now: now,
+		cipher: opts.Cipher, holders: opts.Holders, queue: opts.Queue, now: now,
 	}, nil
 }
 
@@ -726,6 +738,8 @@ func (s *Service) refuseApply(w http.ResponseWriter, err error) {
 	var raced *RacedError
 	var patchErr *PatchError
 	var invalid *ValidationError
+	var held *SeatHeldError
+	var unknown *HoldersUnavailableError
 	switch {
 	case errors.Is(err, ErrNoActiveRevision):
 		httpjson.FailWith(w, http.StatusConflict, httpjson.CodeNoActiveRevision,
@@ -759,6 +773,25 @@ func (s *Service) refuseApply(w http.ResponseWriter, err error) {
 			"the WHOLE document a write produces is validated, not only "+
 				"the part it changed, so a section that is fine on its own is "+
 				"still refused when the company it leaves is invalid", err)
+	case errors.As(err, &held):
+		httpjson.FailWithFields(w, http.StatusConflict, httpjson.CodeSeatHeld,
+			httpjson.Detail{
+				"detail": held.Error(),
+				"held":   held.Held,
+				"hint": "unbind each person from the seat (PATCH " +
+					"/iam/people/{person} with no seat) or remove them, then " +
+					"send the write again",
+			})
+	case errors.As(err, &unknown):
+		log.Warn("config_seat_holders_unreadable",
+			"seats", unknown.Seats, "error", unknown.Err)
+		httpjson.UnavailableWith(w, httpjson.CodeIdentityUnavailable,
+			auth.RetryIdentity(unknown.Err), httpjson.Detail{
+				"seats": unknown.Seats,
+				"hint": "this write removes a human seat, and this node could not " +
+					"read the identity directory to see whether anybody holds it; " +
+					"nothing was written",
+			})
 	default:
 		s.fail(w, "apply the config", err)
 	}

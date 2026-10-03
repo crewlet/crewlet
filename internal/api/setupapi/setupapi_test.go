@@ -168,6 +168,9 @@ func newConfigSurface(t *testing.T) (*configapi.Service, *store.DB, secrets.Ciph
 	cipher := testCipher(t)
 	cfg, err := configapi.New(configapi.Options{
 		Store: db, Plane: coordmemory.NewFleet(), Cipher: cipher,
+		Holders: func(context.Context, []string) (map[string][]configapi.SeatHolder, error) {
+			return nil, nil
+		},
 		Now: func() time.Time { return pinned },
 	})
 	if err != nil {

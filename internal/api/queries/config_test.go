@@ -1,6 +1,7 @@
 package queries_test
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"path/filepath"
@@ -64,6 +65,9 @@ func configSurface(t *testing.T, docs ...string) (*configapi.Service, []string) 
 	}
 	svc, err := configapi.New(configapi.Options{
 		Store: db, Plane: coordmemory.NewFleet(), Cipher: cipher,
+		Holders: func(context.Context, []string) (map[string][]configapi.SeatHolder, error) {
+			return nil, nil
+		},
 	})
 	if err != nil {
 		t.Fatalf("configapi.New: %v", err)

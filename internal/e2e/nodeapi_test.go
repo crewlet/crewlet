@@ -141,6 +141,7 @@ func wireAPI(
 	}
 	configSurface, err := configapi.New(configapi.Options{
 		Store: backends.Store, Cipher: cipher, Plane: backends.Fleet, Queue: backends.Queue,
+		Holders: configapi.DirectoryHolders(e.IAM()),
 	})
 	if err != nil {
 		return fail("config surface", err)
