@@ -47,6 +47,7 @@ type fakeNode struct {
 	opIDs     []string
 	patches   []tracker.TaskPatch
 	turns     []tracker.TurnRecord
+	keys      []pages.CallKey
 	queries   []knowledge.Query
 	units     tracker.Units
 	notReady  bool
@@ -165,6 +166,7 @@ func (f *fakeNode) UpdateTask(_ context.Context, _, _, _ string, _ uint64,
 func (f *fakeNode) Comment(_ context.Context, _ pages.Actor, _ string,
 	in pages.NewComment) (pages.Comment, pages.Written, error) {
 	f.note("comment")
+	f.keyed(in.CallKey)
 	return pages.Comment{Body: in.Body}, pages.Written{}, nil
 }
 
@@ -189,7 +191,7 @@ func (f *fakeNode) backend() Backend {
 			f.mu.Lock()
 			f.actors = append(f.actors, a)
 			f.mu.Unlock()
-			return f
+			return reportingWriter{fakeNode: f, log: a.Provenance.Written}
 		},
 		Committed: func(ctx context.Context, at statelog.Position) error {
 			f.mu.Lock()
