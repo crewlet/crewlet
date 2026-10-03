@@ -106,3 +106,50 @@ func TestABatchSaysWhoseCredentialsItMoved(t *testing.T) {
 		}
 	}
 }
+
+// A BATCH THAT RETAINED A RECORD MOVES EVERYONE'S CREDENTIAL, and no seat.
+//
+// A record this node retains — a newer build's, or one signed under a key it
+// was not restarted with — never reaches Apply, and whose it is sits inside
+// the payload it could not open. What its commit did change is what this node
+// can vouch for: every read of a person in its bucket answers unknown, and the
+// guard refuses their REST requests 503. A socket held open on that person's
+// session heard nothing, so a revocation a newer peer wrote kept streaming the
+// company to the tab on every node still on the older build. So a retention
+// decides every credential again, which the guard then answers per bucket. It
+// moves no seat's standing, because the contact routing is rebuilt from rows
+// and a retained record wrote none.
+//
+// The control is a batch that applied nothing and retained nothing, which
+// hands over nothing at all — before and after.
+//
+// Mutation: make Retained a no-op and the move never arrives.
+func TestARetainedRecordDecidesEveryCredentialAgain(t *testing.T) {
+	t.Parallel()
+	var got []iamdomain.Moved
+	applier := iamdomain.NewApplier("node-a", func(m iamdomain.Moved) {
+		got = append(got, m)
+	})
+
+	applier.Committed(t.Context())
+	if len(got) != 0 {
+		t.Fatalf("a batch that moved nothing handed over %+v", got)
+	}
+
+	applier.Retained(t.Context(), 1)
+	applier.Committed(t.Context())
+	if len(got) != 1 {
+		t.Fatalf("a batch that retained a record handed over %d move(s), want 1",
+			len(got))
+	}
+	if want := (iamdomain.Moved{Everyone: true}); got[0].Seats != want.Seats ||
+		got[0].Everyone != want.Everyone || len(got[0].People) != 0 ||
+		len(got[0].Sessions) != 0 {
+		t.Fatalf("a batch that retained a record said %+v, want %+v", got[0], want)
+	}
+
+	applier.Committed(t.Context())
+	if len(got) != 1 {
+		t.Fatalf("the retention was handed over again by the next batch: %+v", got)
+	}
+}

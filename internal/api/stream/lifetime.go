@@ -34,9 +34,12 @@ import (
 //     committed identity batch ended its session, moved the row of the person
 //     it acts for (their grants, stage, revocation epoch, seat binding,
 //     removal, or a machine token of theirs revoked), or moved something no
-//     list can name — the fleet-wide session generation, a release. Every node
-//     applies the identity log, so every node hears this from its own applier
-//     and decides its own sockets; nothing is sent between nodes.
+//     list can name — the fleet-wide session generation, a release, or a
+//     record this node RETAINED rather than applied (a newer build's, or one
+//     signed under a key it does not hold), whose person is inside a payload
+//     it cannot read. Every node applies the identity log, so every node hears
+//     this from its own applier and decides its own sockets; nothing is sent
+//     between nodes.
 //   - A COMPANY WAS PUBLISHED ([Service.CompanyPublished]): the org chart a
 //     seat binding resolves through and a watch is decided by may have moved —
 //     a seat removed, a lead moved off a team.
@@ -80,6 +83,19 @@ import (
 // presented. An open live view is activity, so a re-decision sets that
 // deadline aside and decides the session on its rows ([auth.Guard.ResolveOpen])
 // — while its ABSOLUTE deadline, which no re-issue moves, still ends it.
+//
+// # A record this node retained
+//
+// A record this node cannot read is retained, not applied, and its applier
+// moves past it — so the node is NOT behind, and nothing about it is a stall.
+// What changed is what the node can vouch for: every person in the bucket the
+// record's scope covers reads as unknown, and the REST guard answers them 503.
+// The identity applier says so as a move naming everyone, because no list can
+// name whose record it is; decided again, a socket in that bucket answers
+// UNKNOWN and closes [CloseUndecided] — its reconnect's handshake answering 503
+// as REST does — and every other socket is decided exactly as before. When the
+// node can read the record (an upgrade, a key added and a restart), it applies
+// it and the ordinary move follows.
 //
 // # A node behind its identity log
 //

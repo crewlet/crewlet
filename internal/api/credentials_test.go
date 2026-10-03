@@ -16,6 +16,7 @@ import (
 	"github.com/crewlet/crewlet/internal/api"
 	"github.com/crewlet/crewlet/internal/api/auth"
 	"github.com/crewlet/crewlet/internal/api/stream"
+	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/iam/session"
 	"github.com/crewlet/crewlet/internal/iamdomain"
@@ -80,6 +81,16 @@ func (l *liveRows) end(person string) {
 	l.rows[person] = identity
 }
 
+// deferPerson marks a person's rows as a node holding a record it retained
+// leaves them: the read succeeds and cannot vouch for what it returned.
+func (l *liveRows) deferPerson(person string) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	identity := l.rows[person]
+	identity.Deferred = true
+	l.rows[person] = identity
+}
+
 // readAtLeast waits until a person's rows have been read n times.
 func (l *liveRows) readAtLeast(t *testing.T, person string, n int) {
 	t.Helper()
@@ -101,7 +112,109 @@ func (l *liveRows) readAtLeast(t *testing.T, person string, n int) {
 // signedInTab is one person's dashboard tab: their session and its socket.
 type signedInTab struct {
 	person, lineage string
+	cookie          *http.Cookie
 	conn            *websocket.Conn
+}
+
+// socketNode is one node serving the dashboard's socket through the REAL app
+// and guard, over a session arm whose rows a case changes while sockets are
+// open, and the credential feed a committed identity batch reaches it on.
+type socketNode struct {
+	b      config.Bootstrap
+	signer *session.Signer
+	rows   *liveRows
+	feed   *fakeCredentials
+	srv    *httptest.Server
+	app    *api.App
+	now    func() time.Time
+}
+
+// newSocketNode builds a node whose signer and session arm read now — the
+// fixed clock, or a moving one for a case about a deadline.
+func newSocketNode(t *testing.T, now func() time.Time) *socketNode {
+	t.Helper()
+	b := closedPosture()
+	b.API.ExternalURL = "http://127.0.0.1:8080"
+	signer, err := session.New(session.Options{
+		Material: runtoken.Material{ActiveID: "k1",
+			Keys: []runtoken.KeyMaterial{{ID: "k1", Material: "the-socket-signing-key"}}},
+		Now: now,
+	})
+	if err != nil {
+		t.Fatalf("session.New: %v", err)
+	}
+	rows := &liveRows{rows: map[string]session.Identity{}, reads: map[string]int{}}
+	arm, err := auth.NewSessions(auth.SessionsDeps{
+		Signer: signer, Directory: rows, Applier: rows, Chart: postureNoSeats{},
+		External: b.API.ExternalBase(), Audit: silentAudit{},
+		Now: now,
+	})
+	if err != nil {
+		t.Fatalf("auth.NewSessions: %v", err)
+	}
+	feed := &fakeCredentials{}
+	app := newApp(t, api.Options{Bootstrap: &b, Sessions: arm, Credentials: feed})
+	srv := httptest.NewServer(app)
+	t.Cleanup(srv.Close)
+	return &socketNode{b: b, signer: signer, rows: rows, feed: feed, srv: srv,
+		app: app, now: now}
+}
+
+// tab signs a person in, at the node's clock, with a session whose absolute
+// deadline is absolute, and opens their tab's socket with its cookie.
+func (n *socketNode) tab(t *testing.T, login string, absolute time.Time) signedInTab {
+	t.Helper()
+	at := n.now()
+	lineage := uuid.Must(uuid.NewV7())
+	millis := at.UnixMilli()
+	for i := range 6 {
+		lineage[i] = byte(millis >> (8 * (5 - i)))
+	}
+	person := uuid.Must(uuid.NewV7()).String()
+	bearer, err := n.signer.Mint(session.Mint{
+		Lineage: lineage, Person: person, Epoch: 1, Generation: 1,
+		StartPosition: 1, AbsoluteExpiresAt: absolute,
+	})
+	if err != nil {
+		t.Fatalf("mint: %v", err)
+	}
+	n.rows.mu.Lock()
+	n.rows.rows[person] = session.Identity{
+		Applied: cookieApplied, Generation: 1,
+		Session: session.LineageRow{Found: true, Epoch: 1, ProvedAt: at},
+		Person: session.PersonRow{Found: true, Epoch: 1, Stage: iam.StageActive,
+			Login: login, Grants: []iam.Grant{iam.GrantStateRead}},
+	}
+	n.rows.mu.Unlock()
+	cookie := &http.Cookie{Name: session.CookieName(n.b.API.ExternalBase()), Value: bearer}
+	conn, _, err := websocket.Dial(t.Context(),
+		"ws"+strings.TrimPrefix(n.srv.URL, "http")+"/ws/stream",
+		&websocket.DialOptions{HTTPHeader: http.Header{
+			"Cookie": {cookie.String()},
+			"Origin": {n.b.API.ExternalURL},
+		}})
+	if err != nil {
+		t.Fatalf("a live session's handshake was refused: %v", err)
+	}
+	t.Cleanup(func() { _ = conn.CloseNow() })
+	// THE HANDSHAKE AND THE DECISION THE SOCKET TAKES AS IT STARTS
+	// LISTENING: both have read the rows before the case moves them.
+	n.rows.readAtLeast(t, person, 2)
+	return signedInTab{person: person, lineage: lineage.String(), cookie: cookie,
+		conn: conn}
+}
+
+// probe is the plain GET a dashboard re-asks the socket's path with, presenting
+// cookie: a REST request through the guard's ordinary resolution, answering
+// 426 for a credential it serves, 401 for one it refuses and 503 for one this
+// node cannot decide.
+func (n *socketNode) probe(t *testing.T, cookie *http.Cookie) int {
+	t.Helper()
+	req := httptest.NewRequest(http.MethodGet, "/ws/stream", nil)
+	req.AddCookie(cookie)
+	rec := httptest.NewRecorder()
+	n.app.ServeHTTP(rec, req)
+	return rec.Code
 }
 
 // A COMMITTED IDENTITY BATCH CLOSES THE OPEN TABS IT ENDED, and only those.
@@ -118,69 +231,11 @@ type signedInTab struct {
 // names closes `4401`, and the other stays open until its own move arrives.
 func TestAnIdentityMoveClosesTheTabsItEnded(t *testing.T) {
 	t.Parallel()
-	b := closedPosture()
-	b.API.ExternalURL = "http://127.0.0.1:8080"
-	signer, err := session.New(session.Options{
-		Material: runtoken.Material{ActiveID: "k1",
-			Keys: []runtoken.KeyMaterial{{ID: "k1", Material: "the-socket-signing-key"}}},
-		Now: func() time.Time { return clock },
-	})
-	if err != nil {
-		t.Fatalf("session.New: %v", err)
-	}
-	rows := &liveRows{rows: map[string]session.Identity{}, reads: map[string]int{}}
-	arm, err := auth.NewSessions(auth.SessionsDeps{
-		Signer: signer, Directory: rows, Applier: rows, Chart: postureNoSeats{},
-		External: b.API.ExternalBase(), Audit: silentAudit{},
-		Now: func() time.Time { return clock },
-	})
-	if err != nil {
-		t.Fatalf("auth.NewSessions: %v", err)
-	}
-	feed := &fakeCredentials{}
-	srv := httptest.NewServer(newApp(t, api.Options{
-		Bootstrap: &b, Sessions: arm, Credentials: feed,
-	}))
-	t.Cleanup(srv.Close)
-
+	node := newSocketNode(t, func() time.Time { return clock })
+	rows, feed := node.rows, node.feed
 	tab := func(login string) signedInTab {
 		t.Helper()
-		lineage := uuid.Must(uuid.NewV7())
-		millis := clock.UnixMilli()
-		for i := range 6 {
-			lineage[i] = byte(millis >> (8 * (5 - i)))
-		}
-		person := uuid.Must(uuid.NewV7()).String()
-		bearer, err := signer.Mint(session.Mint{
-			Lineage: lineage, Person: person, Epoch: 1, Generation: 1,
-			StartPosition: 1, AbsoluteExpiresAt: clock.Add(8 * time.Hour),
-		})
-		if err != nil {
-			t.Fatalf("mint: %v", err)
-		}
-		rows.mu.Lock()
-		rows.rows[person] = session.Identity{
-			Applied: cookieApplied, Generation: 1,
-			Session: session.LineageRow{Found: true, Epoch: 1, ProvedAt: clock},
-			Person: session.PersonRow{Found: true, Epoch: 1, Stage: iam.StageActive,
-				Login: login, Grants: []iam.Grant{iam.GrantStateRead}},
-		}
-		rows.mu.Unlock()
-		cookie := &http.Cookie{Name: session.CookieName(b.API.ExternalBase()), Value: bearer}
-		conn, _, err := websocket.Dial(t.Context(),
-			"ws"+strings.TrimPrefix(srv.URL, "http")+"/ws/stream",
-			&websocket.DialOptions{HTTPHeader: http.Header{
-				"Cookie": {cookie.String()},
-				"Origin": {b.API.ExternalURL},
-			}})
-		if err != nil {
-			t.Fatalf("a live session's handshake was refused: %v", err)
-		}
-		t.Cleanup(func() { _ = conn.CloseNow() })
-		// THE HANDSHAKE AND THE DECISION THE SOCKET TAKES AS IT STARTS
-		// LISTENING: both have read the rows before the case moves them.
-		rows.readAtLeast(t, person, 2)
-		return signedInTab{person: person, lineage: lineage.String(), conn: conn}
+		return node.tab(t, login, clock.Add(8*time.Hour))
 	}
 	jane, omar := tab("jane.doe"), tab("omar.haddad")
 	rows.end(jane.person)
@@ -197,6 +252,39 @@ func TestAnIdentityMoveClosesTheTabsItEnded(t *testing.T) {
 	if got := closeOf(t, omar.conn); got != stream.CloseUnauthenticated {
 		t.Fatalf("the tab whose person moved closed %d, want %d", got,
 			stream.CloseUnauthenticated)
+	}
+}
+
+// A RECORD THIS NODE RETAINED CLOSES THE TABS IN ITS BUCKET, and only those.
+//
+// A record this node cannot read — a newer build's during a rolling upgrade,
+// one signed under a key it was not restarted with — is retained rather than
+// applied, so no list says whose it is: the identity applier hands over a move
+// naming everyone (iamdomain.Applier.Retained). What the node CAN still say is
+// whose rows the record leaves unknown — every person in the bucket its scope
+// declares reads Deferred — and that is the answer the REST guard gives them:
+// 503. So an open tab in that bucket closes 1013 (try again later), and its
+// reconnect's handshake answers 503 like every route beside it, while a tab
+// outside the bucket is decided again on rows that still vouch for it and
+// stays open. Kept open instead, a revocation or a suspension written by a
+// newer peer would leave the person's tab streaming the company on every node
+// still on the older build, for as long as the upgrade took.
+func TestARetainedRecordClosesTheTabsItLeavesUnknown(t *testing.T) {
+	t.Parallel()
+	node := newSocketNode(t, func() time.Time { return clock })
+	jane := node.tab(t, "jane.doe", clock.Add(8*time.Hour))
+	omar := node.tab(t, "omar.haddad", clock.Add(8*time.Hour))
+	node.rows.deferPerson(jane.person)
+
+	node.feed.fire(t, iamdomain.Moved{Everyone: true})
+	if got := closeOf(t, jane.conn); got != stream.CloseUndecided {
+		t.Fatalf("the tab whose rows a retained record left unknown closed %d, "+
+			"want %d", got, stream.CloseUndecided)
+	}
+	stillOpen(t, omar.conn)
+	if got := node.probe(t, jane.cookie); got != http.StatusServiceUnavailable {
+		t.Fatalf("the reconnect of the tab a retained record closed answered %d, "+
+			"want 503 — the handshake is where the client learns why", got)
 	}
 }
 
@@ -223,13 +311,13 @@ func stillOpen(t *testing.T, conn *websocket.Conn) {
 		t.Fatal(err)
 	}
 	if err := conn.Write(ctx, websocket.MessageText, ping); err != nil {
-		t.Fatalf("the other tab's socket is gone: %v", err)
+		t.Fatalf("a socket that should be open is gone: %v", err)
 	}
 	for {
 		_, raw, err := conn.Read(ctx)
 		if err != nil {
-			t.Fatalf("the other tab's socket closed (%v): a move naming one "+
-				"session ended another", err)
+			t.Fatalf("a socket that should be open closed (%v): something "+
+				"that did not end its credential ended it", err)
 		}
 		var frame map[string]any
 		if err := json.Unmarshal(raw, &frame); err != nil {

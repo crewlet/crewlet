@@ -106,6 +106,30 @@ func (a *Applier) Committed(context.Context) {
 	}
 }
 
+// THE APPLIER HEARS WHAT A BATCH RETAINED: see [Applier.Retained].
+var _ statelog.RetentionHook = (*Applier)(nil)
+
+// Retained is told, after a committed batch and before [Applier.Committed],
+// that the batch RETAINED records this node did not apply — one a newer build
+// wrote, one signed under a keyring key this node was not restarted with, or
+// one a retained record's scope covers.
+//
+// IT MOVES EVERYONE ([Moved.Everyone]). Whose record it is sits inside a
+// payload this node could not read, and its scope is a BUCKET of the person
+// id rather than the person, so no list here can name whom it is about. What
+// the commit did change is what this node can vouch for: every read of a
+// person in that bucket answers unknown from now on (the deferral the
+// framework just recorded), and the guard refuses their REST requests 503. A
+// connection held open on a decision made before the commit — a revocation
+// or a suspension this node cannot read is exactly what such a record may be
+// — has to be decided again so that it reaches the same answer; decided
+// again, a credential outside every retained bucket is decided exactly as
+// before. NOT [Moved.Seats]: the contact routing is rebuilt from rows, and a
+// retained record wrote none.
+func (a *Applier) Retained(context.Context, int) {
+	a.moved.Everyone = true
+}
+
 // Gated reports a record that must produce no rows at all.
 //
 // TWO GATES, READ FROM THIS SAME TRANSACTION, because the answer has to come

@@ -3570,7 +3570,17 @@ something could have changed the answer:
   a machine token it presented was revoked; or the company's session generation
   moved. Every node applies the identity log, so every node hears this from its
   own applier as the record applies and decides its own sockets — a revocation
-  reaches an open tab within the time it takes to apply, on every node;
+  reaches an open tab within the time it takes to apply, on every node that can
+  read it;
+- **this node retained an identity record instead of applying it** — one a
+  newer build wrote during a rolling upgrade, or one signed under a keyring key
+  this node was not restarted with. Whose it is sits inside a payload the node
+  cannot read, so every socket is decided again: one whose person is in the
+  bucket the record's scope covers is now somebody this node cannot vouch for,
+  and closes `1013`, its reconnect answering `503` exactly as the node's REST
+  routes answer that person — until the node can read the record (an upgrade,
+  or the key added and a restart) and applies it; every other socket is decided
+  as before and stays open;
 - **a company was published** — the org chart a seat binding resolves through
   may have moved;
 - **its credential ends on its own** — a session's absolute deadline, a
@@ -3600,7 +3610,9 @@ Each answer does one thing:
 open sockets are served on their last decision until it applies the one that
 ends them. That is the same stall every other surface on the node already
 names: its REST routes answer `503` past the stall grace, and the alarm table
-reports it.
+reports it. A node that has **retained** a record is not behind — its applier
+has moved past the record — which is why retention is a signal of its own
+(above) rather than this stall.
 
 `4401` and `4403` sit in the 4000–4999 range the standard reserves for
 applications, and both deliberately echo the HTTP status they mean; `1013` is

@@ -57,7 +57,9 @@ type Moved struct {
 	// to be decided again: the fleet-wide session generation moved, which
 	// ends every session and machine token in the company at once; or a
 	// record took a claim off whoever held it without naming them — a
-	// release, or the residue a claim clears off a stale holder. The
+	// release, or the residue a claim clears off a stale holder; or the
+	// batch RETAINED a record this node cannot read, whose person is
+	// inside the payload it could not open ([Applier.Retained]). The
 	// engine sets it too, when an adoption or a reopened estate replaced
 	// the rows with no committed batch to say what moved.
 	Everyone bool
