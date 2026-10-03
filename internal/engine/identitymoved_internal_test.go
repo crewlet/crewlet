@@ -85,6 +85,50 @@ func TestAnIdentityBatchReachesTheCredentialListener(t *testing.T) {
 	}
 }
 
+// A RECORD THE IDENTITY RUNNER RETAINS DECIDES EVERY CREDENTIAL AGAIN, through
+// the applier the register builds.
+//
+// The framework finds an applier's retention hook by a type assertion on what
+// the register handed it, so a register that wrapped the identity applier — or
+// built one that dropped the hook — would compile, pass every iamdomain case,
+// and leave a retained revocation reaching no open socket on this node. So the
+// applier here is the register's own, and the listener the one the API
+// registers. It moves no seat: the contact routing is rebuilt from rows, and a
+// retained record wrote none.
+func TestARetainedIdentityRecordReachesTheCredentialListener(t *testing.T) {
+	t.Parallel()
+	e := &Engine{directoryNudge: make(chan struct{}, 1)}
+	heard := &heardMoves{}
+	e.SetOnIdentityMoved(heard.hear)
+	entry, ok := registrationFor(iamdomain.Domain{}.Name())
+	if !ok {
+		t.Fatal("the register has no identity domain")
+	}
+	applier, err := entry.NewApplier(&stateLog{nodeID: "node-a", applyHooks: e.applyHooks()})
+	if err != nil {
+		t.Fatalf("build the applier: %v", err)
+	}
+	hook, ok := applier.(statelog.RetentionHook)
+	if !ok {
+		t.Fatalf("the identity applier the register builds (%T) does not take the "+
+			"framework's retention hook, so a record this node retains reaches "+
+			"no open socket", applier)
+	}
+
+	hook.Retained(t.Context(), 1)
+	applier.Committed(t.Context())
+	if got := heard.take(); len(got) != 1 || !got[0].Everyone {
+		t.Fatalf("a batch that retained a record reached the listener as %+v, "+
+			"want everyone", got)
+	}
+	select {
+	case <-e.directoryNudge:
+		t.Error("a batch that retained a record rebuilt the party registry, " +
+			"which is rebuilt from rows a retained record never wrote")
+	default:
+	}
+}
+
 // AN ESTATE REPLACED WITH NO BATCH TO SAY SO DECIDES EVERY CREDENTIAL AGAIN.
 //
 // An adoption puts a donor's rows in place and a reopened estate may be the
