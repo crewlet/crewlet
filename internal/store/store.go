@@ -209,8 +209,10 @@ const (
 // work inside this process — the driver's engine is embedded, a query is not a
 // round trip to a server, and a connection that cannot get a core buys queue
 // depth rather than concurrency; sizing to the cores the runtime will actually
-// give it is the honest ceiling. Eight because two dashboards is the ordinary
-// case and the floor must cover it even on a one-core host. Both bounds are
+// give it is the honest ceiling. Eight because one full dashboard tab in the
+// sockets' half of the readers, and the same again for the engine's own reads,
+// is the ordinary case and the floor must cover it even on a one-core host
+// (see [minReaderConns]). Both bounds are
 // what they are because a reader never blocks the writer under WAL while
 // writers serialise on the file lock regardless — so connections past the read
 // concurrency only deepen a queue.

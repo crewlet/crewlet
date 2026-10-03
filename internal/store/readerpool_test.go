@@ -25,9 +25,10 @@ func TestTheReaderPoolIsDerivedFromTheMachineAndKeepsItsFloor(t *testing.T) {
 		t.Errorf("defaultReaderConns() = %d, want max(%d, GOMAXPROCS=%d) = %d",
 			got, minReaderConns, runtime.GOMAXPROCS(0), want)
 	}
-	// THE FLOOR IS LOAD-BEARING and not decoration: two full dashboards is
-	// eight concurrent queries, and a one-core host would otherwise size
-	// its pool at one and make a single tab queue against itself.
+	// THE FLOOR IS LOAD-BEARING and not decoration: one full tab's four in
+	// the sockets' half and four for the engine's own reads is eight, and a
+	// one-core host would otherwise size its pool at one and make a single
+	// tab queue against itself.
 	if got < minReaderConns {
 		t.Errorf("the derived bound %d fell below the floor of %d", got, minReaderConns)
 	}
@@ -107,10 +108,10 @@ func TestTheReserveIsSkippedWhereThereIsNoRoomForIt(t *testing.T) {
 
 // TestASocketStormCannotStarveIdentityWork is the reservation doing its job.
 //
-// A socket storm is N dashboards × four in-flight queries each, every one of
-// them a scan. They take every connection first-come-first-served, and the
-// identity read that would let those very requests be decided queues behind
-// all of them — so the queue feeds itself, exactly as the reader/writer loop
+// A socket storm is the dashboards' half of the readers full of scans and the
+// engine's own reads taking the rest. Together they take every connection
+// first-come-first-served, and the identity read that would let those very
+// requests be decided queues behind all of them — so the queue feeds itself, exactly as the reader/writer loop
 // [Writer] exists to break does. One connection is HELD from the open, and
 // [Identity] is the only way to spend it.
 func TestASocketStormCannotStarveIdentityWork(t *testing.T) {
