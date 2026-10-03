@@ -895,8 +895,8 @@ type SecretRecord struct {
 	Source        string
 
 	// Version is the store's own revision of the row, set on every read
-	// and ignored on every write: what [Secrets.UpdateSecret] and
-	// [Secrets.DeleteSecretAt] are conditioned on. Store-wide rather than
+	// and ignored on every write: what [Secrets.UpdateSecret] is
+	// conditioned on. Store-wide rather than
 	// per row, as a KV revision is, so a row deleted and written again
 	// never hands back a version an older incarnation of it already used.
 	Version uint64
@@ -960,10 +960,9 @@ type Secrets interface {
 	// THE ENGINE'S OWN KEY MATERIAL NEEDS THE SANDBOX RUNS' DISCIPLINE, and
 	// last-write-wins is exactly wrong for it: a company key two nodes
 	// minted at once is one whose loser derived values under a key the
-	// store no longer holds. So beside the operator's plain put, three
-	// conditional writes: a create for a key's mint, an update at the
-	// version read for a rekey, and a delete at the version judged for a
-	// sweep that decided a row is nobody's.
+	// store no longer holds. So beside the operator's plain put, two
+	// conditional writes: a create for a key's mint, and an update at the
+	// version read for a rekey.
 	CreateSecret(ctx context.Context, rec SecretRecord) (bool, error)
 
 	// UpdateSecret replaces a sealed value only while the row is still at
@@ -971,13 +970,6 @@ type Secrets interface {
 	// moved or went away since the caller read it — and the caller
 	// re-reads and re-decides rather than writing over what it never saw.
 	UpdateSecret(ctx context.Context, rec SecretRecord, version uint64) (bool, error)
-
-	// DeleteSecretAt removes a value only while the row is still at
-	// version, reporting whether it removed it. False is a row somebody
-	// wrote after the caller judged it, or one already gone. A version of
-	// zero names no row and removes nothing: a caller that never read one
-	// has not judged anything.
-	DeleteSecretAt(ctx context.Context, name string, version uint64) (bool, error)
 }
 
 // Integrations is the fleet's record of where each external surface got to.

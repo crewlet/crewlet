@@ -42,13 +42,10 @@
 // # A plain put is right for a credential and wrong for a key
 //
 // An operator's rotation is last-write-wins by design. The engine's own keys
-// are not, and neither is a rekey, a sweep or the org chart: a key is minted
-// with [Estate.Create], never over one that exists; the rekey re-seals every
-// row at the version it read; a chart write seals under a name no other write
-// derives, with [Store.Create], and confirms one it restates with [Store.Hold];
-// and a sweep that decided an operator row is nobody's deletes it with
-// [Store.UnsetAt], only at the version it judged — because a plain write of
-// what any of them read undoes whatever landed in between.
+// are not, and neither is a rekey: a key is minted with [Estate.Create], never
+// over one that exists, and the rekey re-seals every row at the version it
+// read — because a plain write of what either read undoes whatever landed in
+// between.
 package fleetsecrets
 
 import (
@@ -113,85 +110,6 @@ func (s *Store) Set(ctx context.Context, name, value string, by secrets.Author,
 		return err
 	}
 	return s.put(ctx, name, value, by, source, now)
-}
-
-// Create seals a value and writes it only where no row is stored under its
-// name, reporting whether it wrote. False is a row somebody else wrote, and
-// never a failure.
-//
-// FOR A WRITER THAT NAMES WHAT IT WRITES — the org chart, whose every sealed
-// value is under a name derived from the write that sealed it — never for an
-// operator: a person setting a credential means to replace it, which is
-// [Store.Set]. A plain put there is how a chart write refused after its seal
-// replaced the value a live row already named.
-func (s *Store) Create(ctx context.Context, name, value string, by secrets.Author,
-	source string, now time.Time) (bool, error) {
-
-	if s == nil || s.cipher == nil {
-		return false, secrets.ErrNoKeyring
-	}
-	if err := operatorName(name); err != nil {
-		return false, err
-	}
-	if err := secrets.CheckName(name); err != nil {
-		return false, err
-	}
-	rec, err := s.seal(provenance(name, by, source, now), value)
-	if err != nil {
-		return false, err
-	}
-	created, err := s.fleet.CreateSecret(ctx, rec)
-	if err != nil {
-		return false, fmt.Errorf("fleetsecrets: create %s: %w", name, err)
-	}
-	return created, nil
-}
-
-// Hold opens the value stored under name and rewrites its row exactly as it is,
-// at the version it was read at — so the row's version moves and nothing else
-// does — answering the value and whether a row was there to hold.
-//
-// # Why a write that changes nothing
-//
-// For the orphan sweep's sake ([Store.UnsetAt]). The sweep judges a value
-// nobody names at the version it LISTED, and a writer about to name that value
-// again — a chart write restating a reference, or retrying the write that
-// sealed it — has to make that judgement stale, or the sweep deletes the value
-// under the record that names it. Moving the version is the whole of that, and
-// the provenance and the instant the value last CHANGED stay as they were,
-// because nothing about the value did. A row that moved while it was held is
-// read again, and one that went is answered as none.
-func (s *Store) Hold(ctx context.Context, name string) (string, bool, error) {
-	if s == nil || s.cipher == nil {
-		return "", false, secrets.ErrNoKeyring
-	}
-	if err := operatorName(name); err != nil {
-		return "", false, err
-	}
-	for attempt := 1; ; attempt++ {
-		row, found, err := s.fleet.Secret(ctx, name)
-		if err != nil {
-			return "", false, fmt.Errorf("fleetsecrets: read %s: %w", name, err)
-		}
-		if !found {
-			return "", false, nil
-		}
-		value, err := s.cipher.Decrypt(row.Value, secrets.AADForVar(name))
-		if err != nil {
-			return "", false, fmt.Errorf("fleetsecrets: open %s: %w", name, err)
-		}
-		wrote, err := s.fleet.UpdateSecret(ctx, row, row.Version)
-		if err != nil {
-			return "", false, fmt.Errorf("fleetsecrets: hold %s: %w", name, err)
-		}
-		if wrote {
-			return value, true, nil
-		}
-		if attempt == movedRowAttempts {
-			return "", false, fmt.Errorf("fleetsecrets: %s was rewritten %d times "+
-				"while it was held; try again", name, movedRowAttempts)
-		}
-	}
 }
 
 // put seals a value under its own name and writes it, once the caller's view
@@ -400,30 +318,6 @@ func (s *Store) Unset(ctx context.Context, name string) (bool, error) {
 	return s.unset(ctx, name)
 }
 
-// UnsetAt removes a value only while it is still at the version the caller
-// judged it at, reporting whether it removed it.
-//
-// FOR A SWEEP, never a person: an operator's unset is last-write-wins like
-// their set, while a duty that decided a row is nobody's must not delete one
-// written or held since it decided — a chart write naming that very value
-// again between the census and the delete would otherwise have it destroyed
-// under the row it is about to name it in. False is such a row, or one already gone, and neither is
-// a failure. NO KEYRING NEEDED: deleting a row opens nothing.
-func (s *Store) UnsetAt(ctx context.Context, name string, version uint64) (bool, error) {
-	if s == nil {
-		return false, secrets.ErrNoKeyring
-	}
-	if err := operatorName(name); err != nil {
-		return false, err
-	}
-	removed, err := s.fleet.DeleteSecretAt(ctx, name, version)
-	if err != nil {
-		return false, fmt.Errorf("fleetsecrets: unset %s at version %d: %w",
-			name, version, err)
-	}
-	return removed, nil
-}
-
 // unset deletes one row, once the caller's view has established it may.
 func (s *Store) unset(ctx context.Context, name string) (bool, error) {
 	removed, err := s.fleet.DeleteSecret(ctx, name)
@@ -495,12 +389,11 @@ func (s *Store) Rekey(ctx context.Context, activeKeyID string) (Rekeyed, error) 
 	return out, nil
 }
 
-// movedRowAttempts bounds how many times a rekey or a hold re-reads a row a
-// concurrent write moved between its read and its write.
+// movedRowAttempts bounds how many times a rekey re-reads a row a concurrent
+// write moved between its read and its write.
 //
 // THREE, because the writers a row can meet are few and each lands once: an
-// operator rotating or deleting it, a chart write holding it or the chart's
-// sweep collecting it, another rekey moving it. Two re-reads cover any of them
+// operator rotating or deleting it, or another rekey moving it. Two re-reads cover any of them
 // landing between each read and write; a row still moving after that is being
 // rewritten in a loop, which is worth an error naming it rather than a write
 // that spins on it.
