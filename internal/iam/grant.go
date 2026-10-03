@@ -251,10 +251,11 @@ var AllGrants = []Grant{
 // would be a rule a row from anywhere else could step round. They are one of
 // the two locks between a token and the gestures that need a person present —
 // a token is stepped up by construction, so a proof's age is neither ([Recency])
-// — and the other is that every surface changing how somebody proves who they
-// are refuses a request that presented a token, which is what closes the
-// gestures a person makes about THEMSELVES on no grant. A token is what an
-// attacker holding a pipeline's environment already has.
+// — and the other is internal/authz's: every such gesture's row says so, and
+// the table refuses a principal acting through a token
+// ([Principal.MachineToken]), which is what closes the gestures a person makes
+// about THEMSELVES on no grant. A token is what an attacker holding a
+// pipeline's environment already has.
 var PersonPresentGrants = []Grant{GrantSecretRead, GrantPeopleManage}
 
 // grantAccess classifies every grant. A map rather than a string split, for

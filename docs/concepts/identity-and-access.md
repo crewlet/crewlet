@@ -1834,17 +1834,29 @@ a step-up gesture on the day nobody can sign in as a person.
 So what keeps a machine token off the gestures that need a person present —
 revealing a secret, changing somebody's authority or how they prove who they
 are, ending sessions that are not its owner's — is never the clock. It is two
-locks, and the build holds both:
+locks, both in the authority table, and the build holds both:
 
+- **The row says so.** Every verb that needs somebody at a keyboard states it
+  beside its grant and its window, and a request that **presented a machine
+  token** is refused there — `403 unauthorized`, `reason: token_refused` —
+  whatever its owner may do. Some rows need a person on every arm: revealing a
+  secret, every directory write, ending every session in the company, and
+  changing how somebody proves who they are (enrolling or replacing a second
+  factor, regenerating the recovery codes, revoking a password, a second
+  factor or the recovery codes) — which a person does about *themselves* on no
+  grant at all, so this is the only lock there. Others spare the token's own
+  owner: a token may revoke its owner's tokens, itself included, and end its
+  owner's sessions, which ends it too — what somebody who finds one leaked
+  reaches for — and do neither about anybody else. It used to be a refusal
+  each route remembered to make while the table admitted the token on the same
+  verb, so the next route on that verb could forget it.
 - A token can never carry `secrets:read` or `people:manage`, the grants behind
   every one of those gestures about anybody but its owner — refused at its
-  mint and stripped from what it carries on every request — so each is refused
-  on the grant.
-- The gestures a person makes about *themselves* on no grant at all —
-  enrolling or replacing a second factor, regenerating the recovery codes,
-  answering a step-up, revoking a password, a second factor or the recovery
-  codes — are refused to any request that **presented a machine token**, by
-  every surface that makes them, before anything is decided.
+  mint and stripped from what it carries on every request.
+
+Answering a step-up is not a verb in the table — it is about nothing and asks
+no grant — so `POST /auth/step-up` refuses a token itself: nobody is there to
+confirm.
 
 And **no tool** asks for a proof — a seat has no keyboard, and the operator's
 assistant's surface is not a step-up surface — which the build checks too.

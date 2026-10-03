@@ -15,6 +15,7 @@ import (
 	"github.com/crewlet/crewlet/internal/api/auth"
 	"github.com/crewlet/crewlet/internal/api/httpjson"
 	"github.com/crewlet/crewlet/internal/api/opkey"
+	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
@@ -280,16 +281,17 @@ func TestATierATokenNamesWhoATokenIsFor(t *testing.T) {
 
 // A TOKEN REVOKES TOKENS, ITSELF INCLUDED, AND NEVER ITS OWNER'S PROOF.
 //
-// A token acts as its owner and the table admits it here as it admits them —
-// stepped up by construction — so without a rule of its own a leaked token
-// could withdraw the owner's second factor: the first half of taking the
-// account. And not only where the route could name the credential first: one
-// this node's directory did not list yet is held to the same rule inside the
-// snapshot that revokes, answered as the idempotent nothing-changed it is.
+// A token acts as its owner and is stepped up by construction, so the route's
+// own verb admits it as it admits them — and without the proof verb's row
+// needing a person present, a leaked token could withdraw the owner's second
+// factor: the first half of taking the account. The listed password is
+// refused by the table's own word (`token_refused`). And not only where the
+// route could name the credential first: one this node's directory did not
+// list yet is held to the same answer inside the snapshot that revokes.
 //
-// Mutations: drop the method check before the write and the listed password
-// is revoked by a request carrying the token; drop the snapshot's condition
-// and the unlisted one is.
+// Mutations: read the proof verb as admitted before the write and the listed
+// password is revoked by a request carrying the token; drop the snapshot's
+// condition and the unlisted one is.
 func TestATokenRevokesTokensAndNotItsOwnersProof(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
@@ -332,6 +334,13 @@ func TestATokenRevokesTokensAndNotItsOwnersProof(t *testing.T) {
 			if rec.Code != tc.want {
 				t.Fatalf("status %d, want %d: %s", rec.Code, tc.want,
 					rec.Body.String())
+			}
+			if tc.want == http.StatusForbidden {
+				body := decodeBody(t, rec)
+				if body[authz.DetailReason] != string(authz.ReasonTokenRefused) {
+					t.Errorf("refused with %v, want the table's %s", body,
+						authz.ReasonTokenRefused)
+				}
 			}
 			for _, c := range r.writer.held {
 				if c.ID == tc.target && c.RevokedAt.IsZero() == tc.revoked {

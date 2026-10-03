@@ -21,7 +21,7 @@ import (
 
 // THE SECOND FACTOR, enrolled and recovered.
 //
-// # Both routes are guarded AND ask for a SENSITIVE step-up
+// # Both routes are guarded AND ask for a step-up
 //
 // Adding a second factor and replacing the codes that bypass it are the two
 // gestures that decide whether a stolen session can be turned into a permanent
@@ -36,11 +36,12 @@ import (
 //
 // A personal access token acts AS its owner — a person, carrying their seat
 // — so the kind check below passes for it, and it is stepped up by
-// construction, so the window passes for it too. This refusal is the only
-// thing between a token and these gestures: whoever holds a pipeline's
-// environment must never enrol their own second factor on the owner's account,
-// or regenerate the recovery codes and read them. A token PROVES NOBODY IS
-// PRESENT, so it manages no proof — see [machineToken].
+// construction, so the window passes for it too. What refuses it is the
+// authority table's row for the gesture, which needs a person present
+// ([authz.ActionCredentialProof]): whoever holds a pipeline's environment must
+// never enrol their own second factor on the owner's account, or regenerate
+// the recovery codes and read them. A token PROVES NOBODY IS PRESENT, so it
+// manages no proof.
 //
 // # The enrolment is TWO requests, and the secret is only in the first answer
 //
@@ -433,19 +434,16 @@ func (s *Service) proofOfRemoved(w http.ResponseWriter, r *http.Request) {
 // they prove who they are now — a machine, a machine token, or a person whose
 // proof of identity is older than the gesture's window.
 //
-// # The rule is the authority table's
+// # The rule is the authority table's, the token's refusal included
 //
 // Enrolling a second factor, replacing it and regenerating the recovery codes
-// are [authz.ActionCredentialWrite] — the verb `/iam` asks of revoking a
+// are [authz.ActionCredentialProof] — the verb `/iam` asks of revoking a
 // factor, so the two surfaces that change how somebody proves who they are
-// cannot answer differently about it.
-//
-// # And the MACHINE TOKEN is refused here, on what the request presented
-//
-// The table admits a token as its owner — it acts as them and is stepped up by
-// construction — so this refusal is what keeps whoever holds a pipeline's
-// environment from enrolling their own second factor on the owner's account
-// or reading back fresh recovery codes ([machineToken]).
+// cannot answer differently about it. Its row needs a PERSON PRESENT on every
+// arm, so the table refuses a request that presented a machine token here
+// (`token_refused`) although the token acts as its owner and is stepped up: it
+// used to admit one and leave this route to remember to refuse it, which a
+// route added on the same verb could forget.
 //
 // DECIDED AT THIS SURFACE'S OWN INSTANT and rendered in the router's own
 // envelope, so the refusal names its `reason` and its `window` — which is
@@ -462,15 +460,12 @@ func (s *Service) mayChangeProof(w http.ResponseWriter, r *http.Request) (iam.Pr
 		httpjson.Fail(w, http.StatusUnauthorized, httpjson.CodeInvalidToken)
 		return iam.Principal{}, false
 	}
-	window, _ := authz.RecencyOf(authz.ActionCredentialWrite)
+	window, _ := authz.RecencyOf(authz.ActionCredentialProof)
 	if principal.Kind != iam.KindPerson {
 		refuseStepUp(w, window, "a machine credential holds no second factor")
 		return iam.Principal{}, false
 	}
-	if machineToken(w, r, window) {
-		return iam.Principal{}, false
-	}
-	d := authz.Decide(r.Context(), principal, authz.ActionCredentialWrite,
+	d := authz.Decide(r.Context(), principal, authz.ActionCredentialProof,
 		authz.Object{Kind: authz.KindPerson, Owner: principal.ID.String()},
 		authz.NoChart{}, s.now())
 	if d.Unknown() || !d.Allowed {
@@ -478,26 +473,6 @@ func (s *Service) mayChangeProof(w http.ResponseWriter, r *http.Request) (iam.Pr
 		return iam.Principal{}, false
 	}
 	return principal, true
-}
-
-// machineToken refuses a request that presented a machine token, on a gesture
-// that manages the proof its owner signs in with, and says whether it did.
-// window is the proof the gesture asks for, named on the refusal as every
-// `step_up_required` here names it.
-//
-// ASKED OF THE CREDENTIAL, NEVER OF THE PRINCIPAL'S KIND OR ITS CLOCK: a token
-// acts as its owner, so the principal is a person with a fresh step-up clock,
-// and both checks [Service.steppedUp] makes around this one pass it. The one
-// thing on it that says nobody is present is what it came THROUGH — its
-// [iam.Principal.Via], which the guard stamps and [auth.PresentedToken] reads.
-func machineToken(w http.ResponseWriter, r *http.Request, window iam.Recency) bool {
-	if _, fromToken := auth.PresentedToken(r.Context()); !fromToken {
-		return false
-	}
-	refuseStepUp(w, window, "a machine token proves nobody is present, so it "+
-		"cannot confirm its owner's identity or change how they prove it; sign "+
-		"in as the person")
-	return true
 }
 
 // refuseStepUp answers `403 step_up_required` in the ONE envelope every such

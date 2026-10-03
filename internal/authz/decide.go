@@ -190,7 +190,12 @@ var Classes = []Class{
 // caller can branch on; that is what it is for.
 //
 // THEN THE HUMAN-ONLY BAR, which is a fact about the VERB and therefore
-// decided before any class reads any relation — see [rule.humanOnly].
+// decided before any class reads any relation — see [rule.humanOnly] — and the
+// PERSON-PRESENT bar where it covers every arm, for the same reason: a machine
+// token is refused a verb that needs somebody at a keyboard before any class
+// tells it to ask for a grant no token can carry ([rule.presence]). Where the
+// bar spares the self arm it is asked once the class has said which arm
+// admitted.
 //
 // THE ADMIN PATH IS CHECKED BEFORE THE CHART, on every class that has one,
 // because the chart can fail and the grant cannot: an operator holding
@@ -218,12 +223,24 @@ func Decide(ctx context.Context, p iam.Principal, a Action, o Object, chart Char
 	if r.humanOnly && p.Kind == iam.KindSeat {
 		return Decision{Reason: ReasonSeatRefused}
 	}
+	_, throughToken := p.MachineToken()
+	if throughToken && r.presence == PresenceRequired {
+		return Decision{Reason: ReasonTokenRefused}
+	}
 	d := decideClass(ctx, p, r, o, chart)
 	// THE PROOF LAST, and only over an ADMISSION: a refusal is already
 	// the answer, and an unknown is already "ask me again". See the
 	// package doc and [rule.recency].
 	if d.Unknown() || !d.Allowed {
 		return d
+	}
+	// AN ARM ONLY A PERSON MAY TAKE, now that the class has said which arm
+	// admitted: the self arm of a row that spares it is the token acting
+	// as its own owner, and every other arm is somebody else's record.
+	if throughToken && r.presence == PresenceRequiredForOthers &&
+		d.Reason != ReasonSelf {
+
+		return Decision{Reason: ReasonTokenRefused}
 	}
 	need := recencyFor(r, d)
 	if p.Proved(need, now) {

@@ -211,6 +211,31 @@ func (s *Service) Token(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// machineToken refuses a STEP-UP through a request that presented a machine
+// token, and says whether it did. window is the proof a step-up gives, named
+// on the refusal as every `step_up_required` here names it.
+//
+// THE STEP-UP'S OWN, because confirming who you are is no verb in the
+// authority table — it is about no object and asks no grant, it is the
+// credential giving a proof — so the one refusal of a token this surface
+// still makes itself is this one: a token acts as its owner, so the kind check
+// before it passes, and nobody is at a keyboard to confirm anything. Every
+// gesture that NEEDS a person present is the table's to refuse
+// ([authz.Presence]).
+//
+// ASKED OF THE CREDENTIAL, NEVER OF THE PRINCIPAL'S KIND OR ITS CLOCK: the one
+// thing on a token's principal that says nobody is present is what it came
+// THROUGH, which the guard stamps and [auth.PresentedToken] reads.
+func machineToken(w http.ResponseWriter, r *http.Request, window iam.Recency) bool {
+	if _, fromToken := auth.PresentedToken(r.Context()); !fromToken {
+		return false
+	}
+	refuseStepUp(w, window, "a machine token proves nobody is present, so it "+
+		"cannot confirm its owner's identity or change how they prove it; sign "+
+		"in as the person")
+	return true
+}
+
 // stepUpRequest is what confirming identity presents.
 type stepUpRequest struct {
 	Password string `json:"password"`

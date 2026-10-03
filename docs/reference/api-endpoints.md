@@ -235,7 +235,7 @@ node means nothing was done.
 | `GET` | `/auth/session` | **Who you are**: your id, login, seat, kind, stage and grants, and `reauth_at`, the instant your proof of identity stops counting for a [step-up](#some-gestures-ask-how-recently-you-proved-who-you-are) gesture — with `step_up_due` saying whether the next one will ask you to confirm it — and `status`: `signed_in`, or `second_factor_enrolment_required` for a session that may only enrol a second factor, which is one of the routes such a session reaches |
 | `POST` | `/auth/token` | Exchanges a **Tier A bearer** — presented as `Authorization: Bearer`, never a cookie — for a one-hour session cookie. The session **is the token**: it names the token's login, and every request re-composes it from the entry this node holds now — the entry's grants cut to the ceiling, the seat the identity directory binds the token to, stepped up by construction as the bearer is. Removing or renaming the entry ends it on the next request. It answers to the token's **id**, not its value: a new value put under the same id leaves the sessions the old value opened working until their hour ends, so to cut a leaked value's sessions off at once, rotate by giving the token a **new id** — see [Identity and access](../concepts/identity-and-access.md#the-three-credential-shapes-meet-at-one-frame). `POST /auth/logout` from it closes it as it closes a person's, and `POST /auth/logout/all` from it and `crewlet iam invalidate-all` end it too. A refused bearer here is answered exactly as on every guarded route: `401`, counted in the audit trail's failure tally, and never slowed or refused on its address — see [A bearer is its own protection](#a-bearer-is-its-own-protection) |
 | `POST` | `/auth/step-up` | Confirm who you are on a session that is already valid. The only route here that is **both guarded and throttled**: the caller is known, and unbounded retries against a known person is a password oracle with the enumeration already done. It answers a **fresh session cookie** and **ends the session it replaces** first — a close that does not land is `503` with a `Retry-After` and opens nothing, and a presented session that is no longer live is `401`. The replacement confirms the sign-in rather than repeating it, so it keeps the replaced session's absolute deadline |
-| `POST` | `/auth/totp` | Enrol a second factor, replacing any you hold. **Two requests**: the first answers a seed and stores nothing, the second presents a code derived from it — which is the only evidence the authenticator app works. Needs a proof inside `step_up`, the second-factor reset's window, and an older one is `403 step_up_required` naming it (`reason`, `window`) as every step-up refusal does. **Never through a machine token**: one is `403`, whatever its owner may do, because a token proves nobody is present. A factor nobody can confirm is stored is `503` with its `op_id`, never "enrolled". The second leg answers `{"status": "enrolled"}` — and, through a session that could only enrol a second factor, **replaces that session**: the restricted one is ended first, a whole one opens keeping its absolute deadline and its proof instant (the password's — the enrolment's code proves a seed, not who holds it, so it opens no fresh step-up window), its cookie is on the response and it is answered beside the status as `session` (the sign-in's own shape, `status: signed_in`). Such a session enrols only while its person holds **no** second factor — decided in the write's own snapshot — so one that has come to hold one since the session opened is `403 second_factor_required` and nothing is stored: a password alone never replaces a factor. The seed is sealed under your own key before it is stored, and opened only to check a code |
+| `POST` | `/auth/totp` | Enrol a second factor, replacing any you hold. **Two requests**: the first answers a seed and stores nothing, the second presents a code derived from it — which is the only evidence the authenticator app works. Needs a proof inside `step_up`, the second-factor reset's window, and an older one is `403 step_up_required` naming it (`reason`, `window`) as every step-up refusal does. **Never through a machine token**: one is `403 unauthorized` with `reason: token_refused`, whatever its owner may do, because a token proves nobody is present. A factor nobody can confirm is stored is `503` with its `op_id`, never "enrolled". The second leg answers `{"status": "enrolled"}` — and, through a session that could only enrol a second factor, **replaces that session**: the restricted one is ended first, a whole one opens keeping its absolute deadline and its proof instant (the password's — the enrolment's code proves a seed, not who holds it, so it opens no fresh step-up window), its cookie is on the response and it is answered beside the status as `session` (the sign-in's own shape, `status: signed_in`). Such a session enrols only while its person holds **no** second factor — decided in the write's own snapshot — so one that has come to hold one since the session opened is `403 second_factor_required` and nothing is stored: a password alone never replaces a factor. The seed is sealed under your own key before it is stored, and opened only to check a code |
 | `POST` | `/auth/totp/recovery` | Issue ten fresh single-use codes, retiring the old set. Answered **once**, in the clear; what is stored is their hashes, so a lost set is regenerated rather than recovered. Needs a proof inside `step_up`, refused as `POST /auth/totp` is, a machine token included. A set nobody can confirm is stored is `503` with its `op_id`, and the codes are not shown |
 | `POST` | `/auth/logout` | End **this** session. The cookie is cleared whatever the write did — a logout that answered 503 would leave somebody looking at a signed-in page on a shared machine. It ends the session behind **either** cookie name — the one this deployment issues, and the other a browser may still hold from before `api.external_url` moved to https, which the guard no longer authenticates — and clears both. Only a session this node's rows still hold is closed and announced as `iam_session_ended`: a cookie past its deadline, revoked, or naming a session a record already ended is cleared and nothing is written, and a node that cannot read its rows records the close without announcing it. **Unguarded**, and that is what makes the promise true: behind the request guard, a node that could not read its identity estate answered `503 identity_unavailable` before the sign-out ran and the cookie stayed set. It verifies every bearer the browser holds itself, and the origin check still judges it |
 | `POST` | `/auth/logout/all` | End **every** session you hold, by bumping your own revocation epoch — the one move that is immediate on every node. A revocation nobody can confirm is `503` with its `op_id` rather than a claim that your other sessions ended |
@@ -508,7 +508,9 @@ table made the refusal — every question, the policy every `/chart/*` and
 
 `reason` is the authority table's own word for the rule that decided —
 `no_grant`, `not_self`, `not_lead`, `not_author`, `stage`, `seat_refused`,
-`unnamed`, and `step_up` on the one refusal the caller clears themselves
+`token_refused` (a [machine token](#post-iamcredentials-mints-a-machine-token)
+on a gesture that needs a person present), `unnamed`, and `step_up` on the one
+refusal the caller clears themselves
 ([below](#some-gestures-ask-how-recently-you-proved-who-you-are)) — and `grants` are the capabilities any **one** of which would have
 admitted this caller for this object. An empty `grants` is an answer rather
 than an omission: no capability would, and what is missing is a relation the
@@ -581,13 +583,21 @@ personal access or service token. There is nothing else any of them could
 present, and the break-glass credential has to reach a step-up gesture on the
 day nobody can sign in as a person. What keeps a machine token off the
 gestures that need a person present is therefore never the clock, and it is
-two locks: `secrets:read` and `people:manage` — the grants behind every such
-gesture about somebody else — can never be minted onto one, and the gestures a
-person makes about themselves on no grant (`POST /auth/totp`,
-`POST /auth/totp/recovery`, `POST /auth/step-up`, and revoking anything but a
-token through `DELETE /iam/credentials/{id}`) refuse any request that
-presented one. No tool asks for a proof: a seat has no keyboard, and
-`/operator/mcp` is not a step-up surface.
+two locks, both in the authority table. Every row that needs a person says so,
+and a request that presented a machine token is refused there
+`403 unauthorized` with `reason: token_refused` and no `grants`, since no
+capability would change it: revealing a secret, every `/iam/*` write that
+changes who may do anything, ending every session in the company, changing how
+somebody proves who they are (`POST /auth/totp`, `POST /auth/totp/recovery`,
+and revoking a password, a second factor or the recovery codes through
+`DELETE /iam/credentials/{id}`) and — about anybody but the token's own owner
+— minting or revoking a token and ending sessions. A token may still revoke its
+owner's tokens, itself included, and end its owner's sessions, which ends it
+too: that is what somebody who finds one leaked reaches for. And
+`secrets:read` and `people:manage` — the grants behind every such gesture about
+somebody else — can never be minted onto one. `POST /auth/step-up` refuses a
+token itself: there is nobody to confirm. No tool asks for a proof: a seat has
+no keyboard, and `/operator/mcp` is not a step-up surface.
 
 **And a node that cannot read identity answers `503`, never `403`.** The
 principal a node could not check and the principal that carries nothing are
@@ -1000,7 +1010,7 @@ list and nothing ever will be.
 | `POST /iam/people/{id}/mfa/reset` | `people:manage` |
 | `GET /iam/credentials[?person=]` | the person themselves, `people:manage` or `audit:read` |
 | `POST /iam/credentials[?person=]` | the person themselves, from their own session; `people:manage` for a **service account** only; never a request presenting a machine token |
-| `DELETE /iam/credentials/{id}[?person=]` | the person themselves or `people:manage`; a machine token revokes machine tokens only, refused before anything is written |
+| `DELETE /iam/credentials/{id}[?person=]` | the person themselves or `people:manage`; revoking a password, a second factor or the recovery codes needs a person present, so a machine token revokes machine tokens only — `403 token_refused`, before anything is written |
 | `POST /iam/invalidate-all` | `fleet:operate` **and** `people:manage` — the deployment's grant and the directory's, both, as the record layer holds too. Ends every session **and every machine token** |
 | `GET /iam/check` | `people:manage` or `audit:read` |
 | `GET /iam/node-tokens` | `people:manage` or `audit:read` |

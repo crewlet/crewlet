@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -251,6 +252,24 @@ func (p Principal) Proved(r Recency, now time.Time) bool {
 		return p.Fresh(now)
 	}
 	return false
+}
+
+// MachineToken is the id of the machine token this principal acts through, and
+// whether it acts through one at all.
+//
+// THE ONE FACT ON A PRINCIPAL THAT SAYS NOBODY IS PRESENT. A machine token is
+// composed as its OWNER — a person, at their stage, carrying their seat — and
+// stepped up by construction, so neither the kind nor the clock can tell a
+// request it made from one its owner made at a keyboard. What it came through
+// can, and it is read here, once, off [Principal.Via]: internal/authz refuses
+// it every gesture whose row needs a person present, and the routes that must
+// know which token it was read the id from the same place.
+func (p Principal) MachineToken() (string, bool) {
+	id, ok := strings.CutPrefix(p.Via, MachineTokenPrefix)
+	if !ok || id == "" {
+		return "", false
+	}
+	return id, true
 }
 
 // Validate reports what is wrong with this principal, naming the field.

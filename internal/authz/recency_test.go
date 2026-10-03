@@ -121,65 +121,6 @@ func TestEndingEverySessionInTheCompanyTakesBothHats(t *testing.T) {
 	}
 }
 
-// A GESTURE THAT NEEDS A PERSON PRESENT, ABOUT ANYBODY BUT THE CALLER, NEEDS A
-// GRANT NO MACHINE TOKEN CAN CARRY.
-//
-// A machine token is stepped up by construction — nobody is at a keyboard to
-// prove anything — so what keeps one off revealing a secret's value, changing
-// somebody's authority or how they prove who they are, and ending sessions
-// that are not its owner's, is never the age of a proof. It is the grant: every
-// way into one of these that is not the caller acting on their OWN record asks
-// for a grant that needs a person present ([iam.PersonPresentGrants]) — which
-// internal/iamdomain refuses at a machine token's mint and
-// internal/iam/credential strips from what one carries on every request. Walked
-// over each of those verbs with a principal holding everything ELSE, freshly
-// proved, asking about somebody else, about the company and about nobody: none
-// is admitted. The one way left — the self arm, somebody changing how they
-// themselves prove who they are — is closed to a machine token by every surface
-// that makes such a change, on the credential the request presented
-// (internal/api/authapi and internal/api/iamapi hold that half).
-//
-// THE LIST IS THE PROPERTY'S, and each entry is a verb the table must know: a
-// rename that left it naming nothing would certify nothing.
-//
-// Mutation: gate secret reveal on `secrets:write`, which a token can carry, and
-// it is admitted here.
-func TestAGestureThatNeedsAPersonPresentNeedsAGrantNoTokenCarries(t *testing.T) {
-	t.Parallel()
-	needsAPerson := map[authz.Action]string{
-		authz.ActionSecretReveal:      "hands out a credential's value",
-		authz.ActionDirectoryWrite:    "decides who may do anything, and how they prove it",
-		authz.ActionCredentialWrite:   "changes how somebody else proves who they are",
-		authz.ActionSessionEnd:        "ends somebody else's sessions and every token they hold",
-		authz.ActionSessionInvalidate: "ends every session in the company",
-	}
-	var carried []iam.Grant
-	for _, g := range iam.AllGrants {
-		if !slices.Contains(iam.PersonPresentGrants, g) {
-			carried = append(carried, g)
-		}
-	}
-	p := person("ci.pipeline", carried...)
-	somebodyElse := uuid.New().String()
-	for a, why := range needsAPerson {
-		if _, known := authz.RecencyOf(a); !known {
-			t.Errorf("%s (%s) is not a verb the table knows", a, why)
-			continue
-		}
-		for _, object := range []authz.Object{
-			{Kind: authz.KindPerson, Owner: somebodyElse, ID: somebodyElse},
-			{Kind: authz.KindCompany},
-			{},
-		} {
-			if d := authz.Decide(t.Context(), p, a, object, nimbus(), decidedAt); d.Allowed {
-				t.Errorf("%s (%s) about %+v admitted a principal holding no "+
-					"grant that needs a person present (%s) — a machine token "+
-					"carrying the same would reach it", a, why, object, d.Reason)
-			}
-		}
-	}
-}
-
 // ENDING SOMEBODY ELSE'S SESSIONS ASKS FOR THE ADMINISTRATOR'S PROOF, AND
 // ENDING YOUR OWN ASKS FOR NONE.
 //

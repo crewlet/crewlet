@@ -180,3 +180,30 @@ func TestOnlyAnActiveStageMayAct(t *testing.T) {
 		}
 	}
 }
+
+// ONLY A MACHINE TOKEN'S NAME SAYS NOBODY IS PRESENT.
+//
+// A token acts as its owner and is stepped up by construction, so what it came
+// through is the one fact internal/authz can refuse it on — and a browser
+// session, a Tier A bearer (which is its own credential) and a class with no
+// id must not read as one. Mutation: match any coloned credential name and the
+// session reads as a token.
+func TestOnlyAMachineTokensNameSaysNobodyIsPresent(t *testing.T) {
+	id := uuid.Must(uuid.NewV7()).String()
+	for _, c := range []struct {
+		via   string
+		want  string
+		token bool
+	}{
+		{MachineTokenName(id), id, true},
+		{SessionName(id), "", false},
+		{"", "", false},
+		{MachineTokenPrefix, "", false},
+	} {
+		got, token := Principal{Via: c.via}.MachineToken()
+		if got != c.want || token != c.token {
+			t.Errorf("via %q answered (%q, %v), want (%q, %v)", c.via, got,
+				token, c.want, c.token)
+		}
+	}
+}

@@ -58,8 +58,8 @@
 // session in the company among them. ONE WINDOW, for internal/config's reason:
 // a second, shorter one for some of those gestures sent people to re-prove
 // inside the hour they had already proved in, and what keeps a stolen machine
-// credential from them is a grant no token may carry and a refusal of any
-// request a token presented — never the age of a proof.
+// credential from them is a grant no token may carry and the row's own refusal
+// of any request a token presented (see below) — never the age of a proof.
 //
 // IT IS DECIDED HERE, ON THE ROW, and nowhere else. It was a setting nothing
 // read: the sign-in surface could record a proof and no surface outside it ever
@@ -83,11 +83,34 @@
 // keyboard is fresh by construction, because there is nothing else it could
 // ever present — a Tier A token, the development principal and a machine
 // token alike. So the CLOCK keeps no token off the gestures that need a person
-// present, and two other locks do: every such gesture about anybody but the
-// caller asks a grant no token carries ([iam.PersonPresentGrants]), which a
-// walk here holds; and the ones a person makes about themselves on no grant
-// are refused to any request that presented a token, by every surface that
-// makes them (internal/api/authapi, internal/api/iamapi).
+// present, and the next section's two locks do.
+//
+// # Who has to be at the keyboard
+//
+// Some gestures need a PERSON present, whoever the credential acts as:
+// revealing a secret's value, changing who may do anything or how somebody
+// proves who they are, and ending sessions that are not the caller's own. A
+// MACHINE TOKEN acts as its owner and is stepped up by construction, so it
+// passes every relation and every window its owner would — and a leaked one
+// that could change its owner's second factor is the first half of taking the
+// account. Two locks keep it off them, and both are this package's:
+//
+//   - THE ROW SAYS SO ([Presence], [rule.presence]), and [Decide] refuses a
+//     request that presented a machine token on it ([ReasonTokenRefused],
+//     read off [iam.Principal.MachineToken]) — on every arm, or on every arm
+//     but the self arm, which is how a token may still end its own owner's
+//     sessions (itself among them) and revoke its owner's tokens, and never
+//     anybody else's. It was a refusal each route remembered to make, and the
+//     table admitted the token on the same verb; a route added on that verb
+//     that forgot was a token changing its owner's password.
+//   - EVERY ARM ABOUT ANYBODY BUT THE CALLER asks a grant no token carries
+//     ([iam.PersonPresentGrants]): refused at a token's mint and stripped from
+//     what it carries on every request.
+//
+// Walks hold both, and each derives its set from the table rather than from a
+// list: every row that states a presence refuses a token on exactly the arms
+// it names, every arm only a person-present grant opens states one, and every
+// such arm about anybody else admits nobody without that grant.
 //
 // A ROW MAY ASK FOR TWO GRANTS AT ONCE ([rule.also]), and two do: ending every
 // session in the company is the deployment's to run and the directory's to
@@ -269,7 +292,8 @@ type Decision struct {
 	// the self rule, which has no admin path, an object missing the field
 	// its rule reads before it consults any grant, and the refusals that
 	// are not about capability at all — an enrolment stage, a seat taking
-	// a human-only verb, a verb with no rule.
+	// a human-only verb, a machine token taking a verb that needs a person
+	// present, a verb with no rule.
 	//
 	// ON THE DECISION rather than looked up beside it, because a refusal
 	// that names what would have admitted the caller has to name what the
@@ -327,6 +351,10 @@ const (
 	// ReasonSeatRefused is a refusal an agent gets and a person does not.
 	// See [rule.humanOnly].
 	ReasonSeatRefused Reason = "seat_refused"
+	// ReasonTokenRefused is a refusal a request that presented a MACHINE
+	// TOKEN gets and the person it acts as would not: the verb needs a
+	// person present, and a token proves nobody is. See [Presence].
+	ReasonTokenRefused Reason = "token_refused"
 	// ReasonStage is a refusal: this principal is not through enrolment,
 	// so nothing it asks for is granted yet.
 	ReasonStage Reason = "stage"
@@ -349,8 +377,8 @@ const (
 var Reasons = []Reason{
 	ReasonGrant, ReasonSelf, ReasonAuthor, ReasonLead,
 	ReasonNoGrant, ReasonNotSelf, ReasonNotLead, ReasonNotAuthor,
-	ReasonSeatRefused, ReasonStage, ReasonUnnamed, ReasonUnknownAction,
-	ReasonStepUp,
+	ReasonSeatRefused, ReasonTokenRefused, ReasonStage, ReasonUnnamed,
+	ReasonUnknownAction, ReasonStepUp,
 }
 
 // Valid reports whether a reason is one this build knows.

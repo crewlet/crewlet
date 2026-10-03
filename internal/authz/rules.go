@@ -216,19 +216,32 @@ const (
 
 	// --- the identity directory -------------------------------------- //
 	//
-	// FIVE VERBS FOR SIXTEEN ROUTES, because the routes differ in what
+	// SIX VERBS FOR SIXTEEN ROUTES, because the routes differ in what
 	// they do and not in how they are decided. What separates them is the
-	// two questions this estate actually asks: is this about a person or
-	// about the directory, and does it CHANGE anything.
+	// three questions this estate actually asks: is this about a person or
+	// about the directory, does it CHANGE anything, and — for a change to
+	// somebody's own credentials — may a machine token acting as them make
+	// it ([Presence]).
 	ActionDirectoryRead  Action = "iam.read"
 	ActionDirectoryWrite Action = "iam.write"
-	// ActionCredentialWrite changes ONE PERSON's own credentials: minting
-	// or revoking a machine token, enrolling or replacing a second factor,
-	// regenerating the recovery codes, and revoking a password, a second
-	// factor or the recovery codes. It is asked from both surfaces that
-	// make those changes — `/auth` for a person's own, `/iam` for anybody's
-	// — so one row decides them whichever route a request took.
+	// ActionCredentialWrite mints or revokes ONE PERSON's MACHINE TOKEN — a
+	// personal access token, or a service account's.
 	ActionCredentialWrite Action = "iam.credential.write"
+	// ActionCredentialProof changes how ONE PERSON PROVES WHO THEY ARE:
+	// enrolling or replacing a second factor, regenerating the recovery
+	// codes, and revoking a password, a second factor or the recovery
+	// codes. It is asked from both surfaces that make those changes —
+	// `/auth` for a person's own, `/iam` for anybody's — so one row decides
+	// them whichever route a request took.
+	//
+	// ITS OWN VERB BESIDE [ActionCredentialWrite], at the same window,
+	// because the two differ in who must be PRESENT: a token revoking a
+	// token — itself included, from wherever somebody found it leaked — is
+	// containment, while a token changing how its owner signs in is the
+	// first half of taking the account. One verb for both left the table
+	// admitting a token on every proof change and each route remembering
+	// to refuse it.
+	ActionCredentialProof Action = "iam.credential.proof"
 	ActionSessionEnd      Action = "iam.session.end"
 
 	// ActionSessionInvalidate ends EVERY session in the company at once —
@@ -239,6 +252,40 @@ const (
 	// company including the person making it.
 	ActionSessionInvalidate Action = "iam.invalidate"
 )
+
+// Presence is which arms of a verb need a PERSON present: refused to a request
+// that presented a machine token ([iam.Principal.MachineToken]), whatever the
+// token carries and however fresh its proof, because a token proves nobody is
+// at a keyboard. See the package doc.
+//
+// THREE VALUES AND NOT A BOOL, because one verb needs a person on some arms
+// and not others: ending sessions is a token's to do about its own owner — it
+// ends the token too, and is what somebody who finds one leaked reaches for —
+// and never about anybody else.
+type Presence string
+
+const (
+	// PresenceOptional is the zero: no arm needs a person, so a machine
+	// token acting as its owner takes the verb wherever the class admits
+	// the owner. The zero is the open end, as [rule.humanOnly]'s is, and
+	// held the same way — by walks that derive which rows must close it
+	// from the table rather than from memory.
+	PresenceOptional Presence = ""
+	// PresenceRequired needs a person on every arm, the self arm included.
+	PresenceRequired Presence = "required"
+	// PresenceRequiredForOthers needs a person on every arm but the self
+	// arm: about the caller's own record a token acts as its owner, about
+	// anybody else it does not.
+	PresenceRequiredForOthers Presence = "required_for_others"
+)
+
+// Presences are the three, in declaration order.
+var Presences = []Presence{
+	PresenceOptional, PresenceRequired, PresenceRequiredForOthers,
+}
+
+// Valid reports whether a presence is one this build knows.
+func (p Presence) Valid() bool { return slices.Contains(Presences, p) }
 
 // rule is one verb's row: which class decides it, and — for [ClassOperator]
 // alone — which capability that class asks for.
@@ -280,6 +327,22 @@ type rule struct {
 	// CHECKED BEFORE THE CLASS, so an agent holding the grant is told it
 	// is a seat rather than that it lacks a capability it plainly has.
 	humanOnly bool
+
+	// presence is which arms need a PERSON at the keyboard — see
+	// [Presence] — refused to a request that presented a machine token.
+	//
+	// A FIELD ON THE ROW AND NOT A CHECK IN EACH ROUTE, for the reason
+	// [rule.also] gives: the table is what every surface and every walk
+	// reads, so a route that refused a token itself was the one place the
+	// rule was stated, a walk over the table certified a row that admitted
+	// the token, and the next route on that verb could forget.
+	//
+	// CHECKED BEFORE THE CLASS where it covers every arm, as
+	// [rule.humanOnly] is — a token told it lacks a grant no token can
+	// carry is sent to ask for the impossible — and AFTER the class where
+	// it spares the self arm, because only the class can say which arm
+	// admitted.
+	presence Presence
 
 	// recency is how recently the principal must have PROVED who they are
 	// for this verb — the step-up requirement, decided on the row so a
@@ -530,10 +593,14 @@ var rules = map[Action]rule{
 	// polling whether an import landed changes nothing.
 	ActionChartImportRead: {class: ClassOperator, grant: iam.GrantConfigWrite, recency: iam.RecencyAny},
 
-	ActionConfigRead:   {class: ClassOperator, grant: iam.GrantConfigRead, recency: iam.RecencyAny},
-	ActionConfigWrite:  {class: ClassOperator, grant: iam.GrantConfigWrite, recency: iam.RecencyStepUp},
-	ActionSecretList:   {class: ClassOperator, grant: iam.GrantConfigRead, recency: iam.RecencyAny},
-	ActionSecretReveal: {class: ClassOperator, grant: iam.GrantSecretRead, recency: iam.RecencyStepUp},
+	ActionConfigRead:  {class: ClassOperator, grant: iam.GrantConfigRead, recency: iam.RecencyAny},
+	ActionConfigWrite: {class: ClassOperator, grant: iam.GrantConfigWrite, recency: iam.RecencyStepUp},
+	ActionSecretList:  {class: ClassOperator, grant: iam.GrantConfigRead, recency: iam.RecencyAny},
+	// A REVEAL HANDS OVER A CREDENTIAL'S VALUE, which is a person's to read
+	// and never a pipeline's: no token carries the grant, and the row
+	// refuses one besides.
+	ActionSecretReveal: {class: ClassOperator, grant: iam.GrantSecretRead,
+		recency: iam.RecencyStepUp, presence: PresenceRequired},
 	ActionSecretWrite:  {class: ClassOperator, grant: iam.GrantSecretWrite, recency: iam.RecencyStepUp},
 	ActionSetupRead:    {class: ClassOperator, grant: iam.GrantConfigRead, recency: iam.RecencyAny},
 	ActionSetupConnect: {class: ClassOperator, grant: iam.GrantConfigWrite, recency: iam.RecencyStepUp},
@@ -566,24 +633,29 @@ var rules = map[Action]rule{
 	//
 	// EVERY ONE OF THEM — enrolling somebody, inviting them, editing their
 	// row, resetting their second factor, removing them — asks the step-up
-	// window, and `people:manage`, which no machine token may carry: what
-	// keeps a stolen pipeline credential away from somebody's authority is
-	// that grant, and what keeps a week-old cookie away is the window.
-	ActionDirectoryWrite: {class: ClassOperator, grant: iam.GrantPeopleManage, recency: iam.RecencyStepUp},
+	// window and `people:manage`, and needs a person present: what keeps a
+	// week-old cookie away is the window, and what keeps a stolen pipeline
+	// credential away is the row's own refusal of a token and a grant no
+	// token may carry.
+	ActionDirectoryWrite: {class: ClassOperator, grant: iam.GrantPeopleManage,
+		recency: iam.RecencyStepUp, presence: PresenceRequired},
 	// MINTING AND REVOKING A MACHINE TOKEN, CHANGING HOW SOMEBODY PROVES
 	// WHO THEY ARE, and ENDING SESSIONS are the gestures a person
 	// legitimately makes about themselves — a personal access token, a
 	// second factor, signing out everywhere — so they carry the self path
 	// the writes above refuse.
 	//
-	// THE SELF PATH ADMITS A MACHINE TOKEN AS ITS OWNER, and the table
-	// cannot tell the two apart: a token acts as its owner and is stepped
-	// up by construction. What keeps one from changing how its owner proves
-	// who they are is the CREDENTIAL the request presented, which every
-	// surface making such a change refuses before it decides anything
-	// (internal/api/auth's PresentedToken) — `/auth`'s second-factor and
-	// recovery-code routes and `/iam`'s revocation of anything but a token.
-	ActionCredentialWrite: {class: ClassDirectorySelf, recency: iam.RecencyStepUp},
+	// THE SELF PATH ADMITS A MACHINE TOKEN AS ITS OWNER — it acts as them
+	// and is stepped up by construction — so WHO MUST BE PRESENT is what
+	// tells these three apart ([rule.presence]). A token may revoke a token,
+	// itself included, which is what somebody who finds one leaked reaches
+	// for wherever they found it; it may never change how its owner proves
+	// who they are; and about anybody else it may do none of them, which
+	// its missing `people:manage` refuses as well.
+	ActionCredentialWrite: {class: ClassDirectorySelf, recency: iam.RecencyStepUp,
+		presence: PresenceRequiredForOthers},
+	ActionCredentialProof: {class: ClassDirectorySelf, recency: iam.RecencyStepUp,
+		presence: PresenceRequired},
 	// ENDING SESSIONS ASKS OPPOSITE PROOFS OF ITS TWO ARMS ([rule.selfRecency]).
 	// The person themselves asks for NONE: it is the first thing somebody
 	// does on finding somebody else in their account — and it ends every
@@ -591,25 +663,29 @@ var rules = map[Action]rule{
 	// re-prove a password the intruder may also hold makes the fastest
 	// response to a compromise the slowest, which is the reason
 	// internal/iamdomain's own revocation takes no grant at all. An
-	// administrator ending SOMEBODY ELSE's asks the ordinary window, as
-	// every other directory write does: it signs a colleague out of
-	// everything and stops every pipeline they run, and a week-old cookie
-	// looping over the directory would do it to the whole company.
+	// administrator ending SOMEBODY ELSE's asks `step_up`, as every other
+	// directory write does, and a person present: it signs a colleague out
+	// of everything and stops every pipeline they run, and a week-old
+	// cookie — or a token — looping over the directory would do it to the
+	// whole company. The self arm stays open to a token for the revocation's
+	// reason above: what it ends includes the token.
 	ActionSessionEnd: {class: ClassDirectorySelf, recency: iam.RecencyStepUp,
-		selfRecency: iam.RecencyAny},
+		selfRecency: iam.RecencyAny, presence: PresenceRequiredForOthers},
 	// ENDING EVERY SESSION IN THE COMPANY takes BOTH HATS — the design's
 	// rule, and the one internal/iamdomain's own record holds too: the
 	// deployment's grant, because a restore is run by whoever runs the
 	// deployment, AND the directory's, because it ends every person's
 	// authority at once, every machine token included. Admitted on the
 	// deployment's grant alone, the route promised an SRE a gesture the
-	// record then refused them, and the table's own safety argument for a
-	// machine token rested on a check nothing here stated. At the SENSITIVE
-	// window: it is irreversible for everybody at once. A Tier A token holds
-	// both and is fresh by construction, so the restore runbook's CLI step
-	// still runs on the day nobody can sign in.
+	// record then refused them. Its own verb beside the deployment's other
+	// controls because it is irreversible for everybody at once, and it
+	// needs a person present. A Tier A token holds both grants, is its own
+	// credential rather than a machine token and is fresh by construction,
+	// so the restore runbook's CLI step still runs on the day nobody can
+	// sign in.
 	ActionSessionInvalidate: {class: ClassOperator, grant: iam.GrantFleetOperate,
-		also: iam.GrantPeopleManage, recency: iam.RecencyStepUp},
+		also: iam.GrantPeopleManage, recency: iam.RecencyStepUp,
+		presence: PresenceRequired},
 }
 
 // RecencyOf reports how recent a proof a verb asks for, and whether the table
@@ -632,6 +708,15 @@ func RecencyOf(a Action) (iam.Recency, bool) {
 func SelfRecencyOf(a Action) (iam.Recency, bool) {
 	r, ok := rules[a]
 	return r.selfRecency, ok
+}
+
+// PresenceOf reports which arms of a verb need a person present, and whether
+// the table knows the verb at all — see [Presence].
+//
+// EXPORTED FOR THE WALKS, on [RecencyOf]'s terms. Use [Decide].
+func PresenceOf(a Action) (Presence, bool) {
+	r, ok := rules[a]
+	return r.presence, ok
 }
 
 // Actions is every verb this build authorizes, sorted, for the walks that ask

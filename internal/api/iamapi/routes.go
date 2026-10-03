@@ -100,10 +100,12 @@ func (s *Service) Routes(mux authz.Mux) error {
 		ofSubject(authz.ActionDirectoryRead), s.GetCredentials)
 	mount("POST /iam/credentials",
 		ofSubject(authz.ActionCredentialWrite), s.PostCredentials)
-	// A REVOCATION refuses a request that presented a machine token from
-	// inside, once it has read which credential the id names: a token may
-	// withdraw a token, and never a password, a second factor or the
-	// recovery codes — which the pattern cannot see.
+	// A REVOCATION IS ADMITTED ON THE TOKEN VERB and asks the proof verb
+	// from inside once it has read which credential the id names: a
+	// machine token's revocation is the first, and a password's, a second
+	// factor's or the recovery codes' changes how somebody proves who they
+	// are — which the pattern cannot see, and whose row needs a person
+	// present.
 	mount("DELETE /iam/credentials/{id}",
 		ofSubject(authz.ActionCredentialWrite), s.DeleteCredential)
 	// BOTH HATS, the deployment's grant and the directory's — sessions.go

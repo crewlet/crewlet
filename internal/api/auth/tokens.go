@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"net/http"
-	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -109,9 +108,12 @@ func (g *Guard) WithTokens(t *Tokens) *Guard {
 // PresentedToken is the id of the machine token this request carried as its
 // bearer, if it carried one.
 //
-// ASKED BY THE ROUTES THAT MUST KNOW: minting a token from a token would let
-// whoever holds one extend it for ever, a year at a time, with nobody present,
-// and a token may manage none of its owner's proof.
+// ASKED BY THE ROUTES THAT MUST KNOW what the authority table cannot decide:
+// minting a token from a token would let whoever holds one extend it for ever,
+// a year at a time, with nobody present, and a password step-up has nobody to
+// confirm. Every gesture that needs a person present is the TABLE's to refuse
+// a token ([iam.Principal.MachineToken], which internal/authz reads), and
+// never a route's to remember.
 //
 // READ OFF THE PRINCIPAL'S [iam.Principal.Via], which is the one place the
 // arm records it: a second carrier on the context beside it was a second
@@ -122,8 +124,7 @@ func PresentedToken(ctx context.Context) (string, bool) {
 	if how != iam.Resolved {
 		return "", false
 	}
-	id, ok := strings.CutPrefix(principal.Via, iam.MachineTokenPrefix)
-	return id, ok && id != ""
+	return principal.MachineToken()
 }
 
 // errTokenUnavailable is the reason attached to a request whose machine token
@@ -186,13 +187,14 @@ func (g *Guard) token(r *http.Request, presented credential.Token,
 	// there is nothing else it could present.
 	//
 	// WHAT KEEPS IT OFF THE GESTURES THAT NEED A PERSON PRESENT is not a
-	// proof's age. The two grants those ask of anybody else's record —
-	// `secrets:read` and `people:manage` — are never minted onto a token
-	// (internal/iamdomain) and never carried by one
-	// (internal/iam/credential); and where a verb admits the owner as
-	// THEMSELVES on no grant at all — changing how they prove who they are
-	// — every surface that makes the change refuses a request that
-	// presented a token ([PresentedToken]), before anything is decided.
+	// proof's age. Every such verb's row in internal/authz says so, and the
+	// table refuses the credential this principal names below ([iam.Principal.Via],
+	// read through [iam.Principal.MachineToken]) — which is what closes the
+	// ones a verb admits the owner to as THEMSELVES on no grant at all,
+	// changing how they prove who they are. And the two grants those ask
+	// of anybody else's record — `secrets:read` and `people:manage` — are
+	// never minted onto a token (internal/iamdomain) and never carried by
+	// one (internal/iam/credential).
 	g.proof.stamp(&p, now)
 	if owner.Seat == "" {
 		return r.WithContext(iam.WithPrincipal(ctx, p)), nil

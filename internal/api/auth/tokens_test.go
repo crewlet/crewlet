@@ -12,6 +12,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/api/auth"
 	"github.com/crewlet/crewlet/internal/api/httpjson"
+	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/iam"
@@ -178,24 +179,31 @@ func TestATokenActsAsItsOwnerWithTheNarrowestOfThreeGrantSets(t *testing.T) {
 	}
 }
 
-// A MACHINE TOKEN IS STEPPED UP BY CONSTRUCTION, AND SAYS IT IS A TOKEN.
+// A MACHINE TOKEN IS STEPPED UP BY CONSTRUCTION, SAYS IT IS A TOKEN, AND IS
+// REFUSED EVERY GESTURE THAT NEEDS A PERSON PRESENT.
 //
 // A token has nobody at a keyboard, so presenting it is its whole proof for
 // what an automation does — a configuration, a chart or a credential write —
 // and it is composed fresh for `step_up`. That makes the principal's CLOCK no
 // help in keeping it off the gestures that need a person present, so what
 // does is carried beside it: the principal names the token it came through
-// ([iam.Principal.Via], read by [auth.PresentedToken]), which every surface
-// that changes how somebody proves who they are refuses before it decides
-// anything — internal/api/authapi's and internal/api/iamapi's own suites hold
-// those refusals, and internal/authz holds the other half: such a gesture
-// about anybody else needs a grant no token carries.
+// ([iam.Principal.Via]), and the authority table refuses that on every row
+// that needs a person ([authz.Presence]). Walked with the principal THIS GUARD
+// composed — carrying everything a token may and asking about its own owner,
+// by id and by login, which is the arm no grant guards — over every row that
+// states a presence: a row needing a person on every arm admits it nowhere,
+// and one sparing the self arm admits it only as its owner. (internal/authz
+// holds the table's half with principals it builds itself; this is what ties
+// it to the credential shape the guard actually stamps.)
 //
 // Mutation: stamp a token as a session that proved nothing and it is stale;
-// drop the credential from the principal and PresentedToken loses it.
+// drop the credential from the principal and PresentedToken loses it, and the
+// token is admitted to its owner's proof.
 func TestAMachineTokenIsSteppedUpAndSaysItIsAToken(t *testing.T) {
 	t.Parallel()
 	m := newMachineRig(t)
+	m.row.Grants = iam.AllGrants
+	m.row.Owner.Grants = iam.AllGrants
 	got, _ := present(t, m.guard(nil), http.MethodGet, "/agents", m.presented.Value())
 	if got.how != iam.Resolved {
 		t.Fatalf("the token resolved %v (status %d)", got.how, got.status)
@@ -209,6 +217,29 @@ func TestAMachineTokenIsSteppedUpAndSaysItIsAToken(t *testing.T) {
 	if id, fromToken := auth.PresentedToken(ctx); !fromToken || id != m.presented.ID {
 		t.Errorf("the token's principal reads as presenting %q (%v), want %q",
 			id, fromToken, m.presented.ID)
+	}
+	walked := 0
+	for _, a := range authz.Actions() {
+		presence, _ := authz.PresenceOf(a)
+		if presence == authz.PresenceOptional {
+			continue
+		}
+		walked++
+		for _, owner := range []string{p.ID.String(), p.Login} {
+			d := authz.Decide(t.Context(), p, a, authz.Object{
+				Kind: authz.KindPerson, Owner: owner, Author: owner,
+			}, authz.NoChart{}, m.at)
+			spared := presence == authz.PresenceRequiredForOthers &&
+				d.Reason == authz.ReasonSelf
+			if d.Allowed && !spared {
+				t.Errorf("%s (%q) about the token's own owner (%s) was "+
+					"admitted through the token (%s)", a, presence, owner,
+					d.Reason)
+			}
+		}
+	}
+	if walked == 0 {
+		t.Fatal("no row needs a person present, so this walk certifies nothing")
 	}
 }
 
