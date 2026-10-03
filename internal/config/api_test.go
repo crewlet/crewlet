@@ -5,6 +5,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/crewlet/crewlet/internal/iam"
 )
@@ -489,6 +490,49 @@ func TestAPasswordFloorBelowTheEngineOwnIsRefusedRatherThanRaised(t *testing.T) 
 	b.API.Auth.Local.MinPasswordLength = 0
 	if got := b.API.Auth.Local.Passwords(); got != iam.MinPasswordChars {
 		t.Errorf("an unset floor = %d, want the engine's own %d", got, iam.MinPasswordChars)
+	}
+}
+
+// THE STEP-UP WINDOW IS BOUNDED BOTH WAYS, AND AN UNSET ONE IS AN HOUR.
+//
+// One window sizes every step-up gesture, so both bounds are load-bearing:
+// below five minutes an administrator re-proves between one screen and the
+// next, and past a day a proof that old is not a step-up at all. Each refusal
+// names the setting an operator has to change. The controls sit on and inside
+// both bounds, and the unset value reads as the hour the setting's doc
+// defends.
+//
+// Mutation: drop the range check on `step_up` and both refusals validate;
+// move either bound and the case beside it flips.
+func TestTheStepUpWindowIsBoundedAndDefaultsToAnHour(t *testing.T) {
+	t.Parallel()
+	control := serving()
+	if err := control.Validate(); err != nil {
+		t.Fatalf("the control does not validate: %v", err)
+	}
+	for _, raw := range []string{"4m59s", "24h1m"} {
+		b := serving()
+		b.API.Auth.Session.StepUpRaw = raw
+		refuses(t, b, "api.auth.session.step_up")
+	}
+	for _, raw := range []string{"5m", "1h", "24h"} {
+		b := serving()
+		b.API.Auth.Session.StepUpRaw = raw
+		if err := b.Validate(); err != nil {
+			t.Errorf("step_up %s was refused: %v", raw, err)
+			continue
+		}
+		want, err := time.ParseDuration(raw)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := b.API.Auth.Session.StepUp(); got != want {
+			t.Errorf("step_up %s reads as %s", raw, got)
+		}
+	}
+	if got := (APISession{}).StepUp(); got != time.Hour {
+		t.Errorf("an unset step_up reads as %s, want the hour the setting "+
+			"defends", got)
 	}
 }
 
