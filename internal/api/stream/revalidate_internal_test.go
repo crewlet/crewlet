@@ -260,7 +260,7 @@ func openRevalidatedOver(t *testing.T, opened iam.Principal,
 		check := func(ctx context.Context) (*http.Request, *auth.Refusal) {
 			return answer(r.Clone(ctx))
 		}
-		serveSocket(r.Context(), conn, svc, query, budgetKeyOf(opened), who, check)
+		serveSocket(r.Context(), conn, svc, query, who, check)
 	}))
 	t.Cleanup(srv.Close)
 	conn, _, err := websocket.Dial(t.Context(), "ws"+strings.TrimPrefix(srv.URL, "http"), nil)

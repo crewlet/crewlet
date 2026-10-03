@@ -77,12 +77,6 @@ type Service struct {
 	hub   *Hub
 	state *livestate.LiveState
 
-	// budgets is the in-flight query allowance, one per PRINCIPAL rather
-	// than one per socket. It lives here because the service outlives any
-	// one connection, which is what lets a person's tabs share a budget
-	// at all — see budget.go.
-	budgets *budgets
-
 	// health is consulted by the shared tick.
 	health HealthFunc
 
@@ -264,7 +258,6 @@ func NewService(state *livestate.LiveState, opts Options) (*Service, error) {
 	}
 	s := &Service{
 		hub:       NewHub(),
-		budgets:   newBudgets(),
 		state:     state,
 		health:    opts.Health,
 		posture:   opts.Posture,

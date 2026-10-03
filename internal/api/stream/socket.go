@@ -11,7 +11,6 @@ import (
 	"time"
 
 	"github.com/coder/websocket"
-	"github.com/google/uuid"
 
 	"github.com/crewlet/crewlet/internal/api/auth"
 	"github.com/crewlet/crewlet/internal/api/httpjson"
@@ -307,11 +306,6 @@ func Handler(guard *auth.Guard, origins CrossSite, svc *Service, query Query) ht
 					string(iam.GrantStateRead)})
 			return
 		}
-		// THE BUDGET IS THE PRINCIPAL'S, keyed on its ID: the same
-		// person across their tabs and across a rename, and never shared
-		// between two. Not the login, which is a name somebody changes —
-		// see budget.go.
-		budgetKey := budgetKeyOf(principal)
 		who := &asking{principal: principal}
 		check := checkerFor(guard, r)
 
@@ -334,7 +328,7 @@ func Handler(guard *auth.Guard, origins CrossSite, svc *Service, query Query) ht
 			return
 		}
 		//nolint:contextcheck // the resolved request's; see where it is resolved
-		serveSocket(r.Context(), conn, svc, query, budgetKey, who, check)
+		serveSocket(r.Context(), conn, svc, query, who, check)
 	})
 }
 
@@ -388,16 +382,10 @@ func resolved(guard *auth.Guard, w http.ResponseWriter,
 
 // serveSocket runs one connection until it closes.
 func serveSocket(ctx context.Context, conn *websocket.Conn,
-	svc *Service, query Query, budgetKey uuid.UUID, who *asking, check checkFunc,
+	svc *Service, query Query, who *asking, check checkFunc,
 ) {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
-
-	// THE BUDGET IS ACQUIRED BEFORE ANY FRAME IS READ and released when
-	// this socket is done, so a person's tabs share one allowance for
-	// exactly as long as they are open. See budget.go.
-	slots, releaseBudget := svc.budgets.acquire(budgetKey)
-	defer releaseBudget()
 
 	client := NewClient(AudienceOf(who.current().Grants))
 	// REGISTERED BEFORE THE SNAPSHOT. See Hub.Register: the overlap is
@@ -430,7 +418,7 @@ func serveSocket(ctx context.Context, conn *websocket.Conn,
 	})
 	defer checking.Wait()
 
-	code, reason := readLoop(ctx, conn, seats, client, query, who, slots, svc.interval)
+	code, reason := readLoop(ctx, conn, seats, client, query, who, svc.interval)
 
 	// Unregister closes the client's queue, which is what ends the writer.
 	svc.Hub().Unregister(client)
@@ -497,16 +485,13 @@ func writeLoop(ctx context.Context, conn *websocket.Conn, client *Client) {
 // can next change — the hint a query refused on one carries.
 func readLoop(ctx context.Context, conn *websocket.Conn,
 	seats *watching, client *Client, query Query, who *asking,
-	slots chan struct{}, healthEvery time.Duration,
+	healthEvery time.Duration,
 ) (websocket.StatusCode, string) {
-	// THE CONCURRENCY BOUND ARRIVES FROM THE SERVICE rather than being
-	// made here, and that is the whole of the per-principal change: a
-	// channel built in this function is one socket's, so a person's second
-	// tab got a second full allowance. Queries still run on their own
-	// goroutines so a store scan cannot stall the live feed, and a burst
-	// past the bound queues here rather than piling into the engine's
-	// connection pool — it is now this PERSON's burst that queues rather
-	// than this tab's.
+	// THIS SOCKET'S CONCURRENCY BOUND — see [MaxInFlightQueries] for why
+	// four, and why per socket. Queries run on their own goroutines so a
+	// store scan cannot stall the live feed, and a burst past the bound
+	// queues here rather than piling into the engine's connection pool.
+	slots := make(chan struct{}, MaxInFlightQueries)
 	var running sync.WaitGroup
 	defer running.Wait()
 
