@@ -54,7 +54,9 @@ definition, and a recoloured Slack mark is not Slack's. The exception is held
 to exactly that: a mark is drawn only beside the third-party app's name,
 nothing reads state from it, none of its hues is reused as a token, and the
 integration's STATE beside it is carried by the status tone like everything
-else. A tool the company has not set up keeps its mark, dimmed.
+else. A tool the company has not set up keeps its mark, drained of its
+colour (the kit's `muted` mark) — the mark rather than the tile, because the
+mark is decoration beside the name and the tile's text keeps its contrast.
 
 A seat's chrome takes one of three **rings**, or none, from what it is DOING —
 and what it is doing is the ENGINE'S word, never the dashboard's. Every seat row carries
@@ -463,7 +465,8 @@ each the answer to one thing that went missing at one item:
   high N: four lanes holding one card between them say nothing one lane could
   not, and that card is a 292 px object in a 1500 px field. A list degrades to
   one full-width row and is still a list. So a container with no default view
-  opens as a list and the board is one press away in **Display** — and the
+  opens as a list and the board is one press away, the second of the five
+  shape buttons ahead of the saved views — and the
   landing shape is never conditional on how much work exists, because a screen
   that redraws itself as a company fills up is a screen nobody can learn.
 - **A closed-set axis draws every declared value; an open one draws what
@@ -742,9 +745,9 @@ a screen, and every workspace and section the code declares is below.
 | `#/knowledge/pages/{id}` | **Page** — addressed by its id, which a rename does not change: the document, who read it and how, what links to it, its revisions and thread; edited as you | `edit=1` · `version=` (one revision in the document's place) · `lens=diff\|full` |
 | `#/knowledge/skills` | **Agent skills** — the tool skills the engine offers a phase, who loaded each; and what one agent learned | `kind=pages\|learned` · `seat=` (learned) |
 | `#/knowledge/diaries` · `#/knowledge/diaries/{handle}` | **Agent diaries** — every agent's diary at a glance, each counted by the node holding the agent; one agent's diary and episodes. Handles live here as they do under `seats/` | |
-| `#/spend` | **Spend › Overview** — the window's tokens against the one before, the monthly budget, the prompt-cache share and the median task; daily tokens by phase (or model, provider, seat, unit, worker); then by agent, by provider, by team, background workers and the three most expensive tasks (tokens only) | `window=7d\|30d\|90d\|<from>/<to>` (whole company days) · `group=phase\|model\|provider\|seat\|unit\|worker` |
-| `#/spend/tasks` | **Expensive tasks** — the tasks last changed inside the window, most tokens first, each with what drove it: turns, workers, reopens and send-backs | `window=7d\|30d\|90d\|<from>/<to>` |
-| `#/spend/budgets` | **Budgets** — the company's and every agent seat's day, week and month: spent, the ceiling (raised in place by an operator), and what is refusing. ONE address: Settings lists it as a cross-link | |
+| `#/spend` | **Spend › Overview** — the window's tokens against the one before, the monthly budget, the prompt-cache share and the median task; daily tokens by phase (or model, provider, seat, unit, worker); then by agent, by provider, by team, background workers and the three most expensive tasks (tokens only) | `window=7d\|30d\|90d\|<from>/<to>` (whole company days, kept across the sections) · `group=phase\|model\|provider\|seat\|unit\|worker` |
+| `#/spend/tasks` | **Expensive tasks** — the tasks last changed inside the window, most tokens first, each with what drove it: turns, workers, reopens and send-backs | `window=7d\|30d\|90d\|<from>/<to>` (kept across the sections) |
+| `#/spend/budgets` | **Budgets** — the company's and every agent seat's day, week and month: spent, the ceiling (raised in place by an operator), and what is refusing. ONE address: Settings lists it as a cross-link | `window=` is not read here, and is carried through to the other sections |
 | `#/settings` | **Settings › General** — the charter: mission, vision, policies | |
 | `#/settings/people` | **People & access** — every human seat, where agents reach them and whether they act here as themselves; every API token by label, the person it acts as and its scope. Never a value *(operator)*. No tail: a person's page is their seat | |
 | `#/settings/integrations` · `#/settings/integrations/{kind}` | **Integrations** *(operator)* | |
@@ -2248,9 +2251,10 @@ events a seat published under the id every node derives for it, and a person
 publishes none — the engine never runs a human seat. On a phone the bar keeps
 **one** action in view — Message, or Resume on a paused seat — and folds the
 rest into the same More menu, each disabled there with the sentence its inline
-control is held with. A notice above the tabs carries what stops the seat or
-waits on somebody, in the state's own tone: its last error, a pause, another
-stop, or a coding run parked on a question — answerable from the notice.
+control is held with. A notice under the tab strip, above whichever tab is
+open, carries what stops the seat or waits on somebody, in the state's own
+tone: its last error, a pause, another stop, or a coding run parked on a
+question — answerable from the notice.
 
 **The Overview is the seat's week and its charter.** Four figures, all ONE
 answer (`seat_activity` with `previous`, every node's usage rows summed): turns
@@ -4041,8 +4045,10 @@ never read as merely near.
 
 Each capped window is its own bar: a scope capped by the day and by the month
 has two ceilings, and one bar can only be drawn against one of them. `ok` is
-drawn neutral rather than in the accent, because the accent means where the
-reader is and a window with room is a number, not a state.
+drawn in the first data hue — the kit meter's `quantity` tone — rather than in
+the accent, because the accent means where the reader is and a window with
+room is a number, not a state: a meter is a figure of ONE quantity its label
+names, which is all a data hue asks for.
 
 ---
 
@@ -4952,12 +4958,14 @@ pages in it.
   Recent pages and Who writes here each say they cover the first pages by
   title, since the listing is ordered by title rather than by time.
 
-Above the spaces the column draws the workspace's own SECTIONS: **Agent
-skills**, with the count of published tool-skill pages (`pages{skills: true,
-status: published, limit: 1}`'s `total`, so the number is the engine's rather
-than a window's). A section the engine cannot answer is not drawn — on a
-company whose knowledge lives in a vendor's wiki the listing is `unknown_query`
-and the row would open onto an error.
+Below the spaces, past a hairline, the column draws the workspace's own
+SECTIONS: **Agent skills**, with the count of published tool-skill pages
+(`pages{skills: true, status: published, limit: 1}`'s `total`, so the number
+is the engine's rather than a window's), and **Agent diaries**, with how many
+agents keep one (`memory_overview`'s seats). A section the engine cannot answer
+is not drawn — on a company whose knowledge lives in a vendor's wiki the
+skills listing is `unknown_query` and the row would open onto an error; a
+diary is the engine's own whatever the wiki.
 
 ### A page: the document, who read it, and who links to it
 

@@ -158,7 +158,7 @@ function controls(el: HTMLElement): HTMLElement[] {
   return [...el.querySelectorAll<HTMLElement>("button, a[href]")];
 }
 
-// ONE ACTION EACH. A tile in a grid of eight is read in one glance, and the
+// ONE ACTION EACH. A tile in a grid is read in one glance, and the
 // card it replaced carried a tag, a Connect, a Disconnect, a settings square
 // and a chevron — five controls to learn that nothing was owed.
 test("every tile carries exactly one action, and which one follows the engine", async () => {
@@ -183,6 +183,19 @@ test("every tile carries exactly one action, and which one follows the engine", 
   const slack = await tile("Slack");
   expect(controls(slack).map((c) => c.getAttribute("aria-label"))).toEqual(["Connect Slack"]);
   expect(within(slack).getByText("Not in use")).toBeTruthy();
+});
+
+// A TOOL NOBODY SET UP KEEPS ITS MARK, DRAINED: the kit's `muted` mark is the
+// glance that says "available, not connected" down the grid, and a tool that
+// is set up draws its own colours whatever its state.
+test("an unconfigured tool's mark is muted and a configured one's is not", async () => {
+  stubFetch({ status: 200, body: listing });
+  mount();
+  const mark = async (name: string) =>
+    (await tile(name)).querySelector(".int-brand .crewlet-vendor-mark") as Element;
+  expect((await mark("Slack")).classList.contains("crewlet-vendor-mark--muted")).toBe(true);
+  expect((await mark("GitLab")).classList.contains("crewlet-vendor-mark--muted")).toBe(false);
+  expect((await mark("Datadog")).classList.contains("crewlet-vendor-mark--muted")).toBe(false);
 });
 
 // ROTATE TOKEN OPENS THE SETTINGS FORM, SAYING WHY.

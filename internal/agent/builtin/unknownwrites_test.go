@@ -1,7 +1,12 @@
 package builtin_test
 
 import (
+	"cmp"
 	"context"
+	"fmt"
+	"regexp"
+	"slices"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -9,6 +14,13 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tools"
 	"github.com/crewlet/crewlet/internal/tracker"
+)
+
+// The key and the version every unknownWriter result holds: what a tool that
+// reported a receipt beside an unknown outcome would print.
+const (
+	receiptKey     = "ZZZ-77"
+	receiptVersion = 9901
 )
 
 // unknownWriter answers every tracker write `unknown` with a nil error — what a
@@ -24,9 +36,9 @@ type unknownWriter struct {
 
 func (u *unknownWriter) answer(opID string) (tracker.WriteResult, error) {
 	u.ops = append(u.ops, opID)
-	return tracker.WriteResult{Key: "ZZZ-77", Result: statelog.Result{
+	return tracker.WriteResult{Key: receiptKey, Result: statelog.Result{
 		Outcome: statelog.OutcomeUnknown, OpID: opID, Unvouched: u.unvouched,
-		Version: 9901,
+		Version: receiptVersion,
 	}}, nil
 }
 
@@ -89,7 +101,7 @@ func (u *unknownWriter) MarkInbox(_ context.Context, opID, _ string,
 func (u *unknownWriter) PlaceTask(_ context.Context, opID string, _ tracker.Place,
 	_ *tracker.Notify) (tracker.PlaceResult, error) {
 	lane, _ := u.answer(statelog.StepOpID(opID, "lane"))
-	return tracker.PlaceResult{Lane: lane, Version: 9901,
+	return tracker.PlaceResult{Lane: lane, Version: receiptVersion,
 		Unplaced: statelog.ErrUnavailable}, nil
 }
 
@@ -136,22 +148,18 @@ func (u *unknownWriter) operatorSurface(t *testing.T) *tools.Registry {
 
 // receipt is what an answer about a write that may not exist must never carry:
 // the fields of a success, and the key and version the fake's result holds.
+// It is looked for in the answer with its operations taken out
+// ([withoutOperations]), which are random hex that spells a version now and
+// then.
 var receipt = []string{`"version"`, `"comment_id"`, `"key"`, `"id"`, `"outcome"`,
-	`"position"`, "ZZZ-77", "9901", "NOT made"}
+	`"position"`, receiptKey, strconv.Itoa(receiptVersion), "NOT made"}
 
-// EVERY TRACKER WRITE WHOSE OUTCOME IS UNKNOWN IS ANSWERED AS UNKNOWN, on
-// every surface, and never with a receipt.
-//
-// Only the create and the page tools held the rule. A comment the engine
-// answered `unknown` without publishing — its operation minted before this
-// node's ledger lost rows, a seat on a backlog turn just after its node adopted
-// a snapshot — came back as a comment_id with its mentions and its ask, and the
-// seat told whoever asked that it had answered. An update handed back a
-// `version` a model passes as `if_match`, naming a version the item may never
-// have had, and a saved view an id for a view that may not exist.
-func TestEveryTrackerWriteWhoseOutcomeIsUnknownIsAnsweredAsUnknown(t *testing.T) {
-	t.Parallel()
-	operatorCalls := map[string]map[string]any{
+// unknownOperatorCalls is one call to every tracker write on the operator's
+// surface. A fresh table on every call rather than a package variable: two
+// parallel tests hand these arguments to tools, and one shared map would be a
+// data race the moment a tool wrote to its arguments.
+func unknownOperatorCalls() map[string]map[string]any {
+	return map[string]map[string]any{
 		builtin.UpdateWorkItemTool: {"item": "ENG-1", "status": "done"},
 		builtin.CommentOnWorkTool:  {"item": "ENG-1", "body": "done, see the PR", "ask": "eng"},
 		tracker.MergeWorkItemTool:  {"item": "ENG-2", "into": "ENG-1"},
@@ -167,11 +175,27 @@ func TestEveryTrackerWriteWhoseOutcomeIsUnknownIsAnsweredAsUnknown(t *testing.T)
 		tracker.WriteWorkCatalogueTool: {"types": []any{map[string]any{"slug": "bug", "name": "Bug"}}},
 		tracker.WriteProjectTool:       {"project": "ENG", "tags_add": []any{map[string]any{"slug": "regression"}}},
 	}
-	// THE TWO THAT STATE A VALUE mint a fresh operation per call, so they
-	// take no op_id and name the operation they wrote under.
-	restates := map[string]bool{
-		tracker.WriteWorkCatalogueTool: true, tracker.WriteProjectTool: true,
-	}
+}
+
+// restatingTools are THE TWO THAT STATE A VALUE: they mint a fresh operation
+// per call, so they take no op_id and name the operation they wrote under.
+var restatingTools = map[string]bool{
+	tracker.WriteWorkCatalogueTool: true, tracker.WriteProjectTool: true,
+}
+
+// EVERY TRACKER WRITE WHOSE OUTCOME IS UNKNOWN IS ANSWERED AS UNKNOWN, on
+// every surface, and never with a receipt.
+//
+// Only the create and the page tools held the rule. A comment the engine
+// answered `unknown` without publishing — its operation minted before this
+// node's ledger lost rows, a seat on a backlog turn just after its node adopted
+// a snapshot — came back as a comment_id with its mentions and its ask, and the
+// seat told whoever asked that it had answered. An update handed back a
+// `version` a model passes as `if_match`, naming a version the item may never
+// have had, and a saved view an id for a view that may not exist.
+func TestEveryTrackerWriteWhoseOutcomeIsUnknownIsAnsweredAsUnknown(t *testing.T) {
+	t.Parallel()
+	operatorCalls := unknownOperatorCalls()
 	for _, unvouched := range []bool{false, true} {
 		for name, args := range operatorCalls {
 			u := &unknownWriter{fakeTracker: newFakeTracker(), unvouched: unvouched}
@@ -182,8 +206,8 @@ func TestEveryTrackerWriteWhoseOutcomeIsUnknownIsAnsweredAsUnknown(t *testing.T)
 					"nothing: %s", name, unvouched, got.Output)
 				continue
 			}
-			checkUnknownAnswer(t, name, unvouched, got)
-			if restates[name] {
+			checkUnknownAnswer(t, name, unvouched, got, u.ops)
+			if restatingTools[name] {
 				if !strings.Contains(got.Output, u.ops[0]) ||
 					!strings.Contains(got.Output, "harmless") {
 					t.Errorf("%s does not name operation %s, or say a repeat is "+
@@ -232,7 +256,7 @@ func TestEveryTrackerWriteWhoseOutcomeIsUnknownIsAnsweredAsUnknown(t *testing.T)
 				t.Errorf("%s (unvouched %v) wrote nothing: %s", name, unvouched, got.Output)
 				continue
 			}
-			checkUnknownAnswer(t, name, unvouched, got)
+			checkUnknownAnswer(t, name, unvouched, got, u.ops)
 			if !strings.Contains(got.Output, u.ops[0]) {
 				t.Errorf("%s does not name operation %s: %s", name, u.ops[0], got.Output)
 			}
@@ -248,29 +272,173 @@ func TestEveryTrackerWriteWhoseOutcomeIsUnknownIsAnsweredAsUnknown(t *testing.T)
 	}
 }
 
-// checkUnknownAnswer is what every one of those answers has in common.
-func checkUnknownAnswer(t *testing.T, name string, unvouched bool, got tools.Result) {
-	t.Helper()
-	if !got.Failed {
-		t.Errorf("%s (unvouched %v) answered an unknown outcome as a receipt: %s",
-			name, unvouched, got.Output)
-		return
+// AN OPERATION WHOSE ID SPELLS THE RECEIPT IS NOT A RECEIPT, and a receipt
+// printed right beside it still is.
+//
+// An operation id is random hex ([statelog.NewOpID]) and every decimal digit
+// is a hex digit, so a minted id spells the fake's version now and then, and
+// the test above, which mints a fresh id for every operator call, read one as
+// the version leaking a run or two in every few hundred. This pins that case on
+// EVERY run, under the id it happened on, for every tool an operator can bring
+// an operation back to — and pins the other side with it, in three doctored
+// answers the check must still refuse: the version printed after the id, the
+// version GLUED to the id's last character, which only a removal by exact value
+// reads correctly (a pattern that ate the id's run of characters would eat the
+// version with it), and an operation the writer was never handed.
+func TestAnOperationWhoseIDSpellsTheReceiptIsNotReadAsOne(t *testing.T) {
+	t.Parallel()
+	// spelled is the operation that test failed on in CI: its last group is
+	// b9901477cd19.
+	const spelled = "01a102c5-54a2-7eb9-a00e-b9901477cd19"
+	version := strconv.Itoa(receiptVersion)
+	if !strings.Contains(spelled, version) {
+		t.Fatalf("%s does not spell the fake's version %s, so this case shows "+
+			"nothing", spelled, version)
 	}
-	for _, leak := range receipt {
-		if strings.Contains(got.Output, leak) {
-			t.Errorf("%s (unvouched %v) carries %s beside an unknown outcome: %s",
-				name, unvouched, leak, got.Output)
+	for _, unvouched := range []bool{false, true} {
+		for name, args := range unknownOperatorCalls() {
+			if restatingTools[name] {
+				continue // they take no op_id, so their operation is never chosen
+			}
+			u := &unknownWriter{fakeTracker: newFakeTracker(), unvouched: unvouched}
+			reg := u.operatorSurface(t)
+			// THE SAME CALL, brought back under an operation named for it
+			// whose uuid spells the version.
+			op := spelled + answeredOp(t, callNoTurn(t, reg, name, args))[len(spelled):]
+			again := map[string]any{"op_id": op}
+			for k, v := range args {
+				again[k] = v
+			}
+			got := callNoTurn(t, reg, name, again)
+			if !strings.Contains(got.Output, op) {
+				t.Errorf("%s (unvouched %v) does not name operation %s, which it "+
+					"was brought back under, so this case shows nothing: %s",
+					name, unvouched, op, got.Output)
+				continue
+			}
+			checkUnknownAnswer(t, name, unvouched, got, u.ops)
+
+			for _, beside := range []string{" at version " + version, version} {
+				leaked := got
+				leaked.Output = strings.Replace(got.Output, op, op+beside, 1)
+				if !slices.Contains(unknownAnswerProblems(leaked, unvouched, u.ops),
+					"carries "+version+" beside an unknown outcome") {
+					t.Errorf("%s (unvouched %v): version %s printed as %q after "+
+						"operation %s is not read as a receipt: %s", name, unvouched,
+						version, beside, op, leaked.Output)
+				}
+			}
+			stranger := got
+			stranger.Output = strings.Replace(got.Output, op, strangerOp, 1)
+			if !slices.Contains(unknownAnswerProblems(stranger, unvouched, u.ops),
+				"names "+strangerUUID+", which it was not made under") {
+				t.Errorf("%s (unvouched %v): an answer naming operation %s, which the "+
+					"writer was never handed, is not refused: %s", name, unvouched,
+					strangerOp, stranger.Output)
+			}
 		}
 	}
-	if !strings.Contains(got.Output, "is unknown") ||
-		!strings.Contains(got.Output, "do not report it as done") {
-		t.Errorf("%s (unvouched %v) never says the outcome is unknown: %s",
-			name, unvouched, got.Output)
+}
+
+// checkUnknownAnswer is what every one of those answers has in common, where
+// ops are the operations the writer was handed for it.
+func checkUnknownAnswer(t *testing.T, name string, unvouched bool, got tools.Result,
+	ops []string) {
+
+	t.Helper()
+	for _, problem := range unknownAnswerProblems(got, unvouched, ops) {
+		t.Errorf("%s (unvouched %v) %s: %s", name, unvouched, problem, got.Output)
 	}
-	if unvouched != strings.Contains(got.Output, "this node cannot tell") {
-		t.Errorf("%s (unvouched %v) says this node cannot tell %v: %s", name,
-			unvouched, !unvouched, got.Output)
+}
+
+// unknownAnswerProblems is everything wrong with got as the answer to a write
+// whose outcome is unknown, made under ops — none, for a right one. A list
+// rather than a report, so a case can hold the check itself to a doctored
+// answer.
+func unknownAnswerProblems(got tools.Result, unvouched bool, ops []string) []string {
+	if !got.Failed {
+		return []string{"answered an unknown outcome as a receipt"}
 	}
+	said := withoutOperations(got.Output, ops)
+	var problems []string
+	for _, leak := range receipt {
+		if strings.Contains(said, leak) {
+			problems = append(problems, "carries "+leak+" beside an unknown outcome")
+		}
+	}
+	if !strings.Contains(said, "is unknown") ||
+		!strings.Contains(said, "do not report it as done") {
+		problems = append(problems, "never says the outcome is unknown")
+	}
+	if unvouched != strings.Contains(said, "this node cannot tell") {
+		problems = append(problems, fmt.Sprintf("says this node cannot tell %v",
+			!unvouched))
+	}
+	// AN ID LEFT OVER is an operation the writer was never handed. Named in an
+	// answer it is a pointer the reader cannot use — and here it is also the
+	// one thing that would let the false positive above back in, since only the
+	// ids this call wrote under are taken out before the receipt is looked for.
+	for _, id := range uuidPattern.FindAllString(said, -1) {
+		problems = append(problems, "names "+id+", which it was not made under")
+	}
+	return problems
+}
+
+// uuidPattern is the head of an operation id, in the form [statelog.NewOpID]
+// writes it.
+var uuidPattern = regexp.MustCompile(
+	`[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}`)
+
+// strangerOp is an operation in the engine's grammar that no call in these
+// tests is ever made under, and strangerUUID its head — what the check names.
+const (
+	strangerUUID = "01a102c5-0000-7000-8000-000000000000"
+	strangerOp   = strangerUUID + ".place_work_item.stranger"
+)
+
+// withoutOperations is an answer with every operation it may name taken out:
+// each id the writer was handed, and each gesture one of them is a step of —
+// the call's own operation, which is what an operator is told to bring back.
+//
+// # Why a receipt is looked for only in what is left
+//
+// Because an operation id is random hex the answer is REQUIRED to carry
+// ([statelog.NewOpID]), and every decimal digit is a hex digit, so now and then
+// a minted id spells "9901" somewhere, and a check over the whole answer read
+// that as the version leaking. Nothing a write reports can be inside an id
+// minted before the write was made, so taking the ids out hides no leak — and
+// an id the writer was NOT handed is never taken out, and is itself refused
+// ([unknownAnswerProblems]).
+//
+// BY VALUE, NEVER BY PATTERN: only the exact ids this call wrote under come
+// out, so a version printed right beside one is still read. And only ids the
+// engine's grammar minted ([statelog.OpMintedAt]): a test's literal like "op"
+// carries no random part to take out, and taking it out would take words
+// with it.
+func withoutOperations(output string, ops []string) string {
+	var named []string
+	for _, op := range ops {
+		if _, minted := statelog.OpMintedAt(op); !minted {
+			continue
+		}
+		// The step's own id, then each gesture above it, down to the bare
+		// uuid — which holds no dot, so the walk ends there.
+		for id := op; ; {
+			named = append(named, id)
+			step := strings.LastIndex(id, ".")
+			if step < 0 {
+				break
+			}
+			id = id[:step]
+		}
+	}
+	// LONGEST FIRST, or a gesture taken out of a step's id would leave the
+	// step's tail behind.
+	slices.SortFunc(named, func(a, b string) int { return cmp.Compare(len(b), len(a)) })
+	for _, id := range named {
+		output = strings.ReplaceAll(output, id, "<operation>")
+	}
+	return output
 }
 
 // AN UPDATE WHOSE CHANGE IS UNKNOWN WRITES NONE OF ITS DEPENDENCIES. They wait

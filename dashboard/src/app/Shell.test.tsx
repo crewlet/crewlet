@@ -609,6 +609,26 @@ describe("the page header", () => {
     expect(unblocked?.getAttribute("href")).toBe("#/me/unblocked?handle=bo");
   });
 
+  // THE WINDOW travels between Spend's sections — the tab and the overview's
+  // "All" link reach Expensive tasks on the same one — and the chart's split
+  // does not, because it is the overview's alone.
+  test("a Spend tab carries the window, and Budgets carries it back", async () => {
+    location.hash = "#/spend?window=90d&group=model";
+    const { store, socket } = answering({});
+    mountShell(store, socket);
+    const tab = (label: string) =>
+      Array.from(
+        screen.getByRole("navigation", { name: "Spend sections" }).querySelectorAll("a"),
+      ).find((a) => a.textContent === label);
+    expect(tab("Expensive tasks")?.getAttribute("href")).toBe("#/spend/tasks?window=90d");
+    expect(tab("Budgets")?.getAttribute("href")).toBe("#/spend/budgets?window=90d");
+    cleanup();
+    location.hash = "#/spend/budgets?window=90d";
+    const again = answering({});
+    mountShell(again.store, again.socket);
+    expect(tab("Overview")?.getAttribute("href")).toBe("#/spend?window=90d");
+  });
+
   // ON AN OBJECT PAGE the crumbs are the way back; a strip of tabs over a
   // task would say it is a fourth kind of list.
   test("no section tabs are drawn on an object's own page", async () => {
