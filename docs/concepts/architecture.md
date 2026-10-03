@@ -243,7 +243,10 @@ the vendor, so four nodes should not each pay their own 429 to learn it.
 **The observability edge is two routes, not one, and the split is deliberate.**
 A published event forks. It is written to this node's `crewlet_events` **inline,
 in the publishing goroutine**, through a publish listener with no consumer
-group — so no two nodes can ever write one row. And it is read back off the
+group — so no two nodes can ever write one row. (A node without the `data`
+role has no log to write, so its listener batches its events onto the custody
+topic instead, and exactly one data node keeps each batch — see
+[custody](../guides/deployment.md#custody-the-rows-of-a-node-without-data).) And it is read back off the
 broker by an **ephemeral broadcast** subscription on `crewlet.events.>` that
 feeds the live projection — so a dashboard tab attached to node B shows turns
 that ran on node A. Swap either mechanism for the other and you lose the
@@ -532,7 +535,8 @@ What each of the four holds, in full:
 
 | Tables | What they hold |
 |---|---|
-| **`crewlet_events`** · `crewlet_event_parties` | The audit log and its party index |
+| **`crewlet_events`** · `crewlet_event_parties` | The audit log and its party index — this node's own events, and on a data node the batches of a stateless node's events it **keeps** ([custody](../guides/deployment.md#custody-the-rows-of-a-node-without-data)) |
+| `custody_unsettled` | The custody batches this node has written and not yet learned whether it keeps: the fleet decides which data node keeps each batch, create-only in coordination, and a node that crashed between writing a batch and claiming it asks at its next pass and deletes the rows if another node keeps them. Empty but for the batches of the last few moments |
 | **`agent_diary`** · **`episodes`** | Vector-indexed recall |
 | **`synthesized_skills`** · `synthesized_skill_versions` · `counterparty_profiles` · `agent_onboarding_markers` | The rest of the learning subsystem — skill induction and its versions, counterparty profiles, first-turn onboarding markers |
 | **`conversation_sessions`** | What this seat already said in that thread |
@@ -587,6 +591,7 @@ to the adopted log.
 | `crewlet_follows` | The chat threads each seat follows, so the next reply wakes it whichever node claims that delivery. The bucket's age, 90 days, is the last-activity horizon |
 | `crewlet_objects` | The object store's **placement map**: the copies the company asks for and the label they are spread across, how many placement groups the slots are divided into, and every data node's weight, balanced share, domain and whether it is taken out or on probation — plus what the duty has to carry between ticks: each absent member's count of ticks, the nodes it removed and each one's probation, an operator's hold. One key, written by compare-and-set by the `object-map` duty — and by the node serving an operator's out, in, hold or release, the same way. **No age** — an expired map would read as a fleet with nowhere to put a file |
 | `crewlet_estate_map` | Which data nodes hold each partition of the replicated estate once it is divided into partitions, and what the map's maintainer carries between ticks. One key, written only by compare-and-set and **watched** by every node — hence a bucket of its own. Created on every node and empty while every data node holds the whole estate. **No age** — an expired map would read as an estate nobody holds |
+| `crewlet_custody` | Which data node keeps each batch of a stateless node's events: claimed create-only by the data node that wrote the batch, after it wrote it, so exactly one node's log keeps it ([custody](../guides/deployment.md#custody-the-rows-of-a-node-without-data)). The bucket's age, 32 days, outlasts the event log's retention, so a node settling a batch it wrote before a crash always finds the answer |
 | `crewlet_integrations` · `crewlet_mailboxes` | Each surface's reconcile status, and the seat mailboxes that may exist so a removed seat's can be retired |
 | `crewlet_statelog_positions` | **Four key classes**, all answering what the log may delete: each node's position per domain; the trim holds a backup or a join takes; what each owner's newest backup covers, which is the only input the backup term has; and the floor the trim published, with the term holding it and how long it has been holding — the last is the one nothing can re-derive, because a duty that moves on a lease carries no memory across the move. **No age at all**, and this is the one where an age would be worst — an expired position reads as a node that has applied *nothing*, which either pins the trim for ever or, read the other way, deletes records that node still needs |
 
@@ -600,6 +605,7 @@ to the adopted log.
 | **`CREWLET_CONFIG`** | `crewlet.config.>` |
 | **`CREWLET_MEMORY`** | `crewlet.memory.>` — *one message per subject: a keyed table, not a log* |
 | **`CREWLET_DLQ`** | `dlq.>` — *deliberately outside* `crewlet.*` |
+| **`CREWLET_CUSTODY`** | `crewlet.custody.>` — the events of nodes without `data`, in batches, until one data node keeps each; a mailbox (interest retention) aged at the event log's horizon. *Outside* `crewlet.events.*`, whose broadcast every dashboard streams |
 | **`CREWLET_TRACKER_LOG`** | `crewlet.tracker.log.>` — **the write-ahead log the replicated estate's tracker tables are derived from.** One subject per object, which is what makes the subject the unit two writers contend on; retention is bounded by durability rather than by age. Two of its subjects carry no object at all: **`…log.barrier`**, which every `linearizable` read appends one record to and then waits for — the acknowledgement is what proves a quorum agrees on a position, where a field read can be served by an isolated former leader; and **`…log.rankorder.<PROJECT>`**, which is where a board drag is arbitrated, so two people reordering one project's board contend and two reordering different ones never do |
 | **`CREWLET_TRACKER_VECTORS`** | `crewlet.tracker.vectors.>` — the same shape for embeddings, **compacted**: one message retained per subject, because the current embedding of a source is the only one anybody wants and a history of superseded vectors is a bill nobody asked for |
 | **`CREWLET_PAGES_LOG`** | `crewlet.pages.log.>`, **the ordered log the replicated estate's knowledge base is derived from**, and the state log's third domain. The same shape as the tracker's: one subject per object, so two writers saving one page contend at the broker and two saving different pages never do. Retention is bounded by what every node has already applied rather than by age, because a page is a fact for the life of the deployment and removing one is a decision somebody takes rather than a horizon that reaps it while a person is still reading it |

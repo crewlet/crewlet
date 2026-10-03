@@ -446,9 +446,7 @@ func (e *Engine) partitionGates(s *stateLog, p statelog.PartitionID) func(domain
 }
 
 // serverSeams is what this node supplies to every operation it answers,
-// whichever partition it is on: its current chart and org, and its own event
-// log, which takes custody of a stateless node's records whatever backends the
-// company runs.
+// whichever partition it is on: its current chart and org.
 func (e *Engine) serverSeams() estate.ServerSeams {
 	seams := estate.ServerSeams{
 		Units: liveUnits{engine: e}, Leads: liveLeads{engine: e},
@@ -459,9 +457,6 @@ func (e *Engine) serverSeams() estate.ServerSeams {
 			}
 			return c.Org.AgentSeatByHandle(handle), c.Org
 		},
-	}
-	if e.backends != nil && e.backends.Store != nil {
-		seams.Events = e.backends.Store.Events()
 	}
 	return seams
 }

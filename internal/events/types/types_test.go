@@ -61,6 +61,8 @@ func catalogue() []events.Payload {
 		KnowledgeRead{},
 		// webhook.go
 		RawWebhook{},
+		// custody.go
+		CustodyBatch{},
 		// operator.go
 		OperatorActed{}, BackupRequested{},
 		// seat.go
@@ -89,6 +91,7 @@ var wireTypes = []string{
 	"backup_requested",
 	"budget_exhausted",
 	"budget_meters",
+	"custody_batch",
 	"compaction_completed",
 	"compaction_requested",
 	"config_revision_activated",
@@ -306,6 +309,7 @@ var wireTags = map[string][]string{
 	"a2a_channel_closed":              {"channel_id", "closed_by", "duration_ms", "message_count", "participants", "turn_id", "work_key"},
 	"budget_exhausted":                {"agent_id", "budget_type", "max_tokens", "period", "resets_at", "role", "turn_id", "used_tokens", "window", "work_key"},
 	"budget_meters":                   {"meter_id", "org", "seats", "seq", "timezone"},
+	"custody_batch":                   {"events"},
 	"llm_unavailable":                 {"agent_id", "attempt_count", "last_error", "last_error_kind", "provider_chain", "role", "turn_id", "work_key"},
 	"provider_fallback":               {"agent_id", "error_kind", "from_provider_key", "iteration", "phase", "role", "to_provider_key", "turn_id", "work_key"},
 	"agent_turn_started":              {"agent_handle", "agent_id", "conversation_key", "resumed", "role", "started_at", "trigger", "turn_id", "work_item", "work_item_basis", "work_key"},
@@ -778,6 +782,23 @@ func (f *filler) fill(v reflect.Value, name string) {
 	case reflect.Struct:
 		if v.Type() == reflect.TypeOf(time.Time{}) {
 			v.Set(reflect.ValueOf(sampleTime.Add(time.Duration(f.next()) * time.Second)))
+			return
+		}
+		if v.Type() == reflect.TypeOf(events.Event{}) {
+			// AN ENVELOPE CARRIED INSIDE A PAYLOAD (custody's batch) is
+			// filled as a real event of a registered type, since its
+			// round trip is the codec's own: the id, the instant and a
+			// filled payload are what a lost field would show in.
+			n := f.next()
+			inner := events.New(TaskAssigned{
+				TaskID:      name + "-task-" + strconv.Itoa(n),
+				Agent:       name + "-agent-" + strconv.Itoa(n),
+				Description: name + "-description-" + strconv.Itoa(n),
+			}, events.TraceContext{})
+			inner.ID = uuid.NewSHA1(uuid.NameSpaceOID, []byte(name+strconv.Itoa(n)))
+			inner.Timestamp = sampleTime.Add(time.Duration(n) * time.Second)
+			inner.Source = name + "-source"
+			v.Set(reflect.ValueOf(*inner))
 			return
 		}
 		for i := range v.NumField() {

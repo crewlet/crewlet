@@ -23,8 +23,10 @@ the client picks the node and the failover is per operation (a read and a
 tracker write carrying an operation id move on, a page write that went
 unanswered is reported unknown and never repeated); every request carries the
 asking node's SESSION FLOOR, so whichever data node answers has applied the
-node's own writes; what a stateless node publishes is persisted on a data
-node's event log (custody) rather than in a store deleted at its next boot;
+node's own writes; what a stateless node publishes is persisted on exactly one
+data node's event log (custody: published durably, taken by a fleet-wide group,
+and kept by the data node whose create-only claim wins) rather than in a store
+deleted at its next boot;
 and every question about "which nodes hold data" — the trim's counted set, the
 eviction gate, the search roster, the capacity handshake — reads the role off
 the presence lease, so a stateless node is never counted as a copy.

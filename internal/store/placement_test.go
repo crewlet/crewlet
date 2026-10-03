@@ -147,7 +147,19 @@ var nodeEstatePlacements = []placement{
 		Why: "The audit log of what THIS node did. A publish listener writes " +
 			"it inline on the publishing node, so there is no consumer group " +
 			"and no two nodes can write one row. A peer's copy is a different " +
-			"node's history, not a stale version of this one.",
+			"node's history, not a stale version of this one. On a data node " +
+			"it also holds the custody batches of nodes without `data` that " +
+			"this node KEEPS — taken from a group, so two nodes can write one " +
+			"batch, and a create-only claim in coordination decides the one " +
+			"that keeps it (custody_unsettled).",
+	},
+	{
+		Table: "custody_unsettled",
+		Why: "This node's record that it wrote a stateless node's batch and " +
+			"has not yet learned whether it keeps it. Which node keeps a batch " +
+			"is the company's answer and lives in coordination; this is only " +
+			"the question THIS node still has to ask about its own rows, so a " +
+			"peer's copy would be a question about rows the peer never wrote.",
 	},
 	{
 		Table: "crewlet_event_parties",

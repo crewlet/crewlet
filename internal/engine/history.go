@@ -15,7 +15,7 @@ import (
 // # Every data node serves, in every mode
 //
 // A data node's events are in its own store and nowhere else — its own, and
-// the records custody handed it from nodes without `data`, whose stores are
+// the custody batches of nodes without `data` it keeps, whose stores are
 // scratch — so a data node that stopped answering would be a gap in every
 // history screen of the company. That
 // includes a node in maintenance: it publishes nothing, but it still holds
@@ -52,8 +52,8 @@ func (e *Engine) armHistory(ctx context.Context) error {
 	}
 	if e.local == nil {
 		// A NODE WITHOUT `data` HOLDS NO HISTORY to answer from: its
-		// store is scratch, and custody hands every record it publishes
-		// to a data node's event log (internal/observe). It still ASKS —
+		// store is scratch, and custody puts every event it publishes in
+		// exactly one data node's event log (internal/observe). It still ASKS —
 		// its dashboard reads the fleet like any other — and it is never
 		// asked, since the roster is the data nodes.
 		return nil

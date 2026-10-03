@@ -9,7 +9,6 @@ import (
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/pages"
 	"github.com/crewlet/crewlet/internal/statelog"
-	"github.com/crewlet/crewlet/internal/store"
 	"github.com/crewlet/crewlet/internal/tracker"
 )
 
@@ -537,10 +536,4 @@ func (k Knowledge) Search(ctx context.Context, q knowledge.Query) knowledge.Resu
 func (k Knowledge) Building(ctx context.Context) bool {
 	building, _, err := gather(ctx, k.r, opKnowledgeBuilding, "", struct{}{})
 	return err == nil && building
-}
-
-// AppendEvents hands a batch of this node's event records to a data node's
-// event log — see [opAppendEvents]. It answers how many were taken.
-func (r *Router) AppendEvents(ctx context.Context, records []store.EventRecord) (int, error) {
-	return call(ctx, r, opAppendEvents, nil, appendEventsArgs{Records: records})
 }

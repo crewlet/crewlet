@@ -555,7 +555,7 @@ func TestAnUnknownPlacementIsNotAnEmptyFleet(t *testing.T) {
 	f.placement.set(func(p *fakePlacement) { p.err = errors.New("the leases could not be listed") })
 	_, err := f.client.Work().Tasks(t.Context(), tracker.Query{}, time.Now())
 	var unserved *ErrPartitionUnserved
-	if err == nil || errors.As(err, &unserved) || errors.Is(err, ErrNoDataNode) {
+	if err == nil || errors.As(err, &unserved) {
 		t.Fatalf("an unknown placement answered %v, want the placement's own error", err)
 	}
 	if !strings.Contains(err.Error(), "the leases could not be listed") {
@@ -840,8 +840,8 @@ func TestAKnowledgeSearchKeepsItsExclusionAndTakesTheServersScope(t *testing.T) 
 	}
 }
 
-// A PARTITION NOBODY SERVES IS AN ANSWER NAMING IT, and an operation that
-// addresses no partition says there is no data node — never an empty result.
+// A PARTITION NOBODY SERVES IS AN ANSWER NAMING IT — never an empty result,
+// which would read as a company with nothing in it.
 func TestNoServingNodeSaysSo(t *testing.T) {
 	t.Parallel()
 	f := newFleet(t)
@@ -849,9 +849,6 @@ func TestNoServingNodeSaysSo(t *testing.T) {
 	var unserved *ErrPartitionUnserved
 	if !errors.As(err, &unserved) || unserved.Partition != "estate.000" {
 		t.Fatalf("err = %v, want ErrPartitionUnserved naming estate.000", err)
-	}
-	if _, err := f.client.AppendEvents(t.Context(), nil); !errors.Is(err, ErrNoDataNode) {
-		t.Fatalf("custody with no data node answered %v, want ErrNoDataNode", err)
 	}
 }
 

@@ -89,6 +89,18 @@ const (
 	// NotificationsInbound carries raw inbound webhook envelopes.
 	NotificationsInbound = NotificationsPrefix + "inbound"
 
+	// CustodyPrefix prefixes the subjects a node without the `data` role
+	// hands its events to the data nodes on, to be written into exactly one
+	// data node's event log (ADR-0025, internal/observe).
+	//
+	// NOT UNDER EventsPrefix, whose `>` is the broadcast every dashboard's
+	// projector streams: a batch there would send every stateless node's
+	// audit trail, a mebibyte at a time, to every live screen in the fleet,
+	// and every event inside it a second time.
+	CustodyPrefix = "crewlet.custody."
+	// CustodyRecords is the one topic every such node publishes its batches
+	// on, and one fleet-wide group on the data nodes reads.
+	CustodyRecords = CustodyPrefix + "records"
 	// ConfigPrefix prefixes the control-plane subjects, for the same
 	// reason NotificationsPrefix exists.
 	ConfigPrefix = "crewlet.config."

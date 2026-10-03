@@ -356,35 +356,31 @@ func callFrom[A, R any](ctx context.Context, r *Router, o op[A, R], actor *Actor
 		written: written,
 	}
 	var answer any
-	if o.addr.partitions == nil {
-		answer, err = r.anyNode(ctx, spec, actor, x)
-	} else {
-		x.resolve = func(l statelog.Layout) (statelog.PartitionID, error) {
-			parts, resolveErr := o.addr.partitions(ctx, l, layoutResolver{layout: l}, args)
-			switch {
-			case resolveErr != nil:
-				return statelog.PartitionID{}, resolveErr
-			case len(parts) != 1:
-				return statelog.PartitionID{}, fmt.Errorf("estate: %s addresses %d "+
-					"partitions, and a single-partition operation addresses one",
-					spec.name, len(parts))
-			}
-			return parts[0], nil
+	x.resolve = func(l statelog.Layout) (statelog.PartitionID, error) {
+		parts, resolveErr := o.addr.partitions(ctx, l, layoutResolver{layout: l}, args)
+		switch {
+		case resolveErr != nil:
+			return statelog.PartitionID{}, resolveErr
+		case len(parts) != 1:
+			return statelog.PartitionID{}, fmt.Errorf("estate: %s addresses %d "+
+				"partitions, and a single-partition operation addresses one",
+				spec.name, len(parts))
 		}
-		var cov statelog.Coverage
-		if o.cover != nil {
-			// ONE PARTITION, ANSWERED: what a single-partition read covers
-			// is the partition it was read from, at the cut its holder
-			// measured before the read began.
-			x.answered = func(p statelog.PartitionID, at []statelog.Position) {
-				cov = statelog.Coverage{Addressed: 1, Answered: []string{p.String()}, At: cutOf(at)}
-			}
+		return parts[0], nil
+	}
+	var cov statelog.Coverage
+	if o.cover != nil {
+		// ONE PARTITION, ANSWERED: what a single-partition read covers
+		// is the partition it was read from, at the cut its holder
+		// measured before the read began.
+		x.answered = func(p statelog.PartitionID, at []statelog.Position) {
+			cov = statelog.Coverage{Addressed: 1, Answered: []string{p.String()}, At: cutOf(at)}
 		}
-		answer, err = r.route(ctx, spec, actor, x)
-		if out, ok := answer.(R); ok && err == nil && o.cover != nil {
-			o.cover(&out, cov)
-			return out, nil
-		}
+	}
+	answer, err = r.route(ctx, spec, actor, x)
+	if out, ok := answer.(R); ok && err == nil && o.cover != nil {
+		o.cover(&out, cov)
+		return out, nil
 	}
 	if out, ok := answer.(R); ok {
 		return out, err
@@ -847,69 +843,6 @@ func (r *Router) ask(ctx context.Context, node string, req request, budget time.
 			node, err)
 	}
 	return rep, true, nil
-}
-
-// anyNode runs an operation that addresses no partition on the first data
-// node that will: any node serving any partition of the fleet's layout. It is
-// never answered in-process — the one such operation takes custody of a node's
-// event records, which a node holding a store keeps itself.
-func (r *Router) anyNode(ctx context.Context, spec *opSpec, actor *Actor, x exchange) (any, error) {
-	layout, err := r.placement.Layout()
-	if err != nil {
-		return nil, fmt.Errorf("estate: %s: read which layout the fleet runs: %w", spec.name, err)
-	}
-	var nodes []string
-	for _, p := range layout.Partitions() {
-		holders, _, err := r.placement.Serving(p)
-		if err != nil {
-			return nil, fmt.Errorf("estate: %s: read who serves %s: %w", spec.name, p, err)
-		}
-		for _, n := range holders {
-			if !slices.Contains(nodes, n) {
-				nodes = append(nodes, n)
-			}
-		}
-	}
-	budget := r.budgetFor(ctx, spec)
-	var reasons []string
-	for _, node := range r.order(statelog.PartitionID{}, nodes) {
-		rep, answered, err := r.ask(ctx, node, request{
-			Op: spec.name, Args: x.encoded, Actor: actor, From: r.self,
-		}, budget)
-		if err != nil {
-			return nil, fmt.Errorf("estate: %s: %w", spec.name, err)
-		}
-		if !answered {
-			if spec.class == opOnceWrite {
-				return nil, fmt.Errorf("%w (%s, asked of %s)", ErrOutcomeUnknown, spec.name, node)
-			}
-			if ctx.Err() != nil {
-				return nil, fmt.Errorf("estate: %s: %w", spec.name, ctx.Err())
-			}
-			reasons = append(reasons, node+": no answer")
-			continue
-		}
-		x.record(rep)
-		if rep.Unserved != "" {
-			reasons = append(reasons, fmt.Sprintf("%s: %s", node, rep.Detail))
-			continue
-		}
-		r.markAnswered(statelog.PartitionID{}, node)
-		if rep.Err != nil {
-			return nil, decodeError(rep.Err)
-		}
-		value, err := x.decode(rep.Result)
-		if err != nil {
-			return nil, fmt.Errorf("estate: %s: %s answered with a result this "+
-				"build cannot decode: %w", spec.name, node, err)
-		}
-		return value, nil
-	}
-	if len(nodes) == 0 {
-		return nil, fmt.Errorf("%w: no live node holds data, so %s has nothing to "+
-			"ask — give a node the `data` role", ErrNoDataNode, spec.name)
-	}
-	return nil, fmt.Errorf("%w for %s: %v", ErrNoDataNode, spec.name, reasons)
 }
 
 // order is the order p's holders are asked in: sticky for p first, then

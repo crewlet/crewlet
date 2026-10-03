@@ -105,56 +105,49 @@ func (s server) answer(ctx context.Context, raw []byte) []byte {
 		// answered or refused on its own.
 		return encodeReply(s.answerSlices(ctx, spec, req))
 	}
-	b := Backend{}
-	var p statelog.PartitionID
-	var layout statelog.Layout
-	if spec.partitions != nil {
-		var err error
-		p, err = s.partitionOf(ctx, spec, req)
-		if err != nil {
-			out.Err = encodeError(fmt.Errorf("estate: %s: %w", req.Op, err))
-			return encodeReply(out)
-		}
-		served, serves, unknown := s.local.For(ctx, p)
-		if unknown != nil {
-			// CANNOT TELL, which is not "does not serve": no epoch,
-			// because nothing about the asker's map is in question,
-			// and nothing ran, so every class moves on.
-			out.Unserved = unservedHoldingUnknown
-			out.Detail = fmt.Sprintf("%s cannot tell whether it serves %s: %v", s.self, p, unknown)
-			return encodeReply(out)
-		}
-		if !serves {
-			// NOTHING RAN, so every class moves on — a page write
-			// included, whose never-repeat rule is about a request
-			// that may have run. The epoch is THIS node's, which is
-			// what tells the asker whose view is stale.
-			_, epoch, _ := s.placement.Serving(p)
-			out.Unserved, out.Epoch = unservedNotHolder, epoch
-			out.Detail = fmt.Sprintf("%s does not serve %s (asked at map epoch %d)",
-				s.self, p, req.MapEpoch)
-			return encodeReply(out)
-		}
-		b = served
-		layout, err = s.placement.Layout()
-		if err != nil {
-			out.Err = encodeError(fmt.Errorf("estate: %s: read which layout the fleet runs: %w",
-				req.Op, err))
-			return encodeReply(out)
-		}
-		reason, detail, obsolete := ready(ctx, s.self, spec, b, p, req.Floors,
-			spec.floorStreams(layout, p), req.AcceptLagging)
-		for _, gone := range obsolete {
-			out.Obsolete = append(out.Obsolete, gone.Stream)
-		}
-		if reason != "" {
-			out.Unserved, out.Detail = reason, detail
-			return encodeReply(out)
-		}
+	p, err := s.partitionOf(ctx, spec, req)
+	if err != nil {
+		out.Err = encodeError(fmt.Errorf("estate: %s: %w", req.Op, err))
+		return encodeReply(out)
+	}
+	served, serves, unknown := s.local.For(ctx, p)
+	if unknown != nil {
+		// CANNOT TELL, which is not "does not serve": no epoch,
+		// because nothing about the asker's map is in question,
+		// and nothing ran, so every class moves on.
+		out.Unserved = unservedHoldingUnknown
+		out.Detail = fmt.Sprintf("%s cannot tell whether it serves %s: %v", s.self, p, unknown)
+		return encodeReply(out)
+	}
+	if !serves {
+		// NOTHING RAN, so every class moves on — a page write
+		// included, whose never-repeat rule is about a request
+		// that may have run. The epoch is THIS node's, which is
+		// what tells the asker whose view is stale.
+		_, epoch, _ := s.placement.Serving(p)
+		out.Unserved, out.Epoch = unservedNotHolder, epoch
+		out.Detail = fmt.Sprintf("%s does not serve %s (asked at map epoch %d)",
+			s.self, p, req.MapEpoch)
+		return encodeReply(out)
+	}
+	b := served
+	layout, err := s.placement.Layout()
+	if err != nil {
+		out.Err = encodeError(fmt.Errorf("estate: %s: read which layout the fleet runs: %w",
+			req.Op, err))
+		return encodeReply(out)
+	}
+	reason, detail, obsolete := ready(ctx, s.self, spec, b, p, req.Floors,
+		spec.floorStreams(layout, p), req.AcceptLagging)
+	for _, gone := range obsolete {
+		out.Obsolete = append(out.Obsolete, gone.Stream)
+	}
+	if reason != "" {
+		out.Unserved, out.Detail = reason, detail
+		return encodeReply(out)
 	}
 	b.ServerSeams = s.seams
 	var result any
-	var err error
 	if spec.whole != nil {
 		// A GATHER OF ONE PARTITION, which is a single-partition read: its
 		// slice and the merge of that one slice, at the read's own level.

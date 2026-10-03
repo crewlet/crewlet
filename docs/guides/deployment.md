@@ -404,15 +404,15 @@ hand this node's seats to a peer, and that is the intended behaviour rather
 than something a reconnect policy should paper over.
 
 **The account needs more than publish and subscribe.** A node creates what it
-uses, on every start and idempotently: the six engine streams
+uses, on every start and idempotently: the seven engine streams
 (`CREWLET_AGENT`, `CREWLET_EVENTS`, `CREWLET_NOTIFICATIONS`,
-`CREWLET_CONFIG`, `CREWLET_MEMORY`, `CREWLET_DLQ`), the four state-log
+`CREWLET_CONFIG`, `CREWLET_MEMORY`, `CREWLET_DLQ`, `CREWLET_CUSTODY`), the four state-log
 domain streams (`CREWLET_TRACKER_LOG`, `CREWLET_TRACKER_VECTORS`,
 `CREWLET_PAGES_LOG`, `CREWLET_USAGE_LOG`), a stream per extra subject namespace a company
 publishes under, one durable consumer per seat mailbox (an ordinary API
-call, measured at 1.7 ms), and the nineteen `crewlet_*` KV buckets:
+call, measured at 1.7 ms), and the twenty-two `crewlet_*` KV buckets:
 three in the lease store, holding the seat and presence leases, the duty
-leases and the fencing epochs, and sixteen in the fleet store holding the
+leases and the fencing epochs, and nineteen in the fleet store holding the
 shared records — the object store's placement map among them. A credential
 scoped to publishing and consuming fails at boot, on the first stream it
 tries to create.
@@ -895,14 +895,36 @@ departure exports to an external sink over OTLP rather than pointing the
 nodes at one database, which the exclusive file ownership rules out by
 construction.
 
-**A node without the `data` role writes none of its own.** Its store is
-deleted at every boot, so rows written there would be gone at its next restart
-with nothing able to read them in between (the API runs only where the data
-is). It hands every record it would have written to a data node instead —
-batched, idempotent on the record's identity, retried while a data node is
-away and dropped (and logged as `event_custody_dropped`) only when its buffer
-fills — and that data node's event log holds them beside its own, where its
-`GET /events` reads them. An orderly stop flushes what is still buffered.
+#### Custody: the rows of a node without `data`
+
+A node without the `data` role writes none of its own. Its store is deleted
+at every boot, so rows written there would be gone at its next restart with
+nothing able to read them in between (the API runs only where the data is).
+So it hands every event it would have written to the data nodes, and **exactly
+one** of them keeps each one:
+
+1. **It publishes them durably.** Events are buffered for at most a second —
+   a turn never waits on its own audit trail — and published in batches of up
+   to 256 events or 1 MiB onto the custody topic, `crewlet.custody.records`,
+   on the `CREWLET_CUSTODY` stream. Once the broker acknowledges a batch it
+   survives the node that published it; a batch it could not publish is sent
+   again under the same id, which the broker collapses. The buffer holds 4 096
+   events while the broker is unreachable, and an event that finds it full is
+   dropped and counted (`event_custody_dropped`) rather than holding a turn.
+2. **The data nodes take them from one group,** `event-custody`, and each
+   writes the batch it takes into its own event log, where its `GET /events`
+   and the fleet's history reads find it.
+3. **One data node keeps each batch.** The group delivers a batch whose
+   acknowledgement was lost again, to whichever data node asks next — so after
+   writing a batch a data node *claims* it in the coordination store,
+   create-only. The claim's winner keeps the batch; any other node that wrote
+   it deletes its copy. A batch is acknowledged only once its keeper is
+   decided, and a data node that crashed between writing and claiming settles
+   its copy the same way at its next boot.
+
+That last step is what keeps every figure derived from a node's own log
+honest: the `usage` domain sums each node's day, so a batch two data nodes
+kept would bill a stateless node's spend twice.
 
 #### What gets stored, and under which category
 
@@ -937,6 +959,7 @@ test rather than vanishing quietly.
 | `a2a_message` | The answer is **already** a row (`a2a_message_sent`). This event is the wake it puts on the requester's inbox. |
 | `sandbox_answer_given` | The wake an [answer by turn](../concepts/code-sandbox.md#answering-a-parked-run) puts on the seat's inbox, and never a turn. What the answer became is **already** a row (`sandbox_run_answered`), and that a person gave it is their `operator_acted` row — same reason as `a2a_request`. |
 | `tool_skill_page_changed` | A **nudge** between nodes that one tool-skill page moved, so every node's registry re-reads it rather than only the node that won the webhook. The delivery that caused it is **already** a row (the `webhook` category above), and what the change did is a log line on each node, so a durable row would record one wiki edit once more per member of the fleet. |
+| `custody_batch` | A **carrier**, not an event: a node without the `data` role keeps no event log, so it publishes its events in batches and one data node writes each event inside as the row it is ([custody](#custody-the-rows-of-a-node-without-data)). A row for the batch would describe the transport and repeat every event in it. |
 | `budget_meters` | A **snapshot** of the shared token counters, published by every node on a 15-second tick, so a durable row per report is about two million a year per node to answer a question the live projection and `GET /budgets` answer for free. What the audit log holds instead is the spend the counter is charged with, recorded per phase in the `agent_phase_completed` rows every spend query folds, so "what did we spend last month" is answerable and "what was the counter reading at 14:03:15" is not a question anybody asks. It still drives the live projection. |
 
 #### Querying events

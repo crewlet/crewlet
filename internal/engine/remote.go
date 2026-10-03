@@ -9,6 +9,7 @@ import (
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/estate"
+	"github.com/crewlet/crewlet/internal/observe"
 	"github.com/crewlet/crewlet/internal/seat"
 	"github.com/crewlet/crewlet/internal/seat/placement"
 )
@@ -171,8 +172,7 @@ func dataNodesOf(held []coord.Lease) []string {
 // EVERY DATA NODE SERVES, whether or not another node asks yet — one joins
 // without anybody reconfiguring the others — and from BEFORE its native runtime
 // is up: the backend is resolved per request, so a request arriving first is
-// answered "not here" rather than refused, and custody of a stateless node's
-// event records does not wait on the tracker at all.
+// answered "not here" rather than refused.
 func (e *Engine) serveEstate(ctx context.Context) error {
 	if e.local == nil || e.router == nil || e.backends == nil || e.backends.Queue == nil {
 		return nil
@@ -184,6 +184,40 @@ func (e *Engine) serveEstate(ctx context.Context) error {
 	}
 	e.stopEstate = stop
 	return nil
+}
+
+// takeCustody arms this data node's half of event custody (internal/observe):
+// it settles what an earlier run of this node left unsettled, then joins the
+// fleet-wide group the stateless nodes' batches arrive on, writing each into
+// this node's own event log.
+//
+// A NODE WITH NO FLEET STORE TAKES NONE: which data node keeps a batch is
+// decided there, and a keeper that could not ask would keep every copy it
+// wrote. A node without `data` cannot run beside such a node in any case — it
+// reaches the estate through the fleet's broker.
+func (e *Engine) takeCustody(ctx context.Context) error {
+	if e.local == nil || e.backends == nil || e.backends.Store == nil ||
+		e.backends.Fleet == nil || e.backends.Queue == nil {
+		return nil
+	}
+	keeper, err := observe.NewKeeper(e.backends.Store.Events(), e.backends.Fleet, e.id)
+	if err != nil {
+		return fmt.Errorf("engine: event custody: %w", err)
+	}
+	if err := keeper.Start(ctx, e.backends.Queue); err != nil {
+		return fmt.Errorf("engine: event custody: %w", err)
+	}
+	e.keeper = keeper
+	return nil
+}
+
+// stopKeeper ends the keeper's settling pass. Nil-safe.
+func (e *Engine) stopKeeper() {
+	if e.keeper == nil {
+		return
+	}
+	e.keeper.Stop()
+	e.keeper = nil
 }
 
 // stopServingEstate withdraws this node from the stateless nodes' rosters of

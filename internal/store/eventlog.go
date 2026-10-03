@@ -352,6 +352,32 @@ var ErrIncompleteRecord = errors.New("store: incomplete event record")
 // present the same (time, id) pair. Raising instead would make every one of
 // them log a write failure that describes nothing wrong.
 func (l *EventLog) Append(ctx context.Context, rec EventRecord) error {
+	row, err := prepareEvent(rec)
+	if err != nil {
+		return err
+	}
+	if err := l.db.Tx(ctx, func(tx *sql.Tx) error {
+		return row.insert(ctx, tx)
+	}); err != nil {
+		return fmt.Errorf("store: append event %s: %w", rec.ID, err)
+	}
+	return nil
+}
+
+// eventRow is a record made ready for its insert — its identity checked, its
+// tags encoded and its spend derived — so the insert itself can run inside
+// whichever transaction the caller holds: its own ([EventLog.Append]), or one
+// that writes a whole custody batch ([EventLog.WriteCustody]).
+type eventRow struct {
+	rec     EventRecord
+	tags    map[string]string
+	tagJSON string
+	payload string
+	spend   Spend
+}
+
+// prepareEvent readies one record for its insert, or refuses it.
+func prepareEvent(rec EventRecord) (eventRow, error) {
 	// The identity is checked here because SQL cannot check it. NOT NULL
 	// catches a missing column; it does not catch a zero one, and both
 	// halves of this key have a zero value that stores fine and then reads
@@ -359,10 +385,10 @@ func (l *EventLog) Append(ctx context.Context, rec EventRecord) error {
 	// floor, and an empty ID collides with every other record that forgot
 	// the same field. Either way the row exists and no query returns it.
 	if rec.ID == "" {
-		return fmt.Errorf("%w: no event id", ErrIncompleteRecord)
+		return eventRow{}, fmt.Errorf("%w: no event id", ErrIncompleteRecord)
 	}
 	if rec.Time.IsZero() {
-		return fmt.Errorf("%w: event %s has no timestamp", ErrIncompleteRecord, rec.ID)
+		return eventRow{}, fmt.Errorf("%w: event %s has no timestamp", ErrIncompleteRecord, rec.ID)
 	}
 	tags := rec.Tags
 	if tags == nil {
@@ -370,7 +396,7 @@ func (l *EventLog) Append(ctx context.Context, rec EventRecord) error {
 	}
 	tagJSON, err := json.Marshal(tags)
 	if err != nil {
-		return fmt.Errorf("store: encode event tags (%s): %w", rec.ID, err)
+		return eventRow{}, fmt.Errorf("store: encode event tags (%s): %w", rec.ID, err)
 	}
 	payload := rec.Payload
 	if len(payload) == 0 {
@@ -436,39 +462,42 @@ func (l *EventLog) Append(ctx context.Context, rec EventRecord) error {
 	if spend.WorkKey == "" {
 		spend.WorkKey = tags["work_key"]
 	}
-	// IN ONE TRANSACTION with its party rows, because the party table is an
-	// INDEX of this one and an index that can be missing entries is not an
-	// index: an event stored without its parties is invisible to the filter
-	// that reads them, permanently and with nothing to say so. The cost is
-	// a begin and a commit on a path that runs a handful of times a second.
-	if err := l.db.Tx(ctx, func(tx *sql.Tx) error {
-		if _, err := tx.ExecContext(ctx, eventInsertSQL,
-			EncodeTime(rec.Time), rec.ID, rec.Type, rec.Source, rec.Category,
-			rec.TraceID, rec.SpanID, rec.ParentSpanID,
-			tags["agent_id"], tags["agent_role"], tags["task_id"],
-			tags["channel_id"], tags["sender"],
-			rec.Summary, rec.Actor, string(tagJSON), string(payload),
-			spend.Phase, spend.HostPhase, spend.Worker, spend.Model,
-			spend.TurnID, spend.WorkKey, spend.Iteration,
-			spend.InputTokens, spend.OutputTokens, spend.TotalTokens,
-			spend.CacheReadTokens, spend.CacheWriteTokens, spend.ProviderKey,
-			// THE ITEM THE ROW IS ON, off the tag [ExtractTags] composes
-			// from the nested `work_item` object — a copy of a tag, like
-			// agent_id's beside it, so the column and the tag can never
-			// name two different items. See schema/0033.
-			tags["work_item"],
-		); err != nil {
+	return eventRow{rec: rec, tags: tags, tagJSON: string(tagJSON),
+		payload: string(payload), spend: spend}, nil
+}
+
+// insert writes the row and its party rows inside tx.
+//
+// IN ONE TRANSACTION with its party rows, because the party table is an INDEX
+// of this one and an index that can be missing entries is not an index: an
+// event stored without its parties is invisible to the filter that reads them,
+// permanently and with nothing to say so. The cost is a begin and a commit on
+// a path that runs a handful of times a second.
+func (r eventRow) insert(ctx context.Context, tx *sql.Tx) error {
+	rec, tags, spend := r.rec, r.tags, r.spend
+	if _, err := tx.ExecContext(ctx, eventInsertSQL,
+		EncodeTime(rec.Time), rec.ID, rec.Type, rec.Source, rec.Category,
+		rec.TraceID, rec.SpanID, rec.ParentSpanID,
+		tags["agent_id"], tags["agent_role"], tags["task_id"],
+		tags["channel_id"], tags["sender"],
+		rec.Summary, rec.Actor, r.tagJSON, r.payload,
+		spend.Phase, spend.HostPhase, spend.Worker, spend.Model,
+		spend.TurnID, spend.WorkKey, spend.Iteration,
+		spend.InputTokens, spend.OutputTokens, spend.TotalTokens,
+		spend.CacheReadTokens, spend.CacheWriteTokens, spend.ProviderKey,
+		// THE ITEM THE ROW IS ON, off the tag [ExtractTags] composes
+		// from the nested `work_item` object — a copy of a tag, like
+		// agent_id's beside it, so the column and the tag can never
+		// name two different items. See schema/0033.
+		tags["work_item"],
+	); err != nil {
+		return err
+	}
+	for _, party := range partiesOf(rec.Actor, tags) {
+		if _, err := tx.ExecContext(ctx, partyInsertSQL,
+			party, EncodeTime(rec.Time), rec.ID); err != nil {
 			return err
 		}
-		for _, party := range partiesOf(rec.Actor, tags) {
-			if _, err := tx.ExecContext(ctx, partyInsertSQL,
-				party, EncodeTime(rec.Time), rec.ID); err != nil {
-				return err
-			}
-		}
-		return nil
-	}); err != nil {
-		return fmt.Errorf("store: append event %s: %w", rec.ID, err)
 	}
 	return nil
 }

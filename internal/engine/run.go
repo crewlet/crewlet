@@ -304,9 +304,11 @@ type Engine struct {
 	router *estate.Router
 	local  *localEstate
 
-	// custody hands a stateless node's event records to a data node; nil
-	// on a node that holds data.
+	// custody publishes a stateless node's events for a data node to
+	// keep; nil on a node that holds data. keeper is a data node's half,
+	// writing them into its own log; nil on every other node.
 	custody *observe.Custody
+	keeper  *observe.Keeper
 
 	// stopEstate withdraws this data node as a server of the estate, nil
 	// where it serves none. See [Engine.serveEstate].
@@ -860,12 +862,12 @@ func New(ctx context.Context, opts Options) (*Engine, error) {
 		return nil, err
 	}
 
-	// A NODE WITHOUT `data` HANDS A DATA NODE THE RECORD OF WHAT IT DID —
-	// before anything publishes, because the custody listener must be in
-	// place before the first turn a restarted node picks up off its durable
-	// inbox.
+	// A NODE WITHOUT `data` HANDS THE DATA NODES THE RECORD OF WHAT IT
+	// DID — before anything publishes, because the custody listener must
+	// be in place before the first turn a restarted node picks up off its
+	// durable inbox.
 	if !holdsData(opts.Bootstrap) {
-		e.custody = observe.NewCustody(e.router)
+		e.custody = observe.NewCustody(backends.Queue)
 		backends.Queue.AddPublishListener(e.custody.Listen())
 		e.custody.Start(ctx)
 	}
@@ -964,10 +966,16 @@ func New(ctx context.Context, opts Options) (*Engine, error) {
 	e.refreshSecrets(ctx)
 
 	// SERVING BEFORE ANY SEAT, and in every mode: a node restarted into a
-	// maintenance mode still answers reads and takes custody of event
-	// records, and its writers are what [Engine.estateBackend] withholds.
+	// maintenance mode still answers reads, and its writers are what
+	// [Engine.estateBackend] withholds.
 	//nolint:govet // shadow: scoped to this block; see .golangci.yml
 	if err := e.serveEstate(ctx); err != nil {
+		return nil, err
+	}
+	// AND KEEPING THE STATELESS NODES' EVENTS, in every mode too: what it
+	// writes is this node's own event log, which no mode holds still.
+	//nolint:govet // shadow: scoped to this block; see .golangci.yml
+	if err := e.takeCustody(ctx); err != nil {
 		return nil, err
 	}
 	// AND THE BROKER'S MEMBERSHIP, on a member, in every mode: the member
@@ -1726,24 +1734,25 @@ func (e *Engine) teardown(ctx context.Context) {
 	// credentials, and one left behind outlives the engine that vouched
 	// for it.
 	e.stopSharedServers(ctx)
-	// AFTER EVERY SEAT AND LOOP THAT PUBLISHES, so the last records they
-	// wrote are in the buffer, and BEFORE the broker closes under the
-	// shipment.
+	// AFTER EVERY SEAT AND LOOP THAT PUBLISHES, so the last events they
+	// published are in the buffer, and BEFORE the broker closes under the
+	// last batch.
 	e.stopCustody(ctx)
-	// AFTER THE CUSTODY, whose last shipment asks it which data node to
-	// send to, and BEFORE backends.Close, which closes the store it lists.
+	// BEFORE backends.Close, which closes the store the keeper writes and
+	// the broker it settles against.
+	e.stopKeeper()
 	e.stopWatchingDataNodes()
 	if e.ownsBackends {
 		e.backends.Close(ctx)
 	}
 }
 
-// custodyStopBudget is how long an orderly stop waits for a data node to take
-// the event records this node still holds.
+// custodyStopBudget is how long an orderly stop waits for the broker to take
+// the events this node still holds.
 //
-// TEN SECONDS: two ordinary shipments to a node that is up, and short enough
-// that a stop with no data node reachable is not held for a request budget per
-// node — what it could not ship is logged as lost.
+// TEN SECONDS: many publishes to a broker that is up, and short enough that a
+// stop with no member reachable is not held for long — what it could not
+// publish is logged as lost.
 const custodyStopBudget = 10 * time.Second
 
 // stopCustody flushes and ends the event custody. Nil-safe.

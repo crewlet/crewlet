@@ -13,7 +13,6 @@ import (
 	"github.com/crewlet/crewlet/internal/period"
 	"github.com/crewlet/crewlet/internal/search"
 	"github.com/crewlet/crewlet/internal/statelog"
-	"github.com/crewlet/crewlet/internal/store"
 	"github.com/crewlet/crewlet/internal/tracker"
 )
 
@@ -241,16 +240,6 @@ type ServerSeams struct {
 	// Seat resolves a searching seat's handle to its role and the org its
 	// read scope comes from, against this node's current epoch.
 	Seat func(handle string) (*org.Role, *org.Organization)
-
-	// Events is this node's own event log, which takes custody of the
-	// records a node holding no store publishes. See [opAppendEvents].
-	Events EventSink
-}
-
-// EventSink is somewhere an event record is persisted, idempotently on its
-// identity.
-type EventSink interface {
-	Append(ctx context.Context, rec store.EventRecord) error
 }
 
 // errNoHalf is an operation on a half this node does not run.
@@ -1391,35 +1380,3 @@ var opPing = define("estate.ping", opRead, address[pingArgs]{partitions: pingPar
 		}
 		return served{Tracker: b.Tracker != nil, Pages: b.Pages != nil}, nil
 	}).ungated().floorless()
-
-// ---- custody of a stateless node's event records -------------------------- //
-
-// appendEventsArgs is a batch of records a node holding no store published.
-type appendEventsArgs struct {
-	Records []store.EventRecord
-}
-
-// opAppendEvents takes custody of a stateless node's event records into this
-// node's own event log.
-//
-// A node keeps the record of what it did in its OWN database, written inline
-// by whoever published — which a node whose database is deleted at every boot
-// cannot keep. So it hands each record to a data node, whose log then holds it
-// beside its own, where `GET /events` on that node reads it.
-//
-// IDEMPOTENT ON THE RECORD'S IDENTITY, which is what makes a repeat after an
-// unanswered batch safe: the log's append does nothing for a (time, id) pair
-// it already holds. And UNGATED, because a node's own event log is not the
-// replicated estate and does not wait for it.
-var opAppendEvents = define("events.append", opIdempotentWrite, address[appendEventsArgs]{}, false,
-	func(ctx context.Context, b Backend, _ *Actor, a appendEventsArgs) (int, error) {
-		if b.Events == nil {
-			return 0, errNoHalf
-		}
-		for i, rec := range a.Records {
-			if err := b.Events.Append(ctx, rec); err != nil {
-				return i, fmt.Errorf("estate: take custody of event %s: %w", rec.ID, err)
-			}
-		}
-		return len(a.Records), nil
-	}).ungated()

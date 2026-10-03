@@ -127,9 +127,6 @@ func onlyPartition(l statelog.Layout, domain string) (statelog.PartitionID, erro
 // the pages applier reached the comment, and refuse them `behind` while that
 // applier was faulted — the coupling a floor on another PARTITION's log was
 // never carried for, refused within one partition for the same reason.
-//
-// The ZERO address addresses no partition: an operation any data node
-// answers ([opSpec.partitions] nil).
 type address[A any] struct {
 	// domain is the domain whose log the operation depends on — its
 	// floors' log in each partition it addresses. Empty only for an

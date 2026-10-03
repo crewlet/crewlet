@@ -833,8 +833,6 @@ func TestAReadNoCopyCouldAnswerIsUnavailable(t *testing.T) {
 			&stubWork{expandErr: fmt.Errorf("estate: tracker.expanded_query: %w", unserved)}},
 		{"the activity", "work_activity", map[string]any{"container": "workspace"},
 			&stubWork{err: unserved}},
-		{"no data node at all", "work_items", map[string]any{},
-			&stubWork{err: fmt.Errorf("%w for tracker.tasks", estate.ErrNoDataNode)}},
 	} {
 		_, err := askNative(t, queries.Sources{Work: tc.work}, tc.what, tc.params)
 		if !errors.Is(err, queries.ErrUnavailable) || errors.Is(err, queries.ErrBadParams) {

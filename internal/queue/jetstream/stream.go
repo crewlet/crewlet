@@ -89,6 +89,7 @@ const (
 	streamNotifications = "CREWLET_NOTIFICATIONS"
 	streamConfig        = "CREWLET_CONFIG"
 	streamDeadLetter    = "CREWLET_DLQ"
+	streamCustody       = "CREWLET_CUSTODY"
 	streamMemory        = topics.MemoryStream
 
 	// derivedPrefix names a stream provisioned for a subject namespace the
@@ -331,6 +332,20 @@ func engineStreams(eventRetention time.Duration) []streamSpec {
 			subjects:      []string{topics.MemoryPrefix + ">"},
 			retention:     jetstream.LimitsPolicy,
 			maxPerSubject: 1,
+		},
+		{
+			// A stateless node's events on their way into one data
+			// node's log. INTEREST retention, because it is a mailbox:
+			// a batch is kept until the custody group has taken it,
+			// whether or not a data node is attached at that moment.
+			//
+			// AND THE EVENT LOG'S AGE, because a batch nobody has taken
+			// within it holds events past the horizon every log reads
+			// to — keeping it longer keeps what no node would store.
+			name:      streamCustody,
+			subjects:  []string{topics.CustodyPrefix + ">"},
+			retention: jetstream.InterestPolicy,
+			maxAge:    eventRetention,
 		},
 		{
 			// Dead letters are kept by age, not by interest: nothing

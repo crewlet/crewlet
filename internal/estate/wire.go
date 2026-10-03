@@ -434,6 +434,13 @@ func define[A, R any](name string, class opClass, at address[A], actor bool,
 		args: reflect.TypeFor[A](), result: reflect.TypeFor[R](),
 	}
 	partitions := at.partitions
+	if partitions == nil {
+		// EVERY OPERATION ADDRESSES THE PARTITIONS IT TOUCHES: the router
+		// picks a holder by them and the server checks that it holds
+		// them, and an operation that addressed none would be answered by
+		// whichever node the asker reached first, held to nothing.
+		panic(fmt.Sprintf("estate: operation %q addresses no partition", name))
+	}
 	decode := func(raw json.RawMessage) (A, error) {
 		var args A
 		if len(raw) > 0 {
@@ -443,15 +450,13 @@ func define[A, R any](name string, class opClass, at address[A], actor bool,
 		}
 		return args, nil
 	}
-	if partitions != nil {
-		spec.partitions = func(ctx context.Context, l statelog.Layout, r Resolver,
-			raw json.RawMessage) ([]statelog.PartitionID, error) {
-			args, err := decode(raw)
-			if err != nil {
-				return nil, err
-			}
-			return partitions(ctx, l, r, args)
+	spec.partitions = func(ctx context.Context, l statelog.Layout, r Resolver,
+		raw json.RawMessage) ([]statelog.PartitionID, error) {
+		args, err := decode(raw)
+		if err != nil {
+			return nil, err
 		}
+		return partitions(ctx, l, r, args)
 	}
 	checked := func(ctx context.Context, b Backend, who *Actor, args A) (R, error) {
 		if spec.actor && (who == nil || who.Handle == "") {

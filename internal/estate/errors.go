@@ -20,12 +20,6 @@ var ErrOutcomeUnknown = errors.New("estate: the write was sent to a data node " 
 	"that did not answer, so whether it landed is unknown — read it back " +
 	"before writing again")
 
-// ErrNoDataNode is an operation that addresses no partition — custody of a
-// node's event records — that no data node could run: none is live, none
-// answered, or every one that answered was not ready for it. An operation on
-// a partition answers [ErrPartitionUnserved] instead, naming it.
-var ErrNoDataNode = errors.New("estate: no data node answered")
-
 // sentinel is one error value whose identity crosses the wire.
 type sentinel struct {
 	code string
@@ -106,7 +100,6 @@ var sentinels = []sentinel{
 
 	{"estate.ErrBadCursor", ErrBadCursor},
 	{"estate.ErrOutcomeUnknown", ErrOutcomeUnknown},
-	{"estate.ErrNoDataNode", ErrNoDataNode},
 	{"estate.ErrUnaddressed", ErrUnaddressed},
 	{"estate.ErrGateArgs", ErrGateArgs},
 	{"estate.ErrGateKind", ErrGateKind},
