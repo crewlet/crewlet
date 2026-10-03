@@ -119,11 +119,22 @@ const IVFMeasureInterval = 24 * time.Hour
 
 // IndexRecordVersion is the record version every node applying the vector log
 // must read before any record about the index is published on it: the highest
-// version of the index's operations and its subject kind ([kindVersions]).
+// version a record of the index's operations on its subject kind is stamped at
+// ([versionedFields]).
 func IndexRecordVersion() int {
-	version := 0
+	version := 1
 	for _, op := range []Op{OpCentroids, OpReassign, OpMeasure} {
-		version = max(version, VersionOf(op, Subject{Source: IndexSource}))
+		v, err := VectorRecord{RecordEnvelope: RecordEnvelope{
+			Op: op, Subject: Subject{Source: IndexSource},
+		}}.minimumVersion()
+		if err != nil {
+			// A RECORD OF THIS PACKAGE'S OWN TYPES ALWAYS ENCODES; one
+			// that did not would be a build that could not stamp what it
+			// is about to publish, and the safe answer is above
+			// everything it reads, so nothing about the index goes out.
+			return RecordVersion + 1
+		}
+		version = max(version, v)
 	}
 	return version
 }

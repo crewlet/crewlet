@@ -38,12 +38,30 @@ func TestTheVectorDomainIsACertifiedDomain(t *testing.T) {
 			// them. A domain that created its tables from test code
 			// would be a schema the suite proved and the migration
 			// did not.
-			Encode: encodeSuiteRecord,
-			Kinds:  suiteKinds(),
-			Rows:   search.NewRows,
-			Write:  suiteWrite,
+			Encode:   encodeSuiteRecord,
+			Fields:   search.VersionedFields(),
+			Carrying: carryingSuiteField,
+			Kinds:    suiteKinds(),
+			Rows:     search.NewRows,
+			Write:    suiteWrite,
 		}
 	})
+}
+
+// carryingSuiteField is a record carrying one versioned field: each of the
+// index's operations, and its subject kind — which every one of them carries,
+// at the same version — through the centroids record.
+func carryingSuiteField(field statelog.VersionedField) ([]byte, error) {
+	switch field.Name {
+	case "Op=centroids", "Subject.Source=index":
+		return indexRecordOver("suite-embed", 8).Encode()
+	case "Op=reassign":
+		return reassignRecord(1, 0, 1).Encode()
+	case "Op=measure":
+		return measureRecord(1, 1).Encode()
+	}
+	return nil, fmt.Errorf("no suite record carries %s — add a case that sets it "+
+		"and nothing else versioned", field.Name)
 }
 
 // suiteWrite is one tick of the domain's own [search.Embedder] — the only

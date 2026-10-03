@@ -51,9 +51,9 @@ import (
 //     [OpReassign], [OpMeasure]), ADR-0028.
 //
 // A record is WRITTEN at the lowest version that expresses it, never simply at
-// this constant — see [VersionOf] — and it is the maximum of [kindVersions],
-// which a test holds it to, so a kind added at a higher version cannot be
-// written at one no build yet reads.
+// this constant — see [versionedFields] — and it is the highest version that
+// table names, which the framework's conformance suite holds it to, so a kind
+// added at a higher version cannot be written at one no build yet reads.
 const RecordVersion = 2
 
 // Source is where an embedded document came from.
@@ -117,22 +117,32 @@ var Ops = []Op{OpEmbed, OpForget, OpCentroids, OpReassign, OpMeasure}
 // Valid reports whether an operation off the wire is one this build knows.
 func (o Op) Valid() bool { return slices.Contains(Ops, o) }
 
-// kindVersions is the record version each operation and each subject kind was
-// introduced at: the version a record carrying it is written at, and the
-// lowest a reader must read to apply it.
+// versionedFields is the vector domain's field table: the record version each
+// operation and each subject kind after the base format was introduced at — the
+// version a record carrying it is written at, and the lowest a reader must read
+// to apply it ([statelog.RecordFields]).
 //
-// # Why both halves, and why a TABLE
+// # Why the framework's table rather than one of this package's own
 //
-// A record carries an operation AND a subject kind, and either can be new. The
-// version once came from the operation alone, which gave the rule "a build
-// that adds a kind states it at a version above every build that cannot read
-// it" no mechanism at all: a later build embedding a new source would have
-// written its records at 1, and every build reading 1 would have refused them
-// as a writer fault — retried on every redelivery — instead of deferring them.
-// So a record is written at the higher of its two halves' versions, and the
-// table has an entry for EVERY operation in [Ops] and every kind in [Sources]
-// and [IndexSource] — a test fails the day one is added without its row,
-// which is the moment somebody has to decide what version it is.
+// It was one of this package's own once — a map of op and source to version,
+// consulted by a function beside it — while the tracker and the knowledge base
+// stamped through [statelog.RecordFields]: two spellings of one rule, and the
+// framework's conformance suite could hold only one of them. The suite
+// certifies that a build reads exactly the highest version its table names
+// and that every record carrying a row is stamped at that row's version, and
+// a domain with a private table passed it by declaring none.
+//
+// # A ROW FOR EVERY OPERATION AND KIND ABOVE THE BASE FORMAT
+//
+// A record carries an operation AND a subject kind, and either can be new, so
+// each has a row that names its VALUE ([statelog.VersionedField.Equals]): a
+// row naming only the key would stamp every record the domain writes. The base
+// format's own — an embed and a forget of a page or a task — need none, and a
+// test holds the table to every member of [Ops], [Sources] and [IndexSource]
+// so a kind added without its row is a failure rather than a record written at
+// a version the builds before it read, refused by each as a writer fault and
+// retried on every redelivery, where the rolling upgrade's contract is that
+// they defer it.
 //
 // # Why the LOWEST version that expresses it, never [RecordVersion]
 //
@@ -140,42 +150,31 @@ func (o Op) Valid() bool { return slices.Contains(Ops, o) }
 // make every version-1 peer of a rolling upgrade defer every vector this build
 // computes — a whole corpus unsearchable by meaning on the old nodes for the
 // length of the upgrade, for a shape they read perfectly well.
-var kindVersions = struct {
-	ops     map[Op]int
-	sources map[Source]int
-}{
-	ops: map[Op]int{
-		OpEmbed: 1, OpForget: 1,
-		OpCentroids: 2, OpReassign: 2, OpMeasure: 2,
-	},
-	sources: map[Source]int{
-		SourcePage: 1, SourceTask: 1,
-		IndexSource: 2,
-	},
+var versionedFields = statelog.RecordFields{
+	// THE SEMANTIC INDEX'S RECORDS, at version 2 (ADR-0028): three
+	// operations on one subject kind, each named by value. A build reading 1
+	// has no applier for any of them and retains them until it upgrades.
+	{Name: "Op=centroids", Since: 2, Op: string(OpCentroids),
+		Path: []string{"op"}, Equals: string(OpCentroids)},
+	{Name: "Op=reassign", Since: 2, Op: string(OpReassign),
+		Path: []string{"op"}, Equals: string(OpReassign)},
+	{Name: "Op=measure", Since: 2, Op: string(OpMeasure),
+		Path: []string{"op"}, Equals: string(OpMeasure)},
+	{Name: "Subject.Source=index", Since: 2,
+		Path: []string{"subject", "source"}, Equals: string(IndexSource)},
 }
 
-// Version is the record version an operation was introduced at. An operation
-// this build does not know reads as one above every version it reads.
-func (o Op) Version() int {
-	if v, ok := kindVersions.ops[o]; ok {
-		return v
+// VersionedFields is the table, for the conformance suite.
+func VersionedFields() statelog.RecordFields { return slices.Clone(versionedFields) }
+
+// minimumVersion is the lowest version r may be stamped at under
+// [versionedFields]: one where it carries nothing the base format lacked.
+func (r VectorRecord) minimumVersion() (int, error) {
+	body, err := json.Marshal(r)
+	if err != nil {
+		return 0, err
 	}
-	return RecordVersion + 1
-}
-
-// Version is the record version a subject kind was introduced at. A kind this
-// build does not know reads as one above every version it reads.
-func (s Source) Version() int {
-	if v, ok := kindVersions.sources[s]; ok {
-		return v
-	}
-	return RecordVersion + 1
-}
-
-// VersionOf is the version a record doing op on subject is written at: the
-// higher of the two halves' ([kindVersions]).
-func VersionOf(op Op, subject Subject) int {
-	return max(op.Version(), subject.Source.Version())
+	return versionedFields.Minimum(string(r.Op), body)
 }
 
 // indexOp reports an operation about the index rather than about a document.
@@ -435,8 +434,8 @@ func Decode(payload []byte) (VectorRecord, error) {
 	}
 	// A KIND THIS BUILD DOES NOT WRITE, AT A VERSION IT READS, is a writer
 	// fault rather than a newer build: a build that adds a kind writes it at
-	// the version [kindVersions] gives it, above every build that cannot read
-	// it, which is the branch above.
+	// the version its row in [versionedFields] gives it, above every build
+	// that cannot read it, which is the branch above.
 	if err := env.Subject.Validate(); err != nil {
 		return VectorRecord{RecordEnvelope: env}, fmt.Errorf("search: the "+
 			"record at version %d names a subject this build reads that version "+
@@ -465,7 +464,11 @@ func Decode(payload []byte) (VectorRecord, error) {
 // Encode writes a record.
 func (r VectorRecord) Encode() ([]byte, error) {
 	if r.V == 0 {
-		r.V = VersionOf(r.Op, r.Subject)
+		v, err := r.minimumVersion()
+		if err != nil {
+			return nil, err
+		}
+		r.V = v
 	}
 	if err := r.Subject.Validate(); err != nil {
 		return nil, err
@@ -512,7 +515,11 @@ func (r VectorRecord) Encode() ([]byte, error) {
 // [Decode] would refuse to read, so a record this build publishes is one every
 // peer of its own version applies.
 func (r VectorRecord) validate() error {
-	if want := VersionOf(r.Op, r.Subject); r.V < want {
+	want, err := r.minimumVersion()
+	if err != nil {
+		return err
+	}
+	if r.V < want {
 		return fmt.Errorf("search: the %s record on %s is version %d, and that "+
 			"operation on that kind was introduced at version %d — a peer "+
 			"reading %d would apply a record it does not know rather than "+
