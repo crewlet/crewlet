@@ -348,7 +348,7 @@ from that node's own rows:
 |---|---|---|
 | Signing in | refused from the apply on | the stage is read from the row, and only `active` may act |
 | Every session they hold | refused at the next request, `401 session_revoked` | the same stage check, on every request |
-| An open dashboard tab | closed `4401` within a minute | the socket re-checks its credential every 60 seconds |
+| An open dashboard tab | closed `4401` as the record applies | each node's identity applier says whose credentials a committed batch moved, and the node decides again every socket opened with one |
 | Their seat's contact identities — the Slack member, the Jira account, the GitHub login | withdrawn within one apply, with a 30-second re-read behind it | the identity applier signals after the commit, and the node rebuilds its party registry for the same company from a fresh read of the directory |
 | What agents are shown of them — a lead's roster, `lookup_colleague` | their accounts left out from the next turn | every turn pins the registry's reading beside its org, so the prompt and the tools leave out the same people |
 | Their `inbox_changed` watch | gone with the socket | a watch needs a resolved caller |

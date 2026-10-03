@@ -312,6 +312,17 @@ type Options struct {
 	// to learning about somebody's work a poll interval late.
 	Inbox InboxFeed
 
+	// Credentials is where this node hears whose credentials a committed
+	// identity batch moved, which [New] turns into a fresh decision of
+	// every open socket opened with one — see [CredentialFeed].
+	//
+	// REQUIRED, for Inbox's reason: every node applies the identity log
+	// whatever its roles, and a socket authenticated at its handshake is
+	// ended by the record that ends its credential — a node that heard
+	// nothing would leave every revoked session's open tab receiving the
+	// company's state until it closed on its own.
+	Credentials CredentialFeed
+
 	// State is the projection to serve. Nil builds an empty one.
 	State *livestate.LiveState
 
@@ -609,6 +620,9 @@ func New(opts Options) (*App, error) {
 	}
 	// AND WHOSE INBOX MOVED, pushed to the sockets watching each seat.
 	opts.Inbox.SetOnInboxMoved(a.pushInboxMoved)
+	// AND WHOSE CREDENTIALS MOVED, deciding the sockets opened with them
+	// again.
+	opts.Credentials.SetOnIdentityMoved(a.pushIdentityMoved)
 
 	tree := opts.Assets
 	if tree == nil {
@@ -803,6 +817,7 @@ func (o Options) missing() error {
 	}{
 		{"Runtime", o.Runtime == nil},
 		{"Inbox", o.Inbox == nil},
+		{"Credentials", o.Credentials == nil},
 		{"Sources.Company", o.Sources.Company == nil},
 		{"EventLog", o.EventLog == nil},
 		{"Sources.Events", o.Sources.Events == nil},

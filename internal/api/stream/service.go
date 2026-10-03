@@ -113,9 +113,10 @@ type Service struct {
 	// holders resolves a `watch` frame's login. See [Options.Holders].
 	holders iam.Holders
 
-	// revalidateEvery is how often an open socket's credential is checked
-	// again. See [Options.RevalidateEvery].
-	revalidateEvery time.Duration
+	// listeners is every open socket, by what decides it again — see
+	// lifetime.go. The service holds it because what decides a socket
+	// arrives here: an identity move, a published company.
+	listeners listeners
 
 	// tokensDirty means a phase completed since the last rollup went out.
 	// Set on the publish path and cleared on the tick — see flushTokens.
@@ -200,14 +201,6 @@ type Options struct {
 	// that there is exactly ONE of them however many times it is started.
 	HealthInterval time.Duration
 
-	// RevalidateEvery overrides how often an open socket's credential is
-	// checked again. Zero takes [RevalidateEvery], which is the production
-	// value and is tied to the stall grace — see revalidate.go.
-	//
-	// Injectable for HealthInterval's reason: a revocation case that had
-	// to wait out a minute per assertion would be a case nobody runs.
-	RevalidateEvery time.Duration
-
 	// Chart answers who leads whom, which is what a `watch` frame is
 	// decided by — see [watching]. REQUIRED: a watch installs routing for
 	// a seat's inbox, and the question it asks is the one the `work_inbox`
@@ -271,17 +264,12 @@ func NewService(state *livestate.LiveState, opts Options) (*Service, error) {
 		placement: opts.Placement,
 		now:       opts.Now,
 		interval:  opts.HealthInterval,
-
-		revalidateEvery: opts.RevalidateEvery,
 	}
 	if s.now == nil {
 		s.now = func() time.Time { return time.Now().UTC() }
 	}
 	if s.interval <= 0 {
 		s.interval = HealthInterval
-	}
-	if s.revalidateEvery <= 0 {
-		s.revalidateEvery = RevalidateEvery
 	}
 	return s, nil
 }
@@ -520,6 +508,11 @@ func (s *Service) currentTools() []map[string]any { return s.tools() }
 // Broadcast(kind, data) and a caller in another package spelling each kind:
 // the payload each kind carries is this service's to build, and a caller that
 // paired a kind with the wrong payload would compile cleanly.
+//
+// AND EVERY OPEN SOCKET IS DECIDED AGAIN, after the re-sends: the org chart a
+// seat binding resolves through and a watch is decided by may have moved — a
+// seat removed under the person bound to it, a lead moved off a team — and a
+// published company is the one moment either can change. See lifetime.go.
 func (s *Service) CompanyPublished() {
 	now := s.now()
 	for _, push := range []struct {
@@ -535,6 +528,7 @@ func (s *Service) CompanyPublished() {
 	} {
 		s.hub.Broadcast(Push(push.kind, push.data, now))
 	}
+	s.listeners.signal(func(opened) bool { return true })
 }
 
 // InboxChange is the payload of an `inbox_changed` frame: whose inbox moved,

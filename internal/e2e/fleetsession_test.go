@@ -73,7 +73,8 @@ import (
 // write phase names the kind it landed as; drop the handshake's origin check
 // and the foreign dial opens; stop a person's revocation epoch ending their
 // sessions and the copied cookie is served for ever on the member that minted
-// it.
+// it; stop the engine handing the identity applier's moves to the API and the
+// tab left open on that member never closes.
 func TestASessionCrossesTheFleet(t *testing.T) {
 	noParallel(t)
 	c := startCluster(t, fleetSize)
@@ -358,6 +359,13 @@ func socketOpens(t *testing.T, n *node, b *browser) {
 // from the log — so until it applies the record it goes on serving the copy,
 // which is the horizon, and the bound is the one every record in this suite is
 // given to cross the fleet.
+//
+// AND THE TAB LEFT OPEN THERE CLOSES. A socket is authenticated at its
+// handshake and then held, so what ends it is the record that ended its
+// session, heard from the minting member's own identity applier — the engine
+// hands that applier's word to the API, which decides the socket again and
+// closes it `4401`. Left to its handshake, the tab would go on receiving the
+// company's state for as long as it stayed open.
 func revokedEverywhere(t *testing.T, minted, other *node, b *browser) {
 	t.Helper()
 	elsewhere := b.copy()
@@ -368,6 +376,7 @@ func revokedEverywhere(t *testing.T, minted, other *node, b *browser) {
 		t.Fatalf("before signing out, member %s answered the session %d: %v",
 			minted.id, status, who)
 	}
+	tab := openTab(t, minted, elsewhere)
 
 	status, body := b.send(other, http.MethodPost, "/auth/logout/all", nil)
 	if status != http.StatusOK {
@@ -392,6 +401,37 @@ func revokedEverywhere(t *testing.T, minted, other *node, b *browser) {
 				status, who)
 		})
 	}
+	if got := <-tab; got != stream.CloseUnauthenticated {
+		t.Errorf("the tab left open on member %s closed %d after signing out "+
+			"everywhere, want %d", minted.id, got, stream.CloseUnauthenticated)
+	}
+}
+
+// openTab opens the live socket on one member with this browser's cookie, reads
+// its snapshot, and reports how it closes — reading every frame until then,
+// as a tab does, for at most the suite's wait budget.
+func openTab(t *testing.T, n *node, b *browser) <-chan websocket.StatusCode {
+	t.Helper()
+	conn, res, err := b.dial(t, n, deploymentURL)
+	if err != nil {
+		t.Fatalf("the socket refused the session cookie on member %s: %v (%s)",
+			n.id, err, answered(res))
+	}
+	t.Cleanup(func() { _ = conn.CloseNow() })
+	// The snapshot carries the whole roster and more than the default cap.
+	conn.SetReadLimit(8 << 20)
+	closed := make(chan websocket.StatusCode, 1)
+	go func() {
+		read, cancel := context.WithTimeout(context.WithoutCancel(t.Context()), waitBudget)
+		defer cancel()
+		for {
+			if _, _, err := conn.Read(read); err != nil {
+				closed <- websocket.CloseStatus(err)
+				return
+			}
+		}
+	}()
+	return closed
 }
 
 // browser is one person's browser, pointed at whichever member of a fleet each

@@ -22,7 +22,8 @@
 // The hub INDEXES a watch and decides nothing about it; the socket decides it
 // ([watching]), the way the `work_inbox` question decides a read of the same
 // seat's inbox — its holder, whoever leads it, the admin grant — through the
-// same three-valued chart seam, and re-decides it on every credential re-check.
+// same three-valued chart seam, and re-decides it whenever the socket's
+// credential is decided again (lifetime.go).
 // The one seat-routed kind, `inbox_changed`, says whose inbox moved, when and
 // why; an index anyone could write to would be a way to follow somebody else's
 // inbox that the question itself refuses.
@@ -33,6 +34,19 @@
 // to one — so a watch naming their login is installed on that seat, and the
 // directory is asked only once the watch has been decided as far as it can
 // be without the record.
+//
+// # An open socket's credential
+//
+// A socket is authenticated at its handshake and ended by what ends its
+// credential, never by a timer of its own: the guard decides it again when an
+// identity record moved it ([Service.CredentialsMoved]), when a company is
+// published, at the credential's own end, and once as it starts listening.
+// Each answer closes it with the code that says what to do —
+// [CloseUnauthenticated], [CloseUnauthorized], [CloseUndecided] — or carries
+// it on as whoever was just resolved. lifetime.go states every case and what each alternative cost; a
+// session's idle deadline does not end an open socket, and a node behind its
+// identity log serves one on its last decision until it applies the record
+// that ends it.
 package stream
 
 import (
@@ -77,7 +91,7 @@ const writeTimeout = 30 * time.Second
 const QueueDepth = 512
 
 // Kind is what a frame from the socket is: a push, one of the two answers to a
-// query, the pong, or a socket's own identity frame.
+// query, or the pong.
 //
 // A NAMED TYPE, so the one place a kind is spelled is a constant below and
 // every frame is built from one — and the route, grant and posture tables are
@@ -121,16 +135,6 @@ const (
 	// payload is an [InboxChange]: identifiers and a count, never content.
 	KindInboxChanged Kind = "inbox_changed"
 
-	// KindIdentity tells ONE client whether this node could verify the
-	// credential its socket was opened with, at the last revalidation
-	// (see [RevalidateEvery]). A DIRECT kind, because it is a fact about
-	// this socket and not about the company: a node that is perfectly
-	// healthy can hold one tab whose session it cannot check while its
-	// identity applier is behind, and the node-wide health frame would
-	// report that node as fine. Direct is also what lets it reach a client
-	// whose posture the hold itself has degraded.
-	KindIdentity Kind = "identity"
-
 	// KindResult and KindError answer one query, correlated by the
 	// client-minted id it was asked under.
 	KindResult Kind = "result"
@@ -160,9 +164,6 @@ var routes = map[Kind]Route{
 
 	// One seat's audience.
 	KindInboxChanged: RouteSeat,
-
-	// This socket's own identity, to this socket alone.
-	KindIdentity: RouteDirect,
 
 	// The answers, to the one client that asked.
 	KindResult: RouteDirect,
@@ -204,13 +205,11 @@ var needs = map[Kind]iam.Grant{
 // socket's own exchange — which is why no grant stands in front of them. A
 // query's result or refusal was already decided by the grant its question is
 // registered under, and deciding it again here would be a second opinion that
-// could only ever disagree; the identity frame and a pong carry nothing but
-// the socket's own state.
+// could only ever disagree; a pong carries nothing at all.
 var answers = map[Kind]bool{
-	KindIdentity: true,
-	KindResult:   true,
-	KindError:    true,
-	KindPong:     true,
+	KindResult: true,
+	KindError:  true,
+	KindPong:   true,
 }
 
 // Audience is what one reader may receive, decided from the grants it
@@ -422,22 +421,10 @@ type Client struct {
 	// writes it (a node changing posture) while a broadcast reads it.
 	posture FramePosture
 
-	// identityHeld marks a client whose credential this node could not
-	// CHECK at its last revalidation — the identity estate was unreadable,
-	// or the node was behind it. It degrades THIS client whatever the
-	// node's posture: the node may be perfectly healthy while one socket's
-	// session is unverifiable, and serving that socket live would push the
-	// company's state to somebody who may have been signed out.
-	//
-	// SEPARATE FROM posture rather than written into it, because the hub
-	// owns posture and rewrites it on every health tick — an identity hold
-	// stored there would be cleared five seconds later by a node that was
-	// never the thing that was wrong.
-	identityHeld bool
-
 	// audience is what this client may receive. Set at [NewClient] from
 	// the principal the socket was opened as, and moved by
-	// [Client.SetAudience] when a revalidation finds the grants changed.
+	// [Client.SetAudience] when deciding the credential again finds the
+	// grants changed.
 	audience Audience
 
 	// seat is the seat this client asked to be a recipient for, empty
@@ -496,35 +483,11 @@ func (c *Client) SetAudience(a Audience) bool {
 // Out is the channel a transport reads frames from. Closed by [Client.Close].
 func (c *Client) Out() <-chan *Frame { return c.out }
 
-// Posture is how this client is currently being served: the node's posture,
-// degraded further while the client's own identity is held.
+// Posture is how this client is currently being served: the node's posture.
 func (c *Client) Posture() FramePosture {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if c.identityHeld {
-		return FrameDegraded
-	}
 	return c.posture
-}
-
-// HoldIdentity degrades this client until [Client.ReleaseIdentity], reporting
-// whether the hold is new. See the identityHeld field for why it is not a
-// posture.
-func (c *Client) HoldIdentity() bool {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	was := c.identityHeld
-	c.identityHeld = true
-	return !was
-}
-
-// ReleaseIdentity lifts a hold, reporting whether there was one.
-func (c *Client) ReleaseIdentity() bool {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	was := c.identityHeld
-	c.identityHeld = false
-	return was
 }
 
 // SetPosture moves this client to p, reporting whether it took.
@@ -768,11 +731,11 @@ func (h *Hub) Watching(c *Client) (seat string, watch uint64) {
 // named, reporting whether it withdrew anything.
 //
 // A COMPARE-AND-CLEAR, because the decision to withdraw is taken on another
-// goroutine: a credential re-check reads the watch, asks the authority table
-// with no lock held, and by the time a refusal comes back the socket's own read
-// loop may have installed an allowed watch for a DIFFERENT seat — which is
-// exactly when the old one starts being refused, a rebind or a rename moving
-// the viewer's seat. An unconditional clear there withdrew the new, allowed
+// goroutine: deciding a credential again reads the watch, asks the authority
+// table with no lock held, and by the time a refusal comes back the socket's
+// own read loop may have installed an allowed watch for a DIFFERENT seat —
+// which is exactly when the old one starts being refused, a rebind or a rename
+// moving the viewer's seat. An unconditional clear there withdrew the new, allowed
 // watch and told the tab it was refused, and the dashboard retries only a
 // refusal that says "unavailable", so that tab heard nothing until its next
 // socket.
