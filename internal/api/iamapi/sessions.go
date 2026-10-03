@@ -65,8 +65,8 @@ func (s *Service) GetSessions(w http.ResponseWriter, r *http.Request) {
 //
 // The person themselves is asked for no recent proof, because this is the first
 // thing they do on finding an intruder in their account; an administrator
-// ending somebody else's is asked the ordinary step-up window, because it
-// signs a colleague out of everything and stops every pipeline they run. Both
+// ending somebody else's is asked `step_up`, because it signs a colleague out
+// of everything and stops every pipeline they run. Both
 // are one verb's row (internal/authz, `selfRecency`), so the route states
 // nothing about either.
 func (s *Service) DeleteSessions(w http.ResponseWriter, r *http.Request) {

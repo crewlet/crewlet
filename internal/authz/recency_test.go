@@ -127,8 +127,8 @@ func TestEndingEverySessionInTheCompanyTakesBothHats(t *testing.T) {
 // One verb, two arms: a person who finds an intruder in their account signs
 // out everywhere at once, whatever their proof's age, and an administrator
 // ending a colleague's sessions — and every machine token the colleague holds
-// — is asked the ordinary window every other directory write asks. A proof two
-// hours old is outside it; the controls are the same administrator a minute
+// — is asked `step_up`, as every other directory write is. A proof two hours
+// old is outside it; the controls are the same administrator a minute
 // after proving, and the colleague ending their own on a week-old cookie.
 //
 // Mutation: read the row's one window for both arms and the week-old cookie

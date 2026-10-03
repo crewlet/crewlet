@@ -90,9 +90,9 @@ func nimbus() chart {
 // a proof fixed in 2026 would be stale against it.
 var decidedAt = time.Now()
 
-// proved gives a principal a proof of identity a minute old: inside both
-// windows, so every case that is not about the step-up decides on its rule
-// alone — the step-up has cases of its own below.
+// proved gives a principal a proof of identity a minute old: inside the
+// step-up window, so every case that is not about the step-up decides on its
+// rule alone — the step-up has cases of its own in recency_test.go.
 func proved(p iam.Principal) iam.Principal {
 	at := decidedAt.Add(-time.Minute)
 	p.ReauthAt = at.Add(time.Hour)

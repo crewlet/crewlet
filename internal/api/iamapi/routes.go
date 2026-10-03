@@ -76,9 +76,9 @@ func (s *Service) Routes(mux authz.Mux) error {
 	mount("GET /iam/people", at(authz.ActionDirectoryRead), s.GetPeople)
 	mount("POST /iam/people", at(authz.ActionDirectoryWrite), s.PostPeople)
 	mount("GET /iam/people/{id}", about(authz.ActionDirectoryRead), s.GetPerson)
-	// AN EDIT OF AN ENROLLED PERSON is the directory's SENSITIVE write —
-	// it changes what they may do or how they sign in — where creating,
-	// removing and inviting ask the ordinary window.
+	// AN EDIT OF AN ENROLLED PERSON — what they may do or how they sign in
+	// — is an ordinary directory write: `people:manage`, a `step_up` proof
+	// and a person present, as creating, removing and inviting are.
 	mount("PATCH /iam/people/{id}", at(authz.ActionDirectoryWrite), s.PatchPerson)
 	mount("DELETE /iam/people/{id}", at(authz.ActionDirectoryWrite), s.DeletePerson)
 	// AN INVITATION IS ADDRESSED TO AN ADDRESS, not to a person, so it is

@@ -160,7 +160,7 @@ func (s *Service) Session(w http.ResponseWriter, r *http.Request) {
 }
 
 // stepUpDue reports whether this caller's proof of identity is old enough that
-// the next sensitive action will ask them to confirm it.
+// the next step-up gesture will ask them to confirm it.
 //
 // THE PRINCIPAL'S OWN DEADLINE, never a second number: [iam.Principal.ReauthAt]
 // is the instant the proof stops counting, composed by the guard from when the

@@ -151,7 +151,7 @@ func TestAStaleProofMayNotChangeAnybodysGrants(t *testing.T) {
 // The walk above names the caller's own id in every path, so it sees only the
 // self arm of `DELETE /iam/people/{id}/sessions`; this is the other arm. An
 // administrator whose proof is two hours old is refused `step_up_required`
-// naming the ordinary window, and the revocation — which would end every
+// naming `step_up`, and the revocation — which would end every
 // session and every machine token the colleague holds — never reaches the
 // writer. The controls: the same administrator a minute after proving, and
 // the colleague ending their own sessions on a week-old cookie.

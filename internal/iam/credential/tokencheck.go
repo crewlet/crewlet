@@ -203,10 +203,11 @@ func CheckToken(presented Token, row TokenRow, now time.Time,
 //
 // AND NEVER A GRANT THAT NEEDS A PERSON PRESENT ([iam.PersonPresentGrants]),
 // whatever the row says. The mint refuses them, and this is the half the
-// request path relies on: a token is fresh by construction for the ordinary
-// step-up window, and the gestures those grants open are ones it must never
-// reach, so a row carrying one (from a peer whose decide did not refuse it, or
-// from anywhere else) grants it nothing here.
+// request path relies on: a token is fresh by construction for `step_up`, so
+// no proof's age keeps it off the gestures those grants open — stripping them
+// here does, beside the authority table's own refusal of a token on every
+// gesture that needs a person present — and a row carrying one (from a peer
+// whose decide did not refuse it, or from anywhere else) grants it nothing.
 func (row TokenRow) EffectiveGrants() []iam.Grant {
 	out := make([]iam.Grant, 0, len(row.Grants))
 	for _, g := range row.Grants {

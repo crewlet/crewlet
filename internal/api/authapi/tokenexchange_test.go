@@ -174,7 +174,7 @@ func TestAnExchangedTierATokenIsASessionThatWorks(t *testing.T) {
 	// STEPPED UP BY CONSTRUCTION, as the bearer is.
 	if who["fresh"] != true {
 		t.Error("the exchanged session is not fresh, so break-glass through " +
-			"a browser could reach no sensitive surface")
+			"a browser could reach no step-up surface")
 	}
 	// AND ITS WRITES NAME THE SESSION they came through, beside the token
 	// as the author — as a person's session is recorded beside them — so a

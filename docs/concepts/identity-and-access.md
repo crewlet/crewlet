@@ -1810,7 +1810,7 @@ ending every session somebody holds asks nothing of the person themselves —
 it is the first thing they do on finding an intruder in their account, and a
 re-proof of a password the intruder may also hold would make the fastest
 response the slowest — while an administrator ending a colleague's, which
-stops every pipeline they run too, asks the ordinary window. It used to be
+stops every pipeline they run too, asks `step_up`. It used to be
 a setting nothing read — the sign-in surface recorded when a session proved
 who its holder was, and no surface outside it ever asked — so a cookie from last
 week reached every one of these. Every row states its window, and a row that
