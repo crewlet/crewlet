@@ -701,34 +701,11 @@ since a rebase is a rebuild. A commit *without* the marker, such as the merge
 commit **Update branch** makes, still blocks it, and `@dependabot recreate` is
 the way out.
 
-**When one bump merges, the others conflict**, and a conflicted pull request
-runs no workflows, so nothing above can reach it.
-[`dependabot-recreate.yml`](.github/workflows/dependabot-recreate.yml) comments
-`@dependabot recreate` on every open Dependabot bump that touches the dashboard
-and conflicts with `main`, which has Dependabot rebuild the branch from `main`
-so the first workflow can push a fresh bundle onto it. `recreate` discards every
-commit on the branch, so it asks only when all of them were made by bots:
-Dependabot's and the App's. A conflicted bump carrying a person's commit (or a
-commit whose author GitHub cannot resolve to an account) is listed in the run
-summary and left to them. A bump is asked about once per head commit.
-
-It runs on a push to `main` that changes `static/dashboard` and **every hour**.
-The hourly run is the one that does the work: Dependabot's merges are queued
-with `GITHUB_TOKEN`, and GitHub starts no workflows for a push that token
-causes, so those merges never fire the `push` trigger (the merge commits of
-recent bumps have no push-event run at all). One thing it cannot know is
-whether Dependabot acts on a command written by `github-actions[bot]` rather
-than by a person with write access; GitHub's documentation does not say. A
-request still unanswered after six hours is therefore a warning on the run, and
-the remedy is to write the command yourself.
-
-Nothing checks any of this for you, and these workflows hold a credential that
-can write to a branch or a command that discards one. Read the `if:` on both
-jobs, each job's `permissions:`, the pins on the actions in the second one and
-the App's scope on any diff that touches
-[`.github/workflows/dependabot-dashboard.yml`](.github/workflows/dependabot-dashboard.yml),
-and the rule that every commit must be a bot's before
-[`dependabot-recreate.yml`](.github/workflows/dependabot-recreate.yml) asks.
+Nothing checks any of this for you, and the workflow holds a credential that can
+write to a branch. Read the `if:` on both jobs, each job's `permissions:`, the
+pins on the actions in the second one and the App's scope on any diff that
+touches
+[`.github/workflows/dependabot-dashboard.yml`](.github/workflows/dependabot-dashboard.yml).
 
 ## Releasing
 
