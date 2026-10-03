@@ -495,8 +495,17 @@ func (s *Service) Take(ctx context.Context, dir string) (Manifest, error) {
 		if err != nil {
 			return Manifest{}, err
 		}
-		if manifest.Objects, err = copyObjects(ctx, dir, hashes, s.objects); err != nil {
+		prev := s.previousObjects(ctx, dir)
+		if manifest.Objects, err = copyObjects(ctx, dir, hashes, s.objects, prev); err != nil {
 			return Manifest{}, err
+		}
+		if lost := manifest.Objects; lost != nil && len(lost.Lost) > 0 {
+			log.WarnContext(ctx, "backup_objects_lost",
+				"dir", dir, "lost", len(lost.Lost), "chunks", len(hashes),
+				"detail", "the copy names chunks no member of the placement map holds; "+
+					"the backup carries everything else and lists them in its "+
+					"manifest — the objects_missing alarm names the node that "+
+					"should hold each")
 		}
 		// READING A DATABASE CREATES SIDECARS, even for a read, so the
 		// copy is folded back into one file — a -wal left inside the
@@ -566,11 +575,18 @@ func (s *Service) Take(ctx context.Context, dir string) (Manifest, error) {
 	// not exist. See [Service.announce] for why a failure here does not
 	// fail the backup.
 	s.announce(ctx, dir, manifest)
+	var chunks, reused int
+	if manifest.Objects != nil {
+		chunks, reused = manifest.Objects.Chunks, manifest.Objects.Reused
+	}
 	log.InfoContext(ctx, "backup_taken",
 		"dir", dir,
 		"store_bytes", storeBytes(manifest),
 		"streams", len(manifest.Streams),
 		"stream_bytes", snapshotSize(manifest.Streams),
+		"chunks", chunks,
+		"chunks_reused", reused,
+		"object_bytes", objectBytes(manifest),
 		"took", manifest.FinishedAt.Sub(started).String())
 	return manifest, nil
 }
@@ -939,6 +955,33 @@ func assertReplayable(m Manifest) error {
 	return nil
 }
 
+// previousObjects is the chunk directory of this node's previous backup, when
+// it is still on this host and is not dir itself — the source a backup takes
+// the chunks it already holds from — or empty.
+//
+// THIS NODE'S OWN ROW of the backup register, whose Dir is a path on this
+// host: another owner's names a directory on another machine. A register that
+// cannot be read costs the reuse and nothing else, since every chunk can still
+// be fetched.
+func (s *Service) previousObjects(ctx context.Context, dir string) string {
+	points, err := s.backups.BackupPoints(ctx)
+	if err != nil {
+		log.WarnContext(ctx, "backup_previous_unknown", "error", err,
+			"detail", "every chunk is fetched from the fleet rather than reused")
+		return ""
+	}
+	for _, p := range points {
+		if p.Owner != s.nodeID || p.Dir == "" || filepath.Clean(p.Dir) == filepath.Clean(dir) {
+			continue
+		}
+		prev := filepath.Join(p.Dir, objectsDirName)
+		if info, err := os.Stat(prev); err == nil && info.IsDir() {
+			return prev
+		}
+	}
+	return ""
+}
+
 // announce publishes what this backup covers, so the fleet's trim can see it.
 //
 // # Why a failure here does not fail the backup
@@ -971,10 +1014,11 @@ func (s *Service) announce(ctx context.Context, dir string, manifest Manifest) {
 		Dir:      dir,
 		Streams:  map[string]coord.Position{},
 		Verified: true,
-		// THE WHOLE ARTEFACT, the same two sums the `backup_taken` line
+		// THE WHOLE ARTEFACT, the same three sums the `backup_taken` line
 		// logs: what an operator weighs against the disk it went to and
-		// the link it is about to be shipped over.
-		Bytes: storeBytes(manifest) + snapshotSize(manifest.Streams),
+		// the link it is about to be shipped over. The chunks were left
+		// out, which for a company with files is most of it.
+		Bytes: storeBytes(manifest) + snapshotSize(manifest.Streams) + objectBytes(manifest),
 	}
 	for stream, at := range manifest.Domains {
 		point.Streams[stream] = coord.Position{

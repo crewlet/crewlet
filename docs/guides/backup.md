@@ -131,9 +131,30 @@ Three properties worth knowing:
   copy of its directory is a fraction of the company's files. The backup reads
   every chunk the replicated copy **names** — read from the copy itself, for
   the position's reason below — from this node where it holds one and from a
-  peer where it does not, and verifies each against its hash. A chunk it cannot
-  read from anybody fails the backup: a restore would bring back files whose
-  bytes are nowhere, and nothing would say so until somebody opened one. The
+  peer where it does not, four at a time (the repair's own throttle, so a
+  backup never saturates the broker every upload and read also rides), and
+  verifies each against its hash.
+- **A backup takes what its previous one holds.** A chunk is named by its
+  content, so one this node's previous backup already holds is the same bytes:
+  when that backup's directory is still on this host (the `dir` this node last
+  announced), each chunk in it is **linked** into the new backup — copied where
+  the filesystem refuses a link, another mount among them — and read back
+  against its name before it counts, so a copy that rotted in the earlier
+  artefact is fetched again rather than carried forward. Only what is new since
+  crosses the fleet. Each one is a complete file of the new backup, never a
+  reference into the old one: shipping or deleting either directory leaves the
+  other whole. The manifest's `objects.reused` and `objects.reused_from` say
+  how many and from where.
+- **A chunk the fleet has lost is recorded, a chunk it could not reach fails
+  the backup.** A chunk every member of the placement map *answered* it does
+  not hold is gone whatever the backup does: the backup carries everything
+  else, lists it in the manifest's `objects.lost`, logs `backup_objects_lost`,
+  and is announced like any other — refusing it would refuse every later
+  backup too, and with them the trim of every log in the fleet, over one
+  file's missing mebibyte. The `objects_missing` alarm is what sends somebody
+  to replace the file. A chunk a member could not *answer* about — it did not
+  answer, refused, or could not read its own copy — may be intact there, so it
+  **fails the backup**, naming it: take it again once the member answers. The
   manifest's `objects` records how many chunks and bytes it carries; a copy
   naming no file has none.
 - **Streams are enumerated, not listed.** A namespace stream is created on

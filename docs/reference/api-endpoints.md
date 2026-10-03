@@ -4658,7 +4658,8 @@ curl -X POST -H "Authorization: Bearer $CREWLET_API_TOKEN" \
      "source": "/data/crewlet-replicated.db", "bytes": 131072, "sha256": "…",
      "migrations": ["0001_tracker.sql", "…"]}
   ],
-  "objects": {"dir": "objects", "chunks": 40, "bytes": 41943040},
+  "objects": {"dir": "objects", "chunks": 40, "bytes": 41943040, "reused": 36,
+              "reused_from": "/var/backups/crewlet/2026-08-29T18-00/objects"},
   "streams": [
     {"name": "CREWLET_AGENT", "file": "streams/CREWLET_AGENT.snapshot",
      "bytes": 1087, "messages": 5, "config": {…}, "state": {…}}
@@ -4698,11 +4699,16 @@ Four refusals, each pointing somewhere different:
   caller's own command to fix. A disk that fails or fills while the directory
   is prepared is the node's failure, not the path's, and answers `500`.
 - **503 `objects_unreachable`** — the store copy names chunks of the
-  company's files that no reachable data node could supply. Nothing is wrong
-  with this node or the command: a data node holding them is down. Bring it
-  back (the [`objects_missing`](alarms.md) alarm names the condition) and take
-  the backup again. A backup without those chunks is refused rather than
-  written, because a restore would bring back files whose bytes are nowhere.
+  company's files that a data node which may hold them could not supply: it
+  did not answer, refused, or could not read its own copy. Nothing is wrong
+  with this node or the command. Bring that node back (the
+  [`objects_degraded`](alarms.md) alarm names the condition) and take the
+  backup again. A backup without those chunks is refused rather than written,
+  because they may well be intact there. A chunk every member *answered* it
+  does not hold is different — it is lost whatever the backup does — and is
+  listed in the manifest's `objects.lost` rather than refused, so one lost
+  file never stops every later backup and, with them, the trim (see
+  [Backup](../guides/backup.md)).
 - **A copy without the stream estate.** A node that dialled an external NATS
   cluster has no connection to snapshot the streams over, so its manifest
   carries the store copies alone and `crewlet backup` says where the rest
