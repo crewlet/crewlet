@@ -47,7 +47,11 @@ name: dependabot-dashboard
 # Dependabot wrote, so the bundle commit is never approved by the repository. A
 # rule that dismisses stale approvals, or requires approval of the most recent
 # reviewable push, therefore sends a bump that changed the bundle to a person;
-# with both off it merges itself once CI is green. See CONTRIBUTING.md.
+# with both off, as the ruleset stands today, it merges itself once CI is green.
+# The same setting means anything pushed onto an open Dependabot branch merges
+# once CI is green, whoever pushed it: a person with write access, or whoever
+# holds this App's key. That is what the App's one permission is for. See
+# CONTRIBUTING.md.
 
 on:
   pull_request:
@@ -157,14 +161,18 @@ jobs:
       # command is the one CONTRIBUTING.md tells a person to run.
       - run: make dashboard
 
-      # The question ci.yml's drift gate asks, answered with `git status`: a
-      # file the rebuild ADDED or dropped counts as much as one it changed,
-      # and `git diff` alone cannot see the first kind. The commit made from
-      # this tree has to carry all three.
+      # The question ci.yml's drift gate asks, with the same answer: anything
+      # the rebuild changed, dropped or ADDED under static/dashboard, ignored
+      # files included, because the engine embeds the directory with
+      # `all:dashboard` and ships whatever is on disk. `git diff` alone cannot
+      # see an added file. An ignored one cannot be committed, so it travels to
+      # the next job and is refused there by name instead of the push quietly
+      # not happening.
       - name: has the rebuild changed the committed bundle
         id: drift
         run: |
-          changes="$(git status --porcelain -- static/dashboard)"
+          changes="$(git status --porcelain --untracked-files=all \
+            --ignored=matching -- static/dashboard)"
           if [ -z "$changes" ]; then
             echo "static/dashboard already is what dashboard/ builds."
             echo "changed=false" >> "$GITHUB_OUTPUT"

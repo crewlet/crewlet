@@ -59,11 +59,12 @@ jobs:
     # hands that commit the approval branch protection is asking for, which is
     # a way to have your own change approved by the repository itself.
     #
-    # The cost is that a maintainer's own "Update branch" click leaves the pull
-    # request unapproved, because the run it triggers is skipped. `@dependabot
-    # recreate` re-pushes as Dependabot and recovers it. Not `rebase`: the merge
-    # commit that click made is one Dependabot did not write, and it refuses to
-    # rebase a branch that holds one.
+    # The cost, under a rule that dismisses stale approvals, is that a
+    # maintainer's own "Update branch" click can leave the pull request
+    # unapproved, because the run it triggers is skipped. `@dependabot recreate`
+    # from a person with push access re-pushes as Dependabot and recovers it.
+    # Not `rebase`: the merge commit that click made is one Dependabot did not
+    # write, and it refuses to rebase a branch that holds one.
     if: >-
       github.event.pull_request.user.login == 'dependabot[bot]' &&
       github.actor == 'dependabot[bot]'
@@ -84,10 +85,9 @@ jobs:
       # `opened`), or a maintainer re-running an old run (a re-run keeps
       # `github.actor`, so it passes the guard above), would approve a commit
       # no event named: the bundle commit, or one a person pushed onto the
-      # branch. Named
-      # explicitly, an approval of a commit that is no longer the head is
-      # stale from the moment it is made, which is how a protection rule that
-      # dismisses stale approvals is meant to see it.
+      # branch. Named explicitly, an approval of a commit that is no longer the
+      # head is stale from the moment it is made, which is how a protection
+      # rule that dismisses stale approvals is meant to see it.
       - name: approve
         run: |
           gh api --method POST \

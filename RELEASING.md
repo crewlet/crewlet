@@ -249,8 +249,11 @@ when you touch it:
   a `.go` file in it would run on every contributor's machine. The App has to
   stay at Contents: read and write — add Workflows and the key can rewrite the
   workflows themselves — and `v*` needs a tag ruleset it cannot bypass, since
-  Contents: write can create a tag and an App push starts workflows. Weakening
-  any of these makes the workflow reach *more*, never fail.
+  Contents: write can create a tag and an App push starts workflows. While
+  `main`'s ruleset keeps approvals across pushes, anything pushed onto an open
+  Dependabot branch merges once CI is green, so the App's scope is the only
+  limit on what its key can land. Weakening any of these makes the workflow
+  reach *more*, never fail.
 
 ---
 

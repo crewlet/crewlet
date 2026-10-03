@@ -582,11 +582,12 @@ fail.
 The job runs only when Dependabot is both the pull request's author *and* the
 actor that triggered the run. That second condition is what stops the workflow
 approving a commit a person pushed onto a Dependabot branch — anyone with write
-access can push one. Its visible cost is that clicking **Update branch**
-yourself leaves the pull request unapproved, because the run your click
-triggered is skipped; `@dependabot recreate` re-pushes as Dependabot and
-recovers it. (Not `rebase`: the merge commit your click made is one Dependabot
-did not write, and it will not rebase a branch that holds one.)
+access can push one. Its visible cost, under a rule that dismisses stale
+approvals, is that clicking **Update branch** yourself can leave the pull
+request unapproved, because the run your click triggered is skipped;
+`@dependabot recreate` from a person with push access re-pushes as Dependabot
+and recovers it. (Not `rebase`: the merge commit your click made is one
+Dependabot did not write, and it will not rebase a branch that holds one.)
 
 The approval names the commit the run was started for. `gh pr review --approve`
 sends no commit, and GitHub then attaches the review to whatever the head is at
@@ -684,22 +685,39 @@ there matter more than they did, because the bundle commit is a push nobody has
 approved. If the rule **dismisses stale approvals when new commits are pushed**,
 or **requires approval of the most recent reviewable push**, a bump that changed
 the bundle waits for a person; with both off it merges itself once CI is green.
-Which you want is a choice about how much a bump that changes the JavaScript the
-binary embeds needs a human look, and this workflow leaves it where the other
-gates already are.
 
-Dependabot stops rebasing a branch that holds a commit it did not write and
-answers `@dependabot rebase` with "edited by someone other than Dependabot" —
-which would leave a bump that later conflicts with `main` stuck, since a
-conflicted pull request runs no workflows. The bundle commit therefore carries
-`[dependabot skip]`, GitHub's documented marker for "Dependabot may force-push
-over this commit". Dependabot keeps rebasing on conflict, on its schedule and on
-`@dependabot rebase`; each rebase starts from its own commit alone, the bundle
-commit is gone, the workflow runs again and pushes a fresh one. That is also how
-two bumps that both changed the bundle stop colliding — rebuild, never merge —
-since a rebase is a rebuild. A commit *without* the marker, such as the merge
-commit **Update branch** makes, still blocks it, and `@dependabot recreate` is
-the way out.
+**Today both are off** (the ruleset asks for one approval and keeps it across
+pushes), and that has a consequence beyond this workflow: the approval
+`dependabot-merge.yml` gives on `opened` stands, and the auto-merge it queued
+stands with it, so *anything* pushed onto an open Dependabot branch merges once
+CI is green — a bundle, but equally a commit from a person with write access or
+from whoever holds this App's key. CI is the only gate, which is the premise of
+that workflow, and the App's single permission is what keeps its reach to
+Dependabot's branches. If you would rather a person look at what lands, turn on
+**Dismiss stale pull request approvals when new commits are pushed**; the price
+is that every bump that changes the bundle then waits for an approval too.
+
+**When one bump merges the others conflict**, because each carries its own
+rebuilt bundle and the emitted names are content-hashed. Dependabot rebases a
+conflicted bump by itself after a push to `main`, with no comment from anyone —
+#167 conflicted when #168 merged and was rebased two minutes later — but only
+while every commit on the branch is its own or carries `[dependabot skip]`,
+GitHub's documented marker for "Dependabot may force-push over this commit".
+That is why the bundle commit carries it. Each rebase starts from Dependabot's
+commit alone, the bundle commit is gone, the workflow runs again and pushes a
+fresh one: two bumps that both changed the bundle stop colliding by being
+rebuilt, never merged.
+
+What Dependabot will not rebase is a branch holding a commit *without* the
+marker (a person's, or the merge commit **Update branch** makes) or a bump left
+open for 30 days. It answers `@dependabot rebase` there with "edited by someone
+other than Dependabot", and a conflicted pull request runs no workflows, so it
+stays stuck until a person with push access comments `@dependabot recreate`.
+It has to be a person. Dependabot answers that command from `github-actions[bot]`,
+or from any GitHub App, with "Sorry, only users with push access can use that
+command" ([dependabot-core#9147](https://github.com/dependabot/dependabot-core/issues/9147)),
+so no workflow in this repository can do it without storing a maintainer's
+personal token — a standing credential this repository has chosen not to hold.
 
 Nothing checks any of this for you, and the workflow holds a credential that can
 write to a branch. Read the `if:` on both jobs, each job's `permissions:`, the
