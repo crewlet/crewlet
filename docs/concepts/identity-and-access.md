@@ -1227,7 +1227,7 @@ database read for every forged cookie an attacker sends, and has nothing to say
 at all until the row it names has been applied on the node the request reached.
 
 ```
-__Host-crewlet_session=v3.<key tag>.<generation>.<lineage>~<person>.<epoch>.<start position>.<absolute expiry>.<idle expiry>[.<scope>][.cred:<binding>].<mac>
+__Host-crewlet_session=v3.<key tag>.<generation>.<lineage>~<person>.<epoch>.<start position>.<absolute expiry>.<idle expiry>[.<scope>].<mac>
                         Path=/; HttpOnly; Secure; SameSite=Lax
 ```
 
@@ -1283,13 +1283,10 @@ to know it:
 | absolute expiry | Never moved by a re-issue |
 | idle expiry | Moved by every re-issue, with no store write at all |
 | scope | **Present only on a session that may do less than everything**: `enrol`, one that may only [enrol a second factor](#a-required-second-factor-is-enrolled-before-anything-else). Signed with the rest and carried through every re-issue, so a node that has not applied the session's row still knows what it may reach. Absent on a whole session, which is why an ordinary cookie is the same nine fields every build reads, and a scoped one — or a scope a build cannot name — is refused by any build that does not know it rather than served whole |
-| binding | **Present only on a session exchanged from a Tier A token** (`cred:<binding>`): a MAC over the token's value under a key derived from the one that signs the cookie, checked on every request against the value configured under the token's id — so a new value ends the session. Recomputed at every re-issue under the new signing key, so a keyring rotation drains an exchanged session onto the new key like any other. A build that does not know the attribute refuses the cookie rather than serving it whatever value the token has now |
 
 Nothing in it is secret and nothing in it grants anything alone: a bearer in a
-proxy log discloses a lineage, a person id, two deadlines, whether the
-session may only enrol a second factor and — for an exchanged token's — a MAC
-nobody without the keyring can test a guess against, and is worthless without
-the mac. It deliberately carries nothing *about* the person — no login,
+proxy log discloses a lineage, a person id, two deadlines and whether the
+session may only enrol a second factor, and is worthless without the mac. It deliberately carries nothing *about* the person — no login,
 no address, no grants — because a cookie is the value most likely to end up
 somewhere nobody meant it to.
 
@@ -1487,13 +1484,17 @@ closes it like any other session — the sign-in surface reads a token's session
 the way the guard does, from the entry, where the bare estate holds no row for
 a token's login and read it as already over; `POST /auth/logout/all` from it
 ends every session that token opened; and `crewlet iam invalidate-all` ends it
-with everybody else's. So does **putting a new value under the same id**: the
-cookie carries a binding to the value it was exchanged with — a MAC under a key
-derived from the keyring, never the value or a bare digest of it, which in a
-cookie would be an offline guessing oracle for the break-glass credential — and
-every node checks it against the value it holds under that id, applied or not.
-Rotating a leaked token's value therefore ends every session the leaked value
-opened, on the next request, everywhere.
+with everybody else's.
+
+**It answers to the token's id, not its value.** Putting a new value under the
+same id leaves the sessions the old value opened working until their hour
+ends — re-composed from the entry on every request, so they carry whatever the
+entry now grants. **To cut a leaked value's sessions off at once, rotate by
+giving the token a new id** (`id: ops` becomes `id: ops-2`, with the new
+value): the old id is then an entry no node holds, which ends every session
+exchanged from it on its next request, everywhere. Remember that the id is
+also the token's login, `token:<id>`, so a directory row binding the old login
+to a seat has to be moved to the new one.
 
 **The ceiling applies to a person too.** `api.auth.max_grants` is intersected
 into every principal at the moment the request is resolved, so a node whose
@@ -1894,7 +1895,7 @@ Identity has **two trails**, and they answer different questions.
 |---|---|---|
 | `iam_session_started` | The sign-in surface, on a password, app-code, invitation or token sign-in | Once per session |
 | `iam_stepup_completed` | The sign-in surface, when a signed-in person confirms who they are: the person, the new session and the one it replaced, the second factor presented and the client — and never which surface it was for, because a step-up proves the session for every surface until `reauth_at`, and the request that prompted it is refused before it and never reaches it, so the only source would be the client's word | Once per step-up |
-| `iam_session_ended` | A logout (`logout`, `logout_all`), an administrator (`revoked`, `person_removed`), or the request guard noticing a deadline (`idle`, `absolute`) or a token's exchanged session whose value changed or whose entry was removed (`credential_changed`) | Once per ending, from the fact that ended it: a deadline or a changed credential once per session per node, when the cookie is next presented, and only for a session no record had already ended — a revoked person's other browser presenting its cookie the next day is not announced again as `absolute`, and a token's session past its deadline by the time it is presented after a rotation is announced by the deadline |
+| `iam_session_ended` | A logout (`logout`, `logout_all`), an administrator (`revoked`, `person_removed`), or the request guard noticing a deadline (`idle`, `absolute`) | Once per ending, from the fact that ended it: a deadline once per session per node, when the cookie is next presented, and only for a session no record had already ended — a revoked person's other browser presenting its cookie the next day is not announced again as `absolute` |
 | `iam_login_failures` | The engine's own flush loop | One row per client per minute; see below |
 | `iam_recovery_code_used` | The sign-in surface | Once per code, with how many are left |
 | `iam_second_factor_throttled` | The sign-in surface, when a person's second-factor curve reaches its ceiling — somebody holding their password is guessing at their code, so the password is what to rotate | Once per person per fifteen-minute window per node, naming the address the failure that took it there came from |

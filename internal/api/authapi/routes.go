@@ -109,17 +109,18 @@ const tokenLifetime = time.Hour
 // bearer gets, so the grants are the entry's cut to this node's ceiling on
 // each request, a token the identity directory binds to a seat acts as that
 // seat, and removing the entry from the configuration ends the session on the
-// next request. The cookie is BOUND TO THE VALUE exchanged, so putting a new
-// value under the same id ends it too — a session is the token it was
-// exchanged from, and answering a leak by rotating the value must end what the
-// leaked value opened. It used to be minted for the token's derived principal id,
+// next request. It answers to the entry's ID and not its VALUE: a new value put
+// under the same id leaves the sessions the old one opened working until their
+// hour ends, so an operator answering a leak who must cut them off at once
+// rotates by giving the token a new id. It used to be minted for the token's
+// derived principal id,
 // which no directory row holds: once the start record applied every request
 // answered 401 and cleared the cookie, and before that it served a grantless
 // nobody — and a bound token was refused the exchange outright.
 //
 // IT IS STEPPED UP BY CONSTRUCTION, as the bearer is: presenting the token was
 // the proof, and there is nothing else a config-file credential could present.
-// A break-glass session that could reach no sensitive surface would be no use
+// A break-glass session that could reach no step-up surface would be no use
 // on the day it exists for — the day nobody can sign in as a person.
 //
 // # Only a presented token is exchanged
@@ -187,11 +188,6 @@ func (s *Service) Token(w http.ResponseWriter, r *http.Request) {
 		Epoch: opened.Epoch, Generation: opened.Generation,
 		StartPosition:     uint64(at.Packed()),
 		AbsoluteExpiresAt: expires,
-		// BOUND TO THE VALUE PRESENTED, never to the id alone: a new
-		// value under this id is a new token, and it ends this session
-		// on every node's next request. See internal/iam/session's
-		// credential.go.
-		Credential: session.CredentialOf(entry.Token),
 	})
 	if err != nil {
 		log.ErrorContext(r.Context(), "api_token_exchange_mint_failed", "error", err)

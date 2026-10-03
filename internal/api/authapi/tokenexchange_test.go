@@ -223,25 +223,35 @@ func TestATokenRemovedFromTheConfigEndsItsSession(t *testing.T) {
 	}
 }
 
-// ROTATING A TOKEN'S VALUE ENDS THE SESSIONS THE OLD VALUE OPENED.
+// AN EXCHANGED SESSION ANSWERS TO ITS TOKEN'S ID, NOT ITS VALUE.
 //
-// The exchanged session answers to the entry this node holds under the
-// token's id, and it used to answer to the id alone: an operator who answered
-// a leak by putting a new value under the same id left every session exchanged
-// from the leaked value working for the rest of its hour. The cookie is bound
-// to the value it was exchanged with, so a new value ends it — on a node that
-// has not applied the session's start record too, because the configuration is
-// never late. THE CONTROL is the same rebuild with the value unchanged, which
-// keeps it.
-func TestRotatingATokensValueEndsTheSessionsTheOldValueOpened(t *testing.T) {
+// The guard re-composes the session from the entry this node holds under the
+// token's id on every request: a new value put under the same id leaves it
+// working until its hour ends, carrying whatever the entry now grants — the
+// documented residual, which an operator who must cut a leaked value's
+// sessions off at once closes by giving the token a new id. That ends them on
+// the next request, on a node that has not applied the session's start record
+// too, because the configuration is never late.
+//
+// Mutations: answer the subject from the value and the rotated entry's session
+// is refused; leave a renamed-away entry's subject able to act and the old
+// id's session is served.
+func TestAnExchangedSessionAnswersToItsTokensID(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
-		name  string
-		value string
-		want  int
+		name   string
+		edit   func(*config.APIToken)
+		want   int
+		grants []any
 	}{
-		{"the value is rotated", "a-rotated-tier-a-token-for-ops-0003", http.StatusUnauthorized},
-		{"the value is kept", opsValue, http.StatusOK},
+		{"the value is rotated under the same id", func(tok *config.APIToken) {
+			tok.Token = "a-rotated-tier-a-token-for-ops-0003"
+			tok.Grants = []iam.Grant{iam.GrantStateRead}
+		}, http.StatusOK, []any{string(iam.GrantStateRead)}},
+		{"the token is given a new id", func(tok *config.APIToken) {
+			tok.ID = "ops-2"
+			tok.Token = "a-rotated-tier-a-token-for-ops-0003"
+		}, http.StatusUnauthorized, nil},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
@@ -257,15 +267,21 @@ func TestRotatingATokensValueEndsTheSessionsTheOldValueOpened(t *testing.T) {
 			edited.API.Auth.Tokens = slices.Clone(r.boot.API.Auth.Tokens)
 			for i := range edited.API.Auth.Tokens {
 				if edited.API.Auth.Tokens[i].ID == "ops" {
-					edited.API.Auth.Tokens[i].Token = tc.value
+					tc.edit(&edited.API.Auth.Tokens[i])
 				}
 			}
 			r.rebuild(edited)
 			for _, applied := range []uint64{1 << 40, 0} {
 				r.estate.setApplied(applied)
-				if _, rec := r.probe(cookie); rec.Code != tc.want {
+				who, rec := r.probe(cookie)
+				if rec.Code != tc.want {
 					t.Errorf("at applied %d the session answered %d (%s), "+
 						"want %d", applied, rec.Code, rec.Body.String(), tc.want)
+					continue
+				}
+				if tc.grants != nil && !slices.Equal(who["grants"].([]any), tc.grants) {
+					t.Errorf("at applied %d the session carries %v, want the "+
+						"entry's grants now, %v", applied, who["grants"], tc.grants)
 				}
 			}
 		})

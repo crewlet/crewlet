@@ -692,11 +692,15 @@ func (t tierATokens) byLogin(login string) (config.APIToken, bool) {
 // every fact validation reads about the SESSION — its row, whether it ended,
 // the fleet's generation, this node's lag and deferrals — is the directory's,
 // read as for anybody, and the one fact about its SUBJECT is whether this node
-// still holds the entry.
+// still holds the entry under that id.
 //
-// A HELD ENTRY ANSWERS WITH ITS VALUE ([session.Identity.Credential]), which
-// the bearer was bound to when it was exchanged, so a token rotated to a new
-// value under the same id has ended every session the old value opened.
+// BY THE ID AND NEVER THE VALUE. A new value put under the same id leaves the
+// sessions the old one opened working until their one-hour lifetime ends — an
+// operator who has to cut them off at once rotates by giving the token a new
+// id, which ends them here on the next request. A MAC over the value bound into
+// the cookie once ended them on a rotation as well, at the cost of a second
+// credential check on every request, a key derivation and an ending of its
+// own, to shorten an hour an id change already shortens to nothing.
 //
 // A GONE ENTRY IS A SUBJECT THAT MAY NOT ACT, answered as a retired principal:
 // validation then ends the session wherever this node stands against its start
@@ -728,25 +732,14 @@ func (d tierASubjects) Resolve(ctx context.Context, lineage, person string) (
 	epoch := identity.Person.Epoch
 	// NO GRANTS AND NO SEAT on the row: who a token's session acts as is
 	// composed from the entry by the guard, on every request.
-	identity.Person = session.PersonRow{Found: true, Stage: iam.StageActive,
-		Login: person, Epoch: epoch}
-	entry, held := d.tokens(person)
-	if !held {
+	stage := iam.StageActive
+	if _, held := d.tokens(person); !held {
 		// THE ENTRY IS GONE — removed, or renamed out from under the
-		// login — so the credential the session stands for is WITHDRAWN,
-		// which ends it exactly as a new value does, and says so: the
-		// session's own binding refuses it with the ending the audit
-		// trail announces ([session.EndingCredential]). It was answered as
-		// a retired person, which refused the cookie and told nobody.
-		identity.Credential = session.Withdrawn()
-		return identity, nil
+		// login — so the subject may not act, and the session is over.
+		stage = iam.StageRetired
 	}
-	// AND THE VALUE the entry holds now, which the bearer was bound to when
-	// it was exchanged: a session is the token it was exchanged FROM, and
-	// a new value under the same id is a different token. Answered by the
-	// id alone, rotating a leaked value left every session exchanged from
-	// it working for the rest of its hour.
-	identity.Credential = session.CredentialOf(entry.Token)
+	identity.Person = session.PersonRow{Found: true, Stage: stage,
+		Login: person, Epoch: epoch}
 	return identity, nil
 }
 
@@ -857,40 +850,19 @@ func personID(value string) uuid.UUID {
 // because whether it was somebody's failed attempt depends on whether the
 // route needed it — see audit.go.
 //
-// TWO WAYS A SESSION ENDS THAT NO RECORD STATES, and this is the only frame
-// that can ever say either happened: a DEADLINE — the idle one lives in the
-// bearer and nowhere else — see [Sessions.deadline]; and the CREDENTIAL a
-// token's session was exchanged from changing — a value in a configuration
-// file — see [Sessions.credentialChanged]. Every OTHER ended row — the row
+// ONE WAY A SESSION ENDS THAT NO RECORD STATES, and this is the only frame
+// that can ever say it happened: a DEADLINE — the idle one lives in the bearer
+// and nowhere else — see [Sessions.deadline]. Every OTHER ended row — the row
 // says so, the epoch or the generation moved, the person was suspended — was
-// ended by a record, and whoever wrote the record already said so.
+// ended by a record, and whoever wrote the record already said so; and a
+// token's exchanged session whose entry this node no longer holds was ended by
+// an operator editing the configuration, which is that operator's change.
 func (s *Sessions) ended(r *http.Request, v session.Validation,
 	directory session.Directory) {
 
-	switch {
-	case v.Row != session.RowEnded:
-	case v.Ending.Deadline():
+	if v.Row == session.RowEnded && v.Ending.Deadline() {
 		s.deadline(r, v, directory)
-	case v.Ending == session.EndingCredential:
-		s.credentialChanged(r, v)
 	}
-}
-
-// credentialChanged announces a session the credential it was exchanged from
-// ended — ONCE per lineage per node, on the claim a deadline ending takes.
-//
-// NO READ IS NEEDED to know no record got there first: the binding is asked
-// only of a bearer the rows would still serve ([session.EndingCredential]),
-// so the validation that refused it already read them. What it cannot know is
-// WHEN the value changed — the configuration says what it is now, not since
-// when — so the row carries the instant it was noticed, as a deadline's does.
-func (s *Sessions) credentialChanged(r *http.Request, v session.Validation) {
-	lineage := v.Bearer.Lineage.String()
-	s.audit.EmitOnce(r.Context(), authevents.OnceSessionEnded, lineage, 0,
-		types.IAMSessionEnded{
-			Person: v.Bearer.Person, Lineage: lineage,
-			Reason: types.EndCredentialChanged,
-		})
 }
 
 // deadline announces a session its own deadline ended — ONCE, and only when a
@@ -928,13 +900,8 @@ func (s *Sessions) deadline(r *http.Request, v session.Validation,
 	}
 	standing := s.signer.Standing(ctx, directory, v.Bearer)
 	switch {
-	case standing.Row == session.RowValid,
-		standing.Ending == session.EndingCredential:
-		// LIVE BY EVERY RECORD. A token's session whose credential has
-		// also changed is announced by its deadline: this node never saw
-		// it presented between the change and the deadline — that would
-		// have taken the claim above — and the deadline is the ending a
-		// presentation can date.
+	case standing.Row == session.RowValid:
+		// LIVE BY EVERY RECORD until its own deadline.
 		reason := types.EndIdle
 		if v.Ending == session.EndingAbsolute {
 			reason = types.EndAbsolute

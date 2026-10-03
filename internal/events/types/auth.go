@@ -144,21 +144,13 @@ const (
 	// EndPersonRemoved is the person being removed, which ends every
 	// session they hold along with everything else about them.
 	EndPersonRemoved SessionEndReason = "person_removed"
-
-	// EndCredentialChanged is a session exchanged from a Tier A token
-	// whose value is not the one it was exchanged from any more — a new
-	// value put under the token's id, which is how a leak is answered, or
-	// the entry removed. Noticed, like a deadline, when its cookie is next
-	// presented, because the value lives in a configuration file and no
-	// record ever states it changed.
-	EndCredentialChanged SessionEndReason = "credential_changed"
 )
 
 // Valid reports whether r is a reason this build names.
 func (r SessionEndReason) Valid() bool {
 	switch r {
 	case EndLogout, EndLogoutAll, EndIdle, EndAbsolute, EndRevoked,
-		EndPersonRemoved, EndCredentialChanged:
+		EndPersonRemoved:
 		return true
 	}
 	return false
