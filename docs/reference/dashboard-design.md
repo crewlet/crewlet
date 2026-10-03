@@ -54,7 +54,9 @@ definition, and a recoloured Slack mark is not Slack's. The exception is held
 to exactly that: a mark is drawn only beside the third-party app's name,
 nothing reads state from it, none of its hues is reused as a token, and the
 integration's STATE beside it is carried by the status tone like everything
-else. A tool the company has not set up keeps its mark, dimmed.
+else. A tool the company has not set up keeps its mark, drained of its
+colour (the kit's `muted` mark) — the mark rather than the tile, because the
+mark is decoration beside the name and the tile's text keeps its contrast.
 
 A seat's chrome takes one of three **rings**, or none, from what it is DOING —
 and what it is doing is the ENGINE'S word, never the dashboard's. Every seat row carries

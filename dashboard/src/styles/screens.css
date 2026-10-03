@@ -3473,7 +3473,9 @@ textarea.kpage-editor-body {
    not dimmed — an unconnected tool is the one a reader came here to set up,
    and opacity would take its text below contrast in the light theme — it is
    one rung lower, which is the system's word for "nothing is running here
-   yet" without claiming anything is off. */
+   yet" without claiming anything is off. Only its MARK is drained (the kit's
+   `muted` VendorMark): the mark is decoration beside the name, so draining
+   it costs no text its contrast. */
 .int-tile.is-absent {
   background: var(--color-surface-background);
 }
@@ -3629,9 +3631,10 @@ textarea.kpage-editor-body {
   outline-offset: -2px;
 }
 
-/* The third-party app's mark, in a circle the way the console draws it. Its
-   colours are the third-party app's own; see ui/VendorMark.tsx for why that
-   is the one exception to colour carrying state. */
+/* The third-party app's mark (`VendorMark`, from @crewlethq/icons), in a
+   circle the way the console draws it. Its colours are the third-party app's
+   own; see the "one rule" in reference/dashboard-design.md for why that is the
+   one exception to colour carrying state. */
 .int-brand {
   display: inline-flex;
   align-items: center;
@@ -3643,12 +3646,6 @@ textarea.kpage-editor-body {
   background: var(--color-surface-elevated);
   color: var(--color-text-primary);
 }
-.vendor-mark {
-  display: block;
-  width: var(--font-size-xl);
-  height: var(--font-size-xl);
-}
-
 .int-heading {
   display: flex;
   flex-direction: column;

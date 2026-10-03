@@ -185,6 +185,19 @@ test("every tile carries exactly one action, and which one follows the engine", 
   expect(within(slack).getByText("Not in use")).toBeTruthy();
 });
 
+// A TOOL NOBODY SET UP KEEPS ITS MARK, DRAINED: the kit's `muted` mark is the
+// glance that says "available, not connected" down the grid, and a tool that
+// is set up draws its own colours whatever its state.
+test("an unconfigured tool's mark is muted and a configured one's is not", async () => {
+  stubFetch({ status: 200, body: listing });
+  mount();
+  const mark = async (name: string) =>
+    (await tile(name)).querySelector(".int-brand .crewlet-vendor-mark") as Element;
+  expect((await mark("Slack")).classList.contains("crewlet-vendor-mark--muted")).toBe(true);
+  expect((await mark("GitLab")).classList.contains("crewlet-vendor-mark--muted")).toBe(false);
+  expect((await mark("Datadog")).classList.contains("crewlet-vendor-mark--muted")).toBe(false);
+});
+
 // ROTATE TOKEN OPENS THE SETTINGS FORM, SAYING WHY.
 test("rotate token opens the tool's form with the engine's reason", async () => {
   stubFetch({ status: 200, body: listing });

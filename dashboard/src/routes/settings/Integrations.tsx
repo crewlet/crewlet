@@ -49,6 +49,7 @@ import {
   SettingsGlyph,
   TriangleAlertGlyph,
 } from "@crewlethq/icons/glyphs";
+import { VendorMark, type Vendor } from "@crewlethq/icons";
 import { QueryState } from "~/components/common.tsx";
 import { DataGrid, type GridColumn } from "~/app/frame/DataGrid.tsx";
 import {
@@ -66,7 +67,6 @@ import { usePageLabels } from "~/app/Shell.tsx";
 import { useNow } from "~/lib/clock.ts";
 import { fmtDate, fmtDateTime, plural, relTime, tsKey } from "~/lib/format.ts";
 import { useRecheck } from "./recheck.ts";
-import { VendorMark, type Vendor } from "~/ui/VendorMark.tsx";
 import { useQuery } from "~/lib/useQuery.ts";
 import { useOrg } from "~/lib/store-hooks.ts";
 import { indexOrg, seatLookup } from "~/lib/seats.ts";
@@ -1470,7 +1470,10 @@ export function IntegrationTile({
     >
       <div className="int-tile-head">
         <span className="int-brand" aria-hidden>
-          <VendorMark vendor={entry.vendor} />
+          {/* DRAINED, NOT HIDDEN, when nothing is set up: the kit's word for
+              "available but not connected", read at a glance down the grid
+              without dimming the tile's text — see `.int-tile.is-absent`. */}
+          <VendorMark vendor={entry.vendor} size="lg" muted={present.length === 0} />
         </span>
         <span className="int-tile-title">
           <h2 className="int-name" id={nameID}>
@@ -1594,7 +1597,7 @@ export function EntryRow({
     return (
       <div className="int-card int-card-absent">
         <span className="int-brand" aria-hidden>
-          <VendorMark vendor={entry.vendor} />
+          <VendorMark vendor={entry.vendor} size="lg" muted />
         </span>
         <span className="int-heading">
           <span className="int-name">{entry.name}</span>
@@ -1619,7 +1622,7 @@ export function EntryRow({
           onClick={() => setOpen((was) => !was)}
         >
           <span className="int-brand" aria-hidden>
-            <VendorMark vendor={entry.vendor} />
+            <VendorMark vendor={entry.vendor} size="lg" />
           </span>
           <span className="int-heading">
             <span className="int-name">Agents and surfaces</span>
