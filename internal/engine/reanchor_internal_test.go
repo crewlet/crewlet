@@ -797,7 +797,7 @@ func TestAReanchorOfThePagesLogIsThePagesOwn(t *testing.T) {
 	if store == nil {
 		t.Fatal("the node runs no knowledge base")
 	}
-	if _, _, err := store.EnsureContainer(t.Context(), testChartAt, "ENG", "Engineering", "before"); err != nil {
+	if _, _, err := store.EnsureContainer(t.Context(), testActivation, "ENG", "Engineering", "before"); err != nil {
 		t.Fatalf("a page write before the rebuild: %v", err)
 	}
 	if res, err := e.native.Load().writer.EvictNode(t.Context(), "op-tracker", "node-x"); err != nil ||
@@ -849,7 +849,7 @@ func TestAReanchorOfThePagesLogIsThePagesOwn(t *testing.T) {
 		r := s.Domain(pages.Domain{}.Name()).runner
 		return r.StreamIdentity() == nil && r.Committed().Generation == gen
 	})
-	if _, changed, err := store.EnsureContainer(t.Context(), testChartAt, "ENG", "Engineering", "after"); err != nil || !changed {
+	if _, changed, err := store.EnsureContainer(t.Context(), testActivation, "ENG", "Engineering", "after"); err != nil || !changed {
 		t.Fatalf("a page write after the reanchor: changed %v, %v", changed, err)
 	}
 	waitUntil(t, 10*time.Second, "the page write to apply in the new generation", func() bool {
@@ -984,10 +984,10 @@ func readCursorRow(t *testing.T, e *Engine, domain string) cursorRow {
 	return cursorRow{at: at, created: created}
 }
 
-// testChartAt is the position on the org chart's log an internal test's direct
-// container writes are stamped with. Any positive position: what these cases
-// are about is not the chart, and the containers they write start at none.
-const testChartAt int64 = 1
+// testActivation is the activation an internal test's direct container writes
+// are stamped with. Any non-zero instant: what these cases are about is not the
+// chart, and the containers they write start at none.
+var testActivation = time.Date(2026, 1, 5, 9, 0, 0, 0, time.UTC)
 
 // reanchorOperator is who runs a reanchor in these cases: the author, the kind
 // of party and the credential every generation record carries.

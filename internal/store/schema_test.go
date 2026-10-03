@@ -117,10 +117,9 @@ func TestTheChartTablesShipTheColumnsAMigrationCannotAddLater(t *testing.T) {
 	db := openReplicated(t)
 	for table, column := range map[string]string{
 		"chart_units": "former_keys_json",
-		// And the additive column on a table this domain does not own,
-		// which is the tracker's chart guard now that the writer has
-		// moved onto it.
-		"tracker_projects": "chart_position",
+		// And the tracker's chart guard: the activation a project's
+		// chart-owned fields came from.
+		"tracker_projects": "chart_epoch",
 	} {
 		if cols := columnsOf(t, db, table); !slices.Contains(cols, column) {
 			t.Errorf("%s does not carry %s — an applied migration is history, "+
@@ -131,10 +130,10 @@ func TestTheChartTablesShipTheColumnsAMigrationCannotAddLater(t *testing.T) {
 	// AND THE ONE IT REPLACED IS GONE. A guard column with no writer is
 	// worse than an absent one: it reads as a fact about the row, a later
 	// reconcile is tempted to compare it, and what it actually holds is a
-	// wall-clock reading from whichever node last ran the old build.
-	if cols := columnsOf(t, db, "tracker_projects"); slices.Contains(cols, "chart_epoch") {
-		t.Error("tracker_projects still carries chart_epoch — nothing writes it " +
-			"since the chart guard moved onto chart_position, and a column no " +
+	// chart log position in a number space no activation stamp shares.
+	if cols := columnsOf(t, db, "tracker_projects"); slices.Contains(cols, "chart_position") {
+		t.Error("tracker_projects still carries chart_position — nothing writes it " +
+			"since the chart guard moved onto chart_epoch, and a column no " +
 			"writer fills is a value every reader is entitled to misread")
 	}
 	// AND SO IS THE ADDRESS INDEX nobody read. It held a sealed address's

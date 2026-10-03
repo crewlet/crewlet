@@ -4,6 +4,7 @@ import (
 	"context"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/configplane"
@@ -53,7 +54,7 @@ func TestTheLogsEpochFollowsThePublishedCompany(t *testing.T) {
 			t.Fatalf("parse the company: %v", err)
 		}
 		cfg.Tracker.Native = &config.TrackerNativeConfig{InboxRetentionDays: days}
-		status, stages, err := e.Apply(t.Context(), cfg)
+		status, stages, err := e.Apply(t.Context(), cfg, time.Now())
 		if err != nil || status != configplane.StatusOK {
 			t.Fatalf("Apply (%d days) = (%s, %v, %v), want ok", days, status, stages, err)
 		}

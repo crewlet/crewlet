@@ -92,6 +92,22 @@ type Company struct {
 	// direction — a derivation from the document is the one a derivation
 	// from rows should overwrite.
 	ChartAt int64
+
+	// ActivatedAt is the instant the revision this epoch was applied from
+	// was activated — the activation pointer's own ([coord.Activation.At]),
+	// or a boot's reading of the active revision's `activated_at` — and
+	// zero for a company no activation has named yet: a Tier B file a node
+	// booted with, which its reconciler publishes and applies with the
+	// pointer's instant before a seat is claimed.
+	//
+	// IT IS WHAT EVERY ROW DERIVED FROM THE CONFIGURATION IS STAMPED WITH
+	// ([configplane.ActivationStamp]) — the tracker's chart-owned project
+	// fields and the knowledge containers — so that an older configuration
+	// applied late on another node cannot walk a newer one back. Never the
+	// applying node's own clock: every node applies one activation
+	// separately, at its reconcile tick and again at every boot. See
+	// [Engine.applyChart].
+	ActivatedAt time.Time
 }
 
 // NewCompany builds an epoch from a validated config.

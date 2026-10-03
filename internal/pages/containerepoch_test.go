@@ -11,20 +11,21 @@ import (
 
 	js "github.com/crewlet/crewlet/internal/queue/jetstream"
 
+	"github.com/crewlet/crewlet/internal/configplane"
 	"github.com/crewlet/crewlet/internal/pages"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/store"
 )
 
-// chartAt is the packed position on the org chart's log of the nth chart a
-// case derives containers from, in the order the log holds them.
-func chartAt(n int) int64 {
-	return statelog.Position{Generation: 1, Seq: uint64(100 + 10*n)}.Packed()
+// activation is the instant of the nth configuration activation of a case, in
+// the order they were made.
+func activation(n int) time.Time {
+	return time.Date(2026, 1, 5, 9, 0, 0, 0, time.UTC).Add(time.Duration(n) * time.Minute)
 }
 
-// ensure writes one container's settings from one chart position and applies what
+// ensure writes one container's settings from one activation and applies what
 // it wrote, reporting whether it wrote anything.
-func (r *roundTrip) ensure(at int64, key, name, purpose string) bool {
+func (r *roundTrip) ensure(at time.Time, key, name, purpose string) bool {
 	r.t.Helper()
 	_, changed, err := r.store.EnsureContainer(r.t.Context(), at, key, name, purpose)
 	if err != nil {
@@ -46,8 +47,8 @@ func (r *roundTrip) container(key string) pages.Container {
 	return pages.Container{}
 }
 
-// A CONTAINER IS STAMPED WITH THE CHART POSITION ITS SETTINGS CAME FROM, and an
-// older chart position applied late writes nothing.
+// A CONTAINER IS STAMPED WITH THE ACTIVATION ITS SETTINGS CAME FROM, and an
+// older activation applied late writes nothing.
 //
 // A node whose chart applier is behind used to rewrite every container's name
 // and purpose back to its own old ones — the same walk-back the chart's
@@ -55,42 +56,42 @@ func (r *roundTrip) container(key string) pages.Container {
 func TestAnOlderChartDoesNotWalkAContainerBack(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
-	newer := chartAt(0) + 3
+	newer := activation(0).Add(3 * time.Millisecond)
 
 	if !r.ensure(newer, "ENG", "Platform", "ships it") {
 		t.Fatal("the first write wrote nothing — want a create")
 	}
-	if got, want := r.container("ENG").ChartPosition, newer; got != want {
-		t.Fatalf("the container is stamped %d, want the chart position's own %d", got, want)
+	if got, want := r.container("ENG").ChartEpoch, configplane.ActivationStamp(newer); got != want {
+		t.Fatalf("the container is stamped %d, want the activation's own %d", got, want)
 	}
 	end := r.logEnd()
 
-	// THE EARLIER CHART, three records older, arriving second.
-	if r.ensure(chartAt(0), "ENG", "Engineering", "builds it") {
-		t.Error("a chart three records older than the one applied wrote — it " +
+	// THE EARLIER CHART, three milliseconds older, arriving second.
+	if r.ensure(activation(0), "ENG", "Engineering", "builds it") {
+		t.Error("a chart three milliseconds older than the one applied wrote — it " +
 			"walks the newer names back")
 	}
 	if got := r.logEnd(); got != end {
-		t.Errorf("the older chart position put %d record(s) on the log", got-end)
+		t.Errorf("the older activation put %d record(s) on the log", got-end)
 	}
 	if c := r.container("ENG"); c.Name != "Platform" || c.Purpose != "ships it" {
-		t.Errorf("the container reads (%q, %q), want the newer chart position's", c.Name, c.Purpose)
+		t.Errorf("the container reads (%q, %q), want the newer activation's", c.Name, c.Purpose)
 	}
 
 	// AND A NEWER ONE STILL WRITES, even with nothing but the position to say:
-	// a container not re-stamped would let a chart position between the two
+	// a container not re-stamped would let a activation between the two
 	// walk it back.
-	if !r.ensure(chartAt(1), "ENG", "Platform", "ships it") {
-		t.Error("a later chart position with the same settings wrote nothing — the " +
-			"stamp would stay at the older chart position")
+	if !r.ensure(activation(1), "ENG", "Platform", "ships it") {
+		t.Error("a later activation with the same settings wrote nothing — the " +
+			"stamp would stay at the older activation")
 	}
-	if got, want := r.container("ENG").ChartPosition, chartAt(1); got != want {
-		t.Errorf("the container is stamped %d after the later chart position, want %d", got, want)
+	if got, want := r.container("ENG").ChartEpoch, configplane.ActivationStamp(activation(1)); got != want {
+		t.Errorf("the container is stamped %d after the later activation, want %d", got, want)
 	}
 }
 
-// A REAPPLY OF ONE CHART POSITION WRITES NOTHING, AND SETS RIGHT WHAT AN EQUAL
-// CHART POSITION WALKED BACK.
+// A REAPPLY OF ONE ACTIVATION WRITES NOTHING, AND SETS RIGHT WHAT AN EQUAL
+// ACTIVATION WALKED BACK.
 //
 // Every boot of every node reapplies the chart it holds, so a reapply that
 // wrote would be a record per boot per container. But two nodes deriving at
@@ -100,36 +101,36 @@ func TestAnOlderChartDoesNotWalkAContainerBack(t *testing.T) {
 func TestAReapplyWritesOnlyWhatDiffers(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
-	at := chartAt(0)
+	at := activation(0)
 	r.ensure(at, "ENG", "Platform", "ships it")
 	end := r.logEnd()
 	if r.ensure(at, "ENG", "Platform", "ships it") {
-		t.Error("reapplying one chart position wrote")
+		t.Error("reapplying one activation wrote")
 	}
 	if got := r.logEnd(); got != end {
-		t.Errorf("reapplying one chart position put %d record(s) on the log", got-end)
+		t.Errorf("reapplying one activation put %d record(s) on the log", got-end)
 	}
 
 	if !r.ensure(at, "ENG", "Engineering", "builds it") {
 		t.Fatal("the premise: settings that differ at an equal stamp are written")
 	}
 	if !r.ensure(at, "ENG", "Platform", "ships it") {
-		t.Error("the reapply of the current chart position did not set its settings back")
+		t.Error("the reapply of the current activation did not set its settings back")
 	}
 	if c := r.container("ENG"); c.Name != "Platform" {
 		t.Errorf("the container is named %q, want Platform", c.Name)
 	}
 }
 
-// A CONTAINER WRITE MUST NAME ITS CHART POSITION. There is no honest default: a
+// A CONTAINER WRITE MUST NAME ITS ACTIVATION. There is no honest default: a
 // zero position would stamp every container as older than any chart.
-func TestAContainerWriteRefusesToGuessItsChartPosition(t *testing.T) {
+func TestAContainerWriteRefusesToGuessItsChartEpoch(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
 	end := r.logEnd()
-	_, _, err := r.store.EnsureContainer(t.Context(), 0, "ENG", "Engineering", "")
-	if !errors.Is(err, pages.ErrNoChartPosition) {
-		t.Fatalf("a container write with no chart position = %v, want ErrNoChartPosition", err)
+	_, _, err := r.store.EnsureContainer(t.Context(), time.Time{}, "ENG", "Engineering", "")
+	if !errors.Is(err, pages.ErrNoActivation) {
+		t.Fatalf("a container write with no activation = %v, want ErrNoActivation", err)
 	}
 	if got := r.logEnd(); got != end {
 		t.Errorf("a refused write put %d record(s) on the log", got-end)
@@ -144,14 +145,14 @@ func TestAContainerWriteRefusesToGuessItsChartPosition(t *testing.T) {
 func TestAContainerKeepsItsCreationThroughAnUpdate(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
-	r.ensure(chartAt(0), "ENG", "Engineering", "")
+	r.ensure(activation(0), "ENG", "Engineering", "")
 	created := r.container("ENG").CreatedAt
 	if created.IsZero() {
 		t.Fatal("the created container has no creation instant")
 	}
 	// A LATER RECORD, which the broker stores at a later instant.
 	time.Sleep(10 * time.Millisecond)
-	r.ensure(chartAt(1), "ENG", "Platform", "")
+	r.ensure(activation(1), "ENG", "Platform", "")
 	if got := r.container("ENG").CreatedAt; !got.Equal(created) {
 		t.Errorf("the container reads as created at %s after an update, want %s",
 			got, created)
@@ -172,7 +173,7 @@ func TestAContainerRecordCarriesTheVersionThatAddedItsPosition(t *testing.T) {
 	if got := (pages.Domain{}).RecordVersion(); got != 3 {
 		t.Fatalf("this build reads record version %d, want 3", got)
 	}
-	r.ensure(chartAt(0), "ENG", "Engineering", "")
+	r.ensure(activation(0), "ENG", "Engineering", "")
 	if env := r.envelopeAt(r.logEnd()); env.V != 3 {
 		t.Errorf("a container record carries version %d, want 3", env.V)
 	}
@@ -214,7 +215,7 @@ func TestAContainerRecordCarriesTheVersionThatAddedItsPosition(t *testing.T) {
 func TestAnOlderBuildRetainsAContainerRecord(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
-	r.ensure(chartAt(0), "ENG", "Engineering", "builds it")
+	r.ensure(activation(0), "ENG", "Engineering", "builds it")
 	r.write(pages.Actor{Handle: "ops-1", Kind: pages.AuthorOperator},
 		pages.NewPage{Container: "OPS", Title: "runbook"})
 	// A BARRIER, which every build must apply: it is appended for every
@@ -348,7 +349,7 @@ func (o *olderNode) container(key string) (pages.Container, bool) {
 // IT, and a node still on the previous build holds it back rather than
 // applying it without the stamp — then lands it, stamp and all, once upgraded.
 //
-// A row an older build wrote carries no stamp, and every later chart position
+// A row an older build wrote carries no stamp, and every later activation
 // moves it, so the first upgraded node re-stamps every chart-named container
 // on its first apply. Those records were once written at version 1, so that an
 // older node would apply them and not hold back the page writes in the space.
@@ -372,23 +373,23 @@ func TestARestampIsHeldBackRatherThanAppliedWithoutItsStamp(t *testing.T) {
 	})
 	r.drain()
 
-	if !r.ensure(chartAt(1), "ENG", "Engineering", "") {
-		t.Fatal("the premise: an unstamped row is re-stamped by the first chart position")
+	if !r.ensure(activation(1), "ENG", "Engineering", "") {
+		t.Fatal("the premise: an unstamped row is re-stamped by the first activation")
 	}
 	if env := r.envelopeAt(r.logEnd()); env.V != 3 {
 		t.Errorf("a re-stamp of unchanged settings carries version %d, want 3 — "+
 			"a build reading 1 would apply it and drop the stamp", env.V)
 	}
-	stamped := chartAt(1)
-	if c := r.container("ENG"); c.ChartPosition != stamped {
-		t.Errorf("the re-stamp stamped the row %d, want %d", c.ChartPosition, stamped)
+	stamped := configplane.ActivationStamp(activation(1))
+	if c := r.container("ENG"); c.ChartEpoch != stamped {
+		t.Errorf("the re-stamp stamped the row %d, want %d", c.ChartEpoch, stamped)
 	}
 	r.write(pages.Actor{Handle: "ops-1", Kind: pages.AuthorOperator},
 		pages.NewPage{Container: "ENG", Title: "a page"})
 
 	older := r.newOlderNode()
 	older.run(versionOneBuild{}, nil)
-	if c, ok := older.container("ENG"); !ok || c.ChartPosition != 0 {
+	if c, ok := older.container("ENG"); !ok || c.ChartEpoch != 0 {
 		t.Errorf("the older node's ENG row is (%+v, held %v), want the unstamped "+
 			"one the older build wrote — it cannot have read a stamp", c, ok)
 	}
@@ -406,32 +407,32 @@ func TestARestampIsHeldBackRatherThanAppliedWithoutItsStamp(t *testing.T) {
 	older.run(pages.Domain{}, func() bool {
 		return older.count(`SELECT COUNT(*) FROM pages_log_deferred`) == 0
 	})
-	if c, _ := older.container("ENG"); c.ChartPosition != stamped {
+	if c, _ := older.container("ENG"); c.ChartEpoch != stamped {
 		t.Errorf("the upgraded node's ENG row is stamped %d, want the re-stamp's "+
 			"%d — its guard has nothing to refuse a stale chart with",
-			c.ChartPosition, stamped)
+			c.ChartEpoch, stamped)
 	}
 	if n := older.count(`SELECT COUNT(*) FROM pages_heads WHERE container = 'ENG'`); n != 1 {
 		t.Errorf("the upgraded node holds %d page(s) in ENG, want the one written there", n)
 	}
 
-	// THE GUARD STILL HOLDS on the row the re-stamp stamped: a chart position
+	// THE GUARD STILL HOLDS on the row the re-stamp stamped: a activation
 	// older than it leaves the settings alone.
-	if r.ensure(chartAt(0), "ENG", "Walked Back", "") {
-		t.Error("a chart position older than the re-stamp rewrote the container")
+	if r.ensure(activation(0), "ENG", "Walked Back", "") {
+		t.Error("a activation older than the re-stamp rewrote the container")
 	}
 	// AND A REAL CHANGE IS WRITTEN AT THE VERSION THAT CARRIES ITS STAMP TOO.
-	if !r.ensure(chartAt(2), "ENG", "Platform", "") {
-		t.Fatal("a rename under a later chart position wrote nothing")
+	if !r.ensure(activation(2), "ENG", "Platform", "") {
+		t.Fatal("a rename under a later activation wrote nothing")
 	}
 	if env := r.envelopeAt(r.logEnd()); env.V != 3 {
 		t.Errorf("a change to a container's settings carries version %d, want 3", env.V)
 	}
 }
 
-// A VERSION-1 CONTAINER RECORD — an older node's — APPLIES AS POSITION 0, older
+// A VERSION-1 CONTAINER RECORD — an older node's — APPLIES AS EPOCH 0, older
 // than every chart this build stamps, so the next chart's write replaces it.
-func TestAnOlderNodesContainerRecordAppliesAsPositionZero(t *testing.T) {
+func TestAnOlderNodesContainerRecordAppliesAsEpochZero(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
 	r.publishRaw(pages.MutationRecord{
@@ -444,19 +445,19 @@ func TestAnOlderNodesContainerRecordAppliesAsPositionZero(t *testing.T) {
 		Mutation: []byte(`{"v":1,"key":"ENG","name":"Engineering"}`),
 	})
 	r.drain()
-	if c := r.container("ENG"); c.Name != "Engineering" || c.ChartPosition != 0 {
+	if c := r.container("ENG"); c.Name != "Engineering" || c.ChartEpoch != 0 {
 		t.Fatalf("an older node's container record applied as (%q, %d), want "+
-			"(Engineering, 0)", c.Name, c.ChartPosition)
+			"(Engineering, 0)", c.Name, c.ChartEpoch)
 	}
-	if !r.ensure(chartAt(0), "ENG", "Platform", "") {
-		t.Fatal("the first stamped chart position did not replace an unstamped container")
+	if !r.ensure(activation(0), "ENG", "Platform", "") {
+		t.Fatal("the first stamped activation did not replace an unstamped container")
 	}
 	if c := r.container("ENG"); c.Name != "Platform" {
 		t.Errorf("the container is named %q, want Platform", c.Name)
 	}
 }
 
-// TWO NODES APPLYING ONE CHART POSITION PUT ONE RECORD ON THE LOG — the second
+// TWO NODES APPLYING ONE ACTIVATION PUT ONE RECORD ON THE LOG — the second
 // decided a create on rows that did not have the first's yet, lost the
 // broker's arbitration, and re-decided on the rows the winner wrote. And it
 // says it wrote nothing, because only its last round is what it did.
@@ -466,13 +467,13 @@ func TestTwoNodesEnsuringOneContainerWriteOnce(t *testing.T) {
 	b := newRoundTripOn(t, a.log, openNodeStore(t, "node-b.db"), "node-b")
 	b.applyWhileWriting()
 
-	if _, changed, err := a.store.EnsureContainer(t.Context(), chartAt(0),
+	if _, changed, err := a.store.EnsureContainer(t.Context(), activation(0),
 		"ENG", "Engineering", ""); err != nil || !changed {
 		t.Fatalf("node a's write = (%v, %v), want a create", changed, err)
 	}
 	end := a.logEnd()
 	// NODE B HAS NOT APPLIED NODE A'S RECORD.
-	_, changed, err := b.store.EnsureContainer(t.Context(), chartAt(0),
+	_, changed, err := b.store.EnsureContainer(t.Context(), activation(0),
 		"ENG", "Engineering", "")
 	if err != nil {
 		t.Fatalf("node b's write: %v — losing the arbitration to an identical "+
@@ -500,7 +501,7 @@ func TestAnUnknownContainerWriteIsAnError(t *testing.T) {
 		pages.Domain{}, time.Now().Add(time.Hour)); err != nil {
 		t.Fatalf("record the ledger's watermark: %v", err)
 	}
-	_, changed, err := r.store.EnsureContainer(t.Context(), chartAt(0),
+	_, changed, err := r.store.EnsureContainer(t.Context(), activation(0),
 		"ENG", "Engineering", "")
 	if err == nil {
 		t.Fatalf("an unknown outcome was reported as success (changed %v)", changed)

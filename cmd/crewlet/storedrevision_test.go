@@ -197,7 +197,7 @@ func TestARevisionCarryingAChartIsShownExportedAndRefusedAtBoot(t *testing.T) {
 	cfg := bootstrapForStore(t, dir)
 	id := activateStored(t, cfg, duplicateKeysRevision)
 
-	company, err := companyFromStore(t.Context(), cfg)
+	company, _, err := companyFromStore(t.Context(), cfg)
 	if err == nil {
 		t.Fatalf("a node booted onto a revision that carries a chart: %+v", company)
 	}
@@ -239,7 +239,7 @@ func TestBootingOnARevisionThisBuildCannotRunNamesTheRevision(t *testing.T) {
 	cfg := bootstrapForStore(t, dir)
 	id := activateStored(t, cfg, storedRevisionDoc)
 
-	company, err := companyFromStore(t.Context(), cfg)
+	company, _, err := companyFromStore(t.Context(), cfg)
 	if err == nil {
 		t.Fatalf("a node booted onto a revision this build cannot run: %+v", company)
 	}

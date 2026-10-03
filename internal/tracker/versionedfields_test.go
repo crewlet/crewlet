@@ -37,7 +37,7 @@ func TestAClosedRecordVersionGainsNoField(t *testing.T) {
 		9:  {"TaskCreate.Origin"},
 		10: {"TurnRecord.FailedIn", "TurnRecord.Review", "TurnRecord.Summary", "TurnRecord.Tools"},
 		11: {"TaskPatch.Moving"},
-		12: {"Project.ChartPosition"},
+		12: {"Project.ChartEpoch"},
 		13: {"Snapshot.KeyCollision"},
 	}
 	got := map[int][]string{}

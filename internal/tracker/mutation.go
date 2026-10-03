@@ -51,7 +51,7 @@ import (
 // account of what the segment did: [TurnRecord.Summary], [TurnRecord.Review],
 // [TurnRecord.Tools] and [TurnRecord.FailedIn]. Version 11 is the
 // cross-project move's marker on a task patch: [TaskPatch.Moving]. Version 12
-// is a project's chart stamp as a LOG POSITION: [Project.ChartPosition].
+// is a project's chart stamp: [Project.ChartEpoch].
 // Version 13 is a wake that says its key opens another task:
 // [Snapshot.KeyCollision].
 const RecordVersion = 13
@@ -231,8 +231,8 @@ var versionedFields = statelog.RecordFields{
 	// reached it last, where every upgraded node follows the newest. EVERY
 	// OP, for [Project.TargetDate]'s reason: a project document is written
 	// whole by the chart apply and by a lead's edit alike.
-	{Name: "Project.ChartPosition", Since: 12,
-		Path: []string{"mutation", "chart_position"}},
+	{Name: "Project.ChartEpoch", Since: 12,
+		Path: []string{"mutation", "chart_epoch"}},
 	// A WAKE WHOSE KEY OPENS ANOTHER TASK, at version 13. The applier
 	// stores no row from it — the inbox derives its own collision from the
 	// key directory at read — but a wake is RENDERED from the record by

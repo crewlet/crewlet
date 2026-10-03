@@ -410,7 +410,7 @@ func (a *Applier) applyContainer(ctx context.Context, tx *sql.Tx, at applyContex
 	}
 	document, err := EncodeContainer(Container{
 		V: DocumentVersion, Key: c.Key, Name: c.Name, Purpose: c.Purpose,
-		ChartPosition: c.ChartPosition, CreatedAt: created,
+		ChartEpoch: c.ChartEpoch, CreatedAt: created,
 	})
 	if err != nil {
 		return 0, err

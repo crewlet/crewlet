@@ -33,8 +33,9 @@ func TestAFirstCompanyBringsUpTheNativeBackendsWithoutARestart(t *testing.T) {
 		t.Fatal("the premise: a node with no company runs no native backend")
 	}
 
+	activated := time.Date(2026, 3, 2, 10, 0, 0, 0, time.UTC)
 	status, applied, err := e.Apply(t.Context(),
-		parsedCompany(t, chartCompany("builds it")))
+		parsedCompany(t, chartCompany("builds it")), activated)
 	if err != nil || status != configplane.StatusOK {
 		t.Fatalf("Apply = (%s, %v, %v), want ok", status, applied, err)
 	}
@@ -57,13 +58,13 @@ func TestAFirstCompanyBringsUpTheNativeBackendsWithoutARestart(t *testing.T) {
 		}
 	}
 
-	// THE CHART, seeded from the document as a boot would have seeded it —
-	// the chart was empty and this is the node's first company — and its
-	// project and space stamped with the position that chart was read at.
-	if purpose, _ := eventuallyStampedAtView(t, e, "ENG", "ENGDOCS"); purpose != "builds it" {
-		t.Errorf("the chart's project reads %q, want \"builds it\"", purpose)
+	// THE CHART, stamped with the activation that brought it.
+	purpose, epoch := eventuallyProject(t, e, "ENG")
+	if purpose != "builds it" || epoch != configplane.ActivationStamp(activated) {
+		t.Errorf("the chart's project is (%q, %d), want (\"builds it\", %d)",
+			purpose, epoch, configplane.ActivationStamp(activated))
 	}
-	if space := containerRow(t, e, "ENGDOCS"); space.Purpose != "builds it" {
+	if space := eventuallyContainer(t, e, "ENGDOCS"); space.Purpose != "builds it" {
 		t.Errorf("the unit's knowledge space reads %q", space.Purpose)
 	}
 

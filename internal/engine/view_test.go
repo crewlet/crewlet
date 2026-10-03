@@ -70,7 +70,7 @@ func TestAValueAReaderHoldsNeverMovesUnderIt(t *testing.T) {
 	// AND THEN THE SETTINGS, through an apply.
 	grown := parsedCompany(t, strings.Replace(seedCompanyDoc,
 		"name: Acme\n", "name: Acme\nmission: ship it\n", 1))
-	if _, _, err := e.Apply(t.Context(), grown); err != nil {
+	if _, _, err := e.Apply(t.Context(), grown, time.Now()); err != nil {
 		t.Fatalf("apply: %v", err)
 	}
 	if held.Config.Name != name || held.Config.Mission != "" {
@@ -155,7 +155,7 @@ func TestASettingsApplyAndAChartSwapRaceCleanly(t *testing.T) {
 			mission := strings.Repeat("a", i+1)
 			grown := parsedCompany(t, strings.Replace(seedCompanyDoc,
 				"name: Acme\n", "name: Acme\nmission: "+mission+"\n", 1))
-			if _, _, err := e.Apply(t.Context(), grown); err != nil {
+			if _, _, err := e.Apply(t.Context(), grown, time.Now()); err != nil {
 				return
 			}
 		}

@@ -176,15 +176,15 @@ type ContainerPayload struct {
 	Name    string `json:"name,omitempty"`
 	Purpose string `json:"purpose,omitempty"`
 
-	// ChartPosition is the packed position on the org chart's log of the
-	// chart these settings were derived from, which the next EnsureContainer
-	// compares against so a node applying an older chart late cannot walk a
-	// newer one back. Record version 3 onwards — the row in
+	// ChartEpoch is the activation these settings were derived from
+	// ([configplane.ActivationStamp]), which the next EnsureContainer
+	// compares against so a node applying an older configuration late
+	// cannot walk a newer one back. Record version 3 onwards — the row in
 	// [versionedFields], which is why a record carrying it, a re-stamp of
 	// unchanged settings included, is held back by a build that cannot read
 	// it rather than applied without it. A record carrying none applies as
-	// position 0 — older than every chart this build stamps.
-	ChartPosition int64 `json:"chart_position,omitempty"`
+	// epoch 0 — older than every activation this build stamps.
+	ChartEpoch int64 `json:"chart_epoch,omitempty"`
 }
 
 // StatusPayload is a trash, a restore or a purge — the three ops that change

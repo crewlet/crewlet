@@ -1,0 +1,24 @@
+-- A project is stamped with the ACTIVATION its chart-owned fields came from
+-- again: `tracker_projects.chart_epoch` comes back and `chart_position` goes.
+--
+-- 0031 added `chart_position`, the position on the org chart's own log the
+-- project's name, purpose and unit were derived at, and 0033 dropped 0002's
+-- `chart_epoch` once nothing wrote it. The org chart is going back into the
+-- company document, so the fields are derived from an ACTIVATED REVISION and
+-- the guard that stops an older configuration walking a newer one back is the
+-- instant that revision was activated, in Unix milliseconds
+-- (`configplane.ActivationStamp`) — the instant on the fleet's activation
+-- pointer, which every node reads and which a later activation always carries
+-- later (`coord.ActivationAt`).
+--
+-- A NEW COLUMN RATHER THAN A RENAME, because the values do not carry: a packed
+-- log position and a Unix-milliseconds instant are different number spaces,
+-- and a position read as an instant would be a stamp decades in the past or
+-- far in the future. Every existing row starts at 0, which every activation
+-- outranks, so the first apply after this lands re-stamps each project once.
+--
+-- ADDED BEFORE THE DROP, in one file, so no reader ever meets a table with
+-- neither guard. NO INDEX NAMES EITHER (0002's indexes are over the unit and
+-- the archived flag).
+ALTER TABLE tracker_projects ADD COLUMN chart_epoch INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE tracker_projects DROP COLUMN chart_position;

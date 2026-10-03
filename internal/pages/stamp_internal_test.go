@@ -82,7 +82,7 @@ func TestAPagesRecordIsStampedWithTheLowestVersionThatReadsIt(t *testing.T) {
 //
 // Version 2 is retired (see [RecordVersion]), so nothing this build writes is
 // stamped there: a container's settings go from 1 straight to 3.
-func TestTheContainerChartPositionIsStampedAtVersionThree(t *testing.T) {
+func TestTheContainerChartEpochIsStampedAtVersionThree(t *testing.T) {
 	t.Parallel()
 	container := func(mutation string) MutationRecord {
 		rec := stampRecord(0, OpPatch, mutation)
@@ -95,7 +95,7 @@ func TestTheContainerChartPositionIsStampedAtVersionThree(t *testing.T) {
 		want int
 	}{
 		"settings carrying their chart position": {
-			container(`{"v":1,"key":"ENG","name":"Engineering","chart_position":1099511627876}`), 3},
+			container(`{"v":1,"key":"ENG","name":"Engineering","chart_epoch":1767603600000}`), 3},
 		"settings an older build wrote, with none": {
 			container(`{"v":1,"key":"ENG","name":"Engineering"}`), 1},
 		"a page patch": {stampRecord(0, OpPatch, `{"body":"x"}`), 1},
@@ -117,10 +117,10 @@ func TestTheContainerChartPositionIsStampedAtVersionThree(t *testing.T) {
 	// retired version is below it too, so a record set there is refused
 	// the same way.
 	for _, v := range []int{1, 2} {
-		below := container(`{"v":1,"key":"ENG","name":"Engineering","chart_position":1099511627876}`)
+		below := container(`{"v":1,"key":"ENG","name":"Engineering","chart_epoch":1767603600000}`)
 		below.V = v
 		if _, err := Encode(below); err == nil ||
-			!strings.Contains(err.Error(), "ContainerPayload.ChartPosition (version 3)") {
+			!strings.Contains(err.Error(), "ContainerPayload.ChartEpoch (version 3)") {
 			t.Fatalf("a container record set at version %d carrying its chart "+
 				"position encoded: %v", v, err)
 		}

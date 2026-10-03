@@ -98,7 +98,7 @@ func TestAnEvictedNodesRealWritesAreDroppedByTheApplier(t *testing.T) {
 	// Without it a harness that applied nothing of this node's would pass
 	// the case below.
 	writeView("op-view-before", "v-before")
-	if _, _, err := n.pages.EnsureContainer(t.Context(), testChartAt, "BEFORE",
+	if _, _, err := n.pages.EnsureContainer(t.Context(), testActivation, "BEFORE",
 		"Before", ""); err != nil {
 		t.Fatalf("the control container write: %v", err)
 	}
@@ -131,7 +131,7 @@ func TestAnEvictedNodesRealWritesAreDroppedByTheApplier(t *testing.T) {
 			"has to LAND for the gate to have anything to drop", res.Outcome)
 	}
 	viewAt := res.Position
-	if _, _, err := n.pages.EnsureContainer(t.Context(), testChartAt, "EVICTED",
+	if _, _, err := n.pages.EnsureContainer(t.Context(), testActivation, "EVICTED",
 		"Evicted", ""); err != nil {
 		t.Fatalf("the evicted node's container write: %v", err)
 	}

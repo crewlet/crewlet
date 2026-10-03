@@ -600,7 +600,7 @@ func (r *Reconciler) applyRevision(ctx context.Context, target coord.Activation)
 		return configplane.StatusError, nil, fmt.Errorf("engine: revision %s is not a "+
 			"runnable company; activate a corrected revision: %w", target.RevisionID, invalid)
 	}
-	status, applied, err := r.engine.Apply(ctx, cfg)
+	status, applied, err := r.engine.Apply(ctx, cfg, target.At)
 	if status == configplane.StatusOK {
 		// ON THE SUCCESS BRANCH ONLY, which is what makes both warnings once
 		// per node per applied epoch: Tick never re-applies an epoch this node

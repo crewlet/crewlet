@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/configplane"
 	"github.com/crewlet/crewlet/internal/pages"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/statelog/statelogtest"
@@ -87,7 +88,7 @@ func suiteWrite(ctx context.Context, pub *statelog.Publisher, db *store.DB) erro
 	if err != nil {
 		return err
 	}
-	_, _, err = s.EnsureContainer(ctx, chartAt(0), suiteContainer, "The suite's space", "")
+	_, _, err = s.EnsureContainer(ctx, activation(0), suiteContainer, "The suite's space", "")
 	return err
 }
 
@@ -100,10 +101,10 @@ func suiteWrite(ctx context.Context, pub *statelog.Publisher, db *store.DB) erro
 // as the path being wrong, which is a fixture fault dressed as a domain one.
 func carryingSuiteField(field statelog.VersionedField) ([]byte, error) {
 	switch field.Name {
-	case "ContainerPayload.ChartPosition":
+	case "ContainerPayload.ChartEpoch":
 		body, err := marshal(pages.ContainerPayload{
 			V: pages.DocumentVersion, Key: suiteContainer, Name: "The suite's space",
-			ChartPosition: chartAt(0),
+			ChartEpoch: configplane.ActivationStamp(activation(0)),
 		})
 		if err != nil {
 			return nil, err

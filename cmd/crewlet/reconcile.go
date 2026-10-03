@@ -394,12 +394,18 @@ func nudge(ctx context.Context, pub queue.Publisher, revision store.Revision,
 }
 
 // bootOptions is what `crewlet run` builds its engine from: the Tier A it
-// loaded and the company this node starts on.
+// loaded, the company this node starts on, and the instant that company was
+// activated at.
 //
 // With a Tier B file the company is that file's, which the reconcile converges
-// onto the fleet's before anything is claimed, and the store is not read at
-// all. Without one it is whatever this node's store has marked active
-// ([companyFromStore]).
+// onto the fleet's before anything is claimed — and a file's company has NO
+// ACTIVATION YET, so its instant stays zero and the engine leaves its chart to
+// the reconciler's first tick, which publishes the file and applies it with
+// the pointer's own instant. Without one it is whatever this node's store has
+// marked active, WITH the instant it was activated at ([companyFromStore]),
+// which is what the engine stamps the chart and the knowledge spaces with at
+// boot ([engine.Options.ActivatedAt]): a boot that dropped it would stamp
+// nothing at all, and the company's projects would wait for the next apply.
 //
 // ONE VALUE, handed to the engine WHOLE, so no field of it can be decided here
 // and dropped at the call site. Read BEFORE the engine, in its own
@@ -411,11 +417,11 @@ func bootOptions(ctx context.Context, bootstrapPath string, boot *config.Bootstr
 	if file != nil {
 		return opts, nil
 	}
-	company, err := companyFromStore(ctx, bootstrapPath)
+	company, activatedAt, err := companyFromStore(ctx, bootstrapPath)
 	if err != nil {
 		return engine.Options{}, err
 	}
-	opts.Company = company
+	opts.Company, opts.ActivatedAt = company, activatedAt
 	return opts, nil
 }
 
@@ -427,6 +433,12 @@ func bootOptions(ctx context.Context, bootstrapPath string, boot *config.Bootstr
 // is guess: it reads the revision the node's own database marks active, which
 // is what the reconciler is about to converge from anyway.
 //
+// It also answers WHEN the revision was activated — the instant this node's
+// store recorded with its active copy, which is the fleet pointer's own
+// instant for a revision the fleet activated. The engine stamps the org
+// chart's projects with it, so a restart re-applying the same activation is
+// recognised as one and writes nothing (see [engine.Options.ActivatedAt]).
+//
 // A nil company with a nil error is the UNCONFIGURED case — no file and no
 // revision — and it is a state, not a failure. The node serves its API so an
 // operator can push the first revision into it.
@@ -437,25 +449,25 @@ func bootOptions(ctx context.Context, bootstrapPath string, boot *config.Bootstr
 // for the whole run. Two sequential opens at boot cost one migration pass over
 // an already-migrated file; a split lifetime costs a leaked store on every
 // error path that does not know it now has one.
-func companyFromStore(ctx context.Context, bootstrapPath string) (*config.Company, error) {
+func companyFromStore(ctx context.Context, bootstrapPath string) (*config.Company, time.Time, error) {
 	cs, closeStore, err := openConfigStore(ctx, bootstrapPath,
 		"Another `crewlet run` holds this node's store: stop it before "+
 			"starting a second, since one store belongs to one process.")
 	if err != nil {
-		return nil, err
+		return nil, time.Time{}, err
 	}
 	defer closeStore()
 
 	active, found, err := cs.configs.Active(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("read the active revision: %w", err)
+		return nil, time.Time{}, fmt.Errorf("read the active revision: %w", err)
 	}
 	if !found {
-		return nil, nil
+		return nil, time.Time{}, nil
 	}
 	document, err := openStored(cs.cipher, active)
 	if err != nil {
-		return nil, err
+		return nil, time.Time{}, err
 	}
 	// AS SETTINGS: a stored revision is the company's settings and the org
 	// chart is the state log's own domain. A revision carrying a chart is
@@ -463,7 +475,7 @@ func companyFromStore(ctx context.Context, bootstrapPath string) (*config.Compan
 	// [config.DecodeSettings], whose refusal names where the chart lives.
 	company, err := config.DecodeSettingsAsCompany(document)
 	if err != nil {
-		return nil, fmt.Errorf("parse the active revision %s: %w", active.ID, err)
+		return nil, time.Time{}, fmt.Errorf("parse the active revision %s: %w", active.ID, err)
 	}
 	// VALIDATED HERE, naming the revision, because booting is applying and
 	// the stored-form decode holds a revision to no rule. The engine checks
@@ -476,9 +488,9 @@ func companyFromStore(ctx context.Context, bootstrapPath string) (*config.Compan
 	// about it once it applies the epoch (see
 	// [config.Company.ValidateRunnable]).
 	if err := company.ValidateRunnable(); err != nil {
-		return nil, fmt.Errorf("the active revision %s cannot run on this build; "+
+		return nil, time.Time{}, fmt.Errorf("the active revision %s cannot run on this build; "+
 			"import a corrected document with `crewlet config import` and start "+
 			"again: %w", active.ID, err)
 	}
-	return company, nil
+	return company, active.ActivatedAt, nil
 }

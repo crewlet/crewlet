@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/configplane"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
@@ -40,22 +41,36 @@ import (
 // every task filed under it out of reach — a data loss with a typo as its
 // trigger. What the chart stops naming simply stops being reconciled.
 //
-// # Idempotence, and why a matching row is the thing that decides it
+// # The epoch is the ACTIVATION's instant
+//
+// activatedAt is when the configuration this chart came from was activated —
+// the instant on the fleet's activation pointer, which every node reads and a
+// node keeps as its active revision's `activated_at` — and it is the project's
+// epoch ([configplane.ActivationStamp]). Never the apply's own clock: every
+// node applies one activation separately, at its reconcile tick and again at
+// every boot, so an instant read there differs on every one of them and both
+// things the epoch is for stop working. A node that boots on a stale revision
+// would stamp NOW and walk the fleet's newer names back to its own old ones,
+// and no second apply would ever carry the epoch the first stamped, so every
+// apply on every node would be a record per project for a value nobody
+// changed. The zero instant is refused ([ErrNoChartActivation]): there is no
+// honest default, and a caller holding no activation has no chart to apply.
+//
+// # Idempotence, and why it is per project
 //
 // Each project is its own append on its own subject, so N nodes running this
 // at once contend per project and exactly one wins each; the losers re-decide
 // on the rows the winner wrote, see the value they wanted already there and
-// write nothing.
+// write nothing. A project already stamped ABOVE the epoch is left alone, and
+// one stamped AT it with the same three values is too — which is what makes a
+// reconcile on every apply and every boot cost nothing after the first node
+// has done it.
 //
-// WHAT MAKES A RECONCILE FREE IS THE ROW MATCHING, never the stamp. This runs
-// on every apply, on every boot and on every chart write, and `at` moves on
-// each of those — so a guard that rewrote a project whose three fields already
-// said what the chart says would rewrite EVERY project, on EVERY node, every
-// time. Which is what a stamp keyed on the applying node's own clock did: two
-// nodes seconds apart minted two epochs, each higher than the other's, and the
-// pair rewrote the whole catalogue back and forth for the life of the
-// deployment, once per apply and once per boot. So the fields are compared
-// FIRST and the position is consulted only when they differ.
+// THE STAMP IS COMPARED BEFORE THE FIELDS. A row whose three fields already
+// match but whose stamp is OLDER is re-stamped: left at the older activation,
+// it is open to any activation between the two that no node applied before it
+// was superseded and that a slow node applies late. One record per project per
+// activation is what that costs, never one per apply.
 //
 // It returns the projects it actually wrote, so a caller can log the change
 // rather than the attempt; a write whose outcome is `unknown` is an error,
@@ -68,7 +83,13 @@ import (
 // say so and return at the first failure, so a chart whose first project hit a
 // full stream or an unknown outcome reconciled none of the projects after it —
 // on every apply, for as long as that one kept failing.
-func (w *Writer) ApplyChart(ctx context.Context, at int64, chart []ChartProject) ([]string, error) {
+func (w *Writer) ApplyChart(ctx context.Context, activatedAt time.Time,
+	chart []ChartProject) ([]string, error) {
+
+	if activatedAt.IsZero() {
+		return nil, ErrNoChartActivation
+	}
+	epoch := configplane.ActivationStamp(activatedAt)
 	var (
 		wrote  []string
 		failed []error
@@ -77,7 +98,7 @@ func (w *Writer) ApplyChart(ctx context.Context, at int64, chart []ChartProject)
 		if p.Key == "" {
 			continue
 		}
-		changed, err := w.applyChartProject(ctx, at, p)
+		changed, err := w.applyChartProject(ctx, epoch, p)
 		if err != nil {
 			failed = append(failed, fmt.Errorf("tracker: reconcile project %s "+
 				"from the org chart: %w", p.Key, err))
@@ -99,8 +120,13 @@ type ChartProject struct {
 	Unit    string
 }
 
+// ErrNoChartActivation refuses a chart apply that does not name the activation
+// it came from. See [Writer.ApplyChart].
+var ErrNoChartActivation = errors.New("tracker: a chart apply must name the " +
+	"instant its configuration was activated")
+
 // applyChartProject writes one, or decides there is nothing to write.
-func (w *Writer) applyChartProject(ctx context.Context, at int64,
+func (w *Writer) applyChartProject(ctx context.Context, epoch int64,
 	p ChartProject) (bool, error) {
 
 	subject := ProjectSubject(p.Key)
@@ -134,31 +160,25 @@ func (w *Writer) applyChartProject(ctx context.Context, at int64,
 					V: DocumentVersion, Key: p.Key, CreatedAt: now,
 				}
 			}
-			// THE ROW ALREADY SAYS IT, whatever position said so.
-			//
-			// An empty decision is a legitimate outcome rather than
-			// an error — see [statelog.Decision.Payload] — and this
-			// is the arm that makes a reconcile on every apply, every
-			// boot and every chart write cost one local read. It is
-			// deliberately BEFORE the guard below: a row that already
-			// holds these three values has nothing to walk back, so
-			// there is nothing for a position to arbitrate.
-			if held && next.Name == p.Name && next.Purpose == p.Purpose &&
-				next.Unit == p.Unit {
-
+			// A LATER CHART ALREADY WON. Two nodes applying two
+			// revisions is ordinary during a rollout, and the newer
+			// one must not be walked back by the older node's own
+			// reconcile arriving second.
+			if held && current.ChartEpoch > epoch {
 				return statelog.Decision{}, nil
 			}
-			// A LATER CHART ALREADY WON, and only now is that a
-			// question. Two nodes at different applier cursors is
-			// ordinary — one is simply behind — and the view the
-			// behind node derives must not walk back what the ahead
-			// one wrote. The positions are comparable because both
-			// are packed positions on the SAME log.
-			if held && current.ChartPosition > at {
+			if held && current.ChartEpoch == epoch &&
+				next.Name == p.Name && next.Purpose == p.Purpose &&
+				next.Unit == p.Unit {
+
+				// NOTHING TO SAY. An empty decision is a legitimate
+				// outcome rather than an error — see
+				// [statelog.Decision.Payload] — and it is what makes
+				// a reconcile on every apply free after the first.
 				return statelog.Decision{}, nil
 			}
 			next.Name, next.Purpose, next.Unit = p.Name, p.Purpose, p.Unit
-			next.ChartPosition = at
+			next.ChartEpoch = epoch
 			next.UpdatedAt = now
 			changed = true
 
@@ -191,19 +211,20 @@ func (w *Writer) applyChartProject(ctx context.Context, at int64,
 // grammar ([statelog.NewOpID]), because a chart apply is a RECONCILE rather
 // than an operation a retry has to be matched to: it decides from the
 // project's rows what, if anything, is left to write, so a second apply of one
-// chart state — on another node, at the next boot, after a lost
-// acknowledgement — finds its value there and writes nothing, and N nodes
-// racing one chart state are settled by the broker's arbitration with the
-// losers re-deciding on the winner's rows. None of that needs the ledger.
+// activation — on another node, at the next boot, after a lost acknowledgement
+// — finds its value there and writes nothing, and N nodes racing one
+// activation are settled by the broker's arbitration with the losers
+// re-deciding on the winner's rows. None of that needs the ledger.
 //
-// An id DERIVED FROM THE POSITION would put the ledger in charge instead, and
-// the instant the ledger vouches by would be one the id does not carry: this
-// used to be `chart:<position>:<key>`, which is outside the op-id grammar, so
-// the ledger read it as minted at the zero instant and could vouch for it on
-// no node whose ledger ever lost a row. And the ledger would answer a SECOND
-// apply of one chart state from the first's row rather than re-reading the
-// project, so a project a behind node walked back could never be set right by
-// the chart that is actually current.
+// An id DERIVED FROM THE ACTIVATION would put the ledger in charge instead,
+// and its instant would be the activation's. Once that is older than the
+// ledger's retention — a company whose configuration has not changed for a
+// month, which is most of them — the ledger can no longer vouch for it, and
+// every boot of every node would have every project's apply answered
+// `unknown` without being decided. And the ledger would answer a SECOND apply
+// of one activation from the first's row rather than re-reading the project,
+// so a project an older chart walked back at an equal epoch could never be set
+// right by the activation that is actually current.
 func chartOpID(at time.Time, key string) string {
 	return statelog.NewOpID(at, "chart-"+key)
 }

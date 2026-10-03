@@ -57,16 +57,15 @@ func TestAProjectReconcileRecordsWhatTheChartMoved(t *testing.T) {
 	t.Parallel()
 	r := newRoundTripWithoutProject(t)
 
-	if _, err := r.writer.ApplyChart(t.Context(), 100, []tracker.ChartProject{
+	if _, err := r.writer.ApplyChart(t.Context(), activatedAt(100), []tracker.ChartProject{
 		{Key: "ENG", Name: "Engineering", Purpose: "builds it", Unit: "Engineering"},
 	}); err != nil {
 		t.Fatalf("the first chart apply: %v", err)
 	}
 	r.drain()
-	// A CREATE LISTS WHAT IT SET, because every field moves from empty —
-	// and not the chart position it was stamped at, which never moves on
-	// its own and which no reader of a change can read.
+	// A CREATE LISTS WHAT IT SET, because every field moves from empty.
 	if got := r.fieldsFor(tracker.ChangeProjectCreated); got != `{`+
+		`"chart_epoch":{"from":"0","to":"100"},`+
 		`"name":{"from":"","to":"Engineering"},`+
 		`"purpose":{"from":"","to":"builds it"},`+
 		`"unit":{"from":"","to":"Engineering"}}` {
@@ -74,16 +73,18 @@ func TestAProjectReconcileRecordsWhatTheChartMoved(t *testing.T) {
 		t.Errorf("a project create recorded %s", got)
 	}
 
-	// AND AN EDIT NAMES ONLY WHAT IT MOVED. The position moved with it,
-	// and it is not among them: a reconcile whose three fields match writes
-	// nothing at all, so no row is ever the position alone.
-	if _, err := r.writer.ApplyChart(t.Context(), 200, []tracker.ChartProject{
+	// AND AN EDIT NAMES ONLY WHAT IT MOVED. The epoch travels with it
+	// because a re-declaration at a new activation is a real fact about the
+	// row — and because without it the reconcile that changes nothing else
+	// would be the empty row again.
+	if _, err := r.writer.ApplyChart(t.Context(), activatedAt(200), []tracker.ChartProject{
 		{Key: "ENG", Name: "Engineering", Purpose: "ships it", Unit: "Engineering"},
 	}); err != nil {
 		t.Fatalf("the second chart apply: %v", err)
 	}
 	r.drain()
 	if got := r.fieldsFor(tracker.ChangeProjectUpdated); got != `{`+
+		`"chart_epoch":{"from":"100","to":"200"},`+
 		`"purpose":{"from":"builds it","to":"ships it"}}` {
 
 		t.Errorf("a project purpose edit recorded %s — the row is supposed to "+

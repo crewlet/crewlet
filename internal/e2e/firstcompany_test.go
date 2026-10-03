@@ -95,7 +95,7 @@ func TestANodeWithNoCompanySignsInAndServesWorkAfterItsFirstApply(t *testing.T) 
 	if err != nil {
 		t.Fatalf("company config: %v", err)
 	}
-	applied, stages, err := e.Apply(t.Context(), cfg)
+	applied, stages, err := e.Apply(t.Context(), cfg, time.Now())
 	if err != nil || applied != configplane.StatusOK {
 		t.Fatalf("Apply = (%s, %v, %v), want ok", applied, stages, err)
 	}

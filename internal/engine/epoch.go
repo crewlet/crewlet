@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"sync/atomic"
+	"time"
 
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/configplane"
@@ -196,12 +197,15 @@ func embeddingWidth(c *Company) int {
 // diagnosable after the fact — it travels on ConfigRevisionApplied into the
 // audit event log, where it outlives the fleet view's one-minute bucket.
 //
-// NO ACTIVATION INSTANT IS TAKEN. What must agree across nodes about a
-// company's org chart — the tracker's projects, the knowledge containers — is
-// stamped with the position on the chart's own log the published view was
-// composed at ([Company.ChartAt]), which orders the chart without a clock; see
-// [Engine.applyChart].
-func (e *Engine) Apply(ctx context.Context, cfg *config.Company) (configplane.ApplyStatus, []string, error) {
+// activatedAt is the instant the fleet activated cfg — the activation
+// pointer's own ([coord.Activation.At]) — and it is what every clause that
+// must agree across nodes about WHEN this configuration took effect reads: the
+// chart apply stamps each project and each knowledge container with it, so an
+// older configuration arriving late on another node cannot walk a newer one
+// back. Zero is a configuration no activation named, whose chart is not
+// applied; see [Engine.applyChart].
+func (e *Engine) Apply(ctx context.Context, cfg *config.Company,
+	activatedAt time.Time) (configplane.ApplyStatus, []string, error) {
 	e.applying.Lock()
 	defer e.applying.Unlock()
 	if e.stopped {
@@ -222,6 +226,7 @@ func (e *Engine) Apply(ctx context.Context, cfg *config.Company) (configplane.Ap
 				"this node still serves the previous epoch")
 		return configplane.StatusError, applied, fmt.Errorf("engine: apply: %w", err)
 	}
+	next.ActivatedAt = activatedAt
 	applied = append(applied, "company")
 	// THE REVISION'S SANDBOX MANAGER, built HERE — beside the company it is
 	// a part of, before anything below mutates this node — because a

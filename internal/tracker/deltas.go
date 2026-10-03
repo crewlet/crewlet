@@ -257,11 +257,11 @@ func documentDeltas(ctx context.Context, tx *sql.Tx, s Subject,
 // comparison that named only one half would be empty for every write of the
 // other.
 //
-// `chart_position` IS NOT RECORDED. It never moves on its own:
-// [Writer.applyChartProject] compares the three chart fields FIRST and writes
-// nothing when they match, so a chart record always carries a delta of its
-// own on one of them — and a packed log position is a number no reader of a
-// change can read.
+// `chart_epoch` IS RECORDED, and it is the only thing a re-declaration at a
+// new activation moves: [Writer.applyChartProject] publishes when the epoch
+// differs although the three chart fields are equal, so leaving it out would
+// put one empty `project_updated` row per project into the feed on every
+// config activation — the exact row this file exists to end.
 //
 // The two instants are NOT recorded. `created_at` and `updated_at` say WHEN,
 // and the history row's own `created_at` and `effective_at` already answer
@@ -276,6 +276,8 @@ func projectDeltas(before, after Project) map[string]Delta {
 	moved.add("archived", boolText(before.Archived), boolText(after.Archived))
 	moved.add("policy_version",
 		countText(before.PolicyVersion), countText(after.PolicyVersion))
+	moved.add("chart_epoch", strconv.FormatInt(before.ChartEpoch, 10),
+		strconv.FormatInt(after.ChartEpoch, 10))
 	// THE DECLARATIONS BY SLUG, which is what names a field to a person
 	// and what changes when one is added or withdrawn. An edit that leaves
 	// the slugs alone — a renamed label, an archive, a new option — moves

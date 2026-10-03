@@ -25,7 +25,7 @@ func TestTheCompanysClockFollowsAnApply(t *testing.T) {
 
 	berlin := parsedCompany(t, strings.Replace(companyDoc,
 		"name: Acme", "name: Acme\ntimezone: Europe/Berlin", 1))
-	if _, _, err := e.Apply(t.Context(), berlin); err != nil {
+	if _, _, err := e.Apply(t.Context(), berlin, time.Now()); err != nil {
 		t.Fatalf("Apply: %v", err)
 	}
 	if got := e.Zone().String(); got != "Europe/Berlin" {

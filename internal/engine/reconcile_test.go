@@ -1274,7 +1274,7 @@ func TestARefusedApplySaysHowFarItGot(t *testing.T) {
 func TestApplyReportsHowFarItGotBeforeARefusal(t *testing.T) {
 	t.Parallel()
 	e := newEngine(t, engine.Options{})
-	status, applied, err := e.Apply(t.Context(), &config.Company{})
+	status, applied, err := e.Apply(t.Context(), &config.Company{}, time.Now())
 	if err == nil {
 		t.Fatal("a company with no name was applied")
 	}

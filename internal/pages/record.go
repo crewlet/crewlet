@@ -36,8 +36,8 @@ import (
 //     because a version is a statement about which fields a record may
 //     carry, and one number naming two different fields is two builds
 //     disagreeing about what a record at it holds.
-//   - 3: a container's settings carry the position on the org chart's log
-//     they were derived from ([ContainerPayload.ChartPosition]).
+//   - 3: a container's settings carry the activation they were derived
+//     from ([ContainerPayload.ChartEpoch]).
 const RecordVersion = 3
 
 // baseRecordVersion is version 1, the base format: what every build there has
@@ -88,9 +88,9 @@ var versionedFields = statelog.RecordFields{
 	// writes nested in it, until it is upgraded.
 	//
 	// Scoped to the patch op, which is the one a container's settings ride;
-	// no page patch carries `chart_position`.
-	{Name: "ContainerPayload.ChartPosition", Since: 3, Op: string(OpPatch),
-		Path: []string{"mutation", "chart_position"}},
+	// no page patch carries `chart_epoch`.
+	{Name: "ContainerPayload.ChartEpoch", Since: 3, Op: string(OpPatch),
+		Path: []string{"mutation", "chart_epoch"}},
 }
 
 // VersionedFields is the table, for the conformance suite.

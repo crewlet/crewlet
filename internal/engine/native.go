@@ -750,20 +750,17 @@ func (e *Engine) reconcileNative(ctx context.Context, c *Company) {
 // writes into them itself, and a container the engine writes into and cannot
 // list is the same defect one layer in.
 //
-// # Stamped with the CHART'S POSITION, on the chart's terms
+// # Stamped with the ACTIVATION, on the chart's terms
 //
-// c.ChartAt is the position on the org chart's own log this company was
-// composed at, and every container is stamped with it exactly as
+// c.ActivatedAt is the instant the revision this company was applied from was
+// activated, and every container is stamped with it exactly as
 // [Engine.applyChart] stamps a project — for the same two reasons: a node
-// whose chart applier is behind must not rewrite the containers' names and
-// purposes back to its own older view, and a reapply at one position must
-// write nothing. A POSITION AND NOT A CLOCK, because two nodes derive the same
-// settings from the same rows and what tells the one that is behind is its
-// cursor, never which of them wrote last. A company composed at no position —
-// one no chart record has reached yet — has nothing to stamp, and the store
-// refuses a zero ([pages.ErrNoChartPosition]); so it is not applied here, and
-// the publish that first carries a chart position is. See
-// [pages.Store.EnsureContainer].
+// applying an older revision late must not rewrite the containers' names and
+// purposes back to its own older view, and a reapply of one activation must
+// write nothing. A company no activation has named yet has nothing to stamp,
+// and the store refuses a zero ([pages.ErrNoActivation]); so it is not applied
+// here, and the reconciler's first apply — which carries the pointer's instant
+// — is. See [pages.Store.EnsureContainer].
 //
 // # Best effort, and idempotent
 //
@@ -775,12 +772,12 @@ func (e *Engine) reconcileNative(ctx context.Context, c *Company) {
 // written around.
 func (e *Engine) applyContainers(ctx context.Context, c *Company) {
 	store := e.PagesStore()
-	if store == nil || c == nil || c.ChartAt <= 0 {
+	if store == nil || c == nil || c.ActivatedAt.IsZero() {
 		return
 	}
 	var wrote []string
 	for _, want := range chartContainers(c) {
-		_, changed, err := store.EnsureContainer(ctx, c.ChartAt,
+		_, changed, err := store.EnsureContainer(ctx, c.ActivatedAt,
 			want.Key, want.Name, want.Purpose)
 		if err != nil {
 			// EVERY CONTAINER IS ATTEMPTED. One key's refusal must not
@@ -887,15 +884,17 @@ func chartContainers(c *Company) []chartContainer {
 // and says nothing when they match, so the losers of the broker's arbitration
 // and every later publish of the same chart state write nothing.
 //
-// # Stamped with the CHART'S POSITION
+// # Stamped with the ACTIVATION
 //
-// c.ChartAt is the position on the org chart's own log this company was
-// composed at, and it is what every project is stamped with
-// ([tracker.Project.ChartPosition]): a node whose chart applier is behind
-// derives an older view, and its pass must not walk the fleet's newer project
-// names back to its own. A position orders the chart without a clock — two
-// nodes deriving from the same rows derive the same values, and only the
-// cursor says which of them is behind.
+// c.ActivatedAt is the instant the revision this company was applied from was
+// activated, and it is what every project is stamped with
+// ([tracker.Project.ChartEpoch]): a node applying an older revision late must
+// not walk the fleet's newer project names back to its own. The activation's
+// instant and never this node's clock, because every node applies one
+// activation separately and only the instant on the pointer is the same on all
+// of them. A company no activation has named yet — a Tier B file a node booted
+// with — applies nothing here; the reconciler's first apply carries the
+// pointer's instant and applies it then.
 //
 // # Best effort, and what that costs
 //
@@ -905,14 +904,14 @@ func chartContainers(c *Company) []chartContainer {
 // did not land, and the next apply or the next boot retries them.
 func (e *Engine) applyChart(ctx context.Context, c *Company) {
 	writer := e.TrackerWriter()
-	if writer == nil || c == nil || c.Org == nil {
+	if writer == nil || c == nil || c.Org == nil || c.ActivatedAt.IsZero() {
 		return
 	}
 	chart := chartProjects(c.Org)
 	if len(chart) == 0 {
 		return
 	}
-	wrote, err := writer.ApplyChart(ctx, c.ChartAt, chart)
+	wrote, err := writer.ApplyChart(ctx, c.ActivatedAt, chart)
 	if err != nil {
 		log.ErrorContext(ctx, "tracker_chart_not_applied",
 			"error", err.Error(), "wrote", wrote,
