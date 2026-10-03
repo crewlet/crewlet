@@ -610,26 +610,32 @@ func TestATombstoneAReplicaServedForALiveKeyIsReadFromTheLeader(t *testing.T) {
 // sweep, three markers are three reads; after it, the same listing reads
 // nothing, which is what bounds the term by the records removed recently
 // rather than by every record ever removed.
+//
+// ON THE CHANNELS BUCKET, which has no age and removes a record as each ask
+// closes. The values are a counter's because the listing helper reads them,
+// and neither the walk nor the sweep reads a value at all. (The budgets bucket
+// these were first written over now has an age, and the broker ages its
+// markers with it: the fleet's sweep rightly leaves it alone.)
 func TestATombstoneCostsOneLeaderReadUntilItIsSwept(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	nc := embeddedNATS(t)
 	f := openFleetForTest(t, nc, fmt.Sprintf("f%d", bucketSeq.Add(1)))
 	for _, scope := range []string{"org", "seat-a", "seat-b", "gone-1", "gone-2", "purged"} {
-		putBudget(ctx, t, f.budgets, scope, 1)
+		putBudget(ctx, t, f.channels, scope, 1)
 	}
 	for _, scope := range []string{"gone-1", "gone-2"} {
-		if err := f.budgets.Delete(ctx, encodeKey(scope)); err != nil {
+		if err := f.channels.Delete(ctx, encodeKey(scope)); err != nil {
 			t.Fatalf("delete: %v", err)
 		}
 	}
-	if err := f.budgets.Purge(ctx, encodeKey("purged")); err != nil {
+	if err := f.channels.Purge(ctx, encodeKey("purged")); err != nil {
 		t.Fatalf("purge: %v", err)
 	}
 	want := map[string]int{"org": 1, "seat-a": 1, "seat-b": 1}
 
-	wire := countWireReads(t, nc, f.budgets)
-	got, err := listScopes(ctx, f, f.budgets)
+	wire := countWireReads(t, nc, f.channels)
+	got, err := listScopes(ctx, f, f.channels)
 	if err != nil {
 		t.Fatalf("listing: %v", err)
 	}
@@ -648,8 +654,8 @@ func TestATombstoneCostsOneLeaderReadUntilItIsSwept(t *testing.T) {
 	if swept != 3 {
 		t.Fatalf("the sweep removed %d markers, want the 3 the bucket held", swept)
 	}
-	wire = countWireReads(t, nc, f.budgets)
-	got, err = listScopes(ctx, f, f.budgets)
+	wire = countWireReads(t, nc, f.channels)
+	got, err = listScopes(ctx, f, f.channels)
 	if err != nil {
 		t.Fatalf("listing after the sweep: %v", err)
 	}

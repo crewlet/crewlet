@@ -142,8 +142,10 @@ func TestTheSweepNeverRemovesAValueWrittenAfterItsPassSawTheMarker(t *testing.T)
 // holds it against the broker's own account of every stream the store made —
 // so a bucket added without an age is swept without anybody remembering to
 // list it, and a bucket with one is left to its age. A hand-kept list is how
-// the budgets bucket, which purges on every reset, was missing from the first
-// account of which buckets keep markers.
+// the lifetime token counters, which purged on every reset, were missing from
+// the first account of which buckets keep markers — and a hand-kept list is
+// what would have kept sweeping their windowed successor once it took an age
+// of its own.
 func TestEveryBucketTheBrokerNeverAgesIsSwept(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
@@ -177,10 +179,16 @@ func TestEveryBucketTheBrokerNeverAgesIsSwept(t *testing.T) {
 		t.Fatalf("the sweep covers %v, and the buckets the broker never ages "+
 			"are %v", swept, ageless)
 	}
-	for _, must := range []string{"sandbox_runs", "secrets", "budgets", "mailboxes", "statelog_positions"} {
+	for _, must := range []string{"sandbox_runs", "secrets", "channels", "mailboxes", "statelog_positions"} {
 		if !slices.Contains(swept, must) {
 			t.Errorf("the %s bucket removes records and has no age, and the sweep does not cover it", must)
 		}
+	}
+	// AND A BUCKET WITH AN AGE IS LEFT TO IT: the token counters' windows
+	// are aged by the broker, so sweeping them too would be a second
+	// retention over the same markers.
+	if slices.Contains(swept, "budgets") {
+		t.Error("the sweep covers the budgets bucket, which the broker ages")
 	}
 	if len(aged) == 0 {
 		t.Fatal("no bucket with an age was found, so this case cannot tell a derived set from every bucket")
