@@ -76,8 +76,14 @@ var bucketSeq atomic.Int64
 
 func openStore(t *testing.T, nc *nats.Conn, ttl time.Duration) *Store {
 	t.Helper()
+	return openStoreVia(t, jsOf(nc), ttl)
+}
+
+// openStoreVia is [openStore] over a client in any API.
+func openStoreVia(t *testing.T, client jetstream.JetStream, ttl time.Duration) *Store {
+	t.Helper()
 	prefix := fmt.Sprintf("t%d", bucketSeq.Add(1))
-	s, err := Open(context.Background(), jsOf(nc), Config{TTL: ttl, BucketPrefix: prefix})
+	s, err := Open(context.Background(), client, Config{TTL: ttl, BucketPrefix: prefix})
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
@@ -441,35 +447,14 @@ func TestUngatedClaimsDoNotScanTheFleet(t *testing.T) {
 
 // TestFleetContract runs the shared-state suite against the real broker.
 //
-// The retentions are the suite's, not production's: every case reasons about
-// a window or a claim it names both sides of, and a bucket sized for the
-// production ledger's seven days would make a "this has lapsed" case wait
-// seven days. What the broker is being certified for is the SEMANTICS — an
-// atomic increment, a Create that only one caller wins, a Put whose revision
-// is the epoch — and those do not vary with the retention.
+// The retentions are the suite's ([openFleetVia]): what the broker is being
+// certified for is the SEMANTICS — an atomic increment, a Create that only one
+// caller wins, a Put whose revision is the epoch — and those do not vary with
+// the retention.
 func TestFleetContract(t *testing.T) {
 	nc := embeddedNATS(t)
 	coordtest.RunFleet(t, func(t *testing.T) coord.Fleet {
-		prefix := fmt.Sprintf("f%d", bucketSeq.Add(1))
-		store, err := OpenFleet(context.Background(), jsOf(nc), FleetConfig{
-			BucketPrefix: prefix,
-			// Every one of these is above the broker's 100 ms floor and
-			// far longer than a case takes, so nothing lapses under a
-			// case that did not ask it to.
-			RateWindow:      time.Minute,
-			ClaimTTL:        10 * time.Minute,
-			LedgerRetention: 10 * time.Minute,
-			FireRetention:   10 * time.Minute,
-			FollowRetention: 10 * time.Minute,
-			RebaseRetention: 10 * time.Minute,
-			CooldownMax:     time.Hour,
-			BudgetRetention: time.Hour,
-			StatusFreshness: 10 * time.Minute,
-		})
-		if err != nil {
-			t.Fatalf("OpenFleet: %v", err)
-		}
-		return store
+		return openFleetForTest(t, nc, fmt.Sprintf("f%d", bucketSeq.Add(1)))
 	})
 }
 

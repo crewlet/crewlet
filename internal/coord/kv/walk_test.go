@@ -108,7 +108,20 @@ func TestAListingThatEndsEarlyIsUnavailableRatherThanShort(t *testing.T) {
 // TestFleetContract gives for its own numbers.
 func openFleetForTest(t *testing.T, nc *nats.Conn, prefix string) *FleetStore {
 	t.Helper()
-	store, err := OpenFleet(context.Background(), jsOf(nc), FleetConfig{
+	return openFleetVia(t, jsOf(nc), prefix)
+}
+
+// openFleetVia is [openFleetForTest] over a client in any API — a leaf's,
+// which addresses the embedded fleet's domain.
+//
+// The retentions are the suite's, not production's: every case reasons about
+// a window or a claim it names both sides of, and a bucket sized for the
+// production ledger's seven days would make a "this has lapsed" case wait
+// seven days. Every one is above the broker's 100 ms floor and far longer
+// than a case takes, so nothing lapses under a case that did not ask it to.
+func openFleetVia(t *testing.T, client jetstream.JetStream, prefix string) *FleetStore {
+	t.Helper()
+	store, err := OpenFleet(context.Background(), client, FleetConfig{
 		BucketPrefix:    prefix,
 		RateWindow:      time.Minute,
 		ClaimTTL:        10 * time.Minute,
