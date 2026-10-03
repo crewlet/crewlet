@@ -130,7 +130,10 @@
 //
 // Both are satisfied by winning ownership in a CLAIMING state first — owner
 // set, epoch 0 — then advancing the counter, then committing the token into the
-// record already held. Epoch 0 is exactly the right marker because it is
+// record already held. (Between the first two the claim reads its own record
+// back by revision, for the store's timestamp on it — the tenure's start, which
+// the commit has to carry. A read, not a write, but a step a claim can fail
+// at all the same.) Epoch 0 is exactly the right marker because it is
 // exactly the wrong token: a conditional write predicated on it matches an
 // unset column, and TryAcquire has not returned, so nothing can be written
 // under it. Exactly one claimant gets past step 1, so exactly one advances the
@@ -989,6 +992,12 @@ func (s *Store) TryAcquire(ctx context.Context, resource string, opts coord.Acqu
 		// a record already taken from us costs no token.
 		acquiredAt, taken, err := s.claimedAt(ctx, l, resource, rev)
 		if err != nil {
+			// No token was minted, and the record is this call's own
+			// claiming one: it goes back, as after every other failure
+			// past the first write. A read the caller gave up on — the
+			// usual way this fails — would otherwise leave the resource
+			// held against its own owner for a whole TTL.
+			s.abandon(ctx, l, resource, claiming, mine, err)
 			return nil, "", err
 		}
 		if taken {
@@ -1047,9 +1056,8 @@ func (s *Store) claimedAt(ctx context.Context, l *lane, resource string, rev uin
 		return time.Time{}, true, nil
 	}
 	if err != nil {
-		// The record is left in the claiming state and expires with its
-		// TTL, exactly as a lease whose owner died does. No token has been
-		// minted yet, so nothing is stranded.
+		// The caller gives the claiming record back ([Store.abandon]):
+		// no token has been minted, so nothing is stranded either way.
 		return time.Time{}, false, unavailable("read back the claim on "+resource, err)
 	}
 	return kve.Created().UTC(), false, nil

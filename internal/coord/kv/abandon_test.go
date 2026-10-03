@@ -20,6 +20,10 @@ import (
 type faultyBucket struct {
 	jetstream.KeyValue
 	fail func(ctx context.Context, value []byte) (fails, lands bool)
+
+	// landed, when set, is told of every write that landed and was
+	// answered — the instant a case can make the step AFTER a write fail.
+	landed func(value []byte)
 }
 
 var errInjected = fmt.Errorf("injected: %w", nats.ErrTimeout)
@@ -27,7 +31,11 @@ var errInjected = fmt.Errorf("injected: %w", nats.ErrTimeout)
 func (b *faultyBucket) Update(ctx context.Context, key string, value []byte, revision uint64) (uint64, error) {
 	fails, lands := b.fail(ctx, value)
 	if !fails {
-		return b.KeyValue.Update(ctx, key, value, revision)
+		rev, err := b.KeyValue.Update(ctx, key, value, revision)
+		if err == nil && b.landed != nil {
+			b.landed(value)
+		}
+		return rev, err
 	}
 	if lands {
 		if _, err := b.KeyValue.Update(ctx, key, value, revision); err != nil {
@@ -54,9 +62,10 @@ func TestAClaimThatFailsPartWayGivesItsRecordBack(t *testing.T) {
 	// Which write a case fails, and whether it lands first.
 	type write int
 	const (
-		theClaim  write = iota // the record, in the claiming state
-		theEpoch               // the counter
-		theCommit              // the token, into the record
+		theClaim    write = iota // the record, in the claiming state
+		theReadBack              // the claim's own timestamp, read back by its revision
+		theEpoch                 // the counter
+		theCommit                // the token, into the record
 	)
 	cases := []struct {
 		name   string
@@ -69,6 +78,10 @@ func TestAClaimThatFailsPartWayGivesItsRecordBack(t *testing.T) {
 		ownerEpoch int64
 		peerHeld   bool
 	}{
+		// The claim landed and the caller gave up before its tenure's
+		// start was read back: the read fails on the dead context with no
+		// token minted, and the record is still this call's claiming one.
+		{name: "the caller gave up before the read-back", fails: theReadBack, cancel: true, ownerEpoch: 1},
 		{name: "the counter cannot be advanced", fails: theEpoch, ownerEpoch: 1},
 		// The counter moved and nobody was told: that token is a gap, and
 		// the next tenure is fenced above it.
@@ -126,6 +139,16 @@ func TestAClaimThatFailsPartWayGivesItsRecordBack(t *testing.T) {
 							return trip(theClaim)
 						}
 						return trip(theCommit)
+					},
+					landed: func(value []byte) {
+						var v leaseValue
+						if json.Unmarshal(value, &v) == nil && v.Owner != "" &&
+							v.Epoch == claimingEpoch {
+							// The read-back is a READ, so it is failed
+							// the way a caller fails it: by giving up
+							// the instant the claim it reads has landed.
+							trip(theReadBack)
+						}
 					}}
 
 				resource := coord.ClassSeat.Resource("ceo")
