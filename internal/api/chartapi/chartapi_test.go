@@ -227,7 +227,6 @@ func leadOf(grants ...iam.Grant) iam.Principal {
 func proved(p iam.Principal) iam.Principal {
 	at := time.Now().Add(-time.Minute)
 	p.ReauthAt = at.Add(time.Hour)
-	p.SensitiveReauthAt = at.Add(15 * time.Minute)
 	return p
 }
 

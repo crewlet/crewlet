@@ -44,7 +44,7 @@ func TestEveryChartWriteAsksForARecentProofAndNoReadDoes(t *testing.T) {
 	proof := time.Now().Add(-2 * time.Hour)
 	stale := iam.Principal{ID: uuid.New(), Login: "jane.doe", Seat: "cto",
 		Kind: iam.KindPerson, Stage: iam.StageActive, Grants: iam.AllGrants,
-		ReauthAt: proof.Add(time.Hour), SensitiveReauthAt: proof.Add(15 * time.Minute)}
+		ReauthAt: proof.Add(time.Hour)}
 	svc, err := chartapi.New(chartapi.Options{
 		Reader:    &reader{chart: nimbus()},
 		Authority: func(string, chart.AuthorKind, []iam.Grant, chart.Provenance) chartapi.Writer { return &writer{} },

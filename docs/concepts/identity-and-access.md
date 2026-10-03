@@ -795,8 +795,8 @@ enrol one**:
   socket, and the rest of `/auth` too, which regenerates recovery codes and
   signs a person out everywhere. It admits exactly three: `GET /auth/session`,
   `POST /auth/totp` and `POST /auth/step-up` (enrolling asks a proof inside
-  `step_up_sensitive`, and somebody who took longer than that to find their
-  phone re-confirms the password without signing out). The sign-out of this
+  `step_up`, and somebody who took longer than that to find their phone
+  re-confirms the password without signing out). The sign-out of this
   session, `POST /auth/logout`, is reached too, because the guard does not
   stand in front of it at all — see
   [Every route is guarded](#every-route-is-guarded-and-the-exemptions-are-the-list).
@@ -809,8 +809,8 @@ enrol one**:
   the enrolment checks proves possession of a seed that same session was
   handed a moment earlier, not who is holding it, so it earns no fresh
   step-up window. Recovery codes come after, from the whole session, while the
-  password's proof is still inside `step_up_sensitive` — or after a step-up
-  that presents the new factor.
+  password's proof is still inside `step_up` — or after a step-up that
+  presents the new factor.
 - A restricted session enrols **only while its person holds no second
   factor**, decided in the snapshot the factor would land on. Its proof is a
   password alone, and fresh enough for the enrolment's window, so without this
@@ -1195,11 +1195,10 @@ epoch and refused once that moves — which is what makes offboarding complete;
 and `crewlet iam invalidate-all`, because it is minted at the company's session
 generation too, for [a restore's reason](#two-counters-and-why-there-are-two).
 
-**A token manages no proof.** It is stepped up by construction for the
-ordinary window — it has nothing else to present — and never for the sensitive
-one, because every sensitive gesture needs a person present and a token proves
-nobody is; and it is refused every gesture about *how its owner proves who they
-are*: it cannot mint
+**A token manages no proof.** It is stepped up by construction — it has
+nothing else to present — so what keeps it off every gesture about *how its
+owner proves who they are* is the credential the request presented, which each
+of those refuses before anything is decided: it cannot mint
 another token, enrol or replace a second factor, regenerate the recovery codes,
 or answer a step-up, and `DELETE /iam/credentials/{id}` from one revokes
 machine tokens (itself included) and nothing else. Whoever finds a token leaked
@@ -1388,13 +1387,11 @@ because each is a row in a domain that **lags independently**.
 | Seat absent, and this node's chart position is below the binding's, chart applier lag under 60 s | 503 `identity_unavailable` naming the chart |
 | The chart applier stalled past 60 s, or the view is not built | 503 |
 
-**`reauth_at` is the session's own proof plus `step_up`**, and
-`sensitive_reauth_at` the same proof plus `step_up_sensitive`. Every session a
+**`reauth_at` is the session's own proof plus `step_up`.** Every session a
 sign-in opens — a password and its second factor, a redeemed invitation, a
-step-up — records the
-instant it was proved on its row, and the guard composes both deadlines from
-that and this node's two windows at decision time — which of them a gesture
-asks for is [the authority table's](#some-gestures-ask-how-recently-you-proved-who-you-are). Proof is a
+step-up — records the instant it was proved on its row, and the guard composes
+the deadline from that and this node's window at decision time — which
+gestures ask for it is [the authority table's](#some-gestures-ask-how-recently-you-proved-who-you-are). Proof is a
 fact about one sign-in rather than about the person, so a proof on a laptop
 says nothing about a phone signed in last week, and a step-up re-proves by
 opening a new session rather than by moving a field. That new session **ends
@@ -1405,7 +1402,7 @@ confirming a session would keep it alive for ever. A session exchanged from a Ti
 not a session's proof at all: the guard re-composes it from the token's entry
 on every request, exactly as it composes the bearer, so it is fresh by
 construction for as long as the entry is held — the break-glass credential
-must reach a sensitive gesture on the day nobody can sign in as a person. A
+must reach a step-up gesture on the day nobody can sign in as a person. A
 node that has not yet applied the session's row — the read-only grace in the
 table above — claims no proof it cannot see.
 
@@ -1783,19 +1780,22 @@ operator is never told "I cannot tell" by a node that is merely lagging.
 
 A session lives for days and a laptop is left unlocked, so the gestures that
 change what a company *is* ask for a proof of identity taken recently rather
-than on Monday — the **step-up**. Every row of the table states how recent a
-proof its verb asks for, and there are three answers:
+than on Monday — the **step-up**. Every row of the table states whether its
+verb asks for one:
 
 | Window | Sized by | Asked by |
 |---|---|---|
 | none | — | Every read; every work and knowledge verb; ending your own sessions — while an administrator ending *somebody else's* asks `step_up`, because one row states a window for each arm |
-| `step_up` | `api.auth.session.step_up` (1 hour) | The company's configuration and chart writes (a lead editing their own team included), connecting an integration, writing a credential, the deployment's own controls — a budget reset, a backup, the retention and capacity gestures — and every identity-directory write the row below does not name: enrolling, inviting or removing somebody, minting or revoking a machine token, and ending somebody else's sessions |
-| `step_up_sensitive` | `api.auth.session.step_up_sensitive` (15 minutes) | Revealing a secret's value; changing what somebody already enrolled may do or how they prove who they are — an edit of their row, a second-factor reset, revoking a password, a second factor or the recovery codes, and enrolling or replacing your own second factor or regenerating your recovery codes; and ending every session in the company |
+| `step_up` | `api.auth.session.step_up` (1 hour) | The company's configuration and chart writes (a lead editing their own team included), connecting an integration, writing a credential and revealing a secret's value, the deployment's own controls — a budget reset, a backup, the retention and capacity gestures, ending every session in the company — and every identity-directory write: enrolling, inviting, editing or removing somebody, resetting their second factor, minting or revoking a machine token or any other credential, ending somebody else's sessions, and enrolling or replacing your own second factor or regenerating your recovery codes |
 
-The two windows are the design's: every identity-directory write asks the
-ordinary one, and the sensitive one is kept for the gestures that hand over a
-value or an authority somebody already holds. Changing how somebody proves who
-they are is one of those whichever door it comes through — the `/iam` reset,
+**One window, not two.** It is the practice of GitHub's sudo mode — one window
+over every sensitive gesture — at the stricter end of it (GitHub's is two
+hours). A second, shorter window once stood beside it for the gestures that
+hand over a value or an authority somebody already holds; it sent an
+administrator who had proved half an hour earlier to prove again between one
+screen and the next, while what actually keeps those gestures from a stolen
+credential is not the age of a proof — see below. Changing how somebody proves
+who they are is one rule whichever door it comes through — the `/iam` reset,
 revoking a factor through `/iam/credentials`, or replacing your own factor
 through `/auth/totp` — because each is the others by another name.
 
@@ -1811,7 +1811,7 @@ a setting nothing read — the sign-in surface recorded when a session proved
 who its holder was, and no surface outside it ever asked — so a cookie from last
 week reached every one of these. Every row states its window, and a row that
 states none is refused by a check in the engine's own build: read as "no proof
-needed", it would be a sensitive verb shipped open to anybody's week-old session.
+needed", it would be a step-up verb shipped open to anybody's week-old session.
 
 The proof is asked **after** the rule admits you. Somebody who could never make
 the gesture is told what they lack, rather than sent to confirm who they are
@@ -1822,25 +1822,31 @@ caller's own: confirm who you are and send the same request again —
 replaces the session it was made from with one proved now.
 
 What counts as having proved is a fact about the **credential**. A session
-proved when it signed in or stepped up, and each node composes the two
-deadlines from that instant and its own two windows on every request, so a
-shortened window takes effect at once. A credential with nobody at a keyboard
-is **fresh by construction**, because there is nothing else it could ever
-present — but not all of them in both windows. A Tier A token, the session
-exchanged from one and the development principal are fresh in both: the
-break-glass credential has to reach a sensitive gesture on the day nobody can
-sign in as a person. A **personal access or service token** is fresh for `step_up`
-only, and never for `step_up_sensitive`: every sensitive gesture needs a person
-present, and a token proves nobody is. That is two locks, not one. A token can
-never carry `secrets:read` or `people:manage` — the grants behind the sensitive
-gestures about somebody else — and it is never proved for the sensitive window,
-which closes the gestures a person makes about *themselves* on no grant at all:
-it used to be fresh in both, and the only thing between it and changing how its
-owner signs in was each route remembering to refuse it. The build holds both
-halves: every sensitive row about anybody else asks a grant no token carries,
-and a token asking about its own owner is refused every one. And **no tool**
-asks for a proof — a seat has no keyboard, and the operator's assistant's
-surface is not a step-up surface — which the build checks too.
+proved when it signed in or stepped up, and each node composes the deadline
+from that instant and its own window on every request, so a shortened window
+takes effect at once. A credential with nobody at a keyboard is **fresh by
+construction**, because there is nothing else it could ever present: a Tier A
+token, the session exchanged from one, the development principal, and a
+**personal access or service token**. The break-glass credential has to reach
+a step-up gesture on the day nobody can sign in as a person.
+
+So what keeps a machine token off the gestures that need a person present —
+revealing a secret, changing somebody's authority or how they prove who they
+are, ending sessions that are not its owner's — is never the clock. It is two
+locks, and the build holds both:
+
+- A token can never carry `secrets:read` or `people:manage`, the grants behind
+  every one of those gestures about anybody but its owner — refused at its
+  mint and stripped from what it carries on every request — so each is refused
+  on the grant.
+- The gestures a person makes about *themselves* on no grant at all —
+  enrolling or replacing a second factor, regenerating the recovery codes,
+  answering a step-up, revoking a password, a second factor or the recovery
+  codes — are refused to any request that **presented a machine token**, by
+  every surface that makes them, before anything is decided.
+
+And **no tool** asks for a proof — a seat has no keyboard, and the operator's
+assistant's surface is not a step-up surface — which the build checks too.
 
 ### Route policy travels with the route
 

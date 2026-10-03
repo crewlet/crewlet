@@ -66,8 +66,7 @@ func mounted(t *testing.T, opts secretsapi.Options, grants ...iam.Grant) http.Ha
 		ID:    uuid.NewSHA1(auth.TokenNamespace, []byte("ops")),
 		Login: iam.TokenLogin("ops"), Kind: iam.KindMachine,
 		Stage: iam.StageActive, Grants: grants,
-		ReauthAt:          time.Now().Add(time.Hour),
-		SensitiveReauthAt: time.Now().Add(time.Hour),
+		ReauthAt: time.Now().Add(time.Hour),
 	})
 }
 
@@ -580,8 +579,7 @@ func TestAPersonsTokenIsRecordedBesideThePerson(t *testing.T) {
 	}, iam.Principal{
 		ID: uuid.New(), Login: "jane.doe", Kind: iam.KindPerson,
 		Stage: iam.StageActive, Grants: iam.AllGrants, Via: pat,
-		ReauthAt:          time.Now().Add(time.Hour),
-		SensitiveReauthAt: time.Now().Add(time.Hour),
+		ReauthAt: time.Now().Add(time.Hour),
 	})
 	code, written := call(t, h, http.MethodPut, "/secrets/A", "v")
 	if code != http.StatusOK {

@@ -29,15 +29,15 @@ func (m *recordingMux) Handle(pattern string, h http.Handler) {
 	m.ServeMux.Handle(pattern, h)
 }
 
-// EVERY CREDENTIAL WRITE ASKS FOR A RECENT PROOF, REVEALING ONE ASKS FOR A
-// MORE RECENT ONE, AND THE LISTING ASKS FOR NONE.
+// EVERY CREDENTIAL WRITE AND A REVEAL ASK FOR A RECENT PROOF, AND THE
+// LISTING ASKS FOR NONE.
 //
 // Walked over every route the surface mounts, as a person holding every grant.
-// A proof forty minutes old is inside `step_up` and outside
-// `step_up_sensitive`: it writes and it may not reveal. Two hours old, every
-// write is refused `step_up_required` naming `step_up` before its handler
-// runs, and the reads — the listing and one secret's metadata — are served.
-func TestACredentialWriteAsksForAProofAndARevealForARecentOne(t *testing.T) {
+// Two hours old, every write is refused `step_up_required` naming `step_up`
+// before its handler runs, and the reads — the listing and one secret's
+// metadata — are served; so is a reveal refused, asked on top of the listing's
+// verb, while forty minutes old — inside the hour — both write and reveal.
+func TestACredentialWriteAndARevealAskForARecentProof(t *testing.T) {
 	t.Parallel()
 	fleet := coordmem.NewFleet()
 	svc, err := secretsapi.New(secretsapi.Options{
@@ -55,7 +55,7 @@ func TestACredentialWriteAsksForAProofAndARevealForARecentOne(t *testing.T) {
 		at := time.Now().Add(-age)
 		return iam.Principal{ID: uuid.New(), Login: "jane.doe",
 			Kind: iam.KindPerson, Stage: iam.StageActive, Grants: iam.AllGrants,
-			ReauthAt: at.Add(time.Hour), SensitiveReauthAt: at.Add(15 * time.Minute)}
+			ReauthAt: at.Add(time.Hour)}
 	}
 	serve := func(p iam.Principal, method, path, body string) (int, map[string]any) {
 		t.Helper()
@@ -94,21 +94,22 @@ func TestACredentialWriteAsksForAProofAndARevealForARecentOne(t *testing.T) {
 		}
 	}
 
-	// THE REVEAL IS THE SENSITIVE ONE, asked on top of the listing's verb.
-	older := provedAgo(40 * time.Minute)
-	if code, body := serve(older, http.MethodGet, "/secrets/KEY?reveal=true",
-		""); !steppedUp(code, body, iam.RecencySensitive) {
-		t.Errorf("a reveal on a proof forty minutes old answered %d %v, want "+
-			"403 step_up_required naming step_up_sensitive", code, body)
+	// THE REVEAL ASKS THE PROOF TOO, on top of the listing's verb, which
+	// asks none.
+	if code, body := serve(stale, http.MethodGet, "/secrets/KEY?reveal=true",
+		""); !steppedUp(code, body, iam.RecencyStepUp) {
+		t.Errorf("a reveal on a proof two hours old answered %d %v, want "+
+			"403 step_up_required naming step_up", code, body)
 	}
+	// THE CONTROL: a proof inside the hour writes and reveals.
+	older := provedAgo(40 * time.Minute)
 	if code, body := serve(older, http.MethodPut, "/secrets/KEY",
 		"a-third-value"); code != http.StatusOK {
 		t.Errorf("a write on a proof forty minutes old answered %d %v, want "+
 			"200: it asks inside step_up, which is an hour", code, body)
 	}
-	// THE CONTROL: a fresh proof reveals.
-	if code, body := serve(provedAgo(time.Minute), http.MethodGet,
+	if code, body := serve(older, http.MethodGet,
 		"/secrets/KEY?reveal=true", ""); code != http.StatusOK {
-		t.Errorf("a reveal on a proof a minute old answered %d %v", code, body)
+		t.Errorf("a reveal on a proof forty minutes old answered %d %v", code, body)
 	}
 }

@@ -123,12 +123,12 @@ func (g *Guard) principalFor(ctx context.Context, entry config.APIToken,
 		Grants: intersect(entry.Grants, g.ceiling),
 		Stage:  iam.StageActive,
 	}
-	// PRESENTING THE TOKEN IS THE PROOF, so it is fresh for BOTH windows:
-	// the sensitive one included.
+	// PRESENTING THE TOKEN IS THE PROOF, so it is fresh for the step-up
+	// window.
 	//
 	// There is nothing else it could present: a Tier A token has no second
 	// factor, no session and no person behind it. A credential that could
-	// never be fresh would be one that could never reach a sensitive gesture
+	// never be fresh would be one that could never reach a step-up gesture
 	// — which is precisely the job break-glass exists for, on the day an
 	// administrator is locked out and nobody else can sign in.
 	g.proof.stamp(&p, now)
@@ -323,7 +323,7 @@ func (g *Guard) bearer(r *http.Request, candidate string) (*http.Request, *Refus
 // would (and is refused it exactly as the bearer would), and the session is
 // stepped up by construction for the reason the bearer is: presenting the
 // token was the proof, and a break-glass session that could reach no
-// sensitive surface would be no use on the day it exists for.
+// step-up surface would be no use on the day it exists for.
 //
 // The session was once composed from the directory's row for the token's
 // DERIVED id, which no directory holds: once applied every request answered

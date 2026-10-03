@@ -216,38 +216,27 @@ const (
 
 	// --- the identity directory -------------------------------------- //
 	//
-	// SIX VERBS FOR FIFTEEN ROUTES, because the routes differ in what
+	// FIVE VERBS FOR SIXTEEN ROUTES, because the routes differ in what
 	// they do and not in how they are decided. What separates them is the
-	// three questions this estate actually asks: is this about a person or
-	// about the directory, does it CHANGE anything, and — for a change —
-	// does it hand over an authority or a way to prove who somebody is,
-	// which is what the sensitive step-up window exists for.
+	// two questions this estate actually asks: is this about a person or
+	// about the directory, and does it CHANGE anything.
 	ActionDirectoryRead  Action = "iam.read"
 	ActionDirectoryWrite Action = "iam.write"
-	// ActionDirectoryAuthority changes what somebody ALREADY ENROLLED may
-	// do or how they prove who they are: an edit of their row (grants,
-	// stage, seat, login, reach) and a second-factor reset.
-	// Its own verb beside [ActionDirectoryWrite] because it asks for the
-	// SENSITIVE window where every other directory write asks the ordinary
-	// one.
-	ActionDirectoryAuthority Action = "iam.authority.write"
-	ActionCredentialWrite    Action = "iam.credential.write"
-	// ActionCredentialProof changes how ONE PERSON PROVES WHO THEY ARE:
-	// enrolling or replacing a second factor, regenerating the recovery
-	// codes, and revoking a password, a second factor or the recovery
-	// codes. It is asked from both surfaces that make those
-	// changes — `/auth` for a person's own, `/iam` for anybody's — so one
-	// row decides them whichever route a request took.
-	ActionCredentialProof Action = "iam.credential.proof"
+	// ActionCredentialWrite changes ONE PERSON's own credentials: minting
+	// or revoking a machine token, enrolling or replacing a second factor,
+	// regenerating the recovery codes, and revoking a password, a second
+	// factor or the recovery codes. It is asked from both surfaces that
+	// make those changes — `/auth` for a person's own, `/iam` for anybody's
+	// — so one row decides them whichever route a request took.
+	ActionCredentialWrite Action = "iam.credential.write"
 	ActionSessionEnd      Action = "iam.session.end"
 
 	// ActionSessionInvalidate ends EVERY session in the company at once —
 	// the restore runbook's last step. BOTH hats, the deployment's grant AND
-	// the directory's ([rule.also]), and a verb of its own because it asks
-	// for the SENSITIVE window where the deployment's other controls ask for
-	// the ordinary one: it is the one gesture here that cannot be taken back
-	// for anybody, and it signs out the whole company including the person
-	// making it.
+	// the directory's ([rule.also]), which is why it is a verb of its own
+	// beside the deployment's other controls: it is the one gesture here
+	// that cannot be taken back for anybody, and it signs out the whole
+	// company including the person making it.
 	ActionSessionInvalidate Action = "iam.invalidate"
 )
 
@@ -299,7 +288,7 @@ type rule struct {
 	//
 	// EVERY ROW STATES ONE and the zero is refused by a walk in this
 	// package's tests, because the zero would read as [iam.RecencyAny]: a
-	// sensitive verb somebody added without deciding would ship open to a
+	// step-up verb somebody added without deciding would ship open to a
 	// session proved last week, and look exactly like a verb that was
 	// decided to need nothing.
 	//
@@ -544,7 +533,7 @@ var rules = map[Action]rule{
 	ActionConfigRead:   {class: ClassOperator, grant: iam.GrantConfigRead, recency: iam.RecencyAny},
 	ActionConfigWrite:  {class: ClassOperator, grant: iam.GrantConfigWrite, recency: iam.RecencyStepUp},
 	ActionSecretList:   {class: ClassOperator, grant: iam.GrantConfigRead, recency: iam.RecencyAny},
-	ActionSecretReveal: {class: ClassOperator, grant: iam.GrantSecretRead, recency: iam.RecencySensitive},
+	ActionSecretReveal: {class: ClassOperator, grant: iam.GrantSecretRead, recency: iam.RecencyStepUp},
 	ActionSecretWrite:  {class: ClassOperator, grant: iam.GrantSecretWrite, recency: iam.RecencyStepUp},
 	ActionSetupRead:    {class: ClassOperator, grant: iam.GrantConfigRead, recency: iam.RecencyAny},
 	ActionSetupConnect: {class: ClassOperator, grant: iam.GrantConfigWrite, recency: iam.RecencyStepUp},
@@ -575,43 +564,26 @@ var rules = map[Action]rule{
 	// refuses conferring what the caller does not hold, and this refuses
 	// the gesture before it gets there.
 	//
-	// THE ORDINARY WINDOW for enrolling somebody, inviting them and removing
-	// them — the design's own: every
-	// identity-directory write asks `step_up`, and the sensitive window is
-	// kept for the gestures that hand over a value or change an authority
-	// somebody already holds, below. Each of these is bounded another way:
-	// an enrolment and an invitation confer only what their writer holds
-	// (internal/iamdomain), and a removal is announced and audited. Asking the
-	// sensitive window of all of them sent an administrator who proved half
-	// an hour ago to re-prove for every invitation they sent.
+	// EVERY ONE OF THEM — enrolling somebody, inviting them, editing their
+	// row, resetting their second factor, removing them — asks the step-up
+	// window, and `people:manage`, which no machine token may carry: what
+	// keeps a stolen pipeline credential away from somebody's authority is
+	// that grant, and what keeps a week-old cookie away is the window.
 	ActionDirectoryWrite: {class: ClassOperator, grant: iam.GrantPeopleManage, recency: iam.RecencyStepUp},
-	// AND THE SENSITIVE WINDOW FOR CHANGING WHAT AN ENROLLED PERSON MAY DO
-	// OR HOW THEY PROVE IT — one PATCH of their row, whatever fields it
-	// carries, and a second-factor reset — which are the design's two
-	// sensitive directory gestures: changing somebody's grants hands them
-	// an authority, and resetting their second factor is how a phished
-	// password becomes an account.
-	ActionDirectoryAuthority: {class: ClassOperator, grant: iam.GrantPeopleManage,
-		recency: iam.RecencySensitive},
 	// MINTING AND REVOKING A MACHINE TOKEN, CHANGING HOW SOMEBODY PROVES
 	// WHO THEY ARE, and ENDING SESSIONS are the gestures a person
 	// legitimately makes about themselves — a personal access token, a
 	// second factor, signing out everywhere — so they carry the self path
 	// the writes above refuse.
 	//
-	// AND THEY ASK DIFFERENT PROOFS. A machine token's mint and revocation
-	// ask the ordinary window, as every directory write does: what a token
-	// carries is cut to its owner's own grants on every request and never
-	// includes a grant that needs a person present, so a mint hands over
-	// no authority the owner does not already exercise.
+	// THE SELF PATH ADMITS A MACHINE TOKEN AS ITS OWNER, and the table
+	// cannot tell the two apart: a token acts as its owner and is stepped
+	// up by construction. What keeps one from changing how its owner proves
+	// who they are is the CREDENTIAL the request presented, which every
+	// surface making such a change refuses before it decides anything
+	// (internal/api/auth's PresentedToken) — `/auth`'s second-factor and
+	// recovery-code routes and `/iam`'s revocation of anything but a token.
 	ActionCredentialWrite: {class: ClassDirectorySelf, recency: iam.RecencyStepUp},
-	// A CHANGE TO HOW SOMEBODY PROVES WHO THEY ARE asks the SENSITIVE
-	// window, the second-factor reset's reason whichever route it takes:
-	// replacing a factor or revoking one is a reset by another name, a
-	// fresh set of recovery codes is a set of values that bypass the
-	// factor and are shown once, and enrolling a first factor on a stolen
-	// session is a hold on the account its owner cannot shake off.
-	ActionCredentialProof: {class: ClassDirectorySelf, recency: iam.RecencySensitive},
 	// ENDING SESSIONS ASKS OPPOSITE PROOFS OF ITS TWO ARMS ([rule.selfRecency]).
 	// The person themselves asks for NONE: it is the first thing somebody
 	// does on finding somebody else in their account — and it ends every
@@ -637,7 +609,7 @@ var rules = map[Action]rule{
 	// both and is fresh by construction, so the restore runbook's CLI step
 	// still runs on the day nobody can sign in.
 	ActionSessionInvalidate: {class: ClassOperator, grant: iam.GrantFleetOperate,
-		also: iam.GrantPeopleManage, recency: iam.RecencySensitive},
+		also: iam.GrantPeopleManage, recency: iam.RecencyStepUp},
 }
 
 // RecencyOf reports how recent a proof a verb asks for, and whether the table

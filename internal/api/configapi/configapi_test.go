@@ -187,7 +187,7 @@ func (s *surface) do(t *testing.T, method, path, body string, headers map[string
 	caller := iam.Principal{
 		ID: uuid.NewSHA1(auth.TokenNamespace, []byte("ops")), Login: iam.TokenLogin("ops"),
 		Kind: iam.KindMachine, Stage: iam.StageActive, Grants: s.grants,
-		ReauthAt: time.Now().Add(time.Hour), SensitiveReauthAt: time.Now().Add(time.Hour),
+		ReauthAt: time.Now().Add(time.Hour),
 	}
 	if s.caller != nil {
 		caller = *s.caller
@@ -1321,8 +1321,7 @@ func TestARevisionNamesItsAuthorBesideTheCredential(t *testing.T) {
 			caller: &iam.Principal{
 				ID: uuid.New(), Login: "jane.doe", Kind: iam.KindPerson,
 				Stage: iam.StageActive, Grants: iam.AllGrants, Via: pat,
-				ReauthAt:          time.Now().Add(time.Hour),
-				SensitiveReauthAt: time.Now().Add(time.Hour),
+				ReauthAt: time.Now().Add(time.Hour),
 			},
 			want: iam.Actor{Name: "jane.doe", Kind: iam.ActorOperator, OperatorID: pat},
 		},

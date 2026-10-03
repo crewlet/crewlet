@@ -111,7 +111,7 @@ func TestASignInWaitsForItsOwnAddressesTurn(t *testing.T) {
 			map[string]string{"password": "not-the-passphrase-at-all"}, &iam.Principal{
 				ID: uuid.MustParse(person.ID), Login: person.Login,
 				Kind: iam.KindPerson, Stage: iam.StageActive,
-				ReauthAt: clock.Add(time.Hour), SensitiveReauthAt: clock.Add(15 * time.Minute),
+				ReauthAt: clock.Add(time.Hour),
 			}),
 		"a redemption": postFrom(gone, mux, "/auth/invite/"+invitationID, held,
 			map[string]string{"secret": invitationSecret, "login": "dana.sre",

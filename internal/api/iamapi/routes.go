@@ -79,7 +79,7 @@ func (s *Service) Routes(mux authz.Mux) error {
 	// AN EDIT OF AN ENROLLED PERSON is the directory's SENSITIVE write —
 	// it changes what they may do or how they sign in — where creating,
 	// removing and inviting ask the ordinary window.
-	mount("PATCH /iam/people/{id}", at(authz.ActionDirectoryAuthority), s.PatchPerson)
+	mount("PATCH /iam/people/{id}", at(authz.ActionDirectoryWrite), s.PatchPerson)
 	mount("DELETE /iam/people/{id}", at(authz.ActionDirectoryWrite), s.DeletePerson)
 	// AN INVITATION IS ADDRESSED TO AN ADDRESS, not to a person, so it is
 	// its own collection rather than a verb on somebody's row. The design
@@ -95,22 +95,20 @@ func (s *Service) Routes(mux authz.Mux) error {
 	mount("DELETE /iam/people/{id}/sessions",
 		about(authz.ActionSessionEnd), s.DeleteSessions)
 	mount("POST /iam/people/{id}/mfa/reset",
-		at(authz.ActionDirectoryAuthority), s.PostMFAReset)
+		at(authz.ActionDirectoryWrite), s.PostMFAReset)
 	mount("GET /iam/credentials",
 		ofSubject(authz.ActionDirectoryRead), s.GetCredentials)
 	mount("POST /iam/credentials",
 		ofSubject(authz.ActionCredentialWrite), s.PostCredentials)
-	// A REVOCATION IS ADMITTED ON THE ORDINARY VERB and asks the
-	// sensitive one from inside once it has read which credential the id
-	// names: a machine token's is an ordinary write, and a password's, a
-	// second factor's or the recovery codes' changes how somebody proves
-	// who they are — which the pattern cannot see.
+	// A REVOCATION refuses a request that presented a machine token from
+	// inside, once it has read which credential the id names: a token may
+	// withdraw a token, and never a password, a second factor or the
+	// recovery codes — which the pattern cannot see.
 	mount("DELETE /iam/credentials/{id}",
 		ofSubject(authz.ActionCredentialWrite), s.DeleteCredential)
 	// BOTH HATS, the deployment's grant and the directory's — sessions.go
-	// argues it. ITS OWN VERB beside the deployment's other controls,
-	// because it asks for the SENSITIVE window: it signs out everybody,
-	// irreversibly.
+	// argues it — which is why it is its own verb beside the deployment's
+	// other controls: it signs out everybody, irreversibly.
 	mount("POST /iam/invalidate-all",
 		at(authz.ActionSessionInvalidate), s.PostInvalidateAll)
 	mount("GET /iam/check", at(authz.ActionDirectoryRead), s.GetCheck)

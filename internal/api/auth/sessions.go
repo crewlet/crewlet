@@ -185,7 +185,7 @@ func enrolmentRefusal() *Refusal {
 //   - `POST /auth/totp`, the enrolment itself, both legs — whose completion
 //     replaces this session with a whole one;
 //   - `POST /auth/step-up`, because enrolling asks a proof inside the
-//     sensitive window, and a person who took longer than that to find their
+//     step-up window, and a person who took longer than that to find their
 //     phone must be able to re-confirm the password without signing out; it
 //     opens another enrolment-only session, since a password is still all
 //     they hold.
@@ -465,7 +465,7 @@ type sessionAnswer struct {
 // tokens is the guard's Tier A entries by login, for a session exchanged from
 // one: see [tierASubjects].
 func (s *Sessions) resolve(w http.ResponseWriter, r *http.Request,
-	ceiling []iam.Grant, proof proofWindows,
+	ceiling []iam.Grant, proof proofWindow,
 	tokens func(login string) (config.APIToken, bool)) sessionAnswer {
 
 	cookie := s.cookieOf(r)
@@ -767,7 +767,7 @@ func (d tierASubjects) Resolve(ctx context.Context, lineage, person string) (
 // token's exchanged cookie never reaches here: the guard composes it from the
 // entry, exactly as it composes the token's bearer.
 func (s *Sessions) principal(v session.Validation, binding session.Binding,
-	ceiling []iam.Grant, proof proofWindows) iam.Principal {
+	ceiling []iam.Grant, proof proofWindow) iam.Principal {
 
 	person := v.Person
 	p := iam.Principal{
@@ -799,65 +799,38 @@ func (s *Sessions) principal(v session.Validation, binding session.Binding,
 		// trail. The lineage is verified: the bearer reached here signed.
 		Via: iam.SessionName(v.Bearer.Lineage.String()),
 	}
-	// WHEN THIS SESSION'S PROOF STOPS COUNTING, for each window. It used
-	// to be read off a person field nothing ever set, so every session
-	// was stale from its first request and no person could reach a
-	// step-up surface at all — enrolling a second factor included.
+	// WHEN THIS SESSION'S PROOF STOPS COUNTING. It used to be read off a
+	// person field nothing ever set, so every session was stale from its
+	// first request and no person could reach a step-up surface at all —
+	// enrolling a second factor included.
 	proof.stamp(&p, v.Session.ProvedAt)
 	return p
 }
 
-// proofWindows is this node's two step-up windows: `api.auth.session.step_up`
-// and `step_up_sensitive`.
+// proofWindow is this node's step-up window, `api.auth.session.step_up`.
 //
 // THE NODE'S OWN, applied when a principal is composed, for the ceiling's
 // reason: a session row states only WHEN its holder proved who they are, so a
 // shortened window takes effect on this node's next request with nothing
 // rewritten, and a fleet mid-rollout legally disagrees about it.
-type proofWindows struct {
-	stepUp, sensitive time.Duration
-}
+type proofWindow time.Duration
 
-// windowsOf reads the two windows off the session settings, defaults applied.
-func windowsOf(s config.APISession) proofWindows {
-	return proofWindows{stepUp: s.StepUp(), sensitive: s.StepUpSensitive()}
-}
+// windowOf reads the window off the session settings, its default applied.
+func windowOf(s config.APISession) proofWindow { return proofWindow(s.StepUp()) }
 
-// stamp gives p the two deadlines a proof taken at provedAt earns: the proof
-// plus each window.
+// stamp gives p the deadline a proof taken at provedAt earns: the proof plus
+// the window.
 //
-// A ZERO provedAt STAMPS NOTHING, which [iam.Principal.Proved] reads as stale
-// in both windows: a session that proved nothing — one exchanged from no
-// person, or a row this node has not applied yet — must never read as fresh,
-// and a proof of the zero instant plus an hour would read as long stale only
-// by luck.
-func (w proofWindows) stamp(p *iam.Principal, provedAt time.Time) {
+// A ZERO provedAt STAMPS NOTHING, which [iam.Principal.Proved] reads as stale:
+// a session that proved nothing — a row this node has not applied yet — must
+// never read as fresh, and a proof of the zero instant plus an hour would read
+// as long stale only by luck.
+func (w proofWindow) stamp(p *iam.Principal, provedAt time.Time) {
 	if provedAt.IsZero() {
-		p.ReauthAt, p.SensitiveReauthAt = time.Time{}, time.Time{}
+		p.ReauthAt = time.Time{}
 		return
 	}
-	p.ReauthAt = provedAt.Add(w.stepUp)
-	p.SensitiveReauthAt = provedAt.Add(w.sensitive)
-}
-
-// stampOrdinary gives p the ORDINARY window's deadline for a proof taken at
-// provedAt, and none for the sensitive one — which [iam.Principal.Proved] reads
-// as stale there, for ever.
-//
-// WHAT A MACHINE TOKEN EARNS. It has nobody at a keyboard and nothing else to
-// present, so presenting it is its whole proof for the gestures an automation
-// makes — a configuration, a chart, a credential or a directory write. The
-// sensitive gestures are the ones that need a PERSON present — a secret's
-// value, somebody's authority, how somebody proves who they are, every session
-// at once — and a token proves nobody is. Stamped fresh in both windows, a
-// token reached a sensitive gesture wherever a verb admitted its owner as
-// THEMSELVES rather than on a grant: the safety argument was that no token
-// carries a grant the sensitive rows ask for, and a self arm asks none. The
-// break-glass credential keeps both windows ([Guard.principalFor]), because it
-// has to reach a sensitive gesture on the day nobody else can sign in.
-func (w proofWindows) stampOrdinary(p *iam.Principal, provedAt time.Time) {
-	w.stamp(p, provedAt)
-	p.SensitiveReauthAt = time.Time{}
+	p.ReauthAt = provedAt.Add(time.Duration(w))
 }
 
 // personID parses the id a bearer carries.

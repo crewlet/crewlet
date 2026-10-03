@@ -433,8 +433,7 @@ func TestAnAppIsRecordedAsWhoBeganIt(t *testing.T) {
 	s.caller = &iam.Principal{
 		ID: uuid.New(), Login: "jane.doe", Kind: iam.KindPerson,
 		Stage: iam.StageActive, Grants: iam.AllGrants, Via: pat,
-		ReauthAt:          time.Now().Add(time.Hour),
-		SensitiveReauthAt: time.Now().Add(time.Hour),
+		ReauthAt: time.Now().Add(time.Hour),
 	}
 	s.convertOneApp(t, "sre-lead", map[string]any{
 		"id": 91, "slug": "acme-sre-lead", "name": "Acme sre-lead",

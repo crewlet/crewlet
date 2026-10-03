@@ -478,8 +478,7 @@ func TestADisconnectRecordsWhoAskedOnTheRow(t *testing.T) {
 	s.caller = &iam.Principal{
 		ID: uuid.New(), Login: "ana.admin", Kind: iam.KindPerson,
 		Stage: iam.StageActive, Grants: iam.AllGrants, Via: via,
-		ReauthAt:          time.Now().Add(time.Hour),
-		SensitiveReauthAt: time.Now().Add(time.Hour),
+		ReauthAt: time.Now().Add(time.Hour),
 	}
 
 	out := s.do(t, http.MethodDelete, "/setup/integrations/jira", `{}`, nil)

@@ -108,7 +108,7 @@ func signedIn(grants ...iam.Grant) iam.Principal {
 	at := time.Now().Add(-time.Minute)
 	return iam.Principal{ID: uuid.New(), Login: "mira.lead", Seat: "mira",
 		Kind: iam.KindPerson, Stage: iam.StageActive, Grants: grants,
-		ReauthAt: at.Add(time.Hour), SensitiveReauthAt: at.Add(15 * time.Minute)}
+		ReauthAt: at.Add(time.Hour)}
 }
 
 // A LEAD'S PATCH THAT LEAVES THE RUNTIME OUT KEEPS IT, THROUGH THE SURFACE.

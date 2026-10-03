@@ -120,11 +120,7 @@
           "type": "string"
         },
         "step_up": {
-          "description": "How long a proof of identity authorises administrative action (default 1h, 5m..24h).",
-          "type": "string"
-        },
-        "step_up_sensitive": {
-          "description": "The same for irreversible gestures (default 15m, 1m..StepUp).",
+          "description": "How long a proof of identity authorises a step-up gesture (default 1h, 5m..24h).",
           "type": "string"
         }
       },

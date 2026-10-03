@@ -114,8 +114,8 @@ func (s *Service) DeleteSessions(w http.ResponseWriter, r *http.Request) {
 // directory's to decide. It used to be admitted here on fleet:operate alone
 // while the record refused anybody without people:manage, so an operator the
 // route let through was refused a step later — and the argument that a
-// machine token could never reach a sensitive gesture rested on that unstated
-// second check.
+// machine token could never reach this gesture rested on that unstated second
+// check.
 //
 // A backup taken before a revocation restores the session rows that revocation
 // ended, so a pre-restore bearer would work again — a cookie, or a machine

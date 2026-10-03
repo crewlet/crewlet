@@ -27,20 +27,20 @@ import (
 // gestures that decide whether a stolen session can be turned into a permanent
 // hold on somebody's account. A session alone is not enough for either: what
 // is being changed is the thing that would stop the person holding that
-// session, so the person has to be at the keyboard — within the quarter-hour
-// window, not the ordinary hour, because this is the second-factor reset's
-// gesture by another door and `/iam` asks the reset and a factor's revocation
-// the same (see [Service.mayChangeProof]).
+// session, so the person has to be at the keyboard — within the step-up window,
+// because this is the second-factor reset's gesture by another door and `/iam`
+// asks the reset and a factor's revocation the same (see
+// [Service.mayChangeProof]).
 //
 // # A machine token is refused both, whoever it acts as
 //
 // A personal access token acts AS its owner — a person, carrying their seat
-// — so the kind check below passes for it. It is stepped up by construction
-// for the ordinary window only, which the sensitive one these gestures ask
-// would refuse anyway; the refusal of its own is what SAYS why: whoever holds
-// a pipeline's environment must never enrol their own second factor on the
-// owner's account, or regenerate the recovery codes and read them. A token
-// PROVES NOBODY IS PRESENT, so it manages no proof — see [machineToken].
+// — so the kind check below passes for it, and it is stepped up by
+// construction, so the window passes for it too. This refusal is the only
+// thing between a token and these gestures: whoever holds a pipeline's
+// environment must never enrol their own second factor on the owner's account,
+// or regenerate the recovery codes and read them. A token PROVES NOBODY IS
+// PRESENT, so it manages no proof — see [machineToken].
 //
 // # The enrolment is TWO requests, and the secret is only in the first answer
 //
@@ -245,8 +245,8 @@ func (s *Service) EnrolTOTP(w http.ResponseWriter, r *http.Request) {
 // # A password must never override a factor
 //
 // An enrolment-only session was proved by a password alone, and its proof is
-// fresh for the sensitive window, so it satisfies what an enrolment asks of
-// a whole session. Without this, whoever holds such a session — somebody who
+// fresh for the step-up window, so it satisfies what an enrolment asks of a
+// whole session. Without this, whoever holds such a session — somebody who
 // knows the password of a person who held no factor, signed in before that
 // person enrolled their own — could enrol THEIR authenticator over the
 // owner's, lock the owner out and be handed a whole session for it. Every
@@ -336,9 +336,9 @@ func (s *Service) enrolmentSession(w http.ResponseWriter, r *http.Request,
 // The code the enrolment checked proves possession of a seed this same
 // session was handed moments earlier, which says nothing about who is holding
 // it — so the replacement is proved when the password was, and never now.
-// Dated now, it restarted both step-up windows: whoever held the restricted
-// cookie was handed a fresh sensitive window — recovery codes, reveals — that
-// the password sign-in never earned.
+// Dated now, it restarted the step-up window: whoever held the restricted
+// cookie was handed a fresh one — recovery codes, reveals — that the password
+// sign-in never earned.
 func (s *Service) completeEnrolment(w http.ResponseWriter, r *http.Request,
 	principal iam.Principal, replaced session.Validation) {
 
@@ -433,16 +433,19 @@ func (s *Service) proofOfRemoved(w http.ResponseWriter, r *http.Request) {
 // they prove who they are now — a machine, a machine token, or a person whose
 // proof of identity is older than the gesture's window.
 //
-// # The window is the authority table's, and it is the SENSITIVE one
+// # The rule is the authority table's
 //
 // Enrolling a second factor, replacing it and regenerating the recovery codes
-// are [authz.ActionCredentialProof] — the verb `/iam` asks of revoking a
+// are [authz.ActionCredentialWrite] — the verb `/iam` asks of revoking a
 // factor, so the two surfaces that change how somebody proves who they are
-// cannot answer differently about it. It was the ordinary hour here, read off
-// the session's own deadline, while the same person revoking their factor
-// through `/iam` was asked the quarter-hour: a cookie proved forty minutes ago
-// could swap the factor for a stranger's and read back fresh recovery codes,
-// and was refused only the gesture that took one away.
+// cannot answer differently about it.
+//
+// # And the MACHINE TOKEN is refused here, on what the request presented
+//
+// The table admits a token as its owner — it acts as them and is stepped up by
+// construction — so this refusal is what keeps whoever holds a pipeline's
+// environment from enrolling their own second factor on the owner's account
+// or reading back fresh recovery codes ([machineToken]).
 //
 // DECIDED AT THIS SURFACE'S OWN INSTANT and rendered in the router's own
 // envelope, so the refusal names its `reason` and its `window` — which is
@@ -459,7 +462,7 @@ func (s *Service) mayChangeProof(w http.ResponseWriter, r *http.Request) (iam.Pr
 		httpjson.Fail(w, http.StatusUnauthorized, httpjson.CodeInvalidToken)
 		return iam.Principal{}, false
 	}
-	window, _ := authz.RecencyOf(authz.ActionCredentialProof)
+	window, _ := authz.RecencyOf(authz.ActionCredentialWrite)
 	if principal.Kind != iam.KindPerson {
 		refuseStepUp(w, window, "a machine credential holds no second factor")
 		return iam.Principal{}, false
@@ -467,7 +470,7 @@ func (s *Service) mayChangeProof(w http.ResponseWriter, r *http.Request) (iam.Pr
 	if machineToken(w, r, window) {
 		return iam.Principal{}, false
 	}
-	d := authz.Decide(r.Context(), principal, authz.ActionCredentialProof,
+	d := authz.Decide(r.Context(), principal, authz.ActionCredentialWrite,
 		authz.Object{Kind: authz.KindPerson, Owner: principal.ID.String()},
 		authz.NoChart{}, s.now())
 	if d.Unknown() || !d.Allowed {

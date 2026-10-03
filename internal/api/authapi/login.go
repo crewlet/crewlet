@@ -889,9 +889,9 @@ type signIn struct {
 	// proof of the enrolment-only session it replaces, because the code
 	// the enrolment checked proves possession of a seed that same session
 	// was handed moments earlier — which says nothing about who is
-	// holding it. Dated now, it restarted both step-up windows and handed
-	// whoever held the restricted cookie a sensitive window its password
-	// never earned. A POINTER, so "proved nothing datable" (a zero time)
+	// holding it. Dated now, it restarted the step-up window and handed
+	// whoever held the restricted cookie a fresh one its password never
+	// earned. A POINTER, so "proved nothing datable" (a zero time)
 	// and "proved here" (nil) stay two answers.
 	provedAt *time.Time
 

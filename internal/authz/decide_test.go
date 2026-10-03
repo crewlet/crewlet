@@ -96,7 +96,6 @@ var decidedAt = time.Now()
 func proved(p iam.Principal) iam.Principal {
 	at := decidedAt.Add(-time.Minute)
 	p.ReauthAt = at.Add(time.Hour)
-	p.SensitiveReauthAt = at.Add(15 * time.Minute)
 	return p
 }
 

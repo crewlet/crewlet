@@ -11,7 +11,6 @@ import (
 
 	"github.com/crewlet/crewlet/internal/api/auth"
 	"github.com/crewlet/crewlet/internal/api/httpjson"
-	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/iam/credential"
@@ -305,29 +304,23 @@ const mintUnknown = "no token was issued: this node cannot establish whether " +
 // make: "this token was withdrawn on the 3rd by Ana" is the sentence an
 // investigation is looking for, and a row that vanished carries none of it.
 //
-// # Two verbs, and the credential decides which
-//
-// The route is admitted on the ordinary credential write, which is what
-// revoking a MACHINE TOKEN is — a leaked one withdrawn from wherever it was
-// found. Revoking anything else changes how its owner proves who they are: a
-// password, a second factor or the recovery codes, each of them a
-// second-factor reset by another door. So once the id is read, such a
-// revocation asks the SENSITIVE verb as well ([authz.ActionCredentialProof]),
-// the one `/auth`'s own second-factor routes ask. The method of a credential
-// id never changes, so the read that picks the verb and the snapshot that
-// revokes agree about it — and the snapshot revokes a credential that is not a
-// token only for a request that verb admitted, so an id this node could not
-// read yet is never a way round it.
-//
 // # A machine token revokes machine tokens and nothing else
 //
-// A token acts as its owner, so the authority table admits it here as it
-// admits the owner. What it may NOT do is withdraw the proof the owner signs
-// in with, because a token proves nobody is present, and a leaked one that
-// could strip its owner's second factor would be the first half of taking the
-// account. Revoking a token, itself included, is what somebody who finds one
-// leaked should be able to do from wherever they found it. It is refused
-// BEFORE anything is written, on the credential the id names.
+// The route is admitted on [authz.ActionCredentialWrite], the verb `/auth`'s
+// own second-factor routes ask, and a token acts as its owner, so the table
+// admits it here as it admits the owner. What it may NOT do is withdraw the
+// proof the owner signs in with — a password, a second factor or the recovery
+// codes, each a second-factor reset by another door — because a token proves
+// nobody is present, and a leaked one that could strip its owner's second
+// factor would be the first half of taking the account. Revoking a token,
+// itself included, is what somebody who finds one leaked should be able to do
+// from wherever they found it.
+//
+// It is refused BEFORE anything is written, on the credential the id names —
+// and again inside the snapshot that revokes, where a request that presented a
+// token revokes tokens only: the method of a credential id never changes, so
+// the two reads agree about it, and an id this node could not read yet is
+// never a way round the first.
 func (s *Service) DeleteCredential(w http.ResponseWriter, r *http.Request) {
 	person := s.subjectOf(r)
 	if person == "" {
@@ -347,28 +340,17 @@ func (s *Service) DeleteCredential(w http.ResponseWriter, r *http.Request) {
 		s.unavailable(w, r, "read a person's credentials", err)
 		return
 	}
-	named, found := credentialByID(held, id)
-	proof := found && named.RevokedAt.IsZero() &&
-		named.Method != iamdomain.MethodToken
-	if proof {
-		if _, fromToken := auth.PresentedToken(r.Context()); fromToken {
-			httpjson.FailWith(w, http.StatusForbidden, httpjson.CodeUnauthorized,
-				map[string]string{"detail": "a machine token revokes machine " +
-					"tokens and nothing else: a password, a second factor and " +
-					"the recovery codes are how its owner signs in, and are " +
-					"withdrawn by the person, signed in"})
-			return
-		}
-		if !authz.Admit(w, r, guard, authz.Policy{
-			Action: authz.ActionCredentialProof,
-			Object: func(*http.Request) authz.Object {
-				return authz.Object{Kind: authz.KindPerson, Owner: person}
-			},
-		}) {
-			return
-		}
+	_, fromToken := auth.PresentedToken(r.Context())
+	if named, found := credentialByID(held, id); fromToken && found &&
+		named.RevokedAt.IsZero() && named.Method != iamdomain.MethodToken {
+		httpjson.FailWith(w, http.StatusForbidden, httpjson.CodeUnauthorized,
+			map[string]string{"detail": "a machine token revokes machine " +
+				"tokens and nothing else: a password, a second factor and " +
+				"the recovery codes are how its owner signs in, and are " +
+				"withdrawn by the person, signed in"})
+		return
 	}
-	found = false
+	found := false
 	var method iamdomain.CredentialMethod
 	const reason = "a credential was revoked"
 	op, ok := s.opIDFor(w, r, "credentials-revoke", nil)
@@ -384,12 +366,11 @@ func (s *Service) DeleteCredential(w http.ResponseWriter, r *http.Request) {
 			found, method = false, ""
 			out := make([]iamdomain.Credential, 0, len(held))
 			for _, c := range held {
-				// ONLY WHAT WAS ADMITTED: anything but a token is
-				// revoked only by a request the sensitive verb admitted
-				// above, so a credential this node could not name when
-				// it chose the verb is not revoked on the ordinary one.
+				// A TOKEN REVOKES TOKENS HERE TOO, so a credential this
+				// node could not name before the decide is not revoked
+				// past the refusal above.
 				if c.ID == id && c.RevokedAt.IsZero() &&
-					(proof || c.Method == iamdomain.MethodToken) {
+					(!fromToken || c.Method == iamdomain.MethodToken) {
 					c.RevokedAt = now
 					found, method = true, c.Method
 				}

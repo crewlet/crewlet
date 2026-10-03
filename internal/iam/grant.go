@@ -249,10 +249,12 @@ var AllGrants = []Grant{
 // internal/iam/credential drops them from what a token carries on every
 // request. The second is not redundant — a rule that held only at the mint
 // would be a rule a row from anywhere else could step round. They are one of
-// the two locks between a token and the sensitive window ([Recency]); the other
-// is that the request guard never proves a token for that window at all, which
-// is what closes the gestures a person makes about THEMSELVES on no grant. A
-// token is what an attacker holding a pipeline's environment already has.
+// the two locks between a token and the gestures that need a person present —
+// a token is stepped up by construction, so a proof's age is neither ([Recency])
+// — and the other is that every surface changing how somebody proves who they
+// are refuses a request that presented a token, which is what closes the
+// gestures a person makes about THEMSELVES on no grant. A token is what an
+// attacker holding a pipeline's environment already has.
 var PersonPresentGrants = []Grant{GrantSecretRead, GrantPeopleManage}
 
 // grantAccess classifies every grant. A map rather than a string split, for

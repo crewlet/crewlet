@@ -84,19 +84,22 @@ const MinPasswordChars = 12
 // Recency is how recently a gesture needs whoever makes it to have PROVED who
 // they are — the step-up requirement, as a value a rule states.
 //
-// THE TWO WINDOWS ARE THE CONFIGURATION'S, and the values are spelled as its
-// keys: `step_up` is `api.auth.session.step_up` (an hour by default — the
-// ordinary administrative gestures), and `step_up_sensitive` is
-// `api.auth.session.step_up_sensitive` (fifteen minutes — the gestures that
-// hand over something that cannot be taken back: a secret's value, somebody's
-// authority, every session in the company). A refusal names the window it
-// needs by this value, so the setting an operator would tune and the word a
-// client reads are one string.
+// ONE WINDOW, and it is the configuration's: `step_up` is
+// `api.auth.session.step_up` (an hour by default), spelled as its key so the
+// setting an operator would tune and the word a refusal names are one string.
+// Every gesture that asks for a recent proof asks this one — revealing a
+// secret, changing somebody's authority or how they prove who they are,
+// ending every session in the company, writing the configuration — for the
+// reason internal/config gives at the setting: a second, shorter window beside
+// it sent people to re-prove inside the hour they had already proved in, and
+// the gestures it guarded are bounded by what no proof's age can change — a
+// grant no machine token may carry, and a refusal of any request a machine
+// token presented.
 //
 // A NAMED STRING WHOSE ZERO VALUE IS INVALID, and the zero is the one that
 // would be dangerous: read as "no proof needed", a rule somebody wrote without
-// deciding would ship a sensitive gesture open to a session proved last week.
-// So every rule in internal/authz states one of the three, and a walk there
+// deciding would ship a step-up gesture open to a session proved last week.
+// So every rule in internal/authz states one of the two, and a walk there
 // refuses the zero.
 type Recency string
 
@@ -109,19 +112,13 @@ const (
 
 	// RecencyStepUp asks for a proof inside `api.auth.session.step_up`: the
 	// company's configuration, its chart, its integrations, its credential
-	// store's writes, the identity directory's writes and the deployment's
-	// own controls.
+	// store, the identity directory's writes, how somebody proves who they
+	// are, and the deployment's own controls.
 	RecencyStepUp Recency = "step_up"
-
-	// RecencySensitive asks for a proof inside
-	// `api.auth.session.step_up_sensitive`: revealing a secret's value,
-	// changing what anybody may do or how they prove it, and ending every
-	// session in the company.
-	RecencySensitive Recency = "step_up_sensitive"
 )
 
-// Recencies are the three, weakest first.
-var Recencies = []Recency{RecencyAny, RecencyStepUp, RecencySensitive}
+// Recencies are the two, weakest first.
+var Recencies = []Recency{RecencyAny, RecencyStepUp}
 
 // Valid reports whether a value is one this build knows.
 func (r Recency) Valid() bool { return slices.Contains(Recencies, r) }

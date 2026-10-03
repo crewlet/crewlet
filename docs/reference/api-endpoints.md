@@ -232,11 +232,11 @@ node means nothing was done.
 | `GET` | `/auth/config` | What a sign-in page needs to know before anybody has signed in: which backend, and `min_password_length` — the deployment's own `api.auth.local.min_password_length`, never below the engine's twelve, which is exactly the floor every redemption enforces. **Unguarded**, and it carries **no user list and no count of people** |
 | `GET` | `/auth/invite/{id}` | **Renders an invitation and never spends it** — a link is followed by mail clients prefetching, scanners and preview cards, and one spent by a GET is an account created for somebody who never saw it. **Unguarded**: holding the link is the credential — the **secret** it carries after the id, presented in the `X-Crewlet-Invite-Secret` header and never in the URL. The link a person follows is the dashboard's screen, `<api.external_url>/dashboard#/invite/<id>.<secret>`, whose fragment no browser sends to a server; the screen calls this route with the two halves apart. Answers the address it is for, who sent it, the password floor, the `seat` it binds (`{handle, name}` as the chart calls it now — absent for an invitation that binds none), and a `login` **proposed** from the address in the person grammar (`jane.doe@example.com` → `jane.doe`, `jane@example.com` → `jane.example`) for the form to pre-fill. Absent, redeemed, expired and a missing or wrong secret are one `410` — the same bytes, so a guessed secret against a leaked id does not say the id exists — and an id nobody issued or a secret that is not the link's is a **failed attempt in the audit trail's tally**: walking ids or secrets is guessing at a link, which the tally shows. It meets no [curve](#a-failure-costs-a-wait-never-a-lockout) — the secret is 256 bits nobody walks, and a curve keyed on the address a link came from is one a stranger there holds shut for everybody else. A link that **proved itself** and is spent — redeemed, expired, its address enrolled — is the same `410` and is not counted: that is the link's holder, or a mail scanner re-reading it, and a guesser who does not hold the link can never reach the difference |
 | `POST` | `/auth/invite/{id}` | Redeems it, conferring exactly the grants and seat whoever issued it decided — the enrolment names the invitation as its authority and presents the link's secret, and the record refuses anything the invitation does not cover, so a link spent or aged out between the form and the post is `410 invite_spent`. **Unguarded**. `{secret, login, name, password}`: `secret` is the half of the link after the id, checked exactly as the view checks it; the login is **required** — every person enrols with one, the name their changes are recorded under while they hold no seat. An absent login, or one outside a person's grammar (dotted, `jane.doe`), is `400` naming the rule and a login or address somebody already holds is `409` — without saying who, because a link is evidence of who the caller is and of nothing about anybody else. An invitation that binds a seat claims it **first** and binds the person to it: a seat removed, made an agent's or bound to somebody else since the issue is `410` before anything is written, and one a colleague's bind races is `409` saying the seat is taken, naming nobody. Only a record that could not land is `503`. **Retry until it lands**: the person a redemption creates is derived from the invitation, so every attempt names one person and a redeemer told their login is taken posts another. A link whose address somebody is already enrolled under is `410`, like a redeemed one. The company's **first person** redeems exactly this way: a Tier A token issues their invitation — see [How the first person exists](../concepts/identity-and-access.md#how-the-first-person-exists) |
-| `GET` | `/auth/session` | **Who you are**: your id, login, seat, kind, stage and grants, and the two instants your proof of identity stops counting — `reauth_at` for an ordinary [step-up](#some-gestures-ask-how-recently-you-proved-who-you-are) gesture and `sensitive_reauth_at` for a sensitive one — with `step_up_due` and `sensitive_step_up_due` saying whether the next one of each will ask you to confirm it — and `status`: `signed_in`, or `second_factor_enrolment_required` for a session that may only enrol a second factor, which is one of the routes such a session reaches |
+| `GET` | `/auth/session` | **Who you are**: your id, login, seat, kind, stage and grants, and `reauth_at`, the instant your proof of identity stops counting for a [step-up](#some-gestures-ask-how-recently-you-proved-who-you-are) gesture — with `step_up_due` saying whether the next one will ask you to confirm it — and `status`: `signed_in`, or `second_factor_enrolment_required` for a session that may only enrol a second factor, which is one of the routes such a session reaches |
 | `POST` | `/auth/token` | Exchanges a **Tier A bearer** — presented as `Authorization: Bearer`, never a cookie — for a one-hour session cookie. The session **is the token**: it names the token's login, and every request re-composes it from the entry this node holds now — the entry's grants cut to the ceiling, the seat the identity directory binds the token to, stepped up by construction as the bearer is. Removing or renaming the entry ends it on the next request, and so does **putting a new value under the same id**: the cookie is bound to the value it was exchanged with, so rotating a leaked token's value ends every session the old value opened — each announced once as `iam_session_ended` with `credential_changed`, as a removed entry's is, since no record states either. `POST /auth/logout` from it closes it as it closes a person's, and `POST /auth/logout/all` from it and `crewlet iam invalidate-all` end it too. A refused bearer here is answered exactly as on every guarded route: `401`, counted in the audit trail's failure tally, and never slowed or refused on its address — see [A bearer is its own protection](#a-bearer-is-its-own-protection) |
 | `POST` | `/auth/step-up` | Confirm who you are on a session that is already valid. The only route here that is **both guarded and throttled**: the caller is known, and unbounded retries against a known person is a password oracle with the enumeration already done. It answers a **fresh session cookie** and **ends the session it replaces** first — a close that does not land is `503` with a `Retry-After` and opens nothing, and a presented session that is no longer live is `401`. The replacement confirms the sign-in rather than repeating it, so it keeps the replaced session's absolute deadline |
-| `POST` | `/auth/totp` | Enrol a second factor, replacing any you hold. **Two requests**: the first answers a seed and stores nothing, the second presents a code derived from it — which is the only evidence the authenticator app works. Needs a proof inside `step_up_sensitive`, the second-factor reset's window, and an older one is `403 step_up_required` naming it (`reason`, `window`) as every step-up refusal does. A factor nobody can confirm is stored is `503` with its `op_id`, never "enrolled". The second leg answers `{"status": "enrolled"}` — and, through a session that could only enrol a second factor, **replaces that session**: the restricted one is ended first, a whole one opens keeping its absolute deadline and its proof instant (the password's — the enrolment's code proves a seed, not who holds it, so it opens no fresh step-up window), its cookie is on the response and it is answered beside the status as `session` (the sign-in's own shape, `status: signed_in`). Such a session enrols only while its person holds **no** second factor — decided in the write's own snapshot — so one that has come to hold one since the session opened is `403 second_factor_required` and nothing is stored: a password alone never replaces a factor. The seed is sealed under your own key before it is stored, and opened only to check a code |
-| `POST` | `/auth/totp/recovery` | Issue ten fresh single-use codes, retiring the old set. Answered **once**, in the clear; what is stored is their hashes, so a lost set is regenerated rather than recovered. Needs a proof inside `step_up_sensitive`, refused as `POST /auth/totp` is. A set nobody can confirm is stored is `503` with its `op_id`, and the codes are not shown |
+| `POST` | `/auth/totp` | Enrol a second factor, replacing any you hold. **Two requests**: the first answers a seed and stores nothing, the second presents a code derived from it — which is the only evidence the authenticator app works. Needs a proof inside `step_up`, the second-factor reset's window, and an older one is `403 step_up_required` naming it (`reason`, `window`) as every step-up refusal does. **Never through a machine token**: one is `403`, whatever its owner may do, because a token proves nobody is present. A factor nobody can confirm is stored is `503` with its `op_id`, never "enrolled". The second leg answers `{"status": "enrolled"}` — and, through a session that could only enrol a second factor, **replaces that session**: the restricted one is ended first, a whole one opens keeping its absolute deadline and its proof instant (the password's — the enrolment's code proves a seed, not who holds it, so it opens no fresh step-up window), its cookie is on the response and it is answered beside the status as `session` (the sign-in's own shape, `status: signed_in`). Such a session enrols only while its person holds **no** second factor — decided in the write's own snapshot — so one that has come to hold one since the session opened is `403 second_factor_required` and nothing is stored: a password alone never replaces a factor. The seed is sealed under your own key before it is stored, and opened only to check a code |
+| `POST` | `/auth/totp/recovery` | Issue ten fresh single-use codes, retiring the old set. Answered **once**, in the clear; what is stored is their hashes, so a lost set is regenerated rather than recovered. Needs a proof inside `step_up`, refused as `POST /auth/totp` is, a machine token included. A set nobody can confirm is stored is `503` with its `op_id`, and the codes are not shown |
 | `POST` | `/auth/logout` | End **this** session. The cookie is cleared whatever the write did — a logout that answered 503 would leave somebody looking at a signed-in page on a shared machine. It ends the session behind **either** cookie name — the one this deployment issues, and the other a browser may still hold from before `api.external_url` moved to https, which the guard no longer authenticates — and clears both. Only a session this node's rows still hold is closed and announced as `iam_session_ended`: a cookie past its deadline, revoked, or naming a session a record already ended is cleared and nothing is written, and a node that cannot read its rows records the close without announcing it. **Unguarded**, and that is what makes the promise true: behind the request guard, a node that could not read its identity estate answered `503 identity_unavailable` before the sign-out ran and the cookie stayed set. It verifies every bearer the browser holds itself, and the origin check still judges it |
 | `POST` | `/auth/logout/all` | End **every** session you hold, by bumping your own revocation epoch — the one move that is immediate on every node. A revocation nobody can confirm is `503` with its `op_id` rather than a claim that your other sessions ended |
 | `POST` | `/auth/logout/{lineage}` | End **one named** session, which is how you sign out of a laptop you left somewhere from the browser you are using. The owner is read from this node's rows and compared against the caller the guard resolved; `fleet:operate` may end one they do not own. A session already over — ended by a record, past its absolute deadline, revoked or invalidated — answers `ended` with nothing written or announced. A node that cannot read its rows answers `503 identity_unavailable` with a `Retry-After` and writes nothing, because the owner the caller is checked against is one of those rows — unlike `POST /auth/logout`, whose lineage comes off the cookie's own signature. A close nobody can confirm is `503` with its `op_id` — the id is derived from the lineage, so asking again is the same operation |
@@ -548,8 +548,7 @@ is told what they lack, not sent to confirm who they are first.
 
 | Window | Setting (default) | What asks for it |
 |---|---|---|
-| `step_up` | `api.auth.session.step_up` (1 hour) | Every write under `/config*` and `/chart*` (a lead editing their own unit included), `/setup`'s writes, `PUT`/`DELETE /secrets/{name}` and `POST /secrets/rekey`, the deployment's own controls — `POST /backup` and every `POST /work/retention*` — and every `/iam` write the row below does not name: `POST /iam/people`, `DELETE /iam/people/{id}`, `POST /iam/invitations`, `POST /iam/credentials`, revoking a machine token through `DELETE /iam/credentials/{id}`, and ending somebody else's sessions |
-| `step_up_sensitive` | `api.auth.session.step_up_sensitive` (15 minutes) | Revealing a value (`GET /secrets/{name}?reveal=true`); changing what an enrolled person may do or how they prove who they are — `PATCH /iam/people/{id}`, `POST /iam/people/{id}/mfa/reset`, `DELETE /iam/credentials/{id}` naming a password, a second factor or the recovery codes, and your own `POST /auth/totp` and `POST /auth/totp/recovery`; and `POST /iam/invalidate-all` |
+| `step_up` | `api.auth.session.step_up` (1 hour) | Every write under `/config*` and `/chart*` (a lead editing their own unit included), `/setup`'s writes, `PUT`/`DELETE /secrets/{name}`, `POST /secrets/rekey` and revealing a value (`GET /secrets/{name}?reveal=true`), the deployment's own controls — `POST /backup` and every `POST /work/retention*` — and every `/iam` write: `POST /iam/people`, `PATCH /iam/people/{id}`, `DELETE /iam/people/{id}`, `POST /iam/invitations`, `POST /iam/people/{id}/mfa/reset`, `POST /iam/credentials`, `DELETE /iam/credentials/{id}`, ending somebody else's sessions and `POST /iam/invalidate-all`; and your own `POST /auth/totp` and `POST /auth/totp/recovery` |
 | none | | Every read, the two deployment reads (`GET /work/retention/maintenance`, `GET /work/retention/reanchor`) and the import ledger a client polls (`GET /chart/imports*`) included; ending your own sessions (`DELETE /iam/people/{id}/sessions` naming yourself), which is the first thing to do on finding somebody else in your account — an administrator ending somebody else's asks `step_up`; and every work and knowledge verb — the tools, `/operator/mcp`, `/operator/act` and the human write surface |
 
 A proof that is too old is **`403 step_up_required`**, the code the sign-in
@@ -562,7 +561,7 @@ ask the person to confirm who they are and send the same request again —
   "error": "step_up_required",
   "message": "…",
   "reason": "step_up",
-  "window": "step_up_sensitive",
+  "window": "step_up",
   "grants": ["secrets:read"]
 }
 ```
@@ -570,22 +569,25 @@ ask the person to confirm who they are and send the same request again —
 The step-up **replaces** the session it was made from, ending it first and
 keeping its absolute deadline.
 
-`window` is spelled as the setting that sizes it. `GET /auth/session` answers
-the two deadlines the table judges against (`reauth_at`,
-`sensitive_reauth_at`) and whether each is already due, so a screen can say so
-before somebody starts rather than after they submit.
+`window` is spelled as the setting that sizes it, and there is ONE: the
+practice of GitHub's sudo mode, one window over every sensitive gesture, at the
+stricter end of it. `GET /auth/session` answers the deadline the table judges
+against (`reauth_at`) and whether it is already due (`step_up_due`), so a
+screen can say so before somebody starts rather than after they submit.
 
 **A credential with nobody at a keyboard is fresh by construction** — a Tier A
-token (and a session exchanged from one) and the development principal in both
-windows, and a personal access or service token in `step_up` only. There is
-nothing else any of them could present, and the break-glass credential has to
-reach a sensitive gesture on the day nobody can sign in as a person; a machine
-token never does, because every sensitive gesture needs a person present and a
-token proves nobody is. It is bounded twice over: `secrets:read` and
-`people:manage` — the grants behind the sensitive gestures about somebody else
-— can never be minted onto one, and it is never proved for the sensitive window,
-which closes the ones a person makes about themselves. No tool asks for a proof:
-a seat has no keyboard, and `/operator/mcp` is not a step-up surface.
+token (and a session exchanged from one), the development principal, and a
+personal access or service token. There is nothing else any of them could
+present, and the break-glass credential has to reach a step-up gesture on the
+day nobody can sign in as a person. What keeps a machine token off the
+gestures that need a person present is therefore never the clock, and it is
+two locks: `secrets:read` and `people:manage` — the grants behind every such
+gesture about somebody else — can never be minted onto one, and the gestures a
+person makes about themselves on no grant (`POST /auth/totp`,
+`POST /auth/totp/recovery`, `POST /auth/step-up`, and revoking anything but a
+token through `DELETE /iam/credentials/{id}`) refuse any request that
+presented one. No tool asks for a proof: a seat has no keyboard, and
+`/operator/mcp` is not a step-up surface.
 
 **And a node that cannot read identity answers `503`, never `403`.** The
 principal a node could not check and the principal that carries nothing are
@@ -998,24 +1000,16 @@ list and nothing ever will be.
 | `POST /iam/people/{id}/mfa/reset` | `people:manage` |
 | `GET /iam/credentials[?person=]` | the person themselves, `people:manage` or `audit:read` |
 | `POST /iam/credentials[?person=]` | the person themselves, from their own session; `people:manage` for a **service account** only; never a request presenting a machine token |
-| `DELETE /iam/credentials/{id}[?person=]` | the person themselves or `people:manage`; a machine token revokes machine tokens only, refused before anything is written. An id naming a password, a second factor or the recovery codes also asks a proof inside `step_up_sensitive` |
+| `DELETE /iam/credentials/{id}[?person=]` | the person themselves or `people:manage`; a machine token revokes machine tokens only, refused before anything is written |
 | `POST /iam/invalidate-all` | `fleet:operate` **and** `people:manage` — the deployment's grant and the directory's, both, as the record layer holds too. Ends every session **and every machine token** |
 | `GET /iam/check` | `people:manage` or `audit:read` |
 | `GET /iam/node-tokens` | `people:manage` or `audit:read` |
 | `GET /iam/audit` | `audit:read` |
 
-**Every write here asks for a recent proof**, and which window is the
-design's; see
+**Every write here asks for a recent proof**, inside `step_up` (an hour by
+default); see
 [Some gestures ask how recently you proved who you are](#some-gestures-ask-how-recently-you-proved-who-you-are).
-Enrolling, inviting and removing somebody, and minting or revoking a machine
-token ask `step_up` (an hour by default). Changing what an
-enrolled person may do or how they prove it asks `step_up_sensitive` (fifteen
-minutes): `PATCH /iam/people/{id}` whatever it carries, a second-factor reset,
-and a revocation through `DELETE /iam/credentials/{id}` that names a password,
-a second factor or the recovery codes — which the route asks
-once it has read what the id names, since the pattern cannot see it — and so
-does `POST /iam/invalidate-all`. Ending sessions asks two windows of its two
-arms: ending your own asks for none, because it is the first thing somebody
+Ending sessions asks two answers of its two arms: ending your own asks for none, because it is the first thing somebody
 does on finding an intruder in their account — and it ends every machine token
 they hold too — while an administrator ending somebody else's asks `step_up`,
 since it signs a colleague out of everything.
@@ -1586,7 +1580,7 @@ changed. Every node serves them, because every node opens the fleet's
 | Route | Grant |
 |---|---|
 | `GET /secrets`, `GET /secrets/{name}` | `config:read` |
-| `GET /secrets/{name}?reveal=true` | `config:read` **and** `secrets:read`, and a proof of identity inside `step_up_sensitive` — decided before the store is read, so a caller without the second is refused alike for a name that exists and one that does not |
+| `GET /secrets/{name}?reveal=true` | `config:read` **and** `secrets:read`, and a proof of identity inside `step_up` — decided before the store is read, so a caller without the second is refused alike for a name that exists and one that does not |
 | `PUT /secrets/{name}`, `DELETE /secrets/{name}`, `POST /secrets/rekey` | `secrets:write`, and a proof inside `step_up` |
 | `GET /setup/integrations`, `GET /setup/integrations/{kind}`, the two `runs` reads | `config:read` |
 | `POST /setup/integrations/{kind}/inputs` | `config:write` — and `secrets:write` as well when the submission carries a credential, supplied or to be minted |
@@ -1597,8 +1591,7 @@ changed. Every node serves them, because every node opens the fleet's
 write of its own — a credential goes through the store `/secrets` serves — so
 a caller who could not write a credential there cannot write one here either.
 Every `/setup` and `/secrets` write asks for a proof of identity inside
-`step_up` as well, and a reveal one inside `step_up_sensitive`; the reads ask
-for none (see
+`step_up` as well, and so does a reveal; the reads ask for none (see
 [Some gestures ask how recently you proved who you are](#some-gestures-ask-how-recently-you-proved-who-you-are)).
 
 | Method | Path | Description |

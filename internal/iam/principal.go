@@ -141,29 +141,18 @@ type Principal struct {
 	Position string
 
 	// ReauthAt is the instant after which this principal's proof of
-	// identity is too old for an ordinary step-up gesture
-	// ([RecencyStepUp]), in UTC.
+	// identity is too old for a step-up gesture ([RecencyStepUp]), in UTC:
+	// the proof plus `api.auth.session.step_up`.
+	//
+	// AN INSTANT RATHER THAN THE PROOF AND THE WINDOW, because the window
+	// is THIS NODE's setting and the node that composed the principal is
+	// the one whose window applies — exactly as its ceiling is the one cut
+	// into the grants.
 	//
 	// ZERO IS NOT "NEVER" — see [Principal.Fresh]. A zero deadline read
 	// as "never expires" is a session somebody forgot to bound, which is
 	// the same failure the zero [Grant] would be.
 	ReauthAt time.Time
-
-	// SensitiveReauthAt is the same instant for a SENSITIVE gesture
-	// ([RecencySensitive]): the proof plus `step_up_sensitive` rather than
-	// plus `step_up`, and so never later than ReauthAt on a principal the
-	// guard composed.
-	//
-	// TWO DEADLINES AND NOT ONE, because the two windows are two settings
-	// and a gesture asks for one of them: a single deadline could say
-	// whether a proof is inside the hour and could not say whether it is
-	// inside the quarter-hour. Carried as instants rather than as the proof
-	// and the two windows, because the windows are THIS NODE's settings and
-	// the node that composed the principal is the one whose windows apply
-	// — exactly as its ceiling is the one cut into the grants.
-	//
-	// ZERO IS STALE here too, for ReauthAt's reason.
-	SensitiveReauthAt time.Time
 
 	// Stage is how far through enrolment this principal is.
 	Stage Stage
@@ -260,8 +249,6 @@ func (p Principal) Proved(r Recency, now time.Time) bool {
 		return true
 	case RecencyStepUp:
 		return p.Fresh(now)
-	case RecencySensitive:
-		return !p.SensitiveReauthAt.IsZero() && now.Before(p.SensitiveReauthAt)
 	}
 	return false
 }

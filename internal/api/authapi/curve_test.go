@@ -101,7 +101,6 @@ func TestAStepUpsPasswordMeetsTheSameCurve(t *testing.T) {
 			ID:    uuid.MustParse(r.estate.person.ID),
 			Login: r.estate.person.Login, Kind: iam.KindPerson,
 			Stage: iam.StageActive, ReauthAt: clock.Add(time.Hour),
-			SensitiveReauthAt: clock.Add(15 * time.Minute),
 		}))
 		rec := httptest.NewRecorder()
 		mux := http.NewServeMux()

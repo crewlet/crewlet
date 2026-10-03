@@ -50,23 +50,23 @@
 //
 // A session lives for days and a laptop is left unlocked, so the gestures that
 // change what a company IS ask for a proof taken minutes ago rather than on
-// Monday: that is the STEP-UP, and every row states how recent a proof it asks
-// for ([iam.Recency]) — none, `step_up` (an hour by default: the company's
-// configuration, chart, integrations and credential writes, the identity
-// directory's writes and the deployment's own controls) or `step_up_sensitive`
-// (fifteen minutes: revealing a secret, changing what somebody already
-// enrolled may do or how they prove who they are — whichever surface the
-// change comes through — and ending every session in the company). Those are
-// the design's windows: the sensitive one is kept for the gestures that hand
-// over a value or an authority somebody holds, and asking it of every
-// directory write sent an administrator back to re-prove for each invitation.
+// Monday: that is the STEP-UP, and every row states whether it asks for one
+// ([iam.Recency]) — none, or `step_up` (an hour by default): the company's
+// configuration, chart, integrations and credential store, the identity
+// directory's writes, how somebody proves who they are — whichever surface the
+// change comes through — and the deployment's own controls, ending every
+// session in the company among them. ONE WINDOW, for internal/config's reason:
+// a second, shorter one for some of those gestures sent people to re-prove
+// inside the hour they had already proved in, and what keeps a stolen machine
+// credential from them is a grant no token may carry and a refusal of any
+// request a token presented — never the age of a proof.
 //
 // IT IS DECIDED HERE, ON THE ROW, and nowhere else. It was a setting nothing
 // read: the sign-in surface could record a proof and no surface outside it ever
 // asked for one, so a cookie from last week reached every one of those
 // gestures. On the row, a REST route and a tool asking about one verb get one
 // answer, and a walk holds every row to having decided — a zero recency is
-// refused, because read as "none" it is a sensitive verb that shipped open.
+// refused, because read as "none" it is a step-up verb that shipped open.
 //
 // A ROW MAY ASK ITS SELF ARM A DIFFERENT WINDOW from every other arm, read off
 // the reason the class admitted on: ending every session somebody holds asks
@@ -81,12 +81,13 @@
 // proved is the principal's business ([iam.Principal.Proved]): a session
 // proved when it signed in or stepped up, while a credential with nobody at a
 // keyboard is fresh by construction, because there is nothing else it could
-// ever present — a Tier A token and the development principal in both windows,
-// a machine token in the ordinary one only, since every sensitive gesture needs
-// a person present. Two walks hold the sensitive window to that: every
-// sensitive row about anybody but the caller asks a grant no token carries
-// ([iam.PersonPresentGrants]), and internal/api/auth's refuses a token every
-// sensitive row about its own owner.
+// ever present — a Tier A token, the development principal and a machine
+// token alike. So the CLOCK keeps no token off the gestures that need a person
+// present, and two other locks do: every such gesture about anybody but the
+// caller asks a grant no token carries ([iam.PersonPresentGrants]), which a
+// walk here holds; and the ones a person makes about themselves on no grant
+// are refused to any request that presented a token, by every surface that
+// makes them (internal/api/authapi, internal/api/iamapi).
 //
 // A ROW MAY ASK FOR TWO GRANTS AT ONCE ([rule.also]), and two do: ending every
 // session in the company is the deployment's to run and the directory's to

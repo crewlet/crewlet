@@ -310,30 +310,15 @@ func TestASessionsProofCountsForTheStepUpWindow(t *testing.T) {
 	if !got.principal.Fresh(rig.at) {
 		t.Error("a session proved ten minutes ago is stale inside an hour's window")
 	}
-	// AND THE SENSITIVE WINDOW IS ITS OWN, composed from the same proof and
-	// this node's `step_up_sensitive`: two deadlines, because a gesture asks
-	// for one window or the other and one instant cannot answer both.
-	sensitive := proved.Add(config.DefaultSessionStepUpSensitive)
-	if !got.principal.SensitiveReauthAt.Equal(sensitive) {
-		t.Errorf("sensitive deadline %s, want the proof at %s plus the %s window",
-			got.principal.SensitiveReauthAt, proved,
-			config.DefaultSessionStepUpSensitive)
-	}
-	if !got.principal.Proved(iam.RecencySensitive, rig.at) {
-		t.Error("a session proved ten minutes ago is stale inside fifteen")
-	}
 
-	// A PROOF FORTY MINUTES OLD is inside the hour and outside the quarter:
-	// the ordinary gestures go on and revealing a secret asks again.
+	// A PROOF TWO HOURS OLD is outside the hour, so every step-up gesture
+	// asks again.
 	older := newSignedIn(t)
-	older.dir.identity.Session.ProvedAt = older.at.Add(-40 * time.Minute)
+	older.dir.identity.Session.ProvedAt = older.at.Add(-2 * time.Hour)
 	got = older.call(older.guard(), http.MethodGet, "/agents", older.withCookie)
-	if !got.principal.Proved(iam.RecencyStepUp, older.at) ||
-		got.principal.Proved(iam.RecencySensitive, older.at) {
-		t.Errorf("a proof forty minutes old reads step_up=%v sensitive=%v, "+
-			"want fresh and stale",
-			got.principal.Proved(iam.RecencyStepUp, older.at),
-			got.principal.Proved(iam.RecencySensitive, older.at))
+	if got.principal.Proved(iam.RecencyStepUp, older.at) {
+		t.Errorf("a proof two hours old reads fresh until %s",
+			got.principal.ReauthAt)
 	}
 
 	unproved := newSignedIn(t)
@@ -343,23 +328,21 @@ func TestASessionsProofCountsForTheStepUpWindow(t *testing.T) {
 	// THE ZERO DEADLINE, and not a window added to nothing: the two are
 	// both stale, and only the first says "never proved" to a reader of
 	// `reauth_at` rather than naming the year one.
-	if got.how != iam.Resolved || !got.principal.ReauthAt.IsZero() ||
-		!got.principal.SensitiveReauthAt.IsZero() {
-		t.Errorf("a session that proved nothing resolved %v with reauth "+
-			"deadlines %s and %s — want resolved with none", got.how,
-			got.principal.ReauthAt, got.principal.SensitiveReauthAt)
+	if got.how != iam.Resolved || !got.principal.ReauthAt.IsZero() {
+		t.Errorf("a session that proved nothing resolved %v with a reauth "+
+			"deadline %s — want resolved with none", got.how,
+			got.principal.ReauthAt)
 	}
 }
 
-// A CREDENTIAL WITH NOBODY AT A KEYBOARD IS FRESH BY CONSTRUCTION, in BOTH
-// windows.
+// A CREDENTIAL WITH NOBODY AT A KEYBOARD IS FRESH BY CONSTRUCTION.
 //
 // A Tier A token has no second factor, no session and no person behind it:
 // there is nothing else it could ever present, so presenting it is the proof.
-// Fresh only for the ordinary window, the break-glass credential could not
-// reveal a secret or change who holds authority on the one day it exists for —
-// the day nobody else can sign in.
-func TestATierATokenIsFreshInBothWindows(t *testing.T) {
+// Stale, the break-glass credential could not reveal a secret or change who
+// holds authority on the one day it exists for — the day nobody else can sign
+// in. Mutation: stamp it as a session that proved nothing and it is stale.
+func TestATierATokenIsFreshForTheStepUpWindow(t *testing.T) {
 	t.Parallel()
 	rig := newSignedIn(t)
 	got := rig.call(rig.guard(), http.MethodGet, "/agents", func(r *http.Request) {
@@ -368,10 +351,8 @@ func TestATierATokenIsFreshInBothWindows(t *testing.T) {
 	if got.how != iam.Resolved {
 		t.Fatalf("a presented Tier A token resolved %v", got.how)
 	}
-	for _, r := range []iam.Recency{iam.RecencyStepUp, iam.RecencySensitive} {
-		if !got.principal.Proved(r, time.Now()) {
-			t.Errorf("a Tier A token is stale for %s", r)
-		}
+	if !got.principal.Proved(iam.RecencyStepUp, time.Now()) {
+		t.Errorf("a Tier A token is stale for %s", iam.RecencyStepUp)
 	}
 }
 

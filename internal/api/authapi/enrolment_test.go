@@ -150,7 +150,7 @@ func statusOf(rec *httptest.ResponseRecorder) any {
 // And the replacement keeps the restricted session's PROOF: the enrolment's
 // code proves possession of a seed that session was handed a moment earlier,
 // not who holds it, so dating the replacement at the enrolment handed whoever
-// held the restricted cookie a fresh sensitive window.
+// held the restricted cookie a fresh step-up window.
 //
 // The CONTROL is the same person under `totp: optional`, whose sign-in is a
 // whole session from the start. Mutation: drop the mark at the sign-in, or the
@@ -220,7 +220,7 @@ func TestARequiredSecondFactorIsEnrolledBeforeAnythingElse(t *testing.T) {
 			}
 
 			// THE ENROLMENT, both legs, through the restricted session —
-			// five minutes on, well inside the sensitive window the
+			// five minutes on, well inside the step-up window the
 			// password's proof opened.
 			wall.advance(5 * time.Minute)
 			offered, _ := send(t, h, http.MethodPost, auth.PathAuthTOTP, "{}", first)
@@ -422,7 +422,7 @@ func TestARestrictedSessionIsRestrictedBeforeAnyNodeHasAppliedIt(t *testing.T) {
 // A PASSWORD NEVER ENROLS OVER A SECOND FACTOR.
 //
 // An enrolment-only session is proved by a password alone, and its proof is
-// fresh for the sensitive window, so it satisfied everything an enrolment asks
+// fresh for the step-up window, so it satisfied everything an enrolment asks
 // of a whole session. Somebody who knew the password of a person holding no
 // factor could sign in restricted, wait for that person to enrol their own
 // authenticator, and then enrol THEIRS through the still-live restricted

@@ -892,14 +892,13 @@ api:
     session:
       absolute: 168h          # 1h..720h (default 168h)
       step_up: 1h             # 5m..24h  (default 1h): how recent a proof of
-                              #   identity a config, chart, setup, credential,
-                              #   deployment or /iam write asks for
-      step_up_sensitive: 15m  # 1m..step_up (default 15m): the same for
-                              #   revealing a secret, changing what somebody
-                              #   may do or how they prove who they are, and
-                              #   ending every session. A Tier A token is
-                              #   fresh by construction in both; a machine
-                              #   token only in step_up
+                              #   identity every step-up gesture asks for — a
+                              #   config, chart, setup, credential, deployment
+                              #   or /iam write, revealing a secret, changing
+                              #   how somebody proves who they are. ONE window,
+                              #   as GitHub's sudo mode keeps one. A Tier A
+                              #   token or a machine token is fresh by
+                              #   construction
     audit:
       changes: 9600h    # 2160h..24000h (default 9600h = 400 days)
       sessions: 2160h   # 168h..9600h   (default 2160h = 90 days), and never

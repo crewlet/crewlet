@@ -18,7 +18,7 @@ import (
 // EVERY ROW STATES HOW RECENT A PROOF IT ASKS FOR.
 //
 // The zero recency is refused rather than read as "none", because read as none
-// it is a sensitive verb somebody added without deciding — shipped open to a
+// it is a step-up verb somebody added without deciding — shipped open to a
 // session proved last week, and indistinguishable in the table from a verb
 // that was decided to need nothing.
 func TestEveryRowStatesHowRecentAProofItAsksFor(t *testing.T) {
@@ -80,7 +80,7 @@ func TestASelfArmsOwnWindowIsARealOneOnARowThatHasOne(t *testing.T) {
 // internal/iamdomain's record holds the same rule. A refusal names what the
 // caller LACKS, which is the only thing that would change the answer: an SRE
 // holding the deployment's grant is told the directory's is missing. And it
-// asks the sensitive window of a caller holding both.
+// asks the step-up window of a caller holding both.
 //
 // Mutation: admit on the deployment's grant alone and the SRE is let through;
 // name both grants on every refusal and the SRE is told to ask for one they
@@ -113,35 +113,46 @@ func TestEndingEverySessionInTheCompanyTakesBothHats(t *testing.T) {
 	if d := decide(both); !d.Allowed || d.Reason != authz.ReasonGrant {
 		t.Errorf("both grants decided %+v, want admitted on the grant", d)
 	}
-	proof := decidedAt.Add(-40 * time.Minute)
-	both.ReauthAt, both.SensitiveReauthAt = proof.Add(time.Hour), proof.Add(15*time.Minute)
+	both.ReauthAt = decidedAt.Add(-2 * time.Hour).Add(time.Hour)
 	if d := decide(both); d.Allowed || d.Reason != authz.ReasonStepUp ||
-		d.Recency != iam.RecencySensitive {
-		t.Errorf("both grants on a proof forty minutes old decided %+v, want a "+
-			"step-up naming %s", d, iam.RecencySensitive)
+		d.Recency != iam.RecencyStepUp {
+		t.Errorf("both grants on a proof two hours old decided %+v, want a "+
+			"step-up naming %s", d, iam.RecencyStepUp)
 	}
 }
 
-// A SENSITIVE GESTURE ABOUT ANYBODY BUT THE CALLER NEEDS A GRANT NO MACHINE
-// TOKEN CAN CARRY.
+// A GESTURE THAT NEEDS A PERSON PRESENT, ABOUT ANYBODY BUT THE CALLER, NEEDS A
+// GRANT NO MACHINE TOKEN CAN CARRY.
 //
-// The sensitive window's safety does not rest on who has proved what alone: a
-// Tier A token is fresh in it by construction, because break-glass must reach
-// a sensitive gesture on the day the provider is down. So every way into one
-// that is not the caller acting on their OWN record asks for a grant that
-// needs a person present ([iam.PersonPresentGrants]) — which internal/iamdomain
-// refuses at a machine token's mint and internal/iam/credential strips from
-// what one carries on every request. Walked over every sensitive row with a
-// principal holding everything ELSE, freshly proved, asking about somebody
-// else, about the company and about nobody: none is admitted. The one way left
-// — the self arm, somebody changing how they themselves prove who they are —
-// is closed to a machine token by the guard, which never proves one for the
-// sensitive window (internal/api/auth holds that half).
+// A machine token is stepped up by construction — nobody is at a keyboard to
+// prove anything — so what keeps one off revealing a secret's value, changing
+// somebody's authority or how they prove who they are, and ending sessions
+// that are not its owner's, is never the age of a proof. It is the grant: every
+// way into one of these that is not the caller acting on their OWN record asks
+// for a grant that needs a person present ([iam.PersonPresentGrants]) — which
+// internal/iamdomain refuses at a machine token's mint and
+// internal/iam/credential strips from what one carries on every request. Walked
+// over each of those verbs with a principal holding everything ELSE, freshly
+// proved, asking about somebody else, about the company and about nobody: none
+// is admitted. The one way left — the self arm, somebody changing how they
+// themselves prove who they are — is closed to a machine token by every surface
+// that makes such a change, on the credential the request presented
+// (internal/api/authapi and internal/api/iamapi hold that half).
 //
-// Mutation: gate a sensitive row on a grant a token can carry and it is
-// admitted here.
-func TestASensitiveGestureAboutAnybodyElseNeedsAGrantNoTokenCarries(t *testing.T) {
+// THE LIST IS THE PROPERTY'S, and each entry is a verb the table must know: a
+// rename that left it naming nothing would certify nothing.
+//
+// Mutation: gate secret reveal on `secrets:write`, which a token can carry, and
+// it is admitted here.
+func TestAGestureThatNeedsAPersonPresentNeedsAGrantNoTokenCarries(t *testing.T) {
 	t.Parallel()
+	needsAPerson := map[authz.Action]string{
+		authz.ActionSecretReveal:      "hands out a credential's value",
+		authz.ActionDirectoryWrite:    "decides who may do anything, and how they prove it",
+		authz.ActionCredentialWrite:   "changes how somebody else proves who they are",
+		authz.ActionSessionEnd:        "ends somebody else's sessions and every token they hold",
+		authz.ActionSessionInvalidate: "ends every session in the company",
+	}
 	var carried []iam.Grant
 	for _, g := range iam.AllGrants {
 		if !slices.Contains(iam.PersonPresentGrants, g) {
@@ -150,26 +161,22 @@ func TestASensitiveGestureAboutAnybodyElseNeedsAGrantNoTokenCarries(t *testing.T
 	}
 	p := person("ci.pipeline", carried...)
 	somebodyElse := uuid.New().String()
-	sensitive := 0
-	for _, a := range authz.Actions() {
-		if r, _ := authz.RecencyOf(a); r != iam.RecencySensitive {
+	for a, why := range needsAPerson {
+		if _, known := authz.RecencyOf(a); !known {
+			t.Errorf("%s (%s) is not a verb the table knows", a, why)
 			continue
 		}
-		sensitive++
 		for _, object := range []authz.Object{
 			{Kind: authz.KindPerson, Owner: somebodyElse, ID: somebodyElse},
 			{Kind: authz.KindCompany},
 			{},
 		} {
 			if d := authz.Decide(t.Context(), p, a, object, nimbus(), decidedAt); d.Allowed {
-				t.Errorf("%s about %+v admitted a principal holding no grant "+
-					"that needs a person present (%s) — a machine token carrying "+
-					"the same would reach it", a, object, d.Reason)
+				t.Errorf("%s (%s) about %+v admitted a principal holding no "+
+					"grant that needs a person present (%s) — a machine token "+
+					"carrying the same would reach it", a, why, object, d.Reason)
 			}
 		}
-	}
-	if sensitive == 0 {
-		t.Fatal("the table has no sensitive row, so this walk certifies nothing")
 	}
 }
 
@@ -189,8 +196,7 @@ func TestASensitiveGestureAboutAnybodyElseNeedsAGrantNoTokenCarries(t *testing.T
 func TestEndingSomebodyElsesSessionsAsksForTheAdministratorsProof(t *testing.T) {
 	t.Parallel()
 	stale := func(p iam.Principal, age time.Duration) iam.Principal {
-		at := decidedAt.Add(-age)
-		p.ReauthAt, p.SensitiveReauthAt = at.Add(time.Hour), at.Add(15*time.Minute)
+		p.ReauthAt = decidedAt.Add(-age).Add(time.Hour)
 		return p
 	}
 	colleague := person("bob.second")
@@ -293,13 +299,12 @@ func TestEveryOperatorWriteAsksForAProofOrSaysWhyNot(t *testing.T) {
 	}
 }
 
-// A STALE PROOF IS REFUSED EXACTLY WHERE THE ROW ASKS FOR ONE — and the two
-// windows are two windows.
+// A STALE PROOF IS REFUSED EXACTLY WHERE THE ROW ASKS FOR ONE.
 //
 // One principal holding every grant, at four ages of proof, against every
 // verb: nothing it is refused may be a grant or a relation, so every refusal
-// here is the recency and nothing else. The row that proves the windows are
-// different is forty minutes: inside `step_up`, outside `step_up_sensitive`.
+// here is the recency and nothing else. Inside the hour nothing is refused,
+// which is the control for the two ages that refuse every step-up row.
 func TestAStaleProofIsRefusedExactlyWhereTheRowAsksForOne(t *testing.T) {
 	t.Parallel()
 	holding := func(age time.Duration) iam.Principal {
@@ -308,9 +313,7 @@ func TestAStaleProofIsRefusedExactlyWhereTheRowAsksForOne(t *testing.T) {
 		if age < 0 {
 			return p // nothing ever proved
 		}
-		at := decidedAt.Add(-age)
-		p.ReauthAt = at.Add(time.Hour)
-		p.SensitiveReauthAt = at.Add(15 * time.Minute)
+		p.ReauthAt = decidedAt.Add(-age).Add(time.Hour)
 		return p
 	}
 	for _, c := range []struct {
@@ -319,12 +322,10 @@ func TestAStaleProofIsRefusedExactlyWhereTheRowAsksForOne(t *testing.T) {
 		stale map[iam.Recency]bool
 	}{
 		{"proved a minute ago", time.Minute, nil},
-		{"proved forty minutes ago", 40 * time.Minute,
-			map[iam.Recency]bool{iam.RecencySensitive: true}},
+		{"proved forty minutes ago", 40 * time.Minute, nil},
 		{"proved two hours ago", 2 * time.Hour,
-			map[iam.Recency]bool{iam.RecencyStepUp: true, iam.RecencySensitive: true}},
-		{"never proved", -1,
-			map[iam.Recency]bool{iam.RecencyStepUp: true, iam.RecencySensitive: true}},
+			map[iam.Recency]bool{iam.RecencyStepUp: true}},
+		{"never proved", -1, map[iam.Recency]bool{iam.RecencyStepUp: true}},
 	} {
 		p := holding(c.age)
 		for _, a := range authz.Actions() {
@@ -401,7 +402,7 @@ func TestAPrincipalTheRuleRefusesIsNotSentToStepUp(t *testing.T) {
 func TestAStepUpRefusalIsItsOwnCodeAndNamesTheWindow(t *testing.T) {
 	t.Parallel()
 	stale := person("jane.doe", iam.GrantSecretRead, iam.GrantConfigRead)
-	stale.SensitiveReauthAt = decidedAt.Add(-time.Second)
+	stale.ReauthAt = decidedAt.Add(-time.Second)
 	guard := authz.ContextGuard(authz.NoChart{})
 	check := func(t *testing.T, rec *httptest.ResponseRecorder) {
 		t.Helper()
@@ -414,10 +415,10 @@ func TestAStepUpRefusalIsItsOwnCodeAndNamesTheWindow(t *testing.T) {
 			t.Errorf("answered %v, want step_up_required with its sentence", body)
 		}
 		if body[authz.DetailReason] != string(authz.ReasonStepUp) ||
-			body[authz.DetailWindow] != string(iam.RecencySensitive) {
+			body[authz.DetailWindow] != string(iam.RecencyStepUp) {
 			t.Errorf("reason %v window %v, want step_up naming %s",
 				body[authz.DetailReason], body[authz.DetailWindow],
-				iam.RecencySensitive)
+				iam.RecencyStepUp)
 		}
 	}
 	t.Run("through the router", func(t *testing.T) {

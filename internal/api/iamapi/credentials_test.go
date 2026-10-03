@@ -280,21 +280,30 @@ func TestATierATokenNamesWhoATokenIsFor(t *testing.T) {
 
 // A TOKEN REVOKES TOKENS, ITSELF INCLUDED, AND NEVER ITS OWNER'S PROOF.
 //
-// A token acts as its owner and the table admits it here as it admits them,
-// so without a rule of its own a leaked token could withdraw the owner's
-// second factor — the first half of taking the account. Mutation: drop the
-// method check and the password is revoked by a request carrying the token.
+// A token acts as its owner and the table admits it here as it admits them —
+// stepped up by construction — so without a rule of its own a leaked token
+// could withdraw the owner's second factor: the first half of taking the
+// account. And not only where the route could name the credential first: one
+// this node's directory did not list yet is held to the same rule inside the
+// snapshot that revokes, answered as the idempotent nothing-changed it is.
+//
+// Mutations: drop the method check before the write and the listed password
+// is revoked by a request carrying the token; drop the snapshot's condition
+// and the unlisted one is.
 func TestATokenRevokesTokensAndNotItsOwnersProof(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
-		name    string
-		target  string
-		want    int
-		revoked bool
+		name     string
+		target   string
+		unlisted bool
+		want     int
+		revoked  bool
 	}{
 		{"its owner's password", "018f3a9c-0000-7000-8000-00000000000a",
-			http.StatusForbidden, false},
-		{"itself", tokenID, http.StatusOK, true},
+			false, http.StatusForbidden, false},
+		{"its owner's password, before this node lists it",
+			"018f3a9c-0000-7000-8000-00000000000a", true, http.StatusOK, false},
+		{"itself", tokenID, false, http.StatusOK, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
@@ -304,15 +313,18 @@ func TestATokenRevokesTokensAndNotItsOwnersProof(t *testing.T) {
 					Method: iamdomain.MethodPassword},
 				{ID: tokenID, Method: iamdomain.MethodToken},
 			}
-			// THE DIRECTORY HOLDS WHAT THE SNAPSHOT HOLDS: the route reads
-			// which credential the id names before it chooses a verb.
-			r.directory.creds = map[string][]iamdomain.CredentialRow{
-				alice.String(): {
-					{ID: "018f3a9c-0000-7000-8000-00000000000a",
-						PersonID: alice.String(), Method: iamdomain.MethodPassword},
-					{ID: tokenID, PersonID: alice.String(),
-						Method: iamdomain.MethodToken},
-				},
+			// THE DIRECTORY HOLDS WHAT THE SNAPSHOT HOLDS, unless the case
+			// is the node that has not listed it yet: the route reads which
+			// credential the id names before anything is written.
+			if !tc.unlisted {
+				r.directory.creds = map[string][]iamdomain.CredentialRow{
+					alice.String(): {
+						{ID: "018f3a9c-0000-7000-8000-00000000000a",
+							PersonID: alice.String(), Method: iamdomain.MethodPassword},
+						{ID: tokenID, PersonID: alice.String(),
+							Method: iamdomain.MethodToken},
+					},
+				}
 			}
 			presented, row := aliceToken(t)
 			rec := throughTheGuard(t, r, row, http.MethodDelete,
@@ -405,7 +417,7 @@ func TestAPersonMintsTheirOwnTokenFromTheirSession(t *testing.T) {
 		Audit: quietAudit{}, Now: func() time.Time { return at },
 		// PROVED A MOMENT AGO on the clock the route's step-up check
 		// reads, which is the wall clock: minting a credential is a
-		// sensitive gesture, and this case is about WHO mints, not when.
+		// step-up gesture, and this case is about WHO mints, not when.
 		Directory: rows, Applier: rows,
 	})
 	if err != nil {

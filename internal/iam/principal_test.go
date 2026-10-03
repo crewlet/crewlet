@@ -116,39 +116,33 @@ func TestAZeroReauthDeadlineIsStaleNotEternal(t *testing.T) {
 	}
 }
 
-// EACH RECENCY READS ITS OWN WINDOW, and the sensitive one is not the ordinary
-// one relabelled.
+// A STEP-UP IS PROVED INSIDE ITS WINDOW AND NOWHERE ELSE, and asking for no
+// proof is proved by anybody.
 //
-// The case that matters is the middle row: a proof forty minutes old is inside
-// `step_up` and outside `step_up_sensitive`, so an ordinary gesture proceeds
-// and revealing a secret asks again. A method that read ReauthAt for both would
-// pass every other row here and reveal secrets on an hour-old proof.
-func TestEachRecencyReadsItsOwnWindow(t *testing.T) {
+// A proof a minute or forty minutes old is inside the hour; two hours old and
+// never proved are not. The rows that pass are the control for the rows that
+// do not: a method that answered stale for everything would fail the first
+// two, and one that answered fresh would fail the last two.
+func TestAStepUpIsProvedOnlyInsideItsWindow(t *testing.T) {
 	now := time.Date(2026, 3, 1, 12, 0, 0, 0, time.UTC)
 	proved := func(age time.Duration) Principal {
-		at := now.Add(-age)
-		return Principal{ReauthAt: at.Add(time.Hour),
-			SensitiveReauthAt: at.Add(15 * time.Minute)}
+		return Principal{ReauthAt: now.Add(-age).Add(time.Hour)}
 	}
 	for _, tc := range []struct {
 		name      string
 		p         Principal
 		any, step bool
-		sensitive bool
 	}{
-		{"a proof a minute old", proved(time.Minute), true, true, true},
-		{"a proof forty minutes old", proved(40 * time.Minute), true, true, false},
-		{"a proof two hours old", proved(2 * time.Hour), true, false, false},
-		{"nothing ever proved", Principal{}, true, false, false},
+		{"a proof a minute old", proved(time.Minute), true, true},
+		{"a proof forty minutes old", proved(40 * time.Minute), true, true},
+		{"a proof two hours old", proved(2 * time.Hour), true, false},
+		{"nothing ever proved", Principal{}, true, false},
 	} {
 		if got := tc.p.Proved(RecencyAny, now); got != tc.any {
 			t.Errorf("%s: any = %v, want %v", tc.name, got, tc.any)
 		}
 		if got := tc.p.Proved(RecencyStepUp, now); got != tc.step {
 			t.Errorf("%s: step_up = %v, want %v", tc.name, got, tc.step)
-		}
-		if got := tc.p.Proved(RecencySensitive, now); got != tc.sensitive {
-			t.Errorf("%s: step_up_sensitive = %v, want %v", tc.name, got, tc.sensitive)
 		}
 	}
 	// A RECENCY THIS BUILD CANNOT NAME IS NOT PROVED, however fresh the

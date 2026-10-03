@@ -471,22 +471,25 @@ type APISession struct {
 	// deployment can stand not being able to shorten.
 	AbsoluteRaw string `yaml:"absolute,omitempty" json:"absolute,omitempty" desc:"Longest a session may live from sign-in (default 168h, 1h..720h)."`
 
-	// StepUpRaw is how long after proving identity an ordinary
-	// administrative action is allowed without proving it again.
-	// Default 1h.
-	StepUpRaw string `yaml:"step_up,omitempty" json:"step_up,omitempty" desc:"How long a proof of identity authorises administrative action (default 1h, 5m..24h)."`
-
-	// StepUpSensitiveRaw is the same for the gestures that hand out
-	// something that cannot be taken back: revealing a secret, changing
-	// what somebody already enrolled may do or how they prove who they
-	// are, and ending every session in the company. Default 15m.
+	// StepUpRaw is how long after proving identity a step-up gesture is
+	// allowed without proving it again. Default 1h.
 	//
-	// SHORTER THAN StepUp BY CONSTRUCTION — validation refuses the other
-	// ordering rather than clamping, because a file saying the sensitive
-	// window is the longer one is a file whose writer had them the wrong
-	// way round, and silently swapping them would leave the document and
-	// the behaviour disagreeing.
-	StepUpSensitiveRaw string `yaml:"step_up_sensitive,omitempty" json:"step_up_sensitive,omitempty" desc:"The same for irreversible gestures (default 15m, 1m..StepUp)."`
+	// ONE WINDOW OVER EVERY SENSITIVE GESTURE — revealing a secret,
+	// changing somebody's authority or how they prove who they are, ending
+	// every session in the company, writing the configuration, the chart
+	// or the credential store — as GitHub's sudo mode applies one window
+	// to all of its sensitive actions. An hour keeps the stricter end of
+	// that practice. A second, shorter window for some of the gestures was
+	// tried and went: it sent an administrator who had proved half an hour
+	// earlier to prove again between one screen and the next, while what
+	// actually keeps those gestures from a stolen credential is not a
+	// proof's age — they ask a grant no machine token may carry, or are
+	// refused to any request a machine token presented.
+	//
+	// THE FLOOR IS FIVE MINUTES because below it an administrator
+	// re-proves between one screen and the next, and THE CEILING A DAY
+	// because past it a step-up is not one.
+	StepUpRaw string `yaml:"step_up,omitempty" json:"step_up,omitempty" desc:"How long a proof of identity authorises a step-up gesture (default 1h, 5m..24h)."`
 }
 
 // Session defaults, and the bounds around them.
@@ -498,9 +501,6 @@ const (
 	DefaultSessionStepUp = time.Hour
 	SessionStepUpFloor   = 5 * time.Minute
 	SessionStepUpCeiling = 24 * time.Hour
-
-	DefaultSessionStepUpSensitive = 15 * time.Minute
-	SessionStepUpSensitiveFloor   = time.Minute
 )
 
 // Absolute is the longest a session may live, with the default applied.
@@ -508,20 +508,14 @@ func (s APISession) Absolute() time.Duration {
 	return durationOr(s.AbsoluteRaw, DefaultSessionAbsolute)
 }
 
-// StepUp is the ordinary step-up window, with the default applied.
+// StepUp is the step-up window, with the default applied.
 func (s APISession) StepUp() time.Duration {
 	return durationOr(s.StepUpRaw, DefaultSessionStepUp)
 }
 
-// StepUpSensitive is the irreversible-gesture window, with the default
-// applied.
-func (s APISession) StepUpSensitive() time.Duration {
-	return durationOr(s.StepUpSensitiveRaw, DefaultSessionStepUpSensitive)
-}
-
 // IsZero lets an unset block drop out of a JSON round trip.
 func (s APISession) IsZero() bool {
-	return s.AbsoluteRaw == "" && s.StepUpRaw == "" && s.StepUpSensitiveRaw == ""
+	return s.AbsoluteRaw == "" && s.StepUpRaw == ""
 }
 
 func (s APISession) validate(path Path) error {
@@ -536,17 +530,6 @@ func (s APISession) validate(path Path) error {
 	check("step_up", s.StepUpRaw, SessionStepUpFloor, SessionStepUpCeiling,
 		"below five minutes an administrator re-proves their identity between "+
 			"one screen and the next, and past a day a step-up is not one")
-	check("step_up_sensitive", s.StepUpSensitiveRaw, SessionStepUpSensitiveFloor,
-		SessionStepUpCeiling,
-		"below a minute nobody can finish the gesture they proved themselves for")
-	if s.StepUpSensitive() > s.StepUp() {
-		p.add(at(path, "step_up_sensitive"), ErrConflict,
-			"%s is longer than `step_up` (%s), so revealing a secret would be "+
-				"authorised for longer than reading the config. Refused rather "+
-				"than swapped: the file says the opposite of what its writer "+
-				"meant, and a silent swap leaves the document and the engine "+
-				"disagreeing", s.StepUpSensitive(), s.StepUp())
-	}
 	return p.err()
 }
 

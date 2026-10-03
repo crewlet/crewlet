@@ -20,11 +20,10 @@ const (
 	// is an answer — no capability would, and what is missing is a relation
 	// the chart does not hold — rather than an omission.
 	DetailGrants = "grants"
-	// DetailWindow is [Decision.Recency] on a step-up refusal: which of
-	// the two windows the verb asks a proof inside, spelled as the
-	// `api.auth.session` key that sets it (`step_up` or
-	// `step_up_sensitive`), so the word a client reads and the setting an
-	// operator tunes are one string.
+	// DetailWindow is [Decision.Recency] on a step-up refusal: the window
+	// the verb asks a proof inside, spelled as the `api.auth.session` key
+	// that sets it (`step_up`), so the word a client reads and the setting
+	// an operator tunes are one string.
 	DetailWindow = "window"
 )
 

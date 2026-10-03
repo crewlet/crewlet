@@ -31,7 +31,7 @@ func TestAConfigurationWriteAsksForARecentProof(t *testing.T) {
 	proof := time.Now().Add(-2 * time.Hour)
 	stale := iam.Principal{ID: uuid.New(), Login: "jane.doe",
 		Kind: iam.KindPerson, Stage: iam.StageActive, Grants: iam.AllGrants,
-		ReauthAt: proof.Add(time.Hour), SensitiveReauthAt: proof.Add(15 * time.Minute)}
+		ReauthAt: proof.Add(time.Hour)}
 	serve := func(method, path string) (int, map[string]any) {
 		req := httptest.NewRequest(method, path, strings.NewReader(companyJSONDoc))
 		req = req.WithContext(iam.WithPrincipal(req.Context(), stale))
