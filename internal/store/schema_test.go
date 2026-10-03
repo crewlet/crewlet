@@ -263,8 +263,7 @@ func TestTheIamTablesShipTheColumnsAMigrationCannotAddLater(t *testing.T) {
 
 	db := openReplicated(t)
 	for table, columns := range map[string][]string{
-		"iam_people": {"login", "email_blind", "seat_id", "chart_position",
-			"bucket"},
+		"iam_people":             {"login", "email_blind", "seat_id", "bucket"},
 		"iam_credentials":        {"bucket"},
 		"iam_invites":            {"bucket"},
 		"iam_sessions":           {"bucket"},
@@ -280,6 +279,14 @@ func TestTheIamTablesShipTheColumnsAMigrationCannotAddLater(t *testing.T) {
 					"database that has already run this one", table, column)
 			}
 		}
+	}
+	// AND A BINDING CARRIES NO CHART POSITION. Nothing writes the column
+	// once a seat is resolved against the running organisation, and a
+	// column no writer fills is a value every reader is entitled to misread
+	// as the position a bind was decided at.
+	if cols := columnsOf(t, db, "iam_people"); slices.Contains(cols, "chart_position") {
+		t.Error("iam_people still carries chart_position — nothing writes it " +
+			"since a seat binding stopped recording the chart's position")
 	}
 }
 

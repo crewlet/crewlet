@@ -1,0 +1,23 @@
+-- `iam_people.chart_position` goes: a seat binding carries no position.
+--
+-- 0034 shipped the column for a THREE-VALUED seat lookup. A binding recorded
+-- the org chart log's position its bind was decided at, so a seat missing from
+-- a node's chart view could be told apart as removed (403) or not yet applied
+-- on that node (503), by comparing the node's own position against it.
+--
+-- The org changes only when a revision is activated, and every node applies
+-- the activation pointer within seconds of it moving. The window that
+-- comparison protected — a lagging node briefly refusing a seat created a
+-- moment ago — is not worth a column, a position on every claim record and
+-- two rows of the seat table, so a binding is now checked against the running
+-- organisation when it is made and resolved against it on every request, and
+-- nothing writes or reads this column.
+--
+-- NO INDEX NAMES IT (0034's indexes are over the bucket, the stage, the seat
+-- id, the address blind and the login), so the column goes on its own.
+--
+-- DROPPED IN THE CHANGE AFTER THE ONE THAT STOPPED THE APPLIER NAMING IT, for
+-- 0033's reason: an insert naming a column that is gone fails the apply on
+-- every node at once, which in a derived estate is a stalled log rather than
+-- one bad row.
+ALTER TABLE iam_people DROP COLUMN chart_position;
