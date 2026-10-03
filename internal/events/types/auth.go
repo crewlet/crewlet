@@ -347,9 +347,11 @@ type IAMLoginFailures struct {
 
 // SourceFailures is one source's failed attempts in a minute.
 type SourceFailures struct {
-	// Source is the client address the sign-in throttle keys on, resolved
-	// through `api.trusted_proxies`; empty for a request with no
-	// resolvable address.
+	// Source is the caller in the unit the sign-in throttle keys on: the
+	// client address resolved through `api.trusted_proxies`, and for an
+	// IPv6 client its /64 (`2001:db8:1:2::/64`), since every address in
+	// it is one customer's. Empty for a request with no resolvable
+	// address.
 	Source string `json:"source"`
 
 	// Failures is how many of its attempts were refused, the ones the

@@ -1936,9 +1936,11 @@ needs a credential answered `401` because of it.
 
 When the minute has closed, the engine publishes **one `iam_login_failures`
 row for the node**: each source that failed in it — the client address as the
-trusted proxies resolve it — with how many of its attempts failed, the
-busiest first. A minute with no failure writes nothing, and a node that stops
-publishes the minute it is still holding on the way down.
+trusted proxies resolve it, and an IPv6 client by its `/64`, exactly the unit
+the [throttle](#a-failure-costs-a-wait-never-a-lockout) keys on — with how many
+of its attempts failed, the busiest first. A minute with no failure writes
+nothing, and a node that stops publishes the minute it is still holding on the
+way down.
 
 **It carries nothing about who.** Not the login, not the password somebody
 typed into the login box, not a token, not a hash of any of them — which
@@ -1952,8 +1954,12 @@ The one size here an attacker would otherwise choose is bounded: a row names
 at most **64 sources**, and every further source's failures fold into one
 `overflow` count. A minute with more distinct failing sources than that is a
 distributed attack, and what is worth recording is its size — without the cap
-the row would grow with the attacker's address pool, and an IPv6 `/64` alone
-is 2<sup>64</sup> addresses.
+the row would grow with the attacker's address pool, and an IPv6 `/48` alone
+is 65,536 sources. A source is a `/64` rather than an address for the same
+reason it is one for the throttle: counted per address, one host cycling
+addresses inside its own `/64` took every one of the 64 places in the first
+moments of a minute, and every other caller's failures folded into the
+overflow with no name on them.
 
 ### A token's use is on its records, and its overreach is a log line
 

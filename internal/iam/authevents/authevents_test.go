@@ -229,11 +229,12 @@ func TestSourcesPastTheCapFoldIntoTheOverflow(t *testing.T) {
 	trail, pub, clk, _ := newTrail(t)
 	ctx := context.Background()
 	const extra = 10
+	// EACH IN A /64 OF ITS OWN, because a /64 is one source.
 	for i := range MaxSourcesPerMinute + extra {
-		trail.Failed(ctx, Failure{Source: "2001:db8::" + strconv.Itoa(i),
+		trail.Failed(ctx, Failure{Source: "2001:db8:" + strconv.FormatInt(int64(i), 16) + "::1",
 			Method: types.FailBearer})
 	}
-	trail.Failed(ctx, Failure{Source: "2001:db8::0", Method: types.FailBearer})
+	trail.Failed(ctx, Failure{Source: "2001:db8:0::2", Method: types.FailBearer})
 	clk.Set(noon.Add(time.Minute))
 	trail.Flush(ctx)
 	rows := failuresOf(t, pub.published())
@@ -245,12 +246,48 @@ func TestSourcesPastTheCapFoldIntoTheOverflow(t *testing.T) {
 		t.Errorf("row names %d sources with overflow %d, want %d and %d",
 			len(row.Sources), row.Overflow, MaxSourcesPerMinute, extra)
 	}
-	if first := row.Sources[0]; first.Source != "2001:db8::0" || first.Failures != 2 {
+	if first := row.Sources[0]; first.Source != "2001:db8::/64" || first.Failures != 2 {
 		t.Errorf("the busiest source is %+v, want the named one still counted "+
 			"under its name", first)
 	}
 	if got := row.Total(); got != MaxSourcesPerMinute+extra+1 {
 		t.Errorf("the row totals %d, want every attempt", got)
+	}
+}
+
+// A SOURCE IS THE UNIT THE THROTTLE KEYS ON: AN IPv6 HOST IS ITS /64.
+//
+// One customer is given a /64 and every address in it is theirs, which is why
+// the sign-in throttle keys an IPv6 caller by it. Counted per address, the
+// cheapest caller there is — one host cycling addresses inside its own /64 —
+// took every place the row names in the first moments of a minute, and the
+// IPv4 guesser beside it was folded into the overflow with no name on it.
+//
+// Mutation: count under the raw address and the /64 fills the cap, the IPv4
+// source lands in the overflow and the row names neither as one source.
+func TestASourceIsTheUnitTheThrottleKeysOn(t *testing.T) {
+	t.Parallel()
+	trail, pub, clk, _ := newTrail(t)
+	ctx := context.Background()
+	const cycled = MaxSourcesPerMinute + 6
+	for i := range cycled {
+		trail.Failed(ctx, Failure{Source: "2001:db8:1:2::" + strconv.FormatInt(int64(i+1), 16),
+			Method: types.FailPassword})
+	}
+	trail.Failed(ctx, Failure{Source: "198.51.100.4", Method: types.FailPassword})
+	clk.Set(noon.Add(time.Minute))
+	trail.Flush(ctx)
+	rows := failuresOf(t, pub.published())
+	if len(rows) != 1 {
+		t.Fatalf("%d rows, want one", len(rows))
+	}
+	want := []types.SourceFailures{
+		{Source: "2001:db8:1:2::/64", Failures: cycled},
+		{Source: "198.51.100.4", Failures: 1},
+	}
+	if row := rows[0]; !slices.Equal(row.Sources, want) || row.Overflow != 0 {
+		t.Errorf("row = %+v, want %v with no overflow — the /64 counted once "+
+			"under its prefix, and the IPv4 caller named beside it", row, want)
 	}
 }
 

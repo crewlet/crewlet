@@ -23,7 +23,8 @@
 // # A row holds counts per source, and nothing that was presented
 //
 // How many attempts failed from each source — the client address as the
-// trusted proxies resolve it — and how many from sources past the cap. Never
+// trusted proxies resolve it, folded as the sign-in throttle folds it, so an
+// IPv6 caller is its /64 — and how many from sources past the cap. Never
 // what was typed or sent: the presented value is where a password typed into
 // the login box lands, and an unsalted hash of it reverses against the
 // company's own roster in one pass. The tally this replaced also counted the
@@ -61,6 +62,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
+	"github.com/crewlet/crewlet/internal/iam/credential"
 	"github.com/crewlet/crewlet/internal/queue/topics"
 	"github.com/crewlet/crewlet/internal/statelog/metrics"
 	"github.com/crewlet/crewlet/internal/tracing"
@@ -109,10 +111,14 @@ type Options struct {
 // and outcome; see the package doc for what the tally used to hold and why it
 // does not.
 type Failure struct {
-	// Source is the address the throttle keys on: resolved through
-	// `api.trusted_proxies`, so behind a proxy it is the caller rather
-	// than the proxy. Empty is counted under the empty source, which is
-	// what a request with no resolvable address honestly is.
+	// Source is the client address, resolved through
+	// `api.trusted_proxies` so that behind a proxy it is the caller rather
+	// than the proxy. [Trail.Failed] counts it under the unit the sign-in
+	// throttle keys on ([credential.SourceKey]) — an IPv4 address, or an
+	// IPv6 address's /64 — so a surface hands over the address as it
+	// resolved it and never folds it itself. Empty is counted under the
+	// empty source, which is what a request with no resolvable address
+	// honestly is.
 	Source string
 
 	// Method is what the attempt tried to prove itself with.
@@ -135,8 +141,15 @@ type Failure struct {
 // its size, which the overflow carries. It also bounds the row — sixty-four
 // addresses and counts is a few kilobytes, inside any event — and the memory a
 // minute holds, where without it both would grow with the attacker's address
-// pool, and an IPv6 /64 alone is 2^64 of those. A source keeps its place once
-// it has one, so a source already named goes on being counted under its name.
+// pool, and an IPv6 /48 alone is 65,536 sources once each /64 is one. A source
+// keeps its place once it has one, so a source already named goes on being
+// counted under its name.
+//
+// A SOURCE IS THE THROTTLE'S UNIT, not the raw address ([Failure.Source]).
+// Counted per address, one IPv6 host cycling addresses inside its own /64 —
+// the cheapest caller there is — took all sixty-four places in the first
+// milliseconds of every minute, and every other caller's failures, an IPv4
+// guesser's included, folded into the overflow with no name on them.
 const MaxSourcesPerMinute = 64
 
 // PublishBudget bounds one publish.
@@ -244,6 +257,10 @@ func (t *Trail) Failed(_ context.Context, f Failure) {
 		})
 	}
 
+	// THE THROTTLE'S UNIT, folded here rather than by each surface, so no
+	// surface can count under another one.
+	source := credential.SourceKey(f.Source)
+
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	// THE CLOCK IS READ UNDER THE LOCK, which is what makes a minute's row
@@ -257,8 +274,8 @@ func (t *Trail) Failed(_ context.Context, f Failure) {
 		m = &minute{sources: map[string]int{}}
 		t.minutes[start] = m
 	}
-	if _, named := m.sources[f.Source]; named || len(m.sources) < MaxSourcesPerMinute {
-		m.sources[f.Source]++
+	if _, named := m.sources[source]; named || len(m.sources) < MaxSourcesPerMinute {
+		m.sources[source]++
 		return
 	}
 	m.overflow++

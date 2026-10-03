@@ -362,7 +362,7 @@ func (t *Throttle) Admit(ctx context.Context, a Attempt) (*Ticket, error) {
 	if a.Source == "" || a.Subject == "" {
 		return nil, nil
 	}
-	return t.admit(ctx, t.pairOf(a.Subject, sourceKeyOf(a.Source)))
+	return t.admit(ctx, t.pairOf(a.Subject, SourceKey(a.Source)))
 }
 
 // AdmitSecondFactor decides whether a second factor may be checked for
@@ -591,15 +591,20 @@ func (t *Throttle) factorOf(person string) string {
 	return hex.EncodeToString(mac.Sum(nil)[:16])
 }
 
-// sourceKeyOf is the source half of a pair's key: the address, and for IPv6
-// its /64.
+// SourceKey is the unit one caller's attempts are counted under: the address,
+// and for IPv6 its /64. It is the source half of a pair's key here, and the
+// source a failed attempt is counted under in the audit trail's per-minute row
+// (internal/iam/authevents) — ONE FOLD, because a row that counted per address
+// while the curve counted per /64 let one host cycling addresses inside its own
+// /64 take every source the row names in the first milliseconds of a minute,
+// and fold every other caller's failures into the anonymous overflow.
 //
 // THE /64 IS WHAT ONE IPv6 CUSTOMER IS GIVEN, and every address inside it is
 // theirs to use: keyed per address, a run at one account from one host rotates
 // through 2^64 fresh pairs and its curve never starts. A value that is not an
 // address — a test's name for a caller, or whatever a misconfigured proxy
 // forwarded — is keyed as it is.
-func sourceKeyOf(source string) string {
+func SourceKey(source string) string {
 	addr, err := netip.ParseAddr(strings.TrimSpace(source))
 	if err != nil {
 		return source
