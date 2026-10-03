@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/agent/builtin"
+	"github.com/crewlet/crewlet/internal/api"
 	"github.com/crewlet/crewlet/internal/estate"
 	"github.com/crewlet/crewlet/internal/tracker"
 )
@@ -36,7 +37,7 @@ func TestTheOperatorsSurfacesAreHandedTheRouter(t *testing.T) {
 		t.Errorf("the purge is handed %T, want the router's writer", nativePurger(e))
 	}
 
-	opts := operatorOptions(e)
+	opts := api.EngineOperatorOptions(e)
 	work := opts.Work
 	if work.Reader == nil || opts.Pages.Reader == nil {
 		t.Fatalf("the premise: a company on the native tracker and knowledge base hands "+
@@ -59,6 +60,7 @@ func TestTheOperatorsSurfacesAreHandedTheRouter(t *testing.T) {
 		{"CatalogueWriter", work.CatalogueWriter(operator)},
 		{"PersonWriter", work.PersonWriter(operator)},
 		{"TrashWriter", work.TrashWriter(operator)},
+		{"Placer", work.Placer(operator)},
 		{"ProjectWriter", work.ProjectWriter(operator)},
 		{"Pages.Reader", opts.Pages.Reader},
 		{"Pages.Writer", opts.Pages.Writer},

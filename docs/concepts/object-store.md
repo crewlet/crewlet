@@ -141,7 +141,7 @@ node to 2.66 copies, and it stays about 13% off. Such a balance stops at sixty
 rounds with the closest layout it measured and says so, in the map itself: the
 `balance` block on [`GET /fleet`](../reference/api-endpoints.md#get-fleet)
 carries the deviation it reached, the tolerance and the rounds it ran. The
-Fleet screen's placement card reads *not converged: 13.1% after 60 rounds*
+placement card on **Settings › Nodes** reads *not converged: 13.1% after 60 rounds*
 where a balance that landed reads *balanced within 1.3%*, and `crewlet objects
 status` says `NOT CONVERGED: after 60 rounds a member is still 13.1% off…` —
 each beside every node's measured `share_percent`, which shows which node is
@@ -239,7 +239,7 @@ that has not yet applied the latest revision cannot set the map back — and the
 duty moving between nodes cannot move the answer. A revision that changes
 either takes effect at the next tick, with no restart. The decision, and what
 the alternative cost, is
-[ADR-0020](https://github.com/crewlet/crewlet/blob/main/adr/0020-the-company-decides-how-many-copies-and-across-what.md).
+[ADR-0027](https://github.com/crewlet/crewlet/blob/main/adr/0027-the-company-decides-how-many-copies-and-across-what.md).
 
 ### Membership is the objects lease
 
@@ -335,7 +335,7 @@ there — and what each places.
 ### Holding the map
 
 For maintenance known to outlast ten minutes, **hold** the map
-(`crewlet objects hold -for 2h`, or **Hold map** on the Fleet screen): no member
+(`crewlet objects hold -for 2h`, or **Hold map** on **Settings › Nodes**): no member
 is removed while the hold lasts, and absences go on being counted, so a node
 still gone when it ends is removed at the next tick. A hold lasts at most a day
 and always ends by itself — Ceph's `noout` has no expiry, and a flag set for a
@@ -486,7 +486,7 @@ rotten one is, and one the disk will not even open is counted and left where it
 is — a permissions fault must not empty a healthy store — and counts toward the
 store's [health](#health). Either way the scrub steps past it rather than
 stopping on it, so a count that keeps rising is a disk failing chunk by chunk,
-and `crewlet objects status` and the Fleet screen say so. What stops a scrub
+and `crewlet objects status` and **Settings › Nodes** say so. What stops a scrub
 outright — a directory the disk will not list — is reported beside the counts,
 and the scrub tries again shortly.
 Its place in the week is kept in the chunk directory (`.scrub`), so a restart
@@ -579,7 +579,7 @@ is refused as unavailable rather than stored nowhere.
 ### Taking a data node away
 
 Take it **out** first — `crewlet objects out <node> -confirm <node>`, or
-**Take out** on the Fleet screen. The map stops placing on it, and its share is
+**Take out** on **Settings › Nodes**. The map stops placing on it, and its share is
 copied to the other members *while it keeps serving every chunk it holds*, so
 the removal is a copy from a live source rather than a recovery from the
 survivors. Then:
@@ -633,7 +633,7 @@ the next data node may be stopped.
 
 ### Watching it
 
-The dashboard's Fleet screen and `crewlet objects status` draw the map from
+The dashboard's **Settings › Nodes** screen and `crewlet objects status` draw the map from
 [`GET /fleet`](../reference/api-endpoints.md#get-fleet) — each data node's
 measured share, its domain, how many copies of every chunk the fleet holds
 against how many the company asks for, whether the last balance brought every
@@ -687,7 +687,7 @@ plain about what does not:
   for them, with a link in the project.
 
 The decisions are
-[ADR-0019](https://github.com/crewlet/crewlet/blob/main/adr/0019-the-estate-names-an-object-and-a-map-places-its-bytes.md)
+[ADR-0026](https://github.com/crewlet/crewlet/blob/main/adr/0026-the-estate-names-an-object-and-a-map-places-its-bytes.md)
 — the estate names an object, and a map places its bytes — and
-[ADR-0020](https://github.com/crewlet/crewlet/blob/main/adr/0020-the-company-decides-how-many-copies-and-across-what.md)
+[ADR-0027](https://github.com/crewlet/crewlet/blob/main/adr/0027-the-company-decides-how-many-copies-and-across-what.md)
 — the company decides how many copies, and across what.

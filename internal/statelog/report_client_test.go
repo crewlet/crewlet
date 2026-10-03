@@ -21,22 +21,17 @@ func TestTheDashboardKnowsEveryRetentionReportState(t *testing.T) {
 		declaration string
 		engine      []string
 	}{
-		{`export type RetentionTrimFloorState =([^;]*);`,
-			stringsOf(statelog.TrimFloorStates())},
-		{`export type RetentionGenerationState =([^;]*);`,
-			stringsOf(statelog.GenerationStates())},
-		{`export type RetentionIdentityCause =([^;]*);`,
-			stringsOf(statelog.IdentityCauses())},
+		{"RetentionTrimFloorState", stringsOf(statelog.TrimFloorStates())},
+		{"RetentionGenerationState", stringsOf(statelog.GenerationStates())},
+		{"RetentionIdentityCause", stringsOf(statelog.IdentityCauses())},
 		// A KIND THE UNION DOES NOT NAME renders as an eviction: a node that
 		// left the logs itself shown as one an operator evicted.
-		{`export type RetentionEvictionKind =([^;]*);`,
-			stringsOf(statelog.EvictionKinds)},
+		{"RetentionEvictionKind", stringsOf(statelog.EvictionKinds)},
 	} {
-		body, err := clientsource.Declaration(clientsource.Tree(t), gate.declaration)
+		client, err := clientsource.Union(clientsource.Tree(t), gate.declaration)
 		if err != nil {
 			t.Fatal(err)
 		}
-		client := clientsource.Strings(body)
 		if len(client) == 0 {
 			t.Fatalf("%s names nothing, so this gate certifies nothing", gate.declaration)
 		}

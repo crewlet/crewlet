@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/api/queries"
+	"github.com/crewlet/crewlet/internal/clientsource"
 	"github.com/crewlet/crewlet/internal/estate/partmap"
 )
 
@@ -27,7 +28,8 @@ func TestTheDashboardKnowsEveryEstateState(t *testing.T) {
 	for _, s := range partmap.PartitionStates {
 		parts = append(parts, string(s))
 	}
-	holdStrings(t, `export const ESTATE_MAP_STATES = \[([^\]]*)\] as const;`, states, "estate state")
-	holdStrings(t, `export const HOLDER_STATES = \[([^\]]*)\] as const;`, holders, "holder state")
-	holdStrings(t, `export const PARTITION_STATES = \[([^\]]*)\] as const;`, parts, "partition state")
+	tree := clientsource.Tree(t)
+	holdStrings(t, tree, "ESTATE_MAP_STATES", states, "estate state")
+	holdStrings(t, tree, "HOLDER_STATES", holders, "holder state")
+	holdStrings(t, tree, "PARTITION_STATES", parts, "partition state")
 }

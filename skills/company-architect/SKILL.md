@@ -101,7 +101,11 @@ config — rungs 2 and 3 especially:
   configures.** A scope for a backend with no integration block narrows
   nothing, and `crewlet validate` refuses it.
 - **Timezones are real IANA names** (`Europe/Amsterdam`, not `CET` or
-  `Mars/Olympus`).
+  `Mars/Olympus`) — the company's `timezone` and any schedule's own —
+  and never `Local` or `localtime`, which the validator refuses because
+  each is whatever zone the host reading it happens to be set to. There
+  is ONE company clock, the top-level `timezone`: no block under
+  `tracker:` or `scheduling:` takes a zone of its own.
 - **Cron expressions are valid.** The schema takes a cron as plain text,
   so it checks neither the field count nor the values — `99 * * * *` and
   `0 9 * *` both pass it. `crewlet validate` is what checks one.
@@ -114,8 +118,14 @@ Do not open with a YAML dump. Ask, in this order, and stop as soon as
 you have enough for a first running company — the config is
 live-editable, so the first version does not need to be the last.
 
-1. **What does the company do?** One line of mission. This becomes
-   `name` / `mission` / `vision` and lands in every agent's prompt.
+1. **What does the company do, and where?** One line of mission. This
+   becomes `name` / `mission` / `vision` and lands in every agent's
+   prompt. *Where* is the company's `timezone` — its ONE clock, an IANA
+   name like `Europe/Berlin` at the top of the document (UTC when
+   absent). Every "today", "this week" and overdue mark is cut on it, and
+   so is the hour of every schedule that does not name a zone of its
+   own, so a 09:00 standup is 09:00 there. Ask; a company whose people
+   are not on UTC wants it set.
 2. **Who is on it?** Walk the org chart aloud: what teams, what seats,
    who leads what, who reports to whom. Names, one-line goals, and a
    sentence of backstory each. This is 90% of the config.
@@ -136,7 +146,12 @@ live-editable, so the first version does not need to be the last.
    on the default backends that is the whole setup, and it is what gives
    a team somewhere to file work and write things down.
 5. **What model, and what budget?** One `providers.llm` entry is enough
-   to start. Ask whether they want a cost ceiling (`token_budget`).
+   to start. Ask whether they want a cost ceiling, and on which window:
+   `token_budget` is a mapping of `day`, `week` and `month` ceilings on the
+   company's clock, each optional — a month for the bill, a day as the fuse
+   that stops a runaway loop — e.g. `token_budget: {day: 3000000, month:
+   40000000}`. Never write `0` for "no ceiling" (it is refused); leave the
+   key out.
 
 If a founder gives you a vague answer ("a few engineers"), propose a
 concrete chart and let them correct it. Concrete beats complete.

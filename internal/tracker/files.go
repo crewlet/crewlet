@@ -21,7 +21,7 @@ import (
 // A file is a ROW — its project, its path, its content type, its size, the
 // hash of its content and the ordered list of chunks that content is cut
 // into. The bytes themselves are in the object store (internal/objstore,
-// ADR-0019), placed on a few data nodes rather than held by all of them, and
+// ADR-0026), placed on a few data nodes rather than held by all of them, and
 // nothing in this package ever reads one. What this package owns is the fact
 // that the file exists and which chunks it is: the manifest on the record IS
 // the reference that keeps those chunks alive, so a file written here is a

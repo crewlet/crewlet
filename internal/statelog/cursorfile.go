@@ -33,7 +33,7 @@ type FileCursor struct {
 
 	// AppliedVersion is the highest record version the copy's rows on the
 	// stream were applied from, and NIL where nothing recorded it — a row
-	// that predates the record (migration 0027) — which is unknown rather
+	// that predates the record (migration 0035) — which is unknown rather
 	// than "applied nothing": zero is that, and a real value.
 	AppliedVersion *int
 }

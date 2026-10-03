@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 
 	"github.com/crewlet/crewlet/internal/events"
-	"github.com/crewlet/crewlet/internal/tokens"
+	"github.com/crewlet/crewlet/internal/events/types"
 )
 
 // Category reports the dashboard category an event type is filed under, and
@@ -32,7 +32,7 @@ func Category(eventType string) (string, bool) { return events.Category(eventTyp
 // written by nobody or read by nobody, and no test anywhere could see it.
 // That is not hypothetical. `notification_source` lived only here, read only
 // by a mapping function in this package that had no production caller —
-// observe.Record is the writer — so the tag the Integrations room counts its
+// observe.Record is the writer — so the tag Settings › Integrations counts its
 // merges and drops by was never written at all, and every one of those counts
 // read zero on a company whose third-party apps were delivering fine. That
 // function is gone; internal/observe imports this package, so it calls
@@ -117,15 +117,35 @@ var tagKeys = map[string]string{
 	// before this tag existed read back without it — a real discontinuity
 	// at that point in the timeline, not a bug to paper over.
 	"notification_source": "notification_source",
+	// WHICH NODE PUBLISHED THE EVENT — the envelope's own `node`, which the
+	// queue stamps on the way out and which is therefore the node whose
+	// store holds the row. The envelope owns the key (a payload field under
+	// it is dropped), so it means one thing on every type. A tag because a
+	// listing never selects the payload, and a row read back from history
+	// had no other way to say where it came from: a runtime backup's row is
+	// the ONLY record of which host's disk holds the copy, and the backup
+	// record deliberately leaves the node to the envelope.
+	"node": "node",
+	// The RUNTIME AUDIT's three dimensions (types.OperatorActed and
+	// types.BackupRequested, the only events that carry them): the person
+	// the acting credential is bound to, the operator tool a call ran, and
+	// the directory a backup was written to. Tags for the reason every one
+	// here is — the Audit log and the backup history draw these rows from a
+	// listing, which never selects the payload, and without them a row
+	// could say only the summary's prose about who did what and where.
+	"actor_seat": "actor_seat",
+	"tool":       "tool",
+	"dir":        "dir",
 }
 
-// SpendFor pulls one spend record out of a phase completion or a coding run's
-// usage record — the events [tokens.IsSpendEvent] names — by [tokens.Spent],
-// the rule the live projection reads the same events by. So every reader of
-// the columns counts a run beside the phases with no second rule — the Tokens
-// view by model, phase, seat and turn, and the turns list's sums — and a
-// refresh that swaps the live window for these rows places every record where
-// the screen already had it.
+// spendEventType is the one event that carries an LLM call's cost.
+//
+// Gated on the type rather than on "does the payload happen to have these
+// fields", because several other events carry a `model` or a `turn_id` and a
+// rollup that counted them would be counting calls that never happened.
+const spendEventType = "agent_phase_completed"
+
+// SpendFor pulls one LLM call's cost out of a phase completion.
 //
 // Read from the event's serialized form for the same reason [extractTags] is:
 // an event type this build has never heard of still arrives with its fields
@@ -136,7 +156,7 @@ var tagKeys = map[string]string{
 // Nil for every other event, which is what leaves the promoted columns at
 // their defaults — see schema/0015 for why they are columns.
 // It reads the SHALLOW form, like [extractTags] fifty lines below and unlike
-// the version this replaces: a dozen scalars are wanted, and decoding into
+// the version this replaces: thirteen scalars are wanted, and decoding into
 // map[string]any deep-decoded the engine's largest payload — a phase
 // completion carries the phase's whole prompt and tool log — on the
 // publishing goroutine of every LLM call. map[string]json.RawMessage leaves
@@ -145,42 +165,40 @@ var tagKeys = map[string]string{
 // A struct decode would be shorter and is wrong here for the reason the
 // per-field accessors exist: it fails the whole call on one wrong-typed
 // field, where these zero only the offender.
-//
-// The price is not a column: [EventLog.PhaseTokens] reads it back out of the
-// payload, for the reason [phaseTokenSQL] gives.
 func SpendFor(eventType string, payload []byte) *Spend {
-	if !tokens.IsSpendEvent(eventType) {
+	if eventType != spendEventType {
 		return nil
 	}
 	var body map[string]json.RawMessage
 	if err := json.Unmarshal(payload, &body); err != nil {
 		// The call happened, and dropping it because its payload would
-		// not decode understates the spend this exists to report. Read
-		// as a payload with no fields, it still stands where its TYPE
-		// puts it.
-		body = nil
+		// not decode understates the spend this exists to report.
+		return &Spend{}
 	}
-	record, _ := tokens.Spent(eventType, rawFields(body))
-	return &Spend{
-		Phase:        record.Phase,
-		HostPhase:    record.HostPhase,
-		Worker:       record.Worker,
-		Model:        record.Model,
-		TurnID:       record.TurnID,
-		WorkKey:      record.WorkKey,
-		Iteration:    record.Iteration,
-		InputTokens:  record.InputTokens,
-		OutputTokens: record.OutputTokens,
-		TotalTokens:  record.TotalTokens,
+	spend := &Spend{
+		Phase:        jsonString(body["phase"]),
+		HostPhase:    jsonString(body["host_phase"]),
+		Worker:       jsonString(body["worker"]),
+		Model:        jsonString(body["model"]),
+		TurnID:       jsonString(body["turn_id"]),
+		WorkKey:      jsonString(body["work_key"]),
+		Iteration:    jsonInt(body["iteration"]),
+		InputTokens:  jsonInt(body["input_tokens"]),
+		OutputTokens: jsonInt(body["output_tokens"]),
+		TotalTokens:  jsonInt(body["total_tokens"]),
+
+		CacheReadTokens:  jsonInt(body["cache_read_tokens"]),
+		CacheWriteTokens: jsonInt(body["cache_write_tokens"]),
+		ProviderKey:      jsonString(body["provider_key"]),
 	}
+	if spend.Model == "" {
+		// An entry that names no model is identified by the provider
+		// slot it ran on. The backfill in schema/0015 does the same, so
+		// history and new rows agree on what "model" means.
+		spend.Model = jsonString(body["provider_key"])
+	}
+	return spend
 }
-
-// rawFields is a shallowly decoded payload as [tokens.Fields].
-type rawFields map[string]json.RawMessage
-
-func (f rawFields) String(field string) string { return jsonString(f[field]) }
-func (f rawFields) Int(field string) int       { return jsonInt(f[field]) }
-func (f rawFields) Float(field string) float64 { return jsonFloat(f[field]) }
 
 // ExtractTags pulls the filterable dimensions out of an event's serialized
 // form.
@@ -220,6 +238,32 @@ func ExtractTags(payload []byte) map[string]string {
 	if failed {
 		tags["failed"] = "true"
 	}
+	// THE WORK ITEM A TURN IS CHARGED TO, the second nested read and the
+	// only other one. Every turn-level record carries it as an object,
+	// `work_item{backend, id, key, project}`, and the tag is its identity
+	// across trackers — `<backend>:<id>`, [types.WorkItem.Ref] — because
+	// that is the one of the four that a move or a rename leaves alone and
+	// that two trackers cannot both mint. [EventLog.Append] reads it back out
+	// of here for the work_item column (schema/0033), which is what makes
+	// "everything that happened on this item" an index seek.
+	//
+	// BOTH HALVES OR NOTHING: a backend with no id names no item, and a tag
+	// of `native:` would make every such row the same one. The backend is
+	// taken as a string rather than tested for [types.WorkBackend.Valid], so
+	// a newer peer's record naming a tracker this build does not know is
+	// indexed exactly as a known one is — the rule this whole extractor
+	// follows by reading the JSON rather than the decoded payload.
+	if raw, ok := flat["work_item"]; ok {
+		var item struct {
+			Backend string `json:"backend"`
+			ID      string `json:"id"`
+		}
+		if json.Unmarshal(raw, &item) == nil && item.Backend != "" && item.ID != "" {
+			tags["work_item"] = types.WorkItem{
+				Backend: types.WorkBackend(item.Backend), ID: item.ID,
+			}.Ref()
+		}
+	}
 	// Turns triggered by A2A carry their channel one level down, so the
 	// cross-reference from a turn back to the conversation that caused it
 	// needs this one nested read.
@@ -251,23 +295,6 @@ func jsonInt(raw json.RawMessage) int {
 		return 0
 	}
 	return int(v)
-}
-
-// jsonFloat reads a fractional number out of a raw JSON field, zero for
-// anything that is not one.
-func jsonFloat(raw json.RawMessage) float64 {
-	if len(raw) == 0 {
-		return 0
-	}
-	var n json.Number
-	if err := json.Unmarshal(raw, &n); err != nil {
-		return 0
-	}
-	v, err := n.Float64()
-	if err != nil {
-		return 0
-	}
-	return v
 }
 
 // jsonString reads a JSON value as a string, yielding "" for anything that is

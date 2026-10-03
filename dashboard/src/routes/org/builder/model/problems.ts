@@ -13,7 +13,7 @@
  *
  * Only `roles`, `units` and the charter fields map onto nodes, because those
  * are what the builder draws. Everything else stays at document level:
- * `integrations.*` with a link to the Integrations screen (the Datadog
+ * `integrations.*` with a link to Settings › Integrations (the Datadog
  * fallback and GitLab access levels are edited from seats, but a problem at
  * the company's integration block is fixed there), and any schedule problem,
  * mapped or not, with a link to the Schedules screen, because the builder

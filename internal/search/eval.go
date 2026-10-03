@@ -41,7 +41,7 @@ import (
 //
 // # An index is measured TWICE: what searches run, and the scan it replaces
 //
-// When the partition has an index (ADR-0022), every query runs through it —
+// When the partition has an index (ADR-0028), every query runs through it —
 // that is the recall the company actually gets, and the one [EvalReport.Passed]
 // judges — and again with the full scan as its first stage, so the report says
 // what the index COSTS in recall against the exact first stage it

@@ -26,7 +26,7 @@ func TestTheApplierRefusesAFileThatIsNotItsSubject(t *testing.T) {
 		"an invalid chunk": {Project: "ENG", Path: "a/b.md",
 			Chunks: []FileChunk{{Hash: h, Size: 7}, {Hash: "zz", Size: 7}}},
 		// UPPERCASE IS NOT AN ADDRESS here, and it is the refusal replicated
-		// migration 0024's backfill leaned on: its expression reads
+		// migration 0032's backfill leaned on: its expression reads
 		// lowercase hex only.
 		"an uppercase chunk": {Project: "ENG", Path: "a/b.md",
 			Chunks: []FileChunk{{Hash: objstore.Hash(strings.ToUpper(string(h))), Size: 7}}},

@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
+	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/pages"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tools"
@@ -52,9 +53,9 @@ type PageReader interface {
 type PageWriter interface {
 	Create(ctx context.Context, actor pages.Actor, in pages.NewPage) (pages.Written, error)
 	SavePage(ctx context.Context, actor pages.Actor, pageID string, save pages.Save) (pages.Written, error)
-	Rename(ctx context.Context, actor pages.Actor, pageID, title string, quiet bool) (pages.Written, error)
+	Rename(ctx context.Context, actor pages.Actor, pageID, title string, quiet bool, key pages.CallKey) (pages.Written, error)
 	Comment(ctx context.Context, actor pages.Actor, pageID string, in pages.NewComment) (pages.Comment, pages.Written, error)
-	EditComment(ctx context.Context, actor pages.Actor, pageID, commentID, body string) (pages.Comment, pages.Written, error)
+	EditComment(ctx context.Context, actor pages.Actor, pageID, commentID, body string, key pages.CallKey) (pages.Comment, pages.Written, error)
 }
 
 // PageDeps are the knowledge base's halves plus what a write needs.
@@ -80,6 +81,23 @@ type PageDeps struct {
 	// this is a seam rather than a second copy of these five tools.
 	Actor func(ctx context.Context, turn *turnctx.Turn) (pages.Actor, error)
 
+	// Operation reads the operation a transport named for this call off a
+	// request made outside a turn, or "" — the page half of
+	// [Actor.Operation], which the work tools carry on their actor. It is a
+	// seam of its own because [pages.Actor] is the knowledge base's
+	// attribution record and an operation is not attribution: nothing
+	// about it is written to a history row. Nil, which is every seat's
+	// surface, reads "".
+	//
+	// What it buys is that a person's retried write is ONE write: every
+	// page write's operation id — a create's, a save's, a rename's, a
+	// comment's and a comment edit's — and a created page's id are derived
+	// from it exactly as from a turn's key (see [PageDeps.callKey]). The
+	// operator's act transport sets it from the request ([RequestOperation]);
+	// the page tools take no `op_id`, so over MCP each page write is a new
+	// one.
+	Operation func(ctx context.Context) string
+
 	// Await is handed the position every page write landed at, so the next
 	// read sees it. See [WorkDeps.Await]: same seam, same reason, the same
 	// two places the wait happens — and it matters more here: a page's
@@ -87,6 +105,84 @@ type PageDeps struct {
 	// re-reads from a copy that has not caught up gets a stale version and
 	// its next save is refused.
 	Await func(ctx context.Context, at statelog.Position) error
+}
+
+// operation is the transport's operation for this call, or "" — see
+// [PageDeps.Operation].
+func (d PageDeps) operation(ctx context.Context) string {
+	if d.Operation == nil {
+		return ""
+	}
+	return d.Operation(ctx)
+}
+
+// callKey is the key every page write this call makes is derived from — the
+// package doc's one rule, "How a write is made once", typed for the store
+// ([pages.CallKey]):
+//
+//   - IN A TURN, the turn's seed ([turnKey]), the instant it began
+//     ([turnSince]) and this call's repeat count in the run
+//     ([turnctx.CallLog.Ordinal]) — what [opIDFor] derives a work write
+//     from, so a remark made again after a different one is a second
+//     comment and a re-run's is the first;
+//   - OUTSIDE ONE, the operation the transport named for this call
+//     ([PageDeps.Operation]), carrying that operation's own instant — it
+//     already names the call, so it takes no repeat count;
+//   - or none, which the store mints afresh.
+func (d PageDeps) callKey(ctx context.Context, turn *turnctx.Turn, tool string,
+	args map[string]any) pages.CallKey {
+
+	if seed := turnKey(turn); seed != "" {
+		return pages.CallKey{Seed: seed, Since: turnSince(turn),
+			Repeat: turn.CallLog().Ordinal(tool, args)}
+	}
+	if op := d.operation(ctx); op != "" {
+		at, _ := statelog.OpMintedAt(op)
+		return pages.CallKey{Seed: op, Since: at}
+	}
+	return pages.CallKey{}
+}
+
+// foreignOperation refuses a page write whose transport named an operation
+// derived for ANOTHER call — [WorkDeps.bindOperation]'s rule, held on the
+// page tools for its reason: a check that exempted one source of operations
+// would be where a transport that derived one wrong wrote anyway, and here it
+// would write a page, a revision or a comment under ids the other call
+// derives. The page tools take no `op_id`, so a transport's operation is the
+// only one they meet. "" where the call has none, is a turn's (whose key wins
+// — see [PageDeps.callKey]), or names this call.
+func (d PageDeps) foreignOperation(ctx context.Context, turn *turnctx.Turn,
+	tool string, args map[string]any) string {
+
+	if turnKey(turn) != "" {
+		return ""
+	}
+	op := d.operation(ctx)
+	if op == "" || answeredFor(op, callName(tool, args)) {
+		return ""
+	}
+	return foreignRequest(tool)
+}
+
+// sameCall says how this caller makes a page write again as the same
+// operation — [sameCall]'s rule for the knowledge base's keys — or "" where no
+// repeat is the same operation.
+func (k pageCaller) sameCall(tool string) string {
+	switch {
+	case k.turn:
+		return fmt.Sprintf("call %s again with exactly the same arguments, "+
+			"before calling it with any others", tool)
+	case k.key.String() != "":
+		return "send the same request again, unchanged"
+	}
+	return ""
+}
+
+// pageCaller is who made a page write, as far as repeating it goes: a turn,
+// or a caller whose transport named its operation, or neither.
+type pageCaller struct {
+	turn bool
+	key  pages.CallKey
 }
 
 // settle hands a page write's position to [PageDeps.Await], so the next read
@@ -137,8 +233,9 @@ func (d PageDeps) reserved(container string) bool {
 }
 
 func unconfiguredKB(name string) tools.Result {
-	return failed(name + " is unavailable: this company does not run the native " +
-		"knowledge base. Use the tools your company has configured.")
+	return refused(tools.RefusalUnavailable, name+" is unavailable: this "+
+		"company does not run the native knowledge base. Use the tools your "+
+		"company has configured.")
 }
 
 // ---- list_pages -------------------------------------------------------- //
@@ -208,13 +305,20 @@ func (t *listPages) CallForTurn(ctx context.Context, turn *turnctx.Turn, args ma
 		Limit:     argInt(args, "limit", 0),
 	}, seatRead)
 	if err != nil {
-		return failed(readFailure(ListPagesTool, err)), nil
+		return pageReadFailure(ListPagesTool, err), nil
 	}
 	if len(got.Pages) == 0 && got.Coverage.Complete() {
 		return tools.Result{Output: "No pages match that filter."}, nil
 	}
 	out := map[string]any{"count": len(got.Pages), "pages": got.Pages}
 	noteUnanswered(out, got.Coverage)
+	// AND HOW MANY THE FILTER MATCHED IN ALL, when that is more than this
+	// answer holds. Without it a listing cut at its limit read as the whole
+	// container, and a model that believes a short list writes the page that
+	// is already there.
+	if got.Total > len(got.Pages) {
+		out["total"] = got.Total
+	}
 	// AND WHAT THE ANSWER COULD NOT ACCOUNT FOR. A listing served over a
 	// deferred scope may be missing pages, and a model that reads a short
 	// list as the whole truth writes the duplicate.
@@ -226,7 +330,14 @@ func (t *listPages) CallForTurn(ctx context.Context, turn *turnctx.Turn, args ma
 
 // ---- get_page ---------------------------------------------------------- //
 
-type getPage struct{ deps PageDeps }
+type getPage struct {
+	deps PageDeps
+
+	// events receives the `knowledge_read` a seat's read records. Nil
+	// records nothing: a registry built outside an engine, and the
+	// operator's catalogue, whose reader is a person rather than a seat.
+	events Telemetry
+}
 
 var _ tools.SeatCallable = (*getPage)(nil)
 
@@ -273,11 +384,15 @@ func (t *getPage) CallForTurn(ctx context.Context, turn *turnctx.Turn, args map[
 	detail, err := t.deps.Reader.Get(ctx, ref, seatRead)
 	switch {
 	case errors.Is(err, pages.ErrNotFound):
-		return failed(fmt.Sprintf("There is no page %q. Check the container and "+
+		return refused(tools.RefusalNotFound, fmt.Sprintf("There is no page %q. Check the container and "+
 			"title, or use search_knowledge to find it.", clip(ref))), nil
 	case err != nil:
-		return failed(readFailure(GetPageTool, err)), nil
+		return pageReadFailure(GetPageTool, err), nil
 	}
+	note(ctx, t.events, turn, knowledgeRead(turn, types.ReadViaGetPage, pages.Backend, "",
+		[]types.KnowledgeReadPage{{
+			ID: detail.Page.ID, Container: detail.Page.Container, Title: detail.Page.Title,
+		}}))
 	return jsonResult(detail)
 }
 
@@ -308,7 +423,7 @@ func (t *writePage) Parameters() map[string]any {
 			},
 			"body": map[string]any{
 				"type":        "string",
-				"description": "The page, in markdown.",
+				"description": "The page, in markdown. " + pageLinkHelp,
 			},
 			"container": map[string]any{
 				"type":        "string",
@@ -343,6 +458,9 @@ func (t *writePage) CallForTurn(ctx context.Context, turn *turnctx.Turn, args ma
 	if t.deps.Writer == nil {
 		return unconfiguredKB(WritePageTool), nil
 	}
+	if denied := t.deps.foreignOperation(ctx, turn, WritePageTool, args); denied != "" {
+		return failed(denied), nil
+	}
 	in := pages.NewPage{
 		Title:     strings.TrimSpace(argString(args, "title")),
 		Body:      argString(args, "body"),
@@ -350,6 +468,7 @@ func (t *writePage) CallForTurn(ctx context.Context, turn *turnctx.Turn, args ma
 		ParentID:  strings.TrimSpace(argString(args, "parent")),
 		Labels:    argStrings(args, "labels"),
 		Message:   strings.TrimSpace(argString(args, "message")),
+		CallKey:   t.deps.callKey(ctx, turn, t.Name(), args),
 	}
 	if in.Container == "" {
 		if t.deps.DefaultContainer != nil {
@@ -361,7 +480,7 @@ func (t *writePage) CallForTurn(ctx context.Context, turn *turnctx.Turn, args ma
 		}
 	}
 	if t.deps.reserved(in.Container) {
-		return failed(fmt.Sprintf(
+		return refused(tools.RefusalForbidden, fmt.Sprintf(
 			"%s is a reserved container and pages written there are excluded "+
 				"from every search. Write this somewhere a reader will find it.",
 			clip(in.Container))), nil
@@ -369,12 +488,12 @@ func (t *writePage) CallForTurn(ctx context.Context, turn *turnctx.Turn, args ma
 
 	got, err := t.deps.Writer.Create(ctx, actor, in)
 	if err != nil {
-		return failed(pageWriteFailure(WritePageTool, err)), nil
+		return pageWriteFailure(WritePageTool, err), nil
 	}
 	if got.Outcome.Outcome == statelog.OutcomeUnknown {
 		// A PAGE NOBODY CAN SAY WAS WRITTEN IS NOT ONE TO REPORT: the id and
 		// revision below would be a create's that may never have landed.
-		return failed(pageUnknown(WritePageTool, got.Outcome, fmt.Sprintf(
+		return unknownOutcome(pageUnknown(WritePageTool, got.Outcome, fmt.Sprintf(
 			"Read %s/%s with get_page before writing it again: if the first "+
 				"write landed, a second one is refused because the title is taken.",
 			in.Container, in.Title))), nil
@@ -389,6 +508,18 @@ func (t *writePage) CallForTurn(ctx context.Context, turn *turnctx.Turn, args ma
 }
 
 // ---- save_page --------------------------------------------------------- //
+
+// pageLinkExample is how a body links another page: the address
+// [pages.Links] reads back, so the linked page lists this one under "Linked
+// from". BY ID, never by title — a title is an address that a rename moves,
+// and a `[[CONTAINER/Title]]` wiki link is a grammar nothing in the engine
+// reads: it renders as literal brackets and is invisible to the backlinks.
+const pageLinkExample = "[its title](" + pages.AddressPrefix + "<page id>)"
+
+// pageLinkHelp is the sentence both page-writing tools carry on `body`.
+const pageLinkHelp = "Link another page as " + pageLinkExample +
+	", using the `id` get_page or list_pages answers — not the title " +
+	"and not [[wiki]] brackets, which nothing resolves."
 
 type savePage struct{ deps PageDeps }
 
@@ -417,7 +548,10 @@ func (t *savePage) Parameters() map[string]any {
 					"what makes somebody else's edit a refusal instead of a " +
 					"silent overwrite.",
 			},
-			"body":  map[string]any{"type": "string", "description": "Replaces the page."},
+			"body": map[string]any{
+				"type":        "string",
+				"description": "Replaces the page. " + pageLinkHelp,
+			},
 			"title": map[string]any{"type": "string", "description": "Renames it."},
 			"parent": map[string]any{
 				"type": "string",
@@ -456,6 +590,9 @@ func (t *savePage) CallForTurn(ctx context.Context, turn *turnctx.Turn, args map
 	if t.deps.Writer == nil || t.deps.Reader == nil {
 		return unconfiguredKB(SavePageTool), nil
 	}
+	if denied := t.deps.foreignOperation(ctx, turn, SavePageTool, args); denied != "" {
+		return failed(denied), nil
+	}
 	ref := strings.TrimSpace(argString(args, "page"))
 	if ref == "" {
 		return failed("save_page needs a `page` — an id, or \"CONTAINER/Title\"."), nil
@@ -469,12 +606,16 @@ func (t *savePage) CallForTurn(ctx context.Context, turn *turnctx.Turn, args map
 	detail, err := t.deps.Reader.Get(ctx, ref, seatRead)
 	switch {
 	case errors.Is(err, pages.ErrNotFound):
-		return failed(fmt.Sprintf("There is no page %q.", clip(ref))), nil
+		return refused(tools.RefusalNotFound, fmt.Sprintf("There is no page %q.", clip(ref))), nil
 	case err != nil:
-		return failed(readFailure(SavePageTool, err)), nil
+		return pageReadFailure(SavePageTool, err), nil
 	}
 
-	save := pages.Save{BaseVersion: base, Message: strings.TrimSpace(argString(args, "message"))}
+	key := t.deps.callKey(ctx, turn, t.Name(), args)
+	save := pages.Save{
+		BaseVersion: base, Message: strings.TrimSpace(argString(args, "message")),
+		CallKey: key,
+	}
 	if _, ok := args["body"]; ok {
 		body := argString(args, "body")
 		save.Body = &body
@@ -493,10 +634,10 @@ func (t *savePage) CallForTurn(ctx context.Context, turn *turnctx.Turn, args map
 
 	got, err := t.deps.Writer.SavePage(ctx, actor, detail.Page.ID, save)
 	if err != nil {
-		return failed(pageWriteFailure(SavePageTool, err)), nil
+		return pageWriteFailure(SavePageTool, err), nil
 	}
 	if got.Outcome.Outcome == statelog.OutcomeUnknown {
-		return failed(pageUnknown(SavePageTool, got.Outcome, "Read the page with "+
+		return unknownOutcome(pageUnknown(SavePageTool, got.Outcome, "Read the page with "+
 			"get_page: if its version moved past the one you edited, the save "+
 			"landed; if it did not, save again with the version you just read.")), nil
 	}
@@ -517,14 +658,18 @@ func (t *savePage) CallForTurn(ctx context.Context, turn *turnctx.Turn, args map
 		// as stale. See [PageDeps.Await], which exists for exactly this.
 		t.deps.settle(ctx, at)
 		want := strings.TrimSpace(fmt.Sprint(title))
-		renamed, err := t.deps.Writer.Rename(ctx, actor, detail.Page.ID, want, false)
+		renamed, err := t.deps.Writer.Rename(ctx, actor, detail.Page.ID, want, false, key)
 		if err != nil {
-			return failed(fmt.Sprintf("The edit was saved and the rename to %q "+
-				"was not: %s", clip(want),
-				pageWriteFailure(SavePageTool, err))), nil
+			// THE RENAME'S CLASS, because the rename is the half that
+			// failed: the save already landed and nothing about it is
+			// what a caller has to act on.
+			refusal := pageWriteFailure(SavePageTool, err)
+			return refused(refusal.Refusal, fmt.Sprintf("The edit was saved "+
+				"and the rename to %q was not: %s", clip(want),
+				refusal.Output)), nil
 		}
 		if renamed.Outcome.Outcome == statelog.OutcomeUnknown {
-			return failed(fmt.Sprintf("The edit was saved; whether the rename to "+
+			return unknownOutcome(fmt.Sprintf("The edit was saved; whether the rename to "+
 				"%q landed is not known. %s", clip(want),
 				pageUnknown(SavePageTool, renamed.Outcome, "Read the page with "+
 					"get_page: its title says whether the rename landed, and "+
@@ -542,9 +687,13 @@ func (t *savePage) CallForTurn(ctx context.Context, turn *turnctx.Turn, args map
 		if renamed.Revision > revision {
 			revision = renamed.Revision
 		}
-		if renamed.Outcome.Position.Packed() > at.Packed() {
-			at = renamed.Outcome.Position
-			outcome = renamed.Outcome.Outcome
+		at = statelog.Later(at, renamed.Outcome.Position)
+		// AND THE LESS CERTAIN OF THE TWO OUTCOMES, where the rename
+		// appended anything: the call answers for both records, and
+		// `applied` over a rename the broker never confirmed would tell
+		// a caller it can stop looking at a write it cannot vouch for.
+		if renamed.Outcome.Wrote() {
+			outcome = statelog.LessCertain(outcome, renamed.Outcome.Outcome)
 		}
 	}
 	t.deps.settle(ctx, at)
@@ -613,6 +762,9 @@ func (t *commentOnPage) CallForTurn(ctx context.Context, turn *turnctx.Turn, arg
 	if t.deps.Writer == nil || t.deps.Reader == nil {
 		return unconfiguredKB(CommentOnPageTool), nil
 	}
+	if denied := t.deps.foreignOperation(ctx, turn, CommentOnPageTool, args); denied != "" {
+		return failed(denied), nil
+	}
 	ref := strings.TrimSpace(argString(args, "page"))
 	body := strings.TrimSpace(argString(args, "body"))
 	switch {
@@ -624,9 +776,9 @@ func (t *commentOnPage) CallForTurn(ctx context.Context, turn *turnctx.Turn, arg
 	detail, err := t.deps.Reader.Get(ctx, ref, seatRead)
 	switch {
 	case errors.Is(err, pages.ErrNotFound):
-		return failed(fmt.Sprintf("There is no page %q.", clip(ref))), nil
+		return refused(tools.RefusalNotFound, fmt.Sprintf("There is no page %q.", clip(ref))), nil
 	case err != nil:
-		return failed(readFailure(CommentOnPageTool, err)), nil
+		return pageReadFailure(CommentOnPageTool, err), nil
 	}
 
 	// AN EDIT IS THE SAME GESTURE, which is why it is this tool rather than
@@ -635,12 +787,13 @@ func (t *commentOnPage) CallForTurn(ctx context.Context, turn *turnctx.Turn, arg
 	// — lives in the store either way.
 	if edit := strings.TrimSpace(argString(args, "edit")); edit != "" {
 		//nolint:govet // shadow: `x, err := f()` declares x too; see .golangci.yml
-		comment, written, err := t.deps.Writer.EditComment(ctx, actor, detail.Page.ID, edit, body)
+		comment, written, err := t.deps.Writer.EditComment(ctx, actor, detail.Page.ID, edit, body,
+			t.deps.callKey(ctx, turn, t.Name(), args))
 		if err != nil {
-			return failed(pageWriteFailure(CommentOnPageTool, err)), nil
+			return pageWriteFailure(CommentOnPageTool, err), nil
 		}
 		if written.Outcome.Outcome == statelog.OutcomeUnknown {
-			return failed(pageUnknown(CommentOnPageTool, written.Outcome,
+			return unknownOutcome(pageUnknown(CommentOnPageTool, written.Outcome,
 				"Editing the comment again with the same body is harmless: it "+
 					"replaces the text with what it already says if the first "+
 					"edit landed.")), nil
@@ -655,21 +808,18 @@ func (t *commentOnPage) CallForTurn(ctx context.Context, turn *turnctx.Turn, arg
 	}
 
 	in := pages.NewComment{
-		Body:      body,
-		ReplyTo:   strings.TrimSpace(argString(args, "reply_to")),
-		TurnKey:   turnKey(turn),
-		TurnSince: turnSince(turn),
-		// HOW MANY DIFFERENT CALLS TO THIS TOOL CAME FIRST in this run —
-		// see [opIDFor] for what a remark made again after another one
-		// cost without it.
-		Repeat: turn.CallLog().Ordinal(t.Name(), args),
+		Body:    body,
+		ReplyTo: strings.TrimSpace(argString(args, "reply_to")),
+		// THE CALL'S KEY, repeat count included — see [opIDFor] for what a
+		// remark made again after another one cost without it.
+		CallKey: t.deps.callKey(ctx, turn, t.Name(), args),
 	}
 	if t.deps.Mentions != nil {
 		in.Mentions = t.deps.Mentions.Mentions(body)
 	}
 	comment, written, err := t.deps.Writer.Comment(ctx, actor, detail.Page.ID, in)
 	if err != nil {
-		return failed(pageWriteFailure(CommentOnPageTool, err)), nil
+		return pageWriteFailure(CommentOnPageTool, err), nil
 	}
 	if written.Outcome.Outcome == statelog.OutcomeUnknown {
 		// WHAT A REPEAT IS DEPENDS ON THE CALLER. A seat's comment is
@@ -677,15 +827,14 @@ func (t *commentOnPage) CallForTurn(ctx context.Context, turn *turnctx.Turn, arg
 		// comment: under a lost acknowledgement it posts once, and where
 		// this node's ledger cannot vouch for it the repeat publishes
 		// nothing and answers the same way — safe, and no answer sooner
-		// than looking. An operator's has no turn to derive from, so its
-		// repeat is a new comment, and a second one if the first landed.
-		// [unknownNext] is the rule every tracker write already answers by.
-		again := ""
-		if in.TurnKey != "" {
-			again = "call comment_on_page again with exactly the same " +
-				"arguments, before calling it with any others"
-		}
-		return failed(pageUnknown(CommentOnPageTool, written.Outcome,
+		// than looking. A person's retry of one request is the same
+		// comment too. An operator's assistant names no operation for a
+		// page write, so its repeat is a new comment, and a second one if
+		// the first landed. [unknownNext] is the rule every tracker write
+		// already answers by.
+		again := pageCaller{turn: turnKey(turn) != "", key: in.CallKey}.
+			sameCall(CommentOnPageTool)
+		return unknownOutcome(pageUnknown(CommentOnPageTool, written.Outcome,
 			unknownNext(written.Outcome.Unvouched, again,
 				"Read the page's comments with get_page",
 				"that is a second comment"))), nil
@@ -708,7 +857,7 @@ func (t *commentOnPage) CallForTurn(ctx context.Context, turn *turnctx.Turn, arg
 // same OPERATION asked here answers the same way every time, and another node
 // — or a person looking at the page — is what can tell. Whether a caller's
 // repeat is that same operation is `next`'s to say: a seat's comment is, and
-// an operator's is not.
+// so is a person's retry of one request, and an operator's assistant's is not.
 func pageUnknown(name string, result statelog.Result, next string) string {
 	why := "the write's acknowledgement was lost"
 	if result.Unvouched {
@@ -721,25 +870,49 @@ func pageUnknown(name string, result statelog.Result, next string) string {
 }
 
 // pageWriteFailure explains a write that did not land, in terms the model can
-// act on.
-func pageWriteFailure(name string, err error) string {
+// act on, classed for a reader that is not a model.
+//
+// THE UNMARKED REMAINDER IS [tools.RefusalUnavailable] here, where the
+// tracker's is invalid, and the difference is the writers': the pages writer
+// wraps every refusal it decides on content in one of its own sentinels —
+// [pages.ErrInvalid] included — so what reaches the end of this switch is a
+// read or an encode that failed, or a log that refused the append.
+func pageWriteFailure(name string, err error) tools.Result {
 	switch {
 	case errors.Is(err, pages.ErrInvalid):
-		return fmt.Sprintf("%s refused that: %v", name, err)
+		// THE WRITER'S SENTENCE ALONE, for the reason writeFailure gives:
+		// a person's surface prints this class as it stands.
+		return refused(tools.RefusalInvalid, fmt.Sprintf("%s refused that: %s",
+			name, pages.Sentence(err)))
 	case errors.Is(err, pages.ErrTitleTaken):
-		return fmt.Sprintf("%v\n\nThat page already exists — read it with "+
-			"get_page and edit it with save_page rather than writing a second "+
-			"page on the same subject.", err)
+		return refused(tools.RefusalExists, fmt.Sprintf("%v\n\nThat page already "+
+			"exists — read it with get_page and edit it with save_page rather "+
+			"than writing a second page on the same subject.", err))
 	case errors.Is(err, pages.ErrStaleVersion):
-		return fmt.Sprintf("%v\n\nRead the page again with get_page, re-apply "+
-			"your change on top of what it says now, and save with the version "+
-			"you just read.", err)
+		return refused(tools.RefusalStaleVersion, fmt.Sprintf("%v\n\nRead the "+
+			"page again with get_page, re-apply your change on top of what it "+
+			"says now, and save with the version you just read.", err))
 	case errors.Is(err, pages.ErrConflict):
-		return fmt.Sprintf("%s could not land: %v. Somebody else is editing "+
-			"this page. Read it again before retrying.", name, err)
+		return refused(tools.RefusalConflict, fmt.Sprintf("%s could not land: "+
+			"%v. Somebody else is editing this page. Read it again before "+
+			"retrying.", name, err))
 	case errors.Is(err, pages.ErrNotFound):
-		return fmt.Sprintf("%s: %v", name, err)
+		return refused(tools.RefusalNotFound, fmt.Sprintf("%s: %v", name, err))
 	}
-	return fmt.Sprintf("%s did not land (%v). The change was NOT made — do not "+
-		"report it as done.", name, err)
+	return refused(tools.RefusalUnavailable, fmt.Sprintf("%s did not land (%v). "+
+		"The change was NOT made — do not report it as done.", name, err))
+}
+
+// pageReadFailure explains a knowledge-base read that could not be served.
+//
+// ITS OWN SENTENCE rather than [readFailure]'s, which told a model reading a
+// PAGE that it "could not read the tracker" — a different store, and advice
+// ("do not conclude the item or the list does not exist") about objects the
+// call never asked for. The rule is the tracker read's, though: never "nothing
+// found", and [tools.RefusalUnavailable] rather than not-found.
+func pageReadFailure(name string, err error) tools.Result {
+	return refused(tools.RefusalUnavailable, fmt.Sprintf("%s could not read "+
+		"the knowledge base right now (%v). This is NOT an empty result — do "+
+		"not conclude the page does not exist. Try again, or say you could "+
+		"not check.", name, err))
 }

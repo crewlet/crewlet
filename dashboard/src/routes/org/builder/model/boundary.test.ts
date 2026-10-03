@@ -10,23 +10,30 @@
  * notices. So the rule is read off the source text, in the idiom of
  * `ui/boundary.test.ts`:
  *
- * - runtime imports name a file in this directory or `~/lib/format.ts` (pure
- *   formatting); `~/protocol` is imported for TYPES only, because its runtime
- *   half is the socket and `fetch`;
+ * - runtime imports name a file in this directory, `~/lib/format.ts` (pure
+ *   formatting), `~/lib/storage.ts` (the table of storage KEYS, which is
+ *   constants and imports nothing — the storage itself is still injected) or
+ *   `~/protocol/configAnswer.ts` (the ONE reading of a `/config` refusal,
+ *   which imports nothing but types — held below); the rest of `~/protocol`
+ *   is imported for TYPES only, because its runtime half is the socket and
+ *   `fetch`;
  * - no module names a browser or time global.
  */
 
-import { readFileSync, readdirSync } from "node:fs";
-import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
 import { describe, expect, test } from "vitest";
 
-const MODEL = dirname(fileURLToPath(import.meta.url));
+import { modules } from "~/test/source.ts";
+
+/** The one runtime import the model may make from `~/protocol`. */
+const CONFIG_ANSWER = "~/protocol/configAnswer.ts";
+
+/** This directory, relative to `src/`. */
+const MODEL = "routes/org/builder/model/";
 
 /** The modules of this directory, tests excluded: a test may use whatever it needs. */
-const sources = readdirSync(MODEL)
-  .filter((name) => name.endsWith(".ts") && !name.endsWith(".test.ts"))
-  .map((name) => ({ name, text: readFileSync(join(MODEL, name), "utf8") }));
+const sources = modules()
+  .map(({ path, text }) => ({ name: path.slice(MODEL.length), path, text }))
+  .filter(({ path, name }) => path.startsWith(MODEL) && !name.includes("/"));
 
 /** Source without block comments, line comments or string contents, so prose cannot match. */
 function code(text: string): string {
@@ -91,11 +98,28 @@ describe("the builder core", () => {
         const allowed =
           spec.startsWith("./") ||
           spec === "~/lib/format.ts" ||
+          spec === "~/lib/storage.ts" ||
+          spec === CONFIG_ANSWER ||
           (typeOnly && spec.startsWith("~/protocol/"));
         if (!allowed) offending.push(`${name}: ${typeOnly ? "import type" : "import"} "${spec}"`);
       }
     }
     expect(offending).toEqual([]);
+  });
+
+  test("reads a /config refusal through a protocol module that is itself pure", () => {
+    // THE ONE RUNTIME DOOR INTO ~/protocol, and it stays a door only while
+    // what is behind it imports nothing at runtime: the day it reached for
+    // `rest.ts` the model would be one import away from the network.
+    const answer = modules().find(({ path }) => path === "protocol/configAnswer.ts");
+    expect(answer, "protocol/configAnswer.ts is gone").toBeDefined();
+    const runtime = imports(answer!.text).filter(({ typeOnly }) => !typeOnly);
+    expect(runtime).toEqual([]);
+    const body = code(answer!.text);
+    const reached = FORBIDDEN_GLOBALS.filter(([, pattern]) => pattern.test(body)).map(
+      ([label]) => label,
+    );
+    expect(reached).toEqual([]);
   });
 
   test("names no browser, network, clock or randomness global", () => {

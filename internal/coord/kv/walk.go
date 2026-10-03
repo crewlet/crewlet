@@ -233,8 +233,8 @@ func eachEntry(ctx context.Context, js jetstream.JetStream, kv jetstream.KeyValu
 // THE BROKER DOES THE FILTERING, which is the whole point. A key is a subject
 // token path under its bucket (coord/keys.go), so a class of keys written by
 // [coord.DocumentKey] is a subject wildcard the broker can match — and the
-// shared positions register holds SEVEN classes, so a walk that read the whole
-// bucket moved all seven to use one. That read is not an edge case: the
+// shared positions register holds EIGHT classes, so a walk that read the whole
+// bucket moved all eight to use one. That read is not an edge case: the
 // state-log write fence takes it, for the floors, on every write at an
 // expectation of zero.
 //
@@ -243,13 +243,13 @@ func eachEntry(ctx context.Context, js jetstream.JetStream, kv jetstream.KeyValu
 // what the watcher takes. Each walk composes its own, and there is
 // deliberately no default: an empty filter read as "everything" would turn a
 // caller that lost its class value into one that walks the whole register and
-// decodes seven classes as one. The certification's index read narrows by the
+// decodes eight classes as one. The certification's index read narrows by the
 // same filter, so the two halves of one listing can never be answering about
 // different keys.
 //
 // `what` names the listing a failure could not complete — the bare name, which
 // every message composes into "read <what>" — and a filtered walk names its
-// LISTING rather than its bucket. Seven classes share the positions register,
+// LISTING rather than its bucket. Eight classes share the positions register,
 // so "read crewlet_positions" is the same sentence for all of them: it names
 // the file an operator would inspect and never the duty that stalled.
 //
@@ -538,13 +538,31 @@ func apiOf(js jetstream.JetStream) (jsapi.API, error) {
 // message at all is ErrKeyNotFound, and a delete or purge marker is an entry
 // whose Operation says so.
 func (r *leaderReader) last(ctx context.Context, key string) (jetstream.KeyValueEntry, error) {
+	return r.get(ctx, key, server.JSApiMsgGetRequest{LastFor: r.pre + key})
+}
+
+// at answers key's message at one revision as the stream leader holds it —
+// the leader's answer to what the bucket handle's GetRevision asks a replica.
+// A revision the key no longer holds — a later write replaced it, or it was
+// purged — is [jetstream.ErrKeyNotFound], which is what GetRevision says of
+// one; a replica says it of a revision it has not applied YET as well, which
+// is the answer this exists not to give.
+func (r *leaderReader) at(ctx context.Context, key string, revision uint64) (jetstream.KeyValueEntry, error) {
+	return r.get(ctx, key, server.JSApiMsgGetRequest{Seq: revision})
+}
+
+// get asks the leader one message question about key and decodes the answer
+// exactly as the client's KV Get decodes one.
+func (r *leaderReader) get(ctx context.Context, key string,
+	ask server.JSApiMsgGetRequest) (jetstream.KeyValueEntry, error) {
+
 	if _, bounded := ctx.Deadline(); !bounded {
 		var cancel context.CancelFunc
 		ctx, cancel = context.WithTimeout(ctx, r.timeout)
 		defer cancel()
 	}
 	subject := r.pre + key
-	req, err := json.Marshal(server.JSApiMsgGetRequest{LastFor: subject})
+	req, err := json.Marshal(ask)
 	if err != nil {
 		return nil, fmt.Errorf("encode the read: %w", err)
 	}
@@ -563,6 +581,10 @@ func (r *leaderReader) last(ctx context.Context, key string) (jetstream.KeyValue
 		return nil, resp.Error
 	case msg == nil:
 		return nil, errors.New("the leader answered with neither a message nor an error")
+	case msg.Subject != subject && ask.Seq != 0:
+		// A REVISION ANOTHER KEY HOLDS is not this key's at that revision:
+		// what GetRevision answers it, for the same reason.
+		return nil, jetstream.ErrKeyNotFound
 	case msg.Subject != subject:
 		// A broker that answered about another subject did not do what it
 		// was asked, and recording its message under this key would list a

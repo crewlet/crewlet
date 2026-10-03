@@ -33,8 +33,10 @@ _secrets (a coordination KV bucket, no TTL)
   key_id      which keyring entry sealed it
   updated_at
   updated_by
-  source      "cli" | "api" | "gitlab-provision" | "rekey" | "migrated"
+  source      which path last wrote it — "api" | "cli" | "setup" | "provision" | "rekey" | "migrated"
 ```
+
+**`source` is provenance, never location**: every record is sealed in this bucket whichever path wrote it. `PUT /secrets/{name}` stamps `api` unless its `?source=` names another word, `crewlet secrets set` stamps `cli` unless its `--source` does, an integration's setup stamps `setup`, a vendor's `provision` command `provision`, a rekey `rekey` and the boot-time move off a node's own table `migrated`. Each write replaces the word, so it names the LAST writer.
 
 **The name is the reference grammar's, and a write that is not one is refused.** A record is keyed by the name a `${VAR}` resolves through, so the two rules are one rule: letters, digits and underscores, starting with a letter or an underscore. A store that accepted `gitlab-token` would seal the value, list it, report the write as done, and resolve it from nowhere: the operator's only evidence a provider failing to authenticate hours later, far from the name they chose. Every write path checks: `PUT /secrets/{name}` answers `400 invalid_name`, and `crewlet secrets set` refuses against a running node and a stopped one alike. Reading and removing take the name as given, so nothing becomes unremovable.
 
@@ -126,9 +128,25 @@ Every other command reads the **Tier A** config for its keyring, never the compa
 
 ### From the dashboard
 
-The **Credentials** screen (`#/admin/credentials`) lists what the fleet holds and can store, rotate and remove a row, over the same guarded routes the CLI uses. It never shows a value: the one route that returns one is break-glass on both sides, and putting that behind a click in a page anyone holding the operator token can open is not a trade worth making. `crewlet secrets get -reveal` stays the deliberate path, and a rotation asks for the new credential rather than editing the old one.
+Settings › **Secrets** (`#/settings/secrets`) lists what the fleet holds and can store, rotate and remove a row, over the same guarded routes the CLI uses. It never shows a value: the one route that returns one is break-glass on both sides, and putting that behind a click in a page anyone holding the operator token can open is not a trade worth making. `crewlet secrets get -reveal` stays the deliberate path, and a rotation asks for the new credential rather than editing the old one.
 
 Before a removal the screen says **which config fields point at the row**, read from [`GET /config/references`](../reference/api-endpoints.md#config--live-config-management-auth-gated) and listed by path. That is the failure this confirmation exists to prevent: the config keeps `${VAR}` pointers, so removing a row a seat's `bot_token` still names leaves that pointer resolving to `""` at the next activation, and the webhook route or transport holding it starts refusing deliveries with nothing naming the row that went away. Removing a referenced row takes an explicit acknowledgement, and so does removing one when the check itself did not answer, **"the configuration could not be read" is never rendered as "nothing points at this"**, because the second is a reassurance the screen has not earned. A rotation is safe by construction, since the pointer keeps naming a row that still exists.
+
+The API's own bearer tokens are NOT in this store: they are Tier A
+(`api.auth.tokens`), the root of trust the store's keyring comes from. Settings
+› **People & access** (`#/settings/people`) lists their labels — never a value
+— beside the person each one acts as, read from
+[`GET /access`](../reference/api-endpoints.md#get-access).
+
+A model's keys are `${VAR}` pointers into this store too. Settings › **Models &
+keys** (`#/settings/models`) lists each model's keys by the variable they name
+and says, per key, whether it resolves on the node that answered (*Not set*
+when neither this store nor the environment holds it), whether a vendor is
+refusing it and until when, read from
+[`GET /credential-pool`](../reference/api-endpoints.md#get-credential-pool) —
+never a value. A model that names no `api_keys` reads its vendor's conventional
+variable (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`) from this store first; one
+whose named keys resolve to nothing runs on no key rather than borrowing it.
 
 ### From a provisioner
 

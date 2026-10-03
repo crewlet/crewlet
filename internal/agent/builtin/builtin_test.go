@@ -8,6 +8,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/a2a"
 	"github.com/crewlet/crewlet/internal/agent/builtin"
+	"github.com/crewlet/crewlet/internal/agent/skills"
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/knowledge"
@@ -781,14 +782,14 @@ func TestEverySeatScopedToolRefusesWithoutASeat(t *testing.T) {
 // omits its tool. What either one returns is another test's subject.
 type toolSkills struct{}
 
-func (toolSkills) Body(string) (string, bool) { return "", false }
+func (toolSkills) Load(string) (skills.Loaded, bool) { return skills.Loaded{}, false }
 
 type searcher struct{}
 
 func (searcher) CanSearch(*org.Role, *org.Organization) bool { return true }
 
-func (searcher) Search(context.Context, knowledge.Query) knowledge.Answer {
-	return knowledge.Answer{}
+func (searcher) Search(context.Context, knowledge.Query) knowledge.Result {
+	return knowledge.Result{}
 }
 
 func fullDeps(t *testing.T) builtin.Deps {

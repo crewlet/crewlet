@@ -14,7 +14,7 @@ import (
 	"sync"
 )
 
-// THE SEMANTIC FIRST STAGE AS AN INDEX — ADR-0022 — and this file is its
+// THE SEMANTIC FIRST STAGE AS AN INDEX — ADR-0028 — and this file is its
 // arithmetic: an inverted file (IVF) over the 1-bit sign codes the full scan
 // already reads, trained by k-means in HAMMING space with a majority-bit
 // centroid update.
@@ -46,7 +46,7 @@ import (
 // narrow table, 8× smaller, and because HAMMING arithmetic is integer: two
 // CPUs agree on it to the bit, where a float k-means disagrees in the last
 // place across architectures and two nodes would file one document in two
-// lists. That is ADR-0020's objection to a float logarithm in placement, and
+// lists. That is ADR-0027's objection to a float logarithm in placement, and
 // it binds here for the same reason.
 //
 // # What it costs, and what it loses — measured, never assumed
@@ -322,7 +322,7 @@ func (x IVF) Centroid(j int) []uint64 { return x.centroids[j*x.words : (j+1)*x.w
 // INTEGER ARITHMETIC ONLY. A float distance here — the cosine of the f32
 // vector against a ±1 centroid, say — ranks nearly the same and is not
 // bit-reproducible across architectures, so two holders of one partition
-// would disagree about where a document lives: see ADR-0022.
+// would disagree about where a document lives: see ADR-0028.
 func (x IVF) Nearest(code []uint64) int {
 	best, list := math.MaxInt, 0
 	for j := range x.Lists() {

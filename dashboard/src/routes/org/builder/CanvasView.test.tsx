@@ -24,11 +24,9 @@ import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import type { AgentRow, CompanyDocument } from "~/protocol/index.ts";
 import type { ChartKind } from "./BuilderContext.tsx";
 import { CanvasView, type Adding } from "./CanvasView.tsx";
-import { OrgNodeLabel, Tag } from "@crewlethq/ui";
-import { isDrawnAs } from "~/testing.tsx";
-import { COMPANY_KEY, seatKey, unitKey } from "./model/keys.ts";
+import { OrgNodeLabel } from "@crewlethq/ui";
+import { COMPANY_KEY, seatKey, unitKey, type NodeKey } from "./model/keys.ts";
 import type { BuilderState } from "./model/reducer.ts";
-import { NODE_TONES } from "./nodeTone.ts";
 import { fixtureCompany, fixtureDerived } from "./model/testkit.ts";
 import { answered, checkedEdit, PLACED, record } from "./testState.ts";
 import {
@@ -42,14 +40,16 @@ import {
   chartCards,
   chartLinks,
   harnessProbe,
-  isOutlinedCard,
+  isCanvasViewport,
+  VIEWPORT,
   nodeName,
   nodeTrailing,
   type BuilderSpies,
   type HarnessProbe,
 } from "./viewTestkit.tsx";
-import { focusables } from "@crewlethq/ui";
+import { CANVAS_FIT_PADDING, focusables } from "@crewlethq/ui";
 import { menuEntryLabel } from "~/testing.tsx";
+import { LEGIBLE_ZOOM } from "~/ui/canvasView.ts";
 
 let restore: () => void;
 beforeEach(() => {
@@ -74,7 +74,13 @@ function mount(
     chart = "structure",
     readOnly = false,
     adding = null,
-  }: { chart?: ChartKind; readOnly?: boolean; adding?: Adding | null } = {},
+    selected = null,
+  }: {
+    chart?: ChartKind;
+    readOnly?: boolean;
+    adding?: Adding | null;
+    selected?: NodeKey | null;
+  } = {},
 ): Mounted {
   const spies = builderSpies();
   const probe = harnessProbe();
@@ -87,6 +93,7 @@ function mount(
       probe={probe}
       readOnly={props.readOnly ?? readOnly}
       agents={props.agents}
+      selected={selected}
     >
       <CanvasView chart={chart} adding={props.adding === undefined ? adding : props.adding} />
     </BuilderHarness>
@@ -133,19 +140,30 @@ const label = menuEntryLabel;
  * spelt here, this suite would match nothing and report it as a defect in the
  * screen rather than in itself.
  */
-const markStep = (which: "large" | "ring"): string => {
-  const zone = (props: { iconSize?: "md" | "lg"; iconRing?: "none" | "dashed" }) => {
+const largeStep = (): string => {
+  const zone = (props: { iconSize?: "md" | "lg" }) => {
     const { container, unmount } = render(<OrgNodeLabel name="x" icon={<i />} {...props} />);
     const classes = [...container.firstElementChild!.classList];
     unmount();
     return classes;
   };
   const plain = zone({});
-  const marked = which === "large" ? zone({ iconSize: "lg" }) : zone({ iconRing: "dashed" });
-  const extra = marked.filter((name) => !plain.includes(name))[0];
-  if (!extra) throw new Error(`the node label draws no ${which} step this suite can find`);
+  const extra = zone({ iconSize: "lg" }).filter((name) => !plain.includes(name))[0];
+  if (!extra) throw new Error("the node label draws no large step this suite can find");
   return extra;
 };
+
+/** An element's text with a seat badge's initials left out: the name is printed beside them. */
+const said = (el: Element): string =>
+  [...el.childNodes]
+    .map((node) =>
+      node.nodeType === Node.TEXT_NODE
+        ? (node.textContent ?? "")
+        : node instanceof Element && !node.classList.contains("crewlet-avatar")
+          ? said(node)
+          : "",
+    )
+    .join("");
 
 /** A treeitem's node name. */
 const nameOf = (el: HTMLElement) => nodeName(el);
@@ -162,13 +180,13 @@ const markNames = (el: HTMLElement) =>
 const markSentences = (el: HTMLElement) => markNames(el).map(([tooltip]) => tooltip);
 
 describe("which chart", () => {
-  test("the chart the lens hands in is the one drawn, whatever the URL says", () => {
+  test("the chart the builder hands in is the one drawn, whatever the URL says", () => {
     // The Builder owns the `chart` param; a second reading here could disagree.
-    location.hash = "#/company?lens=builder&view=visualization&chart=reporting";
+    location.hash = "#/agents/edit?view=visualization&chart=reporting";
     mount();
     expect(screen.getByRole("tree", { name: "Structure chart" })).toBeDefined();
     cleanup();
-    location.hash = "#/company?lens=builder&view=visualization&chart=structure";
+    location.hash = "#/agents/edit?view=visualization&chart=structure";
     mount(undefined, { chart: "reporting" });
     expect(screen.getByRole("tree", { name: "Reporting chart" })).toBeDefined();
   });
@@ -237,21 +255,24 @@ describe("the tree", () => {
     expect(document.activeElement).toBe(item("Engineering"));
   });
 
-  test("a human seat is drawn with the dashed edge, by kind rather than by colour", () => {
+  test("a human seat is drawn with a person's badge, by kind rather than by colour", () => {
     const doc = fixtureCompany();
     doc.roles![0] = { name: "CEO", kind: "human", contact: { slack: "U0CEO" } };
     mount(checkedEdit(doc));
-    // The mark is the CARD's boundary, which the design system draws, so the
-    // claim is "drawn as the chart draws somebody outside the system" rather
-    // than the name of a class that belongs to the package.
-    expect(isOutlinedCard(chartCard(item("CEO")))).toBe(true);
-    // EVERY SEAT IS A NODE OF ITS OWN, so an agent seat inside a unit is a
-    // card that is not outlined rather than a row that is not marked.
-    expect(isOutlinedCard(chartCard(item("Dev")))).toBe(false);
+    // THE BADGE'S OUTLINE IS THE ONE CUE: a person's circle, an agent's
+    // squircle, on the same solid card. The kit names the two outlines by the
+    // kind they draw, which is the claim — a card-level mark is gone, because
+    // two cues for one fact are two things to keep agreeing.
+    expect(item("CEO").querySelector(".crewlet-avatar--human")).not.toBeNull();
+    expect(item("CEO").querySelector(".crewlet-avatar--agent")).toBeNull();
+    // EVERY SEAT IS A NODE OF ITS OWN, so an agent seat inside a unit wears an
+    // agent's badge rather than a row that is merely not marked.
+    expect(item("Dev").querySelector(".crewlet-avatar--agent")).not.toBeNull();
     expect(within(item("CEO")).getByText("Human seat")).toBeDefined();
-    // And the hue is an agent seat's alone: a human seat wears the boundary.
+    // And neither card is tinted: the outline is the whole of the difference
+    // (see "colour is not identity" below).
     expect(chartCard(item("CEO")).getAttribute("data-tone")).toBeNull();
-    expect(chartCard(item("Dev")).getAttribute("data-tone")).not.toBeNull();
+    expect(chartCard(item("Dev")).getAttribute("data-tone")).toBeNull();
   });
 
   test("a root seat placed by reference is a row of its unit, and a dangling reference is marked at the root", () => {
@@ -302,50 +323,34 @@ describe("the tree", () => {
   test("a seat's kind is drawn once and said once", () => {
     mount();
     const card = item("Dev");
-    expect(card.textContent).toBe("DevAgent seat@dev");
+    // The badge's initials are the eye's, and hidden from everyone else: the
+    // name is printed beside them.
+    expect(said(card)).toBe("DevAgent seat@dev");
     expect(card.getAttribute("title")).toBe("Agent seat, @dev");
   });
 
   /*
-   * AN AGENT SEAT WEARS THE LARGE MARK, because the chart this is drawn from
-   * sizes a mark by what it stands for: a container at half its icon zone and
-   * the thing the chart is ABOUT at three quarters of it. Drawn at one step
-   * for all three, an agent seat was told from a unit by its hue and its
-   * caption alone.
+   * A SEAT LEADS WITH ITS BADGE AND A CONTAINER WITH ITS GLYPH, because the
+   * chart this is drawn from sizes a mark by what it stands for: the seats
+   * are what the chart is ABOUT, so each is its own person or agent, and a
+   * unit or the company is a glyph at half its zone. The badge's outline is
+   * who holds the seat — an agent's squircle, a person's circle — which is the
+   * one cue: the dashed ring round a person's figure is gone with the kit's
+   * second cue for the same fact.
    */
-  test("an agent seat's mark is the large step and a container's is not", () => {
-    mount();
-    // What the package calls the large step is asked OF the package, by
-    // drawing one node each way and taking the difference: a class the design
-    // system draws is not the engine's to spell.
-    const large = markStep("large");
-    const mark = (name: string) => item(name).querySelector("[aria-hidden='true']")!.className;
-    expect(mark("Dev")).toContain(large);
-    expect(mark("Engineering")).not.toContain(large);
-    expect(mark("Acme")).not.toContain(large);
-  });
-
-  /*
-   * A human seat keeps the small figure inside its dashed ring, which is the
-   * boundary that says what it is.
-   *
-   * THE FIGURE'S OWN SIZE, not only the ring's class. This case read the class
-   * alone and stayed green while the figure grew to the zone's own step and
-   * measured 20px inside the 24px ring, touching it on every side: the ring
-   * stops reading as a ring, which is the one thing it is there to do. Every
-   * other mark IS the zone and answers `1em`, which is how an agent seat wears
-   * the large one.
-   */
-  test("a human seat's mark stays the small step inside its ring", () => {
+  test("a seat leads with its badge and a container with its glyph", () => {
     const doc = fixtureCompany();
     doc.roles![0] = { name: "CEO", kind: "human", contact: { slack: "U0CEO" } };
     mount(checkedEdit(doc));
-    const zone = item("CEO").querySelector("[aria-hidden='true']")!;
-    expect(zone.className).toContain(markStep("ring"));
-    expect(zone.className).not.toContain(markStep("large"));
-    expect(zone.querySelector("svg")?.getAttribute("width")).toBe("14px");
-    // The agent seat beside it takes whatever its zone is set to.
-    expect(item("Dev").querySelector("svg")?.getAttribute("width")).toBe("1em");
+    expect(item("Dev").querySelector(".crewlet-avatar--agent")).not.toBeNull();
+    expect(item("CEO").querySelector(".crewlet-avatar--human")).not.toBeNull();
+    const large = largeStep();
+    for (const container of ["Engineering", "Acme"]) {
+      expect(item(container).querySelector(".crewlet-avatar"), container).toBeNull();
+      const zone = item(container).querySelector("[aria-hidden='true']")!;
+      expect(zone.querySelector("svg"), container).not.toBeNull();
+      expect(zone.className, container).not.toContain(large);
+    }
   });
 
   /*
@@ -712,50 +717,155 @@ describe("what a node offers a pointer", () => {
 });
 
 /*
- * AN AGENT SEAT CARRIES A HUE, and it is the one thing on this chart drawn by
- * what a node IS rather than by what the engine said about it. Derived from
- * the seat's KEY, because a company document has no colour in it and a hue
- * hashed from the name would repaint the chart on every keystroke in the
- * editor.
+ * EVERY NODE IS THE CHART'S NEUTRAL SURFACE. Colour on this dashboard says
+ * what a seat is DOING, never who it is, and a draft is doing nothing: an
+ * agent seat used to carry one of six hues hashed from its key, on its card
+ * and on the branch arriving at it, which the live chart a reader had just
+ * left never drew. What tells a person's seat from an agent's is the badge's
+ * outline, a shape. So no card and no connector on either chart asks the
+ * design system for a tone — the mutation that re-adds `cardTone` turns this
+ * red on the first seat it tints.
  */
-describe("a seat's hue", () => {
-  const toneOf = (name: string) => chartCard(item(name)).getAttribute("data-tone");
+describe("colour is not identity", () => {
+  const toned = (container: HTMLElement) => [
+    ...chartCards(container)
+      .filter((card) => card.hasAttribute("data-tone"))
+      .map((card) => `card ${card.textContent}`),
+    ...[...chartLinks(container).querySelectorAll("path")]
+      .filter((path) => path.hasAttribute("data-tone"))
+      .map((path) => `branch ${path.getAttribute("d")}`),
+  ];
 
-  test("an agent seat has one, and nothing else on the chart does", () => {
+  test("no node or branch of the structure chart is tinted, an agent seat's included", () => {
     const doc = fixtureCompany();
     doc.roles![0] = { name: "CEO", kind: "human", contact: { slack_user_id: "U0CEO" } };
-    mount(checkedEdit(doc));
-    expect(toneOf("Dev")).not.toBeNull();
-    // A human seat wears the dashed boundary instead, which reads to somebody
-    // who cannot separate the hues at all.
-    expect(toneOf("CEO")).toBeNull();
-    expect(toneOf("Engineering")).toBeNull();
-    expect(toneOf("Acme")).toBeNull();
+    const { container } = mount(checkedEdit(doc));
+    // The chart really drew agent seats and branches, so an empty list below
+    // is a statement about them rather than about a chart that drew nothing.
+    expect(chartCard(item("Dev"))).toBeDefined();
+    expect(chartLinks(container).querySelectorAll("path").length).toBeGreaterThan(0);
+    expect(toned(container)).toEqual([]);
   });
 
-  test("it is one of the six the design system measures", () => {
-    mount();
-    for (const seat of ["Dev", "VP Engineering", "SRE", "Designer"]) {
-      expect(NODE_TONES, seat).toContain(toneOf(seat));
-    }
+  test("no node or branch of the reporting chart is tinted either", () => {
+    const { container } = mount(checkedEdit(fixtureCompany()), { chart: "reporting" });
+    expect(chartCards(container).length).toBeGreaterThan(0);
+    expect(toned(container)).toEqual([]);
   });
 
   /*
-   * A RENAME DOES NOT REPAINT IT. The key outlives the name, so a seat keeps
-   * its hue while it is renamed, moved or given a handle; the colour is a mark
-   * an operator recognises it by, and one that changed as they typed would be
-   * no mark at all.
+   * AND THE BRANCHES ARE THE DESIGN SYSTEM'S ELBOWS, the orthogonal connector
+   * the live chart draws: two charts of one organization in two drawings read
+   * as two products. A cubic is the `C` command of an SVG path, which an elbow
+   * (lines and the arcs of its corners) never uses.
    */
-  test("a rename leaves the hue where it was", () => {
-    const { probe } = mount();
-    const before = toneOf("Dev");
-    act(() =>
-      probe.dispatch({
-        type: "record",
-        intent: { type: "renameSeat", target: seatKey("dev"), name: "Staff Engineer" },
-      }),
+  test("the branches are elbows, never the console's single cubic", () => {
+    const { container } = mount();
+    const drawn = [...chartLinks(container).querySelectorAll("path")].map(
+      (path) => path.getAttribute("d") ?? "",
     );
-    expect(toneOf("Staff Engineer")).toBe(before);
+    expect(drawn.length).toBeGreaterThan(0);
+    expect(drawn.filter((d) => /[Cc]/.test(d))).toEqual([]);
+  });
+});
+
+/*
+ * THE FIRST VIEW IS HELD AT THE LEGIBILITY FLOOR. The canvas fits the whole
+ * draft on its first layout, and a company as wide as Nimbus fitted at 57% at
+ * 1440 — names at eight pixels. The builder holds that first view at the floor
+ * the org chart holds (`ui/canvasView.ts`) — EXACTLY the floor, where the Zoom
+ * in presses it used to make came to rest on "99%" at 1440 and "101%" at 1280
+ * — and PLACES the company rather than zooming about the canvas's centre,
+ * which left the root off centre and a sliver of one card at an edge. It is
+ * shown WITHOUT being selected: revealing is focusing in the kit, and focus is
+ * selection here, so an unguarded reveal put the company's ring and actions on
+ * a chart nobody had touched.
+ */
+describe("the first view", () => {
+  /** The chart's scale and where a card is drawn, in the viewport's pixels. */
+  const drawn = (container: HTMLElement, name: string) => {
+    const world = canvasWorld(container).style.transform;
+    const w = /translate\((-?[\d.e-]+)px,\s*(-?[\d.e-]+)px\)(?:\s*scale\(([\d.e-]+)\))?/.exec(
+      world,
+    );
+    const c = /translate\((-?[\d.]+)px,\s*(-?[\d.]+)px\)/.exec(
+      chartCard(item(name)).style.transform,
+    );
+    if (!w || !c) throw new Error(`not placed: ${world}`);
+    const k = Number(w[3] ?? 1);
+    const left = Number(w[1]) + Number(c[1]) * k;
+    const top = Number(w[2]) + Number(c[2]) * k;
+    const right = left + CARD_WIDTH * k;
+    return { scale: k, left, right, top, middle: (left + right) / 2 };
+  };
+  /** The canvas's viewport stood at `width`, as the chart is about to measure it. */
+  const standAt = (width: number) => {
+    const plain = LayoutObserver.sizer;
+    LayoutObserver.sizer = (el) =>
+      isCanvasViewport(el) ? { width, height: VIEWPORT.height } : plain(el);
+  };
+  const settled = async () => {
+    await act(async () => {
+      for (let i = 0; i < 5; i++) await Promise.resolve();
+    });
+    act(() => LayoutObserver.settle());
+  };
+
+  test("a draft the fit would shrink past reading is drawn at the floor, the company centred across it", async () => {
+    standAt(360);
+    // LOPSIDED, as a real company is: a deep team wider than everything else
+    // puts the middle of the fitted chart well to the side of its root, which
+    // is where a zoom about the canvas's centre left the root.
+    const doc = fixtureCompany();
+    doc.units![0]!.children![0]!.roles!.push(
+      { name: "SRE 2", goal: "Keep it up" },
+      { name: "SRE 3", goal: "Keep it up" },
+      { name: "SRE 4", goal: "Keep it up" },
+    );
+    const { container, probe } = mount(checkedEdit(doc));
+    await settled();
+    const company = drawn(container, "Acme");
+    expect(company.scale).toBeCloseTo(LEGIBLE_ZOOM, 6);
+    expect(company.middle).toBeCloseTo(180, 3);
+    // Down the canvas, where the kit's own fit puts a chart that is shorter
+    // than the room: in the middle of it.
+    const world = /translate\((-?[\d.e-]+)px,\s*(-?[\d.e-]+)px\)/.exec(
+      canvasWorld(container).style.transform,
+    )!;
+    const edges = chartCards(container).map((card) => {
+      const at = /translate\((-?[\d.]+)px,\s*(-?[\d.]+)px\)/.exec(card.style.transform)!;
+      const top = Number(world[2]) + Number(at[2]) * company.scale;
+      const rows = Math.max(1, card.querySelectorAll("[role='treeitem']").length);
+      return { top, bottom: top + rows * ROW_HEIGHT * company.scale };
+    });
+    const top = Math.min(...edges.map((e) => e.top));
+    const bottom = Math.max(...edges.map((e) => e.bottom));
+    expect(bottom - top).toBeLessThan(VIEWPORT.height - 2 * CANVAS_FIT_PADDING);
+    expect(top).toBeCloseTo(VIEWPORT.height - bottom, 3);
+    // Shown, not chosen.
+    expect(probe.selection).toBeNull();
+  });
+
+  test("a selected node is the one placed, centred across the canvas and in view", async () => {
+    standAt(360);
+    const { container } = mount(checkedEdit(fixtureCompany()), { selected: seatKey("dev") });
+    await settled();
+    const dev = drawn(container, "Dev");
+    expect(dev.scale).toBeCloseTo(LEGIBLE_ZOOM, 6);
+    expect(dev.middle).toBeCloseTo(180, 3);
+    expect(dev.top).toBeGreaterThanOrEqual(0);
+    expect(dev.top + ROW_HEIGHT * dev.scale).toBeLessThanOrEqual(VIEWPORT.height);
+  });
+
+  test("a draft that fits above the floor is drawn whole", async () => {
+    const { container, probe } = mount();
+    await settled();
+    for (const name of ["Acme", "Dev", "Designer"]) {
+      const card = drawn(container, name);
+      expect(card.left, name).toBeGreaterThanOrEqual(0);
+      expect(card.right, name).toBeLessThanOrEqual(VIEWPORT.width);
+    }
+    expect(probe.selection).toBeNull();
   });
 });
 
@@ -1283,7 +1393,7 @@ describe("live state", () => {
     });
     const before = layout();
     rerender({
-      agents: [{ id: "a1", role: "Dev", handle: "dev", state: "working" }],
+      agents: [{ id: "a1", role: "Dev", handle: "dev", activity: "working" }],
     });
     expect(layout()).toEqual(before);
   });
@@ -1309,7 +1419,7 @@ describe("live state", () => {
  * canvas's own corner; measured on this build, the switch and the fullscreen
  * toggle had ended up in the page's toolbar 800px from the bar they belong to.
  * The page still OWNS them, because one acts on the builder's whole container
- * and the other writes the lens's own section param; this view says where they
+ * and the other writes the builder's own section param; this view says where they
  * are drawn.
  */
 describe("the chart's chrome", () => {
@@ -1580,7 +1690,7 @@ describe("adding a node in the chart", () => {
   /*
    * THE SAME ADD, RECORDED THE SAME WAY. The ghost is a shell around the form
    * the dialog also draws, so what it records is the reducer's own operation
-   * with the key the lens minted: a second, quieter add drawn in the chart is
+   * with the key the builder minted: a second, quieter add drawn in the chart is
    * exactly what this arrangement must not become.
    */
   test("the form records the add and closes", () => {
@@ -1649,6 +1759,22 @@ describe("adding a node in the chart", () => {
   test("the company's own add is named after the company", () => {
     mount(undefined, { adding: adding(null).request });
     expect(ghost("Add to Acme")).toBeDefined();
+  });
+
+  /*
+   * AND THE FORM SAYS WHERE, ON SCREEN. The canvas eases onto the ghost, and
+   * at the company's root the ghost is a card wide of the parent at the end
+   * of a long branch: arriving from Agents › Add seat, the root and the
+   * siblings the node joins were off the canvas and nothing drawn said where
+   * it would land. Said once to a screen reader, which the region's own name
+   * already tells on the way in.
+   */
+  test("the form names the parent it adds to, and says it once to a screen reader", () => {
+    const view = mount(undefined, { adding: adding(null).request });
+    const said = within(ghost("Add to Acme")).getByText("Add to Acme");
+    expect(said.getAttribute("aria-hidden")).toBe("true");
+    view.rerender({ adding: adding(unitKey("Engineering")).request });
+    expect(within(ghost("Add to Engineering")).getByText("Add to Engineering")).toBeDefined();
   });
 });
 

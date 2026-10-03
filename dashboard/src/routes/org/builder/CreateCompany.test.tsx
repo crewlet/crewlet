@@ -113,7 +113,7 @@ test("the save is a create-only PUT, and says what is left to do", async () => {
   // that has no screen at all.
   expect(await screen.findByText("The company is created")).toBeDefined();
   expect(screen.getByRole("link", { name: "Open Integrations" }).getAttribute("href")).toBe(
-    "#/admin/integrations",
+    "#/settings/integrations",
   );
   expect(screen.getByText(/crewlet config import company.yaml/)).toBeDefined();
   expect(
@@ -123,7 +123,7 @@ test("the save is a create-only PUT, and says what is left to do", async () => {
   // configuration itself rather than an empty diff.
   expect(screen.queryByRole("link", { name: "View changes" })).toBeNull();
   expect(screen.getByRole("link", { name: "View the configuration" }).getAttribute("href")).toBe(
-    "#/admin/config",
+    "#/settings/config",
   );
 });
 
@@ -146,7 +146,9 @@ test("a company created while the draft is open is found by the check, before an
 // create draft hears of it at once rather than when its next check runs.
 test("a company another node creates is reported by the org push, with no edit", async () => {
   const engine = new Engine(null);
-  const { store } = mountBuilder({ engine });
+  // The tab already holds the snapshot of a node running no company: the
+  // push below REPLACES it, which is what an apply looks like.
+  const { store } = mountBuilder({ engine, org: {} });
   await startCompany({});
   await screen.findByText("No problems");
   engine.document = company();
@@ -184,7 +186,7 @@ test("a company created meanwhile is offered instead of the draft, never written
   expect(engine.checks().at(-1)!.body).toEqual({});
 });
 
-// KEEPING THE DRAFT IS NOT A DEAD END. It can never be saved, and the lens is
+// KEEPING THE DRAFT IS NOT A DEAD END. It can never be saved, and the builder is
 // read-only over it, so what it offers instead has to stay on screen after
 // the dialog is closed: without it the only way out was a reload.
 test("a create draft kept after a company appeared still offers the company", async () => {

@@ -17,7 +17,7 @@
  *
  * The engine already answers it. `work_item` returns `history[]`, each entry
  * carrying `actor`, `actor_kind`, `turn_id`, `at` and a `fields` bag keyed on
- * the tracker's own field names — every one [CHANGE_FIELDS] below names — and
+ * the tracker's own field names — every one [CHANGE_FIELDS] names — and
  * the item screen already reads it for the History tab. So this is a walk over
  * data the page has in hand, not a query, and it costs nothing to render.
  *
@@ -29,56 +29,33 @@
  * window would read as "ada set this" when what happened is "ada made the
  * oldest change we can still see", which is a fact about the page size.
  *
- * That is also why a `created` entry attributes every field it carries: a
- * create genuinely sets them, and for most tasks it is inside the window,
- * which is what makes the line appear at all on a task nobody has edited.
+ * # A create attributes nothing
+ *
+ * A create sets every field at once, and the rail already states who filed the
+ * task and when — its Reporter row and its record — so attributing the create
+ * drew one sentence naming seven fields ("Priority, Assignee, Reporter,
+ * Project, Type, Labels and Due · set by …") under whichever of them came
+ * last, reading as that one field's provenance. The line is for what CHANGED
+ * after the task was filed, which is the question a reader asks of a row; a
+ * field nobody has touched since the create draws none.
+ *
+ * # Named as the person, not the token
+ *
+ * An operator token's change carries `actor_seat`, the seat the token was
+ * bound to, and the line names that seat — the activity beside the rail names
+ * the same change from the same field, and one person drawn two ways on one
+ * page ("founder" in the rail, Jane Founder in the feed) reads as two people.
+ * `actor` stays the credential on the wire, which is the audit trail.
  */
 
 import type { SetBy } from "~/app/frame/ObjectHeader.tsx";
 import type { WorkChange } from "~/protocol/index.ts";
+import { CHANGE_FIELDS } from "~/contract/attribution.ts";
 
 /** The author kinds the wire carries, as `SetBy` spells them. */
 const KINDS = new Set(["agent", "human", "operator", "system"]);
 
-/**
- * The tracker's own field names, exactly as `tracker.TaskDeltas` writes them
- * into a history row's `fields` bag.
- *
- * THE NAMES ARE THE ENGINE'S, NOT THE RAIL'S. A property is labelled "Due" and
- * recorded as `due`; "Estimate" is `estimate` and not `estimate_minutes`, which
- * is what the task row calls the same number; "Watching" is `watchers` and
- * "Routes to" is `routing_unit`. A key that names no field produces no
- * attribution and no error — the line simply never appears — so the list is
- * declared once here, the type makes a typo a compile failure, and
- * `internal/tracker/attribution_test.go` holds it against `TaskDeltas` so a
- * field added or renamed in Go cannot leave this silently short.
- *
- * ONE NAME PER ROW THE RAIL DRAWS, and no more: the four people-and-routing
- * names below joined the list when `TaskDeltas` started comparing them, which
- * is what turned "who added this watcher" from unanswerable into a walk over
- * the log the page already holds. A delta the rail has no row for — `parent`,
- * `archived`, `body`, the checklists — is deliberately absent rather than
- * declared unused, because the gate reports the engine's unattributed fields
- * and a name here with nowhere to render is a row somebody thinks exists.
- */
-export const CHANGE_FIELDS = [
-  "title",
-  "status",
-  "assignee",
-  "reporter",
-  "collaborators",
-  "watchers",
-  "priority",
-  "project",
-  "type",
-  "tags",
-  "due",
-  "start",
-  "estimate",
-  "points",
-  "routing_unit",
-] as const;
-
+/** One of the names [CHANGE_FIELDS] declares — a typo is a compile failure. */
 export type ChangeField = (typeof CHANGE_FIELDS)[number];
 
 /**
@@ -95,13 +72,19 @@ export function attribution(history: readonly WorkChange[] | undefined): Map<str
     // A change with no actor attributes nothing: the line's whole content is
     // who, and "set by" with nobody after it is worse than silence.
     if (!change.actor) continue;
+    if (change.kind === "created") continue;
+    const seat = change.actor_seat ?? "";
     for (const [field, delta] of Object.entries(change.fields ?? {})) {
       if (out.has(field)) continue;
       out.set(field, {
-        actor: change.actor,
-        actorKind: KINDS.has(change.actor_kind ?? "")
-          ? (change.actor_kind as SetBy["actorKind"])
-          : undefined,
+        actor: seat || change.actor,
+        // A BOUND TOKEN'S CHANGE IS A PERSON'S: only a person's seat names an
+        // operator id, so the seat it resolves to is a human one.
+        actorKind: seat
+          ? "human"
+          : KINDS.has(change.actor_kind ?? "")
+            ? (change.actor_kind as SetBy["actorKind"])
+            : undefined,
         turnId: change.turn_id || undefined,
         at: change.at,
         cleared: emptied(delta),

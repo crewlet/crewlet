@@ -57,7 +57,7 @@ flowchart TD
 schedules:
   - name: morning-smoke        # unique within the role/unit; part of the idempotency key
     cron: "0 9 * * 1-5"        # standard 5-field cron (see below)
-    timezone: Europe/Amsterdam # IANA tz; falls back to scheduling.default_timezone
+    timezone: Europe/Amsterdam # IANA tz; falls back to the company's `timezone`
     task: "Run the smoke-test pipeline and triage failures"
     target: each               # unit schedules only — each | lead
     enabled: true              # set false to keep it in config without firing
@@ -71,7 +71,7 @@ schedules:
 | `name` | — (required) | Identifier, unique within the role/unit. Renaming lets a same-minute fire re-run once. |
 | `cron` | — (required) | 5-field cron expression, evaluated in `timezone`. |
 | `task` | — (required) | The task prompt handed to the runner agent. |
-| `timezone` | `scheduling.default_timezone` | IANA timezone the cron is evaluated in. |
+| `timezone` | the company's [`timezone`](#which-clock-a-schedule-fires-on) | IANA timezone the cron is evaluated in. |
 | `target` | `each` | **Unit schedules only.** Who runs it (see [Delivery](#delivery-who-runs-it)). Ignored for role schedules. [Human seats](humans-in-the-org.md) never run schedules: `each` fans out to direct agent roles only, an enabled `lead` schedule under a (possibly inherited) human lead is a config error, and human seats cannot define role schedules. |
 | `enabled` | `true` | `false` keeps the schedule in config but never fires it. |
 | `timeout_seconds` | `180` | Hard wall-clock cap on the scheduled turn. |
@@ -79,16 +79,40 @@ schedules:
 
 Config load (and so `crewlet validate`) checks each schedule's shape: a
 non-empty `name` and `task`, a `cron` with exactly five fields, a
-`timezone` that loads, a non-negative `timeout_seconds`, a `target` of
-`each` or `lead`, and names unique within the owning role or unit. A
-written document is also held to the cron **grammar** — the same parser
-the scheduler evaluates it with — so an expression with five fields and an
-invalid value (`61 * * * *`, `0 9 * * MON-FRY`) is refused at that
-schedule's `cron`, naming the field and the value. The grammar is an
+`timezone` that loads and is not `Local` or `localtime`, a non-negative
+`timeout_seconds`, a `target` of `each` or `lead`, and names unique within
+the owning role or unit. A written document is also held to the cron
+**grammar** — the same parser the scheduler evaluates it with — so an
+expression with five fields and an invalid value (`61 * * * *`,
+`0 9 * * MON-FRY`) is refused at that schedule's `cron`, naming the field
+and the value. The grammar is an
 [admission rule](configuration.md#what-a-stored-revision-is-held-to): a stored
 revision written before it was checked still applies, its node logs
 `org_admission_warning`, and that one schedule is skipped on every tick
 with `schedule_parse_failed` naming it while the rest of the company runs.
+
+### Which clock a schedule fires on
+
+A schedule that names no `timezone` fires on the **company's clock** — the
+top-level [`timezone`](../getting-started/configuration.md#the-companys-clock)
+of the company document, UTC when absent — which is the same clock every
+"today", due band and overdue mark in the tracker is cut on. So a
+`0 9 * * 1-5` standup on a Berlin company fires at 09:00 in Berlin, on the day
+the board calls today. There is no scheduler-wide default zone: one would be a
+second company clock, and a standup that fired at 09:00 on one clock while the
+board cut its days on another disagreed with it about which day that 09:00 was
+on.
+
+A schedule's own `timezone` is that one piece of work's wall clock — the
+Tokyo team's 09:30 standup on a Berlin company — and nothing else is cut on
+it. `Local` and `localtime` are refused for both: each is whatever zone the
+host reading it is set to, and the scheduler is a [singleton
+duty](seat-ownership.md#singleton-duties) that moves between hosts, so the
+standup would move with it.
+
+The company's clock is read at **every tick**, like the org is, so an apply
+that changes `timezone` moves the next tick's fires without re-arming the
+loop.
 
 ### Cron syntax
 
@@ -220,7 +244,7 @@ record** of what it dispatched, which is what the dashboard reads and what
 the retention sweep purges. It is the same split the token counter made
 when it moved to the shared `budgets` slot:
 what the fleet has to agree on is "may I start", and nothing more. Its
-`outcome` is `fired` or `skipped_catchup`; the downstream turn result
+`outcome` is `fired`, `skipped_catchup` or `skipped_paused`; the downstream turn result
 (done, failed or timed out) lives in the normal turn telemetry
 (`agent_turn_completed`, and `turn.guard_breach` when a guard fired) under
 the same trace, because every fire starts a trace of its own and the turn
@@ -240,6 +264,24 @@ period, clamped to `[catchup_min_seconds, catchup_max_seconds]`* (default
 120s–7200s). Older misses are never backfilled; a missed fire outside the
 window is recorded as `skipped_catchup` for audit. Set `catchup: false` on
 a schedule to opt out entirely.
+
+### A paused seat's fires are skipped
+
+A fire that comes due while a person has its runner seat
+[paused](agent-runtime.md#pausing-a-seat) is **claimed and recorded
+`skipped_paused`**, and not sent. It is not queued behind the pause: the
+seat's inbox is held while it is paused, and a fire waiting there would run
+whenever somebody resumed it — a standup days late, one for every day of the
+pause. Claimed under the fire's own identity (its runner included), so a peer's
+tick of the same minute, or this node's after the resume, does not send it
+after all; a resumed seat picks up at its next fire.
+
+Each node reads the pauses from its own watched copy of the coordination
+record, so the answer follows the duty wherever it moves. A node that has not
+read the pauses yet (the seconds after a boot) dispatches the fire, the
+opposite polarity from the duty's own unknown: a paused seat's inbox holds a
+fire rather than running it, while a fire skipped on a read that failed is a
+standup lost for a seat nobody paused.
 
 ### Hard wall-clock timeout
 
@@ -275,11 +317,13 @@ System-level knobs live under a top-level `scheduling:` block:
 scheduling:
   enabled: true              # master switch
   tick_seconds: 10           # scheduler poll interval
-  default_timezone: UTC      # used by any Schedule without its own timezone
   jitter_seconds: 0          # max per-schedule deterministic spread (see below)
   catchup_min_seconds: 120   # lower clamp on the catchup window
   catchup_max_seconds: 7200  # upper clamp on the catchup window
 ```
+
+There is no zone here: a schedule that names none fires on the company's
+clock (see [Which clock a schedule fires on](#which-clock-a-schedule-fires-on)).
 
 The scheduler **auto-enables** when `enabled` is not `false` and the org
 actually declares at least one schedule (see [When the loop runs](#when-the-loop-runs)):
@@ -338,9 +382,15 @@ holds the `scheduler` fleet duty.
 
 ## Observability
 
-- **Dashboard.** The **Schedules** screen lists every configured schedule —
-  name, scope, cron, task, when it next fires and how it last went — and the
-  recent dispatch ledger beside it, both sortable. It is backed by
+- **Dashboard.** **Agents › Schedules** (`#/agents/schedules`) lists every
+  configured schedule — name, scope (a role's seat by its name, or a unit),
+  cron with what it means in words, task, whom it wakes, when it next fires
+  and how it last went — and the recent dispatch ledger below it, both
+  sortable. One schedule's own page
+  (`#/agents/schedules/{scope_type}/{scope_id}/{name}`) adds its whole
+  definition, the fires after the next worked out in the schedule's own zone,
+  and every fire this node's ledger still holds for it (the `schedule_runs`
+  query), because the company-wide ledger is only its newest fifty. The list is backed by
   `GET /schedules`, which serves `schedules` (the resolved schedule list with
   next-run times, projected from the current organization on each request)
   and `recent_runs` (the 50 most recent `scheduled_runs` rows). The next-fire times tick as you watch: every relative time in the

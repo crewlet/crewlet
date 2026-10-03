@@ -20,11 +20,22 @@
  */
 
 import { useState, type CSSProperties } from "react";
-import { RANGES, RANGE_LABEL, isRange, windowLabel } from "~/lib/range.ts";
+import {
+  RANGES,
+  RANGE_LABEL,
+  TODAY,
+  companyDays,
+  dayStartIn,
+  daysLabel,
+  daysInterval,
+  isRange,
+  todayWindow,
+  windowLabel,
+} from "~/lib/range.ts";
 import type { Range, TimeRange, Window } from "~/lib/range.ts";
 import { fromWall, toWall, tsKey } from "~/lib/format.ts";
 import { Button, Callout, FormField, Input, Modal } from "@crewlethq/ui";
-import { ScheduleGlyph } from "@crewlethq/icons/glyphs";
+import { ClockGlyph } from "@crewlethq/icons/glyphs";
 // OURS, AND DELIBERATELY. `SegmentedControl` welds keyboard ACTIVATION to its
 // `semantics` — the arrows commit the option they land on — and this strip
 // drives a `useParam` that re-runs the screen's series query. Arrowing across
@@ -34,6 +45,8 @@ import { Segmented } from "~/ui/primitives.tsx";
 
 /** The custom option's value in the segmented group — not a [Range]. */
 const CUSTOM = "custom";
+
+type Choice = Range | typeof TODAY | typeof CUSTOM;
 
 export function TimeRangePicker({
   range,
@@ -45,9 +58,19 @@ export function TimeRangePicker({
   const [editing, setEditing] = useState(false);
   const { window, offer, since, until, set } = range;
 
-  const options: { value: Range | typeof CUSTOM; label: string; title: string }[] = RANGES.filter(
-    (r) => offer.ranges.includes(r),
-  ).map((r) => ({ value: r, label: r, title: RANGE_LABEL[r] }));
+  const options: { value: Choice; label: string; title: string }[] = [];
+  // TODAY LEADS, because it is the shortest window a screen offering it has
+  // and the vocabulary's order is shortest first.
+  if (offer.today) {
+    options.push({ value: TODAY, label: "Today", title: "Since midnight on the company's clock" });
+  }
+  options.push(
+    ...RANGES.filter((r) => offer.ranges.includes(r)).map((r) => ({
+      value: r,
+      label: r,
+      title: RANGE_LABEL[r],
+    })),
+  );
   if (offer.custom) {
     options.push({
       value: CUSTOM,
@@ -56,22 +79,34 @@ export function TimeRangePicker({
       // timestamps do not fit in a segment, and a segment whose width
       // changes with its value reflows the control beside it every time a
       // reader picks a different window.
-      title: isRange(window) ? "Name two instants of your own" : windowLabel(window),
+      title:
+        isRange(window) || window.today
+          ? offer.customDays
+            ? "Name two company days of your own"
+            : "Name two instants of your own"
+          : offer.customDays
+            ? daysLabel(companyDays(window, offer.zone))
+            : windowLabel(window),
     });
   }
 
   return (
     <>
-      <Segmented<Range | typeof CUSTOM>
+      <Segmented<Choice>
         ariaLabel={ariaLabel}
-        value={isRange(window) ? window : CUSTOM}
-        onChange={(next) => (next === CUSTOM ? setEditing(true) : set(next))}
+        value={isRange(window) ? window : window.today ? TODAY : CUSTOM}
+        onChange={(next) =>
+          next === CUSTOM
+            ? setEditing(true)
+            : set(next === TODAY ? todayWindow(Date.now(), offer.zone) : next)
+        }
         options={options}
       />
       {editing && (
         <CustomWindow
           from={tsKey(since)}
           to={tsKey(until)}
+          days={offer.customDays ? { zone: offer.zone } : undefined}
           onClose={() => setEditing(false)}
           onPick={(next) => {
             set(next);
@@ -98,23 +133,44 @@ export function TimeRangePicker({
 function CustomWindow({
   from,
   to,
+  days,
   onClose,
   onPick,
 }: {
   from: number;
   to: number;
+  /**
+   * Set on a screen whose windows are WHOLE COMPANY DAYS (`Offer.customDays`):
+   * the two boxes are dates on the company's clock, both inclusive, rather
+   * than instants on the reader's. See [daysInterval].
+   */
+  days?: { zone: string | undefined };
   onClose: () => void;
   onPick: (next: Window) => void;
 }) {
-  const [start, setStart] = useState(() => toWall(from));
-  const [end, setEnd] = useState(() => toWall(to));
+  // THE LAST DAY IS THE ONE THE WINDOW'S FINAL INSTANT FALLS ON, since the
+  // end is exclusive: a window ending at midnight covers the day before.
+  const [start, setStart] = useState(() =>
+    days ? companyDays({ from, to }, days.zone).since : toWall(from),
+  );
+  const [end, setEnd] = useState(() =>
+    days ? companyDays({ from, to }, days.zone).until : toWall(to),
+  );
 
-  const at = fromWall(start);
-  const till = fromWall(end);
+  const picked = days ? daysInterval(start, end, days.zone) : null;
+  const at = days ? dayStartIn(start, days.zone) : fromWall(start);
+  const till = days ? dayStartIn(end, days.zone) : fromWall(end);
   // THE THREE FAILURES ARE THREE SENTENCES. "Invalid" over a form with two
   // fields tells a reader to check both of them.
-  const problem =
-    at === null
+  const problem = days
+    ? at === null
+      ? "The first day is not a date."
+      : till === null
+        ? "The last day is not a date."
+        : till < at
+          ? "The last day has to be on or after the first — both are counted."
+          : ""
+    : at === null
       ? "The start is not a date and time."
       : till === null
         ? "The end is not a date and time."
@@ -126,7 +182,7 @@ function CustomWindow({
     <Modal
       open
       title="Custom window"
-      icon={<ScheduleGlyph size="md" />}
+      icon={<ClockGlyph size="md" />}
       // 420 IS NOT A STEP AND DOES NOT WANT TO BE. `sm` is 480 and `md` is
       // 560; two date boxes read in one glance are neither, and there is
       // nothing else in the product at this width to make a step out of.
@@ -139,7 +195,12 @@ function CustomWindow({
       stackBody
       onClose={onClose}
       onSubmit={() => {
-        if (!problem && at !== null && till !== null) onPick({ from: at, to: till });
+        if (problem) return;
+        if (days) {
+          if (picked) onPick(picked);
+        } else if (at !== null && till !== null) {
+          onPick({ from: at, to: till });
+        }
       }}
       footer={
         <>
@@ -147,16 +208,14 @@ function CustomWindow({
               — ours defaulted to the quiet recipe — so a footer that named no
               variant would put two primary buttons side by side and say
               nothing about which one commits. */}
-          <Button variant="tertiary" onClick={onClose}>
+          <Button variant="ghost" onClick={onClose}>
             Cancel
           </Button>
-          <Button
-            variant="primary"
-            disabled={problem !== ""}
-            onClick={() => {
-              if (!problem && at !== null && till !== null) onPick({ from: at, to: till });
-            }}
-          >
+          {/* THE FORM'S SUBMIT BUTTON, and its only path: a browser submits
+              a form of two date fields on Enter only by pressing its submit
+              button, so while Apply was a plain button Enter in either box
+              did nothing — and the frame's `onSubmit` above had no caller. */}
+          <Button variant="primary" type="submit" disabled={problem !== ""}>
             Apply
           </Button>
         </>
@@ -167,11 +226,18 @@ function CustomWindow({
             measured in, not a note about one of them. The component hands each
             control the id its own label points at, so a second field added
             here cannot quietly inherit the first one's. */}
-      <FormField label="From" helper="In your own time zone, as every time on this screen is.">
+      <FormField
+        label={days ? "First day" : "From"}
+        helper={
+          days
+            ? `Company days, both counted, on the company's clock${days.zone ? ` (${days.zone})` : ""}.`
+            : "In your own time zone, as every time on this screen is."
+        }
+      >
         {(field) => (
           <Input
             id={field.id}
-            type="datetime-local"
+            type={days ? "date" : "datetime-local"}
             width="full"
             value={start}
             aria-describedby={field.describedBy}
@@ -179,11 +245,11 @@ function CustomWindow({
           />
         )}
       </FormField>
-      <FormField label="To">
+      <FormField label={days ? "Last day" : "To"}>
         {(field) => (
           <Input
             id={field.id}
-            type="datetime-local"
+            type={days ? "date" : "datetime-local"}
             width="full"
             value={end}
             aria-describedby={field.describedBy}

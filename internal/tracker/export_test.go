@@ -26,3 +26,12 @@ func (w *Writer) Hold(ctx context.Context, resource string) (func(), error) {
 func (w *Writer) Admit(ctx context.Context, rows int) (func(), error) {
 	return w.admit(ctx, rows)
 }
+
+// The record versions a purge's and a release's apply changed at, for the
+// cases that hold each rule to its own version. Named rather than spelled as
+// numbers, because a merge that renumbers them leaves a literal asserting the
+// old one.
+const (
+	RewriteVersion = rewriteVersion
+	ReleaseVersion = releaseVersion
+)

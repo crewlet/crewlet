@@ -73,8 +73,12 @@ COPY ${TARGETPLATFORM}/crewlet /usr/local/bin/crewlet
 COPY LICENSE build/notices/THIRD_PARTY_NOTICES.txt /usr/share/doc/crewlet/
 COPY static/dashboard/THIRD_PARTY_NOTICES.txt /usr/share/doc/crewlet/dashboard/
 
-# The API's port. The engine serves nothing on it unless a company config
-# turns the dashboard on, so publishing it is a convenience, not a promise.
+# The API's port: the dashboard, the REST API and every webhook route are
+# served on it whenever Tier A's `api.port` is set, which is the operator's
+# choice rather than the company's — `api.port: 0` serves no HTTP at all.
+# EXPOSE documents 8080, the port the docs' container examples pass as
+# `-api-port`; it binds nothing by itself, and publishing it is the operator's
+# call.
 EXPOSE 8080
 
 ENTRYPOINT ["/usr/bin/tini", "--", "/usr/local/bin/crewlet"]

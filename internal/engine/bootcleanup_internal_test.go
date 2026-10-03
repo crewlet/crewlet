@@ -10,6 +10,7 @@ import (
 	"github.com/crewlet/crewlet/internal/estate"
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/queue/jetstream"
+	"github.com/crewlet/crewlet/internal/queue/topics"
 	"github.com/crewlet/crewlet/internal/search"
 )
 
@@ -71,6 +72,11 @@ roles:
 // coordinator counts as answered. One left behind by a node whose boot failed
 // is not a leak somebody notices as memory — it is a peer's search silently
 // returning a sixty-fourth of the corpus as a complete answer.
+//
+// PER SUBJECT, because a node registers more than one answerer — the search
+// fan-out's and the fleet history's (internal/eventfan) — and each is a claim
+// a peer relies on: a history answerer left behind by a failed boot answers
+// peers from a store its caller is free to close.
 type servedQueue struct {
 	*jetstream.Queue
 
@@ -104,7 +110,7 @@ func (q *servedQueue) Serve(ctx context.Context, subject string,
 	}, nil
 }
 
-// counts is what was served and withdrawn on one subject.
+// counts is how many answerers were registered and withdrawn on one subject.
 func (q *servedQueue) counts(subject string) (served, withdrawn int) {
 	q.mu.Lock()
 	defer q.mu.Unlock()
@@ -130,7 +136,7 @@ func TestAFailedBootStopsEverythingItAlreadyStarted(t *testing.T) {
 		t.Fatalf("the stream is %T, not the JetStream backend this case needs",
 			back.Queue)
 	}
-	watched := &servedQueue{Queue: real}
+	watched := &servedQueue{Queue: real, served: map[string]int{}, withdrawn: map[string]int{}}
 	// BORROWED backends, so the failure path leaves them open for the
 	// assertions — and so this case sees what an embedded caller sees,
 	// which is the deployment where nothing at all was closed and the
@@ -170,6 +176,17 @@ func TestAFailedBootStopsEverythingItAlreadyStarted(t *testing.T) {
 	if served != 1 || withdrawn != 1 {
 		t.Errorf("the estate server was registered %d time(s) and withdrawn %d, "+
 			"want once each", served, withdrawn)
+	}
+	served, withdrawn = watched.counts(topics.ObserveRead)
+	if served != 1 {
+		t.Fatalf("this node registered %d history answerers, want 1 — the "+
+			"history answerer is armed before the native start, so this case "+
+			"expects exactly one", served)
+	}
+	if withdrawn != 1 {
+		t.Errorf("the boot failed and its history answerer was withdrawn %d "+
+			"times, want 1: peers still ask this node for its turns and it "+
+			"answers them from a store the caller is free to close", withdrawn)
 	}
 
 	admissions, err := back.Fleet.Admissions(context.Background())

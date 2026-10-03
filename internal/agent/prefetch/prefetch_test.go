@@ -196,11 +196,11 @@ func (s *searcher) CanSearch(*org.Role, *org.Organization) bool { return !s.cann
 
 func (s *searcher) Building(context.Context) bool { return s.building }
 
-func (s *searcher) Search(_ context.Context, q knowledge.Query) knowledge.Answer {
+func (s *searcher) Search(_ context.Context, q knowledge.Query) knowledge.Result {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.queries = append(s.queries, q)
-	return knowledge.Answer{Hits: s.hits, Coverage: s.coverage}
+	return knowledge.Result{Hits: s.hits, Outcome: knowledge.Outcome{Partitions: s.coverage}}
 }
 
 func (s *searcher) asked() []knowledge.Query {
@@ -434,7 +434,7 @@ func (panickingSearcher) Backend() string { return "fake" }
 
 func (panickingSearcher) CanSearch(*org.Role, *org.Organization) bool { return true }
 
-func (p panickingSearcher) Search(context.Context, knowledge.Query) knowledge.Answer {
+func (p panickingSearcher) Search(context.Context, knowledge.Query) knowledge.Result {
 	panic(p.mark("a malformed hit"))
 }
 
@@ -825,8 +825,8 @@ func TestTheKnowledgeCountSeparatesPagesFromTheEmptyHint(t *testing.T) {
 		}},
 		Models: models{provider: &aux{answers: []string{"q"}}},
 	}, request(t))
-	if found.RelevantKnowledgeHits != 2 {
-		t.Errorf("two pages rendered as %d hits", found.RelevantKnowledgeHits)
+	if len(found.RelevantKnowledgePages) != 2 {
+		t.Errorf("two pages rendered as %d hits", len(found.RelevantKnowledgePages))
 	}
 
 	empty := fetch(t, prefetch.Sources{
@@ -835,8 +835,9 @@ func TestTheKnowledgeCountSeparatesPagesFromTheEmptyHint(t *testing.T) {
 	if empty.RelevantKnowledge == "" {
 		t.Fatal("the empty search rendered no hint, so this case proves nothing")
 	}
-	if empty.RelevantKnowledgeHits != 0 {
-		t.Errorf("the empty hint reported %d hits", empty.RelevantKnowledgeHits)
+	if len(empty.RelevantKnowledgePages) != 0 || empty.RelevantKnowledgeQuery != "" {
+		t.Errorf("the empty hint reported a read of %d pages for %q",
+			len(empty.RelevantKnowledgePages), empty.RelevantKnowledgeQuery)
 	}
 }
 

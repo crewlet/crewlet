@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
-	"os"
 	"strings"
 	"time"
 
@@ -14,15 +13,8 @@ import (
 	"github.com/openai/openai-go/v3/packages/respjson"
 
 	"github.com/crewlet/crewlet/internal/providers/llm/httpapi"
+	llmopenai "github.com/crewlet/crewlet/internal/providers/llm/openai"
 )
-
-// KeyEnv is the conventional variable consulted when a config names no key.
-//
-// The same one the chat backend uses, deliberately: a company that
-// configured OpenAI for its models has already exported it, and asking for a
-// second variable holding the same key is a setup step that exists only to
-// be forgotten.
-const KeyEnv = "OPENAI_API_KEY"
 
 // Defaults.
 const (
@@ -48,16 +40,18 @@ type Config struct {
 	// are sized from. Required for the same reason.
 	Dimensions int
 
+	// APIKey is the credential, resolved. It is THE credential: nothing
+	// here reads a variable, and the SDK's own OPENAI_API_KEY autoload is
+	// overridden on every client, an empty key included. Which key an
+	// embedder that names none runs on is a configuration rule
+	// (config.EmbeddingProvider.ResolvedKey), decided where the document
+	// and the secret store are both in reach.
 	APIKey  string
 	BaseURL string
 	Timeout time.Duration
 
 	// HTTPClient is the caller's transport, or nil for one built here.
 	HTTPClient *http.Client
-
-	// LookupEnv resolves the conventional key. Nil takes the process
-	// environment.
-	LookupEnv func(string) string
 }
 
 // Provider is an OpenAI-compatible embedder.
@@ -90,13 +84,6 @@ func New(cfg Config) (*Provider, error) {
 			"columns are sized from it")
 	}
 	key := strings.TrimSpace(cfg.APIKey)
-	if key == "" {
-		lookup := cfg.LookupEnv
-		if lookup == nil {
-			lookup = os.Getenv
-		}
-		key = strings.TrimSpace(lookup(KeyEnv))
-	}
 
 	baseURL := strings.TrimSpace(cfg.BaseURL)
 	if baseURL == "" {
@@ -107,7 +94,11 @@ func New(cfg Config) (*Provider, error) {
 		timeout = DefaultTimeout
 	}
 
-	opts := []option.RequestOption{
+	// NOTHING FROM THE PROCESS ENVIRONMENT — the chat backend's rule and its
+	// one implementation (an admin key, organization and project headers and
+	// custom headers would otherwise reach whatever server this embedder
+	// points at). Applied first, so the key below is the one that authorizes.
+	opts := append(llmopenai.WithoutAmbientEnvironment(),
 		option.WithBaseURL(baseURL),
 		option.WithRequestTimeout(timeout),
 		// NO SDK RETRIES, for the reason the chat backend gives: its
@@ -116,10 +107,13 @@ func New(cfg Config) (*Provider, error) {
 		// caller's answer is simply "no vector", which is cheaper than
 		// any retry the SDK could do.
 		option.WithMaxRetries(0),
-	}
-	if key != "" {
-		opts = append(opts, option.WithAPIKey(key))
-	}
+		// ALWAYS, AN EMPTY KEY INCLUDED. The SDK loads OPENAI_API_KEY from
+		// the process environment at construction, so skipping this for an
+		// empty key sent the ambient credential to whatever endpoint this
+		// embedder points at — a self-hosted server included — which is a
+		// key nobody configured, reaching a host that should never see it.
+		option.WithAPIKey(key),
+	)
 
 	// A transport the caller supplied is used as given; otherwise the
 	// engine's shared one. NOTHING HERE OWNS IT — see [httpapi.NewHTTPClient]

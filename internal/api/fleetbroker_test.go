@@ -230,7 +230,7 @@ func TestTheBrokerAnswerFixtureIsTheEnginesOwn(t *testing.T) {
 	}
 	if !bytes.Equal(got, want) {
 		t.Fatalf("the broker answer no longer matches %s. Run `make broker-answer`, "+
-			"read the diff, and follow it in the dashboard's fleet screen — its suite "+
+			"read the diff, and follow it in the dashboard's Nodes screen — its suite "+
 			"loads this file.\n--- rendered now ---\n%s", brokerGolden, got)
 	}
 }

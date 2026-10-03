@@ -6,43 +6,22 @@
  * THE ENGINE'S OWN RENDERING IS THE ESTATE SCREEN'S FIXTURE: its suite reads
  * `internal/api/testdata/estate_answer.json`, which the Go renderers write, so
  * a field renamed on either side fails a test until the other follows it. And
- * every closed set below is a COPY of the engine's, held to it in both
- * directions by `internal/api`'s `estate_client_test.go`.
+ * every closed set it names is a COPY of the engine's, declared in
+ * `../contract/fleet.ts` and held to it in both directions by `internal/api`'s
+ * `estate_client_test.go`.
  */
 
 import type { MapBar, MapHold, MapMember, MapRemoval } from "./types.ts";
 
-/**
- * Which of the five things the estate was when the question was asked —
- * `queries.EstateMapStates`. `whole` is layout 0, every fleet on this build:
- * every data node holds the whole estate and there is no map.
- */
-export const ESTATE_MAP_STATES = [
-  "unavailable",
-  "whole",
-  "no_map",
-  "unreadable",
-  "placed",
-] as const;
+import { ESTATE_MAP_STATES, HOLDER_STATES, PARTITION_STATES } from "../contract/fleet.ts";
+
+export { ESTATE_MAP_STATES, HOLDER_STATES, PARTITION_STATES };
+
+/** One of [ESTATE_MAP_STATES]. */
 export type EstateMapState = (typeof ESTATE_MAP_STATES)[number];
-
-/** What the MAP says a holder is doing with a partition — `partmap.HolderStates`. */
-export const HOLDER_STATES = ["joining", "serving", "leaving"] as const;
+/** One of [HOLDER_STATES]. */
 export type HolderState = (typeof HOLDER_STATES)[number];
-
-/**
- * What a node's own estate lease says it is doing with a partition —
- * `partmap.PartitionStates`. Kept a string on the wire, so a state a newer
- * node reports is shown rather than dropped.
- */
-export const PARTITION_STATES = [
-  "adopting",
-  "catching_up",
-  "serving",
-  "faulted",
-  "draining",
-  "released",
-] as const;
+/** One of [PARTITION_STATES]. */
 export type PartitionState = (typeof PARTITION_STATES)[number];
 
 /** What one data node's estate lease says of itself. */

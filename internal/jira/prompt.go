@@ -3,6 +3,7 @@ package jira
 import (
 	"strings"
 
+	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/notify"
 )
 
@@ -81,6 +82,26 @@ func (Prompt) PartitionKey(metadata map[string]string, _ string) string {
 // cut finer than the issue.
 func (p Prompt) ConversationIdentity(metadata map[string]string, subject string) string {
 	return p.PartitionKey(metadata, subject)
+}
+
+// WorkItem is the issue a webhook names, as the work item a turn it wakes is
+// charged to.
+//
+// THE ISSUE ID IS THE IDENTITY and the key is the label: a key is what a move
+// between projects rewrites ("ENG-12" becomes "OPS-40"), while the id is the
+// same issue for life. So a delivery that carried a key and no id — some
+// bridges' comment events do, which is why the partition keys on the key —
+// names NO item rather than one keyed on a label: charging it to "ENG-12"
+// would split one issue into two items the day it moves.
+func (Prompt) WorkItem(metadata map[string]string) (types.WorkItem, bool) {
+	id := metadata["issue_id"]
+	if id == "" {
+		return types.WorkItem{}, false
+	}
+	return types.WorkItem{
+		Backend: types.WorkJira, ID: id,
+		Key: metadata["issue_key"], Project: metadata["project"],
+	}, true
 }
 
 // WakesActor implements [notify.Prompt]: never.

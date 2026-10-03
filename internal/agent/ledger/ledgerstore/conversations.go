@@ -47,6 +47,13 @@ type Conversations interface {
 	// and a seat that has said nothing are opposite facts.
 	Threads(ctx context.Context, handle string, limit int) ([]Thread, error)
 
+	// ThreadCount is how many conversations this seat has entries in — the
+	// set Threads pages through — so a listing that was cut can say what it
+	// was cut from rather than reading as the seat's whole set.
+	//
+	// RAISES like Threads, for the same reason.
+	ThreadCount(ctx context.Context, handle string) (int, error)
+
 	// Purge deletes entries older than cutoff.
 	Purge(ctx context.Context, cutoff time.Time) (int64, error)
 }
@@ -205,6 +212,18 @@ func (s *SQLConversations) Threads(ctx context.Context, handle string, limit int
 		return nil, fmt.Errorf("ledgerstore: list conversations for %s: %w", handle, err)
 	}
 	return out, nil
+}
+
+// ThreadCount counts the conversations this seat holds entries in.
+func (s *SQLConversations) ThreadCount(ctx context.Context, handle string) (int, error) {
+	var n int
+	err := s.db.SQL().QueryRowContext(ctx,
+		`SELECT COUNT(DISTINCT conversation_key) FROM conversation_sessions
+		 WHERE agent_handle = ?`, handle).Scan(&n)
+	if err != nil {
+		return 0, fmt.Errorf("ledgerstore: count conversations for %s: %w", handle, err)
+	}
+	return n, nil
 }
 
 // Purge deletes turns recorded before cutoff.

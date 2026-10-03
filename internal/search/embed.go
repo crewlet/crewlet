@@ -237,7 +237,7 @@ type EmbedDeps struct {
 	// Publisher is the vector domain's write authority.
 	Publisher *statelog.Publisher
 
-	// Estate is the partition the duty keeps an index for (ADR-0022): the
+	// Estate is the partition the duty keeps an index for (ADR-0028): the
 	// codes it trains on and the rows it reads the index's state from. Read
 	// only — what the duty decides it publishes, and the applier writes.
 	Estate store.PartitionReader

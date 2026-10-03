@@ -153,7 +153,7 @@ func NewFixture(n int, seed uint64) *Fixture {
 // space and by what they are about. A gate that measured the index only on the
 // isotropic member would certify an index that is never worth installing; one
 // that measured it only here would certify recall on a corpus friendlier than
-// the worst one it must survive. So [ADR-0022]'s gate runs both, and the
+// the worst one it must survive. So [ADR-0028]'s gate runs both, and the
 // training's own measurement is what decides, per partition, which one a
 // company's corpus resembles.
 func NewTopicalFixture(n int, seed uint64) *Fixture {

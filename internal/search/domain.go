@@ -182,7 +182,7 @@ func (Domain) Tables() map[string]statelog.TableClass {
 		// travels anyway, because rebuilding half a million of them on
 		// an adopting node is work a copy already did.
 		"kb_vectors_bin": statelog.Derived,
-		// The installed semantic index (ADR-0022) — its head, its
+		// The installed semantic index (ADR-0028) — its head, its
 		// centroids and the rollout its training cut: written only by
 		// applying a centroids record, and not recomputable in this file
 		// — it is a training over every code in the partition — so they

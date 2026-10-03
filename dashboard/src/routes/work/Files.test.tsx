@@ -6,7 +6,7 @@
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, expect, test, vi } from "vitest";
 
-import { fileName, fileURL, ProjectFiles } from "./Files.tsx";
+import { fileAddress, fileName, ProjectFiles } from "./Files.tsx";
 import { Router } from "~/app/router.tsx";
 import { useClient, useConnection } from "~/lib/store-hooks.ts";
 import { rest } from "~/protocol/rest.ts";
@@ -88,7 +88,7 @@ test("a download fetches the bytes with the token, and a refusal is said on the 
 });
 
 test("a path is escaped segment by segment and saved under its own name", () => {
-  expect(fileURL("ENG", "a b/c#d.md")).toBe("/work/files/ENG/a%20b/c%23d.md");
+  expect(fileAddress("ENG", "a b/c#d.md")).toBe("ENG/a%20b/c%23d.md");
   expect(fileName("reports/2026/q3.md")).toBe("q3.md");
   expect(fileName("notes.txt")).toBe("notes.txt");
 });

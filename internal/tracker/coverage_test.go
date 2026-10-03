@@ -21,7 +21,6 @@ func TestAnAnswerStatingNoCoverageSendsNone(t *testing.T) {
 		"activity": {tracker.ActivityAnswer{}, tracker.ActivityAnswer{Coverage: stated}},
 		"inbox":    {tracker.InboxAnswer{}, tracker.InboxAnswer{Coverage: stated}},
 		"projects": {tracker.ProjectListing{}, tracker.ProjectListing{Coverage: stated}},
-		"search":   {tracker.SearchAnswer{}, tracker.SearchAnswer{Coverage: stated}},
 	} {
 		if _, present := wireKeys(t, pair[0])["coverage"]; present {
 			t.Errorf("%s: an answer stating no coverage sent one", name)
@@ -29,6 +28,17 @@ func TestAnAnswerStatingNoCoverageSendsNone(t *testing.T) {
 		if _, present := wireKeys(t, pair[1])["coverage"]; !present {
 			t.Errorf("%s: an answer stating its coverage did not send it", name)
 		}
+	}
+	// A RANKED SEARCH STATES ITS PARTITIONS beside the bucket coverage its
+	// outcome has always carried, under a key of their own, on the same
+	// terms: none stated, none sent.
+	searched := tracker.SearchAnswer{}
+	searched.Partitions = stated
+	if _, present := wireKeys(t, tracker.SearchAnswer{})["partitions"]; present {
+		t.Error("search: an answer stating no partition coverage sent one")
+	}
+	if _, present := wireKeys(t, searched)["partitions"]; !present {
+		t.Error("search: an answer stating its partition coverage did not send it")
 	}
 }
 

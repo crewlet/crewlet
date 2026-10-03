@@ -599,6 +599,51 @@ func TestTheWakeStillPointsAtTheTurnThatCausedIt(t *testing.T) {
 	}
 }
 
+// AN ASK CARRIES THE ITEM ITS ASKER WAS ON, so the answering turn is charged to
+// the same work: help given on a task is work on it, and the colleague's own
+// trigger names nothing. A copy, never the caller's pointer — the wake outlives
+// this call — and an asker on nothing sends no item at all.
+func TestAnAskCarriesTheAskersItem(t *testing.T) {
+	t.Parallel()
+	for name, tc := range map[string]struct {
+		item *types.WorkItem
+	}{
+		"an asker on a task":  {&types.WorkItem{Backend: types.WorkNative, ID: "task-1", Key: "ENG-1", Project: "ENG"}},
+		"an asker on nothing": {nil},
+		"an item with no id":  {&types.WorkItem{Backend: types.WorkNative, Key: "ENG-1"}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			svc, _, rec := service(t, dir{"bob": true})
+			if _, err := svc.Open(context.Background(), a2a.Ask{
+				Requester: "alice", Target: "bob", Brief: "?",
+				WorkItem: tc.item, WorkItemBasis: types.BasisTrigger,
+			}); err != nil {
+				t.Fatalf("Open: %v", err)
+			}
+			wakes := rec.onlyTo(topics.AgentInbox("bob"))
+			ask, ok := events.DataAs[*types.A2ARequest](wakes[0])
+			if !ok {
+				t.Fatal("the wake carries no typed ask")
+			}
+			if tc.item == nil || tc.item.ID == "" {
+				if ask.WorkItem != nil || ask.WorkItemBasis != "" {
+					t.Fatalf("an asker on nothing sent %+v (%q)", ask.WorkItem, ask.WorkItemBasis)
+				}
+				return
+			}
+			if ask.WorkItem == nil || *ask.WorkItem != *tc.item ||
+				ask.WorkItemBasis != types.BasisTrigger {
+				t.Fatalf("the wake carries %+v (%q), want the asker's item and basis",
+					ask.WorkItem, ask.WorkItemBasis)
+			}
+			if ask.WorkItem == tc.item {
+				t.Error("the wake holds the asker's own pointer, not a copy")
+			}
+		})
+	}
+}
+
 // TestTheSweepAnnouncesEveryChannelItCloses is the close event that was never
 // published.
 //

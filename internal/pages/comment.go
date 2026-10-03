@@ -7,9 +7,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
-	"strconv"
 	"strings"
-	"time"
 
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/store"
@@ -40,32 +38,22 @@ type NewComment struct {
 	// not they watch, and each is subscribed.
 	Mentions []string
 
-	// TurnKey makes a comment made from a turn idempotent: a re-run turn
-	// posts once.
+	// CallKey makes a comment idempotent across the one repetition its
+	// caller can produce: a re-run turn (the turn's key) posts once, and so
+	// does a person's retried request (their request key). The zero key is
+	// a call that named neither, which posts a fresh comment every time.
+	// See [CallKey].
 	//
-	// IT DERIVES THE OPERATION ID rather than only the comment's own, so a
+	// IT DERIVES THE OPERATION ID as well as the comment's own, so a
 	// re-run is the SAME operation: inside the log's duplicate window the
 	// broker collapses its append, past it the comment's own id makes the
 	// apply an upsert of the row the first run wrote, and once this node's
 	// ledger has lost the first run's row the state log answers it
-	// `unknown` rather than deciding it again — which is what TurnSince is
-	// for.
-	TurnKey string
-
-	// TurnSince is when the unit of work TurnKey names began, and it is the
-	// instant the derived operation id carries (see statelog.DeriveOpID).
-	// It must be the key's own — reproduced by every re-run — and never the
-	// instant of this call: the state log refuses to decide again an
-	// operation minted before its ledger's watermark whose row it no longer
-	// holds, and a call's own clock is always after it.
-	TurnSince time.Time
-
-	// Repeat is how many earlier calls in the turn's run asked the same
-	// tool for something else — see turnctx.CallLog. It is part of the
-	// derived id, so a remark made again after a different one is a second
-	// comment rather than the first one's retry, while a remark repeated
-	// with nothing between stays one. Zero adds nothing to the id.
-	Repeat int
+	// `unknown` rather than deciding it again — which is what the key's
+	// [CallKey.Since] is for. Its [CallKey.Repeat] is what makes a remark
+	// made again after a different one a second comment rather than the
+	// first one's retry.
+	CallKey CallKey
 
 	Quiet bool
 }
@@ -142,8 +130,12 @@ func (s *Store) Comment(ctx context.Context, actor Actor, pageID string,
 }
 
 // EditComment rewrites one remark's body.
+//
+// KEYED LIKE EVERY WRITE A CALLER CAN REPEAT: the operation is derived from
+// the key, the comment and the text ([Store.callOpID]), so a retried edit is
+// one record.
 func (s *Store) EditComment(ctx context.Context, actor Actor, pageID,
-	commentID, body string) (Comment, Written, error) {
+	commentID, body string, key CallKey) (Comment, Written, error) {
 
 	if err := actor.validate(); err != nil {
 		return Comment{}, Written{}, err
@@ -158,7 +150,7 @@ func (s *Store) EditComment(ctx context.Context, actor Actor, pageID,
 	}
 
 	at := s.now()
-	opID := s.newSeqID()
+	opID := s.callOpID(key, "comment-edit", pageID, commentID, textKey(body))
 	subject := PageSubject(pageID)
 	var out Comment
 	// THE REVISION AN UNCHANGED EDIT ANSWERS WITH, taken in the decision's
@@ -315,26 +307,23 @@ func readCommentTx(ctx context.Context, tx *sql.Tx, pageID, commentID string) (
 
 // commentOpID is the operation this comment belongs to.
 //
-// DERIVED FROM THE TURN when one is named, so a re-run turn is one operation
-// rather than a second comment. The comment's own id is the same value: one
-// comment is one operation here, and two identifiers for one thing is two
-// places for a retry to disagree with itself.
+// DERIVED FROM THE CALLER'S KEY when one is named, so a re-run turn or a
+// retried request is the first attempt's operation and comment rather than a
+// second comment. The comment's own id is the same value: one comment is one
+// operation here, and two identifiers for one thing is two places for a retry
+// to disagree with itself.
 //
-// AND IT CARRIES THE INSTANT THE TURN'S WORK BEGAN, never this call's, for the
-// reason [NewComment.TurnSince] gives.
+// AND IT CARRIES THE INSTANT THE KEY'S WORK BEGAN, never this call's, for the
+// reason [CallKey.Since] gives.
 func (s *Store) commentOpID(pageID string, in NewComment) string {
-	if strings.TrimSpace(in.TurnKey) == "" {
+	if in.CallKey.empty() {
 		return s.newSeqID()
 	}
 	sum := sha256.Sum256([]byte(strings.TrimSpace(in.Body)))
-	identity := []string{commentNamespace, pageID, strings.TrimSpace(in.TurnKey),
-		hex.EncodeToString(sum[:])}
-	if in.Repeat > 0 {
-		identity = append(identity, "repeat:"+strconv.Itoa(in.Repeat))
-	}
 	// UNNAMED, because this is the comment's own id as well and a reader
 	// addresses it: the page and the turn it came from are on the row.
-	return statelog.DeriveOpID(in.TurnSince, "", identity...)
+	return statelog.DeriveOpID(in.CallKey.Since, "",
+		in.CallKey.identity(commentNamespace, pageID, hex.EncodeToString(sum[:]))...)
 }
 
 // commentNamespace scopes the derived operation ids. FIXED for the life of the

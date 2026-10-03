@@ -36,6 +36,15 @@ type tables struct {
 	ops      string
 	deferred string
 	scope    string
+
+	// derivation is the rule set the applier writing through these
+	// tables derives at — see [Deriver]. It is stamped on a checkpoint
+	// row the FIRST time one is written, because the rows that
+	// transaction commits are the first on this stream and this build
+	// derived every one of them. Zero wherever the writer is not an
+	// applier (a reanchor), which reads as "unknown" and costs at most
+	// one re-derivation at the next boot.
+	derivation int
 }
 
 // subjectOf is the WIRE subject an anchor is keyed on.
@@ -218,11 +227,16 @@ func (t tables) readCursor(ctx context.Context, tx *sql.Tx) (cursorRow, bool, er
 func (t tables) setCursor(ctx context.Context, tx *sql.Tx, p Position, created, storedAt,
 	now time.Time, applied int) error {
 
+	// THE DERIVATION IS WRITTEN ON INSERT ONLY. An existing row's
+	// derivation moves in exactly one place — [tables.setDerivation], in
+	// the transaction that re-derived the rows it describes — so a
+	// checkpoint advancing over an old build's rows never claims they were
+	// derived by this one.
 	_, err := tx.ExecContext(ctx, `
 		INSERT INTO statelog_cursor
 			(stream, generation, seq, stream_created_at, stored_at, updated_at,
-			 applied_version)
-		VALUES (?, ?, ?, ?, ?, ?, ?)
+			 applied_version, derivation)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT (stream) DO UPDATE SET
 			generation        = excluded.generation,
 			seq               = excluded.seq,
@@ -232,7 +246,7 @@ func (t tables) setCursor(ctx context.Context, tx *sql.Tx, p Position, created, 
 			applied_version   = `+raisedApplied("excluded.applied_version"),
 		t.stream, int64(p.Generation), int64(p.Seq),
 		store.EncodeTime(created), encodeInstant(storedAt), store.EncodeTime(now),
-		int64(applied))
+		int64(applied), t.derivation)
 	if err != nil {
 		return fmt.Errorf("statelog: write the cursor at %s: %w", p, err)
 	}
@@ -265,10 +279,35 @@ func (t tables) raiseApplied(ctx context.Context, tx *sql.Tx, v int) error {
 // raisedApplied is the one expression that raises the row's applied record
 // version to at least by: the larger of the two, and UNKNOWN STAYS UNKNOWN — a
 // row from before the column held rows nothing recorded, and a maximum over
-// the records since is no bound on the ones before (migration 0027).
+// the records since is no bound on the ones before (migration 0035).
 func raisedApplied(by string) string {
 	return `CASE WHEN statelog_cursor.applied_version IS NULL THEN NULL
 		ELSE MAX(statelog_cursor.applied_version, ` + by + `) END`
+}
+
+// readDerivation reads the rule set this stream's rows were derived by,
+// reporting false when there is no checkpoint — and so no rows — yet.
+func (t tables) readDerivation(ctx context.Context, tx *sql.Tx) (int, bool, error) {
+	var v int
+	err := tx.QueryRowContext(ctx,
+		`SELECT derivation FROM statelog_cursor WHERE stream = ?`, t.stream).Scan(&v)
+	switch {
+	case errors.Is(err, sql.ErrNoRows):
+		return 0, false, nil
+	case err != nil:
+		return 0, false, fmt.Errorf("statelog: read the derivation: %w", err)
+	}
+	return v, true, nil
+}
+
+// setDerivation records that this stream's rows are now derived at v, in the
+// transaction that derived them.
+func (t tables) setDerivation(ctx context.Context, tx *sql.Tx, v int) error {
+	if _, err := tx.ExecContext(ctx,
+		`UPDATE statelog_cursor SET derivation = ? WHERE stream = ?`, v, t.stream); err != nil {
+		return fmt.Errorf("statelog: record derivation %d: %w", v, err)
+	}
+	return nil
 }
 
 // reanchorCursor writes the checkpoint a reanchor places — at p, keyed to
@@ -284,6 +323,12 @@ func raisedApplied(by string) string {
 // abandoned generation's records keeps voiding them after a restart; and a
 // reanchor must REPLACE it, since the range an earlier reanchor abandoned says
 // nothing about the log this one follows.
+//
+// THE DERIVATION IS NOT WRITTEN. A reanchor moves where the rows are followed
+// from and re-derives none of them, so an existing checkpoint keeps the rule
+// set its rows were derived by, and one this statement creates takes the
+// column's zero — "unknown", which costs one re-derivation at the next boot
+// ([tables.derivation]).
 func (t tables) reanchorCursor(ctx context.Context, tx *sql.Tx, p Position,
 	created, storedAt time.Time, from uint32, staleAfter uint64, now time.Time) error {
 

@@ -28,7 +28,7 @@
  * closes.
  */
 
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { useState } from "react";
 import { afterEach, expect, test, vi } from "vitest";
 import { Segmented } from "./primitives.tsx";
@@ -83,8 +83,8 @@ test("an option with a glyph is still named by its label alone", () => {
       value="chart"
       onChange={() => {}}
       options={[
-        { value: "chart", label: "Chart", icon: "account_tree" },
-        { value: "directory", label: "Directory", icon: "person" },
+        { value: "chart", label: "Chart", icon: "network" },
+        { value: "directory", label: "Directory", icon: "user" },
         { value: "charter", label: "Charter" },
       ]}
     />,
@@ -158,6 +158,21 @@ test("the tab stop follows focus rather than the selection", () => {
   // …while the selection has stayed where it was, which is what makes the two
   // columns distinguishable at all.
   expect(checked()).toEqual(["true", "false", "false"]);
+});
+
+// FOCUS THAT ARRIVED ANY OTHER WAY MOVES THE STOP TOO. A dialog an option
+// opened hands focus back to that option when it is dismissed; with only the
+// arrows moving the stop, the reader stood on an option that was neither
+// checked nor the tab stop, and the next Tab started from somewhere else.
+test("the tab stop follows focus however focus arrived", () => {
+  render(<LiveSegmented />);
+  const [, , charter] = screen.getAllByRole("radio");
+  act(() => charter!.focus());
+  expect(tabstops()).toEqual(["-1", "-1", "0"]);
+  expect(checked()).toEqual(["true", "false", "false"]);
+  // And the arrows go on from there, not from the checked option.
+  fireEvent.keyDown(screen.getByRole("radiogroup"), { key: "ArrowLeft" });
+  expect(tabstops()).toEqual(["-1", "0", "-1"]);
 });
 
 // WRAPS, at both ends: a reader holding the key gets the whole group rather

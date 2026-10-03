@@ -1179,7 +1179,7 @@ func TestABarredNodeThatComesBackIsNeverAServer(t *testing.T) {
 }
 
 // ONLY THE NEWEST COMPANY SETS THE COPIES: the duty moves between nodes, and a
-// node a revision behind must not set the replica count back (ADR-0020).
+// node a revision behind must not set the replica count back (ADR-0027).
 func TestOnlyTheNewestCompanySetsTheEstatesCopies(t *testing.T) {
 	t.Parallel()
 	s := settled(t, smallLayout, 2, nodeIDs(3)...)

@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"encoding/base64"
-	"encoding/json"
 	"fmt"
 	"net"
 	"net/http"
@@ -98,14 +97,7 @@ type fakeNode struct {
 	server  *httptest.Server
 	budgets []byte
 	durable bool
-
-	// seen records what the last reset was asked to clear, so a test can
-	// assert the scope actually reached the node rather than only that
-	// the command printed something plausible.
-	seen    string
-	resets  int
 	tokens  []string
-	cleared []string
 }
 
 func newFakeNode(t *testing.T) *fakeNode {
@@ -119,21 +111,8 @@ func newFakeNode(t *testing.T) *fakeNode {
 			_, _ = w.Write(n.budgets)
 			return
 		}
-		_, _ = fmt.Fprintf(w, `{"durable":%t,"org":{"max_tokens":0,"durable_used":0},"seats":[]}`,
+		_, _ = fmt.Fprintf(w, `{"durable":%t,"timezone":"UTC","near_fraction":0.9,"org":{"windows":[]},"seats":[]}`,
 			n.durable)
-	})
-	mux.HandleFunc("POST /budgets/reset", func(w http.ResponseWriter, r *http.Request) {
-		n.tokens = append(n.tokens, r.Header.Get("Authorization"))
-		n.seen = r.URL.Query().Get("scope")
-		n.resets++
-		body, err := json.Marshal(map[string]any{
-			"cleared": len(n.cleared), "scopes": n.cleared,
-		})
-		if err != nil {
-			t.Errorf("marshal: %v", err)
-		}
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write(body)
 	})
 	n.server = httptest.NewServer(mux)
 	t.Cleanup(n.server.Close)
@@ -185,125 +164,133 @@ func TestBudgetsShowRefusesToPrintZerosForAnUnreadableCounter(t *testing.T) {
 	}
 }
 
-func TestBudgetsShowListsWhatEachScopeSpent(t *testing.T) {
-	node := newFakeNode(t)
-	node.budgets = []byte(`{"durable":true,
-	  "org":{"max_tokens":10000,"durable_used":1200,"durable_updated_at":"2026-08-01T00:00:00Z"},
-	  "seats":[{"handle":"swe","agent_id":"a1","max_tokens":500,"durable_used":300,
-	            "durable_updated_at":"2026-08-01T00:00:00Z"},
-	           {"handle":"uncapped","agent_id":"a2","max_tokens":0,"durable_used":700},
-	           {"handle":"idle","agent_id":"a3","max_tokens":0,"durable_used":0}]}`)
-	cfg := bootstrapForNode(t, node)
+// budgetsAnswer is a budgets answer with an org and three seats, each stating
+// the day, the week and the month as the node serves them.
+const budgetsAnswer = `{"durable":true,"timezone":"Europe/Berlin","near_fraction":0.9,
+  "org":{"windows":[
+    {"period":"day","window":"2026-08-01","resets_at":"2026-08-01T22:00:00Z","used":1200,"limit":10000,"state":"ok"},
+    {"period":"week","window":"2026-W31","resets_at":"2026-08-02T22:00:00Z","used":1200,"state":"ok"},
+    {"period":"month","window":"2026-08","resets_at":"2026-08-31T22:00:00Z","used":1200,"state":"ok"}]},
+  "seats":[
+    {"handle":"swe","agent_id":"a1","windows":[
+      {"period":"day","window":"2026-08-01","resets_at":"2026-08-01T22:00:00Z","used":497,"limit":500,
+       "refused_at":"2026-08-01T00:05:00Z","state":"refusing"},
+      {"period":"week","window":"2026-W31","resets_at":"2026-08-02T22:00:00Z","used":497,"state":"ok"},
+      {"period":"month","window":"2026-08","resets_at":"2026-08-31T22:00:00Z","used":497,"state":"ok"}]},
+    {"handle":"uncapped","agent_id":"a2","windows":[
+      {"period":"day","window":"2026-08-01","resets_at":"2026-08-01T22:00:00Z","used":700,"state":"ok"},
+      {"period":"week","window":"2026-W31","resets_at":"2026-08-02T22:00:00Z","used":700,"state":"ok"},
+      {"period":"month","window":"2026-08","resets_at":"2026-08-31T22:00:00Z","used":700,"state":"ok"}]},
+    {"handle":"idle","agent_id":"a3","windows":[
+      {"period":"day","window":"2026-08-01","resets_at":"2026-08-01T22:00:00Z","used":0,"state":"ok"},
+      {"period":"week","window":"2026-W31","resets_at":"2026-08-02T22:00:00Z","used":0,"state":"ok"},
+      {"period":"month","window":"2026-08","resets_at":"2026-08-31T22:00:00Z","used":0,"state":"ok"}]}]}`
 
-	out, _, err := cli(t, "budgets", "show", "-config", cfg)
-	if err != nil {
-		t.Fatalf("budgets show: %v", err)
-	}
-	if !strings.Contains(out, "org") || !strings.Contains(out, "1200") {
-		t.Errorf("the org counter is missing: %q", out)
-	}
-	if !strings.Contains(out, "swe") || !strings.Contains(out, "300") {
-		t.Errorf("the seat's own spend is missing: %q", out)
-	}
-	// A CAP OF 0 IS UNLIMITED, matching the config. Printing a literal 0
-	// in that column would read as the exact opposite of what it means.
-	if !strings.Contains(out, "unlimited") {
-		t.Errorf("an uncapped scope was not named as unlimited: %q", out)
-	}
-	// And a seat with no cap and no spend contributes nothing: a
-	// permanent zero row per seat buries the seats that matter in a
-	// company of any size.
-	if strings.Contains(out, "idle") {
-		t.Errorf("a seat with nothing to report was printed: %q", out)
-	}
-}
-
-// A REFUSING SCOPE SAYS SO. A refused charge increments nothing, so a seat
-// charged in rounds stalls short of its cap and its row reads as headroom: 99
-// of 100 looks healthy on a table with no other column. The refusal stamp is
-// the gate's own record of saying no, and the table prints it.
-func TestBudgetsShowNamesAScopeThatIsRefusing(t *testing.T) {
-	node := newFakeNode(t)
-	node.budgets = []byte(`{"durable":true,
-	  "org":{"max_tokens":10000,"durable_used":1200,"durable_updated_at":"2026-08-01T00:00:00Z",
-	         "refused_at":""},
-	  "seats":[{"handle":"swe","agent_id":"a1","max_tokens":500,"durable_used":497,
-	            "durable_updated_at":"2026-08-01T00:00:00Z","refused_at":"2026-08-01T00:05:00Z"},
-	           {"handle":"ops","agent_id":"a2","max_tokens":500,"durable_used":20,
-	            "durable_updated_at":"2026-08-01T00:00:00Z","refused_at":""}]}`)
-	cfg := bootstrapForNode(t, node)
-
-	out, _, err := cli(t, "budgets", "show", "-config", cfg)
-	if err != nil {
-		t.Fatalf("budgets show: %v", err)
-	}
-	if !strings.Contains(out, "REFUSING SINCE") {
-		t.Fatalf("the table has no refusal column: %q", out)
-	}
+// rowsFor is the printed rows whose first column is scope, split into fields.
+func rowsFor(out, scope string) [][]string {
+	var rows [][]string
 	for _, line := range strings.Split(out, "\n") {
-		fields := strings.Fields(line)
-		if len(fields) == 0 {
-			continue
-		}
-		switch fields[0] {
-		case "swe":
-			if fields[len(fields)-1] != "2026-08-01T00:05:00Z" {
-				t.Errorf("the refusing seat's row = %q, want its refusal stamp last", line)
-			}
-		case "ops", "org":
-			if fields[len(fields)-1] != "-" {
-				t.Errorf("a scope that is not refusing reads %q, want a dash last", line)
-			}
+		if fields := strings.Fields(line); len(fields) > 0 && fields[0] == scope {
+			rows = append(rows, fields)
 		}
 	}
+	return rows
 }
 
-// A RESET NAMES WHAT IT CLEARED. A count alone leaves an operator unable to
-// tell "reset the seat I meant" from "reset a scope that was already empty".
-func TestBudgetsResetNamesTheScopesItCleared(t *testing.T) {
+func TestBudgetsShowListsEveryWindowOfEachScope(t *testing.T) {
 	node := newFakeNode(t)
-	node.cleared = []string{"agent:swe"}
+	node.budgets = []byte(budgetsAnswer)
 	cfg := bootstrapForNode(t, node)
 
-	out, _, err := cli(t, "budgets", "reset", "-config", cfg, "-scope", "agent:swe")
+	out, _, err := cli(t, "budgets", "show", "-config", cfg)
 	if err != nil {
-		t.Fatalf("budgets reset: %v", err)
+		t.Fatalf("budgets show: %v", err)
 	}
-	if !strings.Contains(out, "agent:swe") {
-		t.Errorf("output = %q", out)
+	// THE CLOCK IS NAMED: every window below is cut on it.
+	if !strings.Contains(out, "Europe/Berlin") {
+		t.Errorf("the company clock is not named: %q", out)
 	}
-	// SCOPED MEANS SCOPED, and the scope has to reach the NODE — a
-	// command that printed the right thing while clearing every counter
-	// would re-arm a company somebody had stopped on purpose.
-	if node.seen != "agent:swe" {
-		t.Errorf("the node was asked to clear %q, want the scope the operator named", node.seen)
+	org := rowsFor(out, "org")
+	if len(org) != 3 {
+		t.Fatalf("org rows = %v, want its day, week and month", org)
+	}
+	// SCOPE PERIOD WINDOW USED LIMIT STATE RESETS REFUSING
+	if got := strings.Join(org[0], " "); got != "org day 2026-08-01 1200 10000 ok 2026-08-01T22:00:00Z -" {
+		t.Errorf("org day = %q", got)
+	}
+	// AN UNCAPPED WINDOW IS UNLIMITED, never 0 or blank: either would read
+	// as the exact opposite of what it means.
+	if org[1][4] != "unlimited" {
+		t.Errorf("the org's uncapped week = %v, want unlimited", org[1])
+	}
+	if len(rowsFor(out, "swe")) != 3 || len(rowsFor(out, "uncapped")) != 3 {
+		t.Errorf("a seat with spend or a ceiling lost windows: %q", out)
+	}
+	// A seat with no ceiling and no spend contributes nothing: three
+	// permanent zero rows per seat bury the seats that matter.
+	if rows := rowsFor(out, "idle"); len(rows) != 0 {
+		t.Errorf("a seat with nothing to report was printed: %v", rows)
 	}
 }
 
-// RESETTING NOTHING SAYS SO rather than reporting a success that did not
-// happen.
-func TestResettingAScopeThatIsNotThereSaysSo(t *testing.T) {
+// A REFUSING WINDOW SAYS SO. A refused charge increments nothing, so a seat
+// charged in rounds stalls short of its ceiling and its row reads as headroom:
+// 497 of 500 looks nearly healthy on a table with no other column. The state is
+// the engine's word and the refusal stamp is the gate's, and the table prints
+// both.
+func TestBudgetsShowNamesAWindowThatIsRefusing(t *testing.T) {
 	node := newFakeNode(t)
+	node.budgets = []byte(budgetsAnswer)
 	cfg := bootstrapForNode(t, node)
 
-	out, _, err := cli(t, "budgets", "reset", "-config", cfg, "-scope", "agent:nobody")
+	out, _, err := cli(t, "budgets", "show", "-config", cfg)
 	if err != nil {
-		t.Fatalf("budgets reset: %v", err)
+		t.Fatalf("budgets show: %v", err)
 	}
-	if !strings.Contains(out, "Nothing to reset") {
-		t.Errorf("output = %q", out)
+	if !strings.Contains(out, "REFUSING SINCE") || !strings.Contains(out, "STATE") {
+		t.Fatalf("the table has no state or refusal column: %q", out)
+	}
+	for _, row := range rowsFor(out, "swe") {
+		refusing := row[1] == "day"
+		if got := row[len(row)-1]; refusing != (got == "2026-08-01T00:05:00Z") {
+			t.Errorf("swe %s ends %q; only its day refuses", row[1], got)
+		}
+		if refusing && row[5] != "refusing" {
+			t.Errorf("swe's day state = %q, want refusing", row[5])
+		}
+	}
+	for _, row := range rowsFor(out, "org") {
+		if row[len(row)-1] != "-" {
+			t.Errorf("a window that is not refusing reads %v, want a dash last", row)
+		}
 	}
 }
 
-// THE TOKEN IS SENT. A reset is a guarded write, so a command that dropped
-// the token would fail against every deployment that has auth on — which is
-// every deployment that is not a laptop.
+// THERE IS NO RESET. A budget's ceilings are per calendar window and each
+// window's allowance comes back when it turns over; room before then is made
+// by raising a ceiling. A `reset` that still parsed would be a verb with no
+// route behind it, and one that reached a node would find nothing to call.
+func TestBudgetsHasNoReset(t *testing.T) {
+	node := newFakeNode(t)
+	cfg := bootstrapForNode(t, node)
+	_, _, err := cli(t, "budgets", "reset", "-config", cfg)
+	if err == nil || !strings.Contains(err.Error(), "unknown budgets command") {
+		t.Fatalf("budgets reset = %v, want it refused as an unknown command", err)
+	}
+	if len(node.tokens) != 0 {
+		t.Fatalf("a refused command still reached the node %d time(s)", len(node.tokens))
+	}
+}
+
+// THE TOKEN IS SENT. The counters are read through the node's guarded query
+// surface, so a command that dropped the token would fail against every
+// deployment that turns anonymous reads off.
 func TestABudgetCommandSendsTheConfiguredToken(t *testing.T) {
 	node := newFakeNode(t)
 	cfg := bootstrapForNode(t, node)
 
-	if _, _, err := cli(t, "budgets", "reset", "-config", cfg); err != nil {
-		t.Fatalf("budgets reset: %v", err)
+	if _, _, err := cli(t, "budgets", "show", "-config", cfg); err != nil {
+		t.Fatalf("budgets show: %v", err)
 	}
 	if len(node.tokens) == 0 || node.tokens[len(node.tokens)-1] != "Bearer t0ken" {
 		t.Errorf("Authorization = %v, want the config's token", node.tokens)
@@ -318,8 +305,8 @@ func TestAnExportedTokenBeatsTheConfigs(t *testing.T) {
 	cfg := bootstrapForNode(t, node)
 	t.Setenv(apiTokenEnv, "exported")
 
-	if _, _, err := cli(t, "budgets", "reset", "-config", cfg); err != nil {
-		t.Fatalf("budgets reset: %v", err)
+	if _, _, err := cli(t, "budgets", "show", "-config", cfg); err != nil {
+		t.Fatalf("budgets show: %v", err)
 	}
 	if got := node.tokens[len(node.tokens)-1]; got != "Bearer exported" {
 		t.Errorf("Authorization = %q, want the exported token", got)

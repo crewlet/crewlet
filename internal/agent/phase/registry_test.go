@@ -285,17 +285,44 @@ func TestKeysAndHasReportTheConfiguredSet(t *testing.T) {
 	}
 }
 
-func TestRoleKeysIsTheRawDeclarationValidationNeeds(t *testing.T) {
+// RESOLVE IS THE CHAIN A TURN RUNS ON, as keys.
+//
+// The org projection publishes it, so a Resolve that drifted from Chain would
+// show a founder one model while every turn ran on another. Every phase of a
+// set of roles covering each of Chain's four levels — a per-phase chain, the
+// seat's llm, the "default" key, the first configured provider — plus an
+// unknown key and a repeat, compared member for member.
+func TestResolveIsTheChainATurnRunsOn(t *testing.T) {
 	t.Parallel()
-	// Resolution and validation ask different questions of one field. The
-	// validator must see what the operator WROTE — including a key the
-	// fallback would quietly survive — so this returns the declaration with
-	// no registry and no fallback applied.
-	role := &org.Role{Name: "CTO", LLMReview: org.ProviderKeys{"typo"}}
-	if got := phase.RoleKeys(role, phase.Review); !slices.Equal(got, org.ProviderKeys{"typo"}) {
-		t.Errorf("RoleKeys = %v, want the raw [typo]", got)
+	roles := []*org.Role{
+		{Name: "per-phase", LLM: org.ProviderKeys{"alpha"}, LLMReview: org.ProviderKeys{"beta", "alpha"},
+			LLMJudge: org.ProviderKeys{"typo", "beta", "beta"}, LLMSandbox: org.ProviderKeys{"typo"}},
+		{Name: "names nothing"},
+		{Name: "only unknown", LLM: org.ProviderKeys{"typo"}},
 	}
-	if got := phase.RoleKeys(role, phase.Subagent); len(got) != 0 {
-		t.Errorf("RoleKeys = %v, want nothing for an undeclared phase", got)
+	for _, order := range [][]string{{"beta", "alpha", "default"}, {"beta", "alpha"}} {
+		r := reg(t, order...)
+		for _, role := range roles {
+			for _, ph := range phase.All {
+				members, err := r.Chain(role, ph)
+				if err != nil {
+					t.Fatal(err)
+				}
+				var want []string
+				for _, m := range members {
+					want = append(want, m.Key)
+				}
+				if got := phase.Resolve(role, ph, order); !slices.Equal(got, want) {
+					t.Errorf("order %v, role %q, %s: Resolve = %v, Chain = %v",
+						order, role.Name, ph, got, want)
+				}
+			}
+		}
+	}
+	if got := phase.Resolve(&org.Role{Name: "CTO", LLM: org.ProviderKeys{"alpha"}}, phase.Execute, nil); got != nil {
+		t.Errorf("Resolve with no providers = %v, want nil: a company with no model has no chain", got)
+	}
+	if got := phase.Resolve(nil, phase.Execute, []string{"alpha"}); got != nil {
+		t.Errorf("Resolve of no role = %v, want nil", got)
 	}
 }

@@ -12,7 +12,7 @@ import (
 
 // The semantic half, as one statement over two tables in one file.
 //
-// # Two stages, and the first one is now an index — ADR-0022
+// # Two stages, and the first one is now an index — ADR-0028
 //
 // There is no approximate-nearest-neighbour index on this driver — `caps.go`
 // probes for one on every open and it is absent at the pin — so the honest
@@ -72,7 +72,7 @@ import (
 // a SHARE of the rows, so what it needs is a probed list as one contiguous
 // range. `kb_vectors_bin_ivf_idx` is that, and it is COVERING — every column
 // the first stage reads is in it, so a list is one sequential read of the
-// index with no access to the table at all. Replicated migration 0025 has the
+// index with no access to the table at all. Replicated migration 0033 has the
 // measurement against the two alternatives (an uncovering index on the list,
 // and a table clustered on it). A full scan may read the covering index
 // instead of the table: it is a copy of the same narrow rows in another order,

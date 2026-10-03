@@ -155,7 +155,8 @@ func TestAnUnvalidatedConfigIsValidatedHere(t *testing.T) {
 	// case and looked fine.
 	handbuilt := config.DefaultCompany()
 	handbuilt.Name = "Acme"
-	handbuilt.TokenBudget = -1
+	negative := -1
+	handbuilt.TokenBudget = config.TokenBudget{Day: &negative}
 	handbuilt.Providers.LLM = map[string]config.LLMProvider{
 		"a": {Type: config.LLMAnthropic, Model: "m", APIKeys: []string{"k"}},
 	}
@@ -167,7 +168,7 @@ func TestAnUnvalidatedConfigIsValidatedHere(t *testing.T) {
 	// The counterfactual: the same config with a legal budget builds.
 	// Without it this passes for a constructor that refuses everything
 	// hand-built.
-	handbuilt.TokenBudget = 0
+	handbuilt.TokenBudget = config.TokenBudget{}
 	if _, err := engine.NewCompany(&handbuilt); err != nil {
 		t.Errorf("a valid hand-built config was refused: %v", err)
 	}

@@ -9,8 +9,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/google/uuid"
-
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/queue/topics"
@@ -87,17 +85,29 @@ type ResumeRequest struct {
 	// turn's telemetry names what woke it.
 	Trigger *events.Event
 
-	// DeliveredRefs are the branches and pull requests the run reported,
-	// for the resumed phase's own event, and empty when a PERSON's answer
-	// resumes a parked clarification — the branch the park pushed is on the
-	// row.
+	// DeliveredRefs are what the run reported producing, for the resumed
+	// phase's own event — the executor's delivery is judged on them. Empty
+	// when a PERSON's answer resumes a parked clarification: no new run
+	// finished.
 	//
-	// WHAT THE RUN SPENT IS NOT HERE, and must not be: it is a record of its
-	// own, published at the collect ([Coordinator.announceUsage]). Carried
-	// to the resumed phase, it reached no token view for a run that never
-	// resumed, and counted twice a run whose resume was retried across the
-	// edge of a queried window.
+	// The run's COST is deliberately not here. It is the run's own fact and
+	// rides the run's own record ([Coordinator.OnCompleted] publishes it as
+	// the `sandbox` phase), which every collected run gets — a run that
+	// parked on a question included, whose resume is an answer and carries
+	// no run at all, so on this request its cost was reported nowhere.
 	DeliveredRefs []string
+
+	// InputTokens and OutputTokens are what the job this resume collected
+	// cost, for the resumed segment's charge to the turn's work item
+	// (ADR-0022): that segment is the job's, so it pays for it.
+	//
+	// UNLIKE the refs above, a person's answer carries them too — the
+	// tokens of the job that asked, recorded on the row when it parked
+	// ([PendingRun.ParkedInputTokens]). The answer's resume is the ONLY
+	// segment that job ever gets, so it is the one that pays; the
+	// completion that parked resumed nothing.
+	InputTokens  int
+	OutputTokens int
 }
 
 // Accountant post-charges a collected run's tokens.
@@ -116,33 +126,17 @@ type Accountant interface {
 	Charge(ctx context.Context, agentID, handle string, tokens int) (refused bool, err error)
 }
 
-// Spender records a collected run's tokens on the work its turn is spent on —
-// the tracker task, when a task woke the turn that launched it
-// ([PendingRun.WorkItem]).
+// AudienceResolver resolves the audience a coding agent named for its question
+// — "requester", "manager", "team", or a name it typed — to the seats it means,
+// for the run that asked.
 //
-// A SEPARATE SEAM FROM [Accountant], because the two keep different promises.
-// The charge moves a counter the caps are measured against and is not
-// idempotent, so the row's own flag makes it once per launch
-// ([PendingRun.Charged]). This is a record the implementation makes idempotent
-// by the launch's identity, so it is offered on EVERY collect, a retry's
-// included: behind that flag, a write whose first attempt never answered would
-// be lost to a record saying the CHARGE landed.
-//
-// It answers whether the record's fate is SETTLED: nil when the task's spend
-// counts the run — or never can, the task being gone for good, or no retry
-// could learn whether it does — and an error when whether it counts is not
-// known YET. The error never decides the run's fate; it HOLDS the collect for
-// its retry ([Coordinator.recordSpend]), which offers the same record again
-// under the same identity — so an answer no retry changes must never be one,
-// or the run is held for ever.
-//
-// run.CollectedAt is always set, and is part of that identity: the collect
-// stamps it before it records anything, and every retry carries the FIRST one
-// on the row — so an operation minted at it is the same on every offer, where
-// one minted at the retry's own clock would count a held run on its task
-// twice.
-type Spender interface {
-	RunSpent(ctx context.Context, run PendingRun, result Result) error
+// DECLARED HERE, by the one caller, and implemented by the engine, which holds
+// the chart: this package knows the label and the run, and nothing about who
+// leads whom. A PURE ANSWER with no error, because it is a walk over a chart
+// already in memory — and because what a label that resolves to nobody means
+// is part of the answer ([Audience.Fallback]), never a failure of the park.
+type AudienceResolver interface {
+	ResolveAudience(run PendingRun, label string) Audience
 }
 
 // CoordinatorOptions configures a [Coordinator].
@@ -165,9 +159,13 @@ type CoordinatorOptions struct {
 	// Account post-charges collected tokens. Nil skips accounting.
 	Account Accountant
 
-	// Spent records a collected run's tokens on the work its turn is spent
-	// on — see [Spender]. Nil records nothing.
-	Spent Spender
+	// Audience resolves who a parked question may be answered by, at the
+	// park. Required, for the reason Resume is: only the engine holds the
+	// chart the label is resolved against, and a coordinator that parked
+	// questions without it would record every one of them as waiting on
+	// nobody — which is the defect [PendingRun.AudienceHandles] exists to
+	// end.
+	Audience AudienceResolver
 
 	// Ended is called once for every run this node finishes with, whatever
 	// finished it: collected, failed, torn down or reaped.
@@ -261,8 +259,9 @@ type CoordinatorOptions struct {
 //     that is still going.
 //   - COMPLETION → RESUME. A completion is claimed AT MOST ONCE, and only
 //     for the job it reports, the result collected with the box paused for
-//     reuse, tokens post-accounted once per launch however often the tail is
-//     retried, and the suspended loop re-entered with the result spliced in.
+//     reuse, tokens post-accounted and the run published as a phase of its
+//     own once per launch however often the tail is retried, and the
+//     suspended loop re-entered with the result spliced in.
 //     The seat stays held through all of it and is freed only at the last
 //     moment before the resume, because freeing it earlier lets a queued
 //     event take the slot, the resume fail, and the redelivery find the claim
@@ -287,10 +286,11 @@ type Coordinator struct {
 	manager *Manager
 	resume  Resumer
 	account Accountant
-	spent   Spender
-	ended   func(runID string)
-	stopped func(ctx context.Context, handle, turnID string)
-	now     func() time.Time
+	// audience is [CoordinatorOptions.Audience].
+	audience AudienceResolver
+	ended    func(runID string)
+	stopped  func(ctx context.Context, handle, turnID string)
+	now      func() time.Time
 
 	// mu guards runs, the two seat-level answers the inbox screening reads
 	// on every delivery, and attempts beside them.
@@ -362,6 +362,7 @@ func NewCoordinator(opts CoordinatorOptions) (*Coordinator, error) {
 		{"Pending", opts.Pending == nil},
 		{"Manager", opts.Manager == nil},
 		{"Resume", opts.Resume == nil},
+		{"Audience", opts.Audience == nil},
 	} {
 		if field.absent {
 			missing = append(missing, "CoordinatorOptions."+field.name)
@@ -369,13 +370,15 @@ func NewCoordinator(opts CoordinatorOptions) (*Coordinator, error) {
 	}
 	if len(missing) > 0 {
 		return nil, fmt.Errorf("sandbox: a coordinator needs %s: a detached run is "+
-			"published, recorded, reconnected to and resumed through them",
+			"published, recorded, reconnected to, resumed and put to its "+
+			"answerers through them",
 			strings.Join(missing, ", "))
 	}
 	c := &Coordinator{
 		queue: opts.Queue, pending: opts.Pending, manager: opts.Manager,
-		resume: opts.Resume, account: opts.Account, spent: opts.Spent,
-		ended: opts.Ended, stopped: opts.Stopped,
+		resume: opts.Resume, account: opts.Account, audience: opts.Audience,
+		ended:    opts.Ended,
+		stopped:  opts.Stopped,
 		now:      opts.Now,
 		runs:     map[string]seatRuns{},
 		attempts: map[answerKey]map[string]answerBudget{},
@@ -598,49 +601,10 @@ func (c *Coordinator) OnCompleted(ctx context.Context, ev types.SandboxRunComple
 		return nil
 	}
 
-	// WHAT THE RUN SPENT, recorded HERE, before anything the run does next:
-	// the collect is the one moment every run reaches. A run that parks on
-	// a question is resumed by a person's answer, which collects nothing; a
-	// question nobody answers, a resume abandoned and a node that dies
-	// holding this claim resume nothing at all. So the usage record, the
-	// task's spend and the budget charge are all made here, each once per
-	// LAUNCH however many times this completion is collected — and the run
-	// goes nowhere next until all three are recorded ([Coordinator.recordSpend]).
-	result = reported(result)
-	if run.CollectedAt.IsZero() {
-		// Carried on the claimed row from here, like the charge, so a
-		// retry of this collect restamps nothing.
-		run.CollectedAt = c.now().UTC()
-	}
 	// Carried on the claimed row from here, so that handing the claim back
-	// hands the charge's record back with it.
-	run, unaccounted := c.recordSpend(ctx, run, result)
-	if unaccounted != nil {
-		// HELD, NOT FAILED: the job's result is in hand and nothing about
-		// it is lost, so the claim goes back — with the charge if it
-		// landed — and the completion's retry collects the same finished
-		// job and makes only what did not land.
-		log.WarnContext(ctx, "sandbox_collect_held",
-			"turn_id", run.TurnID, "launch_id", run.LaunchID, "error", unaccounted.Error(),
-			"detail", "what the run spent is not yet recorded everywhere it belongs, so "+
-				"the run is neither resumed nor parked: its claim is handed back, and the "+
-				"completion's retry collects it again and records what did not land")
-		if handedBack, _ := c.unclaim(ctx, run, true, collectUnaccountedDetail); !handedBack {
-			// NO RETRY IS COMING, whichever way the claim did not go
-			// back: the hand-back could not be written, so the run has
-			// been ended and announced ([Coordinator.unclaim]); or the
-			// run had already moved on from this claim — the seat's
-			// next owner reaped it while this collect held it — so it is
-			// that owner's, and a redelivered completion finds nothing
-			// to claim. Either way this pass holds the only copy of what
-			// the run spent, so it is tried once more before the
-			// delivery is let go.
-			c.lastSpend(ctx, run, result)
-			return nil
-		}
-		return fmt.Errorf("sandbox: holding the collect of %s until what it spent is "+
-			"recorded: %w", run.TurnID, unaccounted)
-	}
+	// hands the record back with it — both of them.
+	run.Charged = c.charge(ctx, run, result)
+	run.Launch = c.publishPhase(ctx, run, result)
 
 	if result.NeedsInput {
 		return c.park(ctx, run, result)
@@ -662,186 +626,21 @@ func (c *Coordinator) OnCompleted(ctx context.Context, ev types.SandboxRunComple
 	// does not is an ending.
 	_, err = c.resumeAndSettle(ctx, run, resumeText(result), result.Success, trigger, runOutcome{
 		DeliveredRefs: result.DeliveredRefs,
+		InputTokens:   result.InputTokens, OutputTokens: result.OutputTokens,
 	})
 	return err
 }
 
-// runOutcome is what a collected run reported about itself, for the resumed
-// phase's own record. Zero where no run was collected — a person answering a
-// parked clarification resumes the turn without collecting anything.
+// runOutcome is what a finished run reported about itself, for the resumed
+// phase's own record and the resumed segment's charge. The refs are empty
+// where no run finished — a person answering a parked clarification resumes
+// the turn without collecting anything — while the tokens are the job's
+// either way: see [ResumeRequest.InputTokens].
 type runOutcome struct {
 	DeliveredRefs []string
+	InputTokens   int
+	OutputTokens  int
 }
-
-// reported is a collected result with its usage made a count: a negative token
-// count or price off a coding agent's output is a bad payload rather than a
-// refund, and read as one it lowered the task's spend and cancelled the
-// charge of the tokens beside it.
-func reported(result Result) Result {
-	result.InputTokens = max(result.InputTokens, 0)
-	result.OutputTokens = max(result.OutputTokens, 0)
-	result.CostUSD = max(result.CostUSD, 0)
-	return result
-}
-
-// announceUsage publishes what a collected launch reported spending — the
-// run's record in every token view, see [types.SandboxRunUsage].
-//
-// THE SAME RECORD ON EVERY COLLECT OF ONE LAUNCH: its id is derived from the
-// turn and the launch ([usageEventID]) and its timestamp is the launch's first
-// collect ([PendingRun.CollectedAt]), which are the two fields the event store
-// keys a row on and the live projection dedupes by. So a retried collect
-// publishes nothing new, and fills in the record a first publish that failed
-// never wrote.
-//
-// NOTHING FOR A RUN THAT REPORTED NOTHING — no token and no price, which is
-// OpenCode's run and a box that died before it wrote its usage: a record of
-// zero would be a call in every breakdown for spend nobody saw.
-//
-// A PUBLISH THAT FAILED IS AN ERROR, which holds the collect for its retry
-// ([Coordinator.recordSpend]): a usage record never decides a run's fate, but it
-// has no retry but the collect's, and a run that went on without it was
-// missing from every token view for good.
-func (c *Coordinator) announceUsage(ctx context.Context, run PendingRun, result Result) error {
-	total := result.InputTokens + result.OutputTokens
-	if total == 0 && result.CostUSD == 0 {
-		return nil
-	}
-	usage := types.SandboxRunUsage{
-		Agent: run.AgentID, AgentHandle: run.AgentHandle, RoleName: run.Role,
-		// UnitOfWork, never the raw field: see [PendingRun.UnitOfWork].
-		TurnID: run.TurnID, LaunchID: run.LaunchID, WorkKey: run.UnitOfWork(),
-		SandboxID: run.SandboxID, CodingAgent: run.CodingAgent,
-		InputTokens: result.InputTokens, OutputTokens: result.OutputTokens,
-		TotalTokens: total, CostUSD: result.CostUSD,
-	}
-	ev := events.New(usage, events.TraceContext{
-		TraceID: run.TraceID, ParentSpanID: run.SpanID,
-	})
-	ev.ID, ev.Timestamp = usageEventID(run), run.CollectedAt
-	ev.Source = run.Role
-	if err := c.queue.Publish(ctx, topics.Event(usage.EventType()), ev); err != nil {
-		return fmt.Errorf("sandbox: publishing the usage record of %d tokens: %w", total, err)
-	}
-	return nil
-}
-
-// recordSpend records what a collected launch spent everywhere it belongs — its
-// usage record in every token view ([Coordinator.announceUsage]), the task its
-// turn was spent on ([Spender]) and the budgets ([Coordinator.charge]) — and
-// answers the run with its charge recorded ([PendingRun.Charged]) beside an
-// error naming every one of the three that is not CONFIRMED yet.
-//
-// # A collect is not over until what it spent is recorded
-//
-// Each of the three is made ONCE PER LAUNCH however often the collect runs: the
-// usage record by its derived identity and its first collect's instant, the
-// task's by an operation derived from the launch, and the charge by the row's
-// own flag. So a retry of the collect repeats nothing that landed — and a
-// retry of the collect was the only retry any of them had, which came only
-// when the RESUME failed. A publish that failed, or a charge the counter never
-// answered, followed by a resume or a park that succeeded, was never offered
-// again: the run's spend was on the budgets and the task and missing from
-// every token view for good, or in the views and never on the budgets. So an
-// unconfirmed step HOLDS the collect: the caller hands the claim back,
-// carrying the charge if it landed, and the completion's retry — which the
-// waiter fires again on its next poll of a running row whatever became of the
-// broker's own redeliveries — collects the same finished job and makes again
-// only what did not land.
-//
-// # Why holding the turn is the right trade
-//
-// Nothing here decides a run's fate: a run whose spend is not yet recorded is
-// not failed, only not continued YET, and its result is on its box. And each
-// step's dependency is one the continuation needs anyway — the usage record
-// rides the broker every record of the resumed turn is published on, the
-// charge the coordination store this claim is written to, and the task's
-// spend the tracker a turn woken by that task works in. The charge has a
-// reason of its own to come first: the caps mean what they say only if the
-// resumed turn's next round is refused against the figure that includes the
-// run ([Accountant]), and a charge made after the resume is rounds admitted
-// against a counter short by the whole run.
-//
-// A CHARGE THE COUNTER NEVER ANSWERED is offered again by the retry, and may
-// then be counted twice — it may have landed. That over-states the counter,
-// which trips a cap early rather than late: the direction the counter itself
-// takes when a node dies mid-charge, and the only one available to a charge
-// with no identity of its own.
-//
-// EVERY STEP IS MADE ON EVERY PASS, whatever the others answered, so an outage
-// of one dependency holds the collect for that step alone, and a charge that
-// landed rides the hand-back rather than waiting on a publish.
-func (c *Coordinator) recordSpend(ctx context.Context, run PendingRun, result Result) (PendingRun, error) {
-	var unconfirmed []error
-	if err := c.announceUsage(ctx, run, result); err != nil {
-		unconfirmed = append(unconfirmed, err)
-	}
-	if c.spent != nil {
-		if err := c.spent.RunSpent(ctx, run, result); err != nil {
-			unconfirmed = append(unconfirmed,
-				fmt.Errorf("sandbox: recording the run's spend on its task: %w", err))
-		}
-	}
-	charged, err := c.charge(ctx, run, result)
-	run.Charged = charged
-	if err != nil {
-		unconfirmed = append(unconfirmed, err)
-	}
-	return run, errors.Join(unconfirmed...)
-}
-
-// lastSpend is the one more attempt a collect's spend gets when the claim that
-// held it did NOT GO BACK for the retry ([Coordinator.unclaim]): the hand-back
-// could not be written, so the run was ended; or the run had already moved on
-// from the claim — the seat's next owner reaped it while the collect held it —
-// so nothing will collect it again. Either way the row — the only thing a
-// retry could have come from — no longer carries one.
-//
-// TRIED AGAIN rather than dropped, because two of the three do not need the
-// coordination store at all — the usage record rides the broker and the task's
-// spend the tracker, so a store that refused the hand-back does not stop them
-// — and the charge, which does, is offered only if it had not landed
-// ([PendingRun.Charged]). Each is made
-// once per launch by its own identity, so the attempt repeats nothing that
-// landed. What still does not land is logged by name with the run's figures
-// (`sandbox_spend_unrecorded`), since nothing is left to retry it: that line is
-// the only record of what an operator's token views and budgets are missing.
-//
-// ON A CONTEXT OF ITS OWN, for [Coordinator.unclaim]'s reason: the failure this
-// follows is often the delivery's own cancellation.
-func (c *Coordinator) lastSpend(ctx context.Context, run PendingRun, result Result) {
-	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), discardGrace)
-	defer cancel()
-	// CHARGED AS THIS ATTEMPT LEFT IT, never as the first pass did: a
-	// charge the first pass could not get answered may land here, and a
-	// line saying it had not would send an operator to add by hand a run
-	// the budgets already hold, counting it twice.
-	after, err := c.recordSpend(ctx, run, result)
-	if err != nil {
-		log.ErrorContext(ctx, "sandbox_spend_unrecorded",
-			"turn_id", run.TurnID, "launch_id", run.LaunchID, "agent", run.AgentHandle,
-			"work_item", run.WorkItem, "input_tokens", result.InputTokens,
-			"output_tokens", result.OutputTokens, "cost_usd", result.CostUSD,
-			"charged", after.Charged, "error", err.Error(),
-			"detail", "the collect was held for the run's spend and its claim did not go "+
-				"back for a retry, and what the error names did not land on the last "+
-				"attempt either: those figures are missing from where it names for good")
-	}
-}
-
-// usageEventID is the id of a launch's usage record: derived from the turn and
-// the launch, so every collect of one job on every node names the same event.
-//
-// THE TURN WITH THE LAUNCH, because a launch id is empty on a row a build
-// before launches were named wrote ([PendingRun.LaunchID]); there the turn
-// alone names it, and such a turn ran one job at a time.
-func usageEventID(run PendingRun) uuid.UUID {
-	return uuid.NewSHA1(usageNamespace, []byte(run.TurnID+"\x00"+run.LaunchID))
-}
-
-// usageNamespace scopes derived usage-record ids. Fixed for the life of the
-// deployment: a new one would make every retried collect a second record.
-var usageNamespace = uuid.MustParse("6f1d2c3b-4a59-5e68-8d7c-9b0a1f2e3d4c")
 
 // collect reconnects, reads the result, and PAUSES the box rather than tearing
 // it down: the resumed Execute may call run_sandbox again to continue in the
@@ -875,9 +674,7 @@ func (c *Coordinator) collect(ctx context.Context, run PendingRun) (Result, erro
 }
 
 // charge post-accounts a collected run's tokens, ONCE per launch, and reports
-// whether the run's spend is on the counter — and, where the counter never
-// answered, the error that holds the collect for its retry
-// ([Coordinator.recordSpend]).
+// whether the run's spend is on the counter.
 //
 // The charge sits inside the part of the tail that is retried: a resume that
 // fails hands the claim back, the completion comes back to this node or to the
@@ -896,34 +693,141 @@ func (c *Coordinator) collect(ctx context.Context, run PendingRun) (Result, erro
 // A CHARGE THE COUNTER NEVER ANSWERED IS NOT RECORDED: it may or may not have
 // landed, and offering it again can only over-state the counter, which trips a
 // cap early rather than late — the direction the counter itself takes when a
-// node dies mid-charge. Recorded, it would never be offered again, and a
-// charge that had not landed would be missing from the budgets for good.
+// node dies mid-charge.
 //
 // A charge that went OVER A CAP is recorded like any other, because it landed
 // like any other: the post-charge records the spend whatever the caps say (see
 // [Accountant]). Reading that answer as "unrecorded" and offering it again is
 // how one over-cap run is charged once per completion retry, which is the
 // double-charge this record exists to stop.
-func (c *Coordinator) charge(ctx context.Context, run PendingRun, result Result) (bool, error) {
+func (c *Coordinator) charge(ctx context.Context, run PendingRun, result Result) bool {
 	tokens := result.InputTokens + result.OutputTokens
 	if run.Charged {
 		log.InfoContext(ctx, "sandbox_charge_already_recorded",
 			"agent_id", run.AgentID, "turn_id", run.TurnID, "tokens", tokens)
-		return true, nil
+		return true
 	}
 	if c.account == nil || tokens == 0 {
-		return false, nil
+		return false
 	}
 	over, err := c.account.Charge(ctx, run.AgentID, run.AgentHandle, tokens)
 	if err != nil {
-		return false, fmt.Errorf("sandbox: charging the run's %d tokens: %w", tokens, err)
+		log.WarnContext(ctx, "sandbox_accounting_failed", "turn_id", run.TurnID, "error", err.Error())
+		return false
 	}
 	if over {
 		log.WarnContext(ctx, "sandbox_spend_over_budget",
 			"agent_id", run.AgentID, "turn_id", run.TurnID, "tokens", tokens)
 	}
 	// RECORDED EITHER WAY, because the counters moved either way.
-	return true, nil
+	return true
+}
+
+// publishPhase publishes the collected run as a phase of its turn, ONCE per
+// launch, and returns the job's record as it now stands.
+//
+// THE RUN IS A PHASE OF ITS OWN. Until this existed a detached coding run left
+// no phase record at all: the executor that launched it publishes nothing when
+// it suspends, and its resumed record is the EXECUTOR's — its own rounds and
+// its own tokens. So every token a coding run spent was missing from the spend
+// rollup and from each node's daily usage (the budget counter was charged, and
+// nothing a person reads agreed with it), and the activity transcript the
+// runner reconstructs — the only account of what an agent with no telemetry
+// did — was collected, redacted and thrown away. It is published here, where
+// the result is in hand, for every collected run: one that finished and one
+// that stopped to ask a question alike, because both spent what they spent.
+//
+// ONCE, for the reason the charge is once, and recorded the same way: the
+// publish sits inside the part of the tail that is retried, every reader of
+// the record counts it as spend, and a second copy is a second charge on
+// every surface that shows one. The record rides the release that hands the
+// claim back ([LaunchRecord.Published]). A publish the queue refused is NOT
+// recorded, so a retry, if one comes, offers it again — the one duplicate that
+// can remain is a publish reported failed that had in fact landed, which is
+// the direction the charge also errs in.
+//
+// Telemetry never fails the tail: a record that could not be published is
+// logged, and the run is resumed exactly as it would have been.
+func (c *Coordinator) publishPhase(ctx context.Context, run PendingRun, result Result) LaunchRecord {
+	facts := run.LaunchFacts()
+	if facts.Published {
+		log.InfoContext(ctx, "sandbox_phase_already_published",
+			"turn_id", run.TurnID, "launch_id", run.LaunchID)
+		return run.Launch
+	}
+	ev := events.New(runPhase(run, facts, result, c.now()), events.TraceContext{
+		TraceID: run.TraceID, ParentSpanID: run.SpanID,
+	})
+	ev.Source = run.Role
+	if err := c.queue.Publish(ctx, topics.Event(ev.Type), ev); err != nil {
+		log.WarnContext(ctx, "sandbox_phase_publish_failed",
+			"turn_id", run.TurnID, "launch_id", run.LaunchID, "error", err.Error())
+		return run.Launch
+	}
+	facts.ID, facts.Published = run.LaunchID, true
+	return facts
+}
+
+// runPhase is a collected run's own phase record.
+//
+// Everything on it is the RUN's: its tokens and cache share, what its CLI said
+// it cost, the report it wrote, what it delivered, its transcript and, when it
+// did not finish, why. Nothing on it is the executor's — that is on the
+// resumed executor's own record, which is why the two never sum to more than
+// the turn spent.
+//
+// Its clock is the store's instant for the launch and this node's for the
+// collection, so DURATION covers launch to collection: the waiter's poll
+// interval is inside it, and the coding itself is the rest. A row an older
+// build launched carries no start, and the record then states none rather
+// than a length measured from nothing.
+func runPhase(run PendingRun, facts LaunchRecord, result Result, collected time.Time) types.AgentPhaseCompleted {
+	rec := types.AgentPhaseCompleted{
+		Agent: run.AgentID, RoleName: run.Role,
+		TurnID: run.TurnID, WorkKey: run.UnitOfWork(),
+		Iteration: facts.Iteration, Phase: types.PhaseSandbox,
+		Model: facts.Model,
+		// Redacted again, at the publish, although the runner redacts at
+		// collection: this is the boundary the record leaves by, and a
+		// runner that forgot would otherwise put a box's credentials in
+		// the event store.
+		Response:           redact.Secrets(result.Text),
+		ActivityTranscript: redact.Secrets(result.Transcript),
+		InputTokens:        result.InputTokens,
+		OutputTokens:       result.OutputTokens,
+		TotalTokens:        result.InputTokens + result.OutputTokens,
+		CacheReadTokens:    result.CacheReadTokens,
+		CacheWriteTokens:   result.CacheWriteTokens,
+		WorkItem:           run.WorkItem,
+		LaunchID:           run.LaunchID,
+		Backend:            types.BackendSandbox,
+		CodingAgent:        run.CodingAgent,
+		SandboxID:          run.SandboxID,
+		CostUSD:            result.CostUSD,
+		DeliveredRefs:      result.DeliveredRefs,
+		ConversationKey:    run.Conversation(),
+	}
+	if !facts.StartedAt.IsZero() {
+		rec.StartedAt = facts.StartedAt.UTC()
+		if took := collected.Sub(facts.StartedAt); took > 0 {
+			rec.DurationMS = int(took / time.Millisecond)
+		}
+	}
+	switch {
+	case result.NeedsInput:
+		// STOPPED, NOT FAILED: the run is parked on a question and will
+		// be resumed by its answer. The question is the note a reader
+		// needs beside the record.
+		rec.Notes = "stopped to ask: " + redact.Secrets(result.Question)
+	case !result.Success:
+		rec.Failed = true
+		rec.Error = redact.Secrets(result.Error)
+		if rec.Error == "" {
+			rec.Error = "the coding run did not succeed and gave no reason"
+		}
+		rec.ErrorKind = "coding_run_failed"
+	}
+	return rec
 }
 
 // park announces the question, records it, and settles the box per the pause
@@ -969,13 +873,16 @@ func (c *Coordinator) park(ctx context.Context, run PendingRun, result Result) e
 		// display, and the durable thread is what a person reading the
 		// feed means by the run's conversation.
 		ConversationKey: run.Conversation(),
+		// The item the run recorded at launch, so the question is shown
+		// against the work it is about.
+		WorkItem: run.WorkItem,
 	}
 	ev := events.New(announcement, events.TraceContext{
 		TraceID: run.TraceID, ParentSpanID: run.SpanID,
 	})
 	ev.Source = run.Role
 	if err := c.queue.Publish(ctx, topics.Event(announcement.EventType()), ev); err != nil {
-		if _, unclaimErr := c.unclaim(ctx, run, true, parkUnannouncedDetail); unclaimErr != nil {
+		if unclaimErr := c.unclaim(ctx, run, true, parkUnannouncedDetail); unclaimErr != nil {
 			//nolint:nilerr // Deliberate, as at the record below: the
 			// claim did not go back, so the run has been ended and a
 			// redelivered completion would find no record to claim.
@@ -987,6 +894,12 @@ func (c *Coordinator) park(ctx context.Context, run PendingRun, result Result) e
 	if err := c.pending.MarkAwaiting(ctx, run.TurnID, Clarification{
 		Question: result.Question, Audience: result.AskTo,
 		Branch: firstRef(result.DeliveredRefs), SessionID: result.SessionID,
+		InputTokens: result.InputTokens, OutputTokens: result.OutputTokens,
+		// WHO IT IS PUT TO, resolved now and written with the question:
+		// the label is the coding agent's own words, and "what is waiting
+		// on me" is a question nobody could answer while it was all the
+		// row said. See [PendingRun.AudienceHandles].
+		Answerers: c.audience.ResolveAudience(run, result.AskTo),
 	}); err != nil {
 		// THE WAIT DID NOT LAND, so this run is not parked and this turn
 		// is not waiting for anybody: the row is still in the claim that
@@ -1000,7 +913,7 @@ func (c *Coordinator) park(ctx context.Context, run PendingRun, result Result) e
 			"detail", "the question could not be recorded, so the run is not parked; its "+
 				"claim is given back for the completion to be retried, or the run is "+
 				"ended where it cannot be")
-		if _, unclaimErr := c.unclaim(ctx, run, true, parkUnrecordedDetail); unclaimErr != nil {
+		if unclaimErr := c.unclaim(ctx, run, true, parkUnrecordedDetail); unclaimErr != nil {
 			//nolint:nilerr // Deliberate: the claim was not handed back,
 			// so the run has been SETTLED and there is nothing left for
 			// a redelivered completion to claim. Sending it back would
@@ -1132,6 +1045,8 @@ func (c *Coordinator) TryResumeFromAnswer(ctx context.Context, handle string, co
 		// the run, so this one is spent rather than run as an unrelated
 		// message.
 		c.clearAnswerAttempts(run.AgentHandle, run.TurnID)
+		c.announceAnswered(ctx, run, types.AnswerViaChat, types.AnswerNotAwaiting,
+			answererOf(trigger), "")
 		return AnswerConsumed, nil
 	}
 	// FOUR VALUES, BECAUSE THE MATCH HAS TWO ENDS. The delivery's pair and
@@ -1152,20 +1067,190 @@ func (c *Coordinator) TryResumeFromAnswer(ctx context.Context, handle string, co
 	// it, and re-entering the Execute loop is work like any other. One move,
 	// so no delivery sees the seat between the two halves.
 	c.moveRun(claimed.AgentHandle, StatusAwaiting, StatusResumed)
-	// NO OUTCOME: this resume collects no run. The box is still parked, and
-	// what the collect that parked it spent was recorded, charged and
-	// published at that collect.
-	disposition, err := c.resumeAndSettle(ctx, claimed, answerText(claimed, answer), true, trigger, runOutcome{})
+	// NO OUTCOME: this resume collects no run. The box is still parked and
+	// its cost is charged where it is collected, so reporting one here would
+	// bill the same run twice.
+	// THE PARKED JOB'S TOKENS, off the row it parked on: this resume is
+	// that job's one segment, so it is the one that charges them.
+	disposition, err := c.resumeAndSettle(ctx, claimed, answerText(claimed, answer, ""), true, trigger, runOutcome{
+		InputTokens: claimed.ParkedInputTokens, OutputTokens: claimed.ParkedOutputTokens,
+	})
 	if disposition == AnswerDeferred {
 		// The claim went back and the run is awaiting this same answer
 		// again — so the delivery has to come back, up to the budget
-		// [MaxAnswerAttempts] gives it.
+		// [MaxAnswerAttempts] gives it. NOTHING IS ANNOUNCED: the answer
+		// has not become anything yet.
 		return c.deferAnswer(ctx, claimed, trigger, err)
 	}
 	// SPENT OR HANDED ON, either way not a failure in a series, so the next
 	// one starts its own.
 	c.clearAnswerAttempts(claimed.AgentHandle, claimed.TurnID)
+	c.announceAnswered(ctx, claimed, types.AnswerViaChat, answeredAs(disposition),
+		answererOf(trigger), "")
 	return disposition, err
+}
+
+// AnswerByTurn resumes the parked run a person answered BY NAMING IT, rather
+// than by replying on the conversation it was asked in.
+//
+// It is [Coordinator.TryResumeFromAnswer] with the lookup replaced by the
+// run's own row: the same claim ([PendingStore.ClaimForResume] under
+// [AnswerTail]), so an answer by turn and a chat reply racing for one question
+// resume it exactly once between them, and the same resume and settle
+// ([Coordinator.resumeAndSettle]). What it does not share is the chat route's
+// bound, because it has no ordinary route to fall back to — see below.
+//
+// # What the caller does with each answer
+//
+// The delivery is a [types.SandboxAnswerGiven] on the seat's inbox, and it is
+// NEVER A TURN, so two of the three dispositions mean the same thing to the
+// dispatcher — spend it — and only one hands it back:
+//
+//   - [AnswerConsumed] — the answer resumed the run.
+//   - [AnswerNotMine] — the run is not waiting for an answer (another claimed
+//     it, or it is running a job) or it is gone. Spent: announced as such,
+//     and there is nothing else for the delivery to become.
+//   - [AnswerDeferred] — the run IS waiting and could not be handed this
+//     answer: the row could not be read, the claim could not be confirmed,
+//     or the resume failed and the claim went back. Handed back with a NAK,
+//     so the queue's own backoff spaces the attempts.
+//
+// # Why no attempt ceiling
+//
+// The chat route stops offering a reply after [MaxAnswerAttempts] because the
+// reply has somewhere else to go — it is an ordinary message, and being
+// worked as one is better than circling a run that cannot take it. This
+// delivery has nowhere else to go, so giving up early would DROP a person's
+// answer in silence. The bound is the broker's own delivery budget instead,
+// whose end is loud: the message lands on the dead-letter subject with the
+// cause under it.
+//
+// # Who is recorded
+//
+// Every answer that reached a run publishes [types.SandboxRunAnswered], with
+// the route `operator` and the credential and person the answer names —
+// which is the whole of the audit this route needed and the chat route
+// lacked.
+func (c *Coordinator) AnswerByTurn(ctx context.Context, given types.SandboxAnswerGiven, trigger *events.Event) (AnswerDisposition, error) {
+	answered := func(run PendingRun, outcome types.AnswerOutcome) {
+		c.announceAnswered(ctx, run, types.AnswerViaOperator, outcome,
+			given.AnsweredBy, given.AnsweredBySeat)
+	}
+	run, found, err := c.pending.Get(ctx, given.TurnID)
+	if err != nil {
+		// A STORE THAT COULD NOT BE READ IS NOT A RUN THAT IS GONE. Handed
+		// back, and nothing is announced: the answer has not become
+		// anything yet.
+		return AnswerDeferred, fmt.Errorf("sandbox: reading run %s for the answer it was given: %w",
+			given.TurnID, err)
+	}
+	if !found {
+		// SETTLED, or never there: a run that is over has no record. What
+		// is known about it is what the answer itself named.
+		answered(PendingRun{TurnID: given.TurnID, AgentHandle: given.AgentHandle}, types.AnswerGone)
+		return AnswerNotMine, nil
+	}
+	if run.AgentHandle != given.AgentHandle {
+		// THE ANSWER REACHED ANOTHER SEAT'S INBOX. It is addressed off the
+		// row it was accepted against, so this is a delivery this seat
+		// must not act on — resuming it here would re-enter another
+		// seat's conversation as this one.
+		log.ErrorContext(ctx, "sandbox_answer_misrouted",
+			"turn_id", given.TurnID, "addressed_to", given.AgentHandle,
+			"run_seat", run.AgentHandle,
+			"detail", "an answer by turn arrived on a seat that does not hold the run it "+
+				"names; it is dropped rather than resumed under the wrong seat")
+		return AnswerNotMine, nil
+	}
+	if !slices.Contains(Awaiting, run.Status) {
+		answered(run, types.AnswerNotAwaiting)
+		return AnswerNotMine, nil
+	}
+	claimed, won, err := c.pending.ClaimForResume(ctx, run.TurnID, AnswerTail(run.LaunchID))
+	if err != nil {
+		// THE CLAIM MAY HAVE LANDED — the chat route's ambiguous case,
+		// resolved the same way: towards the run. If it did land, the
+		// redelivery finds the row claimed, answers not_awaiting, and the
+		// seat's next recovery pass reaps the claim.
+		return AnswerDeferred, fmt.Errorf("sandbox: claiming %s for the answer it was given: %w",
+			run.TurnID, err)
+	}
+	if !won {
+		// Another answer took it first — by turn or on the conversation —
+		// and it is resuming the run with that one.
+		answered(run, types.AnswerNotAwaiting)
+		return AnswerNotMine, nil
+	}
+	log.InfoContext(ctx, "sandbox_clarification_answered",
+		"turn_id", claimed.TurnID, "via", string(types.AnswerViaOperator),
+		"answered_by", given.AnsweredBy, "answered_by_seat", given.AnsweredBySeat)
+	// The claim closed the question and took the seat, as on the chat route.
+	c.moveRun(claimed.AgentHandle, StatusAwaiting, StatusResumed)
+	disposition, err := c.resumeAndSettle(ctx, claimed,
+		answerText(claimed, given.Answer, answererName(given)), true, trigger, runOutcome{
+			InputTokens: claimed.ParkedInputTokens, OutputTokens: claimed.ParkedOutputTokens,
+		})
+	if disposition == AnswerDeferred {
+		// THE RUN IS AWAITING THIS SAME ANSWER AGAIN, so it comes back —
+		// and nothing is announced, because it has not become anything.
+		return AnswerDeferred, err
+	}
+	answered(claimed, answeredAs(disposition))
+	if disposition == AnswerConsumed {
+		return AnswerConsumed, err
+	}
+	return AnswerNotMine, err
+}
+
+// answeredAs is what a settled answer became, from what the resume left the
+// delivery: a turn that ran consumed it, and anything else is a run that is
+// gone. Never called for a deferral, which has not become anything.
+func answeredAs(disposition AnswerDisposition) types.AnswerOutcome {
+	if disposition == AnswerConsumed {
+		return types.AnswerResumed
+	}
+	return types.AnswerGone
+}
+
+// answererOf is who a chat reply came from, as its envelope names them.
+func answererOf(trigger *events.Event) string {
+	if trigger == nil {
+		return ""
+	}
+	return trigger.Actor()
+}
+
+// answererName is how an answer by turn names who gave it to the resumed
+// turn: the person where the credential is bound to one, the credential
+// otherwise.
+func answererName(given types.SandboxAnswerGiven) string {
+	if given.AnsweredBySeat != "" {
+		return given.AnsweredBySeat
+	}
+	return given.AnsweredBy
+}
+
+// announceAnswered publishes what an answer to a parked run became.
+//
+// BEST EFFORT, like every other announcement this coordinator makes after the
+// fact: the answer already did whatever it did, and a feed row that could not
+// be written is a log line rather than a reason to hand the delivery back and
+// resume the run a second time.
+func (c *Coordinator) announceAnswered(ctx context.Context, run PendingRun,
+	via types.AnswerVia, outcome types.AnswerOutcome, by, bySeat string,
+) {
+	payload := types.SandboxRunAnswered{
+		Agent: run.AgentID, AgentHandle: run.AgentHandle, RoleName: run.Role,
+		TurnID: run.TurnID, WorkKey: run.UnitOfWork(), WorkItem: run.WorkItem,
+		Via: via, Outcome: outcome, AnsweredBy: by, AnsweredBySeat: bySeat,
+	}
+	ev := events.New(payload, events.TraceContext{TraceID: run.TraceID, ParentSpanID: run.SpanID})
+	ev.Source = run.Role
+	if err := c.queue.Publish(ctx, topics.Event(payload.EventType()), ev); err != nil {
+		log.WarnContext(ctx, "sandbox_answer_announce_failed",
+			"turn_id", run.TurnID, "via", string(via), "outcome", string(outcome),
+			"error", err.Error())
+	}
 }
 
 // resumeAndSettle re-enters the suspended loop, then settles the box.
@@ -1224,6 +1309,7 @@ func (c *Coordinator) resumeAndSettle(ctx context.Context, run PendingRun,
 	if err := c.resume.Resume(ctx, ResumeRequest{
 		Run: run, Answer: answer, Success: success, Trigger: trigger,
 		DeliveredRefs: outcome.DeliveredRefs,
+		InputTokens:   outcome.InputTokens, OutputTokens: outcome.OutputTokens,
 	}); err != nil {
 		if errors.Is(err, ErrResumeAbandoned) {
 			// THE CLAIM IS NEVER GIVEN BACK. Reverting it here would hand
@@ -1273,7 +1359,7 @@ func (c *Coordinator) resumeAndSettle(ctx context.Context, run PendingRun,
 		// conversation is permanently lost with the row stranded in resumed.
 		log.ErrorContext(ctx, "sandbox_resume_failed",
 			"turn_id", run.TurnID, "revert_to", claimedFrom(run), "error", err.Error())
-		if _, unclaimErr := c.unclaim(ctx, run, false, resumeUnrevertedDetail); unclaimErr != nil {
+		if unclaimErr := c.unclaim(ctx, run, false, resumeUnrevertedDetail); unclaimErr != nil {
 			//nolint:nilerr // Deliberate, and the same answer the
 			// acted-and-broke branch above gives for the same reason:
 			// the run has been settled, so the completion is not sent
@@ -1443,15 +1529,13 @@ func (c *Coordinator) settleClaimed(ctx context.Context, run PendingRun, cause e
 //
 // THE RUN IS COUNTED BACK INTO THE SET ITS REVERTED STATUS BELONGS TO, which
 // is not always the seat. counted is whether this node's count still includes
-// this run, which it does until the resume gives the seat back: the two that
-// hand a claim back before that — a park, whose claim is always out of
-// running, and a collect held until what its run spent is recorded
-// ([Coordinator.recordSpend]) — pass true, and only a failed resume passes
-// false. A run back in running holds the seat again; one back waiting on a
-// person does not — it is an OPEN QUESTION instead. Re-marking the seat held
-// for it parked every later delivery on a run no poll completes, the person's
-// own answer included; counting it into neither set is the opposite mistake,
-// and leaves that answer to be run as an unrelated turn (see [seatRuns]).
+// this run, which it does until the resume gives the seat back, and only a
+// park, whose claim is always out of running, hands one back before that. A
+// run back in running holds the seat again; one back waiting on a person does
+// not — it is an OPEN QUESTION instead. Re-marking the seat held for it
+// parked every later delivery on a run no poll completes, the person's own
+// answer included; counting it into neither set is the opposite mistake, and
+// leaves that answer to be run as an unrelated turn (see [seatRuns]).
 //
 // A CONTEXT OF ITS OWN, like [Coordinator.teardown], because this is a
 // rollback and the failure it undoes is often the cancellation itself: a drain
@@ -1489,29 +1573,18 @@ func (c *Coordinator) settleClaimed(ctx context.Context, run PendingRun, cause e
 // over work that is still running. The SETTLE is the exception, and it makes
 // its own report through the ending it performs.
 //
-// # Three answers, not two
-//
-// HANDED BACK (true, nil): the run is back where the claim found it, and the
-// signal's retry will claim it again. MOVED ON (false, nil): the run no longer
-// holds this claim — the resumed turn relaunched, or the seat's next owner
-// reaped it — so nothing was handed back and nothing here ended it, but no
-// retry of THIS claim is coming either. ENDED (false, the release's own
-// error): the hand-back could not be written, so the run was ended in its
-// place. The middle answer is why this is not an error alone: it says nil
-// like the first, and a caller whose retry carries something only this pass
-// holds — a held collect's spend ([Coordinator.lastSpend]) — lost it silently
-// when it read that nil as "the retry will come".
-//
-// The caller's own error is not this answer — a retry keeps it, so the
-// delivery comes back, and an ending drops it, because there is nothing left
-// to come back to.
-func (c *Coordinator) unclaim(ctx context.Context, run PendingRun, counted bool, detail string) (bool, error) {
+// Reports whether the run is back in the hands of whatever will retry it: nil
+// where the claim went back (or had already moved on), and the release's own
+// error where the run was ended in its place. The caller's own error is not
+// this answer — a retry keeps it, so the delivery comes back, and an ending
+// drops it, because there is nothing left to come back to.
+func (c *Coordinator) unclaim(ctx context.Context, run PendingRun, counted bool, detail string) error {
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), discardGrace)
 	defer cancel()
 	to := claimedFrom(run)
 	released, err := c.pending.ReleaseClaim(ctx, run.TurnID, Release{
 		Launch: run.LaunchID, To: to, Charged: run.Charged,
-		CollectedAt: run.CollectedAt, Fence: fenceOf(run),
+		Published: run.LaunchFacts().Published, Fence: fenceOf(run),
 	})
 	switch {
 	case err != nil:
@@ -1523,18 +1596,17 @@ func (c *Coordinator) unclaim(ctx context.Context, run PendingRun, counted bool,
 		// AUTHORITATIVE, not assumed: the settle moved the row and this
 		// call moved the counts, and neither knows what the other found.
 		c.syncSeat(ctx, run.AgentHandle)
-		return false, fmt.Errorf("sandbox: handing back the claim on %s (to %s): %w", run.TurnID, to, err)
+		return fmt.Errorf("sandbox: handing back the claim on %s (to %s): %w", run.TurnID, to, err)
 	case !released:
 		log.WarnContext(ctx, "sandbox_claim_moved_on",
 			"turn_id", run.TurnID, "launch_id", run.LaunchID,
 			"detail", "the run no longer holds this claim, so nothing was handed back: "+
 				"the resumed turn launched another job, or the seat's next owner reaped it")
 		c.syncSeat(ctx, run.AgentHandle)
-		return false, nil
 	case !counted:
 		c.countRun(run.AgentHandle, to)
 	}
-	return true, nil
+	return nil
 }
 
 // claimedFrom is the status a claimed run held before its claim. A claim
@@ -1579,15 +1651,15 @@ func (c *Coordinator) settleFailed(ctx context.Context, run PendingRun, reason, 
 	c.announceFailure(ctx, run, reason, detail)
 }
 
-// The four sentences a stranded claim reaches an operator's board with.
+// The three sentences a stranded claim reaches an operator's board with.
 //
 // One per caller rather than one shared line, because what an operator does
 // about them differs: a question that was never announced is one nobody saw, a
 // question announced but not recorded is one somebody may be composing an
 // answer to that will never be matched, and a resume that could not be given
-// back — or a collect held for its spend that could not be — is work a box had
-// already finished. All four name the coordination store, because a claim that
-// could not be handed back is what brought every one of them here.
+// back is work a box had already finished. All three name the coordination
+// store, because a claim that could not be handed back is what brought every
+// one of them here.
 const (
 	parkUnannouncedDetail = "the coding run stopped to ask a person a question, but neither the " +
 		"question could be announced nor the run's own claim given back to the " +
@@ -1603,11 +1675,6 @@ const (
 		"re-entered, and the run's claim could not be given back to the coordination " +
 		"store for another attempt, so the turn cannot be continued; the work it pushed, " +
 		"if any, is on its branch"
-
-	collectUnaccountedDetail = "the coding job finished but what it spent could not be " +
-		"recorded, and the run's claim could not be given back to the coordination store " +
-		"for another attempt, so the turn cannot be continued; the work it pushed, if " +
-		"any, is on its branch"
 )
 
 // reportStopped tells the engine one suspended turn has stopped.
@@ -2081,14 +2148,22 @@ func resumeText(result Result) string {
 // torn down the moment it blocked under a zero TTL — so the next call
 // provisions a fresh one: git is the durable state, and the brief has to say
 // so or the coding agent starts by looking for a working tree that is gone.
-func answerText(run PendingRun, answer string) string {
+//
+// BY names who answered where the route knows it — an answer by turn carries
+// the person, while a chat reply's sender is already in the conversation the
+// resumed turn reports back to — and "" leaves the answer unattributed.
+func answerText(run PendingRun, answer, by string) string {
 	lines := []string{
 		"The sandbox coding run paused to ask a person a question before it could finish.",
 	}
 	if run.Question != "" {
 		lines = append(lines, "\nQuestion it asked: "+run.Question)
 	}
-	lines = append(lines, "Their answer: "+answer)
+	if by != "" {
+		lines = append(lines, "Answer from "+by+": "+answer)
+	} else {
+		lines = append(lines, "Their answer: "+answer)
+	}
 	if run.Branch != "" {
 		lines = append(lines, "\nWork-in-progress is on git branch: "+run.Branch)
 	}

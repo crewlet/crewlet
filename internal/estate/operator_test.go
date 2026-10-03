@@ -3,8 +3,10 @@ package estate
 import (
 	"context"
 	"errors"
+	"fmt"
 	"reflect"
 	"slices"
+	"strconv"
 	"sync"
 	"testing"
 	"time"
@@ -49,12 +51,58 @@ type deskBoard struct {
 	d *desk
 }
 
-func (b deskBoard) Workload(_ context.Context, q tracker.WorkloadQuery, _ time.Time) (
-	tracker.WorkloadAnswer, error) {
+func (b deskBoard) Workload(_ context.Context, q tracker.WorkloadQuery, _ time.Time,
+	loc *time.Location) (tracker.WorkloadAnswer, error) {
 	if q.Units != b.d.units {
 		return tracker.WorkloadAnswer{}, errors.New("the serving node's chart was not attached")
 	}
+	// THE ASKER'S CLOCK, which a days-cut read must be answered on: the
+	// serving node's own would cut "this week" at another midnight.
+	if loc == nil || loc.String() != "Europe/Berlin" {
+		return tracker.WorkloadAnswer{}, fmt.Errorf("the asker's zone did not cross: %v", loc)
+	}
 	return tracker.WorkloadAnswer{Truncated: q.Unit == "eng"}, nil
+}
+
+func (b deskBoard) EveryView(_ context.Context, q tracker.EveryViewQuery) (tracker.ViewListing, error) {
+	if q.Units != b.d.units {
+		return tracker.ViewListing{}, errors.New("the serving node's chart was not attached")
+	}
+	return tracker.ViewListing{Views: []tracker.ViewRow{{ID: "v-" + q.Viewer.Handle}}}, nil
+}
+
+func (deskBoard) Flow(_ context.Context, q tracker.FlowQuery, _ time.Time,
+	loc *time.Location) (tracker.FlowAnswer, error) {
+	if loc == nil || loc.String() != "Europe/Berlin" {
+		return tracker.FlowAnswer{}, fmt.Errorf("the asker's zone did not cross: %v", loc)
+	}
+	return tracker.FlowAnswer{Project: q.Project, Points: []tracker.FlowPoint{}}, nil
+}
+
+func (deskBoard) CompanyFeed(_ context.Context, q tracker.FeedQuery) (tracker.FeedPage, error) {
+	return tracker.FeedPage{More: q.Limit == 7, Rows: []tracker.FeedRow{}}, nil
+}
+
+func (deskBoard) Decisions(_ context.Context, q tracker.DecisionsQuery, _ time.Time,
+	loc *time.Location) (tracker.DecisionsAnswer, error) {
+	if loc == nil || loc.String() != "Europe/Berlin" {
+		return tracker.DecisionsAnswer{}, fmt.Errorf("the asker's zone did not cross: %v", loc)
+	}
+	return tracker.DecisionsAnswer{Asks: []tracker.AskRow{}, Complete: q.Who.Handle == "founder"}, nil
+}
+
+func (deskBoard) TurnsOf(_ context.Context, ref, cursor string, limit int,
+	_ statelog.Freshness) (tracker.TaskTurns, error) {
+	return tracker.TaskTurns{Task: ref, Next: cursor + "+" + strconv.Itoa(limit)}, nil
+}
+
+func (deskBoard) TurnPlaces(_ context.Context, runs []string,
+	_ statelog.Freshness) (map[string]tracker.TurnPlace, error) {
+	out := map[string]tracker.TurnPlace{}
+	for i, run := range runs {
+		out[run] = tracker.TurnPlace{TaskID: "t-" + run, Ordinal: i + 1}
+	}
+	return out, nil
 }
 
 func (deskBoard) Inbox(_ context.Context, q tracker.InboxQuery, _ time.Time) (tracker.InboxAnswer, error) {
@@ -98,19 +146,38 @@ func (w deskWriter) WriteFields(_ context.Context, opID string, _ []tracker.Fiel
 	return w.d.note("write_fields", opID, w.a), nil
 }
 
-func (w deskWriter) WriteInbox(_ context.Context, opID, _ string, _, _, _ []tracker.InboxEntry,
-	_ []tracker.Reason, _ tracker.Position) (tracker.WriteResult, error) {
-	return w.d.note("write_inbox", opID, w.a), nil
+func (w deskWriter) MarkInbox(_ context.Context, opID, _ string,
+	g tracker.InboxGesture) (tracker.WriteResult, error) {
+	if !slices.Equal(g.Read, []string{"rec-1"}) {
+		return tracker.WriteResult{}, fmt.Errorf("the gesture did not cross: %+v", g)
+	}
+	return w.d.note("mark_inbox", opID, w.a), nil
 }
 
-func (w deskWriter) WritePins(_ context.Context, opID, _ string, _ []string,
-	_ []tracker.Favorite) (tracker.WriteResult, error) {
+func (w deskWriter) WritePins(_ context.Context, opID, _ string,
+	g tracker.PinGesture) (tracker.WriteResult, error) {
+	if !slices.Equal(g.Views.Add, []string{"v-1"}) {
+		return tracker.WriteResult{}, fmt.Errorf("the gesture did not cross: %+v", g)
+	}
 	return w.d.note("write_pins", opID, w.a), nil
 }
 
 func (w deskWriter) WritePriorities(_ context.Context, opID, _ string, _ []string,
-	_ tracker.PersonAuthority) (tracker.WriteResult, error) {
+	ifMatch *uint64, _ tracker.PersonAuthority) (tracker.WriteResult, error) {
+	if ifMatch == nil || *ifMatch != 9 {
+		return tracker.WriteResult{}, fmt.Errorf("the condition did not cross: %v", ifMatch)
+	}
 	return w.d.note("write_priorities", opID, w.a), nil
+}
+
+// PlaceTask changes the card's lane and refuses its place, as a drop does when
+// the card moved between its two appends — the refusal is what has to cross
+// with its identity, since the tool classifies it.
+func (w deskWriter) PlaceTask(_ context.Context, opID string, place tracker.Place,
+	_ *tracker.Notify) (tracker.PlaceResult, error) {
+	lane := w.d.note("place_task", opID, w.a)
+	return tracker.PlaceResult{Lane: lane, Version: 12, Unplaced: fmt.Errorf(
+		"%w: task %s moved under the drop", tracker.ErrStaleVersion, place.Task)}, nil
 }
 
 func (w deskWriter) RemoveTask(_ context.Context, opID, _, _ string, _ bool,
@@ -148,9 +215,37 @@ func TestEveryOperatorOperationCrossesWhole(t *testing.T) {
 	ctx, now := t.Context(), time.Now()
 
 	work := f.client.Work()
+	berlin, err := time.LoadLocation("Europe/Berlin")
+	if err != nil {
+		t.Fatal(err)
+	}
 	if load, err := work.Workload(ctx, tracker.WorkloadQuery{Unit: "eng", Units: chartOf("asker")},
-		now); err != nil || !load.Truncated {
+		now, berlin); err != nil || !load.Truncated {
 		t.Errorf("workload = (%+v, %v), want the serving node's answer for unit eng", load, err)
+	}
+	if views, err := work.EveryView(ctx, tracker.EveryViewQuery{
+		Viewer: tracker.Party{Handle: "founder"}, Units: chartOf("asker")}); err != nil ||
+		len(views.Views) != 1 || views.Views[0].ID != "v-founder" {
+		t.Errorf("every view = (%+v, %v), want the founder's, on the serving chart", views, err)
+	}
+	if flow, err := work.Flow(ctx, tracker.FlowQuery{Project: "ENG"}, now, berlin); err != nil ||
+		flow.Project != "ENG" {
+		t.Errorf("flow = (%+v, %v), want ENG's on the asker's clock", flow, err)
+	}
+	if feed, err := work.CompanyFeed(ctx, tracker.FeedQuery{Limit: 7}); err != nil || !feed.More {
+		t.Errorf("feed = (%+v, %v), want the query's limit answered", feed, err)
+	}
+	if asks, err := work.Decisions(ctx, tracker.DecisionsQuery{Who: tracker.Party{Handle: "founder"}},
+		now, berlin); err != nil || !asks.Complete {
+		t.Errorf("decisions = (%+v, %v), want the founder's on the asker's clock", asks, err)
+	}
+	if turns, err := work.TurnsOf(ctx, "t-1", "c-3", 5, statelog.Freshness{}); err != nil ||
+		turns.Task != "t-1" || turns.Next != "c-3+5" {
+		t.Errorf("turns = (%+v, %v), want t-1's from c-3 by 5", turns, err)
+	}
+	if places, err := work.TurnPlaces(ctx, []string{"r-1", "r-2"}, statelog.Freshness{}); err != nil ||
+		places["r-2"].TaskID != "t-r-2" || places["r-2"].Ordinal != 2 {
+		t.Errorf("turn places = (%+v, %v), want both runs placed", places, err)
 	}
 	if inbox, err := work.Inbox(ctx, tracker.InboxQuery{Reasons: []tracker.Reason{"mention", "asked"}},
 		now); err != nil || inbox.Unread != 2 {
@@ -187,17 +282,36 @@ func TestEveryOperatorOperationCrossesWhole(t *testing.T) {
 		{"write_view", func() (tracker.WriteResult, error) { return w.WriteView(ctx, "op-1", tracker.View{}) }},
 		{"write_types", func() (tracker.WriteResult, error) { return w.WriteTypes(ctx, "op-2", nil) }},
 		{"write_fields", func() (tracker.WriteResult, error) { return w.WriteFields(ctx, "op-3", nil) }},
-		{"write_inbox", func() (tracker.WriteResult, error) {
-			return w.WriteInbox(ctx, "op-4", "founder", nil, nil, nil, nil, tracker.Position{})
+		{"mark_inbox", func() (tracker.WriteResult, error) {
+			return w.MarkInbox(ctx, "op-4", "founder", tracker.InboxGesture{Read: []string{"rec-1"}})
 		}},
-		{"write_pins", func() (tracker.WriteResult, error) { return w.WritePins(ctx, "op-5", "founder", nil, nil) }},
+		{"write_pins", func() (tracker.WriteResult, error) {
+			return w.WritePins(ctx, "op-5", "founder", tracker.PinGesture{
+				Views: tracker.SetChange[string]{Add: []string{"v-1"}}})
+		}},
 		{"write_priorities", func() (tracker.WriteResult, error) {
-			return w.WritePriorities(ctx, "op-6", "founder", nil, tracker.PersonAuthority{})
+			match := uint64(9)
+			return w.WritePriorities(ctx, "op-6", "founder", nil, &match, tracker.PersonAuthority{})
 		}},
 		{"remove_task", func() (tracker.WriteResult, error) { return w.RemoveTask(ctx, "op-7", "t-1", "ENG", false, nil) }},
 		{"restore_task", func() (tracker.WriteResult, error) { return w.RestoreTask(ctx, "op-8", "t-1", "ENG", nil) }},
 		{"purge_task", func() (tracker.WriteResult, error) { return w.PurgeTask(ctx, "op-9", "t-1", "ENG", "spam") }},
 	}
+	writes = append(writes, struct {
+		op    string
+		write func() (tracker.WriteResult, error)
+	}{"place_task", func() (tracker.WriteResult, error) {
+		// A DROP WHOSE PLACE WAS REFUSED crosses with the refusal's
+		// identity, which the tool classifies — an error is an interface
+		// no encoder writes — beside the lane it did change.
+		placed, err := w.PlaceTask(ctx, "op-10", tracker.Place{Task: "t-1", Project: "ENG",
+			After: "t-2"}, nil)
+		if !errors.Is(placed.Unplaced, tracker.ErrStaleVersion) || placed.Version != 12 {
+			t.Errorf("place = (%+v, %v), want the lane changed and a stale-version refusal "+
+				"of its place", placed, placed.Unplaced)
+		}
+		return placed.Lane, err
+	}})
 	for _, write := range writes {
 		if res, err := write.write(); err != nil || res.Outcome != statelog.OutcomeApplied {
 			t.Errorf("%s = (%+v, %v), want applied", write.op, res, err)
@@ -208,7 +322,7 @@ func TestEveryOperatorOperationCrossesWhole(t *testing.T) {
 	var want, wantIDs []string
 	for i, write := range writes {
 		want = append(want, write.op)
-		wantIDs = append(wantIDs, "op-"+string(rune('1'+i)))
+		wantIDs = append(wantIDs, "op-"+strconv.Itoa(i+1))
 	}
 	if !slices.Equal(d.wrote, want) || !slices.Equal(d.opIDs, wantIDs) {
 		t.Errorf("the data node wrote %v under %v, want %v under %v", d.wrote, d.opIDs, want, wantIDs)

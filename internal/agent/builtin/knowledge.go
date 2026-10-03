@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
+	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/knowledge"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/textcut"
@@ -39,7 +40,7 @@ const searchQueryMax = 400
 // about what a knowledge backend is.
 type KnowledgeSearcher interface {
 	CanSearch(seat *org.Role, o *org.Organization) bool
-	Search(ctx context.Context, q knowledge.Query) knowledge.Answer
+	Search(ctx context.Context, q knowledge.Query) knowledge.Result
 }
 
 // searchKnowledge searches the team knowledge base on demand.
@@ -68,6 +69,10 @@ type searchKnowledge struct {
 	// company's own account rather than somebody's". Nil here means a
 	// caller that must bring a turn, which is every seat registry.
 	org func() *org.Organization
+
+	// events receives the `knowledge_read` a seat's search records. Nil
+	// records nothing, which is a registry built outside an engine.
+	events Telemetry
 }
 
 var _ tools.SeatCallable = (*searchKnowledge)(nil)
@@ -138,7 +143,8 @@ func (t *searchKnowledge) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		company = t.org()
 	}
 	if company == nil {
-		return failed("No organization is in scope, so there is no knowledge base to search."), nil
+		return refused(tools.RefusalUnavailable,
+			"No organization is in scope, so there is no knowledge base to search."), nil
 	}
 	// THE CHEAP GATE FIRST, exactly as the turn-start prefetch does it:
 	// CanSearch does no I/O, and a seat whose search could not hit anything
@@ -151,7 +157,7 @@ func (t *searchKnowledge) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 			"from what you have."}, nil
 	}
 
-	answer := t.search.Search(ctx, knowledge.Query{
+	result := t.search.Search(ctx, knowledge.Query{
 		Text: query, Seat: seat, Org: company, Limit: searchHits,
 		// AUTO-DRAFTS HIDDEN, the same exclusion the turn-start prefetch
 		// applies. Those pages are unreviewed proposals a synthesis pass
@@ -160,10 +166,20 @@ func (t *searchKnowledge) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		// without anybody agreeing to it.
 		ExcludeAncestors: []string{knowledge.AutoDraftedParent},
 	})
-	hits := answer.Hits
+	hits := result.Hits
+	if len(hits) == 0 && result.ServedMode == "" {
+		// NOTHING RAN, which is not "nothing matched": telling a seat
+		// the company has not written this down, when the knowledge
+		// base could not be read at all, is how it goes and writes a
+		// duplicate of a page that exists.
+		return tools.Result{Output: "The knowledge base could not be searched just " +
+			"now, so this says nothing about whether a page exists. Try again " +
+			"shortly, or work from what you have."}, nil
+	}
+	partial := partialNote(result.Coverage)
 	// PART OF THE KNOWLEDGE BASE THAT DID NOT ANSWER IS SAID, and never as
 	// "no documents match": its pages are the ones nobody searched.
-	missing := answer.Coverage.Notice()
+	missing := result.Partitions.Notice()
 	if len(hits) == 0 {
 		if missing != "" {
 			return tools.Result{Output: fmt.Sprintf("No team documents matched %q in "+
@@ -173,8 +189,15 @@ func (t *searchKnowledge) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		}
 		return tools.Result{Output: fmt.Sprintf(
 			"No team documents match %q. Try different keywords, or work from what "+
-				"you have — not everything is written down.", clip(query))}, nil
+				"you have — not everything is written down.%s", clip(query), partial)}, nil
 	}
+	// EVERY HIT THE MODEL WAS SHOWN, in the order it was shown them. A
+	// search is a read of titles and snippets rather than of pages, and
+	// recorded as such (`via: search`) — which pages a company's searches
+	// surface is a different question from which ones get opened, and a
+	// knowledge base is curated against both.
+	note(ctx, t.events, turn, knowledgeRead(turn, types.ReadViaSearch,
+		hits[0].Backend, query, knowledge.ReadPages(hits)))
 
 	var b strings.Builder
 	fmt.Fprintf(&b, "%d team documents match %q:\n", len(hits), clip(query))
@@ -192,7 +215,23 @@ func (t *searchKnowledge) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	if missing != "" {
 		b.WriteString("\n" + missing + ".")
 	}
+	b.WriteString(partial)
 	return tools.Result{Output: b.String()}, nil
+}
+
+// partialNote is the sentence a search over part of the knowledge base owes
+// the seat that asked, or nothing when it covered all of it.
+//
+// SAID TO THE MODEL rather than only logged, because the model is the one
+// deciding what the answer means: a short list over two thirds of the corpus
+// reads exactly like a short list over all of it, and "nothing about this is
+// written down" is the conclusion a seat acts on by writing it down again.
+func partialNote(c knowledge.Coverage) string {
+	if c.Complete || c.BucketsMissing == 0 {
+		return ""
+	}
+	return "\n\nThis search covered only part of the knowledge base — some of the " +
+		"fleet did not answer in time — so a page not listed here may still exist."
 }
 
 // renderHit renders one page as a bullet.

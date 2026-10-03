@@ -35,9 +35,18 @@ type frontmatter struct {
 }
 
 // Source identifies where a skill was read from, for provenance.
+//
+// The PAGE and its version are the registry's identity for a skill; the
+// backend, the container and the page's own title are what a record of the
+// skill being USED names it by, because a page id is only an address inside
+// one backend and a reader needs a label for it.
 type Source struct {
 	PageID  string
 	Version int
+
+	Backend   string
+	Container string
+	Title     string
 }
 
 // Parse reads a skill from its authored text.
@@ -77,6 +86,9 @@ func Parse(text string, from Source) (Skill, error) {
 		Required:          required,
 		SourcePageID:      from.PageID,
 		SourcePageVersion: from.Version,
+		SourceBackend:     from.Backend,
+		SourceContainer:   from.Container,
+		SourceTitle:       from.Title,
 	}
 	if err := skill.Validate(); err != nil {
 		return Skill{}, err

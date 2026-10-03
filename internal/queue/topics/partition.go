@@ -31,16 +31,17 @@ import (
 // against: a position recorded against the old stream would be a plausible
 // number in the new one, and nothing comparing the two could tell.
 //
-// # Layout 0 is today's three logs, under today's names
+// # Layout 0 is today's four logs, under today's names
 //
 // Layout 0 is the estate as it has always been — one space, `estate`, whose
-// one partition carries all three domains — and its names are NOT this
+// one partition carries all four domains — and its names are NOT this
 // grammar's. They are the constants the single logs have always had
-// (TrackerLogStream, TrackerVectorsStream, PagesLogStream and their prefixes
-// and wildcards), answered FROM those constants rather than spelled again, so
-// a node running layout 0 addresses the streams a running fleet already holds
-// and no build between here and the first partitioned layout renames one.
-// Layout 0 names only those three logs, and only in estate.000: anything else
+// (TrackerLogStream, TrackerVectorsStream, PagesLogStream, UsageLogStream and
+// their prefixes and wildcards), answered FROM those constants rather than
+// spelled again, so a node running layout 0 addresses the streams a running
+// fleet already holds and no build between here and the first partitioned
+// layout renames one. Layout 0 names only those four logs, and only in
+// estate.000: anything else
 // asked of it is not a stream it has, and aliasing a partitioned-looking
 // request onto today's stream would put two histories behind one name.
 //
@@ -177,7 +178,7 @@ func PartitionLogWildcard(layout int, space string, index int, domain string) st
 }
 
 // layoutZeroLog answers layout 0's names for one log, from the constants the
-// three single logs have always had — or three empty strings for a log
+// four single logs have always had — or three empty strings for a log
 // layout 0 does not have.
 //
 // The words are written HERE, inside a function, and never as package
@@ -204,6 +205,8 @@ func layoutZeroLog(space string, index int, domain string) (stream, prefix, wild
 		return TrackerVectorsStream, TrackerVectorsPrefix, TrackerVectorsWildcard
 	case "pages":
 		return PagesLogStream, PagesLogPrefix, PagesLogWildcard
+	case "usage":
+		return UsageLogStream, UsageLogPrefix, UsageLogWildcard
 	}
 	return "", "", ""
 }

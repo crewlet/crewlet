@@ -15,10 +15,12 @@
  * The bar chart ranked projects by open work alone, which answers "where is
  * the pile" and nothing else: a project with four open and two hundred done is
  * a different situation from one with four open and nothing else, and the
- * chart drew them identically. Every row carries the three maintained counts
- * AND how much of the whole is done, so both readings are on the same line —
- * the meter is `census.tsx`'s, which is the same one the project's own header
- * wears.
+ * chart drew them identically. Every row carries the four maintained counts —
+ * waiting and started apart, because a queue and a team at full stretch are
+ * different situations too — AND the same split drawn as one bar (done,
+ * active, still to do), beside the lead's target date, so "how far along" and
+ * "by when" are on the same line. The meter is `census.tsx`'s, which is the
+ * same one the project's own header wears.
  *
  * # A row peeks, because a directory is read to RECOGNISE something
  *
@@ -28,13 +30,13 @@
  *
  * # The sort is the reader's, it is in the URL, and the ENGINE applies it
  *
- * `DataGrid` writes `sort=`, so a directory ordered by open work can be sent
+ * `DataGrid` writes `sort=`, so a directory ordered by waiting work can be sent
  * to somebody, survives a reload and comes back from Back the way it went.
  * The key then travels to the engine rather than being applied here, because
  * the answer is a PAGE: the listing stops at the engine's own 200
  * (`MaxProjectsPerAnswer`) and a sort applied after that orders the rows that
- * survived the key order — so `-open` meant "the most open work among the
- * projects whose keys sort first", which reads exactly like the answer to the
+ * survived the key order — so `-todo` would mean "the most waiting work among
+ * the projects whose keys sort first", which reads exactly like the answer to the
  * question it is not. `serverSorted` is what tells the grid not to re-sort
  * the page it was handed.
  *
@@ -45,6 +47,7 @@
  */
 
 import { useMemo } from "react";
+import { usePanelAlign } from "~/lib/media.ts";
 import { buildHash, useParam, useRoute } from "~/app/router.tsx";
 import { PageNote } from "~/app/frame/PageNote.tsx";
 import { usePageCoverage } from "~/app/Shell.tsx";
@@ -59,7 +62,7 @@ import { peekHref, peekRow, usePeekControls } from "~/app/frame/DetailRail.tsx";
 import { usePeekNeighbours } from "~/app/frame/PeekHost.tsx";
 import { QueryState } from "~/components/common.tsx";
 import { Button, EmptyState, EmptyValue, Popover, Tag } from "@crewlethq/ui";
-import { DashboardGlyph, ViewColumnGlyph } from "@crewlethq/icons/glyphs";
+import { LayoutDashboardGlyph, Columns3Glyph } from "@crewlethq/icons/glyphs";
 import { useQuery } from "~/lib/useQuery.ts";
 import { useOrg } from "~/lib/store-hooks.ts";
 import { indexOrg, seatLookup } from "~/lib/seats.ts";
@@ -67,6 +70,8 @@ import { useNow } from "~/lib/clock.ts";
 import { Segmented } from "~/ui/primitives.tsx";
 import { filed, ProjectProgress, ProjectProgressLegend } from "./census.tsx";
 import type { WorkProjectRow } from "~/protocol/index.ts";
+import { PROJECT_SORT_KEYS } from "~/contract/work.ts";
+import { targetLabel } from "~/lib/work.ts";
 
 /** Which projects the grid lists, as the one switch this page has. */
 const SHOWN = ["active", "archived", "all"] as const;
@@ -89,19 +94,6 @@ const ASKED: Record<Shown, "false" | "only" | "true"> = {
 };
 
 /**
- * The orderings the ENGINE takes, as the dashboard's own copy.
- *
- * It is a copy by necessity — this is a separate build in a separate language
- * and cannot import `tracker.ProjectSorts` — so a Go gate holds it against
- * that list in both directions (`internal/tracker/client_gate_test.go`). The
- * drift it catches is silent and total: a header carrying a key the engine
- * refuses turns one click into a `bad_params` refusal over the whole screen,
- * and an ordering the engine grew that no header offers is one nobody can
- * reach.
- */
-const PROJECT_SORT_KEYS = ["key", "name", "unit", "open", "done", "closed", "last_change"] as const;
-
-/**
  * What the directory opens on.
  *
  * WHERE THE PILE IS, which is the question a directory of containers is
@@ -110,7 +102,7 @@ const PROJECT_SORT_KEYS = ["key", "name", "unit", "open", "done", "closed", "las
  * the grid read `sort=` through `useParam` with this same fallback, so the two
  * cannot disagree about what an absent key means.
  */
-const DEFAULT_SORT = "-open";
+const DEFAULT_SORT = "-todo";
 
 /**
  * What an empty answer means, per segment — and there are only two here.
@@ -134,7 +126,7 @@ const DEFAULT_SORT = "-open";
  */
 const EMPTY = {
   archived: {
-    icon: "view_column" as const,
+    icon: "columns-3" as const,
     title: "No project is archived",
     hint: "An archived project keeps its work and stops taking new items.",
   },
@@ -152,7 +144,7 @@ const EMPTY = {
 function activeEmpty(archived: number, href: string) {
   if (archived > 0) {
     return {
-      icon: "view_column" as const,
+      icon: "columns-3" as const,
       title: "No project is active",
       hint: (
         <>
@@ -172,13 +164,16 @@ function activeEmpty(archived: number, href: string) {
     };
   }
   return {
-    icon: "view_column" as const,
+    icon: "columns-3" as const,
     title: "No project is active",
     hint: "A project appears the moment a unit in the company configuration declares its `project` key.",
   };
 }
 
 export function Projects() {
+  // See [usePanelAlign]: the Columns panel is end-aligned under the bar's
+  // right edge, and start-aligned on a phone.
+  const columnsAlign = usePanelAlign("end");
   const org = useOrg();
   // THE CHART'S TWO ANSWERS ABOUT A HANDLE, from one lookup: the lead's badge
   // draws the dashed ring off the KIND, and the last change prints the NAME.
@@ -257,11 +252,12 @@ export function Projects() {
     () =>
       rows.reduce(
         (acc, p) => ({
-          open: acc.open + p.task_counts.open,
+          todo: acc.todo + p.task_counts.todo,
+          active: acc.active + p.task_counts.active,
           done: acc.done + p.task_counts.done,
           closed: acc.closed + p.task_counts.closed,
         }),
-        { open: 0, done: 0, closed: 0 },
+        { todo: 0, active: 0, done: 0, closed: 0 },
       ),
     [rows],
   );
@@ -300,7 +296,7 @@ export function Projects() {
   const nothingAtAll = !!census && active + archived === 0;
 
   // A HEAD IS A BUTTON WHERE IT CARRIES `sortValue`, so the columns that do
-  // are exactly the engine's seven orderings — `Projects.test.tsx` holds the
+  // are exactly the engine's nine orderings — `Projects.test.tsx` holds the
   // two lists against each other, and the Go gate holds `PROJECT_SORT_KEYS`
   // against the engine's own. Under `serverSorted` the accessors are never
   // called; they stay because they say what each column's value IS.
@@ -316,6 +312,9 @@ export function Projects() {
       {
         key: "name",
         header: "Project",
+        // THE POINT OF THE LIST, so it has a floor: at zero it is the column
+        // that gives way to every content-sized one beside it.
+        floor: "10rem",
         sortValue: (row) => row.name || row.key,
         cell: (row) => (
           <span className="col">
@@ -383,12 +382,20 @@ export function Projects() {
           ),
       },
       {
-        key: "open",
-        header: "Open",
+        key: "todo",
+        header: "To do",
         align: "right",
         shrink: true,
-        sortValue: (row) => row.task_counts.open,
-        cell: (row) => <NumberCell value={row.task_counts.open} />,
+        sortValue: (row) => row.task_counts.todo,
+        cell: (row) => <NumberCell value={row.task_counts.todo} />,
+      },
+      {
+        key: "active",
+        header: "Active",
+        align: "right",
+        shrink: true,
+        sortValue: (row) => row.task_counts.active,
+        cell: (row) => <NumberCell value={row.task_counts.active} />,
       },
       {
         key: "done",
@@ -416,6 +423,12 @@ export function Projects() {
       {
         key: "progress",
         header: "Progress",
+        // SIZED TO ITS BAR, not a share of the slack. As a flexible track it
+        // split the free width evenly with Project, so at 1280 the bar sat in
+        // 140px of mostly empty cell while "Product Management" was cut to
+        // "Product Managem…" beside it. A proportion reads at 96px; a name
+        // does not read at all once it is cut.
+        shrink: true,
         // NOT SORTABLE. A proportion over four tasks and one over four hundred
         // are the same number and not the same fact, so ordering by it would
         // rank a project nobody has started below one with a single task
@@ -423,10 +436,7 @@ export function Projects() {
         cell: (row) => (
           // IN A CELL IT IS THE BAR ALONE — the legend is drawn once under the
           // grid, because forty legends is not forty facts.
-          <span
-            className="work-meter"
-            title={`${row.task_counts.done} done of ${filed(row.task_counts)} filed`}
-          >
+          <span className="work-meter">
             <ProjectProgress counts={row.task_counts} />
           </span>
         ),
@@ -440,6 +450,20 @@ export function Projects() {
         sortValue: (row) => row.last_change?.at ?? "",
         cell: (row) => <LastChange row={row} now={now} seatName={(handle) => who(handle).name} />,
       },
+      {
+        key: "target",
+        header: "Target",
+        shrink: true,
+        // THE LEAD'S DAY, and a project with none is ABSENT rather than the
+        // soonest — the engine sorts it last in both directions.
+        sortValue: (row) => row.target_date ?? "",
+        cell: (row) =>
+          row.target_date ? (
+            <span className="t-num">{targetLabel(row.target_date)}</span>
+          ) : (
+            <EmptyValue label="No target set" />
+          ),
+      },
     ],
     [who, now],
   );
@@ -452,19 +476,18 @@ export function Projects() {
 
   return (
     <>
-      {/* WHAT THIS PAGE IS, once. Where a project COMES FROM is the sentence
-          somebody needs when there are none, so it lives in the empty state
-          below rather than being printed twice on the one screen that shows
-          both. */}
-      <PageNote>Every project in the company, who leads it and how far along its work is.</PageNote>
-
+      {/* NO INTRODUCTION: the table's own headings say what a row is, and a
+          sentence above them spent a line on every visit saying it again.
+          Where a project COMES FROM is the sentence somebody needs when there
+          are none, so it lives in the empty state below. */}
       <div className="toolbar">
         {/* THE TOTALS AS ONE SENTENCE, not four tiles. They are context for the
             rows under them rather than the point of the page — and the counts
             are over WHAT IS SHOWN, which is why the switch beside them changes
             them and why a short page says so. */}
         <span className="work-summary" style={{ marginLeft: 0 }}>
-          {counted} {noun} · {totals.open} open · {totals.done} done · {totals.closed} closed
+          {counted} {noun} · {totals.todo} to do · {totals.active} active · {totals.done} done ·{" "}
+          {totals.closed} closed
         </span>
         {short && (
           <span className="t-caption">
@@ -506,12 +529,12 @@ export function Projects() {
         <Popover
           role="dialog"
           label="Columns"
-          align="end"
+          align={columnsAlign}
           trigger={(open, toggle) => (
             <Button
               size="small"
-              variant="tertiary"
-              leadingIcon={<ViewColumnGlyph size="sm" />}
+              variant="ghost"
+              leadingIcon={<Columns3Glyph size="sm" />}
               aria-expanded={open}
               aria-haspopup="dialog"
               onClick={toggle}
@@ -607,7 +630,7 @@ function LastChange({
 }) {
   const change = row.last_change;
   if (!change) {
-    return row.task_counts.open + row.task_counts.done + row.task_counts.closed === 0 ? (
+    return filed(row.task_counts) === 0 ? (
       <EmptyValue label="Nothing has been filed here" />
     ) : (
       <EmptyValue label="Filed before this node recorded one" />
@@ -647,7 +670,7 @@ function LastChange({
 function NoProjectsYet() {
   return (
     <EmptyState
-      icon={<DashboardGlyph size={32} />}
+      icon={<LayoutDashboardGlyph size={32} />}
       title="No project has been created yet"
       description="A project is where the company files its work: a key, a lead and its own statuses, types and labels. One appears here the moment a unit in the company configuration declares its `project` key — the engine mints it, so there is nothing to create by hand."
     />

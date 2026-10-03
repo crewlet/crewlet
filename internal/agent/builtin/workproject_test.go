@@ -314,6 +314,62 @@ func TestLabelsAreDeclaredBeforeTheTaskIsFiled(t *testing.T) {
 	}
 }
 
+// A REFUSED CALL DECLARES NO LABEL. The declare is the call's first PUBLISH,
+// on its own subject, so it has to come after every check that can still
+// refuse the call — its ask, its decision, its blockers, its re-route. A call
+// the tool turned down files nothing and must leave the project's label set
+// exactly as it found it, or every refused retry adds a label nobody went on
+// to use.
+//
+// And an update that cannot write its dependency change writes NOTHING: the
+// patch landing before a refusal would tell the caller the call failed about
+// an item whose fields it did in fact change.
+func TestARefusedWriteDeclaresNoLabel(t *testing.T) {
+	t.Parallel()
+	labels := func(args map[string]any) map[string]any {
+		args["labels"] = []any{"regression"}
+		args["labels_create_missing"] = true
+		return args
+	}
+	for name, tc := range map[string]struct {
+		tool string
+		args map[string]any
+	}{
+		"create with a decision asked of nobody": {tracker.CreateWorkItemTool,
+			labels(map[string]any{"title": "Which?", "decision": decisionArg()})},
+		"create with a malformed decision": {tracker.CreateWorkItemTool,
+			labels(map[string]any{"title": "Which?", "ask": "pm",
+				"decision": map[string]any{"question": "Which?", "options": []any{}}})},
+		"create waiting on an item that does not exist": {tracker.CreateWorkItemTool,
+			labels(map[string]any{"title": "A task", "waiting_on": []any{"ENG-99"}})},
+		"create waiting on work with no dependency writer": {tracker.CreateWorkItemTool,
+			labels(map[string]any{"title": "A task", "waiting_on": []any{"ENG-2"}})},
+		"update re-routed by somebody who does not lead the project": {
+			tracker.UpdateWorkItemTool,
+			labels(map[string]any{"item": "ENG-1", "routing_unit": "platform"})},
+		"update waiting on work with no dependency writer": {tracker.UpdateWorkItemTool,
+			labels(map[string]any{"item": "ENG-1",
+				"waiting_on": map[string]any{"add": []any{"ENG-2"}}})},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			trk := newFakeTracker()
+			reg := projectRegistryIn(t, trk, nil, "ENG")
+			got := callWork(t, reg, tc.tool, tc.args)
+			if !got.Failed {
+				t.Fatalf("the call was accepted: %s", got.Output)
+			}
+			if len(trk.ensured) != 0 {
+				t.Errorf("a refused call declared %v", trk.ensured)
+			}
+			if len(trk.created) != 0 || len(trk.patched) != 0 {
+				t.Errorf("a refused call wrote: %d creates, %d patches",
+					len(trk.created), len(trk.patched))
+			}
+		})
+	}
+}
+
 // THE VERB IS DECLARED DESTRUCTIVE, and the facet that makes it so is the one
 // a caller is most likely to reach for by accident rather than the one it is
 // named after: `fields` REPLACES a project's declarations, so a call sending a
@@ -370,4 +426,60 @@ func projectRegistryIn(t *testing.T, trk *fakeTracker, leads builtin.LeadsProjec
 		t.Fatalf("register: %v", err)
 	}
 	return reg
+}
+
+// THE TARGET DATE TRAVELS AS SENT, AND NULL CLEARS IT.
+//
+// Presence decides here too: a call that says nothing about the target must
+// not clear the one the lead set, and one that sends null or "" must — "no
+// target" is a setting. What the value MEANS is the tracker's to coerce, so
+// the tool carries the text and surfaces what the write was not refused for:
+// an instant stored as its day changed the caller's value, and an answer that
+// said `applied` alone would read as stored verbatim.
+func TestWriteProjectCarriesTheTargetDate(t *testing.T) {
+	t.Parallel()
+	for name, tc := range map[string]struct {
+		args map[string]any
+		want *string
+	}{
+		"absent leaves it alone": {map[string]any{"default_assignee": ""}, nil},
+		"a date is carried":      {map[string]any{"target_date": " 2026-12-18 "}, new("2026-12-18")},
+		"null clears it":         {map[string]any{"target_date": nil}, new("")},
+		"empty clears it":        {map[string]any{"target_date": ""}, new("")},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			trk := newFakeTracker()
+			reg := projectRegistry(t, trk, leadAlways)
+			tc.args["project"] = "ENG"
+			if got := callWork(t, reg, tracker.WriteProjectTool, tc.args); got.Failed {
+				t.Fatalf("write_project failed: %q", got.Output)
+			}
+			if len(trk.projectEdits) != 1 {
+				t.Fatalf("%d policy writes, want one", len(trk.projectEdits))
+			}
+			got := trk.projectEdits[0].TargetDate
+			if (got == nil) != (tc.want == nil) || (got != nil && *got != *tc.want) {
+				t.Fatalf("the target reached the writer as %v, want %v", got, tc.want)
+			}
+		})
+	}
+
+	trk := newFakeTracker()
+	reg := projectRegistry(t, trk, leadAlways)
+	if got := callWork(t, reg, tracker.WriteProjectTool, map[string]any{
+		"project": "ENG", "target_date": 20261218,
+	}); !got.Failed || !strings.Contains(got.Output, "target_date") {
+		t.Errorf("a number for a date answered %+v, want a failure naming the "+
+			"argument", got)
+	}
+
+	trk.projectWarnings = []string{"the target date holds a date and not a " +
+		"time, so 2026-12-18T20:00:00Z was stored as 2026-12-19"}
+	got := callWork(t, reg, tracker.WriteProjectTool, map[string]any{
+		"project": "ENG", "target_date": "2026-12-18T20:00:00Z",
+	})
+	if got.Failed || !strings.Contains(got.Output, "2026-12-19") {
+		t.Errorf("a truncated target answered %q, want the warning carried", got.Output)
+	}
 }

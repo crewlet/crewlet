@@ -17,6 +17,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/envref"
 	"github.com/crewlet/crewlet/internal/logging"
+	"github.com/crewlet/crewlet/internal/org"
 	mapplacement "github.com/crewlet/crewlet/internal/placement"
 	"github.com/crewlet/crewlet/internal/seat/placement"
 	"github.com/crewlet/crewlet/internal/secrets"
@@ -1394,7 +1395,7 @@ type Stream struct {
 	// EMBEDDED ONLY, for the reason `store_dir` and `debug` are: it is
 	// handed to the server this process STARTS. An external cluster's
 	// account limits are its own operator's to set.
-	StoreMaxBytes int64 `yaml:"store_max_bytes,omitempty" json:"store_max_bytes,omitempty" js:"min=4294967296;max=70368744177664" desc:"How much of store_dir's volume the EMBEDDED broker may hold; unset lets it take three quarters of that volume's free space at boot. Divide it when several engines share one filesystem."`
+	StoreMaxBytes int64 `yaml:"store_max_bytes,omitempty" json:"store_max_bytes,omitempty" js:"min=5368709120;max=70368744177664" desc:"How much of store_dir's volume the EMBEDDED broker may hold; unset lets it take three quarters of that volume's free space at boot. Divide it when several engines share one filesystem."`
 
 	// Cluster makes the embedded server a MEMBER of a cluster with its
 	// peers: the fleet's broker is those members, and every other node
@@ -1562,6 +1563,26 @@ type Stream struct {
 	// fit the broker and a set one is not, and crossing it refuses the
 	// append rather than shedding history.
 	PagesLogMaxBytes int64 `yaml:"pages_log_max_bytes,omitempty" json:"pages_log_max_bytes,omitempty" js:"min=1073741824;max=274877906944" desc:"Byte ceiling on the knowledge base's log; unset derives a quarter of the mutation log's ceiling, set or derived, 1 GiB..16 GiB from a volume alone."`
+
+	// UsageLogMaxBytes is the byte ceiling on the usage log — the compacted
+	// stream every node publishes its own company days to, so that spend,
+	// turn and read history is answered fleet-wide and outlives the node
+	// that spent it.
+	//
+	// SIZED BY A CENSUS, NOT A RATE: the stream keeps one message per
+	// (node, day, seat or schedule) for 181 days, so its size is the
+	// number of those objects rather than how busy they were. A three-node
+	// fleet of forty seats and twenty schedules is about 217 MB; the 1 GiB
+	// default is four times that. Unset takes the default rather than a
+	// share of the disk, because a gibibyte is already the floor every
+	// state log shares.
+	//
+	// It shares the state logs' one budget, and what the mutation log's
+	// field says about it holds here: the value is the one the stream is
+	// CREATED with, and crossing it refuses the append — the day's figures
+	// stop replicating and the log's headroom alarm names this domain —
+	// rather than dropping the oldest day.
+	UsageLogMaxBytes int64 `yaml:"usage_log_max_bytes,omitempty" json:"usage_log_max_bytes,omitempty" js:"min=1073741824;max=68719476736" desc:"Byte ceiling on the usage log, the compacted stream each node's company days replicate on; default 1 GiB, sized for 181 days of a node's seats and schedules."`
 
 	// TrackerRetention is when the log may be trimmed, and it is the one
 	// block here that can stop a fleet's log growing for ever — or stop it
@@ -1970,6 +1991,8 @@ func (s *Stream) validate(path Path) error {
 		TrackerVectorsMaxBytesFloor, TrackerVectorsMaxBytesCeiling)
 	bytesInRange(&p, path, "pages_log_max_bytes", s.PagesLogMaxBytes,
 		PagesLogMaxBytesFloor, PagesLogMaxBytesCeiling)
+	bytesInRange(&p, path, "usage_log_max_bytes", s.UsageLogMaxBytes,
+		UsageLogMaxBytesFloor, UsageLogMaxBytesCeiling)
 	bytesInRange(&p, path, "store_max_bytes", s.StoreMaxBytes,
 		StoreMaxBytesFloor, StoreMaxBytesCeiling)
 	// A LIMIT SMALLER THAN THE CEILINGS DECLARED INSIDE IT is a refusal
@@ -1993,18 +2016,20 @@ func (s *Stream) validate(path Path) error {
 	// these ceilings exactly fill still fails at boot; what covers that is
 	// the refusal itself, which names this limit, what was already spoken
 	// for, and the field the ceiling came from.
-	declared := s.TrackerLogMaxBytes + s.TrackerVectorsMaxBytes + s.PagesLogMaxBytes
+	declared := s.TrackerLogMaxBytes + s.TrackerVectorsMaxBytes + s.PagesLogMaxBytes +
+		s.UsageLogMaxBytes
 	if s.StoreMaxBytes > 0 && declared > s.StoreMaxBytes {
 		p.add(at(path, "store_max_bytes"), ErrConflict,
 			"%d bytes is smaller than the stream ceilings declared inside it "+
 				"(tracker_log_max_bytes %d + tracker_vectors_max_bytes %d + "+
-				"pages_log_max_bytes %d = %d): the broker refuses a stream whose "+
-				"ceiling it cannot back, so this node would fail to provision one "+
-				"of them. Raise store_max_bytes, or lower the ceilings — and leave "+
-				"headroom, because the state logs reserve only a share of this "+
-				"limit and every other stream on the broker grows inside it",
+				"pages_log_max_bytes %d + usage_log_max_bytes %d = %d): the broker "+
+				"refuses a stream whose ceiling it cannot back, so this node would "+
+				"fail to provision one of them. Raise store_max_bytes, or lower the "+
+				"ceilings — and leave headroom, because the state logs reserve only "+
+				"a share of this limit and every other stream on the broker grows "+
+				"inside it",
 			s.StoreMaxBytes, s.TrackerLogMaxBytes, s.TrackerVectorsMaxBytes,
-			s.PagesLogMaxBytes, declared)
+			s.PagesLogMaxBytes, s.UsageLogMaxBytes, declared)
 	}
 	p.wrap(s.TrackerRetention.validate(at(path, "tracker_retention")))
 	// Refused here rather than at the broker. nats-server validates an
@@ -2230,7 +2255,11 @@ type APIAuth struct {
 type APIToken struct {
 	// ID is a short label stamped into revision audit rows (created_by):
 	// "founder", "ops", "ci-pipeline".
-	ID string `yaml:"id" json:"id" js:"required" desc:"Short label recorded as the author of writes made with this token."`
+	//
+	// LOWERCASE, and validation refuses anything else: a seat binds it
+	// with `contact.crewlet_operator_id`, which is matched case-insensitively,
+	// so the id has exactly one spelling that both directions agree on.
+	ID string `yaml:"id" json:"id" js:"required" desc:"Short lowercase label recorded as the author of writes made with this token."`
 
 	// Token is the value, or a ${VAR} reference to it. Resolved once at
 	// startup and never stored.
@@ -2249,6 +2278,24 @@ func (a *APIAuth) validate(path Path) error {
 		if t.Token == "" {
 			p.add(at(tp, "token"), ErrMissing, "token must not be empty")
 		}
+		if lower := strings.ToLower(t.ID); lower != t.ID {
+			// A TOKEN ID IS LOWERCASE, because the binding that names it
+			// is: `contact.crewlet_operator_id` is lowercased and matched
+			// against the lowercased id (org.SeatByOperatorID), while
+			// every write made under the token records the id EXACTLY.
+			// A mixed-case id is therefore bound for writes and never
+			// matched by its own person's reads, and two ids that differ
+			// only in case — which the duplicate check below cannot see —
+			// are two credentials one seat's binding admits as the same
+			// person. Refused in the one shape that rules out both.
+			p.add(at(tp, "id"), ErrShape,
+				"token id %q must be lowercase: contact.crewlet_operator_id "+
+					"binds a token by its lowercased id while every write "+
+					"made with it records the id as written, so a mixed-case "+
+					"id is a person bound for writes and missing from their "+
+					"own reads, and ids differing only in case are two "+
+					"credentials bound to one seat. Write %q", t.ID, lower)
+		}
 		if _, dup := seen[t.ID]; dup && t.ID != "" {
 			// Two tokens sharing a label make the audit trail unreadable:
 			// every write says "founder" and no one can tell which
@@ -2262,12 +2309,13 @@ func (a *APIAuth) validate(path Path) error {
 	// "anonymous" is the attribution recorded when auth.disabled is true.
 	// A real token carrying it would collide in an audit row with the
 	// writes made while the guard was off — the one distinction those
-	// rows exist to keep.
-	if _, reserved := seen[ReservedOperatorID]; reserved {
+	// rows exist to keep. The id is org's, because the chart refuses it
+	// as a seat binding too and config is the package that imports org.
+	if _, reserved := seen[org.ReservedOperatorID]; reserved {
 		p.add(at(path, "tokens"), ErrConflict,
 			"token id %q is reserved: it is the attribution recorded when "+
 				"api.auth.disabled is true. Pick a different id",
-			ReservedOperatorID)
+			org.ReservedOperatorID)
 	}
 
 	// The pairing that leaves nothing reachable. No tokens means no
@@ -2337,16 +2385,6 @@ func checkOrigin(path Path, origin string) error {
 	}
 	return p.err()
 }
-
-// ReservedOperatorID is the attribution stamped on writes made while the auth
-// guard is disabled.
-//
-// Exported because two packages need the same answer: config refuses it as a
-// token id, and the API stamps it on a disabled-mode request. A second copy of
-// the string is how those two would come to disagree about which id is
-// reserved — and the disagreement would be silent, because each side would
-// still be self-consistent.
-const ReservedOperatorID = "anonymous"
 
 // ---- secrets --------------------------------------------------------- //
 

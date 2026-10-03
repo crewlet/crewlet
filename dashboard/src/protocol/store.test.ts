@@ -9,7 +9,10 @@
  */
 
 import { describe, expect, test, vi } from "vitest";
-import { MAX_EVENTS, MAX_PHASES, MAX_RUNS, Store } from "./store.ts";
+import { MAX_EVENTS } from "../contract/wire.ts";
+import { MAX_PHASES, Store } from "./store.ts";
+import { LiveSocket, QueryError } from "./socket.ts";
+import { nodeCountLabel } from "../lib/format.ts";
 import type { EventEnvelope, FeedRow } from "./types.ts";
 
 function feedRow(id: string, over: Partial<FeedRow> = {}): FeedRow {
@@ -36,12 +39,12 @@ describe("agent overlays", () => {
     // lost the seat's static identity on every progress round would redraw
     // the roster several times a second with half its fields blank.
     const store = new Store();
-    store.applySnapshot({ agents: [{ id: "pm", role: "PM", handle: "pm", state: "idle" }] });
-    store.applyAgents([{ role: "PM", state: "working", current_phase: "execute" }]);
+    store.applySnapshot({ agents: [{ id: "pm", role: "PM", handle: "pm", activity: "idle" }] });
+    store.applyAgents([{ role: "PM", activity: "working", current_phase: "execute" }]);
 
     const [row] = store.state.agents;
     expect(row?.handle).toBe("pm");
-    expect(row?.state).toBe("working");
+    expect(row?.activity).toBe("working");
     expect(row?.current_phase).toBe("execute");
   });
 
@@ -52,15 +55,15 @@ describe("agent overlays", () => {
     // The guard is what makes that loud rather than silent — and the e2e
     // replay is what makes it impossible to ship again.
     const store = new Store();
-    store.applySnapshot({ agents: [{ id: "pm", role: "PM", state: "idle" }] });
-    store.applyAgents({ PM: { state: "working" } } as never);
-    expect(store.state.agents[0]?.state).toBe("idle");
+    store.applySnapshot({ agents: [{ id: "pm", role: "PM", activity: "idle" }] });
+    store.applyAgents({ PM: { activity: "working" } } as never);
+    expect(store.state.agents[0]?.activity).toBe("idle");
   });
 
   test("an overlay for a role the roster does not carry is appended", () => {
     // A live revision can add a seat before the roster push lands.
     const store = new Store();
-    store.applyAgents([{ role: "New", state: "working" }]);
+    store.applyAgents([{ role: "New", activity: "working" }]);
     expect(store.state.agents).toHaveLength(1);
     expect(store.state.agents[0]?.id).toBe("New");
   });
@@ -79,9 +82,9 @@ describe("agent overlays", () => {
 
   test("a seats push keeps the live overlay the roster knows nothing about", () => {
     const store = new Store();
-    store.applyAgents([{ role: "PM", state: "working" }]);
+    store.applyAgents([{ role: "PM", activity: "working" }]);
     store.applySeats([{ id: "pm", role: "PM", handle: "pm" }]);
-    expect(store.state.agents[0]?.state).toBe("working");
+    expect(store.state.agents[0]?.activity).toBe("working");
     expect(store.state.agents[0]?.handle).toBe("pm");
   });
 });
@@ -191,68 +194,49 @@ describe("completed phases", () => {
   });
 });
 
-describe("coding runs' usage", () => {
-  // WHAT A DETACHED RUN SPENT is a record of its own, and the turn it belongs to
-  // counts it — so the socket keeps its payload, as it does a phase's, and holds
-  // one copy of it however many times a retried collect published it.
-  const usageEvent = (id: string): EventEnvelope =>
-    ({
-      ...feedRow(id, { type: "sandbox_run_usage", category: "task" }),
-      payload: { turn_id: "t1", role: "PM", launch_id: "l1", total_tokens: 5700 },
-    }) as EventEnvelope;
-
-  test("a usage record is kept WITH its payload, once", () => {
+// NOTHING SAID IS NOT AN EMPTY COMPANY. `{}` is the projection of a node
+// running none, which is an answer; before the handshake there is no answer,
+// and a screen has to be able to tell — the charter printed "No mission is
+// set" on every cold tab.
+describe("the org chart", () => {
+  test("is null until the engine sends one, and an empty one once it has", () => {
     const store = new Store();
-    store.applyEvent(usageEvent("u1"));
-    store.applyEvent(usageEvent("u1"));
-    expect(store.state.runs).toHaveLength(1);
-    expect(store.state.runs[0]?.payload?.total_tokens).toBe(5700);
+    expect(store.state.org).toBeNull();
+    store.applyOrg(null);
+    expect(store.state.org).toEqual({});
+    const fresh = new Store();
+    fresh.applySnapshot({ agents: [] } as never);
+    expect(fresh.state.org).toEqual({});
+  });
+});
+
+describe("the engine's health", () => {
+  // THE PUSH IS THE WHOLE ENVELOPE, and the slice keeps all of it: every
+  // screen reads the applied epoch, the posture and the fleet's size off this
+  // slice rather than asking a query for them.
+  test("a health frame is kept whole", () => {
+    const store = new Store();
+    const frame = {
+      status: "ok",
+      node: "node-a",
+      applied_epoch: 41,
+      posture: "serve",
+      nodes: 3,
+      alarms: { count: 1, worst: "backup_age" },
+    };
+    store.applyHealth(frame);
+    expect(store.state.health).toEqual(frame);
+    expect(nodeCountLabel(store.state.health.nodes)).toBe("3 nodes");
   });
 
-  test("a payload-free row is not kept, and a phase is not a run", () => {
+  // AN OLDER NODE'S FRAME, or one whose presence read failed, carries no
+  // `nodes` at all. The count is then unknown and said so — never 0, which the
+  // node answering could not be, and never a guessed 1.
+  test("a frame without a node count renders the count as unavailable", () => {
     const store = new Store();
-    store.applyEvent(feedRow("u1", { type: "sandbox_run_usage" }) as EventEnvelope);
-    store.applyEvent({ ...usageEvent("p1"), type: "agent_phase_completed" });
-    expect(store.state.runs).toHaveLength(0);
-  });
-
-  test("the buffer is bounded, newest first", () => {
-    const store = new Store();
-    for (let i = 0; i < MAX_RUNS + 10; i++) store.applyEvent(usageEvent(`u${i}`));
-    expect(store.state.runs).toHaveLength(MAX_RUNS);
-    expect(store.state.runs[0]?.id).toBe(`u${MAX_RUNS + 9}`);
-  });
-
-  test("every run of a turn whose phases are still held is held too", () => {
-    // A turn card and a seat's turns sum a turn's runs from this buffer until
-    // its row settles, so a run dropped while its turn's phases are still
-    // buffered is a turn shown short of what it spent. The heaviest shape a
-    // company whose seats code puts on the wire: every iteration relaunches,
-    // four runs back to back, then the execute they resumed into and its
-    // review — two phase records, since a suspended execute publishes none.
-    const store = new Store();
-    const iterations = MAX_PHASES; // twice what the phase buffer holds
-    for (let i = 0; i < iterations; i++) {
-      const turn = `t${i}`;
-      for (let r = 0; r < 4; r++) {
-        store.applyEvent({
-          ...usageEvent(`u${i}-${r}`),
-          payload: { turn_id: turn, launch_id: `l${i}-${r}`, total_tokens: 10 },
-        } as EventEnvelope);
-      }
-      for (const phase of ["execute", "review"]) {
-        store.applyEvent({
-          ...feedRow(`p${i}-${phase}`, { type: "agent_phase_completed", category: "llm" }),
-          payload: { turn_id: turn, phase, iteration: 0, role: "PM" },
-        } as EventEnvelope);
-      }
-    }
-    const heldTurns = new Set(store.state.phases.map((p) => p.payload?.turn_id));
-    expect(heldTurns.size).toBe(MAX_PHASES / 2);
-    for (const turn of heldTurns) {
-      const runs = store.state.runs.filter((r) => r.payload?.turn_id === turn);
-      expect(runs, `the runs of ${String(turn)}`).toHaveLength(4);
-    }
+    store.applyHealth({ status: "ok", applied_epoch: 7, posture: "serve" });
+    expect(store.state.health.nodes).toBeUndefined();
+    expect(nodeCountLabel(store.state.health.nodes)).toBe("node count unavailable");
   });
 });
 
@@ -297,7 +281,7 @@ describe("subscriptions", () => {
     store.subscribe(["tokens"], tokens);
     store.subscribe(["agents"], agents);
 
-    store.applyAgents([{ role: "PM", state: "working" }]);
+    store.applyAgents([{ role: "PM", activity: "working" }]);
     expect(agents).toHaveBeenCalledTimes(1);
     expect(tokens).not.toHaveBeenCalled();
   });
@@ -353,5 +337,129 @@ describe("seat lookup", () => {
       expect(store.agentByKey(key)?.handle, key).toBe("pm");
     }
     expect(store.agentByKey("nobody")).toBeNull();
+  });
+});
+
+describe("a peer this build was not built against", () => {
+  // A FLEET MID-UPGRADE has a node pushing what this bundle was built before.
+  // Its unknown kind must neither throw nor land in a slice by a guess — and it
+  // must not vanish either, because the same fall-through is what this build's
+  // own engine sending a kind its own client forgot looks like. The e2e replay
+  // asserts the count is zero for exactly that reason.
+  test("an unknown push kind is ignored and counted", () => {
+    const store = new Store();
+    const socket = new LiveSocket(store);
+    const before = JSON.stringify(store.state);
+    const woken = vi.fn();
+    store.subscribe(["agents", "events", "health", "budget"], woken);
+
+    socket.onMessage(JSON.stringify({ kind: "hologram", data: { agents: [] } }));
+    socket.onMessage(JSON.stringify({ kind: "hologram", data: {} }));
+    socket.onMessage(JSON.stringify({ data: {} }));
+
+    expect(JSON.stringify(store.state)).toBe(before);
+    expect(woken).not.toHaveBeenCalled();
+    expect(Object.fromEntries(store.unknownPushes)).toEqual({ hologram: 2, null: 1 });
+  });
+
+  test("every kind this build dispatches is not counted", () => {
+    const store = new Store();
+    const socket = new LiveSocket(store);
+    for (const kind of ["snapshot", "event", "agents", "seats", "sandboxes", "tokens"]) {
+      socket.onMessage(JSON.stringify({ kind, data: kind === "snapshot" ? {} : [] }));
+    }
+    for (const kind of ["budget", "schedules", "org", "tools", "health", "pong"]) {
+      socket.onMessage(JSON.stringify({ kind, data: {} }));
+    }
+    socket.onMessage(JSON.stringify({ kind: "result", id: 99, data: {} }));
+    socket.onMessage(JSON.stringify({ kind: "error", id: 99, error: "not_found" }));
+    expect(store.unknownPushes.size).toBe(0);
+  });
+
+  // EVERY FIELD THIS PR ADDED IS OPTIONAL, because an older node's snapshot
+  // does not carry it. Applying one must neither throw nor invent a value: a
+  // seat with no `activity`, a budget nobody reported and a health frame with
+  // no alarm count stay absent, which is what each screen's "unknown" branch
+  // reads.
+  test("an older node's snapshot applies with this build's fields absent", () => {
+    const store = new Store();
+    store.applySnapshot({
+      agents: [{ id: "pm", role: "PM", handle: "pm" }],
+      health: { status: "ok" },
+    });
+    const [pm] = store.state.agents;
+    expect(pm?.activity).toBeUndefined();
+    expect(pm?.turn).toBeUndefined();
+    expect(pm?.paused).toBeUndefined();
+    expect(store.state.budget).toBeNull();
+    expect(store.state.health.alarms).toBeUndefined();
+    expect(nodeCountLabel(store.state.health.nodes)).toBe("node count unavailable");
+  });
+});
+
+describe("a refused query", () => {
+  // THE WAIT THE ENGINE NAMED TRAVELS WITH THE REFUSAL. The socket used to
+  // reject with the bare code, so `retry_after_seconds` reached no screen and
+  // each guessed a wait of its own.
+  test("an unavailable frame's retry hint reaches the rejection", async () => {
+    const store = new Store();
+    const socket = new LiveSocket(store);
+    const asked = socket.query("fleet");
+    socket.onMessage(
+      JSON.stringify({ kind: "error", id: 1, error: "unavailable", retry_after_seconds: 4 }),
+    );
+    const err = await asked.catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(QueryError);
+    expect((err as QueryError).message).toBe("unavailable");
+    expect((err as QueryError).retryAfterSeconds).toBe(4);
+  });
+
+  // THE REFUSAL'S SENTENCE TRAVELS WITH IT. A `bad_params` refusal is the
+  // one the engine writes for the caller — which parameter, and what it
+  // accepts — and a rejection carrying only the code left a screen to say
+  // "something was missing" about a window the reader chose.
+  test("a bad_params frame's sentence reaches the rejection", async () => {
+    const store = new Store();
+    const socket = new LiveSocket(store);
+    const asked = socket.query("tokens", { days: 91 });
+    socket.onMessage(
+      JSON.stringify({
+        kind: "error",
+        id: 1,
+        error: "bad_params",
+        detail: "days=91, and a spend window is 1 to 90 company days — ask for at most 90",
+      }),
+    );
+    const err = (await asked.catch((e: unknown) => e)) as QueryError;
+    expect(err.message).toBe("bad_params");
+    expect(err.detail).toMatch(/ask for at most 90/);
+  });
+
+  test("a refusal that names no wait carries none", async () => {
+    const store = new Store();
+    const socket = new LiveSocket(store);
+    const asked = socket.query("fleet");
+    socket.onMessage(JSON.stringify({ kind: "error", id: 1, error: "not_found" }));
+    const err = await asked.catch((e: unknown) => e);
+    expect((err as QueryError).retryAfterSeconds).toBeNull();
+    expect((err as QueryError).detail).toBeNull();
+  });
+
+  // NOT REPORTED IS NOT UNCAPPED. The budget slice is `null` until a report
+  // has carried it, from the store's birth, through a snapshot taken before any
+  // node reported (`budget: null`) and after a push of `null`; a report that
+  // caps nothing is held as the report it is. An empty object used to stand
+  // for both, and the Spend and Home tiles offered an operator of a capped
+  // company "Set one" for the first seconds after every engine start.
+  test("the budget is null until a report carries it, and an uncapped report is kept", () => {
+    const store = new Store();
+    expect(store.state.budget).toBeNull();
+    store.applySnapshot({ budget: null, health: { status: "ok" } });
+    expect(store.state.budget).toBeNull();
+    const uncapped = { meter_id: "n:1", seq: 1, timezone: "UTC", org: { windows: [] } };
+    store.applyBudget(uncapped);
+    expect(store.state.budget).toEqual(uncapped);
+    store.applyBudget(null);
+    expect(store.state.budget).toBeNull();
   });
 });

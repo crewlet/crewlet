@@ -2,7 +2,6 @@ package kv
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"maps"
@@ -118,6 +117,7 @@ func openFleetForTest(t *testing.T, nc *nats.Conn, prefix string) *FleetStore {
 		FollowRetention: 10 * time.Minute,
 		RebaseRetention: 10 * time.Minute,
 		CooldownMax:     time.Hour,
+		BudgetRetention: time.Hour,
 		StatusFreshness: 10 * time.Minute,
 	})
 	if err != nil {
@@ -135,7 +135,7 @@ func TestAnEmptyBucketWalksCleanly(t *testing.T) {
 	prefix := fmt.Sprintf("f%d", bucketSeq.Add(1))
 	store := openFleetForTest(t, nc, prefix)
 
-	got, err := store.Usage(context.Background())
+	got, err := store.Usage(context.Background(), coord.WindowsAt(time.Now(), time.UTC))
 	if err != nil {
 		t.Fatalf("listing an empty bucket: %v", err)
 	}
@@ -162,7 +162,7 @@ func TestAnAbandonedWalkLeavesNoConsumer(t *testing.T) {
 	// Past the client lister's 256-entry buffer, so the shape this replaced
 	// would park rather than merely linger.
 	const keys = 300
-	good, err := json.Marshal(budgetRecord{Used: 1, At: time.Now().UTC()})
+	good, err := encodeTally(coord.Tally{At: time.Now().UTC()}.Roll(coord.WindowsAt(time.Now(), time.UTC)).Add(1, time.Now().UTC()))
 	if err != nil {
 		t.Fatalf("encode: %v", err)
 	}
@@ -203,7 +203,7 @@ func TestAnAbandonedWalkLeavesNoConsumer(t *testing.T) {
 
 // A FAILED LISTING NAMES THE LISTING, not the bucket it lives in.
 //
-// Seven key classes share the positions register, so every one of them used to
+// Eight key classes share the positions register, so every one of them used to
 // fail with "read crewlet_positions" — a sentence that names the file an
 // operator would inspect and never the duty that stalled. The trim floors, the
 // trim holds and the maintenance acknowledgements are three very different
@@ -228,7 +228,7 @@ func TestAFailedListingNamesTheListingRatherThanTheBucket(t *testing.T) {
 		t.Errorf("err = %v, want it to wrap ErrUnavailable", err)
 	}
 	if !strings.Contains(err.Error(), listing) {
-		t.Errorf("err = %q, which does not name %q. Seven classes share this "+
+		t.Errorf("err = %q, which does not name %q. Eight classes share this "+
 			"bucket, so a message naming only the bucket is the same sentence "+
 			"for all of them", err, listing)
 	}
@@ -305,7 +305,10 @@ func (w *losingWatcher) Stop() error {
 // putBudget writes one scope's counter the way the store does.
 func putBudget(ctx context.Context, t *testing.T, kv jetstream.KeyValue, scope string, used int) {
 	t.Helper()
-	raw, err := json.Marshal(budgetRecord{Used: used, At: time.Now().UTC()})
+	var tally coord.Tally
+	tally.Slots[0] = coord.Slot{Label: "test", Used: used}
+	tally.At = time.Now().UTC()
+	raw, err := encodeTally(tally)
 	if err != nil {
 		t.Fatalf("encode: %v", err)
 	}
@@ -384,15 +387,15 @@ func (w *wireReads) directReads(t *testing.T) int { t.Helper(); return w.pending
 func listScopes(ctx context.Context, f *FleetStore, kv jetstream.KeyValue) (map[string]int, error) {
 	out := map[string]int{}
 	err := eachEntry(ctx, f.js, kv, func(kve jetstream.KeyValueEntry) error {
-		var r budgetRecord
-		if err := json.Unmarshal(kve.Value(), &r); err != nil {
+		r, err := decodeTally(kve.Value())
+		if err != nil {
 			return err
 		}
 		scope, _ := decodeKey(kve.Key())
 		if _, twice := out[scope]; twice {
 			return fmt.Errorf("scope %s visited twice", scope)
 		}
-		out[scope] = r.Used
+		out[scope] = r.Slots[0].Used
 		return nil
 	})
 	return out, err
@@ -1106,7 +1109,7 @@ func TestAKeyThePassLostIsReadBackOnTheEmbeddedFleetsDomain(t *testing.T) {
 		BucketPrefix: fmt.Sprintf("d%d", bucketSeq.Add(1)),
 		RateWindow:   time.Minute, ClaimTTL: 10 * time.Minute,
 		LedgerRetention: 10 * time.Minute, FireRetention: 10 * time.Minute,
-		FollowRetention: 10 * time.Minute, CooldownMax: time.Hour,
+		FollowRetention: 10 * time.Minute, BudgetRetention: time.Minute, CooldownMax: time.Hour,
 		RebaseRetention: 10 * time.Minute,
 		StatusFreshness: 10 * time.Minute,
 	})

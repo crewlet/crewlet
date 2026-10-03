@@ -13,7 +13,7 @@ import (
 )
 
 // THE EMBEDDING DUTY'S SECOND JOB: keeping the partition's semantic index
-// current — ADR-0022.
+// current — ADR-0028.
 //
 // # Why the duty and nobody else
 //

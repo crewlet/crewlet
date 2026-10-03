@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
@@ -42,6 +43,12 @@ type NewPage struct {
 
 	// Quiet suppresses the wake, for an import.
 	Quiet bool
+
+	// CallKey makes the create idempotent across a repetition its caller
+	// can produce — see [CallKey]. It derives the new page's id as well as
+	// the operation's, so a retry that the broker collapses into the first
+	// attempt answers with the page that attempt made.
+	CallKey CallKey
 }
 
 // Written is what a write reports back.
@@ -108,7 +115,7 @@ func (s *Store) Create(ctx context.Context, actor Actor, in NewPage) (Written, e
 	at := s.now()
 	title := strings.Join(strings.Fields(in.Title), " ")
 	page := Page{
-		V: DocumentVersion, ID: s.newID(), Container: container,
+		V: DocumentVersion, ID: s.pageIDFor(in.CallKey, container, title), Container: container,
 		ParentID: strings.TrimSpace(in.ParentID),
 		Title:    title, Body: in.Body, Status: in.Status, Labels: labels,
 		Version: 1, Author: actor.Name(), CreatedAt: at, UpdatedAt: at,
@@ -120,7 +127,7 @@ func (s *Store) Create(ctx context.Context, actor Actor, in NewPage) (Written, e
 	}
 
 	subject := TitleSubject(container, title)
-	opID := s.newSeqID()
+	opID := s.callOpID(in.CallKey, "create", container, NormalizeTitle(title))
 	scope := ScopeSet{Terms: []ScopeTerm{
 		{Kind: TermTitle, Container: container, ID: TitleToken(title)},
 		{Kind: TermObject, Container: container, ID: page.ID},
@@ -206,6 +213,10 @@ type Save struct {
 	Watch *bool
 
 	Quiet bool
+
+	// CallKey makes the save idempotent across a repetition its caller can
+	// produce — see [CallKey].
+	CallKey CallKey
 }
 
 // SavePage applies an edit to a page, arbitrated on the page's own subject.
@@ -241,7 +252,7 @@ func (s *Store) SavePage(ctx context.Context, actor Actor, pageID string,
 	}
 
 	at := s.now()
-	opID := s.newSeqID()
+	opID := s.callOpID(save.CallKey, "save", pageID, strconv.Itoa(save.BaseVersion), saveKey(save))
 	var out Page
 	var read uint64
 	subject := PageSubject(pageID)
@@ -299,7 +310,7 @@ func (s *Store) SavePage(ctx context.Context, actor Actor, pageID string,
 				}
 				scope := ScopeSet{Subject: true, Container: head.Container}
 				notify := s.notifyOf(save.Quiet, kind, head,
-					excerptOfSave(save, head), nil)
+					excerptOfSave(save), nil)
 				return s.decide(stamp, actor, subject, OpPatch, scope, opID, patch, notify, at)
 			},
 		}
@@ -328,8 +339,12 @@ func (s *Store) SavePage(ctx context.Context, actor Actor, pageID string,
 // smuggled past the rule — it is the rule: the title subject is the same
 // subject this page already holds, so there is nothing there to contend for,
 // and the only row the write touches is the page's own.
+//
+// KEYED LIKE EVERY WRITE A CALLER CAN REPEAT: both records derive their
+// operation from the key, the page and the title asked for
+// ([Store.callOpID]), so a retried rename is one record.
 func (s *Store) Rename(ctx context.Context, actor Actor, pageID string,
-	title string, quiet bool) (Written, error) {
+	title string, quiet bool, key CallKey) (Written, error) {
 
 	if err := actor.validate(); err != nil {
 		return Written{}, err
@@ -340,7 +355,7 @@ func (s *Store) Rename(ctx context.Context, actor Actor, pageID string,
 	title = strings.Join(strings.Fields(title), " ")
 
 	at := s.now()
-	opID := s.newSeqID()
+	opID := s.callOpID(key, "rename", pageID, title)
 	var out Page
 
 	head, err := s.head(ctx, pageID)
@@ -601,6 +616,13 @@ func statusScope(op OpKind, container string) ScopeSet {
 // no honest default, and a caller holding no activation has no configuration
 // to apply.
 //
+// A LATER ACTIVATION OVER UNCHANGED SETTINGS IS WRITTEN TOO — a re-stamp —
+// because a row left at the older stamp is open to any activation between the
+// two. It carries the stamp, so it goes out at record version 2 like every
+// container record ([versionedFields] says why a re-stamp is not exempt), and
+// during a rolling upgrade a node still on a build reading 1 holds it back,
+// with the page writes in that space, until it is upgraded.
+//
 // A FRESH OPERATION PER CALL, on the reasoning [tracker.Writer.ApplyChart]
 // gives for its own: this is a reconcile decided from the row, so a second
 // call — on another node, at the next boot, after a lost acknowledgement —
@@ -622,8 +644,8 @@ func (s *Store) EnsureContainer(ctx context.Context, activatedAt time.Time,
 	opID := s.newSeqID()
 	subject := ContainerSubject(key)
 	var (
-		changed, restamp bool
-		out              Container
+		changed bool
+		out     Container
 	)
 
 	result, err := s.publish(ctx, statelog.Request{
@@ -636,7 +658,7 @@ func (s *Store) EnsureContainer(ctx context.Context, activatedAt time.Time,
 			// lost the broker's arbitration is followed by one that
 			// finds the winner's value already there, and only the last
 			// round says what this call did.
-			changed, restamp = false, false
+			changed = false
 			out = Container{V: DocumentVersion, Key: key, Name: name,
 				Purpose: purpose, ChartEpoch: epoch, CreatedAt: at}
 			var document []byte
@@ -672,25 +694,19 @@ func (s *Store) EnsureContainer(ctx context.Context, activatedAt time.Time,
 					return statelog.Decision{}, nil
 				}
 				out.CreatedAt = held.CreatedAt
-				restamp = held.Name == name && held.Purpose == purpose
 			}
 			changed = true
-			payload := ContainerPayload{
-				V: DocumentVersion, Key: key, Name: name, Purpose: purpose,
-				ChartEpoch: epoch,
-			}
-			// A LATER ACTIVATION OVER THE SAME SETTINGS IS A RE-STAMP, and
-			// it goes out at the version an older build applies whole —
-			// see [recordVersionOf]. The stamp still lands on every node
-			// that can read it, so the guard above holds against the
-			// older activation that would otherwise follow.
-			var record any = payload
-			if restamp {
-				record = restampPayload{payload}
-			}
+			// A LATER ACTIVATION OVER THE SAME SETTINGS IS STILL WRITTEN,
+			// stamp and all — a re-stamp — and it goes out at the version
+			// that carries the stamp like every other container record
+			// ([versionedFields]): a build that dropped the stamp would
+			// keep a row this guard cannot defend after its upgrade.
 			return s.decide(stamp, Actor{Handle: "system", Kind: AuthorOperator},
 				subject, OpPatch, ScopeSet{Subject: true}, opID,
-				record, nil, at)
+				ContainerPayload{
+					V: DocumentVersion, Key: key, Name: name, Purpose: purpose,
+					ChartEpoch: epoch,
+				}, nil, at)
 		},
 	})
 	if err != nil {
@@ -897,15 +913,18 @@ func dominantKind(kinds map[ChangeKind]bool) ChangeKind {
 	return ChangeSaved
 }
 
-// excerptOfSave is what a card shows for one edit.
-func excerptOfSave(save Save, page Page) string {
-	if save.Message != "" {
-		return excerpt(save.Message)
-	}
-	if save.Body != nil {
-		return excerpt(firstLine(*save.Body, page.Title))
-	}
-	return excerpt(page.Title)
+// excerptOfSave is what a card shows for one edit: what the writer SAID the
+// change was, and nothing when they said nothing.
+//
+// NEVER A LINE OF THE PAGE. This used to fall back to the body's first line
+// (or the title), and every save without a message then showed the page's
+// opening heading — "Paging rules" — under the saver's name, on the page's
+// activity and in every watcher's wake, reading as a change note somebody
+// wrote. It is not a summary of the change either: the first line is the
+// same before and after an edit anywhere else. The kind, the actor and the
+// title already say a page was saved; the revision says what changed.
+func excerptOfSave(save Save) string {
+	return excerpt(save.Message)
 }
 
 // firstLine is a body's first non-empty line, or a fallback.

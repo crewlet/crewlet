@@ -6,7 +6,8 @@
 // part, walk back to a rune boundary, and disagreed on the easy one: two
 // appended "…" and two appended "...", so the same cut read differently
 // depending on which subsystem made it. Copies that agree today are copies
-// that can stop agreeing.
+// that can stop agreeing. A fifth, the sandbox runner's private tail cut and
+// the only one that kept the END, became [Tail].
 //
 // The rule they each re-derive is this: a plain s[:n] splits whatever
 // multi-byte character straddles the boundary and yields invalid UTF-8. What
@@ -117,4 +118,38 @@ func Bytes(s string, max int) string {
 		max--
 	}
 	return s[:max]
+}
+
+// Tail is the LAST at most max bytes of s, starting on a rune boundary, with a
+// marker in front where it was cut.
+//
+// The mirror of [Ellipsis], for the one kind of text whose useful end is the
+// end: a process's own account of itself — a coding run's activity log, its
+// stderr — where the most recent activity and the conclusion are what a reader
+// wants and the head (a clone, a dependency install, a banner) is the least
+// interesting thing to drop. The same two rules hold: the marker is not
+// counted against max, because the cap bounds the content, and the cut never
+// lands inside a rune, because a byte slice taken from the end begins mid-rune
+// whenever the text is not ASCII and a JSON encoder turns that partial rune
+// into U+FFFD.
+//
+// It replaced a private rune-counting `tail` in the sandbox's coding-agent
+// runner — a fifth copy of this package's rule, and the only one whose budget
+// was RUNES: the bound it enforced is an event's size, which is bytes, so a
+// "100 000 character" cap was anything from 100 KB to 400 KB on the wire
+// depending on the script the run's output was written in.
+func Tail(s string, max int) string {
+	if len(s) <= max {
+		return s
+	}
+	if max <= 0 {
+		return "…"
+	}
+	// Walk FORWARD to the start of the rune that straddles the cut. At most
+	// three steps, for the reason [Bytes] gives.
+	start := len(s) - max
+	for start < len(s) && !utf8.RuneStart(s[start]) {
+		start++
+	}
+	return "…" + s[start:]
 }

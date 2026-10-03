@@ -122,11 +122,10 @@ func apiError(kind string) string {
 func newProvider(t *testing.T, baseURL string, mutate func(*Config)) *Provider {
 	t.Helper()
 	cfg := Config{
-		Model:     "claude-test",
-		APIKeys:   []string{"k1"},
-		BaseURL:   baseURL,
-		Timeout:   5 * time.Second,
-		LookupEnv: func(string) string { return "" },
+		Model:   "claude-test",
+		APIKeys: []string{"k1"},
+		BaseURL: baseURL,
+		Timeout: 5 * time.Second,
 	}
 	if mutate != nil {
 		mutate(&cfg)
@@ -173,20 +172,24 @@ func TestNewRequiresAModel(t *testing.T) {
 	}
 }
 
-func TestKeysFallBackToTheConventionalVariable(t *testing.T) {
+// AN EMPTY BAG READS NO VARIABLE. Which key an entry that names none runs on
+// is a configuration rule (config.LLMProvider.Keys), decided where the secret
+// store is in reach; a provider that read the process environment itself
+// would also run an entry whose every reference resolved to nothing on the
+// conventional key — another account's credential, with nothing saying so.
+func TestAnEmptyBagSendsNoAmbientKey(t *testing.T) {
 	api, url := serve(t, func(w http.ResponseWriter, _ int) {
 		writeJSON(w, 200, okMessage("hi"))
 	})
-	t.Setenv(KeyEnv, "from-the-environment")
+	t.Setenv("ANTHROPIC_API_KEY", "from-the-environment")
 	p := newProvider(t, url, func(c *Config) {
 		c.APIKeys = nil
-		c.LookupEnv = nil // exercise the real os.Getenv path
 	})
 	if _, err := p.Complete(context.Background(), userTurn("hello")); err != nil {
 		t.Fatalf("Complete: %v", err)
 	}
-	if got := api.seen()[0].apiKey; got != "from-the-environment" {
-		t.Fatalf("wire key = %q, want the environment fallback", got)
+	if got := api.seen()[0].apiKey; got == "from-the-environment" {
+		t.Fatalf("wire key = %q: the ambient variable reached the wire", got)
 	}
 }
 
@@ -214,11 +217,10 @@ func TestAmbientEnvironmentDoesNotShadowTheConfiguredKey(t *testing.T) {
 			})
 			// An empty value reads as unset to the SDK's autoload, which
 			// tests `ok && v != ""`.
-			t.Setenv(KeyEnv, tc.key)
+			t.Setenv("ANTHROPIC_API_KEY", tc.key)
 			t.Setenv("ANTHROPIC_AUTH_TOKEN", tc.token)
 			p := newProvider(t, url, func(c *Config) {
 				c.APIKeys = []string{"configured"}
-				c.LookupEnv = nil
 			})
 			if _, err := p.Complete(context.Background(), userTurn("hello")); err != nil {
 				t.Fatalf("Complete: %v", err)
@@ -1173,5 +1175,48 @@ func TestModelAndStringIdentity(t *testing.T) {
 	}
 	if !strings.Contains(p.String(), "anthropic/claude-test") {
 		t.Fatalf("String() = %q", p.String())
+	}
+}
+
+// A USER MESSAGE AFTER TOOL RESULTS — a person's note to a running turn, sent
+// straight after the round's results (internal/agent/steer) — is ONE user
+// turn: every tool_result first, in call order, then the note as text. The
+// API requires a tool_use's results in the user turn that follows it and first
+// within it; sending the note as a turn of its own leaves that to a merge the
+// server performs as a courtesy.
+func TestAUserMessageAfterToolResultsJoinsTheirTurnAfterThem(t *testing.T) {
+	t.Parallel()
+	api, url := serve(t, func(w http.ResponseWriter, _ int) { writeJSON(w, 200, okMessage("ok")) })
+	p := newProvider(t, url, nil)
+	_, err := p.Complete(context.Background(), llm.Request{Messages: []llm.Message{
+		{Role: llm.RoleUser, Content: "do it"},
+		{Role: llm.RoleAssistant, ToolCalls: []llm.ToolCall{
+			{ID: "a", Name: "first"}, {ID: "b", Name: "second"},
+		}},
+		{Role: llm.RoleTool, ToolCallID: "a", Name: "first", Content: "one"},
+		{Role: llm.RoleTool, ToolCallID: "b", Name: "second", Content: "two"},
+		{Role: llm.RoleUser, Content: "a note from the founder"},
+	}})
+	if err != nil {
+		t.Fatalf("Complete: %v", err)
+	}
+	messages := api.seen()[0].body["messages"].([]any)
+	if len(messages) != 3 {
+		t.Fatalf("sent %d messages, want the opening, the calls, and ONE user turn "+
+			"answering them: %v", len(messages), messages)
+	}
+	turn := messages[2].(map[string]any)
+	blocks := turn["content"].([]any)
+	if turn["role"] != "user" || len(blocks) != 3 {
+		t.Fatalf("the answering turn is %v", turn)
+	}
+	for i, id := range []string{"a", "b"} {
+		b := blocks[i].(map[string]any)
+		if b["type"] != "tool_result" || b["tool_use_id"] != id {
+			t.Errorf("block %d is %v, want the result for %s", i, b, id)
+		}
+	}
+	if note := blocks[2].(map[string]any); note["type"] != "text" || note["text"] != "a note from the founder" {
+		t.Errorf("the note is %v, want it last, as text", note)
 	}
 }

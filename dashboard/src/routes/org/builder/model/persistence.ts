@@ -34,7 +34,7 @@
  * that matches it.
  *
  * A SAVE WHOSE ANSWER IS LOST IS KEPT WITH ITS LOG. A save can land without
- * its answer, and the lens that sent it may be gone by then (the operator
+ * its answer, and the builder that sent it may be gone by then (the operator
  * left it, or the tab reloaded). A kept log of a save that DID land, offered
  * again as an update onto its own revision, would replay every operation a
  * second time. So a save marks the kept log with its write id before it is
@@ -58,9 +58,10 @@ import {
 import type { Log } from "./history.ts";
 import type { BuilderMode } from "./transport.ts";
 import { isWriteId } from "./writes.ts";
+import { STORAGE_KEYS } from "~/lib/storage.ts";
 
 /** The storage key. */
-export const DRAFT_STORAGE_KEY = "crewlet_org_draft";
+export const DRAFT_STORAGE_KEY = STORAGE_KEYS.orgDraft;
 
 /**
  * The most operations (applied and undone together) a kept draft may hold.

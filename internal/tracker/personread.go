@@ -29,10 +29,13 @@ import (
 type PersonState struct {
 	Handle string `json:"handle"`
 
-	// Unread, Read and Snoozed are the inbox. Snoozed entries whose time
-	// has come are reported as DUE rather than silently promoted: putting
-	// one back is a write, and a read that performed it would be a read
-	// that changed the fleet's state.
+	// Unread, Read and Snoozed are the inbox's EXCEPTIONS to the
+	// seen-through position: Read holds notices above it marked read out
+	// of order, Unread notices at or below it marked unread again — see
+	// [Writer.MarkInbox]. Snoozed entries whose time has come are reported
+	// as DUE rather than silently promoted: putting one back is a write,
+	// and a read that performed it would be a read that changed the
+	// fleet's state.
 	Unread  []InboxEntry `json:"unread,omitempty"`
 	Read    []InboxEntry `json:"read,omitempty"`
 	Snoozed []InboxEntry `json:"snoozed,omitempty"`
@@ -50,6 +53,13 @@ type PersonState struct {
 
 	SeenThrough Position `json:"seen_through,omitzero"`
 	Version     uint64   `json:"version"`
+
+	// MaxSnoozeAhead is how far ahead a snooze may be set, in SECONDS —
+	// [MaxSnoozeAhead], served so a screen offers only the presets the
+	// write will accept. A preset past it is a button that is refused
+	// every time it is pressed, and the bound is the engine's to state
+	// rather than a number a client copies and lets drift.
+	MaxSnoozeAhead int64 `json:"max_snooze_ahead"`
 
 	// Held is false for a person nobody has written yet, which is an
 	// EMPTY state rather than a missing one — every other field is the
@@ -96,7 +106,10 @@ func (r *Reader) Person(ctx context.Context, q PersonQuery, now time.Time) (Pers
 		return PersonState{}, fmt.Errorf("tracker: a person read names nobody")
 	}
 
-	out := PersonState{Handle: q.Who.Handle}
+	out := PersonState{
+		Handle:         q.Who.Handle,
+		MaxSnoozeAhead: int64(MaxSnoozeAhead / time.Second),
+	}
 	served, err := r.log.Read(ctx, statelog.Query{
 		Level:       q.Level,
 		Scope:       personScope(),

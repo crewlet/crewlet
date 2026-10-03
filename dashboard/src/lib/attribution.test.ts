@@ -9,7 +9,8 @@
 
 import { describe, expect, test } from "vitest";
 
-import { CHANGE_FIELDS, attribution } from "./attribution.ts";
+import { CHANGE_FIELDS } from "~/contract/attribution.ts";
+import { attribution } from "./attribution.ts";
 import type { WorkChange } from "~/protocol/index.ts";
 
 function change(over: Partial<WorkChange>): WorkChange {
@@ -93,11 +94,35 @@ describe("the latest change to each property", () => {
     expect([...who.keys()].sort()).toEqual(["due", "estimate", "points"]);
   });
 
-  test("a create attributes what it set, which is why a fresh task has lines", () => {
+  test("a create attributes nothing — the rail states who filed it once", () => {
+    // Attributed, a create drew one line naming every field it set under the
+    // last of them, which read as that one field's provenance. A later change
+    // still wins, and a field only the create set draws no line.
     const who = attribution([
-      change({ kind: "created", actor: "founder", actor_kind: "operator", fields: { title: {} } }),
+      change({ log_seq: 2, actor: "ada", fields: { status: { from: "todo", to: "done" } } }),
+      change({
+        log_seq: 1,
+        kind: "created",
+        actor: "founder",
+        actor_kind: "operator",
+        fields: { title: {}, status: {} },
+      }),
     ]);
-    expect(who.get("title")?.actor).toBe("founder");
+    expect(who.has("title")).toBe(false);
+    expect(who.get("status")?.actor).toBe("ada");
+  });
+
+  test("a bound token's change names the person, as the activity does", () => {
+    const who = attribution([
+      change({
+        actor: "founder",
+        actor_kind: "operator",
+        actor_seat: "jane-founder",
+        fields: { priority: { from: "low", to: "high" } },
+      }),
+    ]);
+    expect(who.get("priority")?.actor).toBe("jane-founder");
+    expect(who.get("priority")?.actorKind).toBe("human");
   });
 });
 

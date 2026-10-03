@@ -148,7 +148,7 @@
 //     would hold its node's one join for ever. A barred joiner is withdrawn
 //     whatever it says.
 //   - A serving holder the target no longer names is retired — marked
-//     leaving — only under BOTH of ADR-0019's conditions, adapted to a map
+//     leaving — only under BOTH of ADR-0026's conditions, adapted to a map
 //     with one writer: (a) every node of the partition's target is serving
 //     in the map AND says so on its own lease, which the tick counts present
 //     and healthy, and (b) each of those leases names a map epoch at least

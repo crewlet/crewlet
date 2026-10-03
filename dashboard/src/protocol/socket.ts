@@ -7,16 +7,21 @@
  * payload, a trace, a different spend window, the configuration document — is
  * asked for over the same socket and answered on it.
  *
- * There are no HTTP fetches in normal operation. The REST snapshot is used for
- * exactly one thing: keeping the page honest while the socket is down (a proxy
- * that refuses to upgrade, a restarting engine), and it stops the moment the
- * socket is back.
+ * The socket is the channel for the projection and for every question the
+ * query registry answers — not for everything. Writes and the guarded reads no
+ * query answers (`/secrets`, `/setup`, `/config`) go over REST through
+ * `rest.ts`, and this file makes two HTTP requests of its own: the degraded
+ * snapshot, which keeps the page honest while the socket is down (a proxy that
+ * refuses to upgrade, a restarting engine) and stops the moment the socket is
+ * back, and the refusal probe after a handshake that never opened.
  */
 
 import { api } from "./api.ts";
 import { apiToken } from "./authToken.ts";
 import type { Store } from "./store.ts";
-import type { Frame, QueryErrorCode, QueryMap, QueryName } from "./types.ts";
+import type { Frame, QueryMap, QueryName } from "./types.ts";
+import type { QueryErrorCode } from "../contract/errors.ts";
+import { QUERY_TIMEOUT_MS } from "../contract/wire.ts";
 
 const PATH = "/ws/stream";
 
@@ -42,16 +47,6 @@ const PING_MS = 25_000;
 
 /** Degraded-mode poll — only ever runs while the socket is down. */
 const FALLBACK_MS = 5_000;
-
-/**
- * How long a query waits for its answer ONCE SENT.
- *
- * The clock starts when the frame goes out, not when the query is made, so time
- * spent waiting for a socket is not counted against the server. Ten seconds is
- * far beyond the slowest query's normal latency and still short enough that a
- * screen shows an error rather than an eternal skeleton.
- */
-const QUERY_TIMEOUT_MS = 10_000;
 
 /**
  * Every {@link QueryErrorCode}, as a value a rejection's message can be tested
@@ -85,6 +80,44 @@ const QUERY_ERROR_CODES: Record<QueryErrorCode, true> = {
  */
 export function queryErrorCode(value: string | null | undefined): QueryErrorCode | null {
   return value && Object.hasOwn(QUERY_ERROR_CODES, value) ? (value as QueryErrorCode) : null;
+}
+
+/**
+ * A query the engine refused, with the wait it asked for.
+ *
+ * AN ERROR WHOSE MESSAGE IS THE CODE, so every caller that reads a refusal by
+ * [queryErrorCode] of its message keeps working, and a TYPE beside it because
+ * the wait is a number and the text of an error is no place to carry one: the
+ * `unavailable` frame carries `retry_after_seconds`, computed by the same
+ * engine helper as the REST 503's `Retry-After`, and a transport that dropped
+ * it left each screen to guess a wait of its own.
+ */
+export class QueryError extends Error {
+  /**
+   * The engine's wait in seconds, on an `unavailable` refusal that named one,
+   * and null everywhere else — the socket's own `timeout` and `closed`
+   * included, which no engine said anything about.
+   */
+  readonly retryAfterSeconds: number | null;
+  /**
+   * The refusal's own sentence on a `bad_params` refusal — the parameter to
+   * change and what it accepts — and null everywhere else. The engine writes
+   * that one refusal FOR the caller and keeps every other failure's text in
+   * its log, so this is never a path or a driver's message.
+   */
+  readonly detail: string | null;
+
+  constructor(code: string, retryAfterSeconds: number | null = null, detail: string | null = null) {
+    super(code);
+    this.name = "QueryError";
+    this.retryAfterSeconds = retryAfterSeconds;
+    this.detail = detail;
+  }
+}
+
+/** The engine's wait on a refusal, or null where it named none. */
+function retryHint(value: unknown): number | null {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : null;
 }
 
 interface Inflight {
@@ -202,7 +235,7 @@ export class LiveSocket {
     clearTimeout(entry.timer);
     entry.timer = setTimeout(() => {
       this.inflight.delete(entry.id);
-      entry.reject(new Error("timeout"));
+      entry.reject(new QueryError("timeout"));
     }, QUERY_TIMEOUT_MS);
   }
 
@@ -409,27 +442,48 @@ export class LiveSocket {
       case "error":
         // An error frame always carries a code. One that does not is still
         // a failure nobody explained, which is what `query_failed` means.
-        this.settle(msg.id, msg.error || "query_failed", null);
+        this.settle(
+          msg.id,
+          msg.error || "query_failed",
+          null,
+          retryHint(msg.retry_after_seconds),
+          typeof msg.detail === "string" && msg.detail ? msg.detail : null,
+        );
         break;
       case "pong":
+        break;
+      default:
+        // A KIND THIS BUILD DOES NOT KNOW IS A NEWER PEER'S, and it is
+        // ignored rather than thrown on: a fleet mid-upgrade has a node
+        // pushing what this bundle was built before. It is COUNTED rather
+        // than dropped silently, because the same fall-through is also what
+        // this build's own engine sending a kind its own client forgot looks
+        // like — and the e2e replay asserts that count is zero.
+        this.store.noteUnknownPush((msg as { kind?: unknown }).kind);
         break;
     }
   }
 
-  private settle(id: number | undefined, error: string | null, data: unknown): void {
+  private settle(
+    id: number | undefined,
+    error: string | null,
+    data: unknown,
+    retryAfterSeconds: number | null = null,
+    detail: string | null = null,
+  ): void {
     if (id === undefined) return;
     const entry = this.inflight.get(id);
     if (!entry) return;
     this.inflight.delete(id);
     clearTimeout(entry.timer);
-    if (error) entry.reject(new Error(error));
+    if (error) entry.reject(new QueryError(error, retryAfterSeconds, detail));
     else entry.resolve(data);
   }
 
   private failInflight(reason: string): void {
     for (const entry of this.inflight.values()) {
       clearTimeout(entry.timer);
-      entry.reject(new Error(reason));
+      entry.reject(new QueryError(reason));
     }
     this.inflight.clear();
   }

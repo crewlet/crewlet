@@ -10,7 +10,7 @@
 // same idiom `go mod tidy -diff` and the generated `schema/` already use.
 import { defineConfig, type Plugin } from "vite";
 import react from "@vitejs/plugin-react";
-import { readFileSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
 // The notices for everything the built dashboard redistributes, served beside it
@@ -21,7 +21,7 @@ import { fileURLToPath } from "node:url";
 // bundle contains, each with its license text, sorted by package, so the output
 // is as reproducible as the bundle the CI diff checks. It only sees what a
 // MODULE GRAPH reaches, so `sourceNotices` appends what travels as files: the
-// faces, and the Material Symbols drawings behind every glyph, both
+// faces, and the Lucide drawings behind every glyph, both
 // redistributed by a package under a license of their own that the package's
 // own MIT text does not cover.
 //
@@ -66,25 +66,61 @@ function fontLicence(): Plugin {
 //
 // Both files are @crewlethq/icons', so the tab icon, the rail lockup, the
 // GitHub App landing page and the raster favicon a browser asks for unprompted
-// are one drawing with one source. They are emitted rather than imported
-// because nothing in the module graph references them: the shell names the SVG
-// in its head and the engine serves the .ico from a route of its own.
+// are one drawing with one source, served from /static/dashboard/ like every
+// other file the build writes. There is no second copy anywhere in the tree.
+// They are emitted rather than imported because nothing in the module graph
+// references them: the shell names the SVG in its head and the engine serves
+// the .ico from a route of its own.
+//
+// AND THE DEV SERVER SERVES THEM TOO, from the same package files, under the
+// same base: an emitted asset exists only in a build, so without this a
+// reader of `npm run dev` gets a blank tab icon and an empty lockup — and the
+// proxy entry that used to paper over that forwarded the path to whatever the
+// running engine had embedded instead.
+//
+// THE TAB ICON'S <link> IS WRITTEN HERE rather than in index.html, because its
+// URL is `base` plus the file and the two modes disagree about a literal: the
+// dev server prefixes `base` to every root-relative URL in the shell, so
+// `/static/dashboard/crewlet-icon.svg` became `/static/dashboard/static/
+// dashboard/…` there, while a build leaves a URL that is not a public file
+// exactly as written, so `/crewlet-icon.svg` stayed unprefixed in the
+// artifact. A tag injected after Vite's own pass is written once, from the
+// resolved base, and is the same in both.
 const BRAND_ASSETS: readonly { from: string; to: string }[] = [
   { from: `${ICONS}/svg/crewlet-icon.svg`, to: "crewlet-icon.svg" },
   { from: `${ICONS}/favicon/crewlet.ico`, to: "favicon.ico" },
 ];
 
 function brandAssets(): Plugin {
+  const read = (from: string) => readFileSync(fileURLToPath(new URL(from, import.meta.url)));
+  let base = "/";
   return {
     name: "crewlet:brand-assets",
-    apply: "build",
+    configResolved(config) {
+      base = config.base;
+    },
+    transformIndexHtml: {
+      order: "post",
+      handler: () => [
+        {
+          tag: "link",
+          attrs: { rel: "icon", type: "image/svg+xml", href: `${base}crewlet-icon.svg` },
+          injectTo: "head",
+        },
+      ],
+    },
+    configureServer(server) {
+      server.middlewares.use((req, res, next) => {
+        const path = (req.url ?? "").split("?")[0];
+        const asset = BRAND_ASSETS.find(({ to }) => path === `${base}${to}`);
+        if (!asset) return next();
+        res.setHeader("Content-Type", asset.to.endsWith(".svg") ? "image/svg+xml" : "image/x-icon");
+        res.end(read(asset.from));
+      });
+    },
     generateBundle() {
       for (const { from, to } of BRAND_ASSETS) {
-        this.emitFile({
-          type: "asset",
-          fileName: to,
-          source: readFileSync(fileURLToPath(new URL(from, import.meta.url))),
-        });
+        this.emitFile({ type: "asset", fileName: to, source: read(from) });
       }
     },
   };
@@ -95,19 +131,14 @@ function brandAssets(): Plugin {
 // covers, so the notice moves with the material it belongs to.
 const SOURCE_NOTICES: readonly { heading: string; lead: string; file: string }[] = [
   {
-    heading: "Fonts: Inter and JetBrains Mono (OFL-1.1)",
+    heading: "Fonts: Geist and Geist Mono (OFL-1.1)",
     lead: "The dashboard serves these font files from /static/dashboard/fonts/.",
     file: FONT_LICENCE,
   },
   {
-    heading: "Icons: Material Symbols (Apache-2.0)",
-    lead: "The dashboard's glyphs are Material Symbols drawings, redistributed by @crewlethq/icons.",
-    file: fileURLToPath(new URL(`${ICONS}/symbols/LICENSE`, import.meta.url)),
-  },
-  {
-    heading: "Icons: Material Symbols, notice",
-    lead: "The notice the Apache License requires to travel with the drawings.",
-    file: fileURLToPath(new URL(`${ICONS}/symbols/NOTICE`, import.meta.url)),
+    heading: "Icons: Lucide (ISC; portions Feather, MIT)",
+    lead: "The dashboard's glyphs are Lucide drawings, redistributed by @crewlethq/icons.",
+    file: fileURLToPath(new URL(`${ICONS}/glyphs/LICENSE`, import.meta.url)),
   },
 ];
 
@@ -143,8 +174,68 @@ function sourceNotices(): Plugin {
   };
 }
 
+// designSystemSheet makes the design system's component stylesheets ONE
+// sheet, loaded once, in its place in the cascade.
+//
+// Every uilet component — and the two drawings @crewlethq/icons ships with a
+// stylesheet — imports its own sheet as a side effect of its module. That is
+// right for a page built as one chunk: the sheets land in the entry's CSS in
+// module order, above ours (main.tsx says why that order is the whole game —
+// a one-class tie between a kit rule and ours goes to whichever is written
+// later). A code-split build breaks it silently. A component used only by a
+// lazy workspace takes its sheet INTO THAT WORKSPACE'S chunk, which a browser
+// appends when the chunk loads — after our sheets — so every tie ours used to
+// win flips on the first navigation there, and nothing in the source says so.
+// Measured on the first split build: twelve lazy stylesheets carried kit
+// rules, 140 KB of them.
+//
+// So main.tsx imports DESIGN_SYSTEM_SHEET, which this plugin answers with
+// every component sheet the two packages ship — @crewlethq/ui's own
+// single-sheet build, `styles.css`, which its README names as the supported
+// way to take the whole set, then the icons' — and each per-component
+// side-effect import is answered with an empty module. The rules are then in
+// exactly one place, whichever chunk reaches a component first, and
+// internal/api's TestTheDesignSystemCascadesInOrder fails a lazy stylesheet
+// that carries one. `enforce: "pre"` so the answers are given before Vite's
+// own resolver and loader see the files; both key on the RESOLVED path, so
+// the dev server's pre-bundled copy of the kit is answered as the build is.
+const DESIGN_SYSTEM_SHEET = "virtual:crewlet-design-system.css";
+const DESIGN_SYSTEM_ID = `\0${DESIGN_SYSTEM_SHEET}`;
+const EMPTIED_ID = "\0crewlet-design-system-sheet-already-loaded";
+const UI_DIST = fileURLToPath(new URL("./node_modules/@crewlethq/ui/dist/", import.meta.url));
+const ICONS_DIST = fileURLToPath(new URL(`${ICONS}/dist/`, import.meta.url));
+
+function designSystemSheet(): Plugin {
+  const componentSheet = (file: string) =>
+    file.endsWith(".css") &&
+    (file.startsWith(ICONS_DIST) || (file.startsWith(UI_DIST) && file !== `${UI_DIST}styles.css`));
+  return {
+    name: "crewlet:design-system-sheet",
+    enforce: "pre",
+    async resolveId(source, importer, options) {
+      if (source === DESIGN_SYSTEM_SHEET) return DESIGN_SYSTEM_ID;
+      if (!source.endsWith(".css") || !importer) return null;
+      const resolved = await this.resolve(source, importer, { ...options, skipSelf: true });
+      return resolved && componentSheet(resolved.id.split("?")[0] ?? "") ? EMPTIED_ID : null;
+    },
+    load(id) {
+      if (id === EMPTIED_ID) return "export {};";
+      if (id !== DESIGN_SYSTEM_ID) return null;
+      const icons = readdirSync(ICONS_DIST)
+        .filter((f) => f.endsWith(".css"))
+        .sort();
+      return [`${UI_DIST}styles.css`, ...icons.map((f) => `${ICONS_DIST}${f}`)]
+        .map((file) => {
+          this.addWatchFile(file);
+          return readFileSync(file, "utf-8");
+        })
+        .join("\n");
+    },
+  };
+}
+
 export default defineConfig({
-  plugins: [react(), fontLicence(), brandAssets(), sourceNotices()],
+  plugins: [react(), designSystemSheet(), fontLicence(), brandAssets(), sourceNotices()],
   // The engine serves this tree from /static/dashboard/ and answers the shell
   // at both `/` and `/dashboard`. A relative base would resolve the shell's
   // own asset URLs against whichever of those the reader arrived at; an
@@ -163,6 +254,17 @@ export default defineConfig({
     target: "es2022",
     assetsDir: "assets",
     license: { fileName: NOTICES },
+    // The build's own warning, at the RAW size of the lazy-chunk budget. The
+    // authority is internal/api's TestTheDashboardFitsItsBudget, which holds
+    // every chunk the page fetches later to 150 KiB GZIPPED, as the engine
+    // sends it; this knob can only count raw kB (1,000 bytes). The chunks
+    // this build writes compress between 2.86x (the most compressible) and
+    // 3.48x, so 150 KiB x 1.024 x 2.86 = 439 kB is the raw size at which the
+    // most compressible chunk reaches the budget: the warning fires at or
+    // before the point the test fails, for every chunk, rather than at
+    // Vite's default 500 kB, where a chunk could be 175 KiB on the wire and
+    // the build still say nothing. Change the budget there, then this.
+    chunkSizeWarningLimit: 439,
     // The faces keep the paths they have always had. They arrive from
     // @crewlethq/tokens through its stylesheet rather than from public/, and
     // Vite would otherwise content-hash them into assets/. Two things depend
@@ -174,6 +276,14 @@ export default defineConfig({
     // asks for it and requires the path to be under fonts/ — rather than any
     // filename, which is the design system's to choose. Everything else keeps
     // the hashed default.
+    //
+    // AND EVERYTHING ROUTED TO assets/ MUST CARRY [hash]. The engine serves
+    // that directory `immutable` for a year (internal/api/dashboard.go), which
+    // is correct only because a changed file is a new name; a fixed name there
+    // would pin a stale module in every reader's browser.
+    // TestEveryFileUnderAssetsIsContentHashed reads the built tree and fails
+    // on one. The entry and the chunks take Vite's default,
+    // `assets/[name]-[hash].js`.
     rollupOptions: {
       output: {
         assetFileNames: (asset) =>
@@ -196,26 +306,41 @@ export default defineConfig({
   server: {
     port: 5173,
     // `npm run dev` proxies the data plane to a locally running engine, so
-    // the dev loop is the real API rather than a fixture. Every prefix the
-    // dashboard calls has to be listed: an unlisted one is served by Vite
-    // itself, which answers 404 for a path it has no file for, so the screen
-    // sees a refusal that looks like the engine's and is not.
+    // the dev loop is the real API rather than a fixture. EXACTLY the prefixes
+    // the dashboard reaches, both ways, and src/protocol/proxy.test.ts reads
+    // every URL in the source and the shell's markup to hold it: an unlisted
+    // prefix is served by Vite itself, which answers 404 for a path it has no
+    // file for, so the screen sees a refusal that looks like the engine's and
+    // is not; a listed prefix nothing reaches is a dependency nobody has, which
+    // outlives the screen that once needed it.
     proxy: {
+      // The live socket, and the plain GET the socket makes to diagnose a
+      // handshake the engine refused.
       "/ws/stream": { target: "ws://localhost:8000", ws: true },
-      "/api": { target: "http://localhost:8000" },
-      "/health": { target: "http://localhost:8000" },
-      "/org": { target: "http://localhost:8000" },
-      "/agents": { target: "http://localhost:8000" },
-      "/events": { target: "http://localhost:8000" },
-      "/tools": { target: "http://localhost:8000" },
-      "/schedules": { target: "http://localhost:8000" },
+      // The degraded-mode snapshot poll, for a browser that cannot upgrade.
+      "/stream": { target: "http://localhost:8000" },
       "/config": { target: "http://localhost:8000" },
       "/secrets": { target: "http://localhost:8000" },
       "/setup": { target: "http://localhost:8000" },
-      "/stream": { target: "http://localhost:8000" },
-      // The state log's retention document and its two operator gates, which
-      // the Fleet screen's replication panels read and write.
+      // The state log's two operator gates, evict and readmit, which the
+      // Fleet screen's replication panels write. The retention document they
+      // sit beside is read over the socket.
       "/work": { target: "http://localhost:8000" },
+      // Every change a screen makes, as the signed-in person
+      // (protocol/act.ts). Only the act route: /operator/mcp is a person's
+      // assistant's surface, and nothing in the dashboard dials it.
+      "/operator/act": { target: "http://localhost:8000" },
+      // Taking a backup (Settings › Backups & retention). The record it
+      // lands in is read over the socket.
+      "/backup": { target: "http://localhost:8000" },
+      // The two placement maps' gestures — out, in, hold, release, and the
+      // estate map's move — which Settings › Nodes and Settings › Estate
+      // send. Each map itself is read over the socket.
+      "/objects": { target: "http://localhost:8000" },
+      "/estate": { target: "http://localhost:8000" },
+      // Removing a dead member from the broker's metadata group (Settings ›
+      // Nodes, Broker members). The membership is read over the socket.
+      "/fleet": { target: "http://localhost:8000" },
     },
   },
 });

@@ -15,39 +15,48 @@ import (
 // re-implementation in the browser, and whatever a reconnect left behind —
 // and a refresh routinely disagreed with the page it replaced.
 
-// foldSpend records one spend record — a completed phase's, or a coding run's
-// — reporting whether it counted.
+// foldSpend records one completed phase's spend, reporting whether it counted.
 //
-// THE RECORD IS [tokens.Spent]'s, the rule the event store fills its columns
-// by ([store.SpendFor]), so the live rollup and a queried one place every
-// record in the same rows. Only the three dimensions that rule leaves to its
-// producer are set here: the envelope's id and stamp, and the seat, read from
-// the payload fields this projection keys its seat rows on.
-//
-// Deduped by event id so a redelivered envelope cannot inflate the rollup —
-// and a coding run's record is published again, under the same id, by every
-// retried collect of its launch — and window-pruned so a long-lived process
-// does not keep aggregating spend that has aged out.
+// Deduped by event id so a redelivered envelope cannot inflate the rollup, and
+// window-pruned so a long-lived process does not keep aggregating spend that
+// has aged out.
 func (s *LiveState) foldSpend(env Envelope, payload map[string]any) bool {
-	record, ok := tokens.Spent(env.Type, payloadFields(payload))
-	if !ok {
-		return false
-	}
 	if env.ID != "" {
 		if _, counted := s.spendIDs[env.ID]; counted {
 			return false
 		}
 		s.spendIDs[env.ID] = struct{}{}
 	}
-	record.EventID, record.Timestamp = env.ID, env.Timestamp
-	record.AgentID = str(payload, "agent_id")
-	record.AgentRole = str(payload, "role", "agent_role")
 	// The stamp is PARSED ONCE, here, and carried with the record. The
 	// prune below tests every retained record's age on every spend event,
 	// and re-parsing them — up to three layouts each, twice per pass —
 	// happened inside the projection's write lock, which is the mutex
 	// every /agents request and every websocket snapshot waits on.
-	s.spend = append(s.spend, spendEntry{at: newStamp(env.Timestamp), Record: record})
+	s.spend = append(s.spend, spendEntry{at: newStamp(env.Timestamp), Record: tokens.Record{
+		EventID:      env.ID,
+		Timestamp:    env.Timestamp,
+		AgentID:      str(payload, "agent_id"),
+		AgentRole:    str(payload, "role", "agent_role"),
+		Phase:        str(payload, "phase"),
+		HostPhase:    str(payload, "host_phase"),
+		Worker:       str(payload, "worker"),
+		Model:        str(payload, "model", "provider_key"),
+		TurnID:       str(payload, "turn_id"),
+		WorkKey:      str(payload, "work_key"),
+		Iteration:    num(payload, "iteration"),
+		InputTokens:  num(payload, "input_tokens"),
+		OutputTokens: num(payload, "output_tokens"),
+		TotalTokens:  num(payload, "total_tokens"),
+		// Every value the store's columns carry (schema/0015, 0032):
+		// the live window and a queried one fold through one
+		// aggregation, and a value one producer carries and the other
+		// drops is a rollup that changes when the window crosses the
+		// live edge.
+		CacheReadTokens:  num(payload, "cache_read_tokens"),
+		CacheWriteTokens: num(payload, "cache_write_tokens"),
+		ProviderKey:      str(payload, "provider_key"),
+		CostUSD:          fraction(payload, "cost_usd"),
+	}})
 	s.pruneSpend(env.Timestamp)
 	return true
 }
@@ -148,10 +157,3 @@ func LiveSpendWindowDays() int {
 	}
 	return days
 }
-
-// payloadFields is a decoded payload as [tokens.Fields].
-type payloadFields map[string]any
-
-func (p payloadFields) String(field string) string { return str(p, field) }
-func (p payloadFields) Int(field string) int       { return num(p, field) }
-func (p payloadFields) Float(field string) float64 { return fraction(p, field) }

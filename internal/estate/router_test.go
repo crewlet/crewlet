@@ -1055,14 +1055,14 @@ func TestASearchThatReachedNothingNamesWhatItMissed(t *testing.T) {
 	f := newFleet(t, "data-a")
 	f.nodes["data-a"].set(func(n *fakeNode) { n.silent = true })
 	got := f.client.Knowledge().Search(t.Context(), knowledge.Query{Text: "deploys", Limit: 5})
-	if len(got.Hits) != 0 || got.Coverage.Addressed != 1 || len(got.Coverage.Missing) != 1 ||
-		got.Coverage.Missing[0].Partition != "estate.000" ||
-		got.Coverage.Missing[0].Reason != statelog.MissingUnreachable {
+	if len(got.Hits) != 0 || got.Partitions.Addressed != 1 || len(got.Partitions.Missing) != 1 ||
+		got.Partitions.Missing[0].Partition != "estate.000" ||
+		got.Partitions.Missing[0].Reason != statelog.MissingUnreachable {
 		t.Fatalf("a search nothing answered = %+v, want estate.000 named unreachable", got)
 	}
 	const notice = "1 of 1 partitions did not answer; this list may be incomplete"
-	if got.Coverage.Notice() != notice {
-		t.Errorf("it renders %q, want %q", got.Coverage.Notice(), notice)
+	if got.Partitions.Notice() != notice {
+		t.Errorf("it renders %q, want %q", got.Partitions.Notice(), notice)
 	}
 }
 
@@ -1077,7 +1077,7 @@ func TestASearchWithEveryCopyLaggingRunsOnce(t *testing.T) {
 		n.set(func(n *fakeNode) { n.notReady = true })
 	}
 	got := f.client.Knowledge().Search(t.Context(), knowledge.Query{Text: "deploys", Limit: 5})
-	if len(got.Hits) != 1 || !got.Coverage.Complete() {
+	if len(got.Hits) != 1 || !got.Partitions.Complete() {
 		t.Fatalf("search with every copy lagging = %+v, want one copy's answer", got)
 	}
 	var ran []string
@@ -1103,8 +1103,8 @@ func TestALaggingCopyThatRefusesTheLastResortIsNotAskedAgain(t *testing.T) {
 	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
 	defer cancel()
 	got := f.client.Knowledge().Search(ctx, knowledge.Query{Text: "deploys", Limit: 5})
-	if ctx.Err() != nil || len(got.Coverage.Missing) != 1 ||
-		got.Coverage.Missing[0].Reason != statelog.MissingUnserved {
+	if ctx.Err() != nil || len(got.Partitions.Missing) != 1 ||
+		got.Partitions.Missing[0].Reason != statelog.MissingUnserved {
 		t.Fatalf("search = %+v (deadline %v), want estate.000 missing as unserved before the "+
 			"caller's deadline", got, ctx.Err())
 	}
@@ -1127,7 +1127,7 @@ func TestAGatherThatFailsNamesItsOperation(t *testing.T) {
 	f.placement.set(func(p *fakePlacement) {
 		p.servingErr = errors.New("the presence view answers unknown")
 	})
-	_, err := f.client.Work().Search(t.Context(), "deploys", 5)
+	_, err := f.client.Work().Search(t.Context(), tracker.SearchQuery{Text: "deploys", Limit: 5})
 	const want = "estate: tracker.search: read who serves estate.000: the presence view answers unknown"
 	if err == nil || err.Error() != want {
 		t.Errorf("a gather the placement could not route = %v, want %q", err, want)

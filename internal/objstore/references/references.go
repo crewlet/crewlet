@@ -1,5 +1,5 @@
 // Package references is the one list of replicated tables whose rows name
-// chunks of the object store — ADR-0019's cross-package half.
+// chunks of the object store — ADR-0026's cross-package half.
 //
 // # Why a package of one list
 //

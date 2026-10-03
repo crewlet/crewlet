@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"testing"
 
+	"github.com/crewlet/crewlet/internal/events"
+	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/store"
 )
 
@@ -146,5 +148,49 @@ func TestAnUntrackedTypeIsNotStored(t *testing.T) {
 	if _, ok := store.Category("agent_turn_progress"); ok {
 		t.Fatal("agent_turn_progress is a live-only signal; " +
 			"agent_phase_completed is its durable record")
+	}
+}
+
+// THE RUNTIME AUDIT READS ITS ROWS FROM A LISTING, which never selects the
+// payload — so who acted, as whom, with which tool, into which directory and on
+// which node must each survive as a tag, or the Audit log and the backup
+// history can say only the summary's prose. Built from the real types, so a
+// renamed wire field fails here rather than as a blank column.
+func TestTheRuntimeAuditsDimensionsSurviveIntoAListing(t *testing.T) {
+	t.Parallel()
+	backupEvent := events.New(types.NewBackupRequested(types.BackupRequested{
+		OperatorID: "maya-laptop", ActorSeat: "maya", Dir: "/var/backups/one",
+		Outcome: types.AuditApplied, Streams: 12,
+	}), events.TraceContext{})
+	backupEvent.Node = "node-b"
+	acted := events.New(types.NewOperatorActed(types.OperatorActed{
+		OperatorID: "maya-laptop", ActorSeat: "maya", Transport: types.TransportAct,
+		Tool: "update_work_item", Outcome: types.AuditRefused, Refusal: "conflict",
+	}), events.TraceContext{})
+	acted.Node = "node-a"
+
+	for _, c := range []struct {
+		event *events.Event
+		want  map[string]string
+	}{
+		{backupEvent, map[string]string{
+			"node": "node-b", "actor_seat": "maya", "dir": "/var/backups/one",
+		}},
+		{acted, map[string]string{
+			"node": "node-a", "actor_seat": "maya", "tool": "update_work_item",
+			"failed": "true",
+		}},
+	} {
+		raw, err := json.Marshal(c.event)
+		if err != nil {
+			t.Fatal(err)
+		}
+		tags := store.ExtractTags(raw)
+		for key, want := range c.want {
+			if tags[key] != want {
+				t.Errorf("%s: tag %s = %q, want %q (tags %v)", c.event.Type, key,
+					tags[key], want, tags)
+			}
+		}
 	}
 }

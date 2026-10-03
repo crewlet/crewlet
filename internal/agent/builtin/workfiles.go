@@ -150,7 +150,7 @@ func (t *listProjectFiles) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		Freshness: statelog.Freshness{Level: seatReadLevel},
 	})
 	if err != nil {
-		return failed(fileReadFailure(t.Name(), project, "", err)), nil
+		return fileReadFailure(t.Name(), project, "", err), nil
 	}
 	return jsonResult(map[string]any{
 		"project": project, "count": len(listing.Files), "files": listing.Files,
@@ -234,7 +234,7 @@ func (t *readProjectFile) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	detail, err := t.deps.Files.File(ctx, project, filePath,
 		statelog.Freshness{Level: seatReadLevel})
 	if err != nil {
-		return failed(fileReadFailure(t.Name(), project, filePath, err)), nil
+		return fileReadFailure(t.Name(), project, filePath, err), nil
 	}
 	f := detail.File
 	answer := map[string]any{
@@ -290,14 +290,14 @@ func withNext(answer map[string]any, offset, read, size int64) map[string]any {
 // fileReadFailure explains a file read that could not be served, keeping a
 // file that is not there apart from a read that failed — the second must never
 // read as the first.
-func fileReadFailure(tool, project, filePath string, err error) string {
+func fileReadFailure(tool, project, filePath string, err error) tools.Result {
 	switch {
 	case errors.Is(err, tracker.ErrNoProject):
-		return fmt.Sprintf("%s: there is no project %s. List them with %s.", tool,
-			project, tracker.ListProjectsTool)
+		return refused(tools.RefusalNotFound, fmt.Sprintf("%s: there is no project %s. "+
+			"List them with %s.", tool, project, tracker.ListProjectsTool))
 	case errors.Is(err, tracker.ErrNoFile):
-		return fmt.Sprintf("%s: there is no file %s in %s. List them with %s.", tool,
-			filePath, project, tracker.ListProjectFilesTool)
+		return refused(tools.RefusalNotFound, fmt.Sprintf("%s: there is no file %s in "+
+			"%s. List them with %s.", tool, filePath, project, tracker.ListProjectFilesTool))
 	}
 	return readFailure(tool, err)
 }
@@ -404,7 +404,7 @@ func (t *writeProjectFile) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		IfMatch: uint64(max(argInt(args, "if_version", 0), 0)),
 	})
 	if err != nil {
-		return failed(writeFailure(actor, t.Name(), err)), nil
+		return writeFailure(actor, t.Name(), err), nil
 	}
 	if result.Outcome == statelog.OutcomeUnknown {
 		return failed(unknownWrite(actor, t.Name(),
@@ -498,9 +498,9 @@ func (t *removeProjectFile) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		uint64(max(argInt(args, "if_version", 0), 0)))
 	switch {
 	case errors.Is(err, tracker.ErrNoFile):
-		return failed(fileReadFailure(t.Name(), project, filePath, err)), nil
+		return fileReadFailure(t.Name(), project, filePath, err), nil
 	case err != nil:
-		return failed(writeFailure(actor, t.Name(), err)), nil
+		return writeFailure(actor, t.Name(), err), nil
 	}
 	if result.Outcome == statelog.OutcomeUnknown {
 		return failed(unknownWrite(actor, t.Name(),

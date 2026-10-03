@@ -170,6 +170,16 @@ func (c *Chain) Complete(ctx context.Context, req llm.Request) (*llm.Completion,
 				// tokens under no model at all.
 				completion.Model = m.Provider.Model()
 			}
+			if completion.ProviderKey == "" {
+				// WHICH ENTRY answered, which only this loop knows:
+				// the backend was built from the entry and never told
+				// its key, and every frame above sees the chain as one
+				// provider. Without it a call that fell through to the
+				// second member reads as the head's — the entry the
+				// spend-by-provider rollup would then charge for a call
+				// it failed.
+				completion.ProviderKey = m.Key
+			}
 			return completion, nil
 		}
 

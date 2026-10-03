@@ -56,7 +56,7 @@ stateDiagram-v2
     [*] --> joining: the target names the node
     joining --> serving: its lease says serving,\nhaving read the map that named it
     joining --> leaving: the target moved away\nbefore it served
-    serving --> leaving: the target no longer names it,\nand every target node serves\n(ADR-0019's two conditions)
+    serving --> leaving: the target no longer names it,\nand every target node serves\n(ADR-0026's two conditions)
     leaving --> serving: wanted again,\nand it has not started to drain
     leaving --> [*]: its lease says released
     serving --> [*]: membership removed the node
@@ -248,7 +248,7 @@ The `estate-map` duty runs one step per partition per tick:
    established copy serving, one still being built joining or leaving, and
    any copy of a barred node leaving.
 5. A serving holder the target no longer names is retired only under **both**
-   of ADR-0019's conditions: every target node serves the partition by the map
+   of ADR-0026's conditions: every target node serves the partition by the map
    *and* by its own lease, and has acted on the map that made it a server. The
    last server is never retired.
 6. Every target node not yet holding the partition joins it — at most one
@@ -442,7 +442,7 @@ once before anything is written, reads each such log's bound there too
 (`statelog.readmission_bound`), since that node's fence is the one the
 readmitted node is held to. Nothing else lifts the bar:
 `crewlet estate in` refuses a barred node (`barred_member`) with the map
-unchanged — and the dashboard's estate screen offers a barred node no
+unchanged — and the dashboard's **Settings › Estate** screen offers a barred node no
 **Put back** but **Readmit…**, the readmission itself — because an in cannot
 see the logs, and lifting the bar before they have all taken the node back
 would place partitions on a node they still gate.

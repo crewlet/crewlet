@@ -3,48 +3,21 @@
  * can be, the disagreements the engine names between what the nodes advertise
  * and what the metadata group counts, and how long a removal may take.
  *
- * Every constant here is a COPY of something the engine owns, because this is
- * a separate build that cannot import a Go identifier — and each copy is held
- * to the engine's by a gate on the engine side (`internal/api`'s
- * `broker_client_test.go`), in both directions, so it cannot drift silently.
+ * The closed sets and the removal's wait are declared in `../contract/fleet.ts`,
+ * the one home of every value an engine gate holds; this module re-exports
+ * them beside the wire shapes that use them.
  */
 
-/**
- * How a node's broker takes part in the fleet's — `placement.BrokerKind`, as
- * `String()` renders it.
- *
- * `unknown` IS A VALUE, not an absence: a node running a build older than the
- * field says nothing, and the engine renders that as `unknown` so the cell is
- * never empty — an empty cell reads as nothing to look at, and this one is
- * counted as a member wherever that is the safe reading.
- */
-export const BROKER_KINDS = ["member", "leaf", "client", "unknown"] as const;
+import { BROKER_FINDING_KINDS, BROKER_KINDS, BROKER_REMOVE_TIMEOUT_MS } from "../contract/fleet.ts";
+
+export { BROKER_FINDING_KINDS, BROKER_KINDS, BROKER_REMOVE_TIMEOUT_MS };
 
 /** One of [BROKER_KINDS]. Kept a string on the wire, so a kind a newer node
  *  sends is shown rather than dropped. */
 export type BrokerKind = (typeof BROKER_KINDS)[number];
 
-/**
- * The disagreements between the two records of the broker's membership —
- * `engine.BrokerFindingKinds`.
- */
-export const BROKER_FINDING_KINDS = ["dead_member", "not_in_group", "unknown_kind"] as const;
-
 /** One of [BROKER_FINDING_KINDS]. */
 export type BrokerFindingKind = (typeof BROKER_FINDING_KINDS)[number];
-
-/**
- * How long a removal's request may take before the dialog gives up on it.
- *
- * THREE MINUTES AND FIVE SECONDS, the command line's own wait and for its
- * reason: the node bounds the whole removal by one deadline
- * (`engine.BrokerRemoveWait`, two minutes and five seconds) — the carrying
- * member's own commit budget and one round trip for its answer — and a minute
- * more covers the node listing the fleet and reaching the member. A dialog
- * that gave up first would report a removal the group went on to commit as
- * failed.
- */
-export const BROKER_REMOVE_TIMEOUT_MS = 185_000;
 
 /** One live node's broker, as its presence advertises it. */
 export interface BrokerNode {

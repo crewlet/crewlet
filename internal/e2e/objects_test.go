@@ -296,7 +296,7 @@ func memberOf(objects map[string]any, node string) map[string]any {
 	return nil
 }
 
-// THE MAP'S COPIES AND ITS FAILURE DOMAIN ARE THE COMPANY'S — ADR-0020.
+// THE MAP'S COPIES AND ITS FAILURE DOMAIN ARE THE COMPANY'S — ADR-0027.
 //
 // The harness boots every member with `stream.replicas` at the fleet's size
 // and a company that names no object block, so the map first asks for the

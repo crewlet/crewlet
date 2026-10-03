@@ -1,297 +1,243 @@
 /**
- * Route dispatch.
+ * Route dispatch: what `app/routes.ts` resolved, as a component.
  *
- * A flat switch rather than a route table with lazy chunks: there are twenty
- * screens, the whole application is ~180 KB gzipped, and it is served from the
- * same binary as the API — so a code-split chunk buys a round trip against a
- * server that is already answering. The switch is also what makes the screen
- * list readable in one place.
+ * THE TABLE IS NOT HERE. Which paths are pages, which segment is a key and
+ * which an id, what a bare `#/live/traces` is — all of that is
+ * `routes.ts`'s `resolve`, a pure function the breadcrumb, the stars, the
+ * recents, the palette and the tests call too. This file is the one place a
+ * resolved screen becomes a component, and a `switch` over the resolved
+ * union is exhaustive: a screen added to the union and not drawn here is a
+ * compile error rather than a blank page.
  *
- * # Two levels of dispatch, matching the two levels of navigation
- *
- * The first segment names a WORKSPACE and the second names what inside it. A
- * single-level switch is what the previous shape had, and it is why nineteen
- * unrelated nouns sat at the top of the URL space: `#/runs`, `#/schedules`,
- * `#/conversations` and `#/model` are four views of one question — what the
- * company's workforce did — and nothing in the address said so.
+ * EVERY SCREEN IS A LAZY CHUNK, one per workspace (`lazyScreen.ts` says why
+ * the flat import list this replaced was the wrong trade), so the names below
+ * are components that suspend until their workspace's code is in. The routed
+ * screen sits inside `ScreenBoundary` (`boundaries.tsx`): a suspense boundary
+ * drawing a skeleton while the chunk loads, and an error boundary that takes
+ * down only the screen when it throws or its chunk never arrives.
  *
  * # Keyed on the subject, every screen that has one
  *
  * A hash change re-renders this switch rather than remounting it, so
- * `#/activity/turns/A` → `#/activity/turns/B` reconciles: React keeps the same
+ * `#/live/turns/A` → `#/live/turns/B` reconciles: React keeps the same
  * component instance and every piece of per-SUBJECT state in it outlives the
  * subject it describes. A disclosure left open, a tab left selected and a
  * refusal left on screen are all the same bug waiting for somebody to notice.
  */
 
+import { useEffect, type ReactNode } from "react";
 import { Shell } from "./Shell.tsx";
-import { LayerHost, ToastProvider } from "@crewlethq/ui";
+import { LayerHost, Skeleton, ToastProvider } from "@crewlethq/ui";
 import { useRoute } from "./router.tsx";
-import { Inbox } from "~/routes/inbox/Inbox.tsx";
-import { MyWork } from "~/routes/me/MyWork.tsx";
-import { People } from "~/routes/company/People.tsx";
-import { SeatScreen } from "~/routes/company/Seat.tsx";
-import { CompanyScreen, UnitScreen } from "~/routes/company/Company.tsx";
-import { Runs } from "~/routes/activity/Runs.tsx";
-import { Work } from "~/routes/work/Work.tsx";
-import { Project } from "~/routes/work/Project.tsx";
-import { Projects } from "~/routes/work/Projects.tsx";
-import { History } from "~/routes/work/History.tsx";
-import { WorkItem } from "~/routes/work/WorkItem.tsx";
-import { SavedViews } from "~/routes/work/SavedViews.tsx";
-import { WorkSearch } from "~/routes/work/WorkSearch.tsx";
-import { Pages, PageView } from "~/routes/knowledge/Pages.tsx";
-import { Conversations } from "~/routes/activity/Conversations.tsx";
-import { Turns } from "~/routes/activity/Turns.tsx";
-import { Schedules } from "~/routes/activity/Schedules.tsx";
-import { LiveNow } from "~/routes/activity/LiveNow.tsx";
-import { Activity } from "~/routes/activity/Activity.tsx";
-import { Knowledge } from "~/routes/knowledge/Knowledge.tsx";
-import { Spend } from "~/routes/cost/Spend.tsx";
-import { Budgets } from "~/routes/cost/Budgets.tsx";
-import { Fleet } from "~/routes/admin/Fleet.tsx";
-import { DomainScreen } from "~/routes/admin/Domain.tsx";
-import { Estate } from "~/routes/admin/Estate.tsx";
-import { Integrations } from "~/routes/admin/Integrations.tsx";
-import { Tools } from "~/routes/admin/Tools.tsx";
-import { ConfigScreen } from "~/routes/admin/Config.tsx";
-import { Secrets } from "~/routes/admin/Secrets.tsx";
-import { Audit } from "~/routes/admin/Audit.tsx";
-import { EventScreen } from "~/routes/activity/Event.tsx";
-import { TurnScreen } from "~/routes/activity/Turn.tsx";
-import { TraceScreen } from "~/routes/activity/Trace.tsx";
+import { resolve, type Resolved } from "./routes.ts";
+import { sectionOf } from "./nav.ts";
+import { OperatorRequired } from "./frame/OperatorRequired.tsx";
+import { useViewer } from "~/lib/viewer.ts";
 import { NotFound } from "~/routes/NotFound.tsx";
+import { lazyScreen, prefetchOnIdle } from "./lazyScreen.ts";
+import { ScreenBoundary } from "./boundaries.tsx";
 
-/** A project key is uppercase; an item key is `KEY-n`; an id is a uuid. */
-const PROJECT_KEY = /^[A-Z][A-Z0-9_]*$/;
+const Home = lazyScreen("home", (m) => m.Home);
+const Inbox = lazyScreen("inbox", (m) => m.Inbox);
+const MyWork = lazyScreen("me", (m) => m.MyWork);
+const Work = lazyScreen("work", (m) => m.Work);
+const Projects = lazyScreen("work", (m) => m.Projects);
+const SavedViews = lazyScreen("work", (m) => m.SavedViews);
+const History = lazyScreen("work", (m) => m.History);
+const WorkSearch = lazyScreen("work", (m) => m.WorkSearch);
+const Project = lazyScreen("work", (m) => m.Project);
+const WorkItem = lazyScreen("work", (m) => m.WorkItem);
+const OrgChart = lazyScreen("agents", (m) => m.OrgChart);
+const People = lazyScreen("agents", (m) => m.People);
+const Teams = lazyScreen("agents", (m) => m.Teams);
+const UnitScreen = lazyScreen("agents", (m) => m.UnitScreen);
+const Schedules = lazyScreen("agents", (m) => m.Schedules);
+const SeatScreen = lazyScreen("agents", (m) => m.SeatScreen);
+const OrgEdit = lazyScreen("org", (m) => m.OrgEdit);
+const LiveNow = lazyScreen("live", (m) => m.LiveNow);
+const Turns = lazyScreen("live", (m) => m.Turns);
+const TurnScreen = lazyScreen("live", (m) => m.TurnScreen);
+const Runs = lazyScreen("live", (m) => m.Runs);
+const RunScreen = lazyScreen("live", (m) => m.RunScreen);
+const Conversations = lazyScreen("live", (m) => m.Conversations);
+const ChannelScreen = lazyScreen("live", (m) => m.ChannelScreen);
+const TraceScreen = lazyScreen("live", (m) => m.TraceScreen);
+const Activity = lazyScreen("live", (m) => m.Activity);
+const EventScreen = lazyScreen("live", (m) => m.EventScreen);
+const Knowledge = lazyScreen("knowledge", (m) => m.Knowledge);
+const Pages = lazyScreen("knowledge", (m) => m.Pages);
+const PageView = lazyScreen("knowledge", (m) => m.PageView);
+const Skills = lazyScreen("knowledge", (m) => m.Skills);
+const Diaries = lazyScreen("knowledge", (m) => m.Diaries);
+const Diary = lazyScreen("knowledge", (m) => m.Diary);
+const Spend = lazyScreen("spend", (m) => m.Spend);
+const Budgets = lazyScreen("spend", (m) => m.Budgets);
+const ExpensiveTasks = lazyScreen("spend", (m) => m.ExpensiveTasks);
+const General = lazyScreen("settings", (m) => m.General);
+const PeopleAndAccess = lazyScreen("settings", (m) => m.PeopleAndAccess);
+const Integrations = lazyScreen("settings", (m) => m.Integrations);
+const Tools = lazyScreen("settings", (m) => m.Tools);
+const Models = lazyScreen("settings", (m) => m.Models);
+const Secrets = lazyScreen("settings", (m) => m.Secrets);
+const Fleet = lazyScreen("settings", (m) => m.Fleet);
+const Estate = lazyScreen("settings", (m) => m.Estate);
+const ConfigScreen = lazyScreen("settings", (m) => m.ConfigScreen);
+const Backups = lazyScreen("settings", (m) => m.Backups);
+const Audit = lazyScreen("settings", (m) => m.Audit);
 
-function WorkRoutes({ rest }: { rest: string[] }) {
-  const [first, second] = rest;
-  if (!first) return <Work />;
-  if (first === "views") return second ? <SavedViews key={second} id={second} /> : <SavedViews />;
-  if (first === "search") return <WorkSearch />;
-  // THE TWO WORKSPACE-LEVEL LISTS, AND NEITHER TAKES A TAIL. Both answer a
-  // question about the whole company — which projects there are, and what has
-  // changed — so there is nothing under them to address: a project has its own
-  // route one line down, and a change is a record on the item it changed.
-  // Rendering the list with the tail dropped would put a trail over it naming
-  // a page nobody routed to, which is the defect the Admin arms record.
-  if (first === "projects" || first === "history") {
-    if (second) return <NotFound what={`“${rest.join("/")}” under Work`} />;
-    return first === "projects" ? <Projects /> : <History />;
-  }
-  // A PROJECT OR AN ITEM — decided by the SHAPE of the key rather than by a
-  // lookup, so the route resolves before any answer arrives.
-  if (PROJECT_KEY.test(first)) {
-    return <Project key={first} projectKey={first} />;
-  }
-  // A key or an id BOTH resolve, because the reader has whichever they were
-  // shown: a person pastes ENG-42 out of chat, and every internal link carries
-  // the id. The engine's own Get takes either.
-  return <WorkItem key={first} id={first} />;
-}
-
-function CompanyRoutes({ rest }: { rest: string[] }) {
-  const [first, second] = rest;
-  if (!first) return <CompanyScreen />;
-  if (first === "people") return second ? <SeatScreen key={second} handle={second} /> : <People />;
-  if (first === "units") {
-    return second ? <UnitScreen key={second} id={second} /> : <CompanyScreen />;
-  }
-  return <NotFound what={`“${first}” under Company`} />;
-}
-
-function ActivityRoutes({ rest }: { rest: string[] }) {
-  const [first, ...tail] = rest;
-  const id = tail[0];
-  if (!first) return <LiveNow />;
-  switch (first) {
-    case "turns":
-      return id ? <TurnScreen key={id} turnId={id} /> : <Turns />;
-    // A TRACE HAS NO LIST, only a page: nothing enumerates traces, and every
-    // way in is a link from an event, a turn or a coding run that already
-    // holds the id. A bare `#/activity/traces` is therefore the turns list,
-    // which is the nearest thing to "the traces" this product has.
-    case "traces":
-      return id ? <TraceScreen key={id} traceId={id} /> : <Turns />;
-    case "runs":
-      return <Runs key={id ?? ""} runId={id} />;
+/** One resolved screen, drawn. */
+export function screenFor(route: Resolved): ReactNode {
+  switch (route.screen) {
+    case "home":
+      return <Home />;
+    case "inbox":
+      return <Inbox />;
+    case "me":
+      return <MyWork section={route.section} />;
+    case "work":
+      return <Work />;
+    case "work-projects":
+      return <Projects />;
+    case "work-views":
+      return route.id ? <SavedViews key={route.id} id={route.id} /> : <SavedViews />;
+    case "work-history":
+      return <History />;
+    case "work-search":
+      return <WorkSearch />;
+    case "project":
+      return <Project key={route.key} projectKey={route.key} />;
+    case "item":
+      return <WorkItem key={route.id} id={route.id} />;
+    case "org-chart":
+      return <OrgChart />;
+    case "roster":
+      return <People />;
+    case "teams":
+      return route.unit ? <UnitScreen key={route.unit} id={route.unit} /> : <Teams />;
     case "schedules":
-      return <Schedules key={tail.join("/")} scope={tail} />;
+      return <Schedules key={route.scope.join("/")} scope={route.scope} />;
+    case "org-edit":
+      return <OrgEdit />;
+    case "seat":
+      return <SeatScreen key={route.handle} handle={route.handle} />;
+    case "live":
+      return <LiveNow />;
+    case "turns":
+      return <Turns />;
+    case "turn":
+      return <TurnScreen key={route.id} turnId={route.id} />;
+    case "runs":
+      return route.id ? <RunScreen key={route.id} turnId={route.id} /> : <Runs />;
     case "a2a":
-      return <Conversations key={id ?? ""} channelId={id} />;
+      return route.id ? <ChannelScreen key={route.id} id={route.id} /> : <Conversations />;
+    case "trace":
+      return <TraceScreen key={route.id} traceId={route.id} />;
     case "events":
-      return id ? <EventScreen key={id} eventId={id} /> : <Activity />;
-    default:
-      return <NotFound what={`“${first}” under Activity`} />;
-  }
-}
-
-function AdminRoutes({ rest }: { rest: string[] }) {
-  const [first, ...tail] = rest;
-  // THE LANDING PAGE IS THE FLEET, because a reader who opened Admin is
-  // looking at the machine and the nodes are the machine.
-  if (!first) return <Fleet />;
-  switch (first) {
-    case "fleet": {
-      // TWO SHAPES UNDER ONE SEGMENT, discriminated on the tail's LENGTH for
-      // the reason the `tools` arm below gives: a node id is an OPERATOR's
-      // string and `domains` is a legal one, so reading `tail[0] === "domains"`
-      // would take the page away from a node actually called that.
-      //
-      // It used to take any tail at all and keep only the first segment, so
-      // `#/admin/fleet/domains/tracker` drew the node screen for a node named
-      // `domains` with `tracker` silently dropped — a plausible answer to a
-      // question nobody asked, under a breadcrumb that read
-      // "Infrastructure / domains/tracker".
-      const domain = tail.length === 2 && tail[0] === "domains" ? tail[1] : undefined;
-      if (domain !== undefined) return <DomainScreen key={domain} name={domain} />;
-      if (tail.length > 1) {
-        return <NotFound what={`“${tail.join("/")}” under Infrastructure`} />;
-      }
-      return <Fleet key={tail[0] ?? ""} node={tail[0]} />;
-    }
-    case "estate":
-      // NO TAIL: a partition is a row of this screen, and a node has its
-      // own page under Infrastructure that the rows link to.
-      if (tail.length > 0) return <NotFound what={`“${tail.join("/")}” under Estate`} />;
-      return <Estate />;
+      return <Activity />;
+    case "event":
+      return <EventScreen key={route.id} eventId={route.id} />;
+    case "knowledge":
+      return <Knowledge />;
+    case "container":
+      return <Pages key={route.key} container={route.key} />;
+    case "page":
+      return <PageView key={route.id} id={route.id} />;
+    case "skills":
+      return <Skills />;
+    case "diaries":
+      return <Diaries />;
+    case "diary":
+      return <Diary key={route.handle} handle={route.handle} />;
+    case "spend":
+      return <Spend />;
+    case "spend-tasks":
+      return <ExpensiveTasks />;
+    case "budgets":
+      return <Budgets />;
+    case "general":
+      return <General />;
+    case "people":
+      return <PeopleAndAccess />;
     case "integrations":
-      return <Integrations key={tail[0] ?? ""} kind={tail[0]} />;
-    case "tools": {
-      // TWO SHAPES UNDER ONE SEGMENT, and they do not overlap: `servers/{name}`
-      // is a FILTER on the catalogue's origin, and a bare `{name}` is one TOOL
-      // — which is what `objects.ts` calls a tool's page and where a tool
-      // peek's `Open ↗` goes. The bare form used to fall through with the
-      // segment dropped, so that link landed on the unfiltered catalogue and a
-      // reader lost the tool they had open.
-      //
-      // DISCRIMINATED ON LENGTH, not on the word. A tool name comes from a
-      // third-party MCP server — `tool_prefix` is optional, so the catalogue
-      // holds whatever the server called it — and `nav.ts`'s reserved-segment
-      // rule ("everything the engine mints is a uuid or an uppercase key") does
-      // not cover one. Reading `tail[0] === "servers"` as the filter therefore
-      // took the page away from a tool literally named `servers`, which is the
-      // same regression one sentence up. `router.tsx` encodes each segment
-      // whole, so a tool page is always exactly ONE tail segment and the
-      // origin filter always two — a test nothing else can fake.
-      const server = tail.length === 2 && tail[0] === "servers" ? tail[1] : undefined;
-      const tool = tail.length === 1 ? tail[0] : undefined;
-      if (tail.length > 0 && server === undefined && tool === undefined) {
-        return <NotFound what={`“${tail.join("/")}” under Tools`} />;
-      }
-      return <Tools key={tail.join("/")} server={server} tool={tool} />;
-    }
-    case "config": {
-      // `revisions/{id}` IS THE ONLY TAIL, so anything else is an address the
-      // product does not have — and rendering the config screen with the
-      // segment dropped leaves the trail naming a page nobody routed to.
-      if (!tail[0]) return <ConfigScreen />;
-      if (tail[0] === "revisions" && tail.length <= 2) {
-        return <ConfigScreen key={tail.join("/")} revision={tail[1]} />;
-      }
-      return <NotFound what={`“${tail.join("/")}” under Config`} />;
-    }
-    case "credentials":
-      return <Secrets key={tail[0] ?? ""} name={tail[0]} />;
+      return <Integrations key={route.kind ?? ""} kind={route.kind} />;
+    case "tools":
+      return (
+        <Tools
+          key={`${route.server ?? ""}/${route.tool ?? ""}`}
+          server={route.server}
+          tool={route.tool}
+        />
+      );
+    case "models":
+      return <Models key={route.id ?? ""} id={route.id} />;
+    case "secrets":
+      return <Secrets key={route.name ?? ""} name={route.name} />;
+    case "nodes":
+      return <Fleet key={route.node ?? ""} node={route.node} />;
+    case "estate":
+      return <Estate />;
+    case "config":
+      return (
+        <ConfigScreen
+          key={`${route.revisions}/${route.revision ?? ""}`}
+          revision={route.revision}
+          revisions={route.revisions}
+        />
+      );
+    case "backups":
+      return <Backups key={route.domain ?? ""} domain={route.domain} />;
     case "audit":
-      // NO TAIL. Every row here has a page of its own somewhere else — a task,
-      // a wiki page, a config revision — so a detail under this address would
-      // be a second page for an object that already has one, reachable by two
-      // routes that would then have to agree about it.
-      if (tail.length > 0) return <NotFound what={`“${tail.join("/")}” under Audit`} />;
       return <Audit />;
-    default:
-      return <NotFound what={`“${first}” under Admin`} />;
   }
 }
 
 function Screen() {
   const route = useRoute();
-  const [head, ...rest] = route.path;
-  switch (head) {
-    // THE LANDING SCREEN IS THE INBOX. A dashboard's home used to be a
-    // summary of the company; what a person opening this actually wants to
-    // know is whether anything is waiting on them.
-    case undefined:
-    case "inbox":
-      return <Inbox />;
-    case "me":
-      return <MyWork />;
-    case "work":
-      return <WorkRoutes rest={rest} />;
-    case "company":
-      return <CompanyRoutes rest={rest} />;
-    case "knowledge":
-      // A CONTAINER, OR A PAGE INSIDE ONE. Both are addressed by their own
-      // names rather than by an id, because a container key is what somebody
-      // types and a page title is what they were given.
-      if (rest.length >= 2) {
-        return (
-          <PageView
-            key={rest.join("/")}
-            container={rest[0] ?? ""}
-            title={rest.slice(1).join("/")}
-          />
-        );
-      }
-      return rest[0] ? <Pages key={rest[0]} container={rest[0]} /> : <Knowledge />;
-    case "activity":
-      return <ActivityRoutes rest={rest} />;
-    case "cost":
-      // A CLOSED SET OF TWO, so an unknown tail is Not Found rather than the
-      // spend screen. A two-valued test read every other tail as `#/cost`, so
-      // `#/cost/budget` — the obvious typo, and the shape of a stale bookmark
-      // — drew the spend tables under a trail reading "Cost / budget": the
-      // address, the trail and the screen each naming something different,
-      // with nothing telling the reader the route does not exist.
-      if (!rest[0]) return <Spend />;
-      return rest[0] === "budgets" && rest.length === 1 ? (
-        <Budgets />
-      ) : (
-        <NotFound what={`“${rest.join("/")}” under Cost`} />
+  const viewer = useViewer();
+  const where = resolve(route.path);
+  if (!where.resolved) return <NotFound what={where.what} hint={where.hint} />;
+  // A GUARDED SECTION FOR A VIEWER THE ENGINE HAS SAID CANNOT READ IT is its
+  // refusal and nothing else — see `OperatorRequired`. Only on an ANSWER, and
+  // the first one is waited for: until it is in, the section asks nothing it
+  // may be refused (a cold load of #/settings/secrets sent its guarded reads,
+  // was refused, and drew the refusal, a frame before the frame knew to). A
+  // viewer read that FAILED is no answer and does not hold the section: the
+  // screen mounts, and its own reads say what they find.
+  const section = sectionOf(route.path);
+  if (section?.guarded && !section.answersRefusal) {
+    if (viewer.asking) {
+      return (
+        <Skeleton variant="text" rows={4} label={`Checking your access to ${section.label}`} />
       );
-    case "admin":
-      return <AdminRoutes rest={rest} />;
-    default:
-      return <NotFound what={`the screen “${head}”`} />;
+    }
+    if (!viewer.loading && !viewer.operator) return <OperatorRequired what={section.label} />;
   }
+  return screenFor(where);
 }
 
 export function App() {
+  const route = useRoute();
+  // EVERY OTHER WORKSPACE, FETCHED WHILE NOBODY IS WAITING — see
+  // `prefetchOnIdle`. Once per tab: the effect has no dependency to re-run on.
+  useEffect(() => prefetchOnIdle(), []);
   return (
     // The toast host wraps the shell rather than sitting inside a screen: an
     // outcome has to survive the navigation the write causes, and a provider
     // mounted per screen is unmounted by exactly that.
-    //
-    // uilet's provider, whose `ok` / `failed` are ours verbatim — a success
-    // dismisses itself and a failure stays until it is taken back. What it
-    // adds is the part ours only asserted: two live regions rather than one,
-    // so a refusal is announced assertively while a confirmation stays
-    // polite, and a `max` that drops the oldest instead of letting a burst of
-    // writes bury the screen.
     <ToastProvider>
       {/* THE ONE PORTAL TARGET, DECLARED RATHER THAN FALLEN BACK TO. Every
-          overlay uilet draws — a Modal, a Select's listbox, a Popover, and
-          the palette, which takes the layer without the frame — asks
-          `useLayerContainer()` where to go, and with no host mounted that
-          answers `document.body`: a fallback, and one that puts each surface
-          outside `#root` as a sibling of the application, in whatever order
-          the session happened to open them.
-
-          The host is one absolutely-positioned box covering the shell, inert
-          until something is drawn in it, holding the whole layer band in a
-          stacking context of its own. `body` has `overflow: hidden` here and
-          the shell is the window, so the box IS the viewport and nothing
-          moves on screen — what changes is that the application says where
-          its overlays live.
-
-          INSIDE THE TOAST PROVIDER, so the toaster is rendered after the host
-          and paints above it. A toast reports what a write inside a dialog
-          did; it has to be readable over the dialog that caused it. */}
+          overlay the kit draws — a Modal, a Select's listbox, a Popover, and
+          the palette — asks `useLayerContainer()` where to go, and with no
+          host mounted that answers `document.body`. The host is one
+          absolutely-positioned box covering the shell, inert until something
+          is drawn in it, holding the whole layer band in a stacking context of
+          its own. INSIDE THE TOAST PROVIDER, so a toast reporting what a write
+          inside a dialog did is readable over the dialog that caused it. */}
       <LayerHost>
         <Shell>
-          <Screen />
+          <ScreenBoundary resetKey={route.path.join("/")}>
+            <Screen />
+          </ScreenBoundary>
         </Shell>
       </LayerHost>
     </ToastProvider>

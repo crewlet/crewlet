@@ -58,13 +58,15 @@ func startReconciler(ctx context.Context, e *engine.Engine, boot *config.Bootstr
 ) (*engine.Reconciler, error) {
 	db := e.Backends().Store
 	plane := e.Backends().Fleet
-	if err := seedCompany(ctx, db, plane, e.Backends().Queue, seed, cipher, log); err != nil {
-		return nil, err
-	}
-
+	// THE NODE'S IDENTITY FIRST, because a seed is this node's own write and
+	// the revision records which node made it.
 	nodeID, err := config.ResolveNodeID(boot, nil)
 	if err != nil {
 		return nil, fmt.Errorf("node identity: %w", err)
+	}
+	if err = seedCompany(ctx, db, plane, e.Backends().Queue, seed, cipher,
+		nodeID, log); err != nil {
+		return nil, err
 	}
 	reconciler, err := e.NewReconciler(engine.ReconcilerOptions{
 		Store: db, Fleet: plane, Queue: e.Backends().Queue,
@@ -95,8 +97,12 @@ func startReconciler(ctx context.Context, e *engine.Engine, boot *config.Bootstr
 // however many times the node boots. What happens to a CHANGED one is the
 // seed's mode — see the package note above. A bootstrap seed reports the
 // difference and leaves the store alone; an override imports it.
+//
+// A revision the seed writes is the NODE's, recorded under the node's own id:
+// nobody ran a command, the node read its -company file at boot, and which
+// node did it is the fact somebody reading the history later needs.
 func seedCompany(ctx context.Context, db *store.DB, plane coord.Plane, pub queue.Publisher,
-	seed tierBSeed, cipher secrets.Cipher, log *slog.Logger,
+	seed tierBSeed, cipher secrets.Cipher, nodeID string, log *slog.Logger,
 ) error {
 	configs := db.Configs()
 	active, found, err := configs.Active(ctx)
@@ -175,9 +181,11 @@ func seedCompany(ctx context.Context, db *store.DB, plane coord.Plane, pub queue
 	// STORED FIRST, then pointed at: a crash between the two leaves a
 	// revision nothing points at, which the next boot re-seeds over. The
 	// other order would point the fleet at a payload no node can read.
+	author := store.Author{Name: nodeID, Kind: store.AuthorNode}
 	id, err := configs.InsertActive(ctx, store.Revision{
-		ParentID: parent, Source: "file", CreatedBy: "node",
-		Summary: summary, Payload: payload, CreatedAt: at,
+		ParentID: parent, Source: "file", CreatedBy: author.Name,
+		CreatedByKind: author.Kind, Summary: summary, Payload: payload,
+		CreatedAt: at,
 	})
 	if err != nil {
 		return fmt.Errorf("seed the company config: %w", err)
@@ -189,12 +197,16 @@ func seedCompany(ctx context.Context, db *store.DB, plane coord.Plane, pub queue
 	// fail against a fleet that had moved on for perfectly good reasons.
 	published, err := plane.Activate(ctx, coord.ActivationRequest{
 		RevisionID: id, Summary: summary, Payload: payload, At: at,
+		Origin: coord.RevisionOrigin{
+			Author: author.Name, AuthorKind: string(author.Kind),
+			Source: "file", CreatedAt: at,
+		},
 	})
 	if err != nil {
 		return fmt.Errorf("activate the seeded company config: %w", err)
 	}
 	keepPointersInstant(ctx, configs, id, at, published, log)
-	nudge(ctx, pub, id, summary, log)
+	nudge(ctx, pub, id, summary, author, log)
 	log.InfoContext(ctx, "company_config_seeded", "revision", id, "epoch", published.Epoch,
 		"parent", parent, "sealed", cipher != nil)
 	return nil
@@ -250,17 +262,31 @@ func publishLocalActive(ctx context.Context, plane coord.Plane, pub queue.Publis
 	// legitimate, and every node converges on whichever landed. A
 	// compare-and-set would turn that into a boot-time failure to retry
 	// for nothing. It is the EDIT path that must not lose a write.
+	//
+	// THE REVISION'S OWN AUTHOR goes up with it, never this node's: an
+	// offline `crewlet config import` is an operator's write that only
+	// reaches the fleet here, and every peer must record the operator.
 	published, err := plane.Activate(ctx, coord.ActivationRequest{
 		RevisionID: active.ID, Summary: active.Summary,
 		Payload: active.Payload, At: active.ActivatedAt,
+		Origin: originOf(active),
 	})
 	if err != nil {
 		return fmt.Errorf("publish the active revision: %w", err)
 	}
 	keepPointersInstant(ctx, configs, active.ID, active.ActivatedAt, published, log)
-	nudge(ctx, pub, active.ID, active.Summary, log)
+	nudge(ctx, pub, active.ID, active.Summary,
+		store.Author{Name: active.CreatedBy, Kind: active.CreatedByKind}, log)
 	log.InfoContext(ctx, "local_revision_published", "revision", active.ID, "epoch", published.Epoch)
 	return nil
+}
+
+// originOf is a stored revision's own record, as the pointer carries it.
+func originOf(r store.Revision) coord.RevisionOrigin {
+	return coord.RevisionOrigin{
+		Author: r.CreatedBy, AuthorKind: string(r.CreatedByKind),
+		Source: r.Source, CreatedAt: r.CreatedAt,
+	}
 }
 
 // keepPointersInstant makes this node's local copy of a revision it just
@@ -300,12 +326,15 @@ type localActivator interface {
 // BEST EFFORT, and thin by design: the event carries no payload, because the
 // authoritative path is the pointer and a node acts by re-reading it. Losing
 // one costs a reconcile interval and never a revision.
-func nudge(ctx context.Context, pub queue.Publisher, revisionID, summary string, log *slog.Logger) {
+func nudge(ctx context.Context, pub queue.Publisher, revisionID, summary string,
+	author store.Author, log *slog.Logger,
+) {
 	if pub == nil {
 		return
 	}
 	ev := events.New(types.ConfigRevisionActivated{
-		RevisionID: revisionID, RevisionSummary: summary, CreatedBy: "node",
+		RevisionID: revisionID, RevisionSummary: summary,
+		CreatedBy: author.Name, CreatedByKind: string(author.Kind),
 	}, tracing.TraceOf(ctx))
 	if err := pub.Publish(ctx, topics.ConfigRevisionActivated, ev); err != nil {
 		log.WarnContext(ctx, "activation_nudge_not_published", "revision", revisionID,
@@ -376,14 +405,15 @@ func refuseScratchStore(boot *config.Bootstrap, command, instead string) error {
 // is guess: it reads the revision the node's own database marks active, which
 // is what the reconciler is about to converge from anyway.
 //
+// It also answers WHEN the revision was activated — the instant this node's
+// store recorded with its active copy, which is the fleet pointer's own
+// instant for a revision the fleet activated. The engine stamps the org
+// chart's projects with it, so a restart re-applying the same activation is
+// recognised as one and writes nothing (see [engine.Options.ActivatedAt]).
+//
 // A nil company with a nil error is the UNCONFIGURED case — no file and no
 // revision — and it is a state, not a failure. The node serves its API so an
 // operator can push the first revision into it.
-//
-// It also returns WHEN the revision was activated, which the engine stamps
-// the company's chart with at boot ([engine.Options.ActivatedAt]): the
-// revision's own `activated_at`, which the reconciler keeps equal to the
-// activation pointer's instant for the revision the fleet is on.
 //
 // It opens the store, reads, and closes it again, rather than handing the open
 // handle on: the engine opens its own backends and owns their lifetime, and a

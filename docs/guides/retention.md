@@ -159,6 +159,12 @@ Two policies decide which copies count:
   Under this policy the trim does not advance until that acknowledgement has
   been given at least once.
 
+The **backup-age alarm** (`backup_age`) ages the same point the trim reads,
+under the same policy: under `operator` a node's nightly copies are fresh
+while the trim waits on an acknowledgement, and the alarm fires on the missing
+acknowledgement rather than staying green beside a log that cannot be trimmed.
+**Settings › Backups & retention** marks that point **counted · newest**.
+
 An **unverified** copy satisfies neither. A file that exists and was never
 opened is not a backup, and deleting the log's only copy of a record against
 one is what this whole term prevents.
@@ -769,11 +775,11 @@ the flags it has. The dashboard renders the same actions as its own controls.
 
 ### From the dashboard
 
-The Fleet screen offers **Readmit…** on a node row its logs hold evicted and
-**Evict…** on every other, and the dialog behind them is the same gesture as
-the command, answered the same way: one row per log with its outcome and
-position — no position for `unknown` — or the reason it was not written and
-what to do.
+**Settings › Backups & retention** offers **Readmit…** on a node row its logs
+hold evicted and **Evict…** on every other, and the dialog behind them is the
+same gesture as the command, answered the same way: one row per log with its
+outcome and position — no position for `unknown` — or the reason it was not
+written and what to do.
 
 - The dialog **mints the operation id in the browser before its first
   request**, in the engine's grammar and on the browser's clock, and keeps it
@@ -830,17 +836,17 @@ what to do.
   lease listing this node cannot read — offers **Force eviction**, behind a
   second typed confirmation, which sends `force=true` and carries it into every
   Finish of that gesture.
-- Under a divided layout, the **Estate screen** offers **Readmit…** — the same
+- Under a divided layout, **Settings › Estate** offers **Readmit…** — the same
   dialog — for every node the estate map bars: on a barred member's row, and
-  beside the line naming a barred node the map does not hold. The Fleet screen
-  offers a readmission only for a node whose logs still hold its eviction, and
-  a readmission whose every log took the node back while the map part did not
-  land (coordination unreachable, a newer build's map, a node that does not
-  serve every partition) leaves the node barred with no eviction on any log:
-  only the map knows the bar, so its screen is where the gesture that lifts it
-  is offered. A gesture held there reads **Finish readmission…** or
-  **Readmission sent…** on its row, as on the Fleet screen, until the map no
-  longer bars the node. Never **Put back**, which the engine refuses for a
+  beside the line naming a barred node the map does not hold. **Settings ›
+  Backups & retention** offers a readmission only for a node whose logs still
+  hold its eviction, and a readmission whose every log took the node back
+  while the map part did not land (coordination unreachable, a newer build's
+  map, a node that does not serve every partition) leaves the node barred with
+  no eviction on any log: only the map knows the bar, so its screen is where
+  the gesture that lifts it is offered. A gesture held there reads **Finish
+  readmission…** or **Readmission sent…** on its row, as on **Settings ›
+  Backups & retention**, until the map no longer bars the node. Never **Put back**, which the engine refuses for a
   barred node.
 
 It prints the watermark before and after, and the instant the eviction takes
@@ -850,7 +856,7 @@ tombstone before the trim passes it. `crewlet retention status` shows the node
 as evicted only once every log holds its tombstone, and dates it from the
 latest of them. A node whose latest tombstone is its own **release** — written
 as it left a partition, not by an operator — is shown as having **left**
-(`left, releasing its logs itself`; `left` on the Fleet screen) rather than as
+(`left, releasing its logs itself`; `left` on **Settings › Backups & retention**) rather than as
 evicted by itself: the trim stops counting it the same way, and nobody ran a
 gesture against it.
 
@@ -912,6 +918,15 @@ A full log costs `linearizable` reads, because those append a barrier — which
 is every seat tool read. `stale` keeps answering, so the dashboard and the read
 API are unaffected. See [Read consistency](consistency.md).
 
+The **usage log** refuses the same way, and what it costs is different: no read
+appends to it, so nothing a seat does is refused — what stops is the
+replication of each node's days. Every node keeps re-deriving its day and
+retrying on every tick, nothing is lost from any node's own event log, and the
+`log_headroom` alarm names the domain (`usage: …`) long before the ceiling. Its
+size is a count of node-days rather than a rate — one message per (node, day,
+seat or schedule) for 181 days — so a log that fills has outgrown its census:
+raise `stream.usage_log_max_bytes` as below.
+
 The refusal carries **no retry hint**, deliberately: the only thing that frees
 a byte is a fifteen-minute gated job, and the log is full precisely because
 that gate is closed. A number here would be a promise the mechanism does not
@@ -966,7 +981,8 @@ soft ceiling left, is there so that never happens.
 ## Changing a log's ceiling
 
 A log's Tier A ceiling (`stream.tracker_log_max_bytes`,
-`stream.tracker_vectors_max_bytes`, `stream.pages_log_max_bytes`) is not a live
+`stream.tracker_vectors_max_bytes`, `stream.pages_log_max_bytes`,
+`stream.usage_log_max_bytes`) is not a live
 setting: it is the value the log's stream is created with, sized with the
 other logs inside what the broker can grant (see
 [Replication](replication.md#how-the-byte-ceilings-are-sized)). Changing a
@@ -1110,7 +1126,7 @@ are missing, any unresolved write attempt, and any admission still blocking
 activation.
 
 **You do not have to go looking for it.** While an operation is open, both
-`crewlet retention status` and the Fleet screen lead with it — the stream, the
+`crewlet retention status` and Settings › Backups & retention lead with it — the stream, the
 phase, the attempt, how long it has been open, who ran the verb, and who is
 still outstanding — because every number underneath describes a fleet in which
 nothing is running, and a blocked trim read without knowing that sends you
@@ -1562,6 +1578,14 @@ That is what makes the storage forecast a function of how much a company has
 ever done rather than of how much it is doing — and it is why the numbers below
 are worth reading before the fleet is large.
 
+The **usage history** is the one replicated table set with a horizon of its
+own: each node's company days — spend, turns, page reads, schedule fires — are
+kept **181 days**, which is a ninety-day window, the ninety days it is compared
+with, and the day a moved clock can touch. Nothing sweeps them: every record for
+a day deletes the rows older than that day minus 181 in the same transaction
+that writes it, on every node, and the stream's own age bound forgets the same
+days. See [Replication](replication.md#two-compacted-domains-the-embeddings-and-each-nodes-day).
+
 Two tables are the exception, and both are swept **per node** rather than once
 across the fleet — each node applies the log into its own copy, so a fleet
 singleton would tidy one node and let the table grow for ever on every other,
@@ -1622,9 +1646,9 @@ Two excursions are designed for and do not alarm:
 
 1. **A full re-embedding.** A width change republishes every vector, which at
    year five bottoms the vector log's headroom at about 51 % at the 16 GiB a
-   64 GiB volume asks for — about 26 % at the 10.7 GiB it is created with
+   64 GiB volume asks for — about 43 % at the 13.8 GiB it is created with
    once the one budget scales every log to fit the broker there — and at about
-   88 % at the 64 GiB a volume of 384 GiB or more gets. The alarm threshold is
+   88 % at the 64 GiB a volume of about 290 GiB or more gets. The alarm threshold is
    10 %, clear of each. The corpus is the company's whole history — about
    17 MB per agent seat per year — so a larger or older company sets
    `stream.tracker_vectors_max_bytes` at about twice it: 34 MB per agent seat

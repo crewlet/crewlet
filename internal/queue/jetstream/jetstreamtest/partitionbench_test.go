@@ -29,6 +29,7 @@ import (
 	"github.com/crewlet/crewlet/internal/seat"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tracker"
+	"github.com/crewlet/crewlet/internal/usage"
 )
 
 // BenchmarkPartitionedEstate measures what the embedded broker pays to carry a
@@ -40,9 +41,10 @@ import (
 //
 // For a tracker count T: a tracker space of T partitions, each with a tracker
 // log and a vectors log; a pages space of T/4 partitions, each with a pages log
-// and a vectors log; and one company partition with a tracker log. That is
-// 2T + 2·T/4 + 1 logs — 161 at T = 64 and 641 at T = 256. Every tracker, pages
-// and company log carries a WAKE-FEED consumer at the stream's replicas (T +
+// and a vectors log; and one company partition with a tracker log and the
+// usage domain's log. That is 2T + 2·T/4 + 2 logs — 162 at T = 64 and 642 at
+// T = 256. Every tracker, pages and company tracker log carries a WAKE-FEED
+// consumer at the stream's replicas (T +
 // T/4 + 1 of them), and every holder of a partition has an APPLIER consumer on
 // each of its logs, at consumer replicas 1 or 3 — the shape's choice, because
 // the contract decides R = 1 and asks for both to be measured.
@@ -65,7 +67,7 @@ import (
 // tmpfs. A shape takes five to fifteen minutes and up to 7 GiB of memory:
 //
 //	TMPDIR=/dev/shm go test -run '^$' -benchtime 1x -timeout 60m -v \
-//	  -bench 'PartitionedEstate/members=3,T=64,logs=161,applier=R1,holders=3,via=member$' \
+//	  -bench 'PartitionedEstate/members=3,T=64,logs=162,applier=R1,holders=3,via=member$' \
 //	  ./internal/queue/jetstream/jetstreamtest/
 //
 // Every phase logs its own lines, each snapshot carries the host's load average
@@ -179,11 +181,13 @@ type estateShape struct {
 	seats int
 }
 
-// logs is 2T + 2·T/4 + 1: the tracker space's tracker and vectors logs, the
-// pages space's pages and vectors logs, and the company's tracker log.
-func (s estateShape) logs() int { return 2*s.tracker + 2*(s.tracker/4) + 1 }
+// logs is 2T + 2·T/4 + 2: the tracker space's tracker and vectors logs, the
+// pages space's pages and vectors logs, and the company's tracker and usage
+// logs.
+func (s estateShape) logs() int { return 2*s.tracker + 2*(s.tracker/4) + 2 }
 
-// wakeLogs is T + T/4 + 1: every tracker, pages and company log.
+// wakeLogs is T + T/4 + 1: every tracker, pages and company tracker log — a
+// vectors log and the usage log wake nobody.
 func (s estateShape) wakeLogs() int { return s.tracker + s.tracker/4 + 1 }
 
 func (s estateShape) String() string {
@@ -277,11 +281,11 @@ const (
 // partLog is one log of one partition, and who holds the partition.
 type partLog struct {
 	space  string // tracker, pages or company
-	domain string // tracker, vectors or pages
+	domain string // tracker, vectors, pages or usage
 	spec   js.DomainStream
 	prefix string
-	// wake is whether this log carries a wake-feed consumer: every tracker,
-	// pages and company log does, and no vectors log.
+	// wake is whether this log carries a wake-feed consumer: every tracker
+	// and pages log does, and no vectors or usage log.
 	wake    bool
 	holders []int
 }
@@ -309,7 +313,7 @@ func layoutFor(s estateShape) []*partLog {
 				prefix := spec.SubjectPrefix + "." + suffix
 				logs = append(logs, &partLog{
 					space: name, domain: domain, prefix: prefix,
-					wake: domain != "vectors", holders: holders,
+					wake: domain == "tracker" || domain == "pages", holders: holders,
 					spec: js.DomainStream{
 						Name:          spec.Name + "_" + strings.ToUpper(suffix),
 						Subjects:      []string{prefix + ".>"},
@@ -323,7 +327,7 @@ func layoutFor(s estateShape) []*partLog {
 	}
 	space("tracker", "t", s.tracker, []string{"tracker", "vectors"})
 	space("pages", "p", s.tracker/4, []string{"pages", "vectors"})
-	space("company", "c", 1, []string{"tracker"})
+	space("company", "c", 1, []string{"tracker", "usage"})
 	return logs
 }
 
@@ -336,6 +340,10 @@ func domainSpec(domain string, s estateShape) (statelog.StreamSpec, int64, int) 
 		return statelog.EstateStream(tracker.Domain{}), trackerTotalBytes, s.tracker
 	case "vectors":
 		return statelog.EstateStream(search.Domain{}), vectorsTotalBytes, s.tracker + s.tracker/4
+	case "usage":
+		// One log, at the domain's whole declared ceiling: the company
+		// partition carries all of it.
+		return statelog.EstateStream(usage.Domain{}), usage.LogMaxBytes, 1
 	default:
 		return statelog.EstateStream(pages.Domain{}), pagesTotalBytes, s.tracker / 4
 	}

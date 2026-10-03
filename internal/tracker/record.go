@@ -6,6 +6,8 @@ import (
 	"reflect"
 	"slices"
 	"time"
+
+	"github.com/crewlet/crewlet/internal/statelog"
 )
 
 // The objects, and the two shapes a record carries them in.
@@ -100,10 +102,19 @@ const (
 	MaxDependents = 64
 
 	// MaxChecklists, MaxChecklistItems and MaxChecklistItemsTotal bound
-	// the checklist tree.
+	// the checklist tree, and every gesture that grows it is refused past
+	// them ([ApplyChecklist]).
 	MaxChecklists          = 16
 	MaxChecklistItems      = 64
 	MaxChecklistItemsTotal = 256
+
+	// MaxChecklistName and MaxChecklistItemName bound the tree's text: a
+	// list is headed by a few words and an item is one line, and the
+	// figures are the ones [MaxCommitBytes] counts the tree at — 256
+	// items at a 256-byte line is the "100 KiB" in its arithmetic. A line
+	// longer than that is a task of its own.
+	MaxChecklistName     = 128
+	MaxChecklistItemName = 256
 
 	// MaxFormerKeys bounds what a task DISPLAYS. Resolution is unbounded:
 	// every former key also has an alias row, and the applier never
@@ -167,28 +178,63 @@ const (
 // budget: a record's own encoded size, and one tool answer's. And pure over
 // values, for the reason coerce.go gives for the same shape — a rule that can
 // only be exercised through a database is a rule nobody re-reads.
-func checkTextCaps(id string, title, body, comment *string) error {
+func checkTextCaps(title, body, comment *string) error {
 	for _, c := range []struct {
-		field string
+		field TextField
 		value *string
 		limit int
 	}{
-		{"title", title, MaxTitle},
-		{"body", body, MaxBody},
-		{"comment body", comment, MaxCommentBody},
+		{TextTitle, title, MaxTitle},
+		{TextBody, body, MaxBody},
+		{TextComment, comment, MaxCommentBody},
 	} {
 		if c.value == nil || len(*c.value) <= c.limit {
 			continue
 		}
-		return fmt.Errorf("tracker: the %s on task %s is %d bytes and the "+
-			"maximum is %d — it is refused rather than cut, because a value "+
-			"silently truncated is one somebody will look for later; shorten "+
-			"it, or put the long form where it belongs (a page, or an "+
-			"attachment) and reference it here",
-			c.field, id, len(*c.value), c.limit)
+		return &TextCapError{Field: c.field, Size: len(*c.value), Limit: c.limit}
 	}
 	return nil
 }
+
+// TextField names which of a task's own texts a [TextCapError] is about.
+type TextField string
+
+// The three texts [checkTextCaps] bounds, named as a refusal names them.
+const (
+	TextTitle   TextField = "title"
+	TextBody    TextField = "body"
+	TextComment TextField = "comment body"
+)
+
+// TextCapError is a task's own text past the cap its field declares, refused
+// rather than cut. It is [ErrInvalid] — the same request can never land and a
+// shorter one can.
+//
+// TYPED, because the caller has to NAME THE FIELD to a reader who is not
+// reading Go: a person filing from the dashboard is shown the tool's sentence,
+// and a sentence built from this error's own words said "the title on task
+// 68c5…" about a task that was never created — the create's id is minted
+// before the write and refused with it, so it named nothing anybody could
+// look up. The field, the size and the cap are what a caller can act on, and
+// [builtin]'s refusal composes its sentence from exactly those.
+//
+// AND IT NAMES NO TASK for the same reason: on a create there is none, and on
+// an update the caller named the item it was editing in the call this answers.
+type TextCapError struct {
+	Field TextField
+	// Size is what was sent and Limit the most the field holds, in bytes.
+	Size, Limit int
+}
+
+func (e *TextCapError) Error() string {
+	return fmt.Sprintf("tracker: the %s is %d bytes and the maximum is %d — it "+
+		"is refused rather than cut, because a value silently truncated is one "+
+		"somebody will look for later; shorten it, or put the long form on a "+
+		"page and link it here", e.Field, e.Size, e.Limit)
+}
+
+// Unwrap marks the refusal as one about CONTENT; see [ErrInvalid].
+func (e *TextCapError) Unwrap() error { return ErrInvalid }
 
 // Spend is a task's running totals, for ever.
 //
@@ -205,6 +251,8 @@ type Spend struct {
 	CacheWrite int `json:"cache_write,omitempty"`
 	WallMs     int `json:"wall_ms,omitempty"`
 	Tokens     int `json:"tokens,omitempty"`
+	Workers    int `json:"workers,omitempty"`
+	SentBack   int `json:"sent_back,omitempty"`
 }
 
 // Tombstone is an operator's removal.
@@ -491,6 +539,16 @@ type Comment struct {
 	Ask     string  `json:"ask,omitempty"`
 	Answers *string `json:"answers,omitempty"`
 
+	// Decision is the structure an ask carries when it needs somebody to
+	// choose — see decision.go. Only on the comment that ASKS, and never
+	// changed after: an answer names an option by id, and options edited
+	// under it would turn that answer into an answer to something else.
+	Decision *Decision `json:"decision,omitempty"`
+
+	// Choice is the option an ANSWER chose, by id, checked against the
+	// decision of the ask it answers inside the write's own snapshot.
+	Choice string `json:"choice,omitempty"`
+
 	Resolved   bool       `json:"resolved,omitempty"`
 	ResolvedBy string     `json:"resolved_by,omitempty"`
 	ResolvedAt *time.Time `json:"resolved_at,omitempty"`
@@ -552,7 +610,9 @@ type RankOrder struct {
 	ScopedThrough uint64 `json:"scoped_through,omitempty"`
 	Project       string `json:"project"`
 
-	// Placements is one to sixty-four moves in one record.
+	// Placements is one record's moves: at least one, and at most
+	// [MaxBulkTasks] of a caller's own plus a re-spread's
+	// [RankRespreadInline] neighbours — see [Writer.MoveTasks].
 	Placements []Placement `json:"placements"`
 
 	Extra map[string]json.RawMessage `json:"-"`
@@ -688,10 +748,11 @@ type TaskPatch struct {
 	// move without the mark, and either is a state no reader can tell
 	// from the other.
 	//
-	// A NEW FIELD ON A SHARED RECORD, so a record carrying it is written at
-	// [moveMarkVersion] — see [recordVersionOf]. Merging is a version-1
-	// field every build reads; this one the build before it would drop,
-	// and that node would then hold a row the rest of the fleet does not.
+	// A NEW FIELD ON A SHARED RECORD, so it has its row in
+	// [versionedFields] and a record carrying it is stamped at that
+	// version. Merging is a base-format field every build reads; this one
+	// the build before it would drop, and that node would then hold a row
+	// the rest of the fleet does not.
 	Moving *bool `json:"moving,omitempty"`
 
 	// Reassignments is the hand-off counter this write leaves behind,
@@ -737,12 +798,20 @@ type TaskPatch struct {
 	Relate *RelationIntent  `json:"-"`
 	Depend *DependentIntent `json:"-"`
 
+	// Checklist is the same kind of gesture over the checklists, and for
+	// the same reason: [TaskPatch.Checklists] is carried whole, and one
+	// person ticking an item while another adds one is the ordinary way a
+	// checklist is used. Resolved by [settleChecklist] inside the decide;
+	// NEVER ON THE WIRE, like Watch.
+	Checklist *ChecklistIntent `json:"-"`
+
 	// Promote is the PARENT's half of a checklist item's promotion — the
 	// same kind of gesture again, for the same reason: [TaskPatch.Checklists]
 	// is carried whole, and a promotion that composed it from the parent it
 	// read before minting the subtask's key discarded every checklist edit
 	// that landed between that read and the mark. Resolved by
-	// [settlePromote] inside the decide snapshot.
+	// [settlePromote] inside the decide snapshot, which refuses it beside a
+	// Checklist gesture or a whole Checklists set.
 	//
 	// NEVER ON THE WIRE, like Watch.
 	Promote *PromoteIntent `json:"-"`
@@ -1137,6 +1206,18 @@ type Project struct {
 	Fields          []FieldDef `json:"fields,omitempty"`
 	DefaultAssignee string     `json:"default_assignee,omitempty"`
 
+	// TargetDate is when the project's LEAD means it to be finished: a day
+	// on the company's clock, `YYYY-MM-DD`, empty for no target.
+	//
+	// A DATE AND NOT AN INSTANT, because a target is a day somebody named
+	// and an instant would have to invent the hour and the zone that day
+	// ends in. LEAD-OWNED rather than chart-owned — it is how the team
+	// plans, not a fact the founder wrote in the config — so it is set
+	// through [Writer.WriteProject] and a chart apply carries it through
+	// untouched. A version-7 field ([versionedFields]): a build reading 6
+	// has no column for it and retains a record carrying one.
+	TargetDate string `json:"target_date,omitempty"`
+
 	// PolicyVersion moves on a fields edit — NOT on tags.
 	PolicyVersion int `json:"policy_version,omitempty"`
 
@@ -1258,6 +1339,12 @@ type View struct {
 }
 
 // InboxEntry is one item in a person's inbox, with the position it was at.
+//
+// Position is PACKED, `(generation << 40) | seq`, the form every durable
+// position in this domain takes — so an entry from before a reanchor compares
+// below one after it instead of as a small number in the same space. It is
+// found by the writer from the notice's own history row rather than taken from
+// the caller; see [Writer.MarkInbox].
 type InboxEntry struct {
 	RecordID string     `json:"record_id"`
 	Position uint64     `json:"position"`
@@ -1277,12 +1364,13 @@ type Favorite struct {
 // line, which is the one authority here that reaches across people. See
 // person.go for why that is three verbs rather than one.
 //
-// A LEAD'S PRIORITY WRITE IS STAMPED rather than notified. Every [Notify] this
-// domain carries is task-shaped — its [Snapshot] is a key, a project and a
-// title — so a person record has no card to render and a notification attached
-// to one would reach nobody. What makes the authority visible instead is
-// [Person.PrioritiesSetBy]: a person who starts the day on work they did not
-// choose can see who chose it.
+// A LEAD'S PRIORITY WRITE WAKES ITS PERSON with the `prioritised` reason, and
+// the wake names the task now at the TOP of the list — see
+// [Writer.prioritisedWake] — because every [Notify] this domain carries is
+// task-shaped and "your list changed" with no task on it is a card with
+// nothing to act on. The record also says who set the list:
+// [Person.PrioritiesSetBy], so a person who starts the day on work they did
+// not choose can see who chose it.
 type Person struct {
 	V       int    `json:"v"`
 	Version uint64 `json:"version"`
@@ -1327,10 +1415,28 @@ type Person struct {
 // THE TRIPLE, not a bare sequence: a recreated stream restarts sequences at
 // one, so a stored number from before it compares as current and an inbox
 // reads "nothing unread" for ever.
+//
+// # The generation is stored, and omitted when it is zero
+//
+// The row keeps it PACKED into `seen_through`, as every durable position in
+// this domain is kept: stored as the bare sequence, the generation was dropped
+// on apply, so after a reanchor a person's position read back as generation
+// zero and every notice in the new generation compared above it — an inbox
+// that could never be read past again. A zero generation is omitted from the
+// JSON because a build that stored the bare sequence has nowhere to put any
+// other one: a record carrying a non-zero generation is stamped at the version
+// that stores it (see versionedFields), and one carrying none stays readable by
+// every build.
 type Position struct {
 	Stream     string `json:"stream"`
-	Generation uint32 `json:"generation"`
+	Generation uint32 `json:"generation,omitempty"`
 	Seq        uint64 `json:"seq"`
+}
+
+// packed is the position as the one integer a column stores and a comparison
+// reads — [statelog.Position.Packed] over the same two numbers.
+func (p Position) packed() uint64 {
+	return uint64(statelog.Position{Generation: p.Generation, Seq: p.Seq}.Packed())
 }
 
 // MaxCommitBytes is the design maximum for one record, envelope included.

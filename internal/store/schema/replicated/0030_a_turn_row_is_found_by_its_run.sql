@@ -1,0 +1,17 @@
+-- A task's turn row is found by the run it records.
+--
+-- `tracker_turns` has been read by TASK since it landed — a task's spend, its
+-- turn list, the effective-instant clamp — and every index on it leads with
+-- `task_id` or the log position. A page's readers turn the question round: a
+-- read names the RUN it happened in (`usage_reads.last_turn_id`), and "turn 3
+-- on ENG-412" is that run's task and its place among the task's turns. Without
+-- this, naming one reader's turn scanned every turn row the company has.
+--
+-- WHO HAS TO AGREE ON IT: every node, identically — it is an index over the
+-- tracker's own replicated rows, which the applier writes and nothing else
+-- does; an index is not state, and every node builds the same one.
+--
+-- PARTIAL over the rows that name a run: '' is a turn row written before a
+-- run had an identity of its own (ADR-0017), which no read can name, and the
+-- reader keys those rows on their own id instead.
+CREATE INDEX tracker_turns_turn_idx ON tracker_turns (turn_id) WHERE turn_id <> '';  -- TurnPlaces: a page read's run named back to its task and place

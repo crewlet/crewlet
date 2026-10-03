@@ -86,6 +86,9 @@ func TestTagRenameAndArchiveAreTheLeads(t *testing.T) {
 			if !strings.Contains(err.Error(), "lead") {
 				t.Fatalf("the refusal does not name the lead: %v", err)
 			}
+			if !errors.Is(err, tracker.ErrForbidden) {
+				t.Fatalf("the refusal is %v, want an ErrForbidden", err)
+			}
 			if _, err := r.writer.WriteTags(t.Context(), "op-lead-"+c.name,
 				"ENG", c.edit, tracker.TagAuthority{Lead: true}); err != nil {
 
@@ -464,4 +467,30 @@ func (r *roundTrip) tagSlugs(project string) []string {
 	}
 	slices.Sort(out)
 	return out
+}
+
+// A TYPED TAG REFUSAL IS A REFUSAL LIKE ANY OTHER.
+//
+// [tracker.TagClash] and [tracker.TagsFull] are types so a caller several
+// steps away — a cross-project move declaring its subtree's tags — can name
+// the tags involved. They must still be what every content refusal here is:
+// [tracker.ErrInvalid] under errors.Is, and worded by [tracker.Sentence]
+// without the package prefix, or a surface that does not look for the type
+// classes a person's fixable refusal as the engine's own failure and shows
+// them "tracker:" in front of it.
+func TestATypedTagRefusalIsClassedAndWordedAsARefusal(t *testing.T) {
+	t.Parallel()
+	for name, err := range map[string]error{
+		"a clash": &tracker.TagClash{Project: "OPS", Slug: "api", Label: "API",
+			Other: tracker.Tag{Slug: "backend-api", Label: "API"}},
+		"a full set": &tracker.TagsFull{Project: "OPS", Slug: "api"},
+	} {
+		if !errors.Is(err, tracker.ErrInvalid) {
+			t.Errorf("%s is not ErrInvalid: %v", name, err)
+		}
+		sentence := tracker.Sentence(err)
+		if strings.HasPrefix(sentence, "tracker:") || err.Error() != "tracker: "+sentence {
+			t.Errorf("%s reads %q to a person and %q to a log", name, sentence, err)
+		}
+	}
 }

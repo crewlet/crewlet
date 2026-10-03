@@ -12,7 +12,7 @@ import (
 )
 
 // EVERY TABLE THAT NAMES A CHUNK IS DECLARED, AND EVERY DECLARATION IS A TABLE
-// THAT DOES — ADR-0019's enforcement.
+// THAT DOES — ADR-0026's enforcement.
 //
 // Read off a freshly migrated replicated estate rather than off the migration
 // source, so it judges the schema a node actually runs. The failure it exists

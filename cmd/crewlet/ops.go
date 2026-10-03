@@ -6,22 +6,19 @@ import (
 	"flag"
 	"fmt"
 	"io"
-	"net/url"
-	"slices"
 	"strconv"
-	"strings"
+	"text/tabwriter"
 
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/engine"
 	"github.com/crewlet/crewlet/internal/store"
 )
 
-// The two operator commands that read and write the store directly.
-//
-// Both exist because a node does these things implicitly and a deployment
-// sometimes needs them explicitly: migrations run at every open, and budget
-// counters are written by every turn — so neither is a gap in the engine.
-// What they are is a way to do them WITHOUT starting one.
+// Two operator commands for what a node otherwise does implicitly: migrations
+// run at every open, and the budget counters are charged by every turn — so
+// neither is a gap in the engine. `migrate` applies the store's schema WITHOUT
+// starting one; `budgets` reads the fleet's counters, which live in no file,
+// through the node that is running.
 
 // runMigrate is `crewlet migrate`.
 //
@@ -195,56 +192,65 @@ func runMigrate(args []string, stdout, stderr io.Writer) error {
 //
 // # Why this talks to a NODE and not to a file
 //
-// The token counter is FLEET state: it lives in the coordination store so
+// The token counters are FLEET state: they live in the coordination store so
 // that a company's cap is one number rather than one per node. On the default
 // topology that store is the engine's own embedded broker, which means there
 // is nothing on disk this command could open — and, worse, that opening it
 // anyway would be dangerous rather than merely useless: a second JetStream
 // server on the same store directory is ACCEPTED rather than refused
-// (measured), so two writers would corrupt the counter instead of contending
-// for it.
+// (measured), so two writers would corrupt the counters instead of contending
+// for them.
 //
-// So `show` reads the same answer the dashboard renders, and `reset` posts to
-// the one route that writes it. Both take the running node's address, which
-// defaults to what this node's own Tier A config says it binds — so the
-// common case is still `crewlet budgets show` beside the config file.
+// So `show` reads the same answer the dashboard renders. It takes the running
+// node's address, which defaults to what this node's own Tier A config says it
+// binds — so the common case is still `crewlet budgets show` beside the config
+// file.
+//
+// There is no `reset`, and no route for one (ADR-0019). Each ceiling is per
+// calendar window, and a window's allowance comes back when the window turns
+// over; room before then is made by raising the ceiling, which is a config
+// change like any other.
 func runBudgets(args []string, stdout, stderr io.Writer) error {
 	sub, rest := splitSubject(args)
 	switch sub {
 	case "show":
 		return budgetsShow(rest, stdout, stderr)
-	case "reset":
-		return budgetsReset(rest, stdout, stderr)
 	case "", "help":
 		fmt.Fprintln(stderr,
-			"usage: crewlet budgets show|reset [<config.yaml>] [-url] [-token] [-scope]")
+			"usage: crewlet budgets show [<config.yaml>] [-url] [-token]")
 		return flag.ErrHelp
 	default:
 		return fmt.Errorf("unknown budgets command %q", sub)
 	}
 }
 
-// budgetsShow prints what each scope has spent.
+// budgetWindow is one calendar window of a scope, as the budgets answer states
+// it.
+type budgetWindow struct {
+	Period    string `json:"period"`
+	Window    string `json:"window"`
+	ResetsAt  string `json:"resets_at"`
+	Used      int    `json:"used"`
+	Limit     *int   `json:"limit"`
+	RefusedAt string `json:"refused_at"`
+	State     string `json:"state"`
+}
+
+// budgetsShow prints what each scope has spent, window by window.
 func budgetsShow(args []string, stdout, stderr io.Writer) error {
 	client, err := nodeClientFor(args, "budgets show", stderr, nil)
 	if err != nil {
 		return err
 	}
 	var answer struct {
-		Durable bool `json:"durable"`
-		Org     struct {
-			MaxTokens        int    `json:"max_tokens"`
-			DurableUsed      int    `json:"durable_used"`
-			DurableUpdatedAt string `json:"durable_updated_at"`
-			RefusedAt        string `json:"refused_at"`
+		Timezone string `json:"timezone"`
+		Durable  bool   `json:"durable"`
+		Org      struct {
+			Windows []budgetWindow `json:"windows"`
 		} `json:"org"`
 		Seats []struct {
-			Handle           string `json:"handle"`
-			AgentID          string `json:"agent_id"`
-			MaxTokens        int    `json:"max_tokens"`
-			DurableUsed      int    `json:"durable_used"`
-			DurableUpdatedAt string `json:"durable_updated_at"`
-			RefusedAt        string `json:"refused_at"`
+			Handle  string         `json:"handle"`
+			Windows []budgetWindow `json:"windows"`
 		} `json:"seats"`
 	}
 	if err := client.get(context.Background(), "/query/budgets", &answer); err != nil {
@@ -257,36 +263,55 @@ func budgetsShow(args []string, stdout, stderr io.Writer) error {
 		return errors.New("the node could not read the counter; " +
 			"its `durable` flag is false, so nothing here can be stated")
 	}
-	// REFUSING SINCE is the column that says a scope is out, and USED
-	// against CAP is not: a refused charge increments nothing, so a seat
-	// charged in rounds stalls short of its cap and its row would otherwise
-	// read as headroom.
-	const row = "%-32s %12s %12s  %-30s  %s\n"
-	fmt.Fprintf(stdout, row, "SCOPE", "USED", "CAP", "LAST CHARGED", "REFUSING SINCE")
-	fmt.Fprintf(stdout, row, "org", strconv.Itoa(answer.Org.DurableUsed),
-		capOrDash(answer.Org.MaxTokens), dashIfEmpty(answer.Org.DurableUpdatedAt),
-		dashIfEmpty(answer.Org.RefusedAt))
+	// THE CLOCK FIRST: every window below is cut on it, and a reader in
+	// another zone would otherwise read "2026-09-23" as their own day.
+	fmt.Fprintf(stdout, "Windows on the company clock: %s\n\n", dashIfEmpty(answer.Timezone))
+	// STATE is the engine's own judgement (ok, near, refusing), and
+	// REFUSING SINCE is the gate's record of saying no: a refused charge
+	// increments nothing, so a seat charged in rounds stalls short of its
+	// ceiling and USED against LIMIT alone would read as headroom.
+	w := tabwriter.NewWriter(stdout, 0, 0, 2, ' ', 0)
+	fmt.Fprintln(w, "SCOPE\tPERIOD\tWINDOW\tUSED\tLIMIT\tSTATE\tRESETS AT\tREFUSING SINCE")
+	rows := func(scope string, windows []budgetWindow) {
+		for _, win := range windows {
+			fmt.Fprintf(w, "%s\t%s\t%s\t%d\t%s\t%s\t%s\t%s\n",
+				scope, win.Period, win.Window, win.Used, limitOrUnlimited(win.Limit),
+				win.State, dashIfEmpty(win.ResetsAt), dashIfEmpty(win.RefusedAt))
+		}
+	}
+	rows("org", answer.Org.Windows)
 	for _, seat := range answer.Seats {
-		if seat.DurableUsed == 0 && seat.MaxTokens == 0 {
-			// A seat that has spent nothing under no cap has nothing
-			// to report, and printing a permanent zero for every
-			// seat in a large company buries the ones that matter.
+		if !worthPrinting(seat.Windows) {
+			// A seat that has spent nothing under no ceiling has
+			// nothing to report, and printing three permanent zeroes
+			// for every seat in a large company buries the ones that
+			// matter.
 			continue
 		}
-		fmt.Fprintf(stdout, row,
-			seat.Handle, strconv.Itoa(seat.DurableUsed), capOrDash(seat.MaxTokens),
-			dashIfEmpty(seat.DurableUpdatedAt), dashIfEmpty(seat.RefusedAt))
+		rows(seat.Handle, seat.Windows)
 	}
-	return nil
+	return w.Flush()
 }
 
-func capOrDash(limit int) string {
-	if limit <= 0 {
-		// `token_budget: 0` is how an operator says "no ceiling", so a
-		// literal 0 in this column would read as the opposite.
+// worthPrinting reports whether a seat has spent anything or is capped in any
+// window.
+func worthPrinting(windows []budgetWindow) bool {
+	for _, win := range windows {
+		if win.Used > 0 || win.Limit != nil {
+			return true
+		}
+	}
+	return false
+}
+
+// limitOrUnlimited is a window's ceiling, or "unlimited" where the answer
+// states none: an uncapped window carries no `limit` at all, and a blank or a
+// 0 in this column would read as the opposite of what it means.
+func limitOrUnlimited(limit *int) string {
+	if limit == nil {
 		return "unlimited"
 	}
-	return strconv.Itoa(limit)
+	return strconv.Itoa(*limit)
 }
 
 func dashIfEmpty(s string) string {
@@ -294,46 +319,6 @@ func dashIfEmpty(s string) string {
 		return "-"
 	}
 	return s
-}
-
-// budgetsReset zeroes the counters.
-//
-// # It is never a schedule
-//
-// A budget is a ceiling for the life of a deployment, and a counter that
-// rolled itself over would silently re-arm a company somebody had stopped on
-// purpose. So this is an operator action, and it names what it cleared.
-func budgetsReset(args []string, stdout, stderr io.Writer) error {
-	var scope *string
-	client, err := nodeClientFor(args, "budgets reset", stderr, func(fs *flag.FlagSet) {
-		scope = fs.String("scope", "",
-			"reset only this scope (org, or agent:<id>); empty resets every scope")
-	})
-	if err != nil {
-		return err
-	}
-	path := "/budgets/reset"
-	if *scope != "" {
-		path += "?scope=" + url.QueryEscape(*scope)
-	}
-	var answer struct {
-		Cleared int      `json:"cleared"`
-		Scopes  []string `json:"scopes"`
-	}
-	if err := client.post(context.Background(), path, &answer); err != nil {
-		return err
-	}
-	if answer.Cleared == 0 {
-		fmt.Fprintln(stdout, "Nothing to reset: no counter matched.")
-		return nil
-	}
-	// The report NAMES what was cleared. A count alone leaves an operator
-	// unable to tell "reset the seat I meant" from "reset a scope that was
-	// already empty".
-	slices.Sort(answer.Scopes)
-	fmt.Fprintf(stdout, "Reset %d scope(s): %s\n",
-		answer.Cleared, strings.Join(answer.Scopes, ", "))
-	return nil
 }
 
 // schemaLabel names one file of a migration report: the node's own, or which

@@ -58,7 +58,7 @@
 // ([Readmit]); an operator's in does not ([ErrBarredMember]).
 //
 // How many copies a map keeps and which label they are spread across are the
-// COMPANY's (ADR-0020), taken from the company configuration stamped with the
+// COMPANY's (ADR-0027), taken from the company configuration stamped with the
 // activation it came from ([Company]) and never set back by a holder a
 // revision behind — never read off the Tier A of whichever node holds the
 // duty, which dropped a fleet to one copy the day a node left at the default

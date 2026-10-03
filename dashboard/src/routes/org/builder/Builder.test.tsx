@@ -1,5 +1,5 @@
 /**
- * The Builder lens decides its posture from what the engine answers, checks
+ * The builder decides its posture from what the engine answers, checks
  * every draft with a dry run of exactly the write a save would send, and
  * keeps the operator's work through a change of token.
  */
@@ -158,7 +158,7 @@ describe("the posture table", () => {
   // about. `readonly` was the other one, and it went with the 503
   // `no_control_plane` that was its only producer: no process serves the API
   // without the coordination store that refusal described.
-  test("a halted lens marks the toolbar's add entries unavailable", async () => {
+  test("a halted builder marks the toolbar's add entries unavailable", async () => {
     storeToken("reader");
     const engine = new Engine(company());
     engine.script = (r) =>
@@ -180,7 +180,7 @@ describe("the posture table", () => {
   });
 });
 
-describe("the views the lens hosts", () => {
+describe("the views the builder hosts", () => {
   /** A view that registers `handle` exactly as `useBuilderView` does, counting each registration. */
   function registering(handle: BuilderViewHandle, count: { n: number }) {
     return function RegisteringView() {
@@ -221,14 +221,14 @@ describe("the views the lens hosts", () => {
   /*
    * THE SWITCH BETWEEN THE TWO CHARTS IS DRAWN BY THE CHART, in the canvas's
    * own corner where the console keeps it, and the page still owns it: it
-   * writes the lens's own section param. It sat in the page toolbar, naming
+   * writes the builder's own section param. It sat in the page toolbar, naming
    * two things that exist only inside the canvas, 800px from them.
    */
   test("the canvas is handed the chart the toolbar chooses, and the switch that chooses it", async () => {
     const engine = new Engine(company());
     const { view } = mountBuilder({ engine });
     expect(await screen.findByText("Drawing the structure chart")).toBeDefined();
-    // Inside what the lens hands the canvas, not in the toolbar beside it.
+    // Inside what the builder hands the canvas, not in the toolbar beside it.
     const toolbar = view.container.querySelector(".org-builder-toolbar")!;
     const reporting = screen.getByRole("tab", { name: "Reporting" });
     expect(toolbar.contains(reporting)).toBe(false);
@@ -239,7 +239,7 @@ describe("the views the lens hosts", () => {
   });
 
   /*
-   * AN ADD IS THE ONE REQUEST THIS LENS DOES NOT ALWAYS ANSWER WITH A DIALOG.
+   * AN ADD IS THE ONE REQUEST THIS BUILDER DOES NOT ALWAYS ANSWER WITH A DIALOG.
    * The structure chart draws the form in the ghost of the node about to
    * exist, on the branch it will hang from; nothing is mounted over the
    * picture, and the picture is not pushed back either, so `about` stays
@@ -265,11 +265,11 @@ describe("the views the lens hosts", () => {
    * second, quieter add.
    */
   test("an add asked from the table or the reporting chart is a dialog", async () => {
-    mountBuilder({ engine: new Engine(company()), hash: "#/company?lens=builder&view=table" });
+    mountBuilder({ engine: new Engine(company()), hash: "#/agents/edit?view=table" });
     await screen.findByText("No problems");
     fireEvent.click(screen.getByRole("button", { name: "Add" }));
     fireEvent.click(await screen.findByRole("menuitem", { name: "Add agent seat" }));
-    expect(await screen.findByRole("dialog", { name: "Add to the company" })).toBeDefined();
+    expect(await screen.findByRole("dialog", { name: "Add to Acme" })).toBeDefined();
     fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
     await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
 
@@ -279,11 +279,11 @@ describe("the views the lens hosts", () => {
     await screen.findByText("Drawing the reporting chart");
     fireEvent.click(screen.getByRole("button", { name: "Add" }));
     fireEvent.click(await screen.findByRole("menuitem", { name: "Add agent seat" }));
-    expect(await screen.findByRole("dialog", { name: "Add to the company" })).toBeDefined();
+    expect(await screen.findByRole("dialog", { name: "Add to Acme" })).toBeDefined();
   });
 
   /*
-   * AND AN ADD FOLLOWS THE VIEW. The request is the lens's, not the chart's,
+   * AND AN ADD FOLLOWS THE VIEW. The request is the builder's, not the chart's,
    * so moving to the table while a ghost is open asks the same question in the
    * dialog rather than leaving the reader with a form they can no longer see.
    */
@@ -294,7 +294,7 @@ describe("the views the lens hosts", () => {
     fireEvent.click(await screen.findByRole("menuitem", { name: "Add unit" }));
     await screen.findByText("Adding unit to the company");
     fireEvent.click(screen.getByRole("tab", { name: "Table" }));
-    expect(await screen.findByRole("dialog", { name: "Add to the company" })).toBeDefined();
+    expect(await screen.findByRole("dialog", { name: "Add to Acme" })).toBeDefined();
     fireEvent.click(screen.getByRole("tab", { name: "Visualization" }));
     await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
     expect(await screen.findByText("Adding unit to the company")).toBeDefined();
@@ -328,7 +328,7 @@ describe("the views the lens hosts", () => {
 
   /*
    * ONE QUESTION, ONE SHAPE. The node editor asks exactly this and asks it as
-   * a prompt; the lens's own asked it as a framed dialog with a head band, a
+   * a prompt; the builder's own asked it as a framed dialog with a head band, a
    * mark and a close control that did what the Keep editing two inches below
    * it did. Announced as an `alertdialog`, so the consequence is read with the
    * name rather than after it.
@@ -441,7 +441,37 @@ describe("checking the draft", () => {
   });
 });
 
-// NO PROVIDER, NO TURN. The dashboard writes none, so the lens says where one
+// ONE CHECK PER DRAFT AND BASE. On a cold open the draft is read from
+// `/config` while the socket's snapshot delivers the company, and the snapshot
+// is the configuration the read already returned rather than an apply: checked
+// again, the builder sent the same dry run twice on every such open and aborted
+// the first. A push that REPLACES an org the tab already held is an apply.
+describe("what an org push re-checks", () => {
+  test("the snapshot's first org is not an apply, and the draft is checked once", async () => {
+    const engine = new Engine(company());
+    const { store } = mountBuilder({ engine });
+    await screen.findByText("No problems");
+    expect(engine.checks()).toHaveLength(1);
+    act(() => store.applySnapshot({ org: named }));
+    await new Promise((r) => setTimeout(r, 50));
+    expect(engine.checks()).toHaveLength(1);
+
+    act(() => store.applyOrg({ ...named }));
+    await waitFor(() => expect(engine.checks()).toHaveLength(2));
+    expect(engine.checks()[1]!.body).toEqual(engine.checks()[0]!.body);
+  });
+
+  test("an org the tab held when the builder opened is re-checked when it is replaced", async () => {
+    const engine = new Engine(company());
+    const { store } = mountBuilder({ engine, org: named });
+    await screen.findByText("No problems");
+    expect(engine.checks()).toHaveLength(1);
+    act(() => store.applyOrg({ ...named }));
+    await waitFor(() => expect(engine.checks()).toHaveLength(2));
+  });
+});
+
+// NO PROVIDER, NO TURN. The dashboard writes none, so the builder says where one
 // comes from rather than leaving agents whose work waits with nothing to say
 // why.
 test("a company with no model provider is told so, and one with a provider is not", async () => {
@@ -499,10 +529,16 @@ describe("the selection in the URL", () => {
     expect(screen.getByRole("button", { name: "Acme" })).toBeDefined();
   });
 
-  test("a link naming a seat selects it, and the toolbar offers that seat's actions", async () => {
+  test("a link naming a seat selects it and opens its editor, and the toolbar offers that seat's actions", async () => {
     const engine = new Engine(company());
-    mountBuilder({ engine, hash: "#/company?lens=builder&view=visualization&seat=ceo" });
+    mountBuilder({ engine, hash: "#/agents/edit?view=visualization&seat=ceo" });
     await screen.findByText("No problems");
+    // The link was a request to edit the seat, so its form is what opens
+    // (`editWiring.test.tsx` holds when, and that it happens once); closed,
+    // the seat stays selected under it.
+    const editor = await screen.findByRole("dialog", { name: "Edit CEO" });
+    fireEvent.keyDown(editor, { key: "Escape" });
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
     const actions = await screen.findByRole("button", { name: "CEO" });
     expect(actions.getAttribute("aria-haspopup")).toBe("menu");
     fireEvent.click(actions);
@@ -584,12 +620,12 @@ test("a selection made before the engine described the company follows the seat"
 });
 
 describe("a revision saved by somebody else", () => {
-  // NOTHING TO PROTECT, SO NOTHING TO ASK. A lens with no changes on it is
+  // NOTHING TO PROTECT, SO NOTHING TO ASK. A builder with no changes on it is
   // stood on the newer revision; the conflict banner, and the pause that
   // comes with it, are for a draft that holds work.
   test("an untouched draft is stood on the newer revision the org push reports", async () => {
     const engine = new Engine(company());
-    const { store } = mountBuilder({ engine });
+    const { store } = mountBuilder({ engine, org: named });
     await screen.findByText("No problems");
     const next = company();
     next.roles![1]!.goal = "Design things";
@@ -605,7 +641,7 @@ describe("a revision saved by somebody else", () => {
 
   test("a draft with work is not moved: the change is offered as an update", async () => {
     const engine = new Engine(company());
-    const { store } = mountBuilder({ engine });
+    const { store } = mountBuilder({ engine, org: named });
     await screen.findByText("No problems");
     fireEvent.click(screen.getByRole("button", { name: "Edit CEO" }));
     await waitFor(() => expect(engine.checks()).toHaveLength(2));
@@ -695,17 +731,17 @@ describe("a token change mid-edit", () => {
 });
 
 /**
- * THE CHART LENS TAKES THE WINDOW, and gives it back.
+ * THE CHART VIEW TAKES THE WINDOW, and gives it back.
  *
  * A canvas fills the box its screen gives it and clips, so the application
  * frame's scroller has to stop being one while the chart is on. The shell
  * used to work that out for itself, from a rule in this package's stylesheet
  * that reached up at a wrapper the shell drew; the design system's shell
  * draws no such wrapper, which left the canvas with no definite height
- * anywhere above it. The lens says so now, and this is what says it still
+ * anywhere above it. The builder says so now, and this is what says it still
  * does, and still stops saying it on the outline.
  */
-describe("the lens that fills the window", () => {
+describe("the builder that fills the window", () => {
   function asked(hash: string): boolean[] {
     const calls: boolean[] = [];
     mountBuilder({
@@ -718,17 +754,17 @@ describe("the lens that fills the window", () => {
     return calls;
   }
 
-  test("the chart lens asks the frame for the window's height", async () => {
-    const calls = asked("#/company?lens=builder&view=visualization");
-    // Not before the engine has answered: until then the lens draws a posture
+  test("the chart view asks the frame for the window's height", async () => {
+    const calls = asked("#/agents/edit?view=visualization");
+    // Not before the engine has answered: until then the builder draws a posture
     // screen, which is an ordinary column and scrolls like one.
     expect(calls).not.toContain(true);
     await waitFor(() => expect(calls).toContain(true));
   });
 
-  test("the outline lens asks for nothing and leaves the scroller alone", async () => {
-    const calls = asked("#/company?lens=builder&view=table");
-    // The toolbar is what both lenses draw once the engine has answered, so
+  test("the table view asks for nothing and leaves the scroller alone", async () => {
+    const calls = asked("#/agents/edit?view=table");
+    // The toolbar is what both views draw once the engine has answered, so
     // waiting for it is waiting for the same moment the case above measures.
     await screen.findByRole("toolbar", { name: "Organization builder" });
     expect(calls).not.toContain(true);

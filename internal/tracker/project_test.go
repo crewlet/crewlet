@@ -2,6 +2,7 @@ package tracker_test
 
 import (
 	"database/sql"
+	"errors"
 	"slices"
 	"strings"
 	"testing"
@@ -17,10 +18,16 @@ func TestProjectPolicyIsTheLeads(t *testing.T) {
 	who := "alice"
 	edit := tracker.ProjectEdit{DefaultAssignee: &who}
 
-	if _, err := r.writer.WriteProject(t.Context(), "op-seat", "ENG", edit,
-		tracker.ProjectAuthority{}); err == nil {
-
+	_, err := r.writer.WriteProject(t.Context(), "op-seat", "ENG", edit,
+		tracker.ProjectAuthority{})
+	switch {
+	case err == nil:
 		t.Fatal("a seat that does not lead ENG set its default assignee")
+	case !errors.Is(err, tracker.ErrForbidden):
+		// THE CLASS A CALLER BRANCHES ON: without it this refusal read
+		// as whatever the caller's default was, and a person's surface
+		// offered a retry of something no retry changes.
+		t.Fatalf("the refusal is %v, want an ErrForbidden", err)
 	}
 	if _, err := r.writer.WriteProject(t.Context(), "op-lead", "ENG", edit,
 		tracker.ProjectAuthority{Lead: true}); err != nil {
@@ -373,5 +380,116 @@ func TestAPersonsOwnCredentialMayRenameATag(t *testing.T) {
 		rename, tracker.TagAuthority{Operator: true}); err != nil {
 
 		t.Fatalf("an operator could not rename a tag: %v", err)
+	}
+}
+
+// roster is a chart seam holding exactly the seats it lists, resolving each
+// name it is given to the handle beside it — which may be ANOTHER handle, the
+// way the colleague match's later tiers answer a departed seat's name.
+type roster map[string]string
+
+func (c roster) ResolveSeat(ref string) (string, bool) {
+	handle, held := c[ref]
+	return handle, held
+}
+
+// TestUnassignedWorkLandsOnTheProjectsDefaultAssignee is the setting doing what
+// it says. `default_assignee` is "who unassigned work lands on": the lead sets
+// it, the project read serves it and the New task sheet names it under an
+// empty Assignee field — and nothing applied it, so every task filed without
+// an assignee went to triage whatever the lead had chosen.
+//
+// FOUR CASES, each a way the rule could be half right: a create naming nobody
+// is filed to the default, and its WAKE names them too (or the recipient rule
+// routes it as triage, to the lead, while it sits on somebody else's queue);
+// a named assignee is left alone; and a default that no longer names a seat
+// on the chart — including one the colleague match would turn into somebody
+// ELSE — is not applied, and says so.
+func TestUnassignedWorkLandsOnTheProjectsDefaultAssignee(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+	bo := "bo"
+	if _, err := r.writer.WriteProject(t.Context(), "op-default", "ENG",
+		tracker.ProjectEdit{DefaultAssignee: &bo},
+		tracker.ProjectAuthority{Lead: true}); err != nil {
+
+		t.Fatalf("set the default assignee: %v", err)
+	}
+	r.drain()
+
+	file := func(id, assignee string) tracker.WriteResult {
+		t.Helper()
+		task := newTask(id)
+		task.Key, task.Assignee, task.Watchers = "", assignee, []string{"ana"}
+		if assignee != "" {
+			task.Watchers = append(task.Watchers, assignee)
+		}
+		notify := tracker.Wake{Kind: tracker.ChangeCreated, After: task}.Notify(nil)
+		got, err := r.writer.CreateTask(t.Context(), "op-"+id, task, notify)
+		if err != nil {
+			t.Fatalf("file %s: %v", id, err)
+		}
+		r.drain()
+		return got
+	}
+
+	// NOBODY NAMED: the project's default, on the row, the answer and the
+	// wake alike.
+	got := file("t-nobody", "")
+	if got.Assignee != "bo" {
+		t.Errorf("the create reported it filed to %q, want the default %q", got.Assignee, "bo")
+	}
+	row := r.task(t, "t-nobody").Task
+	if row.Assignee != "bo" {
+		t.Errorf("the task was filed to %q, want the project's default %q", row.Assignee, "bo")
+	}
+	if !slices.Contains(row.Watchers, "bo") || !slices.Contains(row.Watchers, "ana") {
+		t.Errorf("watchers %v: the default assignee follows what they hold, "+
+			"beside the reporter", row.Watchers)
+	}
+	wakes := r.wakes(t)
+	wake := wakes[len(wakes)-1]
+	if wake.Snapshot.Assignee != "bo" {
+		t.Errorf("the wake names %q as the assignee, want %q", wake.Snapshot.Assignee, "bo")
+	}
+	if moved := wake.Fields["assignee"]; moved.To != "bo" {
+		t.Errorf("the wake's assignee delta is %+v, want it to name %q", moved, "bo")
+	}
+	woken := false
+	for _, c := range tracker.Candidates(wake, false) {
+		if c.Handle == "bo" && c.Reason == tracker.ReasonAssignee {
+			woken = true
+		}
+	}
+	if !woken {
+		t.Errorf("the default assignee is not woken as the assignee: %+v",
+			tracker.Candidates(wake, false))
+	}
+
+	// A NAMED ASSIGNEE IS LEFT ALONE.
+	if got := file("t-named", "cy"); got.Assignee != "cy" ||
+		r.task(t, "t-named").Task.Assignee != "cy" {
+
+		t.Errorf("a create naming cy was filed to %q", r.task(t, "t-named").Task.Assignee)
+	}
+
+	// A DEFAULT THE CHART NO LONGER HOLDS goes to triage, and says why —
+	// and so does one the chart would answer with somebody else.
+	for name, seats := range map[string]roster{
+		"departed":      {"cy": "cy"},
+		"somebody else": {"cy": "cy", "bo": "bob"},
+	} {
+		r.writer.World = seats
+		id := "t-" + strings.ReplaceAll(name, " ", "-")
+		got := file(id, "")
+		r.writer.World = nil
+		if row := r.task(t, id).Task; row.Assignee != "" || got.Assignee != "" {
+			t.Errorf("%s: filed to %q (reported %q), want triage", name, row.Assignee, got.Assignee)
+		}
+		if !slices.ContainsFunc(got.Warnings, func(w string) bool {
+			return strings.Contains(w, `"bo"`) && strings.Contains(w, "default_assignee")
+		}) {
+			t.Errorf("%s: the writer was not told the default was skipped: %v", name, got.Warnings)
+		}
 	}
 }

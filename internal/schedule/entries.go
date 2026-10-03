@@ -143,7 +143,13 @@ type Row struct {
 	// never reaches. Zero rather than an error because this is a display
 	// projection — one unparseable cron must not blank the other nineteen
 	// rows — and the reason is in [Row.Problem].
-	NextRun time.Time `json:"next_run"`
+	//
+	// ABSENT ON THE WIRE WHEN ZERO. A zero time.Time marshals as
+	// `0001-01-01T00:00:00Z`, which is an instant — two thousand years
+	// overdue — and every reader took it for one: the dashboard drew a
+	// disabled schedule, and one whose zone was renamed, as "due", and the
+	// [Row.Problem] beside it was never reached. No fire is no key.
+	NextRun time.Time `json:"next_run,omitzero"`
 
 	// Problem says why NextRun is empty when the reason is a defect rather
 	// than a choice: an unparseable cron, an unknown timezone. Empty for a
@@ -157,9 +163,9 @@ type Row struct {
 
 // DescribeOptions carries what a projection needs beyond the org itself.
 type DescribeOptions struct {
-	// DefaultTimezone is applied to any schedule that names none. Empty
-	// means UTC.
-	DefaultTimezone string
+	// Zone is the company's clock (ADR-0018), which a schedule that names
+	// no zone of its own is evaluated in. Nil is UTC.
+	Zone *time.Location
 
 	// Now is the instant NextRun is computed from. Zero reads the clock.
 	Now time.Time
@@ -175,18 +181,22 @@ func Describe(o *org.Organization, opts DescribeOptions) []Row {
 	if ref.IsZero() {
 		ref = now()
 	}
-	defaultTZ := opts.DefaultTimezone
-	if defaultTZ == "" {
-		defaultTZ = DefaultTimezone
+	company := opts.Zone
+	if company == nil {
+		company = time.UTC
 	}
 
 	entries := Entries(o)
 	out := make([]Row, 0, len(entries))
 	for _, e := range entries {
 		s := e.Schedule
+		// THE ZONE IT FIRES IN, resolved by the tick's own [ZoneOf]: the
+		// schedule's own name where it gives one — reported as written even
+		// when it does not load, so the row names what to fix — and the
+		// company's clock where it does not.
 		zone := s.Timezone
 		if zone == "" {
-			zone = defaultTZ
+			zone = company.String()
 		}
 		row := Row{
 			ScopeType:      e.Scope,
@@ -208,7 +218,7 @@ func Describe(o *org.Organization, opts DescribeOptions) []Row {
 			row.Target = target
 		}
 		if row.Enabled {
-			row.NextRun, row.Problem = nextRun(s.Cron, zone, ref)
+			row.NextRun, row.Problem = nextRun(s, company, ref)
 		}
 		out = append(out, row)
 	}
@@ -216,12 +226,12 @@ func Describe(o *org.Organization, opts DescribeOptions) []Row {
 }
 
 // nextRun resolves a row's next fire, or the reason it has none.
-func nextRun(expr, zone string, ref time.Time) (time.Time, string) {
-	loc, err := time.LoadLocation(zone)
+func nextRun(s org.Schedule, company *time.Location, ref time.Time) (time.Time, string) {
+	loc, err := ZoneOf(s, company)
 	if err != nil {
-		return time.Time{}, "unknown timezone " + zone
+		return time.Time{}, err.Error()
 	}
-	parsed, err := cron.Parse(expr)
+	parsed, err := cron.Parse(s.Cron)
 	if err != nil {
 		return time.Time{}, err.Error()
 	}

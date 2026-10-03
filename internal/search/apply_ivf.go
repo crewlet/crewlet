@@ -107,7 +107,7 @@ func readIndexHead(ctx context.Context, tx *sql.Tx) (IndexHead, bool, error) {
 }
 
 // indexHeadStatement reads the head — every column but none of the centroids,
-// which are a table of their own for exactly this read (migration 0025).
+// which are a table of their own for exactly this read (migration 0033).
 const indexHeadStatement = `
 	SELECT generation, log, model, dim, lists, probes, trained_on, largest, why,
 	       digest, trained_at, measured_sources, recall, floor, shape,

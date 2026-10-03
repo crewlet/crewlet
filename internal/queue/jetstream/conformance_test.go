@@ -24,9 +24,9 @@ func TestConformance(t *testing.T) {
 // Own broker per queue, not per test binary: the suite asserts things like
 // "a subscription nobody created retains nothing", which a shared broker
 // carrying another subtest's streams could satisfy accidentally.
-func newConformanceQueue(t *testing.T) queue.EventQueue {
+func newConformanceQueue(t *testing.T, opts ...queue.Option) queue.EventQueue {
 	t.Helper()
-	return openForTest(t, Config{})
+	return openForTest(t, Config{}, opts...)
 }
 
 // openForTest starts a broker owned by the TEST, not by the queue, and
@@ -36,7 +36,7 @@ func newConformanceQueue(t *testing.T) queue.EventQueue {
 // the client that used it — "the mail survived a node leaving" is precisely
 // the property seat ownership rests on, and it is unobservable if stopping
 // the node also took the broker down.
-func openForTest(t *testing.T, cfg Config) *Queue {
+func openForTest(t *testing.T, cfg Config, opts ...queue.Option) *Queue {
 	t.Helper()
 	cfg = testTimings(cfg)
 	srv, err := StartServer(t.Context(), cfg)
@@ -44,7 +44,7 @@ func openForTest(t *testing.T, cfg Config) *Queue {
 		t.Fatalf("StartServer: %v", err)
 	}
 	t.Cleanup(srv.Shutdown)
-	return clientUnderTest(t, srv, srv)
+	return clientUnderTest(t, srv, srv, opts...)
 }
 
 // testTimings shortens the timings a suite would otherwise wait out.
@@ -71,11 +71,11 @@ func testTimings(cfg Config) Config {
 	return cfg
 }
 
-// clientUnderTest is a client of srv, with an inspection client of inspect
-// registered beside it.
-func clientUnderTest(t *testing.T, srv, inspect *Server) *Queue {
+// clientUnderTest is a client of srv, built with opts, with an inspection
+// client of inspect registered beside it.
+func clientUnderTest(t *testing.T, srv, inspect *Server, opts ...queue.Option) *Queue {
 	t.Helper()
-	q, err := srv.Client(t.Context())
+	q, err := srv.Client(t.Context(), opts...)
 	if err != nil {
 		t.Fatalf("Client: %v", err)
 	}
@@ -121,7 +121,9 @@ func inspector(q queue.EventQueue) *Queue {
 	return jq
 }
 
-func capabilities() queuetest.Capabilities { return capabilitiesFor(openForTest) }
+func capabilities() queuetest.Capabilities {
+	return capabilitiesFor(func(t *testing.T, cfg Config) *Queue { return openForTest(t, cfg) })
+}
 
 // capabilitiesFor is the suite's capabilities over queues open builds, so a
 // topology that starts its brokers differently is certified on the same

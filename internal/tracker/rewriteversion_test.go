@@ -18,7 +18,8 @@ import (
 
 // A RANK ORDER AND A PURGE ARE WRITTEN AT THE VERSION THAT CHANGED THEIR APPLY.
 //
-// Both kept their shape at version 4 and changed what their apply does to the
+// Both kept their shape at [tracker.RewriteVersion] and changed what their apply
+// does to the
 // OTHER tasks they touch: a rank order writes each moved task's document, and
 // a purge takes itself out of every task that names it. Written at version 1,
 // a build from before the change would decode either and apply it the old way,
@@ -26,9 +27,9 @@ import (
 // the two builds for ever.
 func TestARankOrderAndAPurgeAreWrittenAtTheVersionThatChangedTheirApply(t *testing.T) {
 	t.Parallel()
-	if got := (tracker.Domain{}).RecordVersion(); got < 4 {
-		t.Fatalf("this build reads record version %d, want at least the 4 that "+
-			"changed the rank order's and the purge's apply", got)
+	if got := (tracker.Domain{}).RecordVersion(); got < tracker.RewriteVersion {
+		t.Fatalf("this build reads record version %d, want at least the %d that "+
+			"changed the rank order's and the purge's apply", got, tracker.RewriteVersion)
 	}
 	r := newRoundTrip(t)
 	for _, id := range []string{"t-1", "t-2"} {
@@ -60,10 +61,10 @@ func TestARankOrderAndAPurgeAreWrittenAtTheVersionThatChangedTheirApply(t *testi
 		switch {
 		case rec.Subject.Kind == tracker.KindRankOrder, rec.Op == tracker.OpPurge:
 			seen[rec.Subject.Kind]++
-			if rec.V != 4 {
-				t.Errorf("the %s record on %s carries version %d, want 4 — a build "+
-					"from before version 4 would apply it by the old rule", rec.Op,
-					rec.Subject, rec.V)
+			if rec.V != tracker.RewriteVersion {
+				t.Errorf("the %s record on %s carries version %d, want %d — a build "+
+					"from before it would apply it by the old rule", rec.Op,
+					rec.Subject, rec.V, tracker.RewriteVersion)
 			}
 		}
 	}
@@ -73,11 +74,11 @@ func TestARankOrderAndAPurgeAreWrittenAtTheVersionThatChangedTheirApply(t *testi
 	}
 }
 
-// A VERSION-1 RANK ORDER IS APPLIED BY VERSION 1'S RULE, AND A VERSION-4 ONE BY
-// VERSION 4'S.
+// A VERSION-1 RANK ORDER IS APPLIED BY VERSION 1'S RULE, AND ONE AT
+// [tracker.RewriteVersion] BY THAT VERSION'S.
 //
-// Every build before version 4 wrote a placement to the rank COLUMN alone and
-// wherever the task was filed; version 4 writes the moved task's document too,
+// Every build before the rewrite wrote a placement to the rank COLUMN alone and
+// wherever the task was filed; the rewrite writes the moved task's document too,
 // and only for a task in the order's project. A node that replays a version-1
 // order from the log — after adopting a snapshot, say — must write what every
 // node that applied it at the time wrote, or it holds rows nobody else does.
@@ -89,7 +90,7 @@ func TestARankOrderIsAppliedByItsOwnVersionsRule(t *testing.T) {
 		ownDocumentMoves, elsewhereMoves bool
 	}{
 		{version: 1, ownDocumentMoves: false, elsewhereMoves: true},
-		{version: 4, ownDocumentMoves: true, elsewhereMoves: false},
+		{version: tracker.RewriteVersion, ownDocumentMoves: true, elsewhereMoves: false},
 	} {
 		t.Run("version "+itoa(tc.version), func(t *testing.T) {
 			t.Parallel()
@@ -136,16 +137,16 @@ func TestARankOrderIsAppliedByItsOwnVersionsRule(t *testing.T) {
 	}
 }
 
-// A VERSION-1 PURGE IS APPLIED BY VERSION 1'S RULE, AND A VERSION-4 ONE BY
-// VERSION 4'S.
+// A VERSION-1 PURGE IS APPLIED BY VERSION 1'S RULE, AND ONE AT
+// [tracker.RewriteVersion] BY THAT VERSION'S.
 //
-// Every build before version 4 fixed the rows naming the purged task and left
-// the other tasks' documents alone; version 4 takes the purged task out of each
+// Every build before the rewrite fixed the rows naming the purged task and left
+// the other tasks' documents alone; the rewrite takes the purged task out of each
 // document too. Both are exactly what their version's nodes hold, so a replay
 // of either must write the same.
 func TestAPurgeIsAppliedByItsOwnVersionsRule(t *testing.T) {
 	t.Parallel()
-	for _, version := range []int{1, 4} {
+	for _, version := range []int{1, tracker.RewriteVersion} {
 		t.Run("version "+itoa(version), func(t *testing.T) {
 			t.Parallel()
 			h := newApplyHarness(t)
@@ -184,8 +185,8 @@ func TestAPurgeIsAppliedByItsOwnVersionsRule(t *testing.T) {
 				t.Errorf("%d dependency rows still name the purged task at version %d",
 					got, version)
 			}
-			// AND THE DOCUMENTS ONLY FROM VERSION 4.
-			rewritten := version >= 4
+			// AND THE DOCUMENTS ONLY FROM THE REWRITE.
+			rewritten := version >= tracker.RewriteVersion
 			if child := documentOf(t, h, "child"); (child.Parent == nil) != rewritten {
 				t.Errorf("the child's document names parent %v at version %d; want it "+
 					"rewritten = %v", child.Parent, version, rewritten)
@@ -200,14 +201,14 @@ func TestAPurgeIsAppliedByItsOwnVersionsRule(t *testing.T) {
 	}
 }
 
-// A BUILD FROM BEFORE VERSION 4 RETAINS A VERSION-4 RANK ORDER AND HALTS AT A
-// VERSION-4 PURGE — through the real framework loop, over the real log.
+// A BUILD FROM BEFORE THE REWRITE RETAINS A REWRITTEN RANK ORDER AND HALTS AT A
+// REWRITTEN PURGE — through the real framework loop, over the real log.
 //
 // Neither may be applied by that build's rule, which is the old one. A rank
 // order is an ordinary record, so it is retained until the node upgrades; a
 // purge installs a gate, and a gate a build cannot apply is a stop rather than
 // a deferral, because a deferred gate licenses every record above it.
-func TestABuildBeforeVersionFourRetainsARankOrderAndHaltsAtAPurge(t *testing.T) {
+func TestABuildBeforeTheRewriteRetainsARankOrderAndHaltsAtAPurge(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
 	for _, id := range []string{"t-1", "t-2"} {
@@ -231,8 +232,8 @@ func TestABuildBeforeVersionFourRetainsARankOrderAndHaltsAtAPurge(t *testing.T) 
 	olderNode, older := storetest.OpenEstate(t, filepath.Join(t.TempDir(), "older.db"), store.Options{}, 1)
 	t.Cleanup(func() { _ = olderNode.Close() })
 	runner, err := statelog.NewRunner(statelog.RunnerDeps{
-		Domain: olderTracker{reads: 3},
-		Spec:   statelog.EstateStream(olderTracker{reads: 3}), Layout: statelog.EstateLayout(olderTracker{reads: 3}.Name()), LogID: statelog.EstateLog(olderTracker{reads: 3}),
+		Domain: olderTracker{reads: tracker.RewriteVersion - 1},
+		Spec:   statelog.EstateStream(olderTracker{reads: tracker.RewriteVersion - 1}), Layout: statelog.EstateLayout(olderTracker{reads: tracker.RewriteVersion - 1}.Name()), LogID: statelog.EstateLog(olderTracker{reads: tracker.RewriteVersion - 1}),
 		Applier: tracker.NewApplier("node-older"),
 		Fetch:   &trackerLogFetch{log: r.log, next: 1},
 		Log:     r.log,
@@ -296,15 +297,16 @@ func TestABuildBeforeVersionFourRetainsARankOrderAndHaltsAtAPurge(t *testing.T) 
 // A release carries an eviction's bytes under the eviction's kind, so a build
 // that predates it would decode it and record an EVICTION: the same gate, in a
 // row naming the wrong one, which every newer node holds as a release — two
-// builds' rows differing for ever. Its kind is a gate's, so written at version
-// 5 that build halts at it rather than apply it the old way; the eviction
+// builds' rows differing for ever. Its kind is a gate's, so written at
+// [tracker.ReleaseVersion] that build halts at it rather than apply it the old
+// way; the eviction
 // beside it stays at the version every build reads, because its apply did not
 // change.
 func TestAReleaseIsWrittenAtItsOwnVersionAndAnOlderBuildHaltsAtIt(t *testing.T) {
 	t.Parallel()
-	if got := (tracker.Domain{}).RecordVersion(); got < 5 {
-		t.Fatalf("this build reads record version %d, want at least the 5 that "+
-			"added a node's release of the log", got)
+	if got := (tracker.Domain{}).RecordVersion(); got < tracker.ReleaseVersion {
+		t.Fatalf("this build reads record version %d, want at least the %d that "+
+			"added a node's release of the log", got, tracker.ReleaseVersion)
 	}
 	r := newRoundTrip(t)
 	r.applyWhileWriting()
@@ -323,14 +325,14 @@ func TestAReleaseIsWrittenAtItsOwnVersionAndAnOlderBuildHaltsAtIt(t *testing.T) 
 		t.Errorf("the eviction carries version %d, want 1 — its apply is every "+
 			"build's, and a higher version would halt nodes that can apply it", v)
 	}
-	if v := r.recordAt(t, released).V; v != 5 {
-		t.Errorf("the release carries version %d, want 5 — a build from before it "+
-			"would record it as an eviction", v)
+	if v := r.recordAt(t, released).V; v != tracker.ReleaseVersion {
+		t.Errorf("the release carries version %d, want %d — a build from before it "+
+			"would record it as an eviction", v, tracker.ReleaseVersion)
 	}
 
 	olderNode, older := storetest.OpenEstate(t, filepath.Join(t.TempDir(), "older.db"), store.Options{}, 1)
 	t.Cleanup(func() { _ = olderNode.Close() })
-	build := olderTracker{reads: 4}
+	build := olderTracker{reads: tracker.ReleaseVersion - 1}
 	runner, err := statelog.NewRunner(statelog.RunnerDeps{
 		Domain: build, Spec: statelog.EstateStream(build),
 		Layout: statelog.EstateLayout(build.Name()), LogID: statelog.EstateLog(build),
@@ -456,11 +458,11 @@ func TestARewriteMovesOnlyTheColumnsItsChangeIsAbout(t *testing.T) {
 			"rank, and holds %v and %q", doc.Parent, doc.Rank)
 	}
 
-	// A VERSION-4 PURGE THAT ONLY UNLINKS IT.
+	// A REWRITTEN PURGE THAT ONLY UNLINKS IT.
 	unlink := taskRecord("unlinked", tracker.OpPurge,
 		map[string]any{"v": tracker.GateRecordVersion, "reason": "gone"}, nil)
 	if _, err := h.apply(unlink, at); err != nil {
-		t.Fatalf("the version-4 purge: %v", err)
+		t.Fatalf("the rewritten purge: %v", err)
 	}
 	if doc := documentOf(t, h, "task"); len(doc.Relations) != 0 {
 		t.Fatalf("the premise: the purge rewrote the task's document, and it still "+

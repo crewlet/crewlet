@@ -11,15 +11,16 @@ import (
 	"github.com/crewlet/crewlet/internal/api/livestate"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
+	"github.com/crewlet/crewlet/internal/engine"
+	"github.com/crewlet/crewlet/internal/eventfan"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/integration"
 	"github.com/crewlet/crewlet/internal/knowledge"
-	"github.com/crewlet/crewlet/internal/learning"
 	"github.com/crewlet/crewlet/internal/logging"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/schedule"
 	"github.com/crewlet/crewlet/internal/store"
-	"github.com/crewlet/crewlet/internal/tokens"
+	"github.com/crewlet/crewlet/internal/usage"
 )
 
 var log = logging.Get("api.queries")
@@ -55,20 +56,38 @@ const (
 // caller that asks a subset of the questions does, which is how this package's
 // own suite exercises one question at a time.
 type Sources struct {
-	State  *livestate.LiveState
-	Events *store.EventLog
+	State *livestate.LiveState
 
-	// Health answers the stream question, which is deliberately not called
-	// health: a query must never share a name with a push kind, or a
-	// reader of the protocol has to know which direction a frame was
-	// travelling to know what it means.
-	Health func(ctx context.Context) any
+	// Events is the FLEET's turn-level history: every node's own event
+	// store, asked at query time, with a [eventfan.Coverage] beside every
+	// answer saying which nodes it came from (ADR-0021).
+	//
+	// An interface every method of which answers a coverage, so a bare
+	// *store.EventLog does not compile here: a read of this node's store
+	// alone answered for a third of a three-node fleet and said nothing
+	// about the other two, which is exactly the answer a screen must never
+	// be handed without being told.
+	Events FleetEvents
+
+	// Usage is the replicated estate's usage domain: every node's company
+	// days, for every NAMED spend window and its series (ADR-0020). Not
+	// this node's event log, which answered for this node alone and only
+	// thirty days back. Nil leaves `token_series` unregistered and a named
+	// `tokens` window empty.
+	Usage usage.Estate
 
 	// Company reads the CURRENT epoch, for the questions answered from
 	// configuration rather than from a store. A function, not a value: an
 	// apply replaces the epoch, and an answer bound to the one this
 	// process booted on would describe a company that is no longer running.
 	Company func() *config.Company
+
+	// OperatorActs names the tools the act transport serves
+	// (`internal/api/operator`'s Server.Acts), which `viewer` answers a
+	// person as `acts` so a screen enables exactly the controls a press of
+	// would be served. Nil serves none — a company with no native backend
+	// has nothing a person could act on.
+	OperatorActs func() []string
 
 	// Coord is the lease table: the fleet's one shared answer to "which
 	// node holds what". Nil leaves the fleet question unregistered.
@@ -98,14 +117,15 @@ type Sources struct {
 	// has fired" are told apart by the answer's own shape.
 	Runs ScheduleRuns
 
-	// Diary, Episodes and Skills are a seat's memory. Skills is the half
-	// that had no query at all: learning.Skills.List exists and is tested,
-	// and nothing served it, so a seat's synthesized skills were written,
-	// versioned, loadable by the agent itself — and invisible to the
-	// operator whose tokens paid for them.
-	Diary    *learning.Diary
-	Episodes *learning.Episodes
-	Skills   *learning.Skills
+	// Memory is a seat's memory — its diary, episodes, the skills it drafted
+	// and what it learned about the people it works with — and its
+	// conversation ledger, each ANSWERED BY THE NODE HOLDING THE SEAT
+	// (internal/learning/memread). Every node keeps a copy of every seat it
+	// ever ran and only the holder keeps it current, so a read of whichever
+	// node served the request described the seat as of the last time that
+	// node ran it. Nil leaves `agent_memory` and `conversations`
+	// unregistered.
+	Memory SeatMemory
 
 	// Channels is the fleet's agent-to-agent authorization record. A
 	// consumer-defined interface rather than the whole coord.Fleet: this
@@ -146,12 +166,19 @@ type Sources struct {
 	// budget screen reads spend and nothing else, and a source that could
 	// reach the activation pointer would eventually be given a reason to.
 	Budget interface {
-		Usage(ctx context.Context) ([]coord.Usage, error)
+		Usage(ctx context.Context, windows coord.Windows) ([]coord.Usage, error)
 	}
 
 	// Sandbox is the durable record of detached coding runs, the fleet's
 	// rather than this node's. Nil leaves the question unregistered.
 	Sandbox PendingRuns
+
+	// SandboxTail is a running coding run's live output, ANSWERED BY THE
+	// NODE THAT OWNS THE RUN (internal/sandbox/livetail.go): the box is
+	// reachable only through the node driving it, and what it has said so
+	// far is on no record anywhere until the run is collected. Nil leaves
+	// the question unregistered.
+	SandboxTail SandboxTails
 
 	// Config serves the config family, and every one of those is
 	// operator-gated: reading the document exposes the whole company.
@@ -188,6 +215,16 @@ type Sources struct {
 	// surface is unchecked.
 	Reconciles func(ctx context.Context) []integration.State
 
+	// Converges reports whether a reconcile pass converges a surface in
+	// this build, or is nil when this process cannot say.
+	//
+	// The one fact the tool roll-up needs that no row carries: a surface no
+	// pass converges (Slack, whose apps are created by hand) never gets a
+	// report, so without this its card would read "connecting" for as long
+	// as it is configured. Nil is "cannot say", and the roll-up then reads
+	// an unreported surface as connecting rather than guessing either way.
+	Converges func(kind integration.Kind) bool
+
 	// Work and Pages are this node's projections of the company's own
 	// tracker and knowledge base. Nil leaves their questions unregistered,
 	// which is the honest answer for a company on Jira and Confluence:
@@ -206,6 +243,12 @@ type Sources struct {
 	// and a screen needs to know which. Nil leaves `work_files`
 	// unregistered.
 	Files FileReader
+	// Backlinks is which pages and tasks link to a page — this node's
+	// lexical index, which derives the links from the bodies it reads
+	// ([search.Backlinks]). Nil leaves the `page` answer without
+	// `linked_from`, which is absent rather than empty: "nothing links
+	// here" is a claim only a node holding the index can make.
+	Backlinks PageBacklinks
 
 	// WorkSearch is the ranked item search, and it is SEPARATE from
 	// [Sources.Work] because the two fail independently: the rows are the
@@ -214,18 +257,6 @@ type Sources struct {
 	// Nil leaves `work_search` unregistered, which is what a screen needs
 	// in order to offer the board's filters instead of an empty ranking.
 	WorkSearch WorkSearcher
-
-	// Conversations is the seat's own thread ledger — what it has said on
-	// a surface this engine does not own, and the record that stops it
-	// replying twice in one thread. Typed on the client since the client
-	// had types and registered nowhere, so the panel that reads it drew an
-	// empty list for every seat in every company.
-	Conversations Conversations
-
-	// Counterparties is what the learning loop remembers about WHO a seat
-	// has worked with — the one memory object that is about somebody else,
-	// and the one the memory answer never carried.
-	Counterparties Counterparties
 
 	// PublicBase is where third-party apps reach this deployment, RESOLVED,
 	// or nil when this process cannot say.
@@ -252,6 +283,41 @@ type Sources struct {
 	// for a node running no state log: it has no applier and no floor to
 	// say anything about.
 	Retention func(ctx context.Context) any
+
+	// Access is the auth guard's posture — the token LABELS it accepts and
+	// never a value (see [AccessPosture]) — for `access`. Nil leaves the
+	// question unregistered; the API always supplies it, from the guard it
+	// mounts.
+	Access *AccessPosture
+
+	// CredentialPools is every LLM provider entry in this node's current
+	// epoch, each configured key's provenance beside this node's pool state
+	// for it — hints, never values (see [engine.Engine.CredentialPools]).
+	// A FUNCTION for the reason [Sources.Company] is one: an apply replaces
+	// every pool. Nil leaves `credential_pool` unregistered.
+	CredentialPools func() []engine.CredentialPool
+
+	// Cooldowns is the fleet's credential cooldown ledger, read so a key a
+	// PEER benched is reported cooling here before this node's refresher
+	// has pulled it. Nil answers with this node's cooldowns alone and says
+	// so (`fleet: false`), rather than calling every key the fleet benched
+	// ready.
+	Cooldowns interface {
+		Since(ctx context.Context, now time.Time) (map[string]time.Time, error)
+	}
+
+	// Backups is the fleet's backup register — each owner's newest
+	// announced point, which is what the trim's backup term reads. With
+	// [Sources.Events] it answers `backups`; nil leaves that unregistered.
+	Backups interface {
+		BackupPoints(ctx context.Context) ([]coord.BackupPoint, error)
+	}
+
+	// BackupFloor is whose word the trim takes for what is backed up
+	// (`stream.tracker_retention.backup_floor`, Tier A, fixed for the life
+	// of the process), so `backups` marks exactly the points the trim
+	// counts. Empty reads as the default, `engine`.
+	BackupFloor config.BackupFloor
 
 	// NodeID names this node in the fleet answer, so a reader can tell
 	// which row is the one they are talking to. The RESOLVED id
@@ -291,6 +357,18 @@ func (s Sources) clock() time.Time {
 		return time.Now().UTC()
 	}
 	return s.Now()
+}
+
+// zone is the company's ONE clock (ADR-0018) as the current epoch sets it, or
+// UTC before one is running: what every day this surface cuts — a `due=`
+// filter, a due band, an overdue mark, a person's day — begins at.
+//
+// Read per call, like [Sources.Company] itself, because an apply can move it.
+func (s Sources) zone() *time.Location {
+	if s.Company == nil {
+		return time.UTC
+	}
+	return s.Company().Location()
 }
 
 // ErrUnavailable is a question this node understood and cannot answer YET: its
@@ -352,19 +430,24 @@ func Register(r *Registry, s Sources) {
 		// serve this: its listing never selects the payload, and a phase
 		// record without one has no prompts, no response and no decision.
 		r.Register("phases", s.phases)
+	}
+	if s.Usage != nil {
 		// AND THE TIME AXIS. `tokens` is a breakdown whose every row is a
 		// sum over the whole window, so it cannot say WHEN — which is the
-		// question a cost explorer is for. Gated on the event store rather
-		// than on the projection: the projection holds a day, and an axis
-		// that changed source when a reader widened the range is a seam
-		// across the one comparison the screen exists to make.
+		// question a cost explorer is for. Gated on the usage domain rather
+		// than on the projection: its buckets are company days, which only
+		// the replicated rows hold, and an axis that changed source when a
+		// reader widened the range is a seam across the one comparison the
+		// screen exists to make.
 		r.Register("token_series", s.tokenSeries)
-	}
-	if s.Health != nil {
-		r.Register("stream", s.stream)
+		// EVERY SEAT'S TURNS over a window of company days, from the same
+		// replicated rows: counts, the first-pass rate over reviewed turns,
+		// merged duration quantiles and a day-by-day series. A screen
+		// counting the rows of a list it loaded was counting the list.
+		r.Register("seat_activity", s.seatActivity)
 	}
 	if s.Coord != nil {
-		// OPERATOR-ONLY, like every other answer the Admin workspace
+		// OPERATOR-ONLY, like every other answer Settings › Nodes
 		// draws. It reports the node ids, which node holds which seat,
 		// the lease epochs and how far a config rollout has reached —
 		// the shape of the deployment rather than the company's work.
@@ -378,6 +461,32 @@ func Register(r *Registry, s Sources) {
 			s.layouts = &objectLayouts{}
 		}
 		r.RegisterOperator("fleet", s.fleet)
+		// WHAT EACH MCP SERVER DID ON EACH NODE, off the same lease
+		// table: every node re-publishes its starts on its presence
+		// heartbeat, so one listing answers for the fleet. Operator-only
+		// for fleet's reason — node ids, launch commands and the first
+		// line of each failure. See [Sources.mcpServersStatus].
+		r.RegisterOperator("mcp_servers_status", s.mcpServersStatus)
+	}
+	if s.Access != nil {
+		// OPERATOR-ONLY: which labels the guard accepts and which person
+		// each is, is a map of which credential to take. See
+		// [Sources.access].
+		r.RegisterOperator("access", s.access)
+	}
+	if s.Backups != nil && s.Events != nil {
+		// OPERATOR-ONLY, for retention's reason and more: every row names
+		// a directory on a named host that holds the company's sealed
+		// credentials. Gated on BOTH halves, since an answer with the
+		// register and no history would read as a fleet nobody ever asked
+		// for a backup.
+		r.RegisterOperator("backups", s.backups)
+	}
+	if s.CredentialPools != nil {
+		// OPERATOR-ONLY: which variable holds each model's keys and which
+		// of them a vendor is refusing right now is a map of which
+		// credential to take, and of when. See [Sources.credentialPool].
+		r.RegisterOperator("credential_pool", s.credentialPool)
 	}
 	if s.Coord != nil && s.Estate != nil {
 		// OPERATOR-ONLY, for the fleet question's reason: which node holds
@@ -426,9 +535,19 @@ func Register(r *Registry, s Sources) {
 		// answer than an unknown query. A nil searcher IS the answer here,
 		// not the absence of one.
 		r.Register("knowledge", s.knowledgeSearch)
+		// A NAME TO A SEAT, through the tiers an agent's own lookup uses —
+		// the command palette's assign and ask pickers. A projection of
+		// the chart, so it rides the company like the others here.
+		r.Register("colleague", s.colleague)
 	}
 	if s.Sandbox != nil {
 		r.Register("sandbox_runs", s.sandboxRuns)
+	}
+	if s.SandboxTail != nil {
+		// ASKED ONLY WHILE SOMEBODY WATCHES: a trace polls it while a
+		// running coding run's span is open, and nothing else does. There
+		// is no event and no row behind it — see [Sources.SandboxTail].
+		r.Register("sandbox_tail", s.sandboxTail)
 	}
 	if s.Retention != nil {
 		// OPERATOR-ONLY. The answer names every node in the fleet, its
@@ -445,10 +564,22 @@ func Register(r *Registry, s Sources) {
 	if s.Work != nil {
 		r.Register("work_items", s.workItems)
 		r.Register("work_item", s.workItem)
+		// A TASK'S THREAD, PAGED — the one collection on a detail with
+		// no bound of its own, so the detail returns its newest page and
+		// this walks the rest. See [Sources.workComments].
+		r.Register("work_comments", s.workComments)
+		// A TASK'S TURNS, PAGED, from the tracker's own rows — the
+		// durable account its cost panel sums. See
+		// [Sources.workItemTurns].
+		r.Register("work_item_turns", s.workItemTurns)
 		// A SEPARATE QUESTION from `work_items`, for the reason
 		// `containers` is separate from `pages`: a screen draws the tab
 		// strip once and the rows in it on every filter change.
 		r.Register("work_views", s.workViews)
+		// AND EVERY VIEW A PERSON CAN SEE, across the containers: the
+		// inventory and the sidebar's pins are about a person's views,
+		// not one container's tabs. See [Sources.workSavedViews].
+		r.Register("work_saved_views", s.workSavedViews)
 		// A SEPARATE QUESTION from `work_items` for the reason
 		// `work_views` is: a home screen draws the project list once
 		// and its rows' tasks on every navigation, and the counts here
@@ -477,7 +608,7 @@ func Register(r *Registry, s Sources) {
 		// been registered ungated, so this is what already ships rather
 		// than a new posture.
 		r.Register("work_my_work", s.workMyWork)
-		// THE READER HAS ALWAYS EXISTED and nothing asked it: twenty
+		// THE READER HAS ALWAYS EXISTED and nothing asked it: eighteen
 		// typed wake reasons, an addressed flag, a fallback flag and
 		// this person's own read and snooze marks, swept on a 365-day
 		// retention and reaching no screen.
@@ -489,6 +620,22 @@ func Register(r *Registry, s Sources) {
 		r.Register("work_routing", s.workRouting)
 		r.Register("work_catalogue", s.workCatalogue)
 		r.Register("work_person", s.workPerson)
+		// THE LANDING SCREEN'S THREE. The series is the tracker's history
+		// replayed backward from today's census; the feed merges the
+		// tracker's completions, creates and hand-offs with the pages'
+		// and the schedules' where this node keeps them; and what is
+		// waiting on a person is their open asks beside the coding runs
+		// parked on a question to them. See home.go.
+		r.Register("work_flow", s.workFlow)
+		r.Register("company_feed", s.companyFeed)
+		r.Register("decisions", s.decisions)
+	}
+	if s.Usage != nil {
+		// WHO READ A PAGE, from every node's days — see pagereads.go.
+		// Gated on the USAGE domain rather than on the native pages: a
+		// read is recorded with its backend, so a company on Confluence
+		// has readers too.
+		r.Register("page_reads", s.pageReads)
 	}
 	if s.Pages != nil {
 		r.Register("pages", s.pageList)
@@ -505,15 +652,17 @@ func Register(r *Registry, s Sources) {
 		r.Register("page_activity", s.pageActivity)
 		r.Register("page_revision", s.pageRevision)
 	}
-	if s.Diary != nil || s.Episodes != nil || s.Skills != nil ||
-		s.Counterparties != nil {
-
-		// FOUR HALVES NOW. Each is gated inside the answer rather than
-		// here, so a node holding one of them answers with that one and
-		// empty lists for the rest — which is what a client needs to
-		// tell "this seat has learned nothing" from "this node does not
-		// keep that half".
+	if s.Memory != nil {
+		// ANSWERED BY THE HOLDER, and saying which node that was — see
+		// [Sources.Memory].
 		r.Register("agent_memory", s.agentMemory)
+		// EVERY AGENT SEAT'S TOTALS IN ONE ANSWER, each counted by its
+		// holder in one scatter — what the diaries list draws, where a
+		// read per seat would be a lease read and a scatter per row.
+		r.Register("memory_overview", s.memoryOverview)
+		// SCOPED, like every other per-seat question — see
+		// [Sources.viewerParty].
+		r.Register("conversations", s.conversations)
 	}
 	if s.Channels != nil {
 		r.Register("a2a_channels", s.a2aChannels)
@@ -528,15 +677,10 @@ func Register(r *Registry, s Sources) {
 	if s.WorkSearch != nil {
 		// SEARCH IS A QUESTION, not a filter on the board, and it is
 		// gated on its own index rather than on the tracker: the ranked
-		// reader is what `search_work` gives a seat, and the operator
+		// reader is what `search_work_items` gives a seat, and the operator
 		// reading the same company had only `q=` — an escaped LIKE over
 		// the excerpt, gated to a span of days.
 		r.Register("work_search", s.workSearch)
-	}
-	if s.Conversations != nil {
-		// SCOPED, like every other per-seat question — see
-		// [Sources.viewerParty].
-		r.Register("conversations", s.conversations)
 	}
 	if s.Config != nil {
 		// OPERATOR-ONLY, all three. Reading the config document exposes
@@ -578,7 +722,7 @@ func (s Sources) agent(ctx context.Context, p Params) (any, error) {
 	// configured and never spawned is exactly that, and a 404 there would
 	// make a healthy new company look broken. Its history is answered the
 	// same way.
-	history, next := s.phaseHistory(ctx, seat, role, p)
+	history, next, coverage := s.phaseHistory(ctx, seat, role, p)
 	answer := map[string]any{
 		"role": role,
 		"live": nil,
@@ -594,6 +738,11 @@ func (s Sources) agent(ctx context.Context, p Params) (any, error) {
 		// rows with no way past them, while the events it was made of sat
 		// in the store addressable by id.
 		"next": next,
+		// WHICH NODES THE HISTORY CAME FROM. A seat moves between nodes,
+		// so its history is on every node that ever held it; null when it
+		// could not be read at all, which is not the same as a seat that
+		// has never run.
+		"coverage": coverage,
 	}
 	// ASSIGNED ONLY WHEN THERE IS ONE, because a nil *Overlay stored in an
 	// any is not nil: every `live != nil` check above this layer would read
@@ -617,12 +766,14 @@ func (s Sources) agent(ctx context.Context, p Params) (any, error) {
 //
 // Each row is the event's PAYLOAD with the envelope's timestamp merged in: the
 // payload's field names are already the client's — turn_id, phase, iteration,
-// model, response, tool_executions, total_tokens, cost_usd — because the same
-// shape drives the live row, and the timestamp is the one field that lives on
-// the envelope rather than inside it.
-func (s Sources) phaseHistory(ctx context.Context, seat, role string, p Params) ([]store.EventRecord, string) {
+// model, response, tool_executions, total_tokens — because the same shape
+// drives the live row, and the timestamp is the one field that lives on the
+// envelope rather than inside it. The payload's price rides along, since the
+// row is the record as stored, and the dashboard reads none of it (rule 19 in
+// docs/reference/dashboard-design.md).
+func (s Sources) phaseHistory(ctx context.Context, seat, role string, p Params) ([]store.EventRecord, string, *eventfan.Coverage) {
 	if s.Events == nil {
-		return []store.EventRecord{}, ""
+		return []store.EventRecord{}, "", nil
 	}
 	var before *store.Cursor
 	if id := p.String("before_id"); id != "" {
@@ -635,30 +786,33 @@ func (s Sources) phaseHistory(ctx context.Context, seat, role string, p Params) 
 		// over a bad query parameter would turn a paging bug into no
 		// screen at all.
 	}
-	records, err := s.Events.AgentPhases(ctx, s.agentIDOf(seat), role, before)
+	listing, coverage, err := s.Events.SeatPhases(ctx, s.agentIDOf(seat), role, before)
 	if err != nil {
 		log.WarnContext(ctx, "agent_history_unavailable", "seat", seat, "error", err)
-		return []store.EventRecord{}, ""
+		return []store.EventRecord{}, "", nil
 	}
+	records := listing.Rows
 	if len(records) == 0 {
 		// EMPTINESS, not nil-ness, and the two are not interchangeable here:
 		// `AgentPhases` answers a nil slice for a seat it cannot name, an
 		// allocated empty one for a seat with no phases yet, and the index
 		// below is out of range on BOTH. Testing for nil alone left a seat
 		// whose history read came back empty indexing a slice of length zero.
-		return []store.EventRecord{}, ""
+		return []store.EventRecord{}, "", &coverage
 	}
 	// The cursor is the LAST row's key, echoed rather than left for a client
 	// to assemble: (time, id) is the table's key, and a client rebuilding it
 	// from a rendered timestamp would lose the sub-second precision the
-	// tiebreak depends on. Offered only on a FULL page — a short one is the
-	// end of the record, and a cursor there would page for ever.
+	// tiebreak depends on. Offered only when the fleet holds MORE — a node
+	// whose read found a row past its page, or a page the merge cut at the
+	// newest point such a node stopped at — since a cursor past the end would
+	// page for ever, and one on a page that merely filled pages onto nothing.
 	next := ""
-	if len(records) == store.AgentPhaseLimit {
+	if listing.More {
 		last := records[len(records)-1]
 		next = last.Time.UTC().Format(time.RFC3339Nano) + "|" + last.ID
 	}
-	return records, next
+	return records, next, &coverage
 }
 
 // firstOf returns the first non-empty value.
@@ -696,115 +850,6 @@ func (s Sources) roleOf(id string) string {
 	return id
 }
 
-// tokens answers the live spend window.
-// tokens answers the spend breakdown.
-//
-// TWO SOURCES, one aggregation. The live projection holds the records for its
-// own window and answers instantly; any other window is a scan of the event
-// store. Both are folded by internal/tokens, so the number a reader sees when
-// they change the window is comparable with the one they were looking at — a
-// second implementation for the second source is precisely how those two came
-// to disagree before.
-//
-// The live window is the default because it is what the dashboard opens on: a
-// page load that scanned the store would put a query on the critical path of
-// every tab, for an answer already in memory.
-func (s Sources) tokens(ctx context.Context, p Params) (any, error) {
-	opts := tokens.Options{
-		Handles:     s.RoleHandles(),
-		AgentRole:   p.String("agent_role"),
-		RecentTurns: Clamp(p.Int("recent_turns", 0), tokens.DefaultRecentTurns, tokens.MaxRecentTurns),
-	}
-	// THE WINDOW AS TWO INSTANTS, which `since_days` cannot name: a
-	// time-range control produces two edges and they need not end at now.
-	// The same pair the series takes, and the same refusal, so a reader who
-	// scrubs to a window sees the chart and the figures above it move
-	// together rather than one of them staying anchored to this afternoon.
-	since, err := instantParam(p, "since")
-	if err != nil {
-		return nil, err
-	}
-	until, err := instantParam(p, "until")
-	if err != nil {
-		return nil, err
-	}
-	if !since.IsZero() && !until.IsZero() && !until.After(since) {
-		return nil, fmt.Errorf("%w: until (%s) is not after since (%s) — the "+
-			"window is half-open, so an empty one names no rows at all",
-			ErrBadParams, until.Format(time.RFC3339), since.Format(time.RFC3339))
-	}
-	live := livestate.LiveSpendWindowDays()
-	days := p.Int("since_days", live)
-	q := store.PhaseTokenQuery{
-		SinceDays: days,
-		Since:     since,
-		Until:     until,
-		AgentRole: opts.AgentRole,
-	}
-	// LABELLED WITH WHAT THE STORE WILL ACTUALLY COVER, never with what was
-	// asked for: `since` is floored at the retention window, so a request
-	// for a year answered over thirty days and headed "a year" is a lie
-	// about the numbers beside it.
-	opts.Since, opts.Until = q.Window(time.Now())
-
-	// The live window, unfiltered, is the one the projection can answer —
-	// and only when the caller named no instants of their own, since the
-	// projection holds one rolling window and cannot look behind it.
-	if since.IsZero() && until.IsZero() && days == live && opts.AgentRole == "" {
-		return tokens.Aggregate(s.State.SpendRecords(), opts), nil
-	}
-	if s.Events == nil {
-		// A registry wired without the event log (a caller asking only the
-		// projection's questions) cannot see this window. The honest answer
-		// is an EMPTY rollup labelled with the window asked for, not the
-		// live one relabelled, which would put a week's heading over an
-		// hour's numbers.
-		return tokens.Aggregate(nil, opts), nil
-	}
-	records, err := s.Events.PhaseTokens(ctx, q)
-	if err != nil {
-		return nil, err
-	}
-	return tokens.Aggregate(records, opts), nil
-}
-
-// RoleHandles maps each seat's role name to its handle, for the per-agent
-// rollup's cross-links. Empty when no revision is active, which links to
-// nothing rather than guessing a handle.
-//
-// Exported because the live stream needs the same map for the rollup it
-// pushes: two derivations of "which handle is this role" is how a pushed row
-// and a queried one come to link to different pages.
-func (s Sources) RoleHandles() map[string]string {
-	out := map[string]string{}
-	if s.Company == nil {
-		return out
-	}
-	company := s.Company()
-	if company == nil {
-		return out
-	}
-	for _, role := range company.Roles {
-		if role.Name == "" {
-			continue
-		}
-		// The SAME derivation the org uses, not a re-spelling of it: a
-		// handle that differs from the seat's real one is a cross-link
-		// to a page that does not exist.
-		handle := role.Handle
-		if handle == "" {
-			handle = org.Slugify(role.Name)
-		}
-		out[role.Name] = handle
-	}
-	return out
-}
-
-// stream answers the engine's health.
-func (s Sources) stream(ctx context.Context, _ Params) (any, error) {
-	return s.Health(ctx), nil
-}
-
 // events answers a page of the log.
 //
 // The filters are the store's own, passed through rather than re-implemented:
@@ -812,7 +857,7 @@ func (s Sources) stream(ctx context.Context, _ Params) (any, error) {
 // store filtered, and the difference shows up as rows that vanish when a reader
 // scrolls.
 func (s Sources) events(ctx context.Context, p Params) (any, error) {
-	q, err := eventFilters(p)
+	q, err := s.eventFilters(p)
 	if err != nil {
 		return nil, err
 	}
@@ -826,10 +871,11 @@ func (s Sources) events(ctx context.Context, p Params) (any, error) {
 		q.Before = &store.Cursor{Time: at, ID: before}
 	}
 
-	rows, err := s.Events.List(ctx, q)
+	listing, coverage, err := s.Events.List(ctx, q)
 	if err != nil {
 		return nil, err
 	}
+	rows := listing.Rows
 	return map[string]any{
 		"events": rows,
 		// The cursor the caller pages with next, echoed rather than left
@@ -842,6 +888,10 @@ func (s Sources) events(ctx context.Context, p Params) (any, error) {
 		// over-fetches and post-filters, so only a zero-row page ends
 		// the walk. Saying so beats a client inferring it wrongly.
 		"exhausted": len(rows) == 0,
+		// WHICH NODES THE PAGE WAS MERGED FROM. A node that did not answer
+		// is named here, because its rows are simply absent from the page
+		// and nothing else on it could say so.
+		"coverage": coverage,
 	}, nil
 }
 
@@ -852,7 +902,7 @@ func (s Sources) events(ctx context.Context, p Params) (any, error) {
 // show is worse than no bar at all. The store compiles both from one predicate;
 // this makes sure both are handed the same one.
 func (s Sources) eventSeries(ctx context.Context, p Params) (any, error) {
-	filters, err := eventFilters(p)
+	filters, err := s.eventFilters(p)
 	if err != nil {
 		return nil, err
 	}
@@ -861,7 +911,7 @@ func (s Sources) eventSeries(ctx context.Context, p Params) (any, error) {
 		return nil, fmt.Errorf("%w: bucket %q is not one of %v",
 			ErrBadParams, bucket, store.EventBuckets)
 	}
-	got, err := s.Events.Histogram(ctx, store.HistogramQuery{ListQuery: filters, Bucket: bucket})
+	got, coverage, err := s.Events.Histogram(ctx, store.HistogramQuery{ListQuery: filters, Bucket: bucket})
 	switch {
 	case errors.Is(err, store.ErrHistogramBucket),
 		errors.Is(err, store.ErrHistogramSpan),
@@ -874,7 +924,7 @@ func (s Sources) eventSeries(ctx context.Context, p Params) (any, error) {
 	case err != nil:
 		return nil, err
 	}
-	return got, nil
+	return SeriesAnswer{EventHistogram: got, Coverage: coverage}, nil
 }
 
 // eventFilters reads the filters both the listing and its axis take.
@@ -882,12 +932,19 @@ func (s Sources) eventSeries(ctx context.Context, p Params) (any, error) {
 // ONE READER, for the reason the store has one predicate: a filter added to the
 // list and forgotten here would draw an axis over a wider set than the rows
 // beneath it, silently.
-func eventFilters(p Params) (store.ListQuery, error) {
+func (s Sources) eventFilters(p Params) (store.ListQuery, error) {
 	q := store.ListQuery{
-		Type:         p.String("type"),
-		Source:       p.String("source"),
-		Category:     p.String("category"),
-		TraceID:      p.String("trace_id"),
+		Type:     p.String("type"),
+		Source:   p.String("source"),
+		Category: p.String("category"),
+		// ONE TRACE, and the same trace the `trace` question answers — but
+		// as a FILTER, so it pages and takes a window and every other
+		// filter beside it, where `trace` is the whole trace oldest first.
+		TraceID: p.String("trace_id"),
+		// ONE AGENT-TO-AGENT CONVERSATION, by the channel id its events
+		// carry. The conversation's own page links here, and before this
+		// the link could only land on the unfiltered log.
+		ChannelID:    strings.TrimSpace(p.String("channel_id")),
 		Actor:        p.String("actor"),
 		RelatedAgent: p.String("agent"),
 		// TURN_ID WAS DECLARED, DOCUMENTED AGAINST MIGRATION 0014, AND
@@ -901,6 +958,45 @@ func eventFilters(p Params) (store.ListQuery, error) {
 		// records, one migration later. See ADR-0017.
 		WorkKey: p.String("work_key"),
 	}
+	item, err := workItemParam(p)
+	if err != nil {
+		return store.ListQuery{}, err
+	}
+	q.WorkItem = item
+	// WHETHER A COMPLETION PARKED ITS TURN, three-valued as the turn list's
+	// `failed` is and for its reason: absent is every row. It is what a turns
+	// axis counts over — `type=agent_turn_completed&suspended=false` is the
+	// turns that ENDED, one each, where the type alone counts a turn that
+	// parked on a coding run and resumed twice.
+	if raw := strings.TrimSpace(p.String("suspended")); raw != "" {
+		switch raw {
+		case "true", "false":
+			flag := raw == "true"
+			q.Suspended = &flag
+		default:
+			return store.ListQuery{}, badParams("suspended", raw, []string{"true", "false"})
+		}
+	}
+	// WHETHER THE EVENT REPORTS A FAILURE, three-valued for the same reason:
+	// absent is every row. The event log's "Failures only" — a filter the
+	// engine applies, so its axis and every page it fetches are the one set,
+	// where narrowing the rows a tab held drew a window's worth of bars over
+	// the failures among the newest hundred.
+	if raw := strings.TrimSpace(p.String("failed")); raw != "" {
+		switch raw {
+		case "true", "false":
+			flag := raw == "true"
+			q.Failed = &flag
+		default:
+			return store.ListQuery{}, badParams("failed", raw, []string{"true", "false"})
+		}
+	}
+	// THE EVENTS ONE SEAT PUBLISHED, named by its handle — see seatParam.
+	agentID, err := s.seatParam(p)
+	if err != nil {
+		return store.ListQuery{}, err
+	}
+	q.AgentID = agentID
 	// THE WINDOW, which is what a reader scrubbing a time range means and
 	// is NOT the cursor: a cursor is where a page resumes and moves with
 	// every page, while these are what was asked for and do not.
@@ -919,6 +1015,65 @@ func eventFilters(p Params) (store.ListQuery, error) {
 			ErrBadParams, until.Format(time.RFC3339), since.Format(time.RFC3339))
 	}
 	return q, nil
+}
+
+// workItemParam reads `work_item=`, a work item's identity across trackers:
+// `<backend>:<id>`, the value [types.WorkItem.Ref] writes and schema/0033's
+// column holds. Empty when absent.
+//
+// REFUSED RATHER THAN MATCHED when it is not that shape, because a malformed
+// ref matches nothing and an empty answer to it reads as "nothing happened on
+// this item" — the one conclusion a caller who pasted a key ("ENG-412") or a
+// bare id instead must not draw. The backend is NOT tested against this build's
+// set: a newer peer's tracker is stored under its own name, and a filter
+// refusing it would hide rows this node holds.
+func workItemParam(p Params) (string, error) {
+	raw := strings.TrimSpace(p.String("work_item"))
+	if raw == "" {
+		return "", nil
+	}
+	backend, id, ok := strings.Cut(raw, ":")
+	if !ok || backend == "" || id == "" {
+		return "", fmt.Errorf("%w: work_item=%q is not a work item's identity — "+
+			"want `<backend>:<id>` (for example `native:<task id>` or `jira:<issue id>`), "+
+			"never its key", ErrBadParams, raw)
+	}
+	return raw, nil
+}
+
+// seatParam reads `seat=<handle>` and answers the agent id every node derives
+// for it, or "" when absent.
+//
+// A SEAT IS NAMED BY ITS HANDLE on every surface that takes one — the handle is
+// a seat's address in the dashboard's URLs and on its roster row — and it is
+// RESOLVED HERE, server-side, into the id the event log's `agent_id` column
+// holds. Neither alternative a caller had was a seat's identity: a role name
+// is shared by every seat a unit template stamps out and changes with a
+// rename, and a raw agent id is a derivation every client would have to
+// repeat. The id is DERIVED ([org.DeriveAgentID]) rather than looked up in the
+// current chart, so a seat since removed still names the history it left —
+// which is what `tokens` does with the same parameter.
+//
+// Refused rather than matched when it is not a handle, because a role name
+// pasted here would match nothing and an empty answer reads as a seat that
+// never did anything; and UNAVAILABLE before a company is applied, since the
+// id is derived from the company's name and there is none to derive it from.
+func (s Sources) seatParam(p Params) (string, error) {
+	handle := strings.TrimSpace(p.String("seat"))
+	if handle == "" {
+		return "", nil
+	}
+	if !org.ValidHandle(handle) {
+		return "", fmt.Errorf("%w: seat=%q is not a handle — a seat is named by "+
+			"its handle (lowercase, as on its page), never its role name", ErrBadParams, handle)
+	}
+	id := s.derivedAgentID(handle)
+	if id == "" {
+		return "", fmt.Errorf("%w: seat=%q cannot be resolved until a company "+
+			"configuration is applied on this node — a seat's id is derived from "+
+			"the company's name", ErrUnavailable, handle)
+	}
+	return id, nil
 }
 
 // instantParam reads an RFC 3339 instant, or the zero time when absent.
@@ -959,7 +1114,7 @@ func (s Sources) event(ctx context.Context, p Params) (any, error) {
 	if id == "" {
 		return nil, fmt.Errorf("%w: event needs an id", ErrBadParams)
 	}
-	rec, err := s.Events.ByID(ctx, id)
+	rec, coverage, err := s.Events.ByID(ctx, id)
 	if err != nil {
 		// A DEAD LINK IS NOT A BROKEN NODE. `store.ErrNotFound` is not
 		// [ErrNotFound], so passing it through untranslated classified an id
@@ -968,12 +1123,15 @@ func (s Sources) event(ctx context.Context, p Params) (any, error) {
 		// a fault there is none of. Every event id on the dashboard is a link
 		// somebody can follow after the 30-day window has closed over it, so
 		// this is the ordinary case rather than the exotic one.
+		//
+		// The store's own sentence rides along, because across a fleet it
+		// is the one that names any node that could not be asked.
 		if errors.Is(err, store.ErrNotFound) {
-			return nil, fmt.Errorf("%w: event %s", ErrNotFound, id)
+			return nil, fmt.Errorf("%w: %w", ErrNotFound, err)
 		}
 		return nil, err
 	}
-	return rec, nil
+	return EventAnswer{EventRecord: rec, Coverage: coverage}, nil
 }
 
 // trace answers every row sharing one trace.
@@ -982,38 +1140,24 @@ func (s Sources) trace(ctx context.Context, p Params) (any, error) {
 	if id == "" {
 		return nil, fmt.Errorf("%w: trace needs a trace_id", ErrBadParams)
 	}
-	rows, err := s.Events.Trace(ctx, id)
+	trace, coverage, err := s.Events.Trace(ctx, id)
 	if err != nil {
 		return nil, err
 	}
-	// SAYS WHEN IT CUT. EventLog.Trace stops at store.MaxTraceEvents — a
-	// trace shown short with no note reads as a complete causal chain that
-	// simply ends, which is the one thing a reader must not conclude from it.
+	// SAYS WHEN IT CUT. A trace stops at store.MaxTraceEvents — and one
+	// shown short with no note reads as a complete causal chain that simply
+	// ends, which is the one thing a reader must not conclude from it.
 	// Additive, so a client that predates the field is unaffected.
 	//
-	// ASKED, NOT INFERRED, for the reason the turn answer gives at length: a
-	// trace of exactly the cap holds every row it has, and `len(rows) == cap`
-	// reports it cut. That is a caution badge on a complete trace, which is
-	// the same class of lie as the note's absence and costs one indexed count
-	// on the reads that filled.
-	//
-	// DEGRADES like `turn`'s does: the rows are in hand, and failing the
-	// whole answer because a follow-up count could not be taken would turn
-	// the largest traces — the only ones that reach this branch — into
-	// `query_failed`. A missing caution badge beats a missing screen.
-	truncated := false
-	if len(rows) >= store.MaxTraceEvents {
-		total, err := s.Events.TraceEventCount(ctx, id)
-		if err != nil {
-			log.WarnContext(ctx, "trace_extent_unavailable", "trace", id, "error", err)
-		} else {
-			truncated = total > len(rows)
-		}
-	}
+	// ASKED, NOT INFERRED: each node counts what it holds when its read
+	// filled (see internal/eventfan), because a trace of exactly the cap
+	// holds every row it has and `len(rows) == cap` would badge a complete
+	// trace as cut.
 	return map[string]any{
 		"trace_id":  id,
-		"events":    rows,
-		"truncated": truncated,
+		"events":    trace.Rows,
+		"truncated": trace.Total > len(trace.Rows),
+		"coverage":  coverage,
 	}, nil
 }
 

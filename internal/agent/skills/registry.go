@@ -358,13 +358,89 @@ func (r *Registry) Matching(phase prompts.Phase, surface prompts.Surface) []Skil
 
 // SkillsFor implements [prompts.SkillCatalogue].
 func (r *Registry) SkillsFor(phase prompts.Phase, surface prompts.Surface) []prompts.Skill {
-	matching := r.Matching(phase, surface)
+	return entries(r.Matching(phase, surface))
+}
+
+// entries is what a prompt's catalogue renders of each skill.
+func entries(matching []Skill) []prompts.Skill {
 	out := make([]prompts.Skill, 0, len(matching))
 	for _, s := range matching {
 		out = append(out, prompts.Skill{
 			Key: s.Key, Summary: s.Summary, Required: s.Required,
 		})
 	}
+	return out
+}
+
+// Offer is the registry as ONE phase's prompts see it, recording what each
+// prompt it rendered was offered.
+//
+// Which skills a catalogue offered is a fact only the render knows: the phase
+// and the surface it is matched against are the prompt builder's, and the
+// registry is live, so asking it again afterwards is asking a second question
+// that can get a different answer. Recording inside the render is what makes
+// "this prompt carried these skills' summaries" a statement about the prompt
+// that was sent.
+//
+// Each render is one OFFERING, kept apart from the others: a phase that builds
+// several prompts (a delegate call's workers, each with its own) offered each
+// of them, and a set merged across them would say one prompt carried what two
+// did.
+type Offer struct {
+	registry *Registry
+
+	mu        sync.Mutex
+	offerings [][]Skill
+}
+
+// Offer starts recording what this registry's catalogue offers. Nil for a nil
+// registry, which [prompts.SkillCatalogue] callers must not wrap in an
+// interface — see [Offer.Catalogue].
+func (r *Registry) Offer() *Offer {
+	if r == nil {
+		return nil
+	}
+	return &Offer{registry: r}
+}
+
+// Catalogue is the offer as a prompt takes it, or a nil interface for a nil
+// offer. A TYPED NIL WOULD NOT BE NIL: the prompt builder checks its catalogue
+// against nil, and a non-nil interface over a nil offer would render a header
+// over nothing.
+func (o *Offer) Catalogue() prompts.SkillCatalogue {
+	if o == nil {
+		return nil
+	}
+	return o
+}
+
+// SkillsFor implements [prompts.SkillCatalogue], recording the offering. A
+// render that matched nothing records nothing: an empty catalogue is not an
+// offer.
+func (o *Offer) SkillsFor(phase prompts.Phase, surface prompts.Surface) []prompts.Skill {
+	matching := o.registry.Matching(phase, surface)
+	if len(matching) > 0 {
+		o.mu.Lock()
+		o.offerings = append(o.offerings, matching)
+		o.mu.Unlock()
+	}
+	return entries(matching)
+}
+
+// Render implements [prompts.SkillCatalogue].
+func (o *Offer) Render(text string) string { return o.registry.Render(text) }
+
+// Drain returns every offering recorded since the last drain, oldest first,
+// and forgets them — so an offering is reported exactly once however many
+// callers drain it. Nil-safe.
+func (o *Offer) Drain() [][]Skill {
+	if o == nil {
+		return nil
+	}
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	out := o.offerings
+	o.offerings = nil
 	return out
 }
 
@@ -413,15 +489,33 @@ func (r *Registry) Audit(knownTools, knownServers []string) {
 	}
 }
 
-// Body renders a skill for loading, or reports that it is not there.
+// Loaded is one skill as load_tool_skill hands it over: the rendered body and
+// the page it was read from.
+//
+// ONE VALUE rather than a body and a separate provenance lookup, because a
+// page can be edited between two reads of a live registry and a load recorded
+// against the page that followed it would name a page the model never saw.
+type Loaded struct {
+	// Body is the rendered skill, with its title and summary as a header.
+	Body string
+
+	// PageID, Backend, Container and Title are the page the body came from
+	// — see [Skill.SourcePageID] and [Skill.SourceContainer].
+	PageID    string
+	Backend   string
+	Container string
+	Title     string
+}
+
+// Load renders a skill for loading, or reports that it is not there.
 //
 // The rendered body carries its TITLE and its trigger's subject, because a
 // model that asked for a key gets back prose with no header otherwise — and
 // a body it cannot attribute is a body it cannot decide to trust.
-func (r *Registry) Body(key string) (string, bool) {
+func (r *Registry) Load(key string) (Loaded, bool) {
 	s, ok := r.Get(key)
 	if !ok {
-		return "", false
+		return Loaded{}, false
 	}
 	var b strings.Builder
 	title := strings.TrimSpace(s.Title)
@@ -433,5 +527,9 @@ func (r *Registry) Body(key string) (string, bool) {
 		b.WriteString(r.Render(summary) + "\n\n")
 	}
 	b.WriteString(r.Render(s.Body))
-	return strings.TrimRight(b.String(), "\n") + "\n", true
+	return Loaded{
+		Body:   strings.TrimRight(b.String(), "\n") + "\n",
+		PageID: s.SourcePageID, Backend: s.SourceBackend,
+		Container: s.SourceContainer, Title: s.SourceTitle,
+	}, true
 }

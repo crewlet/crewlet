@@ -1,12 +1,12 @@
 /**
- * The views and dialogs the Org chart screen hands its Builder lens.
+ * The views and dialogs Agents › Edit org hands its builder.
  *
- * ONE PLACE WHERE THE LENS IS ASSEMBLED. The Builder hosts its visualization,
+ * ONE PLACE WHERE THE BUILDER IS ASSEMBLED. The Builder hosts its visualization,
  * its table, its node editor and its structural dialogs without importing any
  * of them (see `BuilderSurfaces` in `Builder.tsx`), so each is built and
  * tested against `BuilderContext` alone, and a Builder suite can stand a view
  * in with a fake. This is where the screen binds the real ones, and
- * `surfaces.test.tsx` holds the lens to drawing them.
+ * `surfaces.test.tsx` holds the builder to drawing them.
  */
 
 import type { BuilderSurfaces } from "./Builder.tsx";

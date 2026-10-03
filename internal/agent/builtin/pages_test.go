@@ -3,6 +3,7 @@ package builtin_test
 import (
 	"context"
 	"errors"
+	"regexp"
 	"slices"
 	"strings"
 	"testing"
@@ -25,6 +26,11 @@ type fakeKB struct {
 	comments []pages.NewComment
 	edits    []commentEdit
 	actors   []pages.Actor
+
+	// keys is the call key every write arrived with, in order, so a tool
+	// that derived its operation from something other than the caller's
+	// own key — or forgot to pass one — is visible.
+	keys []pages.CallKey
 
 	readErr  error
 	writeErr error
@@ -109,6 +115,7 @@ func (f *fakeKB) Create(_ context.Context, actor pages.Actor, in pages.NewPage) 
 	}
 	f.created = append(f.created, in)
 	f.actors = append(f.actors, actor)
+	f.keys = append(f.keys, in.CallKey)
 	return f.written(pages.Written{Page: pages.Page{ID: "new", Container: in.Container,
 		Title: in.Title, Version: 1}, Revision: 10}), nil
 }
@@ -119,6 +126,7 @@ func (f *fakeKB) SavePage(_ context.Context, actor pages.Actor, _ string, save p
 	}
 	f.saved = append(f.saved, save)
 	f.actors = append(f.actors, actor)
+	f.keys = append(f.keys, save.CallKey)
 	return f.written(pages.Written{
 		Page: pages.Page{ID: "p1", Version: 5}, Revision: 11,
 		Outcome: landedAt(11),
@@ -134,7 +142,7 @@ type renamed struct {
 }
 
 func (f *fakeKB) Rename(_ context.Context, actor pages.Actor, pageID, title string,
-	_ bool) (pages.Written, error) {
+	_ bool, key pages.CallKey) (pages.Written, error) {
 
 	if f.writeErr != nil {
 		return pages.Written{}, f.writeErr
@@ -144,6 +152,7 @@ func (f *fakeKB) Rename(_ context.Context, actor pages.Actor, pageID, title stri
 		awaitedBefore: slices.Clone(f.awaited),
 	})
 	f.actors = append(f.actors, actor)
+	f.keys = append(f.keys, key)
 	return f.renameResult(pageID, title), nil
 }
 
@@ -153,6 +162,7 @@ func (f *fakeKB) Comment(_ context.Context, actor pages.Actor, _ string, in page
 	}
 	f.comments = append(f.comments, in)
 	f.actors = append(f.actors, actor)
+	f.keys = append(f.keys, in.CallKey)
 	return pages.Comment{ID: "m1", Mentions: in.Mentions},
 		f.written(pages.Written{Page: pages.Page{ID: "p1"}, Revision: 12}), nil
 }
@@ -160,12 +170,14 @@ func (f *fakeKB) Comment(_ context.Context, actor pages.Actor, _ string, in page
 // commentEdit is one EditComment call the fake took.
 type commentEdit struct{ commentID, body string }
 
-func (f *fakeKB) EditComment(_ context.Context, actor pages.Actor, _, commentID, body string) (pages.Comment, pages.Written, error) {
+func (f *fakeKB) EditComment(_ context.Context, actor pages.Actor, _, commentID, body string,
+	key pages.CallKey) (pages.Comment, pages.Written, error) {
 	if f.writeErr != nil {
 		return pages.Comment{}, pages.Written{}, f.writeErr
 	}
 	f.edits = append(f.edits, commentEdit{commentID: commentID, body: body})
 	f.actors = append(f.actors, actor)
+	f.keys = append(f.keys, key)
 	return pages.Comment{ID: commentID, Body: body},
 		f.written(pages.Written{Page: pages.Page{ID: "p1"}, Revision: 13}), nil
 }
@@ -379,9 +391,9 @@ func TestPageWritesAreAttributedAndFailuresAreHonest(t *testing.T) {
 	if len(kb.actors) == 0 || kb.actors[0].Handle != "eng" || kb.actors[0].Kind != pages.AuthorAgent {
 		t.Errorf("attributed to %+v, want the turn's own seat", kb.actors)
 	}
-	if kb.comments[0].TurnKey != "turn-1" {
+	if kb.comments[0].CallKey.String() != "turn-1" {
 		t.Errorf("the comment carries turn key %q — a re-run turn would post twice",
-			kb.comments[0].TurnKey)
+			kb.comments[0].CallKey.String())
 	}
 	if !slices.Equal(kb.comments[0].Mentions, []string{"pm"}) {
 		t.Errorf("mentions = %v", kb.comments[0].Mentions)
@@ -638,6 +650,123 @@ func TestASaveThatAlsoRenamesWaitsForTheRenamesOwnPosition(t *testing.T) {
 	}
 }
 
+// A PAGE WRITE STATES ITS OUTCOME AND ITS POSITION, as every work write does:
+// they are what a caller outside a turn — a person's assistant, the dashboard —
+// hands back as `min_position` so the read after its write includes it. And a
+// save that also renames answers for BOTH records: its position is the later
+// one, and its outcome the less certain, because `applied` over a rename the
+// broker never confirmed would tell a caller it can stop looking at a write
+// nobody can vouch for.
+func TestAPageWriteAnswersItsOutcomeAndPosition(t *testing.T) {
+	t.Parallel()
+	kb := newFakeKB()
+	kb.rename = func(pageID, title string) pages.Written {
+		return pages.Written{
+			Page: pages.Page{ID: pageID, Title: title, Version: 5}, Revision: 13,
+			Outcome: statelog.Result{
+				Outcome:  statelog.OutcomePending,
+				Position: statelog.Position{Stream: "CREWLET_PAGES_LOG", Seq: 13},
+			},
+		}
+	}
+	reg := kbRegistry(t, builtin.PageDeps{Reader: kb, Writer: kb, Await: kb.await})
+
+	saved := callWork(t, reg, builtin.SavePageTool, map[string]any{
+		"page": "p1", "base_version": 4, "body": "rewritten",
+	})
+	if !strings.Contains(saved.Output, `"outcome": "applied"`) ||
+		!strings.Contains(saved.Output, `"position": "CREWLET_PAGES_LOG@0:11"`) {
+
+		t.Errorf("a save answered %s, want its applied outcome at its own position", saved.Output)
+	}
+	both := callWork(t, reg, builtin.SavePageTool, map[string]any{
+		"page": "p1", "base_version": 4, "body": "rewritten", "title": "Deploy Guide",
+	})
+	if !strings.Contains(both.Output, `"outcome": "pending"`) ||
+		!strings.Contains(both.Output, `"position": "CREWLET_PAGES_LOG@0:13"`) {
+
+		t.Errorf("a save that also renamed answered %s, want the rename's pending "+
+			"outcome at the rename's position", both.Output)
+	}
+}
+
+// A LISTING CUT AT ITS LIMIT SAYS HOW MANY THERE ARE IN ALL. Without the
+// total, fifty pages of a container of four hundred read to a model as the
+// whole container — and a model that believes a short list writes the page
+// that is already there.
+func TestACutListingTellsTheModelTheTotal(t *testing.T) {
+	t.Parallel()
+	for name, tc := range map[string]struct {
+		total int
+		want  bool
+	}{
+		"cut at its limit": {total: 412, want: true},
+		// THE CONTROL: a listing that is everything carries no total, or
+		// the assertion above would pass on a tool that always renders it.
+		"whole": {total: 1, want: false},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			kb := &cutKB{total: tc.total}
+			reg := kbRegistry(t, builtin.PageDeps{Reader: kb, Writer: newFakeKB()})
+			res := callWork(t, reg, builtin.ListPagesTool, map[string]any{"container": "ENG"})
+			if res.Failed {
+				t.Fatalf("list_pages: %s", res.Output)
+			}
+			if got := strings.Contains(res.Output, `"total"`); got != tc.want {
+				t.Errorf("total rendered = %v, want %v:\n%s", got, tc.want, res.Output)
+			}
+		})
+	}
+}
+
+// cutKB answers one page of a listing that matched `total`.
+type cutKB struct {
+	fakeKB
+	total int
+}
+
+func (c *cutKB) List(_ context.Context, _ pages.Filter,
+	fresh statelog.Freshness,
+) (pages.Listing, error) {
+	return pages.Listing{
+		Pages: []pages.Summary{{ID: "p1", Title: "Deploy Runbook"}},
+		Total: c.total, Level: fresh.Level, Complete: true,
+	}, nil
+}
+
+// A PAGE BODY IS TOLD THE ADDRESS THE BACKLINKS READ. Nothing else tells a
+// seat how to link a page, and left to guess it writes `[[ENG/Title]]` — a
+// grammar nothing resolves, drawn as literal brackets and invisible to the
+// target's "Linked from". The example each writing tool carries must be one
+// [pages.Links] reads back, or the help teaches a link that counts for nothing.
+func TestAPageBodyIsToldTheLinkTheBacklinksRead(t *testing.T) {
+	t.Parallel()
+	kb := newFakeKB()
+	reg := kbRegistry(t, builtin.PageDeps{Reader: kb, Writer: kb})
+	const id = "3f6c9a52-7d24-4517-83b0-39d026dd1cf2"
+	example := regexp.MustCompile(`\[its title\]\(([^)\s]*)<page id>\)`)
+	for _, name := range []string{builtin.WritePageTool, builtin.SavePageTool} {
+		entry, ok := reg.Lookup(name)
+		if !ok {
+			t.Fatalf("%s is not registered", name)
+		}
+		props, _ := entry.Tool.Parameters()["properties"].(map[string]any)
+		body, _ := props["body"].(map[string]any)
+		desc, _ := body["description"].(string)
+		m := example.FindStringSubmatch(desc)
+		if m == nil {
+			t.Errorf("%s: body says nothing about how to link a page: %q", name, desc)
+			continue
+		}
+		link := "[x](" + m[1] + id + ")"
+		if got := pages.Links("See " + link + "."); !slices.Equal(got, []string{id}) {
+			t.Errorf("%s: the example link %s reads back as %v — the backlinks never see it",
+				name, link, got)
+		}
+	}
+}
+
 // A PAGE REMARK MADE AGAIN AFTER A DIFFERENT ONE CARRIES ITS REPEAT COUNT, so
 // the store derives a second comment rather than the first one's retry; a
 // remark repeated with nothing between carries the same count and stays one.
@@ -659,7 +788,7 @@ func TestAPageRemarkCarriesItsRepeatCount(t *testing.T) {
 	}
 	var repeats []int
 	for _, c := range kb.comments {
-		repeats = append(repeats, c.Repeat)
+		repeats = append(repeats, c.CallKey.Repeat)
 	}
 	if len(repeats) != 4 {
 		t.Fatalf("four remarks reached the store as %d", len(repeats))

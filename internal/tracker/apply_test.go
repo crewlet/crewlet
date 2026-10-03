@@ -566,6 +566,71 @@ func TestTheProjectCountsAreMaintainedRatherThanScanned(t *testing.T) {
 	}
 }
 
+// A TASK FILED FINISHED IS FINISHED FROM ITS FIRST ROW.
+//
+// A create may name the status it starts in — a person filing into a board's
+// Done lane files a done task, in one record rather than a create followed by
+// a move that could fail after the task was filed in the wrong column. The
+// finish instants and the project census are derived by the applier from the
+// status GROUP on every commit, a create included, so a task created `done`
+// carries `done_at` and counts as done from the start; one created `closed`
+// carries both instants and counts as closed. A create path that skipped the
+// derivation would leave a done task that "finished" at no time, which every
+// "done this week" filter and burn-down quietly drops.
+func TestATaskCreatedFinishedIsStampedAndCountedFromItsFirstRow(t *testing.T) {
+	t.Parallel()
+	h := newApplyHarness(t)
+	project := tracker.MutationRecord{
+		RecordEnvelope: tracker.RecordEnvelope{
+			V: tracker.RecordVersion, OpID: "eng-1",
+			Subject: tracker.ProjectSubject("ENG"), Op: tracker.OpCreate,
+			Writer: "node-a", Scope: tracker.ScopeSet{Subject: true},
+		},
+		Mutation: mustJSON(tracker.Project{
+			V: tracker.DocumentVersion, Key: "ENG", Name: "Engineering",
+		}),
+	}
+	if _, err := h.apply(project, time.Unix(1_700_000_050, 0).UTC()); err != nil {
+		t.Fatalf("project: %v", err)
+	}
+	for _, c := range []struct {
+		id     string
+		status tracker.Status
+	}{
+		{"t-done", tracker.StatusDone},
+		{"t-closed", tracker.StatusClosed},
+	} {
+		task := newTask(c.id)
+		task.Status, task.StatusGroup = c.status, c.status.Group()
+		if _, err := h.apply(taskRecord(c.id, tracker.OpCreate, task, nil),
+			time.Unix(1_700_000_100, 0).UTC()); err != nil {
+			t.Fatalf("create %s: %v", c.id, err)
+		}
+	}
+	for _, c := range []struct {
+		id           string
+		done, closed int64
+	}{
+		{"t-done", 1, 0},
+		{"t-closed", 1, 1},
+	} {
+		done := h.value(`SELECT done_at IS NOT NULL FROM tracker_tasks WHERE id = ?`, c.id)
+		closed := h.value(`SELECT closed_at IS NOT NULL FROM tracker_tasks WHERE id = ?`, c.id)
+		if done != c.done || closed != c.closed {
+			t.Errorf("%s was created with done_at set %v and closed_at set %v, "+
+				"want %v and %v", c.id, done == 1, closed == 1, c.done == 1, c.closed == 1)
+		}
+	}
+	for column, want := range map[string]int64{
+		"open_count": 0, "done_count": 1, "closed_count": 1,
+	} {
+		if got := h.value(`SELECT ` + column + ` FROM tracker_projects WHERE key = 'ENG'`); got != want {
+			t.Errorf("the project's %s is %d after one task created done and one "+
+				"closed, want %d", column, got, want)
+		}
+	}
+}
+
 // A CYCLE APPLIES COMPLETELY AND RAISES A FLAG.
 //
 // Two concurrent re-parents on two nodes form a shape no single write could
@@ -657,7 +722,7 @@ func TestAHistoryRowWithNoDeltasStoresAnEmptyObject(t *testing.T) {
 		// recorded.
 		r.at = wednesday.Add(time.Duration(i) * time.Hour)
 		if _, err := lead.WritePriorities(t.Context(), op, "ana",
-			[]string{"t-1"}, tracker.PersonAuthority{Lead: true}); err != nil {
+			[]string{"t-1"}, nil, tracker.PersonAuthority{Lead: true}); err != nil {
 			t.Fatalf("WritePriorities %s: %v", op, err)
 		}
 		r.drain()

@@ -6,8 +6,10 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"sync"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/logging"
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/statelog"
@@ -163,7 +165,16 @@ func (s server) answer(ctx context.Context, raw []byte) []byte {
 		if spec.covered && !spec.floorless {
 			out.At = appliedAt(b, streamsOf(layout, p))
 		}
+		var written *writtenItems
+		if req.Actor != nil && req.Actor.Records {
+			// THE ASKER'S TURN WANTS TO HEAR what this write committed
+			// to, and its set is in another process: collect here, and
+			// answer it beside whatever the operation answers.
+			written = &writtenItems{}
+			req.Actor.Provenance.Written = written
+		}
 		result, err = spec.serve(ctx, b, p, req.Actor, req.Args)
+		out.Written = written.list()
 	}
 	switch {
 	case errors.Is(err, errNoHalf):
@@ -312,4 +323,35 @@ func encodeReply(r reply) []byte {
 func deadlineOf(ctx context.Context) time.Time {
 	d, _ := ctx.Deadline()
 	return d
+}
+
+// writtenItems is the [tracker.WriteLog] a served write reports into on behalf
+// of an asking node's turn — see [reply.Written]. A walking gesture's writer
+// may report one item more than once; the set keeps it once, in the order it
+// was first reported.
+type writtenItems struct {
+	mu    sync.Mutex
+	items []types.WorkItem
+}
+
+// Add implements [tracker.WriteLog].
+func (w *writtenItems) Add(item types.WorkItem) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	for _, held := range w.items {
+		if held.Backend == item.Backend && held.ID == item.ID {
+			return
+		}
+	}
+	w.items = append(w.items, item)
+}
+
+// list is what was reported, or nil where nothing asked for it.
+func (w *writtenItems) list() []types.WorkItem {
+	if w == nil {
+		return nil
+	}
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return slices.Clone(w.items)
 }

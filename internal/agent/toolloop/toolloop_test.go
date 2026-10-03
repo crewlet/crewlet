@@ -4,9 +4,12 @@ import (
 	"context"
 	"errors"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/crewlet/crewlet/internal/agent/toolloop"
+	"github.com/crewlet/crewlet/internal/period"
 	"github.com/crewlet/crewlet/internal/providers/llm"
 )
 
@@ -82,6 +85,7 @@ func (m *meter) Spend(_ context.Context, tokens int) (toolloop.SpendOutcome, err
 	if m.refuseAt > 0 && m.spent+tokens > m.refuseAt {
 		return toolloop.SpendOutcome{
 			Scope: "role", Used: m.spent, Limit: m.refuseAt,
+			Period: period.Week, Window: "2026-W39", ResetsAt: weekTurnsOver,
 		}, nil
 	}
 	m.spent += tokens
@@ -518,7 +522,21 @@ func TestARefusedSpendNamesItsScopeAndStopsTheLoop(t *testing.T) {
 	if be.Scope != "role" {
 		t.Errorf("scope = %q, want role — the refusal did not name itself", be.Scope)
 	}
+	// AND THE WINDOW IT REFUSED IN, carried from the counter's answer
+	// unchanged: a ceiling is per calendar window, so a refusal that does
+	// not say which one — and when it turns over — cannot tell a seat that
+	// is out until tonight from one that is out until next month.
+	if be.Period != period.Week || be.Window != "2026-W39" || !be.ResetsAt.Equal(weekTurnsOver) {
+		t.Errorf("window = %s %q resets %v, want the week 2026-W39 resetting %v",
+			be.Period, be.Window, be.ResetsAt, weekTurnsOver)
+	}
+	if !strings.Contains(err.Error(), "2026-W39") || !strings.Contains(err.Error(), "2026-09-28T00:00:00Z") {
+		t.Errorf("error %q does not name the window and when it resets", err)
+	}
 }
+
+// weekTurnsOver is when the refusing week of the budget cases ends.
+var weekTurnsOver = time.Date(2026, time.September, 28, 0, 0, 0, 0, time.UTC)
 
 func TestARefusedRoundDoesNotRunItsTools(t *testing.T) {
 	t.Parallel()
@@ -723,37 +741,131 @@ func TestTheFenceRunsBetweenARoundsCalls(t *testing.T) {
 
 // --- progress --------------------------------------------------------------
 
-func TestProgressIsPublishedTwicePerRound(t *testing.T) {
+func TestProgressIsPublishedAsARoundOpensAnswersAndOncePerCall(t *testing.T) {
 	t.Parallel()
-	// Once the model has spoken — so its reasoning reaches the live view
-	// before the round's tools run — and again once they return.
+	// As each round's provider call is MADE — so a reader knows the round
+	// is in flight before the model answers — once the model has spoken, so
+	// its reasoning reaches the live view before the round's tools run, once
+	// BEFORE EACH CALL, naming it, and again once they return.
 	p := &scriptedProvider{turns: []llm.Completion{
-		{Content: "working", ToolCalls: []llm.ToolCall{toolCall("1", "read")}},
+		{Content: "working", ToolCalls: []llm.ToolCall{toolCall("1", "read"), toolCall("2", "read")}},
 		{Content: "done"},
 	}}
 	s := &fakeSurface{tools: []llm.ToolDef{def("read")}}
 
-	var seen []int // executions visible at each publish
+	var seen []int     // executions visible at each publish
+	var running []bool // whether a call was named in flight
+	var used []int     // the round each publish says the phase is on
 	res, err := toolloop.Run(t.Context(), toolloop.Config{
 		Provider: p, Surface: s, MaxRounds: 5,
-		OnProgress: func(r toolloop.Result) { seen = append(seen, len(r.Executions)) },
+		OnProgress: func(r toolloop.Result) {
+			seen = append(seen, len(r.Executions))
+			running = append(running, r.Running != nil)
+			used = append(used, r.RoundsUsed)
+		},
 	})
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
-	// Round 1 publishes twice (0 executions, then 1); round 2 publishes
-	// once, since it asked for no tools.
-	if len(seen) != 3 {
-		t.Fatalf("published %d times (%v), want 3", len(seen), seen)
+	// Round 1: opened (0), the model (0), before call 1 (0), before call 2
+	// (1), the tools returned (2). Round 2 asked for nothing: opened, the
+	// model.
+	want := []int{0, 0, 0, 1, 2, 2, 2}
+	if len(seen) != len(want) {
+		t.Fatalf("published %d times (%v), want %d (%v)", len(seen), seen, len(want), want)
 	}
-	if seen[0] != 0 {
-		t.Errorf("the first publish saw %d executions, want 0 — it did not "+
-			"happen before the round's tools ran", seen[0])
+	for i := range want {
+		if seen[i] != want[i] {
+			t.Errorf("publish %d saw %d executions, want %d (all: %v)", i, seen[i], want[i], seen)
+		}
 	}
-	if seen[1] != 1 {
-		t.Errorf("the second publish saw %d executions, want 1", seen[1])
+	wantRunning := []bool{false, false, true, true, false, false, false}
+	for i := range wantRunning {
+		if running[i] != wantRunning[i] {
+			t.Errorf("publish %d named a running call = %v, want %v", i, running[i], wantRunning[i])
+		}
 	}
-	_ = res
+	// Round 2's opening frame already says round 2: the round it names is
+	// the round in flight, never the one before it.
+	wantUsed := []int{1, 1, 1, 1, 1, 2, 2}
+	for i := range wantUsed {
+		if used[i] != wantUsed[i] {
+			t.Errorf("publish %d said round %d, want %d (all: %v)", i, used[i], wantUsed[i], used)
+		}
+	}
+	if res.Running != nil {
+		t.Errorf("a finished result names a call in flight: %+v", res.Running)
+	}
+}
+
+// blockingProvider holds its second call open until the test has read the
+// frame published before it, so what a live view shows WHILE a round's model
+// call is out is observable rather than raced.
+type blockingProvider struct {
+	calls   int
+	opened  chan struct{}
+	release chan struct{}
+}
+
+func (p *blockingProvider) Model() string { return "blocking" }
+
+func (p *blockingProvider) Complete(ctx context.Context, _ llm.Request) (*llm.Completion, error) {
+	p.calls++
+	if p.calls == 1 {
+		return &llm.Completion{Content: "reading", ToolCalls: []llm.ToolCall{toolCall("1", "read")}}, nil
+	}
+	close(p.opened)
+	select {
+	case <-p.release:
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+	return &llm.Completion{Content: "done"}, nil
+}
+
+// A ROUND IN FLIGHT HAS ITS OWN INSTANT on the live view. The loop used to
+// publish nothing between the previous round's tools returning and the model
+// answering, so for the whole of a slow call the newest frame named the
+// previous round, carried the previous round's start, and a trace drew the
+// running call from an instant that belonged to a round already finished.
+func TestARoundInFlightIsAnnouncedBeforeTheModelAnswers(t *testing.T) {
+	t.Parallel()
+	p := &blockingProvider{opened: make(chan struct{}), release: make(chan struct{})}
+	s := &fakeSurface{tools: []llm.ToolDef{def("read")}}
+	var mu sync.Mutex
+	var last toolloop.Result
+	done := make(chan error, 1)
+	go func() {
+		_, err := toolloop.Run(t.Context(), toolloop.Config{
+			Provider: p, Surface: s, MaxRounds: 4,
+			OnProgress: func(r toolloop.Result) {
+				mu.Lock()
+				last = r
+				mu.Unlock()
+			},
+		})
+		done <- err
+	}()
+	<-p.opened
+	mu.Lock()
+	frame := last
+	mu.Unlock()
+	close(p.release)
+	if err := <-done; err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	if frame.RoundsUsed != 2 || len(frame.Rounds) != 1 {
+		t.Fatalf("while round 2's call is out the live view says round %d with %d rounds recorded; want round 2, 1 recorded",
+			frame.RoundsUsed, len(frame.Rounds))
+	}
+	if !frame.RoundStartedAt.After(frame.Rounds[0].StartedAt) {
+		t.Errorf("round 2's frame carries start %v, not later than round 1's %v — the previous round's instant",
+			frame.RoundStartedAt, frame.Rounds[0].StartedAt)
+	}
+	if frame.Running != nil {
+		t.Errorf("a round's opening frame names a tool call in flight: %+v", frame.Running)
+	}
 }
 
 func TestTheFailureViewCarriesWhatThePhaseManaged(t *testing.T) {
@@ -775,9 +887,13 @@ func TestTheFailureViewCarriesWhatThePhaseManaged(t *testing.T) {
 		t.Fatal("Run succeeded against a failing provider")
 	}
 
+	// THE ROUND IT DIED ON is the second: its provider call was made, and
+	// the round's opening frame recorded it before the call failed. One
+	// here would describe the failure as happening in the round that had
+	// already answered.
 	snap := prog.Snapshot()
-	if snap.RoundsUsed != 1 {
-		t.Errorf("rounds = %d, want the round it died on", snap.RoundsUsed)
+	if snap.RoundsUsed != 2 {
+		t.Errorf("rounds = %d, want 2, the round it died on", snap.RoundsUsed)
 	}
 	if len(snap.Executions) != 1 {
 		t.Errorf("executions = %+v, want the call that ran before the failure",

@@ -30,7 +30,7 @@ import { isRecord, jsonEqual } from "./model/json.ts";
 import { COMPANY_KEY, type NodeKey } from "./model/keys.ts";
 import { fieldName, type Conflict, type Operation } from "./model/operations.ts";
 import type { PendingUpdate } from "./model/reducer.ts";
-import { RefreshGlyph } from "@crewlethq/icons/glyphs";
+import { RotateCwGlyph } from "@crewlethq/icons/glyphs";
 import { Button, Modal, SegmentedControl, Table } from "@crewlethq/ui";
 
 /** A node's name for its key, or `null` when no draft at hand holds it. */
@@ -172,7 +172,7 @@ export function UpdateDraftDialog({
       open
       stackBody
       title={title}
-      icon={<RefreshGlyph />}
+      icon={<RotateCwGlyph />}
       size="lg"
       // ONE WAY OUT PER JOB. "Not now" is in the foot; a close control beside
       // the title would be a second, unnamed spelling of it.

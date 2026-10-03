@@ -115,13 +115,13 @@ func (t *mergeWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	before, err := t.deps.Reader.Task(ctx, ref, tracker.DetailWants{}, seatRead)
 	switch {
 	case errors.Is(err, tracker.ErrNoTask):
-		return failed(fmt.Sprintf("There is no work item %q.", clip(ref))), nil
+		return refused(tools.RefusalNotFound, fmt.Sprintf("There is no work item %q.", clip(ref))), nil
 	case err != nil:
-		return failed(readFailure(tracker.MergeWorkItemTool, err)), nil
+		return readFailure(tracker.MergeWorkItemTool, err), nil
 	}
 	survivor, refusal := t.deps.resolveRef(ctx, tracker.MergeWorkItemTool, "`into`", into)
-	if refusal != "" {
-		return failed(refusal), nil
+	if refusal != nil {
+		return *refusal, nil
 	}
 	if survivor == before.Task.ID {
 		return failed(fmt.Sprintf("%s cannot be folded into itself.",
@@ -151,14 +151,14 @@ func (t *mergeWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 			"leaves them under the duplicate.", err, before.Task.Key)), nil
 	}
 	if err != nil {
-		return failed(writeFailure(actor, tracker.MergeWorkItemTool, err)), nil
+		return writeFailure(actor, tracker.MergeWorkItemTool, err), nil
 	}
 	if got.Outcome == statelog.OutcomeUnknown {
 		// NEVER A RECEIPT FOR A MERGE NOBODY CAN SAY LANDED — see
 		// [unknownWrite]. The sequence stops at an unknown step with an
 		// error of its own, so this is the seam's contract held here
 		// rather than an implementation's habit trusted.
-		return failed(unknownWrite(actor, tracker.MergeWorkItemTool,
+		return unknownOutcome(unknownWrite(actor, tracker.MergeWorkItemTool,
 			fmt.Sprintf("%s was merged", before.Task.Key), opID, got.Unvouched,
 			unknownNext(got.Unvouched, sameCall(actor, tracker.MergeWorkItemTool),
 				fmt.Sprintf("Read %s with get_work_item — a merged item is "+

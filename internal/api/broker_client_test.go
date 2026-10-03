@@ -25,7 +25,7 @@ func TestTheDashboardKnowsEveryBrokerKind(t *testing.T) {
 	for _, kind := range placement.BrokerKinds() {
 		want = append(want, kind.String())
 	}
-	holdStrings(t, `export const BROKER_KINDS = \[([^\]]*)\] as const;`, want, "broker kind")
+	holdStrings(t, clientsource.Tree(t), "BROKER_KINDS", want, "broker kind")
 }
 
 // AND EVERY DISAGREEMENT THE ENGINE NAMES. A kind the panel does not know is
@@ -37,7 +37,7 @@ func TestTheDashboardKnowsEveryBrokerFinding(t *testing.T) {
 	for _, kind := range engine.BrokerFindingKinds() {
 		want = append(want, string(kind))
 	}
-	holdStrings(t, `export const BROKER_FINDING_KINDS = \[([^\]]*)\] as const;`, want,
+	holdStrings(t, clientsource.Tree(t), "BROKER_FINDING_KINDS", want,
 		"broker finding")
 }
 
@@ -46,8 +46,7 @@ func TestTheDashboardKnowsEveryBrokerFinding(t *testing.T) {
 // on to commit as failed.
 func TestTheDashboardWaitsPastABrokerRemoval(t *testing.T) {
 	t.Parallel()
-	body, err := clientsource.Declaration(clientsource.Tree(t),
-		`export const BROKER_REMOVE_TIMEOUT_MS = ([0-9_]+);`)
+	body, err := clientsource.Scalar(clientsource.Tree(t), "BROKER_REMOVE_TIMEOUT_MS")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -69,8 +68,7 @@ func TestTheDashboardWaitsPastABrokerRemoval(t *testing.T) {
 // exists for.
 func TestTheDashboardWaitsPastAReadOfTheGroup(t *testing.T) {
 	t.Parallel()
-	body, err := clientsource.Declaration(clientsource.Tree(t),
-		`const QUERY_TIMEOUT_MS = ([0-9_]+);`)
+	body, err := clientsource.Scalar(clientsource.Tree(t), "QUERY_TIMEOUT_MS")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -84,10 +82,15 @@ func TestTheDashboardWaitsPastAReadOfTheGroup(t *testing.T) {
 	}
 }
 
-// holdStrings compares the dashboard's declared list with the engine's, both ways.
-func holdStrings(t *testing.T, pattern string, want []string, what string) {
+// holdStrings compares the list the dashboard's source tree declares as name
+// with the engine's, both ways.
+//
+// THE TREE IS THE CALLER'S, so every gate that holds a list through this reads
+// the dashboard's source in its own file — which is what
+// internal/clientsource's contract gate checks of the test a row credits.
+func holdStrings(t *testing.T, tree, name string, want []string, what string) {
 	t.Helper()
-	body, err := clientsource.Declaration(clientsource.Tree(t), pattern)
+	body, err := clientsource.Literal(tree, name)
 	if err != nil {
 		t.Fatal(err)
 	}

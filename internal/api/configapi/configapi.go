@@ -560,7 +560,7 @@ func (s *Service) put(w http.ResponseWriter, r *http.Request) {
 		writeChecked(w, prepared)
 		return
 	}
-	applied, err := s.commit(r.Context(), prepared, summary, operatorOf(r))
+	applied, err := s.commit(r.Context(), prepared, summary, authorOf(r))
 	if err != nil {
 		s.refuseWrite(w, err, createOnly)
 		return
@@ -627,7 +627,7 @@ func (s *Service) patch(w http.ResponseWriter, r *http.Request) {
 	}
 
 	prepared, err := s.prepare(r.Context(), patchDraft(ApplyRequest{
-		Patch: sent.text, Summary: summary, Operator: operatorOf(r), Expect: active.ID,
+		Patch: sent.text, Summary: summary, Author: authorOf(r), Expect: active.ID,
 	}, sent.doc))
 	if err != nil {
 		s.refuseApply(w, err)
@@ -637,7 +637,7 @@ func (s *Service) patch(w http.ResponseWriter, r *http.Request) {
 		writeChecked(w, prepared)
 		return
 	}
-	applied, err := s.commit(r.Context(), prepared, summary, operatorOf(r))
+	applied, err := s.commit(r.Context(), prepared, summary, authorOf(r))
 	if err != nil {
 		s.refuseApply(w, err)
 		return
@@ -766,7 +766,7 @@ func (s *Service) reload(w http.ResponseWriter, r *http.Request) {
 	// HEADER ONLY, like revert: this route reads no body, and it already
 	// knows what it did, so an unset summary defaults rather than
 	// answering 400.
-	applied, err := s.Reload(r.Context(), strings.TrimSpace(r.Header.Get("X-Summary")), operatorOf(r))
+	applied, err := s.Reload(r.Context(), strings.TrimSpace(r.Header.Get("X-Summary")), authorOf(r))
 	if err != nil {
 		s.refuseApply(w, err)
 		return
@@ -838,7 +838,7 @@ func (s *Service) revert(w http.ResponseWriter, r *http.Request) {
 	if summary == "" {
 		summary = "revert to " + target.ID
 	}
-	applied, err := s.commit(r.Context(), prepared, summary, operatorOf(r))
+	applied, err := s.commit(r.Context(), prepared, summary, authorOf(r))
 	if err != nil {
 		s.refuseApply(w, err)
 		return
@@ -846,11 +846,19 @@ func (s *Service) revert(w http.ResponseWriter, r *http.Request) {
 	writeApplied(w, applied)
 }
 
-// operatorOf is who the guard authenticated on this request, or empty.
-func operatorOf(r *http.Request) string {
+// authorOf is the operator the guard authenticated on this request, as the
+// author of the revision it writes.
+//
+// AN OPERATOR, ALWAYS: every write on this surface is made with a credential
+// a person holds — /config is always guarded — and the engine's own writes
+// reach [Service.Apply] directly, stating themselves as the node.
+func authorOf(r *http.Request) store.Author {
 	operator, _ := auth.OperatorFrom(r.Context())
-	return operator
+	return store.Author{Name: operator, Kind: store.AuthorOperator}
 }
+
+// revisionSource is the source every revision this surface writes records.
+const revisionSource = "api"
 
 // nudge tells every node an activation happened.
 //
@@ -859,15 +867,16 @@ func operatorOf(r *http.Request) string {
 // is what makes losing one cost a poll interval rather than a revision, and
 // what makes an ephemeral broadcast the right delivery: every node has to
 // hear it, and none of them has to.
-func (s *Service) nudge(ctx context.Context, revisionID, summary, operator string) {
+func (s *Service) nudge(ctx context.Context, revisionID, summary string, author store.Author) {
 	if s.queue == nil {
 		return
 	}
 	ev := events.New(types.ConfigRevisionActivated{
-		RevisionID: revisionID, RevisionSummary: summary, CreatedBy: operator,
+		RevisionID: revisionID, RevisionSummary: summary,
+		CreatedBy: author.Name, CreatedByKind: string(author.Kind),
 	}, tracing.TraceOf(ctx))
 	ev.Timestamp = s.now()
-	ev.Source = operator
+	ev.Source = author.Name
 	if err := s.queue.Publish(ctx, topics.ConfigRevisionActivated, ev); err != nil {
 		log.WarnContext(ctx, "activation_nudge_not_published", "revision", revisionID,
 			"error", err, "detail", "peers converge on their reconcile interval instead")
@@ -1023,9 +1032,13 @@ func meta(revision store.Revision) map[string]any {
 		"revision_id": revision.ID,
 		"created_at":  revision.CreatedAt.Format(time.RFC3339Nano),
 		"created_by":  revision.CreatedBy,
-		"source":      revision.Source,
-		"summary":     revision.Summary,
-		"is_active":   revision.Active,
+		// WHAT created_by names, which the label alone cannot say. Empty
+		// only on a revision adopted from a pointer that did not record
+		// it — the reader shows "not recorded" rather than a guess.
+		"created_by_kind": string(revision.CreatedByKind),
+		"source":          revision.Source,
+		"summary":         revision.Summary,
+		"is_active":       revision.Active,
 	}
 	if revision.ParentID != "" {
 		body["parent_revision_id"] = revision.ParentID

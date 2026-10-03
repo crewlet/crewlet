@@ -3,11 +3,14 @@
 Every condition the engine raises about itself, what it means, and what to do
 about it.
 
-An alarm reaches you two ways, and they are the same table evaluated once: a
-`crewlet.alarm.active{kind}` gauge your collector scrapes, and a named
-`WARN` line when it starts and another when it clears, carrying how long it
-was up. Nothing has to be polled for either — alarms are evaluated on ticks
-the engine already runs.
+An alarm reaches you three ways, and they are the same table evaluated once,
+every ten seconds on every node: a `crewlet.alarm.active{kind}` gauge your
+collector scrapes, a named `WARN` line when it starts and another when it
+clears, carrying how long it was up, and a count on the node's health envelope
+(`GET /health` and the dashboard's health push carry `alarms: {count, worst}`,
+where `worst` is the alarm that has been firing longest). Nothing has to be
+polled for any of them — alarms are evaluated on the node's own position
+heartbeat, so a condition with a one-minute grace is named within that minute.
 
 The log line is the one to read first. It carries the measurement that raised
 the alarm, in the units of the thing measured, and the remedy from the table
@@ -27,6 +30,7 @@ below.
 | `search_slow` | Interactive search is over its target. The corpus has outgrown what one node's share of it can scan in the budget. | The corpus has outgrown what one node's share can scan in the budget. Adding a node divides the buckets again, with no configuration and no rebuild. See docs/guides/search.md. |
 | `search_degraded` | Searches are being answered without their semantic half — the embeddings provider or the vector domain is failing. | The embeddings provider or the vector domain is failing. Search still answers; it answers less well, and silently. |
 | `search_scoped` | Searches are being answered over part of the corpus because a node did not answer its bucket range. | A node did not cover its bucket range, so part of the corpus went unscanned — it was unreachable, or its own lexical index has not finished its first lap, which is what a node that joined a few minutes ago looks like and clears itself. The answers were complete for what was searched and silent about what was not; the log line names who was absent. |
+| `history_partial` | Fleet history reads — turns, traces, the event log — are being answered without every node, because one did not answer inside the fleet read budget. | Turn-level history lives only on the node that published it, so a partial answer is missing that node's rows — every answer names the node in its `coverage`. A node that has left the fleet is gone with its detail, and the aggregates survive it in the usage domain; a live node that keeps missing the budget is slow on its own store or its route, and its own `pool_starved` and `apply_lag` alarms say which. |
 | `recall_below_floor` | Less of the corpus has current vectors than semantic recall claims to cover. | The embed duty is behind. Semantic recall is answering from a corpus it does not cover. |
 | `ivf_recall_below_floor` | The latest measurement of the partition's semantic index found recall against the exact scan below the floor, in a query shape a search is issued in, even probing every list — which is the full scan's own candidate pool, so the first stage is below the floor on this corpus with or without the index. | The 1-bit first stage is failing this corpus, index or not: `crewlet search eval` against a backup's copy of the partition measures the full scan beside the index in every query shape and will say the same. The remedy is the evaluation's — raise BinaryOversample, then an int8 first stage, both code changes (see docs/guides/search.md). No index is installed meanwhile, so searches answer from the full scan at the recall the evaluation reports. |
 | `records_gated` | An apply gate dropped a record. A gated record is recoverable by nothing. | A gated record is recoverable by nothing. Each drop's `statelog_record_gated` log line names the `gate` that dropped it, the record's `position` and `kind`, and the `writer` — the node that wrote it; this is worth reading today. |
@@ -50,3 +54,10 @@ threshold for an operator to tune: each one fires at the number that already
 decides something — the grace that takes a copy out of service, the grace
 that stops a node serving a partition it cannot decode, the budget a caller
 was promised.
+
+A seat whose token window is spent is NOT an alarm, because nothing is wrong
+with the node: the ceiling is doing what it was set to do. Its mail is parked
+on its inbox until the window turns over or a revision raises the ceiling —
+the `seat_budget_parked` line names the window and when it resets, and
+the budgets surfaces show the refusing window. See the budget park in
+docs/concepts/agent-runtime.md.

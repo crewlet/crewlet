@@ -3,7 +3,6 @@ package api_test
 import (
 	"slices"
 	"strconv"
-	"strings"
 	"testing"
 	"time"
 
@@ -24,8 +23,7 @@ import (
 // command line's flags. The other direction is a branch nothing can reach.
 func TestTheDashboardKnowsEveryGateAction(t *testing.T) {
 	t.Parallel()
-	holdList(t, `export const GATE_ACTIONS = \[([^\]]*)\] as const;`,
-		statelog.GateActions(), "remedy")
+	holdList(t, "GATE_ACTIONS", statelog.GateActions(), "remedy")
 }
 
 // AND AGREES WHICH OF THEM KEEP THE GESTURE'S OWN ID.
@@ -36,8 +34,8 @@ func TestTheDashboardKnowsEveryGateAction(t *testing.T) {
 // eviction. The dialog's copy decides whether it offers "Finish this gesture".
 func TestTheDashboardKeepsTheGesturesOwnIDWhereTheEngineDoes(t *testing.T) {
 	t.Parallel()
-	holdList(t, `export const GATE_ACTIONS_KEEPING_OPERATION = \[([^\]]*)\] as const;`,
-		statelog.GateActionsKeepingOperation(), "operation-keeping action")
+	holdList(t, "GATE_ACTIONS_KEEPING_OPERATION", statelog.GateActionsKeepingOperation(),
+		"operation-keeping action")
 }
 
 // THE DIALOG WAITS PAST THE NODE'S OWN BOUND ON A GESTURE.
@@ -49,14 +47,15 @@ func TestTheDashboardKeepsTheGesturesOwnIDWhereTheEngineDoes(t *testing.T) {
 // map's part.
 func TestTheDashboardWaitsPastTheGateBudget(t *testing.T) {
 	t.Parallel()
-	body, err := clientsource.Declaration(clientsource.Tree(t),
-		`export const GATE_REQUEST_TIMEOUT_MS = ([0-9_]+);`)
+	raw, err := clientsource.Scalar(clientsource.Tree(t), "GATE_REQUEST_TIMEOUT_MS")
 	if err != nil {
 		t.Fatal(err)
 	}
-	ms, err := strconv.ParseInt(strings.ReplaceAll(body, "_", ""), 10, 64)
+	// Base 0 reads the literal as TypeScript spells it: `75_000` is
+	// seventy-five thousand, never a parse failure.
+	ms, err := strconv.ParseInt(raw, 0, 64)
 	if err != nil {
-		t.Fatalf("GATE_REQUEST_TIMEOUT_MS = %q is not a number: %v", body, err)
+		t.Fatalf("GATE_REQUEST_TIMEOUT_MS = %q is not a number: %v", raw, err)
 	}
 	if wait := time.Duration(ms) * time.Millisecond; wait <= engine.GateAnswerBudget {
 		t.Errorf("the dashboard waits %s for a gesture the node answers within %s — it "+
@@ -65,9 +64,9 @@ func TestTheDashboardWaitsPastTheGateBudget(t *testing.T) {
 }
 
 // holdList compares the dashboard's declared list with the engine's, both ways.
-func holdList(t *testing.T, pattern string, want []statelog.GateAction, what string) {
+func holdList(t *testing.T, name string, want []statelog.GateAction, what string) {
 	t.Helper()
-	body, err := clientsource.Declaration(clientsource.Tree(t), pattern)
+	body, err := clientsource.Literal(clientsource.Tree(t), name)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -71,7 +71,7 @@ happened to omit the key. There are four:
 | A seat's own tools, inside a turn | `linearizable` for a read of one [partition](../concepts/estate-placement.md); `session` for a list read across several, floored at its node's own writes and at the change that woke the turn ([below](#read-your-trigger-is-a-floor-not-the-mechanism)) | No |
 | The operator MCP, about tracker content | `linearizable`, across partitions too | No |
 | The dashboard and the REST read path | `stale` | Yes — `linearizable`, `stale`, `consistent_prefix`, or `session` beside a `min_position` |
-| Any answer **about replication** — the retention report, the Fleet screen's lag, whether a purge landed | `stale`, weakening to `consistent_prefix` | No — it is derived, not chosen |
+| Any answer **about replication** — the retention report, Settings › Backups & retention's lag, whether a purge landed | `stale`, weakening to `consistent_prefix` | No — it is derived, not chosen |
 
 **Only the screen chooses**, and the reason is that only the screen can see
 what it got: the level and the lag are rendered beside the rows, so a person
@@ -91,7 +91,7 @@ somebody opened the page for.
 It weakens one step further when this node could not measure its own lag at
 all — the broker unreachable, or coordination — because `stale` is a claim
 about *age* and there is then no age to claim. `crewlet retention status` and
-the Fleet screen say so in a sentence rather than printing the same figures
+Settings › Backups & retention say so in a sentence rather than printing the same figures
 under the stronger name.
 
 An agent cannot choose because the level is not a model's to pick — a tool

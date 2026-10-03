@@ -18,13 +18,31 @@ type stubSearcher struct {
 	hits     []knowledge.Hit
 	coverage statelog.Coverage
 	queries  []knowledge.Query
+
+	// outcome is what the search says it did. The zero value is filled
+	// in as a complete hybrid answer, which is what every case that is
+	// not about the outcome wants.
+	outcome *knowledge.Outcome
 }
 
 func (s *stubSearcher) CanSearch(*org.Role, *org.Organization) bool { return s.can }
 
-func (s *stubSearcher) Search(_ context.Context, q knowledge.Query) knowledge.Answer {
+func (s *stubSearcher) Search(_ context.Context, q knowledge.Query) knowledge.Result {
 	s.queries = append(s.queries, q)
-	return knowledge.Answer{Hits: s.hits, Coverage: s.coverage}
+	out := knowledge.Result{Hits: s.hits, Outcome: completeOutcome()}
+	if s.outcome != nil {
+		out.Outcome = *s.outcome
+	}
+	out.Partitions = s.coverage
+	return out
+}
+
+// completeOutcome is a hybrid search that covered everything.
+func completeOutcome() knowledge.Outcome {
+	return knowledge.Outcome{
+		ServedMode: knowledge.ModeHybrid, Modes: knowledge.Modes,
+		Coverage: knowledge.Coverage{Complete: true},
+	}
 }
 
 func searchTurn() *turnctx.Turn {
@@ -190,5 +208,49 @@ func TestSearchKnowledgeSaysWhatItDidNotReach(t *testing.T) {
 			t.Errorf("%s: the answer sends the seat to rephrase a search that did not "+
 				"run everywhere:\n%s", name, res.Output)
 		}
+	}
+}
+
+// A SEARCH OVER PART OF THE KNOWLEDGE BASE SAYS SO, and one that could not run
+// is not "nothing matched".
+//
+// Both used to reach the seat as the same short list: the partial fan-out was
+// logged on the coordinating node and nowhere else, and a search that failed
+// outright was an empty list the tool rendered as "No team documents match" —
+// which is the sentence a seat acts on by writing the page again.
+func TestSearchKnowledgeSaysWhenItCoveredPartOrNothing(t *testing.T) {
+	t.Parallel()
+	partial := &stubSearcher{can: true,
+		hits: []knowledge.Hit{{Title: "Staging runbook"}},
+		outcome: &knowledge.Outcome{ServedMode: knowledge.ModeHybrid,
+			Coverage: knowledge.Coverage{BucketsMissing: 22}},
+	}
+	res, err := (&searchKnowledge{search: partial}).CallForTurn(context.Background(),
+		searchTurn(), map[string]any{"query": "staging"})
+	if err != nil {
+		t.Fatalf("CallForTurn: %v", err)
+	}
+	if !strings.Contains(res.Output, "covered only part of the knowledge base") {
+		t.Errorf("a partial answer reached the seat as:\n%s", res.Output)
+	}
+
+	unrun := &stubSearcher{can: true, outcome: &knowledge.Outcome{
+		Coverage: knowledge.Coverage{BucketsMissing: 64},
+	}}
+	res, err = (&searchKnowledge{search: unrun}).CallForTurn(context.Background(),
+		searchTurn(), map[string]any{"query": "staging"})
+	if err != nil {
+		t.Fatalf("CallForTurn: %v", err)
+	}
+	if strings.Contains(res.Output, "No team documents match") ||
+		!strings.Contains(res.Output, "could not be searched") {
+		t.Errorf("a search that never ran reached the seat as:\n%s", res.Output)
+	}
+
+	whole := &stubSearcher{can: true, hits: []knowledge.Hit{{Title: "Staging runbook"}}}
+	res, _ = (&searchKnowledge{search: whole}).CallForTurn(context.Background(),
+		searchTurn(), map[string]any{"query": "staging"})
+	if strings.Contains(res.Output, "only part") {
+		t.Errorf("a complete answer carries a partial note:\n%s", res.Output)
 	}
 }

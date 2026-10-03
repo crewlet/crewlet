@@ -3,9 +3,11 @@ package engine
 import (
 	"context"
 	"errors"
+	"slices"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/agent/builtin"
+	"github.com/crewlet/crewlet/internal/agent/execstate"
 	"github.com/crewlet/crewlet/internal/agent/phase"
 	"github.com/crewlet/crewlet/internal/agent/runner"
 	"github.com/crewlet/crewlet/internal/agent/toolloop"
@@ -13,6 +15,7 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
+	"github.com/crewlet/crewlet/internal/notify"
 	"github.com/crewlet/crewlet/internal/providers/llm"
 	"github.com/crewlet/crewlet/internal/providers/llm/chain"
 	"github.com/crewlet/crewlet/internal/queue/topics"
@@ -22,8 +25,10 @@ import (
 
 // The turn-level events, published around turn.Run.
 //
-// The phases publish their own (internal/agent/runner/telemetry.go); these two
-// close the turn, and they are separate because they have different readers:
+// The phases publish their own (internal/agent/runner/telemetry.go). One opens
+// the turn — agent_turn_started, before its context is gathered (see
+// [Engine.publishTurnStarted]) — and two close it, separate because they have
+// different readers:
 //
 //   - agent_turn_completed is the DASHBOARD's single-phase summary. It is what
 //     ends a seat's live row, so a turn that failed to publish it leaves a
@@ -67,8 +72,11 @@ type turnTelemetry struct {
 	// so a detached coding run's row can also state the batch it was
 	// launched from, which is all a peer predating the identity can match
 	// on.
-	convKey   string
-	partKey   string
+	convKey string
+	partKey string
+	// transport is the chat surface the trigger arrived on — see
+	// [turnctx.Turn.Transport] — and empty for a turn no chat woke.
+	transport string
 	startedAt time.Time
 	trace     events.TraceContext
 
@@ -79,25 +87,41 @@ type turnTelemetry struct {
 	// off the payload is one it cannot reason about at all.
 	interactions []types.InboundInteraction
 
+	// requester is the seat whose wake started this turn — see
+	// [turnctx.Turn.Requester] — resolved off the same first event the
+	// trigger is described from, or off the parked row on a resume.
+	requester string
+
 	// skills is the synthesized-skill ids offered to this turn's prompt.
 	// Set after the prefetch, which is the only thing that knows them.
 	skills []string
 
-	// workItem is the tracker task this turn is spent on — the task whose
-	// change woke it, see [workItemOf] — and empty for every other turn.
-	// It travels onto a detached run's row, so the resumed half of the
-	// turn is spent on the same task.
-	workItem string
+	// workItem is the item this turn is on as dispatch resolved it — the
+	// trigger's, the asker's or the parked row's — and workItemBasis the
+	// rule that named it; both empty for a turn nothing named an item for.
+	// See worksubject.go for the rules and their order.
+	workItem      *types.WorkItem
+	workItemBasis types.WorkItemBasis
 
-	// resumedRound is the round a resumed turn re-entered, zero for a turn
-	// that started at round one. Its rounds up to that one were already
-	// counted by the half that parked — see [Engine.recordTaskSpend].
-	resumedRound int
+	// written is the set of items this turn's writes commit to, shared with
+	// every tool call and delegate worker through the turn context and read
+	// back at completion for the one rule dispatch cannot decide.
+	written *turnctx.Written
+
+	// resumed marks a segment that re-entered a parked run, and launchID
+	// the coding run it collected — together they name the segment its
+	// charge is recorded under (see turnspend.go). jobInput and jobOutput
+	// are that run's tokens, which the segment pays, and uncharged what the
+	// segments before it spent and charged to nothing.
+	resumed             bool
+	launchID            string
+	jobInput, jobOutput int
+	uncharged           *execstate.Uncharged
 }
 
 // newRunID mints the identity of ONE EXECUTION of a turn.
 //
-// A uuid rather than anything derived, and that is the whole point: every
+// FRESH rather than anything derived, and that is the whole point: every
 // derivable identity a turn has — the trigger's ids, the conversation, the
 // seat, the clock rounded to anything useful — is something a redelivery
 // reproduces, and reproducing it is exactly the bug ADR-0017 records. Two runs
@@ -146,7 +170,11 @@ func (e *Engine) describeTurn(ctx context.Context, company *Company, req Request
 		// conversation reached the sandbox row as "" for the whole life of
 		// that feature. The identity has no such source: a resumed turn
 		// has no events at all, so it has to travel.
-		partKey:   partitionKeyOf(req.Events),
+		partKey: partitionKeyOf(req.Events),
+		// THE CHAT SURFACE, read off the same metadata the working
+		// indicator raises on — see [chatMetadataOf] — so "was this turn
+		// woken by a chat message" has one answer.
+		transport: chatMetadataOf(req.Events)[notify.TransportField],
 		startedAt: time.Now().UTC(),
 	}
 	t.role, t.agentID = seatIdentity(company, req.Handle)
@@ -154,6 +182,7 @@ func (e *Engine) describeTurn(ctx context.Context, company *Company, req Request
 	// merged digest's own constituent list, which is the same set the
 	// partition held and the one place a merge combined them.
 	t.interactions = e.interactionsOf(req.Ask())
+	t.requester = requesterOf(req.Events, t.interactions)
 	// The turn's own span, not the trigger's ids copied forward.
 	//
 	// This used to read `TraceID: ev.TraceID, SpanID: ev.SpanID` straight off
@@ -172,7 +201,10 @@ func (e *Engine) describeTurn(ctx context.Context, company *Company, req Request
 		t.trigger = types.DescribeTrigger(ev)
 		break
 	}
-	t.workItem = workItemOf(req.Events)
+	// THE ITEM, from the same first event the trigger is described from,
+	// and a fresh set for what the turn is about to write.
+	t.workItem, t.workItemBasis = workItemOf(req)
+	t.written = &turnctx.Written{}
 	rebased, err := rebaseFor(ctx, e.rebases(), builtin.Actor{
 		TurnID: t.runID, WorkKey: t.workKey, WorkSince: t.workSince,
 	}, t.startedAt)
@@ -237,16 +269,81 @@ func (t turnTelemetry) runnerTurn(company *Company,
 			// the conversation field has to match on.
 			ConversationKey: t.convKey,
 			PartitionKey:    t.partKey,
+			// AND THE SURFACE, so a task this turn files says where it
+			// came from — see [turnctx.Turn.Transport].
+			Transport: t.transport,
 			// The brief and the delivery obligation, carried for the
 			// same reason: a resumed turn sees neither its trigger nor
 			// this frame, so both have to reach the row from here.
 			Task:  task,
 			Reply: reply.String(),
-			// And the task this turn is spent on, for the same reason
-			// again: the resumed half's spend belongs to it.
-			WorkItem: t.workItem,
+			// And who woke it, for a question a run it detaches puts to
+			// "the requester" long after this frame is gone.
+			Requester: t.requester,
+			// THE ITEM THIS TURN IS ON, and the set its writes report
+			// into. The item rides every phase event and the row of any
+			// coding run this turn detaches; the set is the one mutable
+			// thing a turn points at, shared by every tool call.
+			WorkItem:      t.workItem,
+			WorkItemBasis: t.workItemBasis,
+			Written:       t.written,
 		},
 	}
+}
+
+// publishTurnStarted puts a turn — or one resumed segment of it — on the record
+// before it does anything slow: agent_turn_started.
+//
+// EVERY OTHER TURN EVENT IS PUBLISHED FROM INSIDE A PHASE OR AFTER THE LAST
+// ONE, so until this existed nothing said a turn was running while it gathered
+// its context: a seat whose prefetch was reading a long thread was
+// indistinguishable from an idle one, and a turn that died there left no row
+// naming its run at all. So the dispatch path publishes this BEFORE the
+// prefetch, and the resume path once the segment is certain to run (see
+// [Engine.resumeTurn] for why that is later).
+//
+// EVERY START IS CLOSED. Each frame that publishes one publishes
+// [Engine.publishTurnCompleted] on every path out of it that returns, so a
+// reader pairing the two on `turn_id` never holds an open turn that ended. A
+// start with no completion is a turn that died in its own frames: a panic
+// recovered outside the loop, which the unhandled-exception breach under the
+// same `turn_id` says (see [panicBreach]), or a process that died under it —
+// the fact the unpaired row is there to state.
+//
+// The depth and the chain travel on the ENVELOPE, whose keys they are — a
+// payload field under an envelope key is dropped on the way out — and they are
+// arguments, on the terms [turnTelemetry.runnerTurn] takes them: the dispatch
+// reads them off the trigger and the resume off the parked row.
+//
+// It names the item dispatch resolved (see worksubject.go) and no other: a
+// turn that ends up charged by a sole write starts WITHOUT one, because at the
+// start that write has not happened. Neither key is present on a turn on
+// nothing, which is the documented shape of an unattributed turn rather than a
+// null.
+func (e *Engine) publishTurnStarted(ctx context.Context, t turnTelemetry,
+	depth int, chain []string, resumed bool,
+) {
+	ev := events.New(types.AgentTurnStarted{
+		Agent:           t.agentID,
+		AgentHandle:     t.handle,
+		RoleName:        t.role,
+		TurnID:          t.runID,
+		WorkKey:         t.workKey,
+		Trigger:         t.trigger,
+		ConversationKey: t.convKey,
+		WorkItem:        t.workItem,
+		WorkItemBasis:   t.workItemBasis,
+		// THE SAME INSTANT turn_completed reports as the turn's start, so
+		// the two records of one run can never disagree about when it
+		// began — both read it off the telemetry assembled once.
+		StartedAt: t.startedAt,
+		Resumed:   resumed,
+	}, t.trace)
+	ev.DelegationDepth = depth
+	// A copy, never the caller's backing array: the request that holds it
+	// outlives this publish, and a listener handed the event keeps it.
+	ev.DelegationChain = slices.Clone(chain)
+	e.publishEvent(ctx, ev, t.role)
 }
 
 // publishTurnCompleted closes the turn for both readers.
@@ -259,8 +356,18 @@ func (e *Engine) publishTurnCompleted(ctx context.Context, t turnTelemetry,
 	spend runner.Spend, res turn.Result, err error,
 ) {
 	ended := time.Now().UTC()
-	failed := err != nil || res.Decision == phase.Failed
+	// A TURN A PERSON STOPPED DID NOT FAIL, although it ended on an error:
+	// the error is how the stop reached this frame. Read as a failure it
+	// would be listed with the turns that broke, and its seat drawn as in
+	// trouble for being stopped by somebody who meant to.
+	stopped := turn.Stopped(err)
+	failed := !stopped && (err != nil || res.Decision == phase.Failed)
 	decision := string(res.Decision)
+	// THE ITEM THIS COMPLETION IS CHARGED TO: dispatch's, or — for a turn
+	// nothing named one for — the one item its writes committed to, which
+	// only a segment that FINISHED the turn may conclude. Both records carry
+	// the same answer, read once.
+	item, basis := completedWorkItem(t.workItem, t.workItemBasis, t.written, res.Suspended)
 
 	summary := types.AgentTurnCompleted{
 		Agent:    t.agentID,
@@ -288,11 +395,24 @@ func (e *Engine) publishTurnCompleted(ctx context.Context, t turnTelemetry,
 		// would double-count them — and the split is the only thing that
 		// answers "how much of this turn was fan-out" when a seat's spend
 		// jumps and its own rounds did not.
-		SubagentCount:   spend.Workers,
-		SubagentTokens:  spend.WorkerTokens,
+		SubagentCount:        spend.Workers,
+		SubagentTokens:       spend.WorkerTokens(),
+		SubagentInputTokens:  spend.WorkerInput,
+		SubagentOutputTokens: spend.WorkerOutput,
+		// The cache's share of InputTokens over the turn's own phases,
+		// as the phase records state it.
+		CacheReadTokens:  spend.CacheRead,
+		CacheWriteTokens: spend.CacheWrite,
+		WorkItem:         item,
+		WorkItemBasis:    basis,
+		// A SEGMENT THAT PARKED says so, because the same turn id completes
+		// again when its coding run is collected: read as an end, this
+		// record would list a parked turn as finished.
+		Suspended:       res.Suspended,
 		Iterations:      res.Rounds,
 		Decision:        decision,
 		Failed:          failed,
+		Stopped:         stopped,
 		ConversationKey: t.convKey,
 	}
 	if err != nil {
@@ -302,6 +422,9 @@ func (e *Engine) publishTurnCompleted(ctx context.Context, t turnTelemetry,
 		// operator the whole record rather than its tail.
 		summary.Error = events.ClipDiagnostic(err.Error())
 		summary.ErrorKind = "error"
+		if stopped {
+			summary.ErrorKind = runner.StoppedKind
+		}
 	}
 	if res.Breach != nil {
 		// A guard breach is not an error: the turn ran and was stopped by
@@ -324,16 +447,19 @@ func (e *Engine) publishTurnCompleted(ctx context.Context, t turnTelemetry,
 	e.publishFailure(ctx, t, res, err)
 
 	e.publishEvent(ctx, events.New(types.TurnCompleted{
-		Agent:       t.agentID,
-		AgentHandle: t.handle,
-		RoleName:    t.role,
-		TurnID:      t.runID,
-		WorkKey:     t.workKey,
-		StartedAt:   t.startedAt,
-		EndedAt:     ended,
-		DurationMS:  int(ended.Sub(t.startedAt) / time.Millisecond),
-		TaskSummary: t.trigger.Summary,
-		PlanSummary: planSummary(res),
+		Agent:         t.agentID,
+		AgentHandle:   t.handle,
+		RoleName:      t.role,
+		TurnID:        t.runID,
+		WorkKey:       t.workKey,
+		WorkItem:      item,
+		WorkItemBasis: basis,
+		Suspended:     res.Suspended,
+		StartedAt:     t.startedAt,
+		EndedAt:       ended,
+		DurationMS:    int(ended.Sub(t.startedAt) / time.Millisecond),
+		TaskSummary:   t.trigger.Summary,
+		PlanSummary:   planSummary(res),
 		// ReviewOutcome is the reviewer's decision, which is the turn's
 		// decision except where a guard ended it first — so it is read off
 		// the result rather than off the last review, and the two differ
@@ -371,11 +497,12 @@ func (e *Engine) publishTurnCompleted(ctx context.Context, t turnTelemetry,
 // agent_turn_completed's error/error_kind and the three dedicated types were
 // registered, categorised and documented with no producer.
 //
-// What that cost is a whole dashboard state. `afk` is derived from exactly
-// these three types (internal/api/livestate: llm_unavailable,
-// turn.guard_breach, budget_exhausted) and from nothing else, so no seat could
-// ever reach it — the attention queue's "the engine stopped it" row, the seat
-// screen's AFK banner and the `broken` rail were all unreachable branches.
+// What that cost was a whole dashboard state. The live projection's failure
+// hold is taken from exactly these three types (internal/api/livestate:
+// llm_unavailable, turn.guard_breach, budget_exhausted) and from nothing else —
+// and `stopped`/`provider` from the first of them — so no seat could ever reach
+// it: the attention queue's "the engine stopped it" row, the seat screen's
+// banner and the `broken` rail were all unreachable branches.
 //
 // The summary event still carries error/error_kind, and that is not a second
 // copy to keep in step: it is the ONE-LINE reason on a row about the turn,
@@ -414,12 +541,15 @@ func (e *Engine) publishFailure(ctx context.Context, t turnTelemetry,
 			BudgetType: types.BudgetScope(budget.Scope),
 			UsedTokens: budget.Used,
 			MaxTokens:  budget.Limit,
+			Period:     string(budget.Period),
+			Window:     budget.Window,
+			ResetsAt:   rfc3339(budget.ResetsAt),
 		}, t.trace), t.role)
 		return
 	}
 
-	// EVERY MEMBER FAILED RETRYABLY — the seat has no model left and is
-	// effectively AFK. A non-retryable failure from one member is not this:
+	// EVERY MEMBER FAILED RETRYABLY — the seat has no model left, which is
+	// what reads it as stopped on its provider. A non-retryable failure from one member is not this:
 	// it comes back as that backend's own error, the chain never wrapped it,
 	// and calling it "unavailable" would blame a chain that was never walked.
 	var exhausted *chain.Error
@@ -534,6 +664,11 @@ func (e *Engine) describeResume(ctx context.Context, company *Company, in resume
 		startedAt: time.Now().UTC(),
 		role:      in.Run.Role,
 		agentID:   in.Run.AgentID,
+		// WHO ASKED, off the row rather than off whatever resumed it: an
+		// answer is somebody replying to the run, not somebody asking this
+		// turn for something, so a second run the resumed turn detaches is
+		// still the first requester's.
+		requester: in.Run.Requester,
 		// The resumed turn's OWN span, opened by resumeTurn under the
 		// reconstructed suspended one. This used to be built by hand as
 		// `{TraceID: run.TraceID, ParentSpanID: run.SpanID}` with SpanID
@@ -545,11 +680,18 @@ func (e *Engine) describeResume(ctx context.Context, company *Company, in resume
 	if in.Trigger != nil {
 		t.trigger = types.DescribeTrigger(in.Trigger)
 	}
-	// THE TASK THE TURN IS SPENT ON, off the row, and the round it parked
-	// in — the resumed half sees no trigger to derive the first from, and
-	// its rounds up to the second were already counted by the half that
-	// parked.
-	t.workItem, t.resumedRound = in.Run.WorkItem, in.State.Round
+	// RULE 3: the item the parked row recorded, never one read off the
+	// event that resumed it — a person's answer is a chat message, and it
+	// names no item. And the set the turn had written before it parked,
+	// carried on the suspension, so a completion concluding a sole write
+	// judges the whole turn rather than its second half.
+	t.workItem, t.workItemBasis = resumedWorkItem(in.Run)
+	t.written = turnctx.WrittenFrom(in.State.Written, in.State.WrittenMany)
+	// THE SEGMENT, for its charge: the job it collected and what that job
+	// cost, and what the segments before it spent that nothing paid for.
+	t.resumed, t.launchID = true, in.Run.LaunchID
+	t.jobInput, t.jobOutput = in.InputTokens, in.OutputTokens
+	t.uncharged = in.State.Uncharged
 	// Re-derived from the org when the row predates a rename, so a resumed
 	// turn is still attributed to a seat that exists.
 	if role, agentID := seatIdentity(company, in.Run.AgentHandle); role != "" {
@@ -605,4 +747,30 @@ func skipDecision(decision string) types.PlanDecision {
 		return types.PlanDecisionSkip
 	}
 	return ""
+}
+
+// requesterOf is the seat whose wake started a turn, or "" when no seat's did.
+//
+// OFF THE FIRST EVENT, the one [Engine.describeTurn] describes the trigger
+// from: a colleague's ask names its asker, and a notification's first
+// constituent names the person whose thread the turn is answering — resolved
+// to a seat through the same registry the interactions were, so it is a
+// handle in the chart or nothing. The first speaker ONLY, even where a later
+// constituent's sender is known: "the requester" is who started the
+// conversation this turn answers, and a later voice in the same thread is not
+// them.
+func requesterOf(evs []*events.Event, interactions []types.InboundInteraction) string {
+	for _, ev := range evs {
+		if ev == nil {
+			continue
+		}
+		if ask, ok := events.DataAs[*types.A2ARequest](ev); ok {
+			return ask.Requester
+		}
+		break
+	}
+	if len(interactions) == 0 {
+		return ""
+	}
+	return interactions[0].Sender.Handle
 }

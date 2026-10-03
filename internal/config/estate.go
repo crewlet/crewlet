@@ -17,7 +17,7 @@ import (
 // whole fleet, and a value read off whichever node holds the map's duty would
 // move with the duty. A Tier B value is one document every node applies,
 // stamped with the activation it came from, so a node a revision behind cannot
-// set it back (ADR-0020). What stays on the node is what is a fact about the
+// set it back (ADR-0027). What stays on the node is what is a fact about the
 // node: the share its disk offers (`store.estate.weight`, Tier A) and the
 // labels its failure domain is read from (`node.labels`).
 //

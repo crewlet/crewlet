@@ -5,14 +5,14 @@
  * revision is stored and activated; each node then applies it on its own
  * reconcile tick, and a node can refuse it (a provider it cannot build, an
  * MCP server it cannot start) and go on serving the previous epoch. Until
- * then the seats, the routing and every read lens still run the revision
+ * then the seats, the routing and every read screen still run the revision
  * before this one, and a strip that said "Saved" and stopped would be the
  * dashboard claiming an outcome nobody has had yet.
  *
- * So the strip watches two answers the dashboard already has: the `stream`
- * query's `applied_epoch` for this node, and the `fleet` query for every
+ * So the strip watches two things the dashboard already has: the health
+ * push's `applied_epoch` for this node, and the `fleet` query for every
  * node's `config_epoch` and `config_status`. It resolves to Applied, to
- * Applied on N of M nodes, or to the refusal with a link to the Fleet screen,
+ * Applied on N of M nodes, or to the refusal with a link to Settings › Nodes,
  * and stops polling once it has.
  *
  * It also offers the two things an operator wants right after a save: the
@@ -26,17 +26,19 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { href } from "~/app/router.tsx";
 import { plural } from "~/lib/format.ts";
 import { useQuery } from "~/lib/useQuery.ts";
-import { rest, RestError, type EngineHealth, type FleetAnswer } from "~/protocol/index.ts";
-import { useRecheck } from "~/routes/admin/recheck.ts";
+import { useEngineHealth } from "~/lib/store-hooks.ts";
+import { rest, RestError, type FleetAnswer } from "~/protocol/index.ts";
+import type { EngineHealth } from "~/contract/health.ts";
+import { useRecheck } from "~/routes/settings/recheck.ts";
 import { revisionOfEtag } from "./model/transport.ts";
 import { useSavedRevision, type SavedRevision } from "./savedRevision.ts";
 import { screenPath } from "./dialogParts.tsx";
 import {
   CheckGlyph,
-  CloseGlyph,
-  DescriptionGlyph,
-  ErrorGlyph,
-  RefreshGlyph,
+  XGlyph,
+  FileTextGlyph,
+  CircleAlertGlyph,
+  RotateCwGlyph,
 } from "@crewlethq/icons/glyphs";
 import {
   Button,
@@ -52,7 +54,8 @@ import {
 import { RECORD_MAX_HEIGHT } from "~/components/common.tsx";
 
 /**
- * How often the two answers are read while the apply is still moving. The
+ * How often the fleet is read while the apply is still moving. This node's own
+ * epoch is not read at all: it arrives on the health push every five seconds. The
  * Integrations screen settles on the same cadence after its own writes: fast
  * enough that a node applying in a second or two is seen at once, slow enough
  * not to poll an engine that is busy applying.
@@ -71,7 +74,7 @@ export interface ApplyState {
   readonly message: string;
   /** True once nothing more is expected to change. */
   readonly resolved: boolean;
-  /** The Fleet screen answers what a refusal was about. */
+  /** Settings › Nodes answers what a refusal was about. */
   readonly showFleet: boolean;
 }
 
@@ -94,7 +97,7 @@ function refusedBy(fleet: FleetAnswer, epoch: number) {
 /** What the strip says about a saved revision, from the two live answers. */
 export function applyState(
   saved: SavedRevision,
-  stream: EngineHealth | null,
+  health: EngineHealth | null,
   fleet: FleetAnswer | null,
 ): ApplyState {
   // A save whose answer was lost carries no epoch; the fleet's target is the
@@ -145,13 +148,13 @@ export function applyState(
       showFleet: false,
     };
   }
-  if (stream && (stream.applied_epoch ?? 0) >= epoch) {
+  if (health && (health.applied_epoch ?? 0) >= epoch) {
     return { tone: "positive", message: "Applied.", resolved: true, showFleet: false };
   }
   return { tone: "info", message: "The engine is applying it.", resolved: false, showFleet: false };
 }
 
-/** The first characters of a revision id, as the Configuration screen shows one. */
+/** The first characters of a revision id, as Settings › Configuration shows one. */
 export const shortRevision = (id: string) => id.slice(0, 10);
 
 export function AfterSaveStrip({
@@ -163,21 +166,16 @@ export function AfterSaveStrip({
 }) {
   const [yaml, setYaml] = useState(false);
   const [pollMs, setPollMs] = useState<number | undefined>(APPLYING_POLL_MS);
-  const stream = useQuery("stream", undefined, { pollMs });
+  const health = useEngineHealth();
   const fleet = useQuery("fleet", undefined, { pollMs });
-  const state = useMemo(
-    () => applyState(saved, stream.data, fleet.data),
-    [saved, stream.data, fleet.data],
-  );
+  const state = useMemo(() => applyState(saved, health, fleet.data), [saved, health, fleet.data]);
 
-  // Both answers, read through a ref so the recheck window is armed once per
-  // saved revision rather than on every render.
-  const both = useRef<() => void>(() => {});
-  both.current = () => {
-    stream.refetch();
-    fleet.refetch();
-  };
-  const read = useCallback(() => both.current(), []);
+  // The fleet's answer, read through a ref so the recheck window is armed once
+  // per saved revision rather than on every render. This node's epoch needs no
+  // re-read: the health push brings it.
+  const refetch = useRef<() => void>(() => {});
+  refetch.current = () => fleet.refetch();
+  const read = useCallback(() => refetch.current(), []);
   const { watching, watch } = useRecheck(read);
   useEffect(() => watch(), [saved.revisionId, watch]);
   useEffect(() => {
@@ -192,9 +190,9 @@ export function AfterSaveStrip({
           state.tone === "positive" ? (
             <CheckGlyph />
           ) : state.tone === "critical" ? (
-            <ErrorGlyph />
+            <CircleAlertGlyph />
           ) : (
-            <RefreshGlyph />
+            <RotateCwGlyph />
           )
         }
         action={
@@ -202,7 +200,7 @@ export function AfterSaveStrip({
             {saved.parentRevisionId ? (
               <ButtonLink
                 size="small"
-                variant="tertiary"
+                variant="ghost"
                 href={href(screenPath("config"), {
                   lens: "diff",
                   revision: saved.revisionId,
@@ -214,19 +212,19 @@ export function AfterSaveStrip({
             ) : (
               // The company's first revision has no parent to differ from:
               // all of it is what the save wrote.
-              <ButtonLink size="small" variant="tertiary" href={href(screenPath("config"))}>
+              <ButtonLink size="small" variant="ghost" href={href(screenPath("config"))}>
                 View the configuration
               </ButtonLink>
             )}
-            <Button size="small" variant="tertiary" onClick={() => setYaml(true)}>
+            <Button size="small" variant="ghost" onClick={() => setYaml(true)}>
               Copy as YAML
             </Button>
             {state.showFleet && (
-              <ButtonLink size="small" variant="tertiary" href={href(screenPath("fleet"))}>
+              <ButtonLink size="small" variant="ghost" href={href(screenPath("nodes"))}>
                 Open the fleet
               </ButtonLink>
             )}
-            <IconButton label="Dismiss" icon={<CloseGlyph />} size="sm" onClick={onDismiss} />
+            <IconButton label="Dismiss" icon={<XGlyph />} size="sm" onClick={onDismiss} />
           </span>
         }
       >
@@ -239,31 +237,26 @@ export function AfterSaveStrip({
 }
 
 /**
- * What a read lens says while this node is still applying the revision this
- * tab saved: the org projection it draws from is the previous one.
+ * What a read section says while this node is still applying the revision
+ * this tab saved: the org projection it draws from is the previous one.
  *
- * On the Org screen's read lenses rather than in the Builder, because that is
+ * On Agents' org chart and teams rather than in the Builder, because that is
  * where an operator goes to look at what they just changed, and the chart
  * that has not moved yet is exactly what would otherwise read as a save that
  * did nothing.
  */
 export function PreviousRevisionNote() {
   const saved = useSavedRevision();
-  const waiting = saved !== null && saved.epoch !== null;
-  // ON THE RECONCILE CADENCE, not the strip's quick one. This note lives for
-  // as long as the node has not applied the revision, which can be for ever
-  // when the node refuses it, and a node's applied epoch cannot move faster
-  // than `configplane.ReconcileInterval` anyway. The Shell already reads
-  // `stream` on the same interval; a second, faster poller of the same
-  // answer would be paid for the life of the tab.
-  const stream = useQuery("stream", undefined, {
-    enabled: waiting,
-    pollMs: waiting ? RECONCILE_POLL_MS : undefined,
-  });
+  // THE HEALTH PUSH, which carries this node's applied epoch every five
+  // seconds to every tab — there is nothing to poll. This note lives for as
+  // long as the node has not applied the revision, which can be for ever when
+  // the node refuses it, so a poller of its own would be paid for the life of
+  // the tab.
+  const health = useEngineHealth();
   if (!saved || saved.epoch === null) return null;
-  if ((stream.data?.applied_epoch ?? 0) >= saved.epoch) return null;
+  if ((health?.applied_epoch ?? 0) >= saved.epoch) return null;
   return (
-    <Callout variant="neutral" icon={<RefreshGlyph />}>
+    <Callout variant="neutral" icon={<RotateCwGlyph />}>
       This node is still applying revision{" "}
       <InlineCode>{shortRevision(saved.revisionId)}</InlineCode>, so what is drawn below is the
       revision before it.
@@ -318,7 +311,7 @@ function YamlDialog({ savedRevision, onClose }: { savedRevision: string; onClose
       open
       stackBody
       title="The company as YAML"
-      icon={<DescriptionGlyph />}
+      icon={<FileTextGlyph />}
       size="lg"
       onClose={onClose}
       footer={

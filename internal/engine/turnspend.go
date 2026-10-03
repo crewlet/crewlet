@@ -3,291 +3,229 @@ package engine
 import (
 	"context"
 	"errors"
-	"fmt"
-	"strconv"
 	"time"
 
-	"github.com/crewlet/crewlet/internal/agent/builtin"
+	"github.com/crewlet/crewlet/internal/agent/execstate"
 	"github.com/crewlet/crewlet/internal/agent/phase"
 	"github.com/crewlet/crewlet/internal/agent/runner"
 	"github.com/crewlet/crewlet/internal/agent/turn"
-	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
-	"github.com/crewlet/crewlet/internal/sandbox"
-	"github.com/crewlet/crewlet/internal/statelog"
+	"github.com/crewlet/crewlet/internal/textcut"
 	"github.com/crewlet/crewlet/internal/tracker"
 )
 
-// A TURN'S SPEND, ON THE TASK IT WAS SPENT ON.
+// Spend is on the task: what one completed turn SEGMENT charges to the work
+// item the turn is on (ADR-0022).
 //
-// The tracker keeps, per task, what the work has cost — turns, rounds, tokens
-// and wall-clock — as eight counters its applier adds each turn's record to
-// ([tracker.Writer.RecordTurn]). Nothing called it: every task in every
-// company reported that it had cost nothing, and every total, sort and
-// filter over the `spend_*` columns answered over zeros.
+// # A segment, not a turn
 //
-// # Which task a turn is spent on
+// A turn that detaches a coding run completes more than once under one run id:
+// the dispatch segment parks, and each collected run resumes a segment of its
+// own — minutes later, often on another node. Each segment charges what IT
+// spent, under an operation id naming the segment:
 //
-// The one its TRIGGER names, and only that one: a turn the tracker woke about
-// a task — assigned, mentioned, asked, unblocked, commented on — is a turn
-// spent on that task. That is derived from the wake the change feed built,
-// never from what the turn's tools touched afterwards: a turn that files three
-// follow-ups while answering a chat message was not spent on any of them, and
-// splitting its cost by the calls a model chose to make would make the counter
-// a record of the model's choices rather than of the work. A turn no task woke
-// is spent on none, and records nothing here — its cost is still the seat's,
-// on every other spend surface.
+//	turn/<run id>/dispatch
+//	turn/<run id>/resume/<launch id>
 //
-// # Once per turn, whichever half it is
+// so a segment re-run after a failed resume, or a record delivered twice,
+// lands on one turn row and is counted once. ONLY THE DISPATCH SEGMENT COUNTS
+// A TURN (`turns=1`): a resumed segment is more of the same turn, and counting
+// it again would put three turns on a task one turn worked on.
 //
-// A turn that detached a coding run is two executions: the half that parked
-// and the half that resumed, possibly on another node. Each records its own
-// spend — its phases' tokens and its own wall-clock — and only the first
-// counts as a TURN, while the second's rounds are the ones it ran past the
-// round it re-entered. The two sum to one turn. The resumed half learns the
-// task from the run's row, having no trigger of its own.
+// # What a segment's tokens are
 //
-// # And a coding run's tokens with it
+// Its own phases, as their records state them — a phase that resumed across a
+// park states both halves, which is why a suspended phase is paid by the
+// segment it finished in and never twice — plus the workers it delegated to
+// and the extension judge, whose calls are metered beside the phases rather
+// than inside them. A resumed segment adds the collected coding run it resumed
+// from, which no phase of the engine's own ran. REFLECTION IS NOT IN IT: the
+// learning pass runs after the turn is over, on the seat's behalf rather than
+// the item's, and charging it to whatever the turn was on would make a task's
+// cost depend on how much its seat had to remember.
 //
-// What a detached coding agent spent inside its box is no phase's spend — the
-// turn was suspended while it ran — so neither half carries it. It is recorded
-// when the run is COLLECTED, as a record of its own on the same task: a run
-// that parks on a question is resumed by a person's answer, which collects
-// nothing, so a run's tokens reach the task there or never ([runSpender]).
-// It counts no turn and no round, and no wall-clock: a task's wall-clock is
-// the time the engine's turns on it ran, which is what every turn's duration
-// means on every other surface.
+// # A segment charged to nothing hands its spend on
 //
-// # And never twice for one execution
+// A turn nothing at dispatch named an item for may still be charged at its end
+// by a sole write, and a segment that parks cannot conclude that. So such a
+// segment charges nothing and CARRIES what it spent on the suspended
+// conversation (execstate.State.Uncharged), and the segment that finishes the
+// turn pays it with its own if it is charged, turn count included. If it is
+// not, nothing ever is — which is what an unattributed turn is.
 //
-// The operation id is DERIVED from the run and the round it began at, so a
-// retry of the write — the outcome unknown, the data node that took it gone —
-// reproduces it, and the applier adds a turn's spend only for an operation it
-// has not applied. A collected run's is derived from the launch it collected
-// and MINTED AT ITS FIRST COLLECT ([sandbox.PendingRun.CollectedAt]), which the
-// run's row carries across every retry of that collect, so every retry of the
-// completion that collects the same job reproduces it.
-//
-// # Minted at the collect, never at the row's creation
-//
-// An operation's instant is what an operation ledger that lost rows judges it
-// by ([statelog.Result.Unvouched]): one minted before the instant the ledger
-// may have lost rows from, with no row for it, is answered `unknown` and never
-// published, on every node whose ledger the retention sweep has passed. The
-// row is created at the turn's FIRST launch and a later launch keeps it, so a
-// turn parked on a question for longer than the ledger's retention and then
-// launched again derived its run's spend from an instant every node's sweep
-// had passed — a spend no node would ever record. The first collect is the
-// first attempt, so nothing any node lost can predate it.
+// ONLY A NATIVE ITEM IS CHARGED: the counters are the engine's own tracker's
+// rows. A turn on a Jira issue or a pull request is attributed on its events
+// and charges nothing here.
 
-// turnSpendBudget bounds the write of one turn's spend.
-//
-// TWICE [statelog.DefaultResolveBudget]: one append resolves within the
-// resolve budget, and the second is the room a node without `data` needs to
-// ask the next data node when the first did not answer. It is spent AFTER the
-// turn, on a context the turn's cancellation does not reach — a drain that
-// lets a turn finish must not then drop what it cost — so it is bounded here
-// rather than by the caller.
-const turnSpendBudget = 2 * statelog.DefaultResolveBudget
-
-// workItemOf is the tracker task a partition's wakes are about: the one task
-// every tracker wake in it names, or empty when none does or they disagree.
-//
-// A TASK WAKE ONLY. A wake about a person's own priority list names the task
-// that reached its top, but the turn it starts is about the list — and a turn
-// woken by anything else names no task at all.
-func workItemOf(evs []*events.Event) string {
-	item := ""
-	for _, n := range notificationsIn(evs) {
-		if n.NotificationSource != tracker.Source ||
-			n.Metadata[tracker.MetaObject] != string(tracker.KindTask) {
-			continue
-		}
-		id := n.Metadata[tracker.MetaTaskID]
-		switch {
-		case id == "":
-			continue
-		case item != "" && item != id:
-			// ONE PARTITION IS ONE TASK, because the tracker's wakes
-			// partition on the task's key; two ids here is a partition
-			// this derivation does not understand, and a guess would
-			// charge one task for another's work.
-			return ""
-		}
-		item = id
-	}
-	return item
+// segmentCharge is what one completed segment charges, decided once.
+type segmentCharge struct {
+	// item is the work item the segment is charged to, nil for none.
+	item *types.WorkItem
+	// opID is the segment's operation id, and the turn row's.
+	opID string
+	// record is the turn record to publish when item is native.
+	record tracker.TurnRecord
+	// carry is what a parked segment charged to nothing hands on to the
+	// segment that finishes the turn; nil otherwise.
+	carry *execstate.Uncharged
 }
 
-// recordTaskSpend adds what this execution of a turn cost to the task it was
-// spent on — see the file's doc. Nothing when no task woke it, or when the
-// company does not run the native tracker.
-func (e *Engine) recordTaskSpend(ctx context.Context, t turnTelemetry,
-	spend runner.Spend, res turn.Result) {
+// native reports a charge this engine's own tracker takes: one on a native
+// work item. A turn on nothing charges nothing, and a turn on another
+// tracker's item is attributed on its events and has no row here to add to.
+func (c segmentCharge) native() bool {
+	return c.item != nil && c.item.Backend == types.WorkNative
+}
 
-	if t.workItem == "" {
+// segmentOpID is the operation id of one segment of a run.
+func segmentOpID(runID, launch string, resumed bool) string {
+	if !resumed {
+		return "turn/" + runID + "/dispatch"
+	}
+	return "turn/" + runID + "/resume/" + launch
+}
+
+// chargeFor decides what this segment charges: its item from the turn's rules,
+// and its spend from the runner's tally, the collected run it resumed from and
+// whatever an earlier segment handed on.
+func (t turnTelemetry) chargeFor(spend runner.Spend, res turn.Result, err error,
+	ended time.Time,
+) segmentCharge {
+	item, _ := completedWorkItem(t.workItem, t.workItemBasis, t.written, res.Suspended)
+	own := tracker.TurnSpend{
+		Rounds:     spend.Rounds,
+		Input:      spend.InputTokens + spend.WorkerInput + spend.JudgeInput + t.jobInput,
+		Output:     spend.OutputTokens + spend.WorkerOutput + spend.JudgeOutput + t.jobOutput,
+		CacheRead:  spend.CacheRead,
+		CacheWrite: spend.CacheWrite,
+		WallMs:     int(max(ended.Sub(t.startedAt), 0) / time.Millisecond),
+		Workers:    spend.Workers,
+		SentBack:   spend.SentBack,
+	}
+	if !t.resumed {
+		own.Turns = 1
+	}
+	total := addUncharged(own, t.uncharged)
+	charge := segmentCharge{item: item, opID: segmentOpID(t.runID, t.launchID, t.resumed)}
+	if item == nil {
+		if res.Suspended {
+			charge.carry = unchargedOf(total)
+		}
+		return charge
+	}
+	charge.record = tracker.TurnRecord{
+		Task: item.ID, Seat: t.handle, TurnID: t.runID, Trigger: t.trigger.Type,
+		Outcome: segmentOutcome(res, err), Phases: spend.Phases, Spend: total,
+		// WHAT THE SEGMENT DID, cut to the record's own bound here — the
+		// writer refuses an overlong one rather than cut it, since every
+		// node would store it. The same summary the turn's completion
+		// event carries, so the task's card and the trace agree.
+		Summary: textcut.Within(planSummary(res), tracker.MaxTurnSummary),
+		Review:  textcut.Within(spend.Review, tracker.MaxTurnSummary),
+		Tools:   tracker.CountTurnTools(workTools(spend.AllTools)),
+	}
+	// WHICH PHASE BROKE, only where the segment is recorded as failed: a
+	// phase can fail and the turn still end otherwise (a person's stop is
+	// not a failure), and a name beside a success would be a claim about a
+	// turn that did not fail.
+	if charge.record.Outcome == string(phase.Failed) {
+		charge.record.FailedIn = spend.FailedIn
+	}
+	return charge
+}
+
+// segmentOutcome is how a segment ended, in the vocabulary a task's turn list
+// reads: parked on a coding run, failed, or the turn's own decision.
+func segmentOutcome(res turn.Result, err error) string {
+	switch {
+	case res.Suspended:
+		return "suspended"
+	case err != nil || res.Decision == phase.Failed:
+		return string(phase.Failed)
+	}
+	return string(res.Decision)
+}
+
+// addUncharged folds what an earlier segment handed on into this one's spend.
+func addUncharged(s tracker.TurnSpend, u *execstate.Uncharged) tracker.TurnSpend {
+	if u == nil {
+		return s
+	}
+	s.Turns += u.Turns
+	s.Rounds += u.Rounds
+	s.Input += u.Input
+	s.Output += u.Output
+	s.CacheRead += u.CacheRead
+	s.CacheWrite += u.CacheWrite
+	s.WallMs += u.WallMs
+	s.Workers += u.Workers
+	s.SentBack += u.SentBack
+	return s
+}
+
+// unchargedOf is a spend in the suspended conversation's own shape.
+func unchargedOf(s tracker.TurnSpend) *execstate.Uncharged {
+	return &execstate.Uncharged{
+		Turns: s.Turns, Rounds: s.Rounds, Input: s.Input, Output: s.Output,
+		CacheRead: s.CacheRead, CacheWrite: s.CacheWrite, WallMs: s.WallMs,
+		Workers: s.Workers, SentBack: s.SentBack,
+	}
+}
+
+// turnRecorder is the one write a segment's charge needs, declared by its one
+// caller.
+type turnRecorder interface {
+	RecordTurn(ctx context.Context, opID string, turn tracker.TurnRecord) (tracker.WriteResult, error)
+}
+
+// recordTurnSpend publishes a segment's charge to its native work item.
+//
+// TELEMETRY NEVER FAILS THE WORK, so this returns nothing, on the terms
+// [Engine.publishTurnCompleted] states: the turn has finished and its result is
+// already the caller's answer. A charge that could not be written is logged
+// naming the item and the segment — the spend is still on the seat's counters
+// and in the usage domain; what is lost is the task's share of it.
+func (e *Engine) recordTurnSpend(ctx context.Context, charge segmentCharge) {
+	if !charge.native() {
 		return
 	}
-	halves, ok := e.trackerHalves()
-	if !ok {
+	writer := e.TrackerWriter()
+	if writer == nil {
+		// A NATIVE ITEM ON A NODE WITH NO NATIVE TRACKER is a company that
+		// moved its tracker off the engine while the turn ran: there are
+		// no rows here to charge.
 		return
 	}
-	record := turnRecordOf(t, spend, res, time.Now().UTC())
-	opID := statelog.DeriveOpID(t.startedAt, "turn_spend", t.runID,
-		strconv.Itoa(t.resumedRound))
-	// TELEMETRY NEVER FAILS THE WORK, and a turn's own spend has no retry:
-	// the turn is over when it is written. So a spend that could not be
-	// recorded is logged and whatever spent it stands.
-	if err := writeSpend(ctx, halves, opID, record); err != nil {
-		log.WarnContext(ctx, "turn_spend_unrecorded", "handle", record.Seat,
-			"turn_id", record.TurnID, "task", record.Task, "operation", opID,
-			"error", err.Error(),
-			"detail", "the work stands; what it cost may be missing from the "+
-				"task's spend, and every other spend surface still counts it")
+	e.chargeSegment(ctx, writer.As(charge.record.Seat, tracker.AuthorAgent,
+		tracker.Provenance{TurnID: charge.record.TurnID}), charge)
+}
+
+// chargeSegment is [Engine.recordTurnSpend] over the write it needs.
+func (e *Engine) chargeSegment(ctx context.Context, w turnRecorder, charge segmentCharge) {
+	if _, err := w.RecordTurn(ctx, charge.opID, charge.record); err != nil {
+		level := log.WarnContext
+		if errors.Is(err, context.Canceled) {
+			level = log.InfoContext
+		}
+		level(ctx, "turn_spend_unrecorded", "turn_id", charge.record.TurnID,
+			"op_id", charge.opID, "task", charge.item.ID, "key", charge.item.Key,
+			"tokens", charge.record.Spend.Tokens(), "error", err.Error(),
+			"detail", "the segment's spend is on the seat's counters and the "+
+				"usage history, and not on the task it worked on")
 	}
 }
 
-// errSpendUnknown is a spend write whose outcome never came back: it may
-// have landed. The operation id makes a repeat of it count it at most once.
-var errSpendUnknown = errors.New("engine: whether the task's spend counts this " +
-	"is unknown")
-
-// writeSpend writes one spend record as the seat it belongs to, bounded — see
-// the file's doc — and answers whether its fate is SETTLED: nil when the
-// task's spend counts it, or never can because the task is gone for good —
-// purged, or created by no record on its log ([tracker.ErrNoTask], which no
-// retry changes) — or when no repeat here can learn whether it does (an
-// unknown the answering node's ledger cannot vouch for); and an error when
-// whether it counts is not known YET — the write refused for now, unanswered,
-// or answered with an outcome a repeat resolves — which a repeat under the
-// same operation id settles without counting it twice.
-func writeSpend(ctx context.Context, halves trackerSeams, opID string,
-	record tracker.TurnRecord) error {
-
-	writer := halves.as(builtin.Actor{
-		Handle: record.Seat, Kind: tracker.AuthorAgent, TurnID: record.TurnID,
-	})
-	bounded, cancel := context.WithTimeout(context.WithoutCancel(ctx), turnSpendBudget)
-	defer cancel()
-	result, err := writer.RecordTurn(bounded, opID, record)
-	switch {
-	case err == nil && result.Outcome == statelog.OutcomeUnknown && result.Unvouched:
-		// UNKNOWN FOR GOOD HERE, unlike a lost acknowledgement: the ledger
-		// of the node that answered cannot vouch for an operation minted
-		// before it may have lost rows, and answers every repeat of it the
-		// same way until the record reaches it — which, if the first
-		// attempt never landed, it never does. Repeating it is a caller
-		// held for ever on telemetry, so the fate is settled as unknown
-		// and said by name.
-		minted, _ := statelog.OpMintedAt(opID)
-		log.WarnContext(ctx, "turn_spend_unvouched", "handle", record.Seat,
-			"turn_id", record.TurnID, "task", record.Task, "operation", opID,
-			"minted_at", minted,
-			"detail", "the data node that answered cannot say whether the task's "+
-				"spend counts this: its operation ledger may have lost rows from "+
-				"before the operation was minted, and holds none for it; every "+
-				"other spend surface still counts it")
-		return nil
-	case errors.Is(err, tracker.ErrNoTask):
-		log.InfoContext(ctx, "turn_spend_task_gone", "handle", record.Seat,
-			"turn_id", record.TurnID, "task", record.Task, "operation", opID,
-			"error", err.Error(),
-			"detail", "the task is gone for good — purged, or created by no record "+
-				"on its log, as the error says — so nothing it cost can be recorded "+
-				"against it; every other spend surface still counts it")
-		return nil
-	case err != nil:
-		return err
-	case result.Outcome == statelog.OutcomeUnknown:
-		return errSpendUnknown
+// workTools is the calls a segment made that did something, without the ones
+// that only carried the phase's own answer out: `submit_work` is how an
+// executor says what it concluded (`agent/structured`), and a turn card
+// listing it beside the tools that touched the company reads as work done.
+func workTools(calls []string) []string {
+	out := make([]string, 0, len(calls))
+	for _, name := range calls {
+		if name == runner.SubmitWorkTool || name == runner.SubmitReviewTool {
+			continue
+		}
+		out = append(out, name)
 	}
-	return nil
-}
-
-// runSpender records a collected coding run's tokens on the task its turn is
-// spent on — [sandbox.Spender], and see the file's doc.
-type runSpender struct{ engine *Engine }
-
-// RunSpent implements [sandbox.Spender]: nil when the run's spend is on its
-// task or never can be, and an error — which holds the collect for its retry —
-// when whether it is on it is not known yet ([writeSpend]).
-func (s runSpender) RunSpent(ctx context.Context, run sandbox.PendingRun,
-	result sandbox.Result) error {
-
-	if run.WorkItem == "" || result.InputTokens+result.OutputTokens == 0 {
-		return nil
-	}
-	halves, ok := s.engine.trackerHalves()
-	if !ok {
-		return nil
-	}
-	// THE LAUNCH, minted at its FIRST COLLECT — see the file's doc: every
-	// retry of the completion collects the same finished job from the same
-	// row, which carries that instant, and a second job in the same turn is
-	// a new launch with spend of its own.
-	if run.CollectedAt.IsZero() {
-		return fmt.Errorf("engine: run %s's launch %s reached its spend with no "+
-			"collect instant, which its operation is minted at — the collect "+
-			"stamps it before it records anything", run.TurnID, run.LaunchID)
-	}
-	opID := statelog.DeriveOpID(run.CollectedAt, "run_spend", run.TurnID, run.LaunchID)
-	return writeSpend(ctx, halves, opID, runRecordOf(run, result))
-}
-
-// runRecordOf is one collected run's spend as the tracker's turn record
-// carries it: tokens, and no turn, round or wall-clock of its own.
-func runRecordOf(run sandbox.PendingRun, result sandbox.Result) tracker.TurnRecord {
-	outcome := "failed"
-	switch {
-	case result.NeedsInput:
-		outcome = "needs_input"
-	case result.Success:
-		outcome = "succeeded"
-	}
-	return tracker.TurnRecord{
-		Task: run.WorkItem, Seat: run.AgentHandle, TurnID: run.TurnID,
-		Trigger: types.SandboxRunCompleted{}.EventType(), Outcome: outcome,
-		Spend: tracker.TurnSpend{
-			Input: result.InputTokens, Output: result.OutputTokens,
-		},
-	}
-}
-
-// turnRecordOf is one execution's spend as the tracker's turn record carries
-// it.
-func turnRecordOf(t turnTelemetry, spend runner.Spend, res turn.Result,
-	ended time.Time) tracker.TurnRecord {
-
-	turns := 1
-	if t.resumedRound > 0 {
-		// THE SAME TURN, resumed: the half that parked counted it.
-		turns = 0
-	}
-	outcome := spend.Outcome
-	if outcome == "" {
-		outcome = string(res.Decision)
-	}
-	var phases []string
-	if spend.ExecuteModel != "" {
-		phases = append(phases, phase.Execute.String())
-	}
-	if spend.ReviewModel != "" {
-		phases = append(phases, phase.Review.String())
-	}
-	return tracker.TurnRecord{
-		Task: t.workItem, Seat: t.handle, TurnID: t.runID,
-		Trigger: t.trigger.Type, Outcome: outcome, Phases: phases,
-		Spend: tracker.TurnSpend{
-			Turns: turns,
-			// THE ROUNDS THIS EXECUTION RAN: a resumed turn re-enters
-			// the round it parked in and counts on from there, and the
-			// rounds up to it are the parked half's.
-			Rounds:     max(res.Rounds-t.resumedRound, 0),
-			Input:      spend.InputTokens,
-			Output:     spend.OutputTokens,
-			CacheRead:  spend.CacheRead,
-			CacheWrite: spend.CacheWrite,
-			WallMs:     int(max(ended.Sub(t.startedAt), 0) / time.Millisecond),
-		},
-	}
+	return out
 }

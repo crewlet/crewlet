@@ -26,7 +26,7 @@ A satellite comes in two shapes, and the difference is the `data` role:
 Which of the two its broker is — its **broker kind** — comes from its `stream`
 block, never from its roles: `stream.leaf.urls` makes it a leaf, and every node
 advertises the kind it runs on its presence (`crewlet fleet broker list`, or
-the Fleet screen's Broker column). See
+the Broker column on **Settings › Nodes**). See
 [The broker: members and leaves](fleet.md#the-broker-members-and-leaves).
 
 **Stateless is what you want for an agent host you intend to keep small and
@@ -222,7 +222,7 @@ crewlet run -roles seats
 
 ## Verify it landed
 
-The **Fleet** screen in the dashboard is the direct answer: it reads the
+The **Settings › Nodes** screen in the dashboard is the direct answer: it reads the
 lease table, so it gives the same picture from whichever node you happen
 to reach. Look for the satellite in *Nodes* with its roles and labels,
 and for the pinned handle in *Seat ownership* against that node.

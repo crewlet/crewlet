@@ -30,7 +30,7 @@ Call `lookup_colleague` for their identity before writing the body. The surfaces
 **Sharing links.** When you share a link to a work item or a page, build it on this deployment's own address:
 
 - **Work item:** `${crewlet_base_url}/#/work/{KEY}` — e.g. `ENG-42`
-- **Page:** `${crewlet_base_url}/#/pages/{page-id}`
+- **Page:** `${crewlet_base_url}/#/knowledge/pages/{page-id}`
 
 `${crewlet_base_url}` is filled in for you by the engine from where this deployment answers; if it still shows as a literal dollar-brace placeholder, this deployment has no public address configured — say so rather than guessing a URL, and share the item's KEY instead, which a colleague can paste into the board's own search.
 

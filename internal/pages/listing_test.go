@@ -2,6 +2,8 @@ package pages_test
 
 import (
 	"encoding/json"
+	"errors"
+	"slices"
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/pages"
@@ -34,10 +36,20 @@ func TestAPageListingWindowsAfterItFilters(t *testing.T) {
 	if got := titles(first); len(got) != 2 || got[0] != "Alpha" || got[1] != "Beta" {
 		t.Fatalf("the first page of two is %v, want Alpha and Beta", got)
 	}
-	second := r.list(pages.Filter{Container: "ENG", Limit: 2, Offset: 2})
+	if first.Total != 3 || first.After == "" {
+		t.Fatalf("the first page of two says total %d and after %q, want 3 and a "+
+			"cursor — a window that stops at its limit must say there is more",
+			first.Total, first.After)
+	}
+	second := r.list(pages.Filter{Container: "ENG", Limit: 2, After: first.After})
 	if got := titles(second); len(got) != 1 || got[0] != "Gamma" {
-		t.Fatalf("the second page of two is %v, want Gamma alone — an offset "+
+		t.Fatalf("the second page of two is %v, want Gamma alone — a cursor "+
 			"that did not reach the query pages the same rows for ever", got)
+	}
+	if second.After != "" || second.Total != 3 {
+		t.Fatalf("the last page says after %q and total %d, want no cursor and "+
+			"the same total — the total is the whole listing, not what is left",
+			second.After, second.Total)
 	}
 
 	// AND A FILTER VALUE BESIDE THE WINDOW. This is the case a mis-ordered
@@ -67,6 +79,99 @@ func TestAPageReportsItsChildren(t *testing.T) {
 	if len(detail.Children) != 1 || detail.Children[0].Title != "Rollback" {
 		t.Fatalf("the page reports children %v, want Rollback alone",
 			titles(pages.Listing{Pages: detail.Children}))
+	}
+	if detail.ChildrenTotal != 1 {
+		t.Fatalf("the page reports %d children in all, want 1", detail.ChildrenTotal)
+	}
+}
+
+// A "LOAD MORE" CONTINUES WHERE IT STOPPED, even when the listing moved
+// underneath it.
+//
+// This is what the cursor is for and what an offset could not do: a page
+// created BEFORE the reader's position shifts every later row one place, so
+// the offset's second window repeated the row the first one ended on. The
+// cursor names a place in the ORDER, and the new page lands behind it.
+func TestAListingCursorSurvivesAWriteBeforeIt(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+	for _, title := range []string{"Bravo", "Charlie", "Delta", "Echo"} {
+		r.write(author("jane"), pages.NewPage{Title: title, Body: "prose"})
+	}
+	first := r.list(pages.Filter{Container: "ENG", Limit: 2})
+	if got := titles(first); len(got) != 2 || got[1] != "Charlie" {
+		t.Fatalf("the first window is %v, want Bravo and Charlie", got)
+	}
+	// SORTS AHEAD OF EVERYTHING ALREADY READ.
+	r.write(author("jane"), pages.NewPage{Title: "Alpha", Body: "prose"})
+
+	second := r.list(pages.Filter{Container: "ENG", Limit: 2, After: first.After})
+	if got := titles(second); len(got) != 2 || got[0] != "Delta" || got[1] != "Echo" {
+		t.Fatalf("the window after Charlie is %v, want Delta and Echo — Charlie "+
+			"again is the repeat an offset gives", got)
+	}
+	if second.Total != 5 {
+		t.Fatalf("the total is %d after the create, want 5", second.Total)
+	}
+}
+
+// A CURSOR THIS READER DID NOT MINT IS REFUSED rather than read as "from the
+// start", which would draw the first page again under a "Load more".
+func TestAListingRefusesACursorItDidNotMint(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+	r.write(author("jane"), pages.NewPage{Title: "Alpha", Body: "prose"})
+	for _, bad := range []string{"not base64!", "e30"} { // e30 is `{}`
+		_, err := r.reader.List(t.Context(), pages.Filter{Container: "ENG", After: bad},
+			statelog.Freshness{Level: statelog.ReadSession})
+		if !errors.Is(err, pages.ErrBadCursor) {
+			t.Errorf("after=%q answered %v, want ErrBadCursor", bad, err)
+		}
+	}
+}
+
+// A TREE LOADS ONE LEVEL AT A TIME, and each row says whether it opens.
+//
+// `Roots` is the top of a container and `ParentID` one page's children; the
+// `children` count is what a tree draws its expander off, so it must count
+// the children THE SAME LISTING would show — a trashed child counted is an
+// expander that opens onto nothing.
+func TestATreeLevelSaysWhichRowsOpen(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+	runbooks := r.write(author("jane"), pages.NewPage{Title: "Runbooks", Body: "index"})
+	r.write(author("jane"), pages.NewPage{
+		Title: "Provisioner", Body: "prose", ParentID: runbooks.Page.ID,
+	})
+	gone := r.write(author("jane"), pages.NewPage{
+		Title: "Retired", Body: "prose", ParentID: runbooks.Page.ID,
+	})
+	if _, err := r.store.Trash(t.Context(), author("jane"), gone.Page.ID); err != nil {
+		t.Fatalf("Trash: %v", err)
+	}
+	lonely := r.write(author("jane"), pages.NewPage{Title: "Handbook", Body: "prose"})
+	r.drain()
+
+	live := []pages.Status{pages.StatusPublished, pages.StatusDraft}
+	top := r.list(pages.Filter{Container: "ENG", Roots: true, Status: live})
+	if got := titles(top); len(got) != 2 || got[0] != "Handbook" || got[1] != "Runbooks" {
+		t.Fatalf("the top of ENG is %v, want Handbook and Runbooks — a child "+
+			"listed at the top is a page drawn twice", got)
+	}
+	opens := map[string]int{}
+	for _, p := range top.Pages {
+		opens[p.ID] = p.Children
+	}
+	if opens[runbooks.Page.ID] != 1 {
+		t.Errorf("Runbooks counts %d children, want 1 — its trashed child is "+
+			"not in a listing of live pages", opens[runbooks.Page.ID])
+	}
+	if opens[lonely.Page.ID] != 0 {
+		t.Errorf("Handbook counts %d children, want 0", opens[lonely.Page.ID])
+	}
+	under := r.list(pages.Filter{ParentID: runbooks.Page.ID, Status: live})
+	if got := titles(under); len(got) != 1 || got[0] != "Provisioner" || under.Total != 1 {
+		t.Fatalf("under Runbooks is %v (total %d), want Provisioner alone", got, under.Total)
 	}
 }
 
@@ -450,5 +555,39 @@ func TestAListingStatingNoCoverageSendsNone(t *testing.T) {
 	stated := pages.Listing{Coverage: statelog.Coverage{Addressed: 1, Answered: []string{"pages.000"}}}
 	if _, present := keys(stated)["coverage"]; !present {
 		t.Error("a listing stating its coverage did not send it")
+	}
+}
+
+// A SAVE'S EXCERPT IS WHAT ITS WRITER SAID, never a line of the page.
+//
+// With no message the excerpt used to fall back to the body's first line, so
+// every such save showed the page's opening heading under the saver's name —
+// on the activity feed and in each watcher's wake — reading as a change note
+// nobody wrote, and one that is the same before and after an edit anywhere
+// below it.
+func TestASaveExcerptIsItsMessageAndNothingElse(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+	page := r.write(author("jane"), pages.NewPage{Title: "Runbook", Body: "## Paging rules\n\nv1"})
+	if _, err := r.store.SavePage(t.Context(), author("jane"), page.Page.ID,
+		pages.Save{BaseVersion: 1, Body: ptr("## Paging rules\n\nv2")}); err != nil {
+		t.Fatalf("save: %v", err)
+	}
+	r.drain()
+	if _, err := r.store.SavePage(t.Context(), author("bob"), page.Page.ID,
+		pages.Save{BaseVersion: 2, Body: ptr("## Paging rules\n\nv3"), Message: "raise the grace"}); err != nil {
+		t.Fatalf("save: %v", err)
+	}
+	r.drain()
+
+	var saves []string
+	for _, change := range r.activity(pages.PageActivityQuery{Page: page.Page.ID}).Changes {
+		if change.Kind == pages.ChangeSaved {
+			saves = append(saves, change.Excerpt)
+		}
+	}
+	// Newest first.
+	if want := []string{"raise the grace", ""}; !slices.Equal(saves, want) {
+		t.Fatalf("save excerpts = %q, want %q", saves, want)
 	}
 }

@@ -7,6 +7,7 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/store"
 	"github.com/crewlet/crewlet/internal/tracker"
+	"github.com/crewlet/crewlet/internal/usage"
 )
 
 // The layouts this build knows how to describe, and the partition counts a
@@ -33,11 +34,13 @@ import (
 //
 //	                                            T = 64            T = 256
 //	partition logs: 2T (tracker + vectors)
-//	  + 2·T/4 (pages + vectors) + 1 (company)   161               641
+//	  + 2·T/4 (pages + vectors)
+//	  + 2 (company: tracker + usage)            162               642
 //	durable consumers, each at its stream's
 //	  replicas: a wake feed per tracker,
-//	  pages and company log (T + T/4 + 1),
-//	  plus an applier per holder per log        81 + 483 = 564    321 + 1,923 = 2,244
+//	  pages and company tracker log
+//	  (T + T/4 + 1), plus an applier per
+//	  holder per log                            81 + 486 = 567    321 + 1,926 = 2,247
 //	fixed: engine streams (6) + coordination
 //	  buckets (19 + the estate map's)           26                26
 //	files on a node holding every partition
@@ -54,9 +57,11 @@ import (
 // 513-stream point is therefore the one 256 was judged by, and its idle cost
 // is only affordable with the state-log pull answered on one standing inbox
 // (the per-pull poll measured 1.3–3 cores at 1,539 consumers). At T = 256 the
-// 641 here is a quarter beyond the measured 513, so the activation step
-// measures the 641-stream point with these consumer counts before it merges,
-// rather than extrapolating it.
+// 642 here is a quarter beyond the measured 513, so the activation step
+// measures the 642-stream point with these consumer counts before it merges,
+// rather than extrapolating it. The 642 is that 641 and the usage domain's one
+// log, which shares the company partition (see [DefaultLayoutOne]) and has no
+// wake feed — a node-day wakes nobody.
 //
 // # Every applier at its stream's replicas
 //
@@ -64,12 +69,12 @@ import (
 // (internal/queue/jetstream's domain consumer), so it takes its stream's, and
 // the table counts it there. An applier at consumer replicas 1 would take two
 // of its three raft replicas off the broker for every holder of every log —
-// 3,846 of the 8,733 replicas the table counts at T = 256 — and it is NOT
+// 3,852 of the 8,745 replicas the table counts at T = 256 — and it is NOT
 // applied: the broker places an R1 consumer on one of its stream's peers at
 // random, so restarting that one member stalls every applier whose consumer
 // sits there until it is back, where at the stream's replicas the consumer
 // fails over with it. Whether that stall is worth the replicas it saves is
-// measured at the 641-stream point before the partitioned estate activates;
+// measured at the 642-stream point before the partitioned estate activates;
 // until then every applier keeps its stream's replica count. Counted at R = 1
 // here, the table promised a broker the engine does not build.
 //
@@ -106,8 +111,8 @@ const (
 	// rule 4 it keeps a tracker partition near 64 GB at 10,000 seats in year
 	// five where 64 would put it at 257 GB. The price is four times the
 	// broker cost of 64 on every axis, which is why a fleet at this count
-	// runs five broker members rather than three (1,747 raft replicas per
-	// member — the table's 2,911 streams and consumers at three replicas
+	// runs five broker members rather than three (1,749 raft replicas per
+	// member — the table's 2,915 streams and consumers at three replicas
 	// each, over five — against 2,082 at the measured point), and why rule
 	// 2 — a single
 	// node holding all 321 partition files — is measured before activation.
@@ -179,12 +184,16 @@ func estateSpec(domain statelog.Domain) statelog.StreamSpec {
 // space carrying the pages' log and theirs — vectors co-located with the
 // documents they embed, so a partition's embedding selection stays one
 // statement over one file — and the company space carrying the tracker's
-// company-wide objects in one partition.
+// company-wide objects and the whole usage domain in one partition: a node-day
+// is a census row every spend window reads across every seat, so dividing it
+// would make every spend answer a gather over a table that is small by
+// construction (see usage.LogMaxBytes).
 func DefaultLayoutOne() statelog.Layout {
 	trackerLog, vectors, pagesLog := tracker.Domain{}.Name(), search.Domain{}.Name(), pages.Domain{}.Name()
+	spend := usage.Domain{}.Name()
 	return statelog.Layout{Number: 1, Spaces: []statelog.SpaceLayout{
 		{Space: statelog.SpaceTracker, Partitions: DefaultTrackerPartitions, Domains: []string{trackerLog, vectors}},
 		{Space: statelog.SpacePages, Partitions: DefaultPagesPartitions, Domains: []string{pagesLog, vectors}},
-		{Space: statelog.SpaceCompany, Partitions: CompanyPartitions, Domains: []string{trackerLog}},
+		{Space: statelog.SpaceCompany, Partitions: CompanyPartitions, Domains: []string{trackerLog, spend}},
 	}}
 }

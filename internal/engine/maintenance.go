@@ -122,6 +122,12 @@ func (e *Engine) maintenanceJobs() []maintenance.Job {
 		// every listing that meets one pays a leader read for it. See
 		// [maintenance.MarkerJobs].
 		jobs = append(jobs, maintenance.MarkerJobs(fleet)...)
+		// AND THE LIFETIME TOKEN COUNTERS an earlier build kept, which
+		// nothing here reads any more. Deleted once, under the duty, and
+		// only when no node of that build is live to charge them — see
+		// [maintenance.RetiredBudgetJobs] for why the protocol floor is
+		// the gate and a boot step is not.
+		jobs = append(jobs, maintenance.RetiredBudgetJobs(fleet, e.backends.Coord)...)
 		// The NATIVE backends' own records, on the same edge and for a
 		// related reason: their family holds several classes under one
 		// grammar, and only some of them age out — so no bucket age can
@@ -185,14 +191,14 @@ func (e *Engine) maintenanceJobs() []maintenance.Job {
 				}
 			}
 			// AND THE STATE LOG'S OWN OPERATION LEDGERS, one per
-			// registered domain. Every `<domain>_ops` migration says
+			// registered domain that keeps one. Every `<domain>_ops` migration says
 			// the table is swept and ships the index a range delete
 			// needs, and nothing swept them: a row per applied record,
 			// kept for ever, on every node. PER NODE rather than under
 			// the singleton, because each node owns its own copy —
 			// see [maintenance.StatelogJobs].
 			if n.log != nil {
-				jobs = append(jobs, maintenance.StatelogJobs(registeredNames(),
+				jobs = append(jobs, maintenance.StatelogJobs(ledgeredNames(),
 					n.log.opsLedgers, maintenance.Fixed(statelog.OpsRetention))...)
 			}
 			// THE KNOWLEDGE BASE HAS NO SWEEP ANY MORE, and its

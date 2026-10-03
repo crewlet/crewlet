@@ -254,7 +254,7 @@ func (ObjectEstate) Name() string { return Domain{}.Name() }
 // be in any project and a record this node could not apply may be a put of
 // any of them — which is exactly the case the collector must see as
 // incomplete.
-var chunkScope = domainScope
+var chunkScope = statelog.ScopeSet{Paths: []string{ScopeTerm{Kind: TermDomain}.Path()}}
 
 // Barrier waits until this node has applied everything the log had committed
 // when it was called, and answers where that is.

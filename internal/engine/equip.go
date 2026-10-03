@@ -281,10 +281,10 @@ func (k liveKnowledge) CanSearch(seat *org.Role, o *org.Organization) bool {
 	return s != nil && s.CanSearch(seat, o)
 }
 
-func (k liveKnowledge) Search(ctx context.Context, q knowledge.Query) knowledge.Answer {
+func (k liveKnowledge) Search(ctx context.Context, q knowledge.Query) knowledge.Result {
 	s := k.engine.Knowledge()
 	if s == nil {
-		return knowledge.Answer{}
+		return knowledge.Result{}
 	}
 	return s.Search(ctx, q)
 }

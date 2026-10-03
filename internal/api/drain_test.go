@@ -88,7 +88,8 @@ func refusedForDraining(t *testing.T, rec *httptest.ResponseRecorder) bool {
 //
 // [drainingApp] is a node with no store, no coordination store and no company,
 // so the three surfaces that need one (/config, /secrets, /setup) and the two
-// that need a tracker (/work/{id}/purge, /operator/mcp) are not mounted on it.
+// that need a tracker (/work/{id}/purge, /operator/mcp, /operator/act/{tool})
+// are not mounted on it.
 var startsWork = []struct {
 	method, path string
 	mounted      bool
@@ -104,7 +105,6 @@ var startsWork = []struct {
 	{http.MethodPut, "/secrets/GITHUB_TOKEN", false},
 	{http.MethodDelete, "/secrets/GITHUB_TOKEN", false},
 	{http.MethodPost, "/setup/integrations/github/provision", false},
-	{http.MethodPost, "/budgets/reset", true},
 	{http.MethodPost, "/backup", true},
 	{http.MethodPost, "/work/retention/ack", true},
 	{http.MethodPost, "/work/ENG-1/purge", false},
@@ -119,6 +119,7 @@ var startsWork = []struct {
 	{http.MethodPost, "/estate/move/tracker.002?from=data-c&confirm=data-c", true},
 	{http.MethodPost, "/estate/move/tracker.002/cancel?from=data-c&confirm=data-c", true},
 	{http.MethodPost, "/operator/mcp", false},
+	{http.MethodPost, "/operator/act/create_work_item", false},
 }
 
 func TestADrainRefusesEveryRequestThatWouldStartWork(t *testing.T) {
@@ -202,7 +203,7 @@ func TestADrainingNodeStillServesItsProbesAndItsReads(t *testing.T) {
 
 	// Every other read keeps answering, which is how an operator watches
 	// the drain: the dashboard, the REST reads and the query surface.
-	for _, path := range []string{"/agents", "/org", "/dashboard", "/query/stream"} {
+	for _, path := range []string{"/agents", "/org", "/dashboard", "/query/viewer"} {
 		if rec := send(t, a, http.MethodGet, path); rec.Code != http.StatusOK {
 			t.Errorf("GET %s answered %d during a drain, want 200", path, rec.Code)
 		}
@@ -291,7 +292,7 @@ func TestAProcessWithNoEngineHasNothingToDrain(t *testing.T) {
 	t.Parallel()
 	b := closedPosture()
 	a := newApp(t, api.Options{Bootstrap: &b})
-	if rec := send(t, a, http.MethodPost, "/budgets/reset"); refusedForDraining(t, rec) {
+	if rec := send(t, a, http.MethodPost, "/backup"); refusedForDraining(t, rec) {
 		t.Error("a process with no engine refused a write for draining")
 	}
 }

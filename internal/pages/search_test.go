@@ -73,8 +73,9 @@ func TestAToolSkillPageCostsTheAnswerNoPlace(t *testing.T) {
 			t.Errorf("a %s page was returned: %+v", hit.Container, hit)
 		}
 	}
-	if !answer.Coverage.Complete() || answer.Coverage.Addressed != 0 {
-		t.Errorf("one corpus searched alone states coverage %+v, want none", answer.Coverage)
+	if !answer.Partitions.Complete() || answer.Partitions.Addressed != 0 {
+		t.Errorf("one corpus searched alone states partition coverage %+v, want none",
+			answer.Partitions)
 	}
 }
 
@@ -97,7 +98,7 @@ func TestASearchIsItsOwnSliceFused(t *testing.T) {
 	if len(slice.Candidates.Lexical) == 0 || len(slice.Hits) == 0 {
 		t.Fatalf("the slice holds no candidates: %+v", slice)
 	}
-	merged := pages.MergeSearch([]pages.SearchSlice{slice}, q)
+	merged := pages.MergeSearch([]pages.SearchSlice{slice}, q).Hits
 	if got := s.Search(t.Context(), q).Hits; !reflect.DeepEqual(got, merged) || len(got) != 5 {
 		t.Fatalf("searched %+v, want its own slice fused %+v", got, merged)
 	}

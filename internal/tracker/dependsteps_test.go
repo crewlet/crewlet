@@ -102,16 +102,17 @@ func TestADependencyRetryAnswersEachStepWithItsOwnWrite(t *testing.T) {
 	})
 }
 
-// A DEPENDENCY CHANGE REPORTS ITS OWN TASK'S VERSION, and an outcome whatever
-// its mirrors did.
+// A DEPENDENCY CHANGE REPORTS ITS OWN TASK'S VERSION, at its last commit's
+// position, and an outcome whatever its mirrors did.
 //
-// The result's version is the LAST COMMIT's, and a dependency change's last
-// commit is usually another task's — a blocker's mirror, a dependent's edge. A
-// caller reporting it as the version of the task it named handed back an
-// `if_match` that task never had, refused as stale. And a `blocking`-only
-// change whose own mirror was left one-sided reported nothing at all: the
-// authored edges on the other tasks were never counted, so it answered the
-// zero result — an outcome that is none of the three, and no position.
+// The result used to be the LAST COMMIT's, whole, and a dependency change's
+// last commit is usually another task's — a blocker's mirror, a dependent's
+// edge. A caller reporting its version as the version of the task it named
+// handed back an `if_match` that task never had, refused as stale. And a
+// `blocking`-only change whose own mirror was left one-sided reported nothing
+// at all: the authored edges on the other tasks were never counted, so it
+// answered the zero result — an outcome that is none of the three, and no
+// position.
 func TestADependencyChangeReportsItsOwnTasksVersion(t *testing.T) {
 	t.Parallel()
 
@@ -130,13 +131,20 @@ func TestADependencyChangeReportsItsOwnTasksVersion(t *testing.T) {
 			t.Fatalf("the premise: Depend = (%+v, %v), want both ends written", got, err)
 		}
 		r.drain()
-		if got.Version == got.TaskVersion {
-			t.Fatalf("the premise: the last commit is dep's own (%d), so this "+
-				"case shows nothing", got.Version)
+		dep, blk := r.task(t, "dep").Task, r.task(t, "blk").Task
+		if blk.Version <= dep.Version {
+			t.Fatalf("the premise: the last commit is dep's own (%d, the "+
+				"blocker's mirror at %d), so this case shows nothing",
+				dep.Version, blk.Version)
 		}
-		if want := int64(r.task(t, "dep").Task.Version); got.TaskVersion != want {
-			t.Errorf("TaskVersion = %d, want dep's own version %d — %d is the "+
-				"blocker's mirror", got.TaskVersion, want, got.Version)
+		if got.Version != int64(dep.Version) {
+			t.Errorf("Version = %d, want dep's own version %d — %d is the "+
+				"blocker's mirror", got.Version, dep.Version, blk.Version)
+		}
+		if uint64(got.Position.Packed()) != blk.Version {
+			t.Errorf("the change answered position %s, and its last commit — "+
+				"the blocker's mirror — is at %d: a read barriered at the answer "+
+				"can miss it", got.Position, blk.Version)
 		}
 	})
 
@@ -161,9 +169,9 @@ func TestADependencyChangeReportsItsOwnTasksVersion(t *testing.T) {
 				"landed, and that commit is what it has to report", got.Outcome,
 				got.Position)
 		}
-		if got.TaskVersion != 0 {
-			t.Errorf("TaskVersion = %d, but nothing landed on blk's own subject",
-				got.TaskVersion)
+		if got.Version != 0 {
+			t.Errorf("Version = %d, but nothing landed on blk's own subject",
+				got.Version)
 		}
 	})
 }

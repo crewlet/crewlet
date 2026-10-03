@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/api/configapi"
+	"github.com/crewlet/crewlet/internal/store"
 )
 
 // A write made by this build keeps what this build cannot represent.
@@ -516,7 +517,7 @@ func TestAnEntityWriteAcceptsEitherSpellingOfThePrecondition(t *testing.T) {
 		if _, err := s.svc.ApplyEntity(t.Context(), configapi.ApplyEntityRequest{
 			Kind: configapi.EntityRoles, ID: "cto",
 			Body:    []byte(`{"name": "CTO", "handle": "cto", "llm": "zulu", "goal": "` + name + `"}`),
-			Summary: "an entity", Operator: "operator", Expect: spell(current.ID),
+			Summary: "an entity", Author: store.Author{Name: "operator", Kind: store.AuthorOperator}, Expect: spell(current.ID),
 		}); err != nil {
 			t.Errorf("ApplyEntity with %s = %v", name, err)
 		}

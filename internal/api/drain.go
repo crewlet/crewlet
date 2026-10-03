@@ -62,9 +62,10 @@ const DrainRetryAfter = 30 * time.Second
 //     the drain.
 //   - Every other write is REFUSED. A config write activates a revision, a
 //     setup write runs a vendor's pass, a backup copies the estates the
-//     teardown is about to close, and the operator MCP files and moves work.
-//     Refusing by default is what keeps a write route added later from being
-//     admitted through a drain because nobody listed it.
+//     teardown is about to close, and the operator surface — MCP and the act
+//     transport alike — files and moves work. Refusing by default is what
+//     keeps a write route added later from being admitted through a drain
+//     because nobody listed it.
 //
 // The one route the method rule SPLITS is /operator/mcp, which is mounted for
 // every verb because streamable HTTP is a GET for the server-to-client stream

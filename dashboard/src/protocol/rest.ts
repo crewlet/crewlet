@@ -2,8 +2,13 @@
  * The dashboard's one REST transport: every write, and the guarded reads the
  * socket has no question for.
  *
- * The socket remains the data channel for state. This is not a second one: it
- * carries the requests that are not questions about state at all. Writes never
+ * The socket remains the data channel for the projection and for every
+ * question in the query registry. This is not a second one: it carries the
+ * requests that are not questions about state at all, and the reads that no
+ * query answers. A screen does not call it for a read directly — it reads
+ * through `lib/useRest.ts`, the one loader, so that a superseded answer, an
+ * unmounted screen, a changed token and a server's `Retry-After` are each
+ * handled once. Writes never
  * go over the socket, deliberately — its token rides the query string on the
  * handshake, and a channel whose credential appears in a proxy log is not
  * where a credential-bearing write belongs (see internal/api/auth's own note
@@ -39,8 +44,20 @@ export class RestError extends Error {
   readonly hint: string;
   /** Everything else the body carried, for a caller that needs a field. */
   readonly body: Record<string, unknown>;
+  /**
+   * How long the engine asked the caller to wait before asking again, in
+   * seconds, from the refusal's `Retry-After` header — or null where it named
+   * no wait.
+   *
+   * THE ONLY RETRY SIGNAL A REST READ HAS. A 503 is not one on its own: the
+   * engine answers 503 both for a node draining or catching up, which a wait
+   * clears and which carries the header, and for a node with no keyring,
+   * which no wait clears and which does not. The header is the engine saying
+   * which, so a loader retries exactly when it is present.
+   */
+  readonly retryAfterSeconds: number | null;
 
-  constructor(status: number, body: Record<string, unknown>) {
+  constructor(status: number, body: Record<string, unknown>, retryAfter: string | null = null) {
     const code = typeof body.error === "string" ? body.error : "";
     const detail = typeof body.detail === "string" ? body.detail : "";
     super(detail || code || `HTTP ${status}`);
@@ -50,6 +67,7 @@ export class RestError extends Error {
     this.detail = detail;
     this.hint = typeof body.hint === "string" ? body.hint : "";
     this.body = body;
+    this.retryAfterSeconds = retryAfterSeconds(retryAfter, Date.now());
   }
 
   /** Whether the engine refused the credential rather than the request. */
@@ -77,6 +95,27 @@ export class RestError extends Error {
   get unanswered(): boolean {
     return this.status === 0 || this.code === "" || this.code === "unreadable_body";
   }
+}
+
+/**
+ * A `Retry-After` header value as whole seconds from `now`, or null for a
+ * header that is absent or says nothing usable.
+ *
+ * BOTH FORMS RFC 9110 ALLOWS. The engine writes delay-seconds, but a proxy in
+ * front of it may answer for it with an HTTP-date, and reading that as "no
+ * hint" would drop the one instruction the refusal carried. A date already
+ * past is a wait of zero, never a negative one.
+ */
+export function retryAfterSeconds(header: string | null | undefined, now: number): number | null {
+  const value = header?.trim() ?? "";
+  if (value === "") return null;
+  if (/^\d+$/.test(value)) return Number(value);
+  // AN HTTP-DATE NAMES ITS DAY OR MONTH IN LETTERS in every form the RFC
+  // admits, and `Date.parse` alone would read "-4" as a year.
+  if (!/[A-Za-z]/.test(value)) return null;
+  const at = Date.parse(value);
+  if (Number.isNaN(at)) return null;
+  return Math.max(0, Math.ceil((at - now) / 1000));
 }
 
 /**
@@ -109,11 +148,11 @@ function offline(err: unknown): RestError {
  *
  * It is the DEFAULT, not the only deadline: a call whose path is genuinely
  * longer passes [RequestOptions.timeoutMs] rather than removing the deadline.
- * The node gate is the one that does — the engine takes up to a minute and
- * three quarters to answer a gesture (half a minute to judge it, a minute to
- * write every log, a quarter of one for the estate map's part), so thirty
- * seconds gave up on a gesture the node went on to finish, holding nothing to
- * finish it with.
+ * Two do. A backup copies the whole store before it answers. And the node
+ * gate takes up to a minute and three quarters to answer a gesture (half a
+ * minute to judge it, a minute to write every log, a quarter of one for the
+ * estate map's part), so thirty seconds gave up on a gesture the node went on
+ * to finish, holding nothing to finish it with.
  */
 export const REQUEST_TIMEOUT_MS = 30_000;
 
@@ -145,12 +184,6 @@ export interface RequestOptions {
    */
   signal?: AbortSignal;
   /**
-   * How long this request may take before it is abandoned, in milliseconds.
-   * Defaults to [REQUEST_TIMEOUT_MS]; a caller whose path is genuinely longer
-   * says so here, and the refusal it gets on expiry names ITS deadline.
-   */
-  timeoutMs?: number;
-  /**
    * How a SUCCESSFUL body is read. `json` (the default) parses it; `text`
    * hands it over as the string the engine sent, for the one kind of answer
    * that is a file rather than a document: `GET /config?format=yaml`, which a
@@ -158,6 +191,16 @@ export interface RequestOptions {
    * JSON either way, because every refusal the engine writes is one.
    */
   read?: "json" | "text";
+  /**
+   * How long this request may take before it is abandoned, in milliseconds —
+   * [REQUEST_TIMEOUT_MS] unless the caller's path is genuinely longer and
+   * says so here, rather than removing the deadline; the refusal it gets on
+   * expiry names ITS deadline, not the default's. Two paths are: `POST
+   * /backup`, whose copy is synchronous and bounded by the size of the store
+   * rather than by anything a screen decides, and the node gate, which the
+   * engine allows a minute from its first record to its last answer.
+   */
+  timeoutMs?: number;
 }
 
 /** What the engine answered, whole: the status and entity-tag beside the body. */
@@ -174,6 +217,13 @@ export interface RestResponse {
    * the tag back exactly as it was given.
    */
   etag: string | null;
+}
+
+/** A deadline as a person would say it: seconds under two minutes, else
+ *  minutes. */
+function waitWords(ms: number): string {
+  const seconds = Math.round(ms / 1000);
+  return seconds < 120 ? `${seconds} seconds` : `${Math.round(seconds / 60)} minutes`;
 }
 
 /** Whether a rejection is the caller's own abort rather than a failure. */
@@ -278,7 +328,7 @@ async function request(
     return timedOut
       ? new RestError(0, {
           error: "unreachable",
-          detail: `the engine did not answer within ${timeoutMs / 1000} seconds`,
+          detail: `the engine did not answer within ${waitWords(timeoutMs)}`,
         })
       : offline(err);
   };
@@ -323,13 +373,20 @@ async function request(
       // all the detail there is; on a success it is a broken answer either
       // way, so both become an error rather than a silent null — and one
       // that says it is not the engine's answer ([RestError.unanswered]),
-      // since nothing in it says what the engine did.
-      throw new RestError(response.ok ? 502 : response.status, {
-        error: "unreadable_body",
-        detail: response.ok
-          ? "the answer was cut short, or is not the engine's JSON"
-          : `a ${response.status} came back that is not the engine's JSON — something in front of it answered`,
-      });
+      // since nothing in it says what the engine did. A refusal's
+      // `Retry-After` still travels: a proxy answering a 503 page for an
+      // engine that is restarting says when to come back in the header,
+      // whatever its body is.
+      throw new RestError(
+        response.ok ? 502 : response.status,
+        {
+          error: "unreadable_body",
+          detail: response.ok
+            ? "the answer was cut short, or is not the engine's JSON"
+            : `a ${response.status} came back that is not the engine's JSON — something in front of it answered`,
+        },
+        response.ok ? null : response.headers.get("Retry-After"),
+      );
     }
   }
 
@@ -338,7 +395,7 @@ async function request(
   // still current.
   if (!response.ok && response.status !== 304) {
     const refusal = parsed && typeof parsed === "object" ? (parsed as Record<string, unknown>) : {};
-    throw new RestError(response.status, refusal);
+    throw new RestError(response.status, refusal, response.headers.get("Retry-After"));
   }
   return { status: response.status, body: parsed, etag: response.headers.get("ETag") };
 }
@@ -413,7 +470,9 @@ export const rest = {
    * precondition, reads a tag, cancels, or branches on a success status.
    */
   request,
-  get: (path: string) => bodyOf("GET", path),
+  /** A read's body. `signal` is the loader's: `lib/useRest.ts` aborts a read
+   *  it superseded, and a screen reads through that rather than calling this. */
+  get: (path: string, signal?: AbortSignal) => bodyOf("GET", path, { signal }),
   post: (path: string, body?: unknown, headers?: Record<string, string>) =>
     bodyOf("POST", path, { body: body ?? {}, headers }),
   put: (path: string, body?: unknown, headers?: Record<string, string>) =>

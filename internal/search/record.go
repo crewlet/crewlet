@@ -48,7 +48,7 @@ import (
 //   - 1: the documents' own records — an embed and a forget of a page or a
 //     task.
 //   - 2: the semantic index's records ([IndexSource]: [OpCentroids],
-//     [OpReassign], [OpMeasure]), ADR-0022.
+//     [OpReassign], [OpMeasure]), ADR-0028.
 //
 // A record is WRITTEN at the lowest version that expresses it, never simply at
 // this constant — see [VersionOf] — and it is the maximum of [kindVersions],

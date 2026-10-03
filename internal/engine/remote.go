@@ -11,7 +11,6 @@ import (
 	"github.com/crewlet/crewlet/internal/estate"
 	"github.com/crewlet/crewlet/internal/seat"
 	"github.com/crewlet/crewlet/internal/seat/placement"
-	"github.com/crewlet/crewlet/internal/tracker"
 )
 
 // The native backends on a node that holds no data.
@@ -202,13 +201,16 @@ func (e *Engine) stopServingEstate(ctx context.Context) {
 	e.stopEstate = nil
 }
 
-// provenanceOf is where a tool's actor says a write came from, in the one
-// shape both the local writer and the estate take.
-func provenanceOf(actor builtin.Actor) tracker.Provenance {
-	return tracker.Provenance{TurnID: actor.TurnID, Chain: actor.Chain}
-}
-
-// remoteActor is a tool's actor as the estate carries it.
+// remoteActor is a tool's actor as the estate carries it: its WHOLE
+// provenance, through the one construction every writer of it uses
+// ([builtin.Actor.Provenance]).
+//
+// It carried the turn and the chain alone once, written before a person's
+// credential, its bound seat, a task's chat origin and the turn's set of
+// written items were part of a provenance — so every write that crossed the
+// router lost the four: an operator's own gesture landed on a person record
+// named after their token, a task filed from a chat thread forgot the thread,
+// and a turn that wrote one item was charged to none.
 func remoteActor(actor builtin.Actor) estate.Actor {
-	return estate.Actor{Handle: actor.Handle, Kind: actor.Kind, Provenance: provenanceOf(actor)}
+	return estate.Actor{Handle: actor.Handle, Kind: actor.Kind, Provenance: actor.Provenance()}
 }

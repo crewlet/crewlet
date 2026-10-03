@@ -204,6 +204,25 @@ func (d *Diary) Recent(ctx context.Context, agentID string, now time.Time, limit
 	return collectDiary(rows)
 }
 
+// Count is how many LIVE entries a seat's diary holds — the set [Diary.Recent]
+// pages through, under the same liveness predicate, so a page and its total
+// describe one set.
+//
+// COUNTED, never measured off a page: a screen that drew the length of the
+// fifty entries it was sent reported fifty for every seat that had written
+// more, which is exactly the seat whose memory a reader is trying to size.
+func (d *Diary) Count(ctx context.Context, agentID string, now time.Time) (int, error) {
+	var n int
+	err := d.db.SQL().QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM agent_diary
+		 WHERE agent_id = ? AND (ttl_until IS NULL OR ttl_until > ?)`,
+		agentID, store.EncodeTime(now)).Scan(&n)
+	if err != nil {
+		return 0, fmt.Errorf("learning: count diary for %s: %w", agentID, err)
+	}
+	return n, nil
+}
+
 // Recall returns a seat's most similar live entries.
 //
 // Same shape as episode recall and for the same reasons — a scan the database

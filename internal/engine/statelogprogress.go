@@ -21,7 +21,7 @@ import (
 // anything, which made the `stalled` arm of [statelog.Health.Refusal]
 // unreachable and left a frozen applier serving reads as though it were
 // current, and `DeferredSince` had no producer at all, so what the
-// `deferred_old` alarm promises an operator — then "its seats move at 30m0s",
+// `deferred_old` alarm promises an operator — then "its seats move at 30m",
 // now that the node stops serving the partition — never happened.
 //
 // # It is observed on the position heartbeat, not on the read

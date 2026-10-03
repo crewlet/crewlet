@@ -17,9 +17,11 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/prefetch"
 	"github.com/crewlet/crewlet/internal/agent/prompts"
 	"github.com/crewlet/crewlet/internal/agent/skills"
+	"github.com/crewlet/crewlet/internal/agent/steer"
 	"github.com/crewlet/crewlet/internal/agent/structured"
 	"github.com/crewlet/crewlet/internal/agent/toolloop"
 	"github.com/crewlet/crewlet/internal/agent/turn"
+	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/logging"
 	"github.com/crewlet/crewlet/internal/providers/llm"
 	"github.com/crewlet/crewlet/internal/providers/llm/chain"
@@ -175,6 +177,23 @@ type Config struct {
 	// every seat on an API provider has and what a cli-agent entry in
 	// text mode has. See agentrun.go.
 	AgentRun AgentLauncher
+
+	// Steer is the turn's box of notes from a person (internal/agent/steer),
+	// drained at the top of every round of the EXECUTOR and the REVIEWER —
+	// the two phases that are the turn's own conversation. Never a worker's
+	// (a leaf its parent directs), the onboarding pass's (orientation, not
+	// the work) or the extension judge's (a question about the phase, not
+	// part of it): a note left in the box by one of those is read by the
+	// next round of the turn's own.
+	//
+	// A note read once is carried into every later phase of the turn, as
+	// the same message, so a correction made to the executor binds the
+	// reviewer that judges the work and every executor iteration after it.
+	// See [Runner.steered].
+	//
+	// Nil is a turn nobody can steer, which is every test and every runner
+	// driven directly. The engine opens one box per turn.
+	Steer *steer.Box
 }
 
 // Resume is a suspended Execute conversation plus the answer that unblocks it.
@@ -205,17 +224,13 @@ type Resume struct {
 // in a remote box and one that ran three rounds in this process were reported
 // identically: the sandbox badge could never render, and `coding_agent`,
 // `sandbox_id` and `delivered_refs` had no producer at all — despite the
-// coding agents reporting every one of them.
+// coding agents reporting every one of them. What the run itself cost is NOT
+// here: that is the run's own fact, on the `sandbox` phase record its
+// collection publishes, which a run that parked on a question also gets.
 //
 // Carried rather than re-derived, for the same reason the run's placement is:
 // the resume may be another process on another node, days later, under a
 // company configuration that has been applied again since.
-//
-// WHAT THE RUN SPENT IS NOT HERE. Its tokens and its price are a record of
-// their own, published once per launch at the collect
-// ([types.SandboxRunUsage]); the phase that resumes into its turn is not
-// published once per launch, and a run whose turn never resumes has no such
-// phase at all.
 type RunRecord struct {
 	// CodingAgent is the CLI that did the work; SandboxID the box it ran in.
 	// Both are empty on a resume that is not collecting a run — a person
@@ -225,6 +240,12 @@ type RunRecord struct {
 
 	// DeliveredRefs are the branches and pull requests the run produced.
 	DeliveredRefs []string
+
+	// LaunchID is the job this resume collected — the pending-run row's
+	// [sandbox.PendingRun.LaunchID] when the claim took it. A turn can launch
+	// more than once, so it is what tells one collected run's record from
+	// the next.
+	LaunchID string
 }
 
 // Sandboxed reports whether this resume is collecting a detached coding run,
@@ -260,6 +281,21 @@ type Runner struct {
 	// onboardedThisTurn suppresses the executor prompt's onboarding hint for a
 	// seat that has just been through the pass. See [Runner.Onboard].
 	onboardedThisTurn bool
+
+	// steered is every person's note this turn has read, rendered, in the
+	// order it was read — opened into every LATER phase's conversation
+	// after its opening messages.
+	//
+	// A phase is a fresh conversation (a reviewer, a self-iterated
+	// executor), so a note read in one phase is gone from the next unless
+	// it is carried: the reviewer would judge the work against the task the
+	// person corrected, and the next executor iteration would undo the
+	// correction. Carried as the SAME message rather than summarised,
+	// because the note's words are the person's and a paraphrase is the
+	// engine's. Guarded by mu: the loop that reads a note and the suspend
+	// that persists the list are on one goroutine, but the engine reads the
+	// suspension after the turn returns.
+	steered []string
 }
 
 var _ turn.Phases = (*Runner)(nil)
@@ -332,13 +368,13 @@ func (r *Runner) Execute(ctx context.Context, round int, notes string, history [
 	}
 	surface = built
 
-	system, user := r.executorPrompt(round, notes, history, snapshot)
+	system, user := r.executorPrompt(ctx, round, notes, history, snapshot)
 
 	phaseCtx, res, err := r.runPhase(ctx, phaseRun{
 		phase: phase.Execute, surface: surface, system: system, user: user,
 		rounds: r.cfg.Caps.ExecutorRounds, ceiling: r.cfg.Caps.ExecutorCeiling,
 		iteration: round, terminateAfter: []string{SubmitWorkTool},
-		allowSuspend: true,
+		allowSuspend: true, steerable: true,
 	})
 	if err != nil {
 		// THE RECORD SURVIVES THE FAILURE. A phase that broke halfway
@@ -378,9 +414,16 @@ func (r *Runner) Execute(ctx context.Context, round int, notes string, history [
 // nobody re-reads. The `round` is unused today and taken anyway, so a prompt
 // that ever needs to know which iteration it is does not change this
 // signature at two call sites.
-func (r *Runner) executorPrompt(_ int, notes string, history []ledger.Iteration,
-	snapshot tools.Snapshot,
+//
+// It also RECORDS what the prompt's tool-skill catalogue offered, as a
+// `knowledge_read` with `via: skill_injected` (see [emitter.skillsInjected]):
+// here, once, because this is the one frame that renders the catalogue for
+// both runtimes, and a record made anywhere else would describe a catalogue
+// matched a second time against a live registry rather than the one sent.
+func (r *Runner) executorPrompt(ctx context.Context, _ int, notes string,
+	history []ledger.Iteration, snapshot tools.Snapshot,
 ) (system, user string) {
+	offer := r.cfg.Skills.Offer()
 	system = prompts.BuildExecutor(r.cfg.Seat, prompts.ExecutorInput{
 		ToolCatalogue:  r.cfg.Registry.Catalogue(),
 		AvailableTools: snapshot.Names(),
@@ -397,8 +440,9 @@ func (r *Runner) executorPrompt(_ int, notes string, history []ledger.Iteration,
 		// phase actually has — and nil where a company has published
 		// none, which keeps the prompt free of skill scaffolding rather
 		// than rendering an empty section.
-		Skills: r.catalogue(),
+		Skills: offer.Catalogue(),
 	})
+	r.emitter().skillsInjected(ctx, phase.Execute, offer.Drain())
 	user = prompts.BuildPhaseUserMessage(prompts.UserMessage{
 		TaskDescription:     r.taskFor(notes),
 		PriorWork:           ledger.RenderIterations(history, r.cfg.SkipNames),
@@ -455,6 +499,7 @@ func (r *Runner) finishWork(phaseCtx context.Context, round int, w work) (turn.W
 	r.emitter().completed(phaseCtx, phaseRecord{
 		Phase: phase.Execute, Iteration: round, System: w.system, User: w.user,
 		Result: w.res.Result, Exhausted: w.res.Exhausted, Elapsed: w.res.Elapsed,
+		StartedAt: w.res.StartedAt, Caps: w.res.Caps,
 		Decision: payload.Outcome, Rescued: !submitted,
 		Notes:     missingNote(missing),
 		Run:       w.run,
@@ -496,6 +541,7 @@ func (r *Runner) Review(ctx context.Context, round int, w turn.Work, history []l
 	// VERBATIM. Review's evidence log takes the zero FormatOptions: the
 	// budgets belong to the cross-round ledger, and a reviewer judging an
 	// elided log is judging a summary and calling it evidence.
+	offer := r.cfg.Skills.Offer()
 	system := prompts.BuildReview(r.cfg.Seat, prompts.ReviewInput{
 		Intent:            w.Summary,
 		Outcome:           string(w.Outcome),
@@ -505,12 +551,18 @@ func (r *Runner) Review(ctx context.Context, round int, w turn.Work, history []l
 		Produced:          reviewArtifact(w),
 		ToolLog:           ledger.FormatCalls(w.Calls, ledger.FormatOptions{Skip: r.cfg.SkipNames}),
 		EarlierIterations: ledger.RenderIterations(history, r.cfg.SkipNames),
+		// THE SKILLS AN OPERATOR SCOPED TO REVIEW, which the prompt, the
+		// parser and the docs all supported and nothing ever passed: a
+		// skill authored with `phases: [review]` reached no reviewer.
+		Skills: offer.Catalogue(),
 	})
+	r.emitter().skillsInjected(ctx, phase.Review, offer.Drain())
 
 	phaseCtx, res, err := r.runPhase(ctx, phaseRun{
 		phase: phase.Review, surface: surface, system: system, user: reviewTask(r.cfg.Task),
 		rounds: reviewRounds, iteration: round,
 		terminateAfter: []string{SubmitReviewTool}, intent: w.Summary,
+		steerable: true,
 		// THE REVIEWER'S ONLY TOOL IS ITS SUBMISSION. Its surface carries
 		// no catalogue at all, so "call a tool" and "submit the review" are
 		// the same instruction here — which is what makes forcing it safe
@@ -590,6 +642,7 @@ func reviewRecord(round int, system, user string, res phaseResult,
 	return phaseRecord{
 		Phase: phase.Review, Iteration: round, System: system, User: user,
 		Result: res.Result, Exhausted: res.Exhausted, Elapsed: res.Elapsed,
+		StartedAt: res.StartedAt, Caps: res.Caps,
 		Decision: decision, Notes: notes, Rescued: rescued,
 		Available: surface.Active(),
 	}
@@ -681,6 +734,11 @@ type phaseRun struct {
 	// silently abandon a turn.
 	allowSuspend bool
 
+	// steerable is whether a person's notes are drained into this phase's
+	// rounds — the executor and the reviewer, and nothing else. See
+	// [Config.Steer].
+	steerable bool
+
 	// intent is what the turn set out to do, for the extension judge.
 	//
 	// Empty for the executor, which is the phase that decides it as it
@@ -727,6 +785,11 @@ func (r *Runner) runPhase(ctx context.Context, in phaseRun) (context.Context, ph
 	// than either being absent. A monotonic reading, so a clock correction
 	// mid-phase cannot report a negative duration.
 	began := time.Now().Add(-in.priorElapsed)
+	// THIS SEGMENT's start, which is not `began`: that one is shifted back
+	// by the pre-suspend half so the duration covers the whole phase, and
+	// stamping it as a start would put a resumed phase's opening at an
+	// instant it was not running — often another node, often days earlier.
+	segment := time.Now().UTC()
 	system, user := in.system, in.user
 	iteration, ceiling := in.iteration, in.ceiling
 	terminateAfter := in.terminateAfter
@@ -746,6 +809,11 @@ func (r *Runner) runPhase(ctx context.Context, in phaseRun) (context.Context, ph
 	var out phaseResult
 	out.Result = in.prior
 	out.Rounds = in.prior.RoundsUsed
+	// The extension policy, up here because every record this phase
+	// publishes — the failure record included — states the ceiling it set.
+	policy := extension.Policy{
+		Enabled: r.cfg.Caps.ExtensionOn, RoundStep: r.cfg.Caps.ExtensionStep, Ceiling: ceiling,
+	}
 	// The phase's own wall clock, stamped onto the record on the way out.
 	// A closure rather than a line at each `return`, because there are two
 	// success returns inside the loop below and a measurement that is
@@ -754,6 +822,8 @@ func (r *Runner) runPhase(ctx context.Context, in phaseRun) (context.Context, ph
 	// somebody is timing — come back without a duration.
 	done := func() (context.Context, phaseResult, error) {
 		out.Elapsed = time.Since(began)
+		out.StartedAt = segment
+		out.Caps = capsOf(policy, out.Result.MaxRounds)
 		return ctx, out, nil
 	}
 	// Returns the phase context too, so `return fail(err)` stays a single
@@ -780,8 +850,14 @@ func (r *Runner) runPhase(ctx context.Context, in phaseRun) (context.Context, ph
 			// the number that says so: a phase whose provider hung for
 			// four minutes and one refused in fifty milliseconds are the
 			// same record without it.
-			Elapsed: time.Since(began),
-			Failed:  true, Err: err,
+			Elapsed:   time.Since(began),
+			StartedAt: segment,
+			Caps:      capsOf(policy, maxRounds(out, in.rounds)),
+			// A PHASE A PERSON STOPPED DID NOT FAIL. It carries the stop as
+			// its error, so the card says why it ended, and is not marked
+			// failed — a turn is listed as failed when any of its rows is,
+			// and a turn somebody deliberately ended is not one that broke.
+			Failed: !turn.Stopped(err), Err: err,
 		})
 		return ctx, phaseResult{}, err
 	}
@@ -815,7 +891,8 @@ func (r *Runner) runPhase(ctx context.Context, in phaseRun) (context.Context, ph
 	// the strings, and every round of either carries the tool-definition
 	// array, which both HTTP vendors bill as input and the cli-agent text
 	// backend writes into the prompt literally.
-	emit.started(ctx, ph, iteration, system, user, in.seed, surface)
+	emit.started(ctx, ph, iteration, system, user, in.seed, surface,
+		capsOf(policy, out.Rounds+in.rounds))
 
 	messages := in.seed
 	if messages == nil {
@@ -823,11 +900,14 @@ func (r *Runner) runPhase(ctx context.Context, in phaseRun) (context.Context, ph
 			{Role: llm.RoleSystem, Content: system},
 			{Role: llm.RoleUser, Content: user},
 		}
+		// EVERY NOTE THE TURN HAS ALREADY READ, after the opening and in
+		// the order it was read, so a new phase starts from the turn as
+		// the person corrected it. A seeded phase is re-entering a
+		// conversation that already holds its own. See [Runner.steered].
+		for _, note := range r.carriedSteers() {
+			messages = append(messages, llm.Message{Role: llm.RoleUser, Content: note})
+		}
 	}
-	policy := extension.Policy{
-		Enabled: r.cfg.Caps.ExtensionOn, RoundStep: r.cfg.Caps.ExtensionStep, Ceiling: ceiling,
-	}
-
 	budget := in.rounds
 	for {
 		// What the phase holds BEFORE this invocation, captured by value:
@@ -848,9 +928,20 @@ func (r *Runner) runPhase(ctx context.Context, in phaseRun) (context.Context, ph
 		// everything above the insertion point, which is the one property
 		// the round ledger exists to guarantee.
 		prior := out
-		res, err := toolloop.Run(ctx, toolloop.Config{
+		// The rounds already behind this invocation, declared so a tool
+		// that asks which round it is in hears the PHASE's number — the
+		// same number the records below are renumbered onto.
+		loopCtx := toolloop.WithRoundOffset(ctx, prior.Rounds)
+		var steering toolloop.Steerer
+		if in.steerable && r.cfg.Steer != nil {
+			steering = phaseSteer{r: r, ctx: ctx, ph: ph, iteration: iteration, offset: prior.Rounds}
+		}
+		res, err := toolloop.Run(loopCtx, toolloop.Config{
 			Provider: provider, Messages: messages, Surface: surface,
-			MaxRounds: budget, Budget: r.cfg.Budget,
+			// The chain's head, standing in until a completion names the
+			// member that actually served — see toolloop.Config.
+			ProviderKey: members[0].Key,
+			MaxRounds:   budget, Budget: r.cfg.Budget,
 			Fence:        r.cfg.Fence,
 			ToolChoice:   in.toolChoice,
 			AllowSuspend: in.allowSuspend,
@@ -867,8 +958,12 @@ func (r *Runner) runPhase(ctx context.Context, in phaseRun) (context.Context, ph
 			// The live view is the only reason to stream, so it is on
 			// exactly when something is listening.
 			StreamPartials: true,
+			// A person's notes, into the executor's and the reviewer's
+			// rounds only.
+			Steer: steering,
 			OnProgress: func(live toolloop.Result) {
-				emit.progress(ctx, ph, iteration, foldOnto(prior, live))
+				folded := foldOnto(prior, live)
+				emit.progress(ctx, ph, iteration, folded, capsOf(policy, folded.MaxRounds))
 			},
 		})
 		if err != nil {
@@ -892,7 +987,7 @@ func (r *Runner) runPhase(ctx context.Context, in phaseRun) (context.Context, ph
 				attribute.Bool("crewlet.suspended", out.Suspended))
 			return done()
 		}
-		granted, decision := r.consider(ctx, ph, iteration, policy, extension.Request{
+		granted, decision := r.consider(ctx, ph, iteration, out.Rounds, policy, extension.Request{
 			Phase: ph, Task: r.cfg.Task, PlanSummary: in.intent,
 			Calls: calls(surface), LastText: res.Text, RoundsUsed: out.Rounds,
 		})
@@ -934,6 +1029,27 @@ func offsetRounds(res toolloop.Result, prior int) toolloop.Result {
 		narration[i] = n
 	}
 	res.Narration = narration
+	timed := make([]toolloop.Round, len(res.Rounds))
+	for i, r := range res.Rounds {
+		r.Round += prior
+		timed[i] = r
+	}
+	res.Rounds = timed
+	// A note's round too, or a note read in extension round 1 is drawn
+	// beside the phase's first round.
+	steers := make([]toolloop.SteerMark, len(res.Steers))
+	for i, m := range res.Steers {
+		m.Round += prior
+		steers[i] = m
+	}
+	res.Steers = steers
+	// The call in flight is on the same scale, or a live row names a call
+	// in round 1 of a phase that is twenty rounds in.
+	if res.Running != nil {
+		running := *res.Running
+		running.Round += prior
+		res.Running = &running
+	}
 	// The round IN FLIGHT is on the same scale as the rounds behind it, or it
 	// COLLIDES with one of them. A consumer keys the ledger on the round
 	// number — the dashboard's `rounds()` builds one block per number and the
@@ -969,7 +1085,7 @@ func offsetRounds(res toolloop.Result, prior int) toolloop.Result {
 // on a phase that has already run out of rounds, and a seat at its cap should
 // stop extending, not die: an over-budget judgement is recorded and treated as
 // "no extension", which is the same outcome as the judge saying no.
-func (r *Runner) consider(ctx context.Context, ph phase.Phase, iteration int,
+func (r *Runner) consider(ctx context.Context, ph phase.Phase, iteration, hostRound int,
 	policy extension.Policy, req extension.Request,
 ) (int, extension.Decision) {
 	// The span the turn-engine doc has always promised: one per judge call,
@@ -1011,7 +1127,7 @@ func (r *Runner) consider(ctx context.Context, ph phase.Phase, iteration int,
 			"iteration", iteration, "tokens", decision.Tokens(), "error", err.Error())
 		granted = 0
 	}
-	r.emitter().judged(ctx, ph, iteration, granted, decision, judged)
+	r.emitter().judged(ctx, ph, iteration, hostRound, granted, decision, began, judged)
 	return granted, decision
 }
 
@@ -1040,6 +1156,15 @@ func charge(ctx context.Context, meter toolloop.BudgetMeter, tokens int) error {
 		scope, tokens, outcome.Used, outcome.Limit)
 }
 
+// maxRounds is the cap a phase is under when it has no invocation of its own to
+// read it from — the failure path, which can die before the loop echoed one.
+func maxRounds(out phaseResult, base int) int {
+	if out.Result.MaxRounds > 0 {
+		return out.Result.MaxRounds
+	}
+	return out.Rounds + base
+}
+
 // foldOnto merges one loop invocation's record onto the rounds already behind
 // it, producing the record of the PHASE rather than of the invocation.
 //
@@ -1057,7 +1182,16 @@ func foldOnto(done phaseResult, live toolloop.Result) toolloop.Result {
 		append([]toolloop.Execution(nil), done.Result.Executions...), res.Executions...)
 	res.Narration = append(
 		append([]toolloop.Narration(nil), done.Result.Narration...), res.Narration...)
+	res.Rounds = append(
+		append([]toolloop.Round(nil), done.Result.Rounds...), res.Rounds...)
+	res.Steers = append(
+		append([]toolloop.SteerMark(nil), done.Result.Steers...), res.Steers...)
 	res.RoundsUsed = done.Rounds + live.RoundsUsed
+	// The cap the PHASE is under: every round already behind it plus what
+	// this invocation was granted — which is exactly how an extension
+	// moves it, and how a resumed executor's fresh budget sits on top of
+	// its pre-suspend rounds.
+	res.MaxRounds = done.Rounds + live.MaxRounds
 	res.InputTokens += done.Result.InputTokens
 	res.OutputTokens += done.Result.OutputTokens
 	res.CacheRead += done.Result.CacheRead
@@ -1073,6 +1207,10 @@ func foldOnto(done phaseResult, live toolloop.Result) toolloop.Result {
 	// never reached a provider.
 	if res.Model == "" {
 		res.Model = done.Result.Model
+	}
+	// The entry, by the same rule and for the same reason.
+	if res.ProviderKey == "" {
+		res.ProviderKey = done.Result.ProviderKey
 	}
 	return res
 }
@@ -1092,6 +1230,12 @@ type phaseResult struct {
 	// and a clock read there would fold the decode into the measurement
 	// differently on every path.
 	Elapsed time.Duration
+
+	// StartedAt is when this segment of the phase began, and Caps the round
+	// allowance it ended under — both stamped by the frame that brackets
+	// the phase, for the reason Elapsed is.
+	StartedAt time.Time
+	Caps      roundCaps
 
 	// Result is the loop's own outcome, kept whole so the phase can report
 	// what it spent and what it called. The fields above are the ones the
@@ -1169,7 +1313,10 @@ func (r *Runner) surfaceWith(ctx context.Context, ph phase.Phase, round int,
 	}
 	// Bound to the turn, which is what lets a seat-scoped tool know who is
 	// calling it without the seat travelling through the model's arguments.
-	surface = tools.NewSurface(ph.String(), snapshot, active).ForTurn(r.cfg.Turn.Context)
+	// Bound to the turn AS THIS PHASE, so a tool reporting what it did can
+	// say which leg of the turn did it — see [turnctx.Turn.InPhase].
+	surface = tools.NewSurface(ph.String(), snapshot, active).
+		ForTurn(r.cfg.Turn.Context.InPhase(types.Phase(ph)))
 	// THE GUARD IS BUILT FROM THE FINISHED SURFACE, so what it enforces and
 	// what the catalogue showed cannot disagree: both are derived from the
 	// same active list, at the same moment, and the catalogue's "required"
@@ -1242,18 +1389,6 @@ func (r *Runner) guardFor(ph phase.Phase, surface *tools.Surface, loaded []strin
 		guard: guard,
 		wrap:  &reportingGuard{guard: guard, emit: r.emitter(), phase: ph},
 	}
-}
-
-// catalogue is the tool-skill registry as the prompt sees it, or nil.
-//
-// A TYPED NIL WOULD NOT BE NIL here either: prompts.injectSkillCatalogue
-// checks its interface against nil, and a non-nil interface wrapping a nil
-// registry would take the catalogue path and render a header over nothing.
-func (r *Runner) catalogue() prompts.SkillCatalogue {
-	if r.cfg.Skills == nil {
-		return nil
-	}
-	return r.cfg.Skills
 }
 
 // promptPhase maps a runner phase onto the prompt package's own.
@@ -1445,3 +1580,57 @@ func reviewArtifact(w turn.Work) string {
 // Caps returns the runner's round budgets, so an assembler can assert on what
 // it actually wired rather than on what it meant to.
 func (r *Runner) Caps() Caps { return r.cfg.Caps }
+
+// phaseSteer is the turn's note box as one phase's loop reads it: each note
+// rendered as the message the model reads, recorded as read, carried into the
+// turn's later phases and announced as delivered at the round that read it.
+type phaseSteer struct {
+	r         *Runner
+	ctx       context.Context
+	ph        phase.Phase
+	iteration int
+	// offset is the rounds this phase ran before the loop invocation
+	// draining, so the round a note is announced at is on the PHASE's
+	// scale — the scale every record of the phase uses.
+	offset int
+}
+
+func (s phaseSteer) Drain(round int) []toolloop.SteerNote {
+	notes := s.r.cfg.Steer.Drain()
+	if len(notes) == 0 {
+		return nil
+	}
+	out := make([]toolloop.SteerNote, 0, len(notes))
+	emit := s.r.emitter()
+	for _, n := range notes {
+		msg := prompts.SteerMessage(n.Sender(), n.Text)
+		s.r.carrySteer(msg)
+		emit.steered(s.ctx, s.ph, s.iteration, s.offset+round, n)
+		out = append(out, toolloop.SteerNote{ID: n.ID, Message: msg})
+	}
+	return out
+}
+
+// carrySteer records a note the turn has read, for its later phases.
+func (r *Runner) carrySteer(msg string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.steered = append(r.steered, msg)
+}
+
+// carriedSteers is every note the turn has read so far, in order.
+func (r *Runner) carriedSteers() []string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return append([]string(nil), r.steered...)
+}
+
+// SteerExpired records the notes a turn took and never read: it ended or
+// parked before its next round. The engine calls it with what closing the
+// turn's box returned.
+func (r *Runner) SteerExpired(ctx context.Context, notes []steer.Note) {
+	emit := r.emitter()
+	for _, n := range notes {
+		emit.steerExpired(ctx, n)
+	}
+}

@@ -1,76 +1,27 @@
 /**
  * The node gate — evicting a node and readmitting one — as the wire knows it:
  * the remedy vocabulary a gate answer speaks, the operation id a gesture is
- * finished under, and how long a gesture may take to answer.
+ * finished under, and what a remedy means for that id.
  *
- * Every constant here is a COPY of something the engine owns, because this is
- * a separate build that cannot import a Go identifier — and each copy is held
- * to the engine's by a gate on the engine side (`internal/api`'s
- * `gate_client_test.go`), in both directions, so it cannot drift silently. The
+ * The engine's own values — the actions, which of them keep the id, and how
+ * long a gesture may take — are declared in `../contract/gate.ts`, the one
+ * home of what an engine gate holds (`internal/api`'s `gate_client_test.go`);
+ * what is DONE with them is here. RELATIVE, because this directory is also
+ * built alone as `protocol.js`, where the `~` alias does not exist. The
  * minter is held to a vector file both sides read.
  */
 
-/**
- * What an operator does about a log a gesture did not finish, or a gesture
- * refused before anything was written — `statelog.GateActions`.
- *
- * AN ACTION, NEVER A FLAG. The engine used to send one sentence in the command
- * line's words ("evict it with -force", "without -op-id"), and this dashboard
- * rendered it beside a dialog that has none of those flags. The engine now
- * says WHAT to do and each surface says HOW: here, as its own controls.
- */
-export const GATE_ACTIONS = [
-  "retry_same_op",
-  "new_gesture",
-  "force",
-  "other_node",
-  "reanchor",
-  "set_capacity",
-  "restore",
-  "wait",
-] as const;
+import { GATE_ACTIONS_KEEPING_OPERATION, type GATE_ACTIONS } from "../contract/gate.ts";
 
 /** One of [GATE_ACTIONS]. A gate answer's `actions` is typed `string[]`, so an
  *  action a newer node sends is a value to show rather than a type error. */
 export type GateAction = (typeof GATE_ACTIONS)[number];
 
-/**
- * The actions after which the gesture is finished under ITS OWN operation id —
- * `statelog.GateActionsKeepingOperation`.
- *
- * A log refused `log_full` cannot be finished by sending the gesture again at
- * once, and a surface that let go of the id then left the operator nothing
- * but a FRESH gesture once the ceiling was raised — which writes every log
- * that already held the first record again, re-dating each eviction and
- * restarting its fence window. So the id is kept for all of these, and only
- * `new_gesture` lets it go.
- */
-export const GATE_ACTIONS_KEEPING_OPERATION = [
-  "retry_same_op",
-  "other_node",
-  "reanchor",
-  "set_capacity",
-] as const;
-
 /** Whether, once the operator has done `action`, the gesture is finished under
- *  its own operation id. */
+ *  its own operation id ([GATE_ACTIONS_KEEPING_OPERATION]). */
 export function keepsOperation(action: string): boolean {
   return (GATE_ACTIONS_KEEPING_OPERATION as readonly string[]).includes(action);
 }
-
-/**
- * How long one gesture's request may take before the dialog gives up on it.
- *
- * TWO MINUTES, the command line's own `gateRequestTimeout` and for its
- * reason: the engine answers one gesture within `engine.GateAnswerBudget` — a
- * minute and three quarters: half a minute to judge it, a minute to write
- * every log, a quarter of one for the estate map's part — and the rest is the
- * request's round trip. Waiting past the node's own bound is what makes its
- * answer — every log's outcome — reach the operator rather than a client
- * timeout that knows none of it. The default thirty seconds gave up on a
- * gesture the node went on to finish.
- */
-export const GATE_REQUEST_TIMEOUT_MS = 120_000;
 
 /**
  * An operation id in the engine's grammar (`statelog.NewOpID`), from its parts.

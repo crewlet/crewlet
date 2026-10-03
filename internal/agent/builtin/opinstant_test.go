@@ -88,24 +88,41 @@ func TestARunWithNoWorkKeyCarriesItsOwnStart(t *testing.T) {
 	}
 }
 
-// A PAGE COMMENT MADE FROM A TURN CARRIES THE INSTANT THE TURN'S WORK BEGAN, so
+// A PAGE WRITE MADE FROM A TURN CARRIES THE INSTANT THE TURN'S WORK BEGAN, so
 // the knowledge base derives its operation id from the same identity the
-// tracker's writes use.
-func TestAPageCommentCarriesTheTurnsInstant(t *testing.T) {
+// tracker's writes use — every page write, not only a comment: a create, a
+// save, the rename a save makes and a comment edit each derive an operation
+// from the key, and one carrying no instant is read as older than every loss
+// the ledger has had, so a keyed page write on a node whose ledger ever lost a
+// row would answer `unknown` for ever.
+func TestAPageWriteCarriesTheTurnsInstant(t *testing.T) {
 	t.Parallel()
 	began := time.Date(2026, 9, 1, 8, 0, 0, 0, time.UTC)
 	kb := newFakeKB()
 	turn := workTurn(t)
 	turn.WorkSince = began
-	call(t, kbRegistry(t, builtin.PageDeps{Reader: kb, Writer: kb}), turn,
-		builtin.CommentOnPageTool, map[string]any{"page": "p1", "body": "noted"})
-	if len(kb.comments) != 1 {
-		t.Fatalf("the comment reached the knowledge base %d time(s)", len(kb.comments))
+	reg := kbRegistry(t, builtin.PageDeps{Reader: kb, Writer: kb})
+	for name, args := range map[string]map[string]any{
+		builtin.CommentOnPageTool: {"page": "p1", "body": "noted"},
+		builtin.WritePageTool:     {"title": "New Page", "body": "text", "container": "ENG"},
+		builtin.SavePageTool: {"page": "p1", "base_version": 4, "body": "text",
+			"title": "Deploy Guide"},
+	} {
+		call(t, reg, turn, name, args)
 	}
-	if got := kb.comments[0].TurnSince; !got.Equal(began) {
-		t.Fatalf("the comment carries %s, want %s when the work began — a "+
-			"comment re-posted after an adoption is otherwise decided twice",
-			got, began)
+	call(t, reg, turn, builtin.CommentOnPageTool,
+		map[string]any{"page": "p1", "body": "noted, again", "edit": "m1"})
+	// A comment, a create, a save and its rename, and an edit.
+	if len(kb.keys) != 5 {
+		t.Fatalf("the page writes reached the knowledge base with %d keys, want 5",
+			len(kb.keys))
+	}
+	for i, key := range kb.keys {
+		if key.String() != turn.WorkKey || !key.Since.Equal(began) {
+			t.Errorf("page write %d carries key %+v, want the turn's work key %q "+
+				"at %s when the work began — a write re-made after an adoption "+
+				"is otherwise decided twice", i, key, turn.WorkKey, began)
+		}
 	}
 }
 
@@ -157,7 +174,7 @@ func TestARebasedTurnMintsEveryWriteAtItsRebase(t *testing.T) {
 			if len(kb.comments) != 1 {
 				t.Fatalf("the comment reached the knowledge base %d time(s)", len(kb.comments))
 			}
-			if got := kb.comments[0].TurnSince; !got.Equal(rebasedTo) {
+			if got := kb.comments[0].CallKey.Since; !got.Equal(rebasedTo) {
 				t.Fatalf("the rebased comment carries %s, want the rebase's %s", got, rebasedTo)
 			}
 		})

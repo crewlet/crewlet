@@ -189,35 +189,8 @@ func newRoundTripOn(t *testing.T, q *js.Queue, log *js.DomainLog, node *store.DB
 	if err != nil {
 		t.Fatalf("build the publisher: %v", err)
 	}
-	// THE WRITER'S READ AUTHORITY IS A REAL ONE, barrier and all: a turn's
-	// spend on a task this node holds no row for asks the log's END whether
-	// it ever will ([tracker.Writer.RecordTurn]), and only a barrier on this
-	// broker, applied by this harness's own applier, can answer that. The
-	// reader's health is this node's: drained, and at the waiter's position.
-	index, err := statelog.NewReadIndex(tracker.Domain{}, statelog.EstateStream(tracker.Domain{}),
-		log, reserve, tracker.EncodeBarrier, func() uint32 { return 0 }, recorder)
-	if err != nil {
-		t.Fatalf("build the read index: %v", err)
-	}
-	linearizable, err := statelog.NewReader(statelog.ReaderDeps{
-		Domain: tracker.Domain{}, Spec: statelog.EstateStream(tracker.Domain{}),
-		Mode: statelog.ModeNormal, DB: db, Index: index, Waiter: waiter,
-		Health: func() statelog.Health {
-			at := waiter.Committed()
-			behind, first, floor := uint64(0), uint64(1), uint64(0)
-			return statelog.Health{
-				Position: at, AppliedThrough: at.Seq, Drained: true,
-				Floor: statelog.Floor{State: statelog.FloorOK, ReadAt: time.Now()},
-				Lag:   &behind, FirstSeq: &first, TrimFloor: &floor,
-			}
-		},
-		Metrics: recorder,
-	})
-	if err != nil {
-		t.Fatalf("build the writer's read authority: %v", err)
-	}
 	writer, err := tracker.NewWriter(tracker.WriterDeps{
-		Publisher: publisher, DB: db.Reader(), NodeID: nodeID, Log: linearizable,
+		Publisher: publisher, DB: db.Reader(), NodeID: nodeID,
 		// A REAL CLAIM BACKEND, because the WALKING sequences refuse
 		// without one and a harness that could not run them left the
 		// cross-project move — and everything it reads, including the

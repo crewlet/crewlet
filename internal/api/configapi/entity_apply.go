@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/store"
 )
 
 // Writing ONE entity from inside this process.
@@ -37,8 +38,10 @@ type ApplyEntityRequest struct {
 	// Body is the entity's JSON, whole.
 	Body []byte
 
-	Summary  string
-	Operator string
+	Summary string
+	// Author is who the revision records as its writer; see
+	// [ApplyRequest.Author].
+	Author store.Author
 
 	// Expect is the revision the caller built this edit on, empty for
 	// unconditional. See [ApplyRequest.Expect].
@@ -54,7 +57,7 @@ func (e *EntityError) Unwrap() error { return e.Err }
 
 // ApplyEntity splices one entity into the active revision and activates it.
 func (s *Service) ApplyEntity(ctx context.Context, req ApplyEntityRequest) (Applied, error) {
-	d, err := entityDraft(req.Kind, req.ID, asText(req.Body), req.Expect)
+	d, err := entityDraft(req.Kind, req.ID, asText(req.Body), req.Expect, false)
 	if err != nil {
 		return Applied{}, err
 	}
@@ -62,18 +65,22 @@ func (s *Service) ApplyEntity(ctx context.Context, req ApplyEntityRequest) (Appl
 	if err != nil {
 		return Applied{}, err
 	}
-	return s.commit(ctx, prepared, req.Summary, req.Operator)
+	return s.commit(ctx, prepared, req.Summary, req.Author)
 }
 
-// entityDraft replaces the entity of one kind under one id.
+// entityDraft replaces the entity of one kind under one id — or, with create,
+// adds one under an id the collection does not carry yet.
 //
 // Nothing to splice into is refused rather than treated as an empty company:
 // building the first revision out of one seat is not what this write is for.
-func entityDraft(kind, id string, body submitted, expect string) (draft, error) {
+func entityDraft(kind, id string, body submitted, expect string, create bool) (draft, error) {
 	access, ok := entityKinds[kind]
 	if !ok {
 		return draft{}, &EntityError{Err: fmt.Errorf("%w: %q (want one of %v)",
 			ErrUnknownEntityKind, kind, EntityKinds())}
+	}
+	if create && access.create == nil {
+		return draft{}, &EntityError{Err: fmt.Errorf("%w: %s", ErrNotCreatable, kind)}
 	}
 	return draft{
 		expect: expect, requireActive: true,
@@ -89,14 +96,20 @@ func entityDraft(kind, id string, body submitted, expect string) (draft, error) 
 			if err != nil {
 				return nil, nil, fmt.Errorf("configapi: decode the active revision: %w", err)
 			}
-			if refused := access.replace(spliced, id, body); refused != nil {
+			write := access.replace
+			if create {
+				write = access.create
+			}
+			if refused := write(spliced, id, body); refused != nil {
 				return nil, nil, &EntityError{Err: refused}
 			}
 			// The masks the caller was shown come back as the values they
-			// hide, against the revision they were shown FROM.
+			// hide, against the revision they were shown FROM. A created
+			// entity matches no member of that revision, so nothing in it
+			// is restored: it was never shown, so it holds no mask.
 			spliced.RestoreRedacted(b.prior)
 			entity, _ := access.find(spliced, id)
-			document, err := spliceStored(b.document, access, id, entity)
+			document, err := spliceStored(b.document, access, id, entity, create)
 			if err != nil {
 				return nil, nil, err
 			}

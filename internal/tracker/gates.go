@@ -308,8 +308,7 @@ func (g *Gates) GatedAt(ctx context.Context, subj statelog.Subject, writer, opID
 // whatever a record names in its payload cannot decide whether a marker
 // holds it.
 func markedTask(subj statelog.Subject) (string, bool) {
-	switch ObjectKind(subj.Kind) {
-	case KindTask, KindTurn:
+	if ObjectKind(subj.Kind).GatedByPurge() {
 		return subj.ID, true
 	}
 	return "", false

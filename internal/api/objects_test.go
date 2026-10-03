@@ -600,7 +600,7 @@ func renderObjectsScenarios(t *testing.T) []byte {
 // reason the gate answer's are: a screen whose suite types its own fixtures
 // agrees with itself whatever the engine sends. A change to the rendering is a
 // failing test until the golden is regenerated (`make objects-answer`) and a
-// failing Vitest suite until the fleet screen follows it.
+// failing Vitest suite until the Nodes screen follows it.
 func TestTheObjectsAnswerMatchesItsGoldenFile(t *testing.T) {
 	t.Parallel()
 	got := renderObjectsScenarios(t)
@@ -619,7 +619,7 @@ func TestTheObjectsAnswerMatchesItsGoldenFile(t *testing.T) {
 	}
 	if !bytes.Equal(got, want) {
 		t.Fatalf("the objects answer no longer matches %s. Run `make objects-answer`, "+
-			"read the diff, and follow it in the dashboard's fleet screen — its suite "+
+			"read the diff, and follow it in the dashboard's Nodes screen — its suite "+
 			"loads this file — and in docs/reference/api-endpoints.md's GET /fleet "+
 			"example, which is held to it.\n--- rendered now ---\n%s", objectsGolden, got)
 	}
@@ -733,8 +733,7 @@ func TestNoObjectsHintNamesACommandLineFlag(t *testing.T) {
 // build — see internal/clientsource — so this side holds it.
 func TestTheDashboardOffersHoldLengthsTheEngineAccepts(t *testing.T) {
 	t.Parallel()
-	body, err := clientsource.Declaration(clientsource.Tree(t),
-		`export const HOLD_LENGTHS = \[([^\]]*)\] as const;`)
+	body, err := clientsource.Literal(clientsource.Tree(t), "HOLD_LENGTHS")
 	if err != nil {
 		t.Fatal(err)
 	}

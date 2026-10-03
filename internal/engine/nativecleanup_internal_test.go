@@ -62,18 +62,19 @@ type dialQueue struct {
 // search fan-out's answerer.
 //
 // Serve is the one verb a test can fail on demand AFTER the log is up, and it
-// is the exact failure the fan-out registration reports. ONLY that subject:
-// the estate server registers before the native start, and a broker refusing
-// it too would fail the boot before the state log existed — a case that could
-// no longer see what it is about.
+// is the exact failure the fan-out registration reports. ONLY ON THE SEARCH
+// SLICE: the estate server and the fleet history's answerer register before
+// the native start, and a broker refusing either too would fail the boot
+// before the state log this case watches ever started.
 type deafQueue struct{ *dialQueue }
 
-// Serve refuses the slice registration, which is where startNative fails.
-func (q *deafQueue) Serve(ctx context.Context, subject string, h queue.AnswerFunc) (queue.Unsubscribe, error) {
-	if subject == search.SliceSubject {
-		return nil, errors.New("jetstream: this broker registers no answerer")
+// Serve refuses the slice subject, which is where startNative's registration
+// fails, and registers every other answerer for real.
+func (q *deafQueue) Serve(ctx context.Context, subject string, fn queue.AnswerFunc) (queue.Unsubscribe, error) {
+	if subject != search.SliceSubject {
+		return q.dialQueue.Serve(ctx, subject, fn)
 	}
-	return q.dialQueue.Serve(ctx, subject, h)
+	return nil, errors.New("jetstream: this broker registers no answerer")
 }
 
 // DialOwned hands out the real second connection and REMEMBERS it.

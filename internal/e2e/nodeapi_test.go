@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/crewlet/crewlet/internal/api"
 	"github.com/crewlet/crewlet/internal/api/configapi"
@@ -58,10 +59,14 @@ func serveAPI(
 // because a fleet member is built off the test's goroutine, where t.Fatalf
 // ends only that goroutine and leaves the test running with a nil member.
 //
-// What it leaves out is what a case here never reaches: the operator MCP
-// surface and the native tracker and knowledge readers, each of which has its
-// own suite. The file byte routes are IN, because a file's bytes crossing
-// between members is something only a fleet here can exercise.
+// THE OPERATOR SURFACE IS THE NODE'S OWN, from [api.NewEngineOperator] — the
+// constructor `crewlet run` calls — so `/operator/act` here is the route a
+// person's dashboard writes through, and the viewer names the same verbs.
+// AND THE NATIVE TRACKER'S READS, so a read that names the floor an act
+// answered with is asked of the route the dashboard asks. The file byte routes
+// are IN too, because a file's bytes crossing between members is something
+// only a fleet here can exercise. What it leaves out is what a case here never
+// reaches: the knowledge readers, which have their own suite.
 func wireAPI(
 	ctx context.Context, e *engine.Engine, boot *config.Bootstrap, amend func(*api.Options),
 ) (*api.App, *httptest.Server, []func(), error) {
@@ -123,6 +128,10 @@ func wireAPI(
 	if err != nil {
 		return fail("setup surface", err)
 	}
+	operators, err := api.NewEngineOperator(e)
+	if err != nil {
+		return fail("operator surface", err)
+	}
 	copier, err := backup.New(backup.Options{
 		Store: backends.Store, Partitions: e.HeldPartitions,
 		Conn: backends.Conn(), API: backends.API(),
@@ -133,32 +142,51 @@ func wireAPI(
 		return fail("backup", err)
 	}
 
+	// THE ENGINE'S OWN fleet reader, as cmd/crewlet wires it, so the node the
+	// harness serves answers history the way a real node does — from every
+	// live member.
+	sources := queries.Sources{
+		Events:  e.History(),
+		Usage:   e.UsageEstate(),
+		Company: company,
+		NodeID:  nodeID,
+		// THE FLEET VIEW, over the lease table, the control plane and the
+		// stored placement map, as cmd/crewlet reads it: the seat states
+		// the dashboard is served read placement from the leases, and a
+		// case that makes a gesture on one member reads its effect off
+		// another's view of the fleet.
+		Coord:   backends.Coord,
+		Plane:   backends.Fleet,
+		Objects: backends.Fleet,
+		// WHAT A PERSON MAY DO, off the same surface the act route
+		// serves, as cmd/crewlet wires it.
+		OperatorActs: operators.Acts,
+	}
+	// THE TRACKER'S READS, through this node's estate router as cmd/crewlet
+	// wires them, and set only when this node runs one: a nil reader in the
+	// interface would register every work question and panic on the first
+	// ask, where an unset one leaves them honestly unregistered.
+	if reader, ok := engine.OperatorWork(e); ok {
+		sources.Work = reader
+	}
+
 	opts := api.Options{
 		Bootstrap:    boot,
 		Runtime:      runtime,
 		QueueBackend: backends.Queue.Backend(),
-		Sources: queries.Sources{
-			Events:  backends.Store.Events(),
-			Company: company,
-			NodeID:  nodeID,
-			// THE FLEET VIEW, over the lease table, the control plane and
-			// the stored placement map, as cmd/crewlet reads it: a case
-			// that makes a gesture on one member reads its effect off
-			// another's view of the fleet.
-			Coord:   backends.Coord,
-			Plane:   backends.Fleet,
-			Objects: backends.Fleet,
-		},
-		Config:    configSurface,
-		Secrets:   secretSurface,
-		Setup:     setupSurface,
-		Budgets:   backends.Fleet,
-		Retention: backends.Fleet,
-		Capacity:  e,
+		EventLog:     backends.Store.Events(),
+		Sources:      sources,
+		Operator:     operators,
+		Config:       configSurface,
+		Secrets:      secretSurface,
+		Setup:        setupSurface,
+		Retention:    backends.Fleet,
+		Capacity:     e,
 		// THE FLEET BROKER'S MEMBERSHIP, through the engine's own surface,
 		// as `crewlet run` wires it.
 		FleetBroker: e.FleetBroker(),
 		Backup:      copier,
+		Audit:       backends.Queue,
 		// THE FILE BYTE ROUTES, through the adapter `crewlet run` uses, so
 		// an upload on one member and a download from another cross the
 		// object store the way a deployment's do.
@@ -208,10 +236,30 @@ func wireAPI(
 	// has ended, which is exactly when a cancelled stop would do nothing.
 	stops = append(stops, func() { projector.Stop(context.WithoutCancel(ctx)) })
 
+	// AND THE HISTORY BEHIND IT, seeded as cmd/crewlet seeds it: after the
+	// subscription so nothing falls into the gap, before the listener so the
+	// first socket sees the seeded snapshot. A harness without it served a
+	// node `crewlet run` never produces — one whose envelope carries no
+	// `seeded_from` and whose feed starts at boot — and every case reading
+	// either proved the harness rather than the node. FAILED here rather than
+	// warned about, as cmd/crewlet does: a seed that cannot read the fleet it
+	// was just built beside is a broken case, not a degraded node.
+	seedCtx, cancelSeed := context.WithTimeout(ctx, seedBudget)
+	err = observe.Seed(seedCtx, e.History(), company().AgentRoles(), app.Stream().State())
+	cancelSeed()
+	if err != nil {
+		return fail("seed the live projection", err)
+	}
+
 	srv := httptest.NewServer(app)
 	stops = append(stops, srv.Close)
 	return app, srv, stops, nil
 }
+
+// seedBudget bounds the harness's boot seed, at cmd/crewlet's
+// projectionSeedBudget: the same read, over the same fan-out, against a fleet
+// that is booting just as a real one is.
+const seedBudget = 5 * time.Second
 
 // stopInReverse runs a teardown in the reverse of the order it was built.
 func stopInReverse(stops []func()) {

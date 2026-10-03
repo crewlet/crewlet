@@ -29,21 +29,19 @@ import (
 // default embed pattern silently skips them, and a stylesheet under one would
 // be missing from the binary with nothing failing until a browser asked for it.
 //
-// THE ICON IS NOT UNDER dashboard/ AND MUST STILL BE NAMED. The shell asks
-// for it at /static/crewlet-icon.svg (the tab icon and the sidebar brand) —
-// one directory above the rest of the app, because it is the product's mark
-// rather than the dashboard's asset. Embedding only `dashboard` left it
-// 404ing from the binary while every module and stylesheet served perfectly,
-// which renders as a page with no logo and a blank tab icon: the kind of
-// break nothing fails on and nobody files. (The raster favicon.ico a browser
-// asks for unprompted lives under dashboard/ and rides the `all:` pattern.)
+// THE BRAND MARK IS UNDER dashboard/ TOO, and it is the only copy. The build
+// emits `crewlet-icon.svg` and `favicon.ico` from `@crewlethq/icons`, the
+// package that owns the mark (`dashboard/vite.config.ts`, `brandAssets`), so
+// the tab icon, the rail's lockup and the GitHub App landing page are one
+// drawing from one source. A second copy used to sit one directory up, named
+// by a pattern of its own, and two copies of one drawing are two files that
+// drift silently.
 //
-// A NEW TOP-LEVEL ASSET NEEDS A NEW PATTERN HERE, and TestEveryStaticFileIsInTheBinary
-// is what says so — it walks this directory on disk and fails on anything the
-// embed did not take.
+// A NEW TOP-LEVEL ASSET WOULD NEED A NEW PATTERN HERE, and
+// TestEveryStaticFileIsInTheBinary is what says so — it walks this directory
+// on disk and fails on anything the embed did not take.
 //
 //go:embed all:dashboard
-//go:embed crewlet-icon.svg
 var files embed.FS
 
 // FS is the embedded tree rooted at the dashboard directory's parent, so a

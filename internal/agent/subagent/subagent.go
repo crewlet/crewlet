@@ -531,6 +531,9 @@ func Run(ctx context.Context, cfg Config, req Request) ([]Result, error) {
 	if err != nil {
 		return nil, err
 	}
+	// When the call began, for its summary event: the same instant the
+	// call's wall-clock cap below is measured from.
+	callBegan := time.Now().UTC()
 
 	// ONE slice for the whole call, computed once. Every worker charges
 	// the same meter, so they compete: whoever spends first leaves less
@@ -580,7 +583,7 @@ func Run(ctx context.Context, cfg Config, req Request) ([]Result, error) {
 			return run(childCtx, began, cfg, provider, key, meter, r, deps, calls)
 		})
 
-	publishCall(ctx, cfg, tasks, results)
+	publishCall(ctx, cfg, tasks, results, callBegan)
 	return results, nil
 }
 
@@ -596,7 +599,8 @@ func run(ctx context.Context, began time.Time, cfg Config, provider llm.Provider
 	key string, meter toolloop.BudgetMeter, task resolved, deps []Result,
 	calls *turnctx.CallLog,
 ) (res Result) {
-	res.ID, res.Worker, res.ProviderKey = task.ID, task.Worker, key
+	res.ID, res.Worker = task.ID, task.Worker
+	res.StartedAt, res.MaxRounds = began.UTC(), task.maxTurns
 
 	// TELEMETRY ON EVERY PATH, including the panic the frame below
 	// contains. Deferred FIRST so it runs LAST: the recovery below writes
@@ -685,10 +689,12 @@ func run(ctx context.Context, began time.Time, cfg Config, provider llm.Provider
 	}
 	surface = tools.NewSurface(phase.Subagent.String(), universe, active)
 	// BOUND to the parent turn, or every seat-scoped tool in the grant
-	// fails at call time — see Config.Turn. On this task's own fork of the
-	// run's call log, never the parent's — see [runGraph].
+	// fails at call time — see Config.Turn. AS A WORKER, so a tool reporting
+	// what it did names the phase that did it rather than the executor that
+	// delegated; and on this task's own fork of the run's call log, never
+	// the parent's — see [runGraph].
 	if cfg.Turn != nil {
-		surface = surface.ForTurn(cfg.Turn.WithCalls(calls))
+		surface = surface.ForTurn(cfg.Turn.InPhase(types.PhaseSubagent).WithCalls(calls))
 	}
 	if cfg.Guard != nil {
 		// AFTER the surface exists and from that surface, so what the
@@ -721,12 +727,15 @@ func run(ctx context.Context, began time.Time, cfg Config, provider llm.Provider
 
 	progress := &toolloop.Progress{}
 	loop, err := toolloop.Run(ctx, toolloop.Config{
-		Provider:  provider,
-		Surface:   surface,
-		MaxRounds: task.maxTurns,
-		Budget:    meter,
-		Fence:     cfg.Fence,
-		Progress:  progress,
+		Provider: provider,
+		// The resolved head, until a completion names the entry that
+		// actually served — which, on a seat's chain, can be a later one.
+		ProviderKey: key,
+		Surface:     surface,
+		MaxRounds:   task.maxTurns,
+		Budget:      meter,
+		Fence:       cfg.Fence,
+		Progress:    progress,
 		Messages: []llm.Message{
 			{Role: llm.RoleSystem, Content: res.SystemPrompt},
 			{Role: llm.RoleUser, Content: res.UserPrompt},
@@ -746,7 +755,10 @@ func run(ctx context.Context, began time.Time, cfg Config, provider llm.Provider
 		res.Text = loop.Text
 		res.Rounds = loop.RoundsUsed
 		res.InputTokens, res.OutputTokens = loop.InputTokens, loop.OutputTokens
+		res.CacheRead, res.CacheWrite = loop.CacheRead, loop.CacheWrite
+		res.RoundRecords = loop.Rounds
 		res.Model = loop.Model
+		res.ProviderKey = loop.ProviderKey
 		res.Executions = loop.Executions
 		res.Narration = loop.Narration
 		res.Status, res.Output = submitted(submit)
@@ -765,7 +777,10 @@ func run(ctx context.Context, began time.Time, cfg Config, provider llm.Provider
 	res.Text = partial.Text
 	res.Rounds = partial.RoundsUsed
 	res.InputTokens, res.OutputTokens = partial.InputTokens, partial.OutputTokens
+	res.CacheRead, res.CacheWrite = partial.CacheRead, partial.CacheWrite
+	res.RoundRecords = partial.Rounds
 	res.Model = partial.Model
+	res.ProviderKey = partial.ProviderKey
 	res.Executions = partial.Executions
 	res.Narration = partial.Narration
 
@@ -1007,7 +1022,7 @@ func publishFallback(ctx context.Context, cfg Config, f chain.Fallback) {
 // Telemetry must never fail a call: the workers have already run and their
 // results are the parent's answer, so a broker that refuses this event must
 // not turn a finished call into a failed tool call.
-func publishCall(ctx context.Context, cfg Config, tasks []resolved, results []Result) {
+func publishCall(ctx context.Context, cfg Config, tasks []resolved, results []Result, began time.Time) {
 	if cfg.Publisher == nil {
 		return
 	}
@@ -1024,6 +1039,10 @@ func publishCall(ctx context.Context, cfg Config, tasks []resolved, results []Re
 	if cfg.Turn != nil {
 		batchRun, batchWork = cfg.Turn.RunID, cfg.Turn.WorkKey
 	}
+	// The parent's round, off the context its tool loop handed this call:
+	// the one frame that knows which round is running is the loop, and the
+	// delegate tool is called from inside it.
+	round, _ := toolloop.CallRound(ctx)
 	ev := events.New(types.SubagentBatched{
 		ParentHandle: cfg.Seat.Role.Handle(),
 		TurnID:       batchRun,
@@ -1034,6 +1053,8 @@ func publishCall(ctx context.Context, cfg Config, tasks []resolved, results []Re
 		TotalTokens:  tokens,
 		Graph:        graphOf(tasks),
 		Statuses:     statuses,
+		StartedAt:    began,
+		Round:        round,
 	}, cfg.Trace)
 	// The payload carries no role, so the envelope's source is the only
 	// attribution this event has — without it every fan-out in the company

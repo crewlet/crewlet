@@ -99,6 +99,30 @@ func TestTheClaudeParserReadsTheEnvelope(t *testing.T) {
 	}
 }
 
+// THE PROMPT A CODING RUN SENT IS ITS WHOLE PROMPT, cached share included.
+//
+// The vendor's input_tokens is only the UNCACHED remainder, and a coding run
+// is almost entirely cached rounds — so reading it alone put a fraction of
+// every run's prompt on the budget counter and the spend rollup. The cached
+// share is carried beside it as a breakdown, which is the convention every
+// engine provider reports in.
+func TestTheClaudeParserCountsTheCachedPrompt(t *testing.T) {
+	res := claude().Parse(`{
+		"result": "done", "subtype": "success",
+		"usage": {"input_tokens": 40, "cache_read_input_tokens": 9000,
+			"cache_creation_input_tokens": 1500, "output_tokens": 300}
+	}`)
+	if res.InputTokens != 10540 {
+		t.Errorf("input = %d, want the whole prompt: 40 uncached + 9000 read + 1500 written", res.InputTokens)
+	}
+	if res.CacheReadTokens != 9000 || res.CacheWriteTokens != 1500 {
+		t.Errorf("cache = %d read / %d written, want 9000 / 1500", res.CacheReadTokens, res.CacheWriteTokens)
+	}
+	if res.OutputTokens != 300 {
+		t.Errorf("output = %d, want 300", res.OutputTokens)
+	}
+}
+
 // A run that hit its turn cap sets no is_error but did not finish.
 func TestARunThatHitItsCapIsNotASuccess(t *testing.T) {
 	res := claude().Parse(`{"result":"ran out of turns","subtype":"error_max_turns","is_error":false}`)

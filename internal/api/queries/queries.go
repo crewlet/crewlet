@@ -17,10 +17,12 @@ import (
 	"net/url"
 	"slices"
 	"strconv"
+	"strings"
 	"sync"
 
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/estate"
+	"github.com/crewlet/crewlet/internal/learning/memread"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
@@ -38,6 +40,57 @@ var (
 	// ErrBadParams is a request this surface understood and refused.
 	ErrBadParams = errors.New("queries: bad parameters")
 )
+
+// RefusalDetail is a [ErrBadParams] refusal's own sentence, for the caller.
+//
+// A refusal here is WRITTEN FOR the caller — it names the parameter to change
+// and the values it accepts — so both transports carry it beside the
+// `bad_params` code rather than only logging it. What is taken out is the
+// sentinel's own text, which is a Go package's name for the class and says
+// nothing a reader can act on; the refusals wrap it at the front
+// (`%w: days=91, …`) or at the end (`…, not both: %w`), and both are removed
+// wherever they sit. A refusal that also names a finer CLASS a caller tests
+// for — a spend window too long, or starting before the history — is built
+// with [refuseAs], whose sentence carries no class text at all: the Spend
+// screen used to show `tokens: the window reaches past the spend history:`
+// in front of every such refusal, twice over with the question's own name.
+// Everything else is kept verbatim, a wrapped cause's explanation included.
+func RefusalDetail(err error) string {
+	if err == nil {
+		return ""
+	}
+	var r *refusal
+	if errors.As(err, &r) {
+		return r.sentence
+	}
+	text := err.Error()
+	sentinel := ErrBadParams.Error()
+	text = strings.ReplaceAll(text, sentinel+": ", "")
+	text = strings.ReplaceAll(text, ": "+sentinel, "")
+	text = strings.ReplaceAll(text, sentinel, "")
+	return strings.TrimSpace(text)
+}
+
+// refusal is an [ErrBadParams] refusal that is also a finer class, with a
+// sentence written for the person who will read it.
+//
+// THE CLASS IS IN THE CHAIN AND NOT IN THE SENTENCE. `%w: %w: …` put both
+// sentinels' Go text in front of the explanation, and a class name is for
+// [errors.Is], never for a reader.
+type refusal struct {
+	sentence string
+	class    error
+}
+
+func (r *refusal) Error() string { return ErrBadParams.Error() + ": " + r.sentence }
+
+// Unwrap makes a refusal both [ErrBadParams] and its class to [errors.Is].
+func (r *refusal) Unwrap() []error { return []error{ErrBadParams, r.class} }
+
+// refuseAs is a refusal of the given class, its sentence formatted from args.
+func refuseAs(class error, format string, args ...any) error {
+	return &refusal{sentence: fmt.Sprintf(format, args...), class: class}
+}
 
 // operatorKey is the context key this package carries the caller's operator id
 // under.
@@ -334,6 +387,14 @@ func unavailableIfTransient(err error) error {
 	if transient(err) {
 		// WRAPPED, NOT REPLACED, so the refusal's own code, detail and
 		// derived hint survive for [RetryAfter] and for the log.
+		return fmt.Errorf("%w: %w", ErrUnavailable, err)
+	}
+	if errors.Is(err, coord.ErrUnavailable) {
+		return fmt.Errorf("%w: %w", ErrUnavailable, err)
+	}
+	// A SEAT'S HOLDER THAT COULD NOT ANSWER YET — its lease unreadable, its
+	// node silent, or the seat still arriving on it — clears by waiting.
+	if errors.Is(err, memread.ErrUnavailable) {
 		return fmt.Errorf("%w: %w", ErrUnavailable, err)
 	}
 	return err

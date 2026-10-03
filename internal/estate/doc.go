@@ -1,7 +1,7 @@
 // Package estate routes every node's reads and writes of the replicated estate
 // to a node that serves the partition they address.
 //
-// The decision it carries is ADR-0018: a node without the `data` role reaches
+// The decision it carries is ADR-0025: a node without the `data` role reaches
 // the estate through a node that holds it, and every rule below is one clause
 // of what makes that sound. Its amendment: the client that node ran became a
 // ROUTER that every node runs, and a data node's own seats reach its own copy

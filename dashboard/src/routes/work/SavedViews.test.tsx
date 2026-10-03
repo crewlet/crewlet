@@ -14,6 +14,7 @@ import { SavedViews } from "./SavedViews.tsx";
 import { Router } from "~/app/router.tsx";
 import { useClient, useConnection, useOrg } from "~/lib/store-hooks.ts";
 import type { QueryName } from "~/protocol/index.ts";
+import { ViewerProvider } from "~/lib/viewer.ts";
 
 vi.mock("~/lib/store-hooks.ts", async () => {
   const actual =
@@ -50,9 +51,11 @@ const view = (over: Record<string, unknown> = {}) => ({
 
 const mount = (id?: string) =>
   render(
-    <Router>
-      <SavedViews id={id} />
-    </Router>,
+    <ViewerProvider>
+      <Router>
+        <SavedViews id={id} />
+      </Router>
+    </ViewerProvider>,
   );
 
 // AN OWNER IS A PERSON, and the chart is what turns their handle into the name
@@ -60,7 +63,7 @@ const mount = (id?: string) =>
 // two lines below it resolved the same value — so `ada-okonkwo` and "Ada
 // Okonkwo" appeared on one page as though they were two people.
 test("a personal view names its owner the way the rest of the screen does", async () => {
-  serving({ work_views: { views: [view({ owner: "ada-okonkwo" })], complete: true } });
+  serving({ work_saved_views: { views: [view({ owner: "ada-okonkwo" })], complete: true } });
   const { container } = mount("v-1");
   await waitFor(() => expect(screen.getByText(/A personal view owned by/)).toBeTruthy());
   expect(container.textContent).toContain("A personal view owned by Ada Okonkwo.");
@@ -71,7 +74,7 @@ test("a personal view names its owner the way the rest of the screen does", asyn
 // writing through the MCP surface owns views and holds no seat, so the
 // fallback is the handle itself rather than an empty sentence.
 test("an owner outside the chart is named by their handle", async () => {
-  serving({ work_views: { views: [view({ owner: "ops-rota" })], complete: true } });
+  serving({ work_saved_views: { views: [view({ owner: "ops-rota" })], complete: true } });
   const { container } = mount("v-1");
   await waitFor(() => expect(screen.getByText(/A personal view owned by/)).toBeTruthy());
   expect(container.textContent).toContain("A personal view owned by ops-rota.");
@@ -80,7 +83,7 @@ test("an owner outside the chart is named by their handle", async () => {
 // A SHARED VIEW IS NOT AN UNOWNED ONE — empty is a setting somebody chose, and
 // it is a sentence rather than a blank.
 test("a shared view says what shared means", async () => {
-  serving({ work_views: { views: [view()], complete: true } });
+  serving({ work_saved_views: { views: [view()], complete: true } });
   const { container } = mount("v-1");
   await waitFor(() => expect(screen.getByText(/everybody in this company/)).toBeTruthy());
   expect(container.textContent).not.toContain("A personal view owned by");
@@ -102,7 +105,7 @@ function markTitles(root: HTMLElement): (string | null)[] {
 // nobody turned on.
 test("a view carrying no marks says which absence that is", async () => {
   serving({
-    work_views: {
+    work_saved_views: {
       views: [view(), view({ id: "v-2", key: "team-board", name: "Team board", pinned: true })],
       complete: true,
     },
@@ -122,18 +125,52 @@ test("a view carrying no marks says which absence that is", async () => {
   expect(screen.getByText("pinned")).toBeTruthy();
 });
 
+// EVERY VIEW, IN WHICHEVER CONTAINER IT WAS SAVED. The inventory read the
+// workspace strip, so a view saved on a project board had no row here and
+// could be pinned from nowhere. It reads every container now, says where each
+// view lives in a person's words, and offers a pin on every row — and it never
+// shows a uuid key, which nobody reads or types.
+test("a view saved on a project is listed, says where it lives, and can be pinned", async () => {
+  const query = serving({
+    work_saved_views: {
+      views: [
+        view({
+          id: "1c448b67-7dcc-49cc-b595-20842f0a3c11",
+          key: "1c448b67-7dcc-49cc-b595-20842f0a3c11",
+        }),
+        view({
+          id: "v-eng",
+          key: "v-eng",
+          name: "ENG bugs",
+          container: { kind: "project", id: "ENG" },
+        }),
+      ],
+      complete: true,
+    },
+  });
+  const { container } = mount();
+  await waitFor(() => expect(screen.getByText("ENG bugs")).toBeTruthy());
+  expect(query.mock.calls.some(([what]) => what === "work_saved_views")).toBe(true);
+  expect(query.mock.calls.some(([what]) => what === "work_views")).toBe(false);
+  expect(screen.getByText("Company-wide")).toBeTruthy();
+  expect(screen.getByTitle("project:ENG").textContent).toBe("ENG");
+  expect(screen.getAllByRole("button", { name: "Pin" })).toHaveLength(2);
+  expect(container.textContent).not.toContain("1c448b67");
+  expect(screen.queryByRole("columnheader", { name: "Key" })).toBeNull();
+});
+
 // ONE SPELLING OF A MARK. The grid's tags carried the sentence saying what each
 // mark means and the facts block's did not, so `protected` explained itself on
 // the inventory and explained nothing on the view's own page.
 test("a mark says what it means wherever it is drawn", async () => {
   const marked = { default: true, protected: true, pinned: true };
-  serving({ work_views: { views: [view(marked)], complete: true } });
+  serving({ work_saved_views: { views: [view(marked)], complete: true } });
   const list = mount();
   await waitFor(() => expect(screen.getByText("My queue")).toBeTruthy());
   const onTheGrid = markTitles(list.container);
   cleanup();
 
-  serving({ work_views: { views: [view(marked)], complete: true } });
+  serving({ work_saved_views: { views: [view(marked)], complete: true } });
   const page = mount("v-1");
   await waitFor(() => expect(screen.getByText("Saved view")).toBeTruthy());
   expect(markTitles(page.container)).toEqual(onTheGrid);

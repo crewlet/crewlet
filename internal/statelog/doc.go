@@ -159,7 +159,7 @@
 // attempt applies to the instant it inherits, against its own clock, and
 // mint.go says why the line is [MintHorizon] rather than the retention. That an
 // attempt past it rebases, records the instant for the fleet and is judged at
-// its own clock rather than an earlier attempt's is ADR-0023.
+// its own clock rather than an earlier attempt's is ADR-0029.
 //
 // # A record this build cannot decode is RETAINED, with one exception
 //
@@ -185,7 +185,25 @@
 // and [Readers] reads it across the trim's own counted set: a writer about to
 // publish such a kind waits until every node that applies the log reads it —
 // a node that says nothing being one that predates the question. The vector
-// log's index records are the first such kind (internal/search, ADR-0022).
+// log's index records are the first such kind (internal/search, ADR-0028).
+//
+// # A record is stamped with the lowest version that reads it
+//
+// The retain rule decides by the record's version, so the version is a
+// promise to the builds that PRECEDE the writer: a record stamped below what
+// its fields need is applied by an older node with the field dropped, and one
+// stamped at the writer's own version is retained by every older node whether
+// it carries anything new or not. A domain therefore declares a
+// [RecordFields] table — each field its records gained since the base format,
+// with the version that introduced it — and its encoder stamps
+// [RecordFields.Minimum]. The build's own [Domain.RecordVersion] is exactly
+// the table's highest version: [RecordFields.Check] and the conformance suite
+// hold both halves.
+//
+// A column an applier computes from its rows is invisible to a record
+// version, since what differs between builds is the rule; a [Deriver]
+// versions its rules on the checkpoint row and re-derives once, at the first
+// boot whose rules differ.
 //
 // # THE FLOOR THEOREM
 //

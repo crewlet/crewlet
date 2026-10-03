@@ -20,7 +20,6 @@ import type {
   AgentRow,
   FeedRow,
   EventEnvelope,
-  HealthPush,
   OrgBudget,
   OrgProjection,
   Overlay,
@@ -30,18 +29,10 @@ import type {
   Snapshot,
   ToolRow,
 } from "./types.ts";
-
-/**
- * Longest activity feed a tab keeps.
- *
- * Matches the server's own retention (`livestate.EventFeedLimit`) so a
- * reconnect's snapshot neither truncates the feed nor leaves rows the server
- * cannot resend. Exported because it is also the limit of what anything derived
- * from the feed can HONESTLY claim to know: a busy company fills 400 events in
- * minutes, and a panel covering an hour has to say where the record actually
- * starts rather than drawing the gap as quiet.
- */
-export const MAX_EVENTS = 400;
+// RELATIVE, like every contract import in this directory: it is also built
+// alone as `protocol.js`, where the `~` alias does not exist.
+import { MAX_EVENTS } from "../contract/wire.ts";
+import type { EngineHealth } from "../contract/health.ts";
 
 /**
  * How many completed-phase envelopes a tab keeps, PAYLOAD AND ALL.
@@ -73,25 +64,6 @@ export const MAX_EVENTS = 400;
  */
 export const MAX_PHASES = 200;
 
-/**
- * How many coding runs' usage envelopes the socket keeps, payload and all.
- *
- * The same drop-oldest, company-wide bound as [MAX_PHASES] and for the same
- * reason — these only supplement a screen's query answer — and sized from it,
- * because what it must hold is every run of the turns whose phases that buffer
- * still holds: a turn card and a seat's turns sum a turn's runs from here
- * until its row settles. A turn's iteration that launches coding runs puts TWO
- * phase records on the wire, the execute its last run resumed into and the
- * review (a suspended execute publishes none), and ONE usage record per run —
- * and the runs of one iteration are as many as its executor launched back to
- * back. So runs are at least half the phases in a company whose seats mostly
- * code, and more wherever a turn relaunches; at TWICE the phases this keeps
- * every run of every buffered turn up to four runs an iteration, company-wide.
- * The cost is nothing a phase buffer would notice: a record is a few hundred
- * bytes, where one phase carries its prompts and tool results.
- */
-export const MAX_RUNS = 2 * MAX_PHASES;
-
 export interface StoreState {
   agents: AgentRow[];
   events: FeedRow[];
@@ -103,18 +75,34 @@ export interface StoreState {
    * the durable history each screen loads comes from its own query.
    */
   phases: EventEnvelope[];
-  /**
-   * The `sandbox_run_usage` envelopes seen on this socket, newest first — what
-   * each detached coding run spent, one record per launch. Kept with their
-   * payload, and outside what a snapshot replaces, for the reason `phases` is.
-   */
-  runs: EventEnvelope[];
   sandboxes: SandboxEntry[];
-  org: OrgProjection;
+  /**
+   * The org chart the engine pushed, or NULL until the first one arrives.
+   *
+   * Null rather than `{}`, because `{}` is an ANSWER — the projection of a
+   * node running no company — and a screen has to tell that from "nothing has
+   * been said yet": the charter drew "No mission is set" and a policy count
+   * of 0 on every cold tab, before the handshake had said anything at all.
+   */
+  org: OrgProjection | null;
   tools: ToolRow[];
-  health: HealthPush;
+  /**
+   * The engine's own health: the `health` push, `api.Health` WHOLE, replaced
+   * by the snapshot and by every five-second tick. `{status: "unknown"}` while
+   * the socket is down — the one value here that is not a push, and asserts
+   * nothing beyond that it is not known.
+   */
+  health: EngineHealth;
   tokens: Rollup | null;
-  budget: OrgBudget;
+  /**
+   * The company's live token meter as the last `budget` push stated it, and
+   * `null` UNTIL ONE HAS. Three facts, not two: nobody has read the counter
+   * yet, nothing is capped (`org.windows` empty), or a reading. An empty
+   * object used to stand for both of the first two, so for the first seconds
+   * after every engine start a capped company was drawn as having no budget
+   * and its operator was offered "Set one".
+   */
+  budget: OrgBudget | null;
   schedules: ScheduleRow[] | null;
   connected: boolean;
   /**
@@ -148,13 +136,12 @@ function emptyState(): StoreState {
     agents: [],
     events: [],
     phases: [],
-    runs: [],
     sandboxes: [],
-    org: {},
+    org: null,
     tools: [],
     health: { status: "unknown" },
     tokens: null,
-    budget: {},
+    budget: null,
     schedules: null,
     connected: false,
     authRejected: false,
@@ -163,6 +150,21 @@ function emptyState(): StoreState {
 
 export class Store {
   state: StoreState = emptyState();
+
+  /**
+   * The push kinds this build does not know, each with how many arrived.
+   *
+   * IGNORED AND COUNTED. A fleet part way through an upgrade has a node
+   * pushing a kind this bundle was built before, and throwing on it — or
+   * applying it to a slice by a guess — would break a screen over a frame it
+   * has no use for. But the same fall-through is exactly what this build's
+   * own engine sending a kind its own client forgot looks like, which is the
+   * silent failure the e2e replay exists to catch: so it is kept here, and
+   * the replay asserts it is empty. Not a slice, because nothing renders it
+   * and a listener woken by a frame nobody can read would be woken for
+   * nothing.
+   */
+  readonly unknownPushes = new Map<string, number>();
 
   private subs = new Map<Slice, Set<() => void>>();
 
@@ -218,7 +220,7 @@ export class Store {
     this.state.org = snap.org ?? {};
     this.state.tools = snap.tools ?? [];
     if (snap.tokens && snap.tokens.totals) this.state.tokens = snap.tokens;
-    this.state.budget = snap.budget ?? {};
+    this.state.budget = snap.budget ?? null;
     // A bare list here, unlike the push's `{schedules: […]}` object.
     if (snap.schedules) this.state.schedules = snap.schedules;
     // NOT `connected`. That belongs to the transport, which knows whether the
@@ -286,7 +288,7 @@ export class Store {
   }
 
   applyBudget(budget: OrgBudget | null | undefined): void {
-    this.state.budget = budget ?? {};
+    this.state.budget = budget ?? null;
     this.emit("budget");
   }
 
@@ -308,7 +310,7 @@ export class Store {
     this.emit("tools");
   }
 
-  applyHealth(health: HealthPush | null | undefined): void {
+  applyHealth(health: EngineHealth | null | undefined): void {
     this.state.health = health ?? { status: "unknown" };
     this.state.connected = !!health && health.status !== "unknown";
     this.emit("health");
@@ -357,15 +359,12 @@ export class Store {
         this.emit("phases");
       }
     }
-    // A CODING RUN'S USAGE, likewise with its payload: its tokens are in no
-    // other frame, and the turn it belongs to counts them. Deduped by id,
-    // which is the launch's own — a retried collect publishes the same record.
-    if (ev.type === "sandbox_run_usage" && ev.payload) {
-      if (!this.state.runs.some((r) => r.id === ev.id)) {
-        this.state.runs = [ev, ...this.state.runs].slice(0, MAX_RUNS);
-        this.emit("runs");
-      }
-    }
+  }
+
+  /** Count one frame whose `kind` this build does not dispatch. */
+  noteUnknownPush(kind: unknown): void {
+    const name = typeof kind === "string" ? kind : JSON.stringify(kind ?? null);
+    this.unknownPushes.set(name, (this.unknownPushes.get(name) ?? 0) + 1);
   }
 
   // ---- reads -------------------------------------------------------------

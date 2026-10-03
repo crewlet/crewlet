@@ -30,9 +30,8 @@ func TestATurnsCommentRepostedAfterAnAdoptionIsNotPostedTwice(t *testing.T) {
 	page := r.write(author("jane"), pages.NewPage{Title: "Runbook", Body: "prose"})
 
 	in := pages.NewComment{
-		Body:      "does this still hold?",
-		TurnKey:   "wk-1",
-		TurnSince: time.Now().Add(-time.Hour),
+		Body:    "does this still hold?",
+		CallKey: pages.CallKey{Seed: "wk-1", Since: time.Now().Add(-time.Hour)},
 	}
 	if _, _, err := r.store.Comment(t.Context(), agent("bob"), page.Page.ID, in); err != nil {
 		t.Fatalf("the first run's comment: %v", err)

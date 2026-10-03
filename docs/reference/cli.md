@@ -12,8 +12,7 @@ subcommand below is served by it.
 | `crewlet run [config.yaml]` | Read Tier A bootstrap (positional, or `-config`; default `./crewlet.yaml`), connect to DB, run engine; falls into unconfigured state if no active revision |
 | `crewlet validate [file.yaml]` | Validate a Tier A or Tier B YAML and print a summary (`-json` for located, classified problems and warnings); with no positional it checks both tiers via `-config` and `-company` |
 | `crewlet migrate [config.yaml]` | Apply pending schema migrations (Tier A file, default `./crewlet.yaml`). Every process migrates on open, so this is a way to do it *without* starting one — `-check` reports pending work and exits non-zero without applying it |
-| `crewlet budgets show [config]` | Print token usage per scope (`org`, `agent:<id>`), read from a running node, because the counter is the fleet's and not this file's. `REFUSING SINCE` names a scope whose cap is turning charges away |
-| `crewlet budgets reset [config]` | Zero token usage on a running node — durable across restarts, so resetting is deliberate. `-scope` limits it to one scope, and the report names what it cleared |
+| `crewlet budgets show [config]` | Print each scope's day, ISO week and month on the company clock — spend, ceiling (`unlimited` where none), the engine's `STATE` (`ok`, `near`, `refusing`), when the window turns over and `REFUSING SINCE` — read from a running node, because the counters are the fleet's and not this file's. There is no reset: a window's allowance comes back when the window turns over |
 | `crewlet backup -dir PATH [config]` | Copy a running node's store **and** its stream estate into one verified directory on the *engine's* host — the only way to copy either, since the store is locked to that process and the embedded broker binds no socket. See [Backups & Restore](../guides/backup.md) |
 | `crewlet retention status [config]` | What each domain's log is holding, what the trim concluded and which of the six terms is stopping it, every node's position, and what this node costs to replace. **Exits non-zero when any alarm is active**, printing each one's measurement and remedy on stderr — the hook for your own cron |
 | `crewlet retention snapshots [config]` | The per-node snapshot inventory: what each machine holds, per domain, how old and how large — or why it holds none. The question you ask when a join fails |
@@ -38,6 +37,8 @@ subcommand below is served by it.
 | `crewlet estate move <partition> -from <node> -confirm <node> [-reason TEXT] [-cancel]` | Move one partition's copy off one node: it is rebuilt on the member the partition's ranking offers next, then released. `-cancel` lifts the move |
 | `crewlet fleet broker list [config] [-json]` | The fleet broker's membership: each live node's broker kind (`member`, `leaf`, `client`, or `unknown` for a build older than the field) beside how the JetStream metadata group counts it — read through a member — and, in words, every disagreement: a member gone for good that the group still counts in every election, with the command that removes it |
 | `crewlet fleet broker remove <node> -confirm <node> [-force]`, or `-peer <peer> -confirm <peer>` | Stop the metadata group counting a member that is gone for good, through a live member's system account — by node id, or by the peer id `list` shows for a voter no member can name. Refused while the node holds a live presence lease as a member; `-force` is for a member wedged in a way that still renews it |
+| `crewlet seats pause <handle> [-stop] [-reason TEXT]` | Pause an agent seat: it starts no new turn, its mail waits in order and its scheduled runs are skipped. `-stop` also ends the turn it is on at its next round. As the person the token is bound to |
+| `crewlet seats resume <handle>` | Lift the pause; what waited is delivered first, in order |
 | `crewlet schema [company\|bootstrap]` | Print the JSON Schema for a config tier (editor autocomplete, CI, [AI-assisted authoring](../getting-started/ai-authoring.md)) |
 | `crewlet config import <company.yaml>` | Load Tier B YAML, activate as a new `company_config` revision |
 | `crewlet config export [--revision <UUID>]` | Dump the active (or specified) revision as YAML to stdout |
@@ -142,7 +143,7 @@ the wrong document on a machine that has both. Tier B is read from the `company_
 | Flag | Description |
 |------|-------------|
 | `-config PATH` | Tier A: this node's broker, store and API (default `./crewlet.yaml`) |
-| `-company PATH` | Tier B **bootstrap seed** (default `./company.yaml`): imported only when the store holds no company yet. Once one exists this file is **ignored**, loudly (`company_seed_ignored` at warn), so a restart with a stale file never reverts a live change. Absent at its default is fine — the node boots on whatever the store holds. |
+| `-company PATH` | Tier B **bootstrap seed** (default `./company.yaml`): imported only when the store holds no company yet. Once one exists this file is **ignored**, loudly (`company_seed_ignored` at warn), so a restart with a stale file never reverts a live change. Absent at its default is fine — the node boots on whatever the store holds. A revision the seed writes is the node's own: its `created_by` is the node's id and its `created_by_kind` is `node`. |
 | `-import-company PATH` | Tier B to make the active revision **now**, over whatever the fleet is running. The deliberate "this file is the company again" gesture. Mutually exclusive with `-company`; both together is refused, because they ask for opposite things. |
 | `-log-level LEVEL` | `debug`, `info` (default), `warn` or `error`. Overrides `logging.level` in Tier A, and only when actually given. A typo resolves to `info` — a bad log level must never be why a company will not boot. |
 | `-log-format FORMAT` | `console` (default), `text` or `json`. Overrides `logging.format` in Tier A, and only when actually given. `console` is columns and colour for a person; `text` is slog's `key=value`; `json` is one object per line for a shipper. A typo resolves to `console`. |
@@ -211,7 +212,9 @@ The line it prints says which of the two happened.
 `-summary` is the audit note recorded with the revision (default
 `imported from <path>`). The revision history is the record of who changed what
 and why, so a fleet-wide write is worth a sentence; `created_by` is the token's
-id when it goes through the API, and the invoking operator when it does not.
+id when it goes through the API, and the invoking operator when it does not —
+either way the revision's `created_by_kind` is `operator`, and that author
+travels with the revision to every node in the fleet.
 
 It does **not** refuse because a revision is already active, and there is no
 flag to force it past one: the pointer is append-only, so an import *chains* a
@@ -526,12 +529,14 @@ install looks like rather than an error.
 
 ## `crewlet budgets`
 
-Token-budget usage lives in the fleet's [coordination store](../concepts/coordination.md):
-one counter for the whole company, surviving restarts. A counter each node
-kept privately would make an org cap of 500k into N × 500k.
+Token-budget usage lives in the fleet's [coordination store](../concepts/coordination.md#token-budgets-are-windows):
+one counter per scope for the whole company, with a slot for each calendar
+window — the day, the ISO week and the month on the company's clock — and
+surviving restarts. A counter each node kept privately would make an org cap of
+500k into N × 500k.
 
-**These commands talk to a running node**, not to a file. That follows from
-where the counter lives: on the default topology the coordination store is the
+**This command talks to a running node**, not to a file. That follows from
+where the counters live: on the default topology the coordination store is the
 engine's own embedded broker, so there is nothing on disk to open — and opening
 it anyway would be worse than useless, because a second broker on the same
 store directory is accepted rather than refused, and two writers on one store
@@ -539,45 +544,58 @@ is corruption rather than contention.
 
 ```bash
 crewlet budgets show                       # usage per scope
-crewlet budgets reset                      # zero every scope
-crewlet budgets reset -scope org           # just the org
-crewlet budgets reset -scope agent:<id>    # just one seat
 ```
 
 | Flag | Default | What it does |
 |---|---|---|
 | `-url` | the `api` block of the config named on the command line | The running node's base URL. A wildcard bind (`0.0.0.0`, `::`) becomes the loopback address, because a wildcard is not something anything can dial |
-| `-token` | `$CREWLET_API_TOKEN`, then the config's first `api.auth.tokens` entry | The bearer token. `reset` is a write, so it always needs one — `allow_anonymous_read` opens reads and nothing else |
+| `-token` | `$CREWLET_API_TOKEN`, then the config's first `api.auth.tokens` entry | The bearer token, sent on the read. A node with `allow_anonymous_read` off answers nothing without one |
 
 The environment wins over the config so an operator who exported a token
 deliberately gets that one. There is no token *default* on the command line:
 a token typed as an argument is in the shell history, in `ps`, and in any CI
 log that echoes the command.
 
-The **caps** are not stored here — they come from the active company config
+The **ceilings** are not stored here — they come from the active company config
 (`token_budget` on the org, `role.token_budget` on a seat), so every process
 derives the same numbers without coordinating. Only the usage is shared.
 
-`show` prints a `REFUSING SINCE` column: when that scope's cap last turned a
-charge away, or `-` while it is not refusing. Read it rather than `USED`
-against `CAP`, because a refused charge increments nothing: a seat charged in
-3 000-token rounds against a 100 000 cap stops near 99 000 and its row would
-otherwise read as headroom. The next charge the scope admits clears it, and so
-does a reset.
+`show` names the company clock the windows are cut on, then prints **one row
+per window**: the company's day, week and month, then each seat's.
+
+```
+Windows on the company clock: Europe/Berlin
+
+SCOPE  PERIOD  WINDOW      USED     LIMIT      STATE     RESETS AT             REFUSING SINCE
+org    day     2026-09-23  2710450  3000000    near      2026-09-23T22:00:00Z  -
+org    week    2026-W39    9120045  unlimited  ok        2026-09-27T22:00:00Z  -
+org    month   2026-09     31004188 unlimited  ok        2026-09-30T22:00:00Z  -
+eng    day     2026-09-23  99120    100000     refusing  2026-09-23T22:00:00Z  2026-09-23T07:29:51Z
+…
+```
+
+A window no ceiling caps still shows its spend, with a `LIMIT` of `unlimited`.
+`STATE` is the engine's own judgement, the one every surface shows: `refusing`
+when the gate has turned a charge away in the window or no charge fits, `near`
+at nine tenths of the ceiling, `ok` otherwise. `REFUSING SINCE` is when that
+window last turned a charge away, or `-` while it has not. Read those rather
+than `USED` against `LIMIT`, because a refused charge increments nothing: a seat
+charged in 3 000-token rounds against a 100 000 ceiling stops near 99 000 and
+its row would otherwise read as headroom. The next charge the scope admits
+clears the stamp, and so does the window turning over.
 
 `show` refuses rather than printing zeros when the node reports it could not
 read the counter (`durable: false` on the query surface). A counter nobody
 could look at is not a counter that reads zero, and a table of zeros draws a
 company at 0% of its budget at exactly the moment nothing is known. Seats with
-no cap and no spend are left out for the same reason in reverse: a permanent
-zero row per seat buries the seats that matter.
+no ceiling and no spend in any window are left out for the same reason in
+reverse: three permanent zero rows per seat bury the seats that matter.
 
-`reset` is an operator action and never a schedule — a budget is a ceiling
-for the life of a deployment, and a counter that rolled itself over would
-silently re-arm a company somebody had stopped on purpose. It **names the
-scopes it cleared**, because a count alone leaves you unable to tell "reset
-the seat I meant" from "reset a scope that was already empty", and a scoped
-reset names only its own scope.
+**There is no `reset`.** A window's allowance comes back when the window
+turns over — at local midnight, on Monday, on the 1st — rolled inside the
+charge that crosses the boundary, and room before then is made by raising the
+ceiling in the company config — which is a revision with an author, where a
+counter zeroed by hand left no record of who made the room or why.
 
 ---
 
@@ -982,6 +1000,41 @@ refusal says so: bring enough members back for a quorum, then ask again. A
 removal the node did not answer may still have been committed; `list` reads
 the group, and asking again for a member already removed is refused as not a
 member.
+## `crewlet seats`
+
+```
+crewlet seats pause <handle> [-stop] [-reason TEXT]
+    [-request-id ID] [<config.yaml>] [-url URL] [-token TOKEN]
+crewlet seats resume <handle>
+    [-request-id ID] [<config.yaml>] [-url URL] [-token TOKEN]
+```
+
+Pause an agent seat, or resume it — the same `pause_seat` and `resume_seat`
+the dashboard's buttons call, over the same route
+([`POST /operator/act/{tool}`](api-endpoints.md#operatoract--the-dashboards-write-surface)), so a pause from a
+terminal and one from a profile screen are one gesture with one record. It acts
+as the **person** your token is bound to (`contact.crewlet_operator_id` on
+their seat); a token nobody bound is refused `unbound`, and the refusal names
+the seat to bind it on.
+
+A paused seat starts no new turn, its incoming mail waits on its inbox in
+order, and its scheduled runs are recorded `skipped_paused` rather than sent.
+The turn it is on finishes first unless `-stop` is given, which ends that turn
+at its next round; a stopped turn is not run again. `-reason` is one line
+(at most 500 characters), shown on the seat and in the feed. Pausing a paused
+seat changes nothing — except that `-stop` adds the stop — and resuming a seat
+that is not paused changes nothing. See
+[Agent Runtime § Pausing a seat](../concepts/agent-runtime.md#pausing-a-seat).
+
+The outcome is `applied` — the pause is the fleet's record, and the node
+holding the seat carries it out from its own copy within about a second — or
+`unknown`, when the node could not confirm the write. `unknown` prints the
+request id to send again with `-request-id`, so the retry is the same request.
+The id is a UUIDv7 — the node reads the instant it carries to decide whether it
+can still vouch for a retry — and the command mints one when `-request-id` is
+not given; an id of another version is refused `invalid_request_id`.
+A fleet mid-upgrade refuses both `peer_upgrading` until every live node runs a
+build that can carry a pause.
 
 ## `crewlet retention`
 
@@ -1257,7 +1310,8 @@ crewlet retention set-capacity CREWLET_TRACKER_LOG 8589934592 -confirm 858993459
 
 Changes a log's byte ceiling, raising or lowering it. A log's Tier A ceiling
 (`stream.tracker_log_max_bytes`, `stream.tracker_vectors_max_bytes`,
-`stream.pages_log_max_bytes`) is not a live setting, only the value its stream
+`stream.pages_log_max_bytes`, `stream.usage_log_max_bytes`) is not a live
+setting, only the value its stream
 is created with. A resize is decided against the usage the log is at, and a
 publisher makes that a moving quantity, so this runs with the whole fleet in a
 maintenance mode and costs **three fleet-wide restarts**, two more per retry. The

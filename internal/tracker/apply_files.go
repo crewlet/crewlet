@@ -19,7 +19,7 @@ import (
 // refuses — the passes read each name back through [objstore.ParseHash] — so
 // that group's repair and collection would stop for good, on every node.
 // Lowercase matters for the rows written before slots too: replicated
-// migration 0024 computed theirs from the chunk's text with an expression that
+// migration 0032 computed theirs from the chunk's text with an expression that
 // reads lowercase hex only, which is sound because this refusal was already in
 // force when every one of them was applied.
 func fileMatches(c applyContext, id string, file File) error {

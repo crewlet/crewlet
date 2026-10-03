@@ -20,6 +20,7 @@ import (
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/org"
+	"github.com/crewlet/crewlet/internal/period"
 	"github.com/crewlet/crewlet/internal/sandbox"
 )
 
@@ -404,7 +405,8 @@ func TestAnUnrecordableSuspensionReclaimsTheRunsBox(t *testing.T) {
 	// coordinator refuses to be built without one.
 	e := &Engine{}
 	coordinator, err := sandbox.NewCoordinator(sandbox.CoordinatorOptions{
-		Queue: queue, Pending: store, Manager: manager, Resume: &resumer{engine: e},
+		Audience: noAudience{},
+		Queue:    queue, Pending: store, Manager: manager, Resume: &resumer{engine: e},
 	})
 	if err != nil {
 		t.Fatalf("NewCoordinator: %v", err)
@@ -563,11 +565,9 @@ func newChargeRig(t *testing.T, tokens, orgCap, seatCap int, resume sandbox.Resu
 		t.Fatalf("NewManager: %v", err)
 	}
 	coordinator, err := sandbox.NewCoordinator(sandbox.CoordinatorOptions{
-		Queue: discardQueue{}, Pending: store, Manager: manager, Resume: resume,
-		Account: sandboxAccountant{
-			budgets: fleet,
-			caps:    func(string) (int, int) { return orgCap, seatCap },
-		},
+		Audience: noAudience{},
+		Queue:    discardQueue{}, Pending: store, Manager: manager, Resume: resume,
+		Account: accountant(fleet, dayCap(orgCap), dayCap(seatCap)),
 	})
 	if err != nil {
 		t.Fatalf("NewCoordinator: %v", err)
@@ -588,9 +588,9 @@ func newChargeRig(t *testing.T, tokens, orgCap, seatCap int, resume sandbox.Resu
 	}, sandbox.Fence{}); err != nil {
 		t.Fatalf("AttachSandbox: %v", err)
 	}
-	if suspended, err := store.MarkSuspended(ctx, "t1", map[string]any{
+	if suspended, err := store.MarkSuspended(ctx, "t1", sandbox.Suspension{State: map[string]any{
 		"pending_tool_name": "run_sandbox",
-	}); err != nil || !suspended {
+	}}); err != nil || !suspended {
 		t.Fatalf("MarkSuspended = %v, %v", suspended, err)
 	}
 	runner.Finish(sandbox.Result{Success: true, Text: "done", InputTokens: tokens})
@@ -615,11 +615,15 @@ func (r *chargeRig) deliver(t *testing.T) error {
 
 func (r *chargeRig) used(t *testing.T, scope string) int {
 	t.Helper()
-	got, err := r.fleet.Used(t.Context(), scope)
-	if err != nil {
-		t.Fatalf("Used(%s): %v", scope, err)
+	return dayUsed(t.Context(), t, r.fleet, scope)
+}
+
+// dayCap is a day ceiling of n, or no ceiling at all for 0 — the rig's shorthand.
+func dayCap(n int) coord.Caps {
+	if n == 0 {
+		return nil
 	}
-	return got
+	return coord.Caps{period.Day: n}
 }
 
 // A CODING RUN IS CHARGED TO THE FLEET ONCE, however often its completion
@@ -786,7 +790,8 @@ func TestRetiringASeatEndsItsRunsOrRefusesWithoutACoordinator(t *testing.T) {
 	}
 	equipped := &Engine{backends: &Backends{Fleet: fleet}}
 	coordinator, err := sandbox.NewCoordinator(sandbox.CoordinatorOptions{
-		Queue: &publishRecorder{}, Pending: store, Manager: manager,
+		Audience: noAudience{},
+		Queue:    &publishRecorder{}, Pending: store, Manager: manager,
 		Resume: &resumer{engine: equipped},
 	})
 	if err != nil {

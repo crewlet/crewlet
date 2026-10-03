@@ -10,6 +10,7 @@ import (
 	"github.com/crewlet/crewlet/internal/search"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tracker"
+	"github.com/crewlet/crewlet/internal/usage"
 )
 
 // LAYOUT 0 IS TODAY'S ESTATE: every registered domain, in the register's
@@ -64,7 +65,7 @@ func TestLayoutZeroIsTodaysEstateUnderTodaysNames(t *testing.T) {
 
 // THE FIRST PARTITIONED LAYOUT HAS THE SHAPE ITS COSTS WERE COUNTED FOR.
 //
-// The broker figures the count was chosen by — 641 partition logs over 321
+// The broker figures the count was chosen by — 642 partition logs over 321
 // partitions at T = 256 — are functions of this shape: which spaces
 // exist, which domains each carries, and the counts. A domain moved between
 // spaces, a vectors log dropped from pages, or a second company partition
@@ -77,6 +78,7 @@ func TestDefaultLayoutOneHasTheShapeItsCostsWereCountedFor(t *testing.T) {
 		t.Fatalf("DefaultLayoutOne does not validate: %v", err)
 	}
 	trackerLog, vectors, pagesLog := tracker.Domain{}.Name(), search.Domain{}.Name(), pages.Domain{}.Name()
+	spend := usage.Domain{}.Name()
 	for _, tc := range []struct {
 		space   statelog.Space
 		count   int
@@ -84,7 +86,7 @@ func TestDefaultLayoutOneHasTheShapeItsCostsWereCountedFor(t *testing.T) {
 	}{
 		{statelog.SpaceTracker, DefaultTrackerPartitions, []string{trackerLog, vectors}},
 		{statelog.SpacePages, DefaultPagesPartitions, []string{pagesLog, vectors}},
-		{statelog.SpaceCompany, CompanyPartitions, []string{trackerLog}},
+		{statelog.SpaceCompany, CompanyPartitions, []string{trackerLog, spend}},
 		{statelog.SpaceEstate, 0, nil},
 	} {
 		if got := l.Count(tc.space); got != tc.count {
@@ -115,8 +117,8 @@ func TestDefaultLayoutOneHasTheShapeItsCostsWereCountedFor(t *testing.T) {
 	if want := T + T/4 + 1; len(partitions) != want {
 		t.Errorf("%d partitions, and the cost table counts T + T/4 + 1 = %d", len(partitions), want)
 	}
-	if want := 2*T + 2*(T/4) + 1; logs != want {
-		t.Errorf("%d partition logs, and the cost table counts 2T + 2·T/4 + 1 = %d", logs, want)
+	if want := 2*T + 2*(T/4) + 2; logs != want {
+		t.Errorf("%d partition logs, and the cost table counts 2T + 2·T/4 + 2 = %d", logs, want)
 	}
 	for _, d := range registeredDomains() {
 		if !carried[d.Name()] {

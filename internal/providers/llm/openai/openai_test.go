@@ -40,6 +40,7 @@ func TestMain(m *testing.M) {
 
 type attempt struct {
 	authorization string
+	header        http.Header
 	body          map[string]any
 }
 
@@ -60,6 +61,7 @@ func (f *fakeAPI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	f.mu.Lock()
 	f.attempts = append(f.attempts, attempt{
 		authorization: r.Header.Get("Authorization"),
+		header:        r.Header.Clone(),
 		body:          body,
 	})
 	n := len(f.attempts)
@@ -110,11 +112,10 @@ func apiError(kind string) string {
 func newProvider(t *testing.T, baseURL string, mutate func(*Config)) *Provider {
 	t.Helper()
 	cfg := Config{
-		Model:     "gpt-test",
-		APIKeys:   []string{"k1"},
-		BaseURL:   baseURL,
-		Timeout:   5 * time.Second,
-		LookupEnv: func(string) string { return "" },
+		Model:   "gpt-test",
+		APIKeys: []string{"k1"},
+		BaseURL: baseURL,
+		Timeout: 5 * time.Second,
 	}
 	if mutate != nil {
 		mutate(&cfg)
@@ -155,20 +156,24 @@ func TestNewRequiresAModel(t *testing.T) {
 	}
 }
 
-func TestKeysFallBackToTheConventionalVariable(t *testing.T) {
+// AN EMPTY BAG READS NO VARIABLE. Which key an entry that names none runs on
+// is a configuration rule (config.LLMProvider.Keys), decided where the secret
+// store is in reach; a provider that read the process environment itself
+// would also run an entry whose every reference resolved to nothing on the
+// conventional key — another account's credential, with nothing saying so.
+func TestAnEmptyBagSendsNoAmbientKey(t *testing.T) {
 	api, url := serve(t, func(w http.ResponseWriter, _ int) {
 		writeJSON(w, 200, okCompletion("hi"))
 	})
-	t.Setenv(KeyEnv, "from-the-environment")
+	t.Setenv("OPENAI_API_KEY", "from-the-environment")
 	p := newProvider(t, url, func(c *Config) {
 		c.APIKeys = nil
-		c.LookupEnv = nil // exercise the real os.Getenv path
 	})
 	if _, err := p.Complete(context.Background(), userTurn("hello")); err != nil {
 		t.Fatalf("Complete: %v", err)
 	}
-	if got := api.seen()[0].authorization; got != "Bearer from-the-environment" {
-		t.Fatalf("Authorization = %q, want the environment fallback", got)
+	if got := api.seen()[0].authorization; strings.Contains(got, "from-the-environment") {
+		t.Fatalf("Authorization = %q: the ambient variable reached the wire", got)
 	}
 }
 
@@ -179,10 +184,9 @@ func TestPerRequestKeyBeatsTheAmbientEnvironment(t *testing.T) {
 	api, url := serve(t, func(w http.ResponseWriter, _ int) {
 		writeJSON(w, 200, okCompletion("hi"))
 	})
-	t.Setenv(KeyEnv, "ambient")
+	t.Setenv("OPENAI_API_KEY", "ambient")
 	p := newProvider(t, url, func(c *Config) {
 		c.APIKeys = []string{"configured"}
-		c.LookupEnv = nil
 	})
 	if _, err := p.Complete(context.Background(), userTurn("hello")); err != nil {
 		t.Fatalf("Complete: %v", err)
@@ -208,6 +212,43 @@ func TestAmbientBaseURLDoesNotRedirectTraffic(t *testing.T) {
 	}
 	if api.count() != 1 {
 		t.Fatal("the call did not reach the configured endpoint")
+	}
+}
+
+// NOTHING ELSE FROM THE ENVIRONMENT EITHER. The SDK also reads organization
+// and project ids and arbitrary custom headers — a custom Authorization among
+// them, which replaced the configured key outright — all sent to whatever
+// endpoint an openai-compatible entry names.
+func TestNoAmbientOpenAIVariableReachesTheWire(t *testing.T) {
+	t.Setenv("OPENAI_API_KEY", "sk-ambient")
+	t.Setenv("OPENAI_ADMIN_KEY", "sk-admin-ambient")
+	t.Setenv("OPENAI_ORG_ID", "org-ambient")
+	t.Setenv("OPENAI_PROJECT_ID", "proj-ambient")
+	// WITH AND WITHOUT CUSTOM HEADERS, because deleting a custom
+	// Authorization marks the request as carrying an explicit one — which
+	// alone would hide a key the case without them shows.
+	for _, custom := range []string{"", "X-Ambient: leaked\nAuthorization: Bearer sk-custom-ambient"} {
+		t.Setenv("OPENAI_CUSTOM_HEADERS", custom)
+		for _, keys := range [][]string{nil, {"configured"}} {
+			api, url := serve(t, func(w http.ResponseWriter, _ int) {
+				writeJSON(w, 200, okCompletion("hi"))
+			})
+			p := newProvider(t, url, func(c *Config) { c.APIKeys = keys })
+			if _, err := p.Complete(context.Background(), userTurn("hello")); err != nil {
+				t.Fatalf("keys %v: Complete: %v", keys, err)
+			}
+			got := api.seen()[0]
+			for name, values := range got.header {
+				for _, v := range values {
+					if strings.Contains(v, "ambient") || strings.Contains(v, "leaked") {
+						t.Errorf("keys %v: header %s = %q reached the wire from the environment", keys, name, v)
+					}
+				}
+			}
+			if len(keys) > 0 && got.authorization != "Bearer "+keys[0] {
+				t.Errorf("keys %v: Authorization = %q, want the configured key", keys, got.authorization)
+			}
+		}
 	}
 }
 
@@ -1083,5 +1124,39 @@ func TestAnEndpointThatCannotStreamStillAnswers(t *testing.T) {
 	}
 	if extra := api.count() - before; extra != 1 {
 		t.Errorf("the second call cost %d requests, want 1 — the probe repeats", extra)
+	}
+}
+
+// A USER MESSAGE AFTER TOOL RESULTS — a person's note to a running turn, sent
+// straight after the round's results (internal/agent/steer) — goes as a user
+// message after every tool message, never between a call's results: this
+// endpoint requires each tool_call answered by a tool message before anything
+// else is said.
+func TestAUserMessageAfterToolResultsFollowsThem(t *testing.T) {
+	t.Parallel()
+	api, url := serve(t, func(w http.ResponseWriter, _ int) { writeJSON(w, 200, okCompletion("ok")) })
+	p := newProvider(t, url, nil)
+	_, err := p.Complete(context.Background(), llm.Request{Messages: []llm.Message{
+		{Role: llm.RoleUser, Content: "do it"},
+		{Role: llm.RoleAssistant, ToolCalls: []llm.ToolCall{
+			{ID: "a", Name: "first"}, {ID: "b", Name: "second"},
+		}},
+		{Role: llm.RoleTool, ToolCallID: "a", Name: "first", Content: "one"},
+		{Role: llm.RoleTool, ToolCallID: "b", Name: "second", Content: "two"},
+		{Role: llm.RoleUser, Content: "a note from the founder"},
+	}})
+	if err != nil {
+		t.Fatalf("Complete: %v", err)
+	}
+	messages := api.seen()[0].body["messages"].([]any)
+	var roles []string
+	for _, m := range messages {
+		roles = append(roles, m.(map[string]any)["role"].(string))
+	}
+	if strings.Join(roles, ",") != "user,assistant,tool,tool,user" {
+		t.Fatalf("roles = %v, want both results before the note", roles)
+	}
+	if note := messages[4].(map[string]any); note["content"] != "a note from the founder" {
+		t.Errorf("the note is %v", note)
 	}
 }

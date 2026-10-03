@@ -22,51 +22,45 @@ type itemRanker struct {
 	index *search.Indexer
 }
 
-// Candidates implements [tracker.Ranker]: each method's top candidates over
-// this node's corpus of work items, and the item behind each with the index's
-// excerpt.
-func (r itemRanker) Candidates(ctx context.Context, text string) (
-	search.Candidates, map[string]tracker.RankedDoc, error) {
-
+// Candidates implements [tracker.Ranker]: each method the query's mode runs,
+// its top candidates over this node's corpus of work items, the item behind
+// each with the index's excerpt, and what the ranking did.
+//
+// PARTIAL IS NOT REFUSED, for the reason the knowledge search gives: an
+// answer over part of the corpus beats none. It is not swallowed either — the
+// coverage rides in the answer's outcome to whichever surface asked, which is
+// where a person or a seat can act on it. It used to be a log line, which
+// nobody asking could see.
+func (r itemRanker) Candidates(ctx context.Context, q tracker.SearchQuery) (tracker.RankedCandidates, error) {
 	if r.fan == nil || r.index == nil {
-		return search.Candidates{}, nil, nil
+		return tracker.RankedCandidates{}, nil
 	}
 	answer, err := r.fan.Search(ctx, search.FanQuery{
-		Text:    text,
+		Text:    q.Text,
 		Sources: []string{string(search.SourceTask)},
+		Mode:    q.Mode,
 		// NOT THE CALLER'S LIMIT: what this answers is the candidates,
 		// each method's top FuseN whatever the limit, and the fused cut
 		// the fan-out also makes is not read here.
 		Limit: search.FuseN,
 	})
 	if err != nil {
-		return search.Candidates{}, nil, err
+		return tracker.RankedCandidates{}, err
 	}
-	// PARTIAL IS NOT REFUSED, for the reason the knowledge search gives:
-	// an answer over part of the corpus beats none. What differs here is
-	// that the caller is a TOOL rather than a prompt block, so the fact
-	// travels in the log rather than being swallowed — a short result set
-	// is indistinguishable from a short corpus.
-	if answer.Partial() {
-		log.WarnContext(ctx, "work_search_scoped",
-			"buckets_answered", answer.BucketsAnswered,
-			"buckets_missing", answer.BucketsMissing,
-			"detail", "the ranking was complete for what was searched and "+
-				"silent about what was not")
-	}
+	out := tracker.RankedCandidates{Candidates: answer.Candidates, Outcome: answer.Outcome()}
 	keys := answer.Candidates.Keys()
 	if len(keys) == 0 {
-		return answer.Candidates, nil, nil
+		return out, nil
 	}
-	hits, err := r.index.Hydrate(ctx, keys, text)
+	hits, err := r.index.Hydrate(ctx, keys, q.Text)
 	if err != nil {
-		return search.Candidates{}, nil, err
+		return tracker.RankedCandidates{}, err
 	}
-	docs := make(map[string]tracker.RankedDoc, len(hits))
+	out.Docs = make(map[string]tracker.RankedDoc, len(hits))
 	for _, hit := range hits {
-		docs[hit.Key] = tracker.RankedDoc{ID: hit.ID, Snippet: hit.Snippet}
+		out.Docs[hit.Key] = tracker.RankedDoc{ID: hit.ID, Snippet: hit.Snippet}
 	}
-	return answer.Candidates, docs, nil
+	return out, nil
 }
 
 // Building implements [tracker.Ranker].

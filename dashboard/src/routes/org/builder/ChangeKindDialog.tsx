@@ -49,7 +49,7 @@ import { handlesOf, recordIntent } from "./model/reducer.ts";
 import { datadogFallback } from "./chartModel.ts";
 import { isWorking, referenceNames, vendorIdentities } from "./nodeFacts.ts";
 import { newlyStranded, simulate } from "./preflight.ts";
-import { PersonGlyph, SmartToyGlyph } from "@crewlethq/icons/glyphs";
+import { UserGlyph, BotGlyph } from "@crewlethq/icons/glyphs";
 import { Button, Callout, InlineCode, Modal } from "@crewlethq/ui";
 
 export function ChangeKindDialog({ nodeKey, onClose }: { nodeKey: NodeKey; onClose: () => void }) {
@@ -151,13 +151,13 @@ export function ChangeKindDialog({ nodeKey, onClose }: { nodeKey: NodeKey; onClo
       open
       stackBody
       title={title}
-      icon={becoming === "human" ? <PersonGlyph /> : <SmartToyGlyph />}
+      icon={becoming === "human" ? <UserGlyph /> : <BotGlyph />}
       size="md"
       onClose={onClose}
       onSubmit={change}
       footer={
         <>
-          <Button variant="tertiary" onClick={onClose}>
+          <Button variant="ghost" onClick={onClose}>
             Cancel
           </Button>
           <Button variant="primary" type="submit" disabled={blocked}>

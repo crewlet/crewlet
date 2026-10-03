@@ -51,7 +51,7 @@ test("an edit that still applies is replayed onto the newer revision", async () 
   // The banner links to what changed between the draft's base and now: the
   // newer revision against the base, read forwards.
   expect(screen.getByRole("link", { name: "Show what changed" }).getAttribute("href")).toBe(
-    "#/admin/config?lens=diff&revision=r2&against=r1",
+    "#/settings/config?lens=diff&revision=r2&against=r1",
   );
   fireEvent.click(screen.getByRole("button", { name: "Update my draft" }));
   const dialog = await screen.findByRole("dialog", { name: "Update my draft and review" });
@@ -236,7 +236,7 @@ describe("a conflict's values", () => {
 
 test("a removal somebody else edited first names what they changed", async () => {
   const engine = new Engine(company());
-  const { store } = mountBuilder({ engine });
+  const { store } = mountBuilder({ engine, org: { name: "Acme", roles: [], units: [] } });
   await screen.findByText("No problems");
   fireEvent.click(screen.getByRole("button", { name: "Remove Designer" }));
   await waitFor(() => expect(engine.checks()).toHaveLength(2));

@@ -90,7 +90,7 @@ func TestAnAppliedVersionNobodyRecordedStaysUnknown(t *testing.T) {
 	if err := h.run(1); err != nil {
 		t.Fatalf("run: %v", err)
 	}
-	// THE ROW AS MIGRATION 0027 LEFT EVERY CHECKPOINT THAT PREDATES IT.
+	// THE ROW AS MIGRATION 0035 LEFT EVERY CHECKPOINT THAT PREDATES IT.
 	if err := h.estate.Tx(t.Context(), func(tx *sql.Tx) error {
 		_, err := tx.ExecContext(t.Context(), `UPDATE statelog_cursor SET applied_version = NULL`)
 		return err

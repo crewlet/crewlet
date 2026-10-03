@@ -108,7 +108,7 @@
       "additionalProperties": false,
       "properties": {
         "id": {
-          "description": "Short label recorded as the author of writes made with this token.",
+          "description": "Short lowercase label recorded as the author of writes made with this token.",
           "type": [
             "string",
             "number",
@@ -778,7 +778,7 @@
           "anyOf": [
             {
               "maximum": 70368744177664,
-              "minimum": 4294967296,
+              "minimum": 5368709120,
               "type": [
                 "integer",
                 "null"
@@ -874,6 +874,23 @@
             "boolean",
             "null"
           ]
+        },
+        "usage_log_max_bytes": {
+          "anyOf": [
+            {
+              "maximum": 68719476736,
+              "minimum": 1073741824,
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            {
+              "pattern": "^\\$\\{[A-Za-z_][A-Za-z0-9_]*\\}$",
+              "type": "string"
+            }
+          ],
+          "description": "Byte ceiling on the usage log, the compacted stream each node's company days replicate on; default 1 GiB, sized for 181 days of a node's seats and schedules."
         }
       },
       "type": [

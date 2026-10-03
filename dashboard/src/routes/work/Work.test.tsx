@@ -12,29 +12,33 @@
  * also why the board can be drawn inside a peek panel.
  */
 
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, expect, test, vi } from "vitest";
-import { EMPTY_VALUE } from "@crewlethq/ui";
 import { Work } from "./Work.tsx";
 import { patchedHref } from "./ItemsView.tsx";
 import { Board } from "./shapes/Board.tsx";
 import { CalendarView } from "./shapes/Calendar.tsx";
-import { BoardCard, WorkRow } from "~/components/work.tsx";
+import { WorkCard, PriorityMark, StatusMark, WorkRow } from "~/components/work.tsx";
 import { Router } from "~/app/router.tsx";
 import { useClient, useConnection, useOrg } from "~/lib/store-hooks.ts";
+import { ViewerProvider } from "~/lib/viewer.ts";
 import { calendarWeeks, dayKey, dayLabel, filterPatchForGroup } from "~/lib/work.ts";
-import type {
-  QueryName,
-  WorkGroup,
-  WorkProjectDetail,
-  WorkProjectRow,
-  WorkSummary,
-} from "~/protocol/index.ts";
+import type { QueryName, WorkGroup, WorkProjectRow, WorkSummary } from "~/protocol/index.ts";
 
 vi.mock("~/lib/store-hooks.ts", async () => {
   const actual =
     await vi.importActual<typeof import("~/lib/store-hooks.ts")>("~/lib/store-hooks.ts");
-  return { ...actual, useClient: vi.fn(), useConnection: vi.fn(), useOrg: vi.fn() };
+  // THE AGENTS PUSH, which the list reads for the turn running on each card:
+  // no seat is working in these cases, so the push is empty.
+  return {
+    ...actual,
+    useClient: vi.fn(),
+    useConnection: vi.fn(),
+    useOrg: vi.fn(),
+    useAgents: () => [],
+  };
 });
 
 afterEach(() => {
@@ -61,7 +65,7 @@ const row = (id: string, over: Partial<WorkSummary> = {}): WorkSummary => ({
 const NOW = Date.parse("2031-04-16T00:00:00Z");
 
 const card = (over: Partial<WorkSummary> = {}) =>
-  render(<BoardCard row={row("1", over)} href="#/work/ENG-1" now={NOW} />);
+  render(<WorkCard row={row("1", over)} href="#/work/ENG-1" now={NOW} />);
 
 // ---------------------------------------------------------------------------
 // The card
@@ -91,7 +95,7 @@ test("an overdue due date is marked and an on-time one is not", () => {
   expect(container.querySelector(".work-due.overdue")).toBeTruthy();
   cleanup();
   const plain = render(
-    <BoardCard row={row("2", { due: "2031-09-01T00:00:00Z" })} href="#/work/ENG-2" now={NOW} />,
+    <WorkCard row={row("2", { due: "2031-09-01T00:00:00Z" })} href="#/work/ENG-2" now={NOW} />,
   );
   expect(plain.container.querySelector(".work-due")).toBeTruthy();
   expect(plain.container.querySelector(".work-due.overdue")).toBeNull();
@@ -99,15 +103,15 @@ test("an overdue due date is marked and an on-time one is not", () => {
 
 // NOBODY IS A STATE, and the one worth seeing: an unassigned item routes to
 // the project's lead, and a project with no lead routes to nobody at all. On a
-// card it is drawn wherever the foot is drawn — beside the facts it belongs
-// with, never alone, which is the case below.
+// card it is the top row's last mark, beside the key, as the approved board
+// draws the holder — so it is there on every card, set or not.
 test("an unassigned card draws the empty seat rather than a blank", () => {
-  const { container } = card({ due: "2031-09-01T00:00:00Z" });
-  expect(container.querySelector(".work-nobody")).toBeTruthy();
+  const { container } = card();
+  expect(container.querySelector(".work-card-top .work-nobody")).toBeTruthy();
   expect(screen.getByText("Unassigned")).toBeTruthy();
   cleanup();
   const held = render(
-    <BoardCard
+    <WorkCard
       row={row("3", { assignee: "ada" })}
       href="#/work/ENG-3"
       now={NOW}
@@ -118,30 +122,47 @@ test("an unassigned card draws the empty seat rather than a blank", () => {
   expect(held.container.querySelector(".crewlet-avatar")?.textContent).toBe("AL");
 });
 
-// THE GHOST HOLDS A TRACK OPEN, AND A CARD HAS NO TRACK. On `.work-row` the
-// dashed square is a grid cell, and a cell that vanished would take its column
-// with it and pull every later one a place left — which is the case further
-// down. A card is inline flow, so on a task nobody has touched the same square
-// came out alone under the title, floating in a foot with nothing else in it
-// and reading as a control somebody could press. The foot is its marks: with
-// none of them it is not drawn, and one fact brings it back.
+// THE FOOT IS ITS MARKS, AND THE HOLDER IS NOT ONE OF THEM. On `.work-row`
+// the dashed square is a grid cell, and a cell that vanished would take its
+// column with it. On a card it floated alone in a foot with nothing else in it,
+// reading as a control somebody could press — so the holder moved to the top
+// row, where the approved board draws it, and a foot with none of its marks is
+// not drawn at all. One fact brings it back, and never the holder with it.
 test("a card with nothing set draws no foot, while the same task as a row keeps its cell", () => {
   const bare = card().container;
   expect(bare.querySelector(".work-card-foot")).toBeNull();
-  expect(bare.querySelector(".work-nobody")).toBeNull();
+  expect(bare.querySelector(".work-card-top .work-nobody")).toBeTruthy();
   cleanup();
   const asRow = render(<WorkRow row={row("1")} href="#/work/ENG-1" now={NOW} chrome={{}} />);
   expect(asRow.container.querySelector(".work-nobody")).toBeTruthy();
   cleanup();
-  // ONE MARK IS ENOUGH, and the ghost comes back with it: "nobody holds this,
-  // and it is due on Monday" is the pair a board column is scanned for.
   const dated = card({ due: "2031-09-01T00:00:00Z" }).container;
   expect(dated.querySelector(".work-card-foot")).toBeTruthy();
-  expect(dated.querySelector(".work-nobody")).toBeTruthy();
+  expect(dated.querySelector(".work-card-foot .work-nobody")).toBeNull();
   cleanup();
   // And a card whose only fact is that it is blocked still has a foot, which
   // is what says the predicate reads every mark rather than the assignee.
   expect(card({ blocked: true }).container.querySelector(".work-card-foot")).toBeTruthy();
+});
+
+// A ROW IS AS TALL WITH NOBODY HOLDING IT AS WITH SOMEBODY. The holder's
+// badge is 26px and the unassigned mark a 20px square, so a list of mixed rows
+// stepped 39, 43, 39 as a reader scanned down it. jsdom lays nothing out, so
+// the cascade over the holder's cell is what is read: it keeps a badge's
+// height whichever it holds.
+test("a row's holder cell keeps a badge's height with nobody in it", () => {
+  const read = (path: string) => readFileSync(join(process.cwd(), path), "utf8");
+  const style = document.createElement("style");
+  style.textContent = read("src/styles/screens.css");
+  document.head.append(style);
+  try {
+    const { container } = render(<WorkRow row={row("1")} href="#/work/ENG-1" now={NOW} />);
+    const cell = container.querySelector<HTMLElement>(".work-cell-who")!;
+    expect(cell.querySelector(".work-nobody")).toBeTruthy();
+    expect(getComputedStyle(cell).minHeight).toBe("26px");
+  } finally {
+    style.remove();
+  }
 });
 
 // A CARD IS A REAL ANCHOR, so middle-click and ⌘-click open the item's own
@@ -151,7 +172,7 @@ test("a card with nothing set draws no foot, while the same task as a row keeps 
 test("a plain click peeks and a modified click follows the link", () => {
   const onOpen = vi.fn();
   const { container } = render(
-    <BoardCard row={row("4")} href="#/work/ENG-4" onOpen={onOpen} now={NOW} />,
+    <WorkCard row={row("4")} href="#/work/ENG-4" onOpen={onOpen} now={NOW} />,
   );
   const anchor = container.querySelector("a.work-card");
   expect(anchor?.getAttribute("href")).toBe("#/work/ENG-4");
@@ -165,6 +186,25 @@ test("a plain click peeks and a modified click follows the link", () => {
   anchor?.dispatchEvent(meta);
   expect(onOpen).toHaveBeenCalledTimes(1);
   expect(meta.defaultPrevented).toBe(false);
+});
+
+// THE SIZE AGREES WITH ITS NUMBER and is drawn in whichever measure it was
+// given: "1 pts" was on every one-point card, and a task estimated in time
+// rather than points showed no size at all.
+test("a card's size is one pt, several pts, or the time it was estimated in", () => {
+  expect(card({ points: 1 }).container.querySelector(".work-card-points")?.textContent).toBe(
+    "1 pt",
+  );
+  cleanup();
+  expect(card({ points: 5 }).container.querySelector(".work-card-points")?.textContent).toBe(
+    "5 pts",
+  );
+  cleanup();
+  expect(
+    card({ estimate_min: 120 }).container.querySelector(".work-card-points")?.textContent,
+  ).toBeTruthy();
+  cleanup();
+  expect(card().container.querySelector(".work-card-points")).toBeNull();
 });
 
 // THE TYPE IS ON THE ROW, so a card can draw its own mark. Before it was, a
@@ -191,19 +231,25 @@ const group = (key: string, over: Partial<WorkGroup> = {}): WorkGroup => ({
 const overflowHref = (axis: string, key: string) =>
   `#/work/ENG?view=list&group_by=${axis}&group=${key}`;
 
-const board = (groups: WorkGroup[], axis = "status") =>
-  render(
-    <Board
-      now={NOW}
-      groups={groups}
-      axis={axis}
-      chrome={{}}
-      hrefOf={(r) => `#/work/${r.key}`}
-      onOpen={() => {}}
-      onOverflow={() => {}}
-      overflowHref={overflowHref}
-    />,
+// UNDER A VIEWER, as the frame mounts every board: a card's drag is a write,
+// and it asks who is reading before it says whether a card can move.
+const board = (groups: WorkGroup[], axis = "status") => {
+  serving({});
+  return render(
+    <ViewerProvider>
+      <Board
+        now={NOW}
+        groups={groups}
+        axis={axis}
+        chrome={{}}
+        hrefOf={(r) => `#/work/${r.key}`}
+        onOpen={() => {}}
+        onOverflow={() => {}}
+        overflowHref={overflowHref}
+      />
+    </ViewerProvider>,
   );
+};
 
 // A COLUMN'S COUNT IS OVER THE WHOLE SET and its rows are a slice, so a column
 // of four hundred says four hundred and hands back fifty. The overflow has to
@@ -211,7 +257,7 @@ const board = (groups: WorkGroup[], axis = "status") =>
 // no way to see them is a board that hides a backlog.
 test("a capped column offers its overflow and an uncapped one does not", () => {
   board([group("todo", { count: 53, rows: [row("a")] })]);
-  const more = screen.getByText("52 more →");
+  const more = screen.getByText("52 more").closest("a")!;
   // THE SCREEN'S OWN ADDRESS, verbatim. The footer used to build
   // `href(["work"], …)` itself, which dropped the project segment and every
   // live filter — and a middle click follows the href rather than the
@@ -219,7 +265,7 @@ test("a capped column offers its overflow and an uncapped one does not", () => {
   expect(more.getAttribute("href")).toBe(overflowHref("status", "todo"));
   cleanup();
   board([group("todo", { count: 1, rows: [row("a")] })]);
-  expect(screen.queryByText(/more →/)).toBeNull();
+  expect(screen.queryByText(/more$/)).toBeNull();
 });
 
 // THE LINK AND THE CLICK NAME THE SAME PLACE. Only the screen knows both
@@ -251,19 +297,22 @@ test("a patched address keeps the path it is on and the filters it is under", ()
 
 test("an overflow link hands the axis and the column back to the screen", () => {
   const onOverflow = vi.fn();
+  serving({});
   render(
-    <Board
-      now={NOW}
-      groups={[group("ada", { count: 9, rows: [row("a")] })]}
-      axis="assignee"
-      chrome={{}}
-      hrefOf={(r) => `#/work/${r.key}`}
-      onOpen={() => {}}
-      onOverflow={onOverflow}
-      overflowHref={overflowHref}
-    />,
+    <ViewerProvider>
+      <Board
+        now={NOW}
+        groups={[group("ada", { count: 9, rows: [row("a")] })]}
+        axis="assignee"
+        chrome={{}}
+        hrefOf={(r) => `#/work/${r.key}`}
+        onOpen={() => {}}
+        onOverflow={onOverflow}
+        overflowHref={overflowHref}
+      />
+    </ViewerProvider>,
   );
-  fireEvent.click(screen.getByText("8 more →"));
+  fireEvent.click(screen.getByText("8 more"));
   expect(onOverflow).toHaveBeenCalledWith("assignee", "ada");
 });
 
@@ -297,6 +346,8 @@ const calendar = (rows: WorkSummary[], month = "2031-04") =>
       onOpen={() => {}}
       onMonth={() => {}}
       onToday={() => {}}
+      dayHref={(day) => `#/work?shape=list&day=${day}`}
+      onDay={() => {}}
     />,
   );
 
@@ -362,6 +413,9 @@ test("every cell says which date it is, so a repeated numeral is not ambiguous",
 
 // A DAY WITH MORE THAN THE CELL HOLDS SAYS HOW MANY, rather than truncating
 // to whatever fits: a cell showing three of eleven is a day that looks quiet.
+// AND THE COUNT IS A WAY TO THEM — the list narrowed to that day — where it was
+// a dead number, so the fourth task due on one Tuesday was reachable from
+// nowhere on this shape.
 test("a crowded day folds the rest into a count", () => {
   const due = new Date(2031, 3, 16, 9, 0, 0).toISOString();
   const { container } = calendar([
@@ -372,7 +426,9 @@ test("a crowded day folds the rest into a count", () => {
     row("e", { due }),
   ]);
   expect(container.querySelectorAll(".work-cal-chip")).toHaveLength(3);
-  expect(screen.getByText("+2 more")).toBeTruthy();
+  const more = screen.getByText("+2 more").closest("a")!;
+  expect(more.getAttribute("href")).toBe("#/work?shape=list&day=2031-04-16");
+  expect(more.textContent).toContain(`due ${dayLabel("2031-04-16")}`);
 });
 
 // ---------------------------------------------------------------------------
@@ -441,12 +497,12 @@ test("a due date in this year is drawn without it, and another year keeps it", (
   expect(drawn("2032-09-01T00:00:00Z")).toContain("2032");
 });
 
-// THE DEFAULT IS DRAWN AS NOTHING. `normal` is what a task gets when nobody
-// said, so it is most of a board — a mark on every card is a mark that says
-// nothing, and it buries the four that ARE urgent under forty that are not.
-// `none` and `normal` differ in the data and agree on screen, which is the
-// one place they should.
-test("an ordinary priority draws no mark at all", () => {
+// EVERY STEP IS DRAWN, `normal` INCLUDED. The approved Board draws the bars
+// on every card; a list that left `normal` blank had a priority column that
+// was mostly empty, where the two-bar state never appeared and a blank could
+// not be told from a value that never arrived. `none` — the engine's "nobody
+// said" — and an absent value are not steps on the scale, and draw nothing.
+test("every step of the scale draws its mark, and no step draws none", () => {
   const marks = (priority?: string) =>
     render(
       <WorkRow
@@ -456,10 +512,57 @@ test("an ordinary priority draws no mark at all", () => {
         chrome={{}}
       />,
     ).container.querySelectorAll(".work-prio").length;
-  expect(marks("normal")).toBe(0);
+  expect(marks("normal")).toBe(1);
+  expect(marks("none")).toBe(0);
   expect(marks(undefined)).toBe(0);
   expect(marks("low")).toBe(1);
   expect(marks("high")).toBe(1);
+});
+
+// THE SCALE IS SIGNAL BARS, COUNTED, and urgent is the alert mark. A chevron
+// pair drew it once, and a column of chevrons in a list reads as rows that
+// fold. The level is the NUMBER of filled bars, so it reads with no colour;
+// `urgent` is not a fourth bar; and a value this build has no step for draws
+// no mark rather than borrowing one.
+test("a priority is drawn as bars filled to its step, and urgent as the alert", () => {
+  const drawn = (priority: string) => {
+    const { container } = render(<PriorityMark priority={priority} word />);
+    const mark = container.querySelector(".work-prio")!;
+    const bars = mark.querySelector(".work-prio-bars");
+    const out = {
+      level: bars?.getAttribute("data-level") ?? null,
+      bars: bars?.children.length ?? 0,
+      glyph: mark.querySelectorAll(":scope > svg").length,
+      word: mark.textContent,
+    };
+    cleanup();
+    return out;
+  };
+  expect(drawn("low")).toEqual({ level: "1", bars: 3, glyph: 0, word: "Low" });
+  expect(drawn("normal")).toEqual({ level: "2", bars: 3, glyph: 0, word: "Normal" });
+  expect(drawn("high")).toEqual({ level: "3", bars: 3, glyph: 0, word: "High" });
+  expect(drawn("urgent")).toEqual({ level: null, bars: 0, glyph: 1, word: "Urgent" });
+  expect(drawn("critical")).toEqual({ level: null, bars: 0, glyph: 0, word: "Critical" });
+});
+
+// A STATUS READS BY ITS SHAPE: in progress is a half-filled ring and in review
+// three quarters, in the same blue, and a delivered task a filled check — the
+// kit's two glyphs drew both active states as the empty to-do ring.
+test("a status is drawn in its own shape", () => {
+  const shape = (status: string) => {
+    const { container } = render(<StatusMark status={status} />);
+    const mark = container.querySelector(".work-status-mark")!;
+    const out = {
+      shape: mark.getAttribute("data-shape"),
+      paths: mark.querySelectorAll("path").length,
+    };
+    cleanup();
+    return out;
+  };
+  expect(shape("todo")).toEqual({ shape: "ring", paths: 0 });
+  expect(shape("in_progress")).toEqual({ shape: "half", paths: 1 });
+  expect(shape("in_review")).toEqual({ shape: "most", paths: 1 });
+  expect(shape("done")).toEqual({ shape: "check", paths: 1 });
 });
 
 // ---------------------------------------------------------------------------
@@ -488,10 +591,15 @@ function serving(
   return query;
 }
 
+// UNDER A VIEWER, as the frame mounts every screen: the trash column's
+// Restore is a write control, and it asks who is reading before it says
+// whether it can act.
 const mountWork = () =>
   render(
     <Router>
-      <Work />
+      <ViewerProvider>
+        <Work />
+      </ViewerProvider>
     </Router>,
   );
 
@@ -538,7 +646,7 @@ test("an empty scope says why, and only a filter says nothing matched", async ()
           name: "Engineering",
           unit: { resolved: true },
           lead: {},
-          task_counts: { open: 0, done: 0, closed: 0 },
+          task_counts: { todo: 0, active: 0, done: 0, closed: 0 },
           version: 1,
         },
       ],
@@ -675,7 +783,7 @@ test("a saved view's grouping heads the list's columns by name", async () => {
           name: "Engineering",
           unit: { resolved: true },
           lead: {},
-          task_counts: { open: 3, done: 0, closed: 0 },
+          task_counts: { todo: 3, active: 0, done: 0, closed: 0 },
           version: 1,
         },
       ],
@@ -699,7 +807,7 @@ const oneProject = {
       name: "Engineering",
       unit: { resolved: true },
       lead: {},
-      task_counts: { open: 1, done: 0, closed: 0 },
+      task_counts: { todo: 1, active: 0, done: 0, closed: 0 },
       version: 1,
     },
   ],
@@ -728,9 +836,7 @@ function savedWith(params: Record<string, string>) {
 
 /** The Display menu, opened. */
 async function openDisplay() {
-  const button = await screen.findByRole("button", {
-    name: /^(List|Board|Table|Calendar|Timeline)/,
-  });
+  const button = await screen.findByRole("button", { name: "Display" });
   fireEvent.click(button);
   return button;
 }
@@ -746,13 +852,14 @@ test("a view's own arrangement is what the display controls show", async () => {
     work_projects: oneProject,
   });
   mountWork();
-  // THE BUTTON SAYS IT FIRST, because the arrangement has to be readable
-  // without opening anything.
-  await waitFor(() => expect(screen.getByRole("button", { name: /List · Assignee/ })).toBeTruthy());
+  // GROUP BY AND SORT ARE IN THE BAR, so the arrangement is readable without
+  // opening anything.
+  await waitFor(() =>
+    expect(screen.getByRole("combobox", { name: "Group by" }).textContent).toContain("Assignee"),
+  );
+  expect(screen.getByRole("combobox", { name: "Sort" }).textContent).toContain("Due soonest");
   await openDisplay();
-  expect(screen.getByRole("combobox", { name: "Group by" }).textContent).toContain("Assignee");
   expect(screen.getByRole("combobox", { name: "Then by" }).textContent).toContain("Priority");
-  expect(screen.getByRole("combobox", { name: "Order by" }).textContent).toContain("Due soonest");
 });
 
 // AND TURNING ONE OFF IS A VALUE ON THE ADDRESS. `group_by=` is DELETED by the
@@ -767,7 +874,6 @@ test("turning a view's grouping off says so on the address and on the wire", asy
   });
   mountWork();
   await waitFor(() => expect(asked(query).group_by).toBe("assignee"));
-  await openDisplay();
   fireEvent.click(screen.getByRole("combobox", { name: "Group by" }));
   fireEvent.mouseDown(await screen.findByRole("option", { name: "No grouping" }));
   await waitFor(() => expect(location.hash).toContain("group_by=none"));
@@ -787,10 +893,15 @@ test("turning off an arrangement nobody set leaves the address clean", async () 
     work_projects: oneProject,
   });
   mountWork();
-  await openDisplay();
-  fireEvent.click(screen.getByRole("combobox", { name: "Order by" }));
-  fireEvent.mouseDown(await screen.findByRole("option", { name: "Default order" }));
-  await waitFor(() => expect(screen.queryByRole("option", { name: "Default order" })).toBeNull());
+  // THE DEFAULT NAMES WHICH ORDER IT IS — across the company, the most
+  // recently touched — rather than "Default", which names none.
+  const sort = await screen.findByRole("combobox", { name: "Sort" });
+  fireEvent.click(sort);
+  const option = await screen.findByRole("option", { name: "Recently updated (default)" });
+  fireEvent.mouseDown(option);
+  await waitFor(() =>
+    expect(screen.queryByRole("option", { name: "Recently updated (default)" })).toBeNull(),
+  );
   expect(location.hash).not.toContain("sort=");
 });
 
@@ -1101,6 +1212,23 @@ test("the trash asks for removed work without re-narrowing it to open", async ()
   expect(asked(query).status_group).toBeUndefined();
 });
 
+// AND THE SAME TRASH FROM ITS OWN ADDRESS. `removed=true` arrives on a link
+// somebody sent as often as from the Filter menu, and the wider scope was
+// written only by the menu's gesture — so the address opened on Show = Open,
+// "1 in Open", with every removal of finished work hidden. The widening is the
+// scope's DEFAULT under the trash now, whichever way the reader arrived.
+test("the trash opened by its address asks for removed work in every state", async () => {
+  location.hash = "#/work?removed=true";
+  const query = serving({
+    work_views: strip("list"),
+    work_items: { items: [], groups: [], complete: true },
+    work_activity: { records: [], complete: true },
+  });
+  mountWork();
+  await waitFor(() => expect(asked(query).removed).toBe("true"));
+  expect(asked(query).status_group).toBeUndefined();
+});
+
 // AND THE ORDINARY TABLE IS AN ORDINARY BOARD QUESTION. Same tab strip, same
 // screen, and none of the trash's parameters — so a reader on Table is not
 // quietly looking at deleted work.
@@ -1164,9 +1292,9 @@ test("a removed row names who removed it, from the feed rather than the row", as
   // to resolve in the same tick, which is what made this case flake.
   await waitFor(() => expect(screen.getAllByText("Ada Okonkwo").length).toBeGreaterThan(0));
   expect(screen.getByText("the wrong subtree")).toBeTruthy();
-  // And the way back is on the row: this dashboard writes nothing, so what it
-  // offers is the call an assistant would make.
-  expect(screen.getByText("Restore")).toBeTruthy();
+  // And the way back is on the row, as a control made as the reader — drawn
+  // whoever is reading, and disabled with the reason where they cannot act.
+  expect(screen.getByRole("button", { name: "Restore ENG-9" })).toBeTruthy();
 });
 
 // A ROW THE FEED'S PAGE DOES NOT REACH SAYS SO.
@@ -1273,39 +1401,99 @@ test("the bar declares itself the screen's toolbar", async () => {
   expect(container.querySelector(".work-bar")?.classList.contains("toolbar")).toBe(true);
 });
 
-// THREE CONTROLS, NOT ELEVEN. The bar carried a search box, five selects, a
-// three-way switch, two chips, a Clear button and the count — and which of
-// them appeared depended on the shape, so the scope switch sat at x≈345 on
-// List, x≈1338 on Board and x≈1155 on Calendar. What is left is the Filter
-// menu, the substring mark, the scope switch and the Display menu, so there is
-// no arrangement left for a wrap to disturb.
-test("the bar is two menus, a switch and a mark", async () => {
+// TWO ROWS, AS THE APPROVED BOARD DRAWS THEM: the first is WHAT is drawn —
+// the five shapes, the saved views, the substring box and Display — and the
+// second is HOW the answer is cut: the chips ending in "+ Filter" on the left,
+// and at the far end which work is shown and the two arrangements a reader
+// changes constantly. Group by and Sort were inside the Display menu, where
+// nothing said what they were set to until it was opened.
+test("the first row draws the shape and the menus, the second cuts the answer", async () => {
   serving({ work_items: { items: [], groups: [], complete: true } });
   const { container } = mountWork();
   await waitFor(() => expect(container.querySelector(".work-bar")).toBeTruthy());
+  const tabs = container.querySelector(".work-tabs") as HTMLElement;
+  expect(
+    within(within(tabs).getByRole("group", { name: "Draw as" }))
+      .getAllByRole("button")
+      .map((el) => el.textContent),
+  ).toEqual(["List", "Board", "Timeline", "Calendar", "Table"]);
+  expect(within(tabs).getByRole("button", { name: "Display" })).toBeTruthy();
+  expect(within(tabs).getByRole("searchbox", { name: /key or title/ })).toBeTruthy();
+
   const bar = container.querySelector(".work-bar") as HTMLElement;
-  expect(within(bar).getByText("Filter")).toBeTruthy();
-  // The Display button SAYS WHAT IS ON, so the arrangement is readable without
-  // opening anything — which is what the strip of shape tabs used to do.
-  expect(within(bar).getByText("List")).toBeTruthy();
-  for (const label of ["Open", "Closed", "All"]) {
-    expect(within(bar).getByText(label), `${label} is not in the bar`).toBeTruthy();
-  }
-  // AND THE PICKERS ARE GONE FROM IT. A control per field is what a menu
+  // "+ FILTER" ENDS THE CHIP ROW, which is the row's first thing, and there
+  // is one of it — not a second in the row above.
+  const filters = within(bar).getByRole("group", { name: "Filters" });
+  expect(within(filters).getByRole("button", { name: "Filter" })).toBeTruthy();
+  expect(within(tabs).queryByRole("button", { name: "Filter" })).toBeNull();
+  expect(bar.querySelector(".work-bar-run")?.firstElementChild).toBe(filters);
+  expect(within(bar).getByRole("combobox", { name: "Which work" }).textContent).toContain("Open");
+  expect(within(bar).getByRole("combobox", { name: "Group by" })).toBeTruthy();
+  expect(within(bar).getByRole("combobox", { name: "Sort" })).toBeTruthy();
+  // AND NO PICKER PER FIELD. A control per field is what the Filter menu
   // replaces, and one left behind would be a second way to set the same key.
   expect(within(bar).queryByLabelText("Status")).toBeNull();
   expect(within(bar).queryByLabelText("Priority")).toBeNull();
   expect(within(bar).queryByLabelText("Assignee")).toBeNull();
 });
 
-// A CHIP IS DRAWN ONLY WHERE A FILTER IS APPLIED, so an unfiltered list has no
-// chip row at all — which is the whole difference from a bar of controls that
-// were all drawn whether or not they were set.
+// ON A PHONE THE BAR'S RUN AND THE SHAPES SCROLL, AND SAY SO: the edge with
+// more past it carries the attribute the sheet fades — a control cut at the
+// edge ("Ta", "No g") with nothing to say more was past it read as a broken
+// label. The RUN fades, never the sticky band it sits on.
+test("a list scroller wider than its box marks the edge with more past it", async () => {
+  const had = {
+    scroll: Object.getOwnPropertyDescriptor(HTMLElement.prototype, "scrollWidth"),
+    client: Object.getOwnPropertyDescriptor(HTMLElement.prototype, "clientWidth"),
+  };
+  const widths = (el: HTMLElement) =>
+    el.classList.contains("work-bar-run")
+      ? [745, 356]
+      : el.classList.contains("work-tabs-group")
+        ? [381, 356]
+        : [0, 0];
+  Object.defineProperty(HTMLElement.prototype, "scrollWidth", {
+    configurable: true,
+    get(this: HTMLElement) {
+      return widths(this)[0];
+    },
+  });
+  Object.defineProperty(HTMLElement.prototype, "clientWidth", {
+    configurable: true,
+    get(this: HTMLElement) {
+      return widths(this)[1];
+    },
+  });
+  try {
+    serving({ work_items: { items: [], groups: [], complete: true } });
+    const { container } = mountWork();
+    await waitFor(() => expect(container.querySelector(".work-bar-run")).toBeTruthy());
+    await waitFor(() =>
+      expect(container.querySelector(".work-bar-run")?.hasAttribute("data-more-end")).toBe(true),
+    );
+    expect(container.querySelector(".work-bar")?.hasAttribute("data-more-end")).toBe(false);
+    const shapes = screen.getByRole("group", { name: "Draw as" });
+    expect(shapes.hasAttribute("data-more-end")).toBe(true);
+    expect(shapes.hasAttribute("data-more-start")).toBe(false);
+  } finally {
+    for (const [key, d] of [
+      ["scrollWidth", had.scroll],
+      ["clientWidth", had.client],
+    ] as const) {
+      if (d) Object.defineProperty(HTMLElement.prototype, key, d);
+      else delete (HTMLElement.prototype as unknown as Record<string, unknown>)[key];
+    }
+  }
+});
+
+// A CHIP IS DRAWN ONLY WHERE A FILTER IS APPLIED, so an unfiltered list's chip
+// row is "+ Filter" alone — which is the whole difference from a bar of
+// controls that were all drawn whether or not they were set.
 test("an unfiltered list draws no chips, and a filtered one says the whole narrowing", async () => {
   serving({ work_items: { items: [], groups: [], complete: true } });
   const bare = mountWork();
   await waitFor(() => expect(bare.container.querySelector(".work-bar")).toBeTruthy());
-  expect(bare.container.querySelector(".work-chips")).toBeNull();
+  expect(bare.container.querySelector(".work-chip-field")).toBeNull();
   cleanup();
 
   location.hash = "#/work?assignee=ada&blocked=true";
@@ -1359,7 +1547,17 @@ test("the strip holds what somebody saved, never the five shapes", async () => {
           type: "list",
           container: { kind: "workspace", id: "" },
           builtin: false,
+          pinned: true,
           params: { group_by: "assignee" },
+        },
+        {
+          id: "v-2",
+          key: "unpinned",
+          name: "Somebody else's triage",
+          type: "list",
+          container: { kind: "workspace", id: "" },
+          builtin: false,
+          params: {},
         },
       ],
       complete: true,
@@ -1368,8 +1566,14 @@ test("the strip holds what somebody saved, never the five shapes", async () => {
   });
   mountWork();
   await waitFor(() => expect(screen.getByText("Overdue, by owner")).toBeTruthy());
-  const tabs = screen.getAllByRole("tab").map((el) => el.textContent);
-  expect(tabs).toEqual(["All work", "Overdue, by owner"]);
+  // THE VIEWS THIS READER PINNED, behind the container's own list — and not
+  // the ones they did not, which are one link away in the inventory.
+  const strip = screen.getByRole("group", { name: "Saved views" });
+  expect(
+    within(strip)
+      .getAllByRole("button")
+      .map((el) => el.textContent),
+  ).toEqual(["All work", "Overdue, by owner"]);
 });
 
 // AND THE SHAPE IS ITS OWN KEY, so switching a saved view to another drawing
@@ -1408,7 +1612,7 @@ test("the shape is a key beside the view rather than the same one", async () => 
 // ---------------------------------------------------------------------------
 
 /** A project row, for the one fact these cases need from the directory. */
-const listedProject = (counts = { open: 0, done: 0, closed: 0 }): WorkProjectRow => ({
+const listedProject = (counts = { todo: 0, active: 0, done: 0, closed: 0 }): WorkProjectRow => ({
   key: "ENG",
   name: "Engineering",
   unit: { resolved: true },
@@ -1433,8 +1637,8 @@ test("a container with no default view opens on the list", async () => {
   expect(asked(query).limit).toBe(100);
   expect(asked(query).group_by).toBeUndefined();
   expect(asked(query).group_limit).toBeUndefined();
-  // And the Display button says which shape is on without anything opening.
-  expect(screen.getByText("List")).toBeTruthy();
+  // And the shape row says which shape is on without anything opening.
+  expect(screen.getByRole("button", { name: "List", pressed: true })).toBeTruthy();
   expect(container.querySelector(".work-board")).toBeNull();
 });
 
@@ -1445,7 +1649,9 @@ test("a container with no default view opens on the list", async () => {
 // here is the DRAWING: a zero lane is a head with its count and a body saying
 // it is empty, rather than a heading over nothing.
 test("a board draws every declared lane the scope admits, and says which are empty", async () => {
-  location.hash = "#/work?shape=board";
+  // THE OPEN SEGMENT, chosen: a board opens on Recent, whose Done lane holds
+  // the week's deliveries — see the case after this one.
+  location.hash = "#/work?shape=board&scope=open";
   serving({
     work_items: {
       items: [],
@@ -1500,15 +1706,17 @@ test("an assignee board draws only the columns the answer carried", async () => 
 test("the strip and its way into the inventory survive a company that saved nothing", async () => {
   serving({ work_items: { items: [], groups: [], complete: true } });
   mountWork();
-  await waitFor(() => expect(screen.getByRole("tab", { name: "All work" })).toBeTruthy());
+  await waitFor(() =>
+    expect(screen.getByRole("button", { name: "All work", pressed: true })).toBeTruthy(),
+  );
   // A REAL ANCHOR, middle-clickable like every other way out of a screen.
-  const more = screen.getByText("All views →");
+  const more = screen.getByRole("link", { name: "All saved views" });
   expect(more.tagName).toBe("A");
   expect(more.getAttribute("href")).toBe("#/work/views");
   // AND NO COUNT ON THE CONTAINER TAB. The engine's total is over the FILTER
   // rather than over the container, so a number here would read as the
   // container's size and be the size of whatever is narrowed.
-  expect(screen.getByRole("tab", { name: "All work" }).textContent).toBe("All work");
+  expect(screen.getByRole("button", { name: "All work" }).textContent).toBe("All work");
 });
 
 // (a) A NARROWING THAT MATCHED NOTHING CARRIES THE CONTROL THAT REMOVES IT,
@@ -1561,7 +1769,8 @@ test("a first-run company gets the page's own panel and no second one from the l
 // A LIST THAT REACHED ITS END AND ONE THAT WAS CUT OFF ended the same way:
 // rows, then page ground. The count in the bar is silent once everything
 // matching is on screen (`totalHint`) and a cursor is invisible, so the reader
-// of a page could not tell whether there was another one.
+// of a page could not tell whether there was another one. A cut-off list ends
+// in the way to the rest instead, with what is loaded out of how many match.
 test("a complete list closes with the end of it and an incomplete one does not", async () => {
   serving({
     work_items: { items: [row("1"), row("2")], groups: [], total_hint: 2, complete: true },
@@ -1584,7 +1793,9 @@ test("a complete list closes with the end of it and an incomplete one does not",
   });
   const paged = mountWork();
   await waitFor(() => expect(paged.container.querySelector(".grid-wrap")).toBeTruthy());
-  expect(paged.container.querySelector(".grid-foot")).toBeNull();
+  expect(paged.container.textContent).not.toContain("That is all of it");
+  expect(screen.getByRole("button", { name: "Load more" })).toBeTruthy();
+  expect(paged.container.textContent).toContain("2 of 240 loaded");
 });
 
 // AND A NARROWING CHANGES THE NOUN AND NOTHING ELSE. It never says how many the
@@ -1608,7 +1819,7 @@ test("a narrowed list says its rows are the ones that match, and counts nothing 
 // axis (`Params.Has` is what tells it from an absent key) — and every writer on
 // this screen read an empty value as "no key": the query builder dropped it,
 // `useParam` could not say it, and the address writer deleted it. So following
-// "2 more →" out of Unassigned loaded the whole board, which is the one column
+// "2 more" out of Unassigned loaded the whole board, which is the one column
 // overflow a lead actually follows.
 test("the unset column's overflow narrows to that column rather than the whole board", async () => {
   location.hash = "#/work?shape=board&group_by=assignee";
@@ -1621,8 +1832,8 @@ test("the unset column's overflow narrows to that column rather than the whole b
     },
   });
   const { container } = mountWork();
-  await waitFor(() => expect(container.querySelector(".work-col-foot a")).toBeTruthy());
-  const more = container.querySelector(".work-col-foot a") as HTMLAnchorElement;
+  await waitFor(() => expect(container.querySelector("a.work-col-more")).toBeTruthy());
+  const more = container.querySelector("a.work-col-more") as HTMLAnchorElement;
   // THE LINK CARRIES THE KEY WITH NOTHING AFTER IT, which is what a middle
   // click follows.
   expect(more.getAttribute("href")).toContain("group_by=assignee");
@@ -1639,4 +1850,40 @@ test("the unset column's overflow narrows to that column rather than the whole b
   const chips = container.querySelector(".work-chips") as HTMLElement;
   expect(within(chips).getByText("Unassigned")).toBeTruthy();
   expect(within(chips).getByText("Assignee")).toBeTruthy();
+});
+
+// EVERY ROW IS REACHABLE. The list stopped at its first page: the hundred-and-
+// first task in a project was on no screen, and the foot said only that more
+// existed. "Load more" follows the answer's own cursor, and the rows after it
+// are drawn below the first page's.
+test("rows past the first page are reachable", async () => {
+  const pages: Record<string, unknown> = {
+    "": {
+      items: [row("1"), row("2")],
+      groups: [],
+      total_hint: 3,
+      next_cursor: "c-2",
+      complete: true,
+    },
+    "c-2": { items: [row("3")], groups: [], total_hint: 3, complete: true },
+  };
+  const query = vi.fn(async (what: string, params?: Record<string, unknown>) =>
+    what === "work_items" ? pages[String(params?.cursor ?? "")] : {},
+  );
+  vi.mocked(useClient).mockReturnValue({ socket: { query } } as never);
+  vi.mocked(useConnection).mockReturnValue({ connected: true } as never);
+  vi.mocked(useOrg).mockReturnValue({ name: "Acme", roles: [] } as never);
+  mountWork();
+  await waitFor(() => expect(screen.getByText("a task called 2")).toBeTruthy());
+  expect(screen.queryByText("a task called 3")).toBeNull();
+  expect(screen.getByText("2 of 3 loaded")).toBeTruthy();
+  fireEvent.click(screen.getByRole("button", { name: "Load more" }));
+  await waitFor(() => expect(screen.getByText("a task called 3")).toBeTruthy());
+  // THE SAME QUESTION, from where the first page stopped.
+  const next = (query.mock.calls as unknown as [string, Record<string, unknown>?][]).find(
+    ([what, params]) => what === "work_items" && params?.cursor === "c-2",
+  );
+  expect(next?.[1]?.limit).toBe(100);
+  // AND THE LIST IS WHOLE: no way to more, and the foot says it is all of it.
+  await waitFor(() => expect(screen.queryByRole("button", { name: "Load more" })).toBeNull());
 });

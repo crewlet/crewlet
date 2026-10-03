@@ -11,6 +11,7 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/store"
 	"github.com/crewlet/crewlet/internal/tracker"
+	"github.com/crewlet/crewlet/internal/usage"
 )
 
 // EVERY DOMAIN'S TABLES ARE IN THE SCHEMA OF EVERY SPACE THAT LISTS IT.
@@ -59,7 +60,7 @@ func TestEveryDomainTableIsInItsSpaceSchema(t *testing.T) {
 	// the engine exports the names only; a name with no entry is a domain
 	// this test was never shown, and it fails rather than passes.
 	known := map[string]statelog.Domain{}
-	for _, d := range []statelog.Domain{tracker.Domain{}, pages.Domain{}, search.Domain{}} {
+	for _, d := range []statelog.Domain{tracker.Domain{}, pages.Domain{}, search.Domain{}, usage.Domain{}} {
 		known[d.Name()] = d
 	}
 

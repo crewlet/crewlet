@@ -24,7 +24,7 @@ import (
 // renews it on the seat heartbeat's cadence, and gives it back only after the
 // runtime has stopped ([native.shutdown]): after the search slices are
 // withdrawn, the runtime's own loops have ended and its appliers have
-// stopped. That order is the lease's whole point (ADR-0020's reason for not
+// stopped. That order is the lease's whole point (ADR-0027's reason for not
 // reading membership off presence): a drain gives presence back at its first
 // step while the node still serves, and a map reading presence would count a
 // draining node gone and move everything it holds.

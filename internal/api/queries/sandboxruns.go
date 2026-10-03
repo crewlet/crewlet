@@ -2,6 +2,9 @@ package queries
 
 import (
 	"context"
+	"fmt"
+	"slices"
+	"strings"
 
 	"github.com/crewlet/crewlet/internal/notify"
 	"github.com/crewlet/crewlet/internal/sandbox"
@@ -45,16 +48,72 @@ type PendingRuns interface {
 	ListActive(ctx context.Context) ([]sandbox.PendingRun, error)
 }
 
-func (s Sources) sandboxRuns(ctx context.Context, _ Params) (any, error) {
+// SandboxTails answers a running coding run's live output from the node that
+// owns it — the one method this surface calls of [sandbox.TailReader].
+type SandboxTails interface {
+	Tail(ctx context.Context, turnID, launchID string) (sandbox.TailAnswer, error)
+}
+
+// sandboxTail answers `sandbox_tail{turn_id, launch_id}`: the tail of that
+// launch while it runs, `not_running` with the record's own status once it is
+// not, or the owning node NAMED where it did not answer (`owner_silent`) or
+// runs a build that cannot (`owner_upgrading`).
+//
+// BOTH IDS ARE REQUIRED. A run is one execution of a turn and a turn can launch
+// more than one job; a request naming only the turn would show whichever job
+// its row holds now, which is a different job from the span a person clicked
+// the moment a second launch replaces the first.
+func (s Sources) sandboxTail(ctx context.Context, p Params) (any, error) {
+	turnID := strings.TrimSpace(p.String("turn_id"))
+	launchID := strings.TrimSpace(p.String("launch_id"))
+	if turnID == "" || launchID == "" {
+		return nil, fmt.Errorf("%w: sandbox_tail needs a turn_id and the launch_id of the "+
+			"run's job", ErrBadParams)
+	}
+	return s.SandboxTail.Tail(ctx, turnID, launchID)
+}
+
+// sandboxRuns answers the board, or — with `audience=<handle>` — the runs
+// whose question is put to that one person.
+//
+// THE PERSON'S WHOLE PARTY, not the handle alone: a run's audience is resolved
+// to seats at the park, while the same person may be recorded under the
+// credential bound to their seat as well (see [tracker.Party]), so the filter
+// is expanded the way every personal read here is. NO SCOPE RULE beside it,
+// unlike the tracker's personal reads: the unfiltered board already carries
+// every run's audience to anybody who may read it, so a narrower answer
+// reveals nothing the wider one did not.
+//
+// A run parked by a build that resolved no audience carries none, and is
+// therefore nobody's by this filter — which is the truth about it: nothing
+// recorded whom its question was put to.
+func (s Sources) sandboxRuns(ctx context.Context, p Params) (any, error) {
 	runs, err := s.Sandbox.ListActive(ctx)
 	if err != nil {
 		return nil, err
 	}
+	var who []string
+	if asked := strings.TrimSpace(p.String("audience")); asked != "" {
+		who = s.partyOf(asked).Handles()
+	}
 	out := make([]any, 0, len(runs))
 	for _, run := range runs {
+		if who != nil && !putTo(run, who) {
+			continue
+		}
 		out = append(out, serialiseRun(run))
 	}
 	return map[string]any{"runs": out}, nil
+}
+
+// putTo reports whether a run's question is put to any of these identities.
+func putTo(run sandbox.PendingRun, who []string) bool {
+	for _, handle := range run.AudienceHandles {
+		if slices.Contains(who, handle) {
+			return true
+		}
+	}
+	return false
 }
 
 func serialiseRun(run sandbox.PendingRun) map[string]any {
@@ -72,8 +131,19 @@ func serialiseRun(run sandbox.PendingRun) map[string]any {
 		// THROUGH THE ACCESSOR, because nothing rewrites a parked row: a
 		// run suspended before the identities were split carries the key
 		// in its turn id instead. Empty when the run genuinely has none.
-		"work_key":     run.UnitOfWork(),
+		"work_key": run.UnitOfWork(),
+		// THE ITEM THE LAUNCHING TURN WAS CHARGED TO, which the row has
+		// carried since runs named one and this answer never served — so a
+		// parked run's question reached a person with no task beside it.
+		// Null on a run launched by a turn charged to no item.
+		"work_item":    run.WorkItem,
 		"agent_handle": run.AgentHandle,
+		// THE JOB THE ROW HOLDS NOW, which is what `sandbox_tail` is asked
+		// by: a turn can launch more than one, and the run's own page polls
+		// the live output of the job it is showing rather than of whichever
+		// replaced it. Empty on a row a build that predates it wrote, and
+		// such a run has no live output to ask for.
+		"launch_id":    run.LaunchID,
 		"role":         run.Role,
 		"status":       run.Status,
 		"coding_agent": run.CodingAgent,
@@ -86,9 +156,16 @@ func serialiseRun(run sandbox.PendingRun) map[string]any {
 		"task_description": run.TaskDescription,
 		"question":         run.Question,
 		"audience":         run.Audience,
-		"branch":           run.Branch,
-		"trace_id":         run.TraceID,
-		"owner":            run.Owner,
+		// WHO THE QUESTION IS PUT TO, resolved against the chart when the
+		// run parked, and whether that is a fallback — the seat's lead
+		// chain — because the audience above named nobody the chart has.
+		// Always an array, empty on a run that is not parked or that a
+		// build which resolved nothing parked.
+		"audience_handles":  nonNilStrings(run.AudienceHandles),
+		"audience_fallback": run.AudienceFallback,
+		"branch":            run.Branch,
+		"trace_id":          run.TraceID,
+		"owner":             run.Owner,
 		// The two facts the board draws, rather than the ids themselves: a
 		// non-empty sandbox id means a box exists, and a set paused_at
 		// means it is currently held as a snapshot and being paid for.
@@ -156,4 +233,13 @@ func serialiseRun(run sandbox.PendingRun) map[string]any {
 // have left this route confidently offering a thread that does not exist.
 func answerableInChat(conversation string) bool {
 	return notify.Derived(conversation)
+}
+
+// nonNilStrings is a list that encodes as `[]` rather than `null` when empty,
+// so a reader indexes it without a presence check.
+func nonNilStrings(list []string) []string {
+	if list == nil {
+		return []string{}
+	}
+	return list
 }

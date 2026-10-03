@@ -14,7 +14,7 @@
 
 import { useState } from "react";
 import { Button, cx, EmptyValue, Tag } from "@crewlethq/ui";
-import { ChevronRightGlyph, KeyboardArrowDownGlyph, LayersGlyph } from "@crewlethq/icons/glyphs";
+import { ChevronRightGlyph, ChevronDownGlyph, LayersGlyph } from "@crewlethq/icons/glyphs";
 // STILL OURS, and for the reason PhaseCard gives at its own import: `PhaseTag`
 // has a peer, but it is a `~/ui` primitive, so its port belongs to that file
 // rather than to a third inlined copy of the phase variant table.
@@ -62,12 +62,6 @@ export function TurnCard({
   const measured = !!row?.complete && (row?.duration_ms ?? 0) > 0;
   const took = measured ? row!.duration_ms : group.span;
   const startedAt = row?.started_at || group.startedAt;
-  // AND ITS TOKENS, by the same rule: a SETTLED turn's row sums every spend
-  // record the engine holds for it — its phases and the usage record of each
-  // coding run it launched — where the card holds only the phases this screen
-  // loaded and the runs this tab happened to see arrive. A running turn's row is
-  // a figure from before its latest phases, so it keeps its own.
-  const tokens = row?.complete ? row.total_tokens : group.totalTokens;
   const began = tsKey(startedAt);
 
   const trigger = group.trigger;
@@ -76,7 +70,7 @@ export function TurnCard({
   return (
     <article className={cx("turn-card", group.live && "live", group.failed && "failed")}>
       <header className="turn-head" onClick={() => setOpen((v) => !v)}>
-        {open ? <KeyboardArrowDownGlyph size="sm" /> : <ChevronRightGlyph size="sm" />}
+        {open ? <ChevronDownGlyph size="sm" /> : <ChevronRightGlyph size="sm" />}
         <div className="col" style={{ gap: 2, flex: 1, minWidth: 0 }}>
           {/* THE ONE SENTENCE A COLLAPSED CARD CARRIES, and it CLAMPS where it
               used to be cut at a line. `.truncate` is the cell rule: it is right
@@ -153,16 +147,13 @@ export function TurnCard({
             facts and a dash claims the first about the second. The dash stays
             for the one case where the zero really is an absence — a turn
             still running, whose phases have not reported their usage yet. */}
-        {group.live && tokens === 0 ? (
+        {group.live && group.totalTokens === 0 ? (
           <span className="phase-meta" title="no phase has reported its usage yet">
             —
           </span>
         ) : (
-          <span
-            className="phase-meta t-num"
-            title="tokens across every phase of this turn and the coding runs it launched"
-          >
-            {fmtCount(tokens)}
+          <span className="phase-meta t-num" title="tokens across every phase of this turn">
+            {fmtCount(group.totalTokens)}
           </span>
         )}
         {took != null && (
@@ -226,7 +217,7 @@ export function TurnCard({
               size="small"
               variant="secondary"
               leadingIcon={<LayersGlyph />}
-              onClick={() => nav.to(["activity", "turns", group.turnId])}
+              onClick={() => nav.to(["live", "turns", group.turnId])}
               title={`turn ${group.turnId}`}
             >
               Open the whole turn

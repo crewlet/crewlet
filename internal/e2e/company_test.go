@@ -81,7 +81,9 @@ const tickInterval = 25 * time.Millisecond
 // activation pointer's own instant — and a company booted with no activation
 // is not charted until an activation names it, so its projects and knowledge
 // spaces would never exist. Every node of one harness fleet boots with the
-// SAME instant, because they are running one activation.
+// SAME instant, because they are running one activation — and every RESTART
+// boots with it too: a value read off a clock per node or per boot would be
+// exactly the bug the chart's activation stamp exists to rule out.
 var harnessActivation = time.Date(2026, 1, 5, 9, 0, 0, 0, time.UTC)
 
 // node is a running node: engine and API in one process, wired as
@@ -117,6 +119,16 @@ func start(t *testing.T) *node { return startWith(t, nil) }
 // the cases whose subject is a config field rather than a turn.
 func startWith(t *testing.T, amend func(doc string) string) *node {
 	t.Helper()
+	return startBooted(t, amend, nil)
+}
+
+// startBooted stands a node up over a company document and a bootstrap the
+// caller may both amend, for the cases that need the operator's own half of
+// the configuration too — a bearer token a person writes with.
+func startBooted(
+	t *testing.T, amend func(doc string) string, amendBoot func(*config.Bootstrap),
+) *node {
+	t.Helper()
 	model := newScriptedModel(t)
 
 	doc := fmt.Sprintf(companyDoc, model.url)
@@ -130,6 +142,9 @@ func startWith(t *testing.T, amend func(doc string) string) *node {
 	boot := config.DefaultBootstrap()
 	boot.Store.Path = filepath.Join(t.TempDir(), "crewlet.db")
 	boot.Stream.StoreDir = filepath.Join(t.TempDir(), "stream")
+	if amendBoot != nil {
+		amendBoot(&boot)
+	}
 
 	e, err := engine.New(t.Context(), engine.Options{
 		Bootstrap: &boot, Company: cfg, ActivatedAt: harnessActivation,
@@ -552,6 +567,30 @@ func systemPrompt(raw []byte) string {
 	return b.String()
 }
 
+// replyUsage is the usage block one scripted response reports.
+type replyUsage struct{ input, output, cacheRead, cacheWrite int }
+
+// The usage each scripted response reports. NAMED rather than inlined in the
+// JSON, because a case that reasons about a budget has to know what each call
+// costs, and a figure restated in a comment beside a literal goes stale the
+// first time the literal moves — the budget case's own comment said 150 and
+// 130 long after the fixture began reporting cache tokens.
+var (
+	toolUseUsage   = replyUsage{input: 120, output: 30, cacheRead: 80, cacheWrite: 15}
+	textReplyUsage = replyUsage{input: 90, output: 40, cacheRead: 60, cacheWrite: 25}
+)
+
+// tokens is what the engine charges for one such response: the Anthropic
+// adapter folds both cache figures into the input, so every one of them is
+// counted (see providers/llm/anthropic).
+func (u replyUsage) tokens() int { return u.input + u.cacheRead + u.cacheWrite + u.output }
+
+func (u replyUsage) json() string {
+	return fmt.Sprintf(`{"input_tokens":%d,"output_tokens":%d,`+
+		`"cache_read_input_tokens":%d,"cache_creation_input_tokens":%d}`,
+		u.input, u.output, u.cacheRead, u.cacheWrite)
+}
+
 // toolUse renders a Messages response whose content is one tool call.
 func toolUse(name string, input map[string]any) string {
 	args, _ := json.Marshal(input)
@@ -559,8 +598,8 @@ func toolUse(name string, input map[string]any) string {
 		"id":"msg_1","type":"message","role":"assistant","model":"claude-golden",
 		"content":[{"type":"tool_use","id":"call_1","name":%q,"input":%s}],
 		"stop_reason":"tool_use",
-		"usage":{"input_tokens":120,"output_tokens":30}
-	}`, name, args)
+		"usage":%s
+	}`, name, args, toolUseUsage.json())
 }
 
 // textReply renders a Messages response that is plain prose — a phase that
@@ -571,8 +610,8 @@ func textReply(text string) string {
 		"id":"msg_2","type":"message","role":"assistant","model":"claude-golden",
 		"content":[{"type":"text","text":%s}],
 		"stop_reason":"end_turn",
-		"usage":{"input_tokens":90,"output_tokens":40}
-	}`, body)
+		"usage":%s
+	}`, body, textReplyUsage.json())
 }
 
 // waitFor polls until cond holds, failing the test if it never does.

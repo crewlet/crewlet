@@ -18,7 +18,7 @@ import (
 // Both maps read who their members are off a lease of their own class rather
 // than off presence, for one reason: presence is the seat host's, and a drain
 // gives it back at its very first step while the node still serves what it
-// holds (ADR-0020). So each subsystem claims its own lease, renews it on a
+// holds (ADR-0027). So each subsystem claims its own lease, renews it on a
 // loop of its own, re-sends what it says on every beat, and gives it back only
 // once it has stopped serving. That is ONE rule — claimed ungated, a claim
 // rather than a renew on every beat, an unanswered beat read as unknown rather

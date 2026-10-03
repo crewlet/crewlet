@@ -108,17 +108,71 @@ func control() statelogtest.Candidate {
 			})
 		},
 		Encode: func(kind, id, opID string, version int) ([]byte, error) {
-			return json.Marshal(statelog.Envelope{
-				V:       version,
-				Kind:    kind,
-				Subject: statelog.Subject{Kind: kind, ID: id},
-				OpID:    opID,
-				Gen:     1,
-				Scope:   statelog.ScopeSet{Paths: []string{kind + "/" + id}},
-				Writer:  "control",
-			})
+			return encodeControl(controlRecord{Envelope: controlEnvelope(kind, id, opID, version)},
+				stampByContent)
+		},
+		Fields: controlFields,
+		Carrying: func(field statelog.VersionedField) ([]byte, error) {
+			if field.Name != "widget.Colour" {
+				return nil, fmt.Errorf("the control has no field %s", field.Name)
+			}
+			return encodeControl(controlRecord{
+				Envelope: controlEnvelope("widget", "carrying", "suite-carrying", 0),
+				Colour:   "violet",
+			}, stampByContent)
 		},
 	}
+}
+
+// controlFields is the control's versioned-field table: ONE field, added at
+// version 2, so the version-stamping cases ([statelogtest.Stamping]) have
+// something to hold it to.
+var controlFields = statelog.RecordFields{
+	{Name: "widget.Colour", Since: 2, Path: []string{"colour"}},
+}
+
+// controlRecord is the control's wire shape: the framework's envelope plus
+// the one field a later build added.
+type controlRecord struct {
+	statelog.Envelope
+	Colour string `json:"colour,omitempty"`
+}
+
+func controlEnvelope(kind, id, opID string, version int) statelog.Envelope {
+	return statelog.Envelope{
+		V:       version,
+		Kind:    kind,
+		Subject: statelog.Subject{Kind: kind, ID: id},
+		OpID:    opID,
+		Gen:     1,
+		Scope:   statelog.ScopeSet{Paths: []string{kind + "/" + id}},
+		Writer:  "control",
+	}
+}
+
+// stamper decides the version a record whose caller left it unset goes out
+// at — the one thing the meta-tests below vary.
+type stamper func(rec controlRecord) (int, error)
+
+// stampByContent is the rule every domain follows: the lowest version that
+// reads what the record carries.
+func stampByContent(rec controlRecord) (int, error) {
+	body, err := json.Marshal(rec)
+	if err != nil {
+		return 0, err
+	}
+	return controlFields.Minimum(rec.Kind, body)
+}
+
+func encodeControl(rec controlRecord, stamp stamper) ([]byte, error) {
+	if rec.V == 0 {
+		v, err := stamp(rec)
+		if err != nil {
+			return nil, err
+		}
+		rec.V = v
+	}
+	return json.Marshal(rec)
 }
 
 const controlDDL = `
@@ -237,7 +291,10 @@ func (controlBase) ScopePartition(l statelog.Layout, path string) (statelog.Part
 	return l.OnlyPartition("control"), true
 }
 
-func (controlBase) RecordVersion() int { return 1 }
+// RecordVersion is 2 because the control's field table reaches 2 — the one
+// field a later build added ([controlFields]) — and a build reads exactly the
+// highest version its table introduces.
+func (controlBase) RecordVersion() int { return 2 }
 
 func (controlBase) Envelope(payload []byte) (statelog.Envelope, error) {
 	var env statelog.Envelope
@@ -609,6 +666,188 @@ func TestTheSuiteCatchesADomainThatMisdeclaresItself(t *testing.T) {
 		}
 	})
 }
+
+// A KIND A ROW INTRODUCES IS STAMPED AT THAT ROW'S VERSION, and the suite holds
+// a domain to it in both directions: its ordinary record of that kind carries
+// the kind's own row and nothing else, so the version it is owed is the row's
+// rather than one — demanding one would demand that builds with no applier for
+// the kind apply it — and a record of it stamped one is the fault the row
+// exists to prevent.
+func TestTheSuiteHoldsAKindARowIntroducedToThatRowsVersion(t *testing.T) {
+	t.Parallel()
+	fields := append(statelog.RecordFields{}, controlFields...)
+	fields = append(fields, statelog.VersionedField{
+		Name: "Kind=gadget", Since: 2, Path: []string{"Kind"}, Equals: "gadget",
+	})
+	byTable := func(rec controlRecord) (int, error) {
+		body, err := json.Marshal(rec)
+		if err != nil {
+			return 0, err
+		}
+		return fields.Minimum(rec.Op, body)
+	}
+	withGadgets := func(stamp stamper) statelogtest.Candidate {
+		c := control()
+		c.Kinds = []string{"widget", "gadget"}
+		c.Fields = fields
+		c.Encode = func(kind, id, opID string, version int) ([]byte, error) {
+			return encodeControl(controlRecord{Envelope: controlEnvelope(kind, id, opID, version)}, stamp)
+		}
+		c.Carrying = func(field statelog.VersionedField) ([]byte, error) {
+			rec := controlRecord{Envelope: controlEnvelope("widget", "carrying", "suite-carrying", 0)}
+			switch field.Name {
+			case "widget.Colour":
+				rec.Colour = "violet"
+			case "Kind=gadget":
+				rec.Envelope = controlEnvelope("gadget", "carrying", "suite-carrying", 0)
+			default:
+				return nil, fmt.Errorf("the control has no field %s", field.Name)
+			}
+			return encodeControl(rec, stamp)
+		}
+		return c
+	}
+
+	if errs := statelogtest.Stamping(withGadgets(byTable)); len(errs) != 0 {
+		t.Errorf("a domain stamping a gadget at the version its row gives it was "+
+			"refused: %v", errs)
+	}
+	errs := statelogtest.Stamping(withGadgets(func(controlRecord) (int, error) { return 1, nil }))
+	var found bool
+	for _, err := range errs {
+		if strings.Contains(err.Error(), "the only versioned field it carries is its kind's own") {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("a gadget stamped at version one passed the base-record case: %v", errs)
+	}
+}
+
+// A DOMAIN THAT STAMPS THE WRONG VERSION IS CAUGHT, in both directions and
+// in both halves of the table-and-build agreement.
+//
+// Each arm is the shape the stamping rule was written against: a writer that
+// stamps its BUILD's version holds every record back from every older node,
+// one that stamps the base version always lets an older node apply a field
+// away, and a table and a build that disagree are one of those two waiting
+// for the day the other half moves.
+func TestTheSuiteCatchesADomainThatStampsTheWrongVersion(t *testing.T) {
+	t.Parallel()
+	buildVersion := func(controlRecord) (int, error) { return controlDomain{}.RecordVersion(), nil }
+	baseVersion := func(controlRecord) (int, error) { return 1, nil }
+	for name, tc := range map[string]struct {
+		mutate func(*statelogtest.Candidate)
+		names  string
+	}{
+		"a writer that stamps its build's version on everything": {
+			mutate: func(c *statelogtest.Candidate) {
+				c.Encode = func(kind, id, opID string, version int) ([]byte, error) {
+					return encodeControl(controlRecord{Envelope: controlEnvelope(kind, id, opID, version)}, buildVersion)
+				}
+			},
+			names: "carrying no versioned field at version 2",
+		},
+		"a writer that stamps version one on everything": {
+			mutate: func(c *statelogtest.Candidate) {
+				c.Carrying = func(statelog.VersionedField) ([]byte, error) {
+					return encodeControl(controlRecord{
+						Envelope: controlEnvelope("widget", "carrying", "suite-carrying", 0),
+						Colour:   "violet",
+					}, baseVersion)
+				}
+			},
+			names: "would decode it, drop the field",
+		},
+		"a field table whose path misses where the field is written": {
+			mutate: func(c *statelogtest.Candidate) {
+				// THE ENCODER READS THE SAME TABLE the candidate
+				// declares, as every domain's does, so a path typo is
+				// a field nothing ever stamps.
+				misspelt := statelog.RecordFields{
+					{Name: "widget.Colour", Since: 2, Path: []string{"color"}},
+				}
+				c.Fields = misspelt
+				c.Carrying = func(statelog.VersionedField) ([]byte, error) {
+					rec := controlRecord{
+						Envelope: controlEnvelope("widget", "carrying", "suite-carrying", 0),
+						Colour:   "violet",
+					}
+					return encodeControl(rec, func(rec controlRecord) (int, error) {
+						body, err := json.Marshal(rec)
+						if err != nil {
+							return 0, err
+						}
+						return misspelt.Minimum(rec.Kind, body)
+					})
+				}
+			},
+			names: "would decode it, drop the field",
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			c := control()
+			tc.mutate(&c)
+			errs := statelogtest.Stamping(c)
+			if len(errs) == 0 {
+				t.Fatalf("the suite passed %s", name)
+			}
+			var found bool
+			for _, err := range errs {
+				if strings.Contains(err.Error(), tc.names) {
+					found = true
+				}
+			}
+			if !found {
+				t.Errorf("the suite objected, but to something else: %v", errs)
+			}
+		})
+	}
+
+	for name, tc := range map[string]struct {
+		domain statelog.Domain
+		fields statelog.RecordFields
+		names  string
+	}{
+		"a build that reads a version no field introduced": {
+			domain: readsAhead{controlDomain{}}, fields: controlFields,
+			names: "no field introduced",
+		},
+		"a field at a version the build does not read": {
+			domain: controlDomain{},
+			fields: statelog.RecordFields{{Name: "widget.Colour", Since: 3, Path: []string{"colour"}}},
+			names:  "would be retained by the build that wrote them",
+		},
+		"a field table with no record carrying its field": {
+			domain: controlDomain{}, fields: controlFields,
+			names: "no record carrying one",
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			c := control()
+			c.Domain, c.Fields = tc.domain, tc.fields
+			if tc.names == "no record carrying one" {
+				c.Carrying = nil
+			}
+			var found bool
+			for _, err := range statelogtest.Declaration(c) {
+				if strings.Contains(err.Error(), tc.names) {
+					found = true
+				}
+			}
+			if !found {
+				t.Errorf("the declaration passed %s", name)
+			}
+		})
+	}
+}
+
+// readsAhead claims a record version its field table never reaches.
+type readsAhead struct{ controlDomain }
+
+func (readsAhead) RecordVersion() int { return 3 }
 
 type brokenStream struct{ controlDomain }
 

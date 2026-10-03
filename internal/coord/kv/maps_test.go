@@ -21,7 +21,7 @@ func openMapsFleet(t *testing.T) *FleetStore {
 		BucketPrefix: fmt.Sprintf("m%d", bucketSeq.Add(1)),
 		RateWindow:   time.Minute, ClaimTTL: time.Minute,
 		LedgerRetention: time.Minute, FireRetention: time.Minute,
-		FollowRetention: time.Minute, RebaseRetention: time.Minute,
+		FollowRetention: time.Minute, BudgetRetention: time.Minute, RebaseRetention: time.Minute,
 		CooldownMax: time.Minute, StatusFreshness: time.Minute,
 	})
 	if err != nil {

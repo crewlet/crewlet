@@ -9,6 +9,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -123,6 +124,66 @@ func TestAnUnscopedSearchOnTheOrgCredentialIsRefused(t *testing.T) {
 		Text: "how do we deploy", Org: o, Seat: &org.Role{Name: "SWE"},
 	}).Hits; len(hits) != 0 {
 		t.Fatalf("hits = %+v", hits)
+	}
+}
+
+// CONFLUENCE RANKS BY KEYWORD AND NOTHING ELSE, AND SAYS SO.
+//
+// The site's CQL search is the whole of this backend's ranking — the engine
+// embeds nothing here — so `modes` offers keyword alone, a hybrid search is
+// served as keyword and says it was, and a semantic one answers nothing
+// without asking the site at all: a keyword answer presented as one ranked by
+// meaning is the ranking guaranteed not to find what was asked for.
+func TestConfluenceIsKeywordOnlyAndSaysSo(t *testing.T) {
+	t.Parallel()
+	var asked atomic.Int64
+	inst := newInstance(t, func(string) (int, string) {
+		asked.Add(1)
+		return 200, `{"results":[{"id":"1","title":"Deploy runbook",
+			"space":{"key":"ENG"},"body":{"storage":{"value":"<p>Run it.</p>"}}}]}`
+	})
+	seat := &org.Role{Name: "SWE", DeclaredHandle: "swe"}
+	searcher := confluence.NewSearcher(confluence.SearcherOptions{
+		Org: client(t, inst),
+		ForSeat: func(*org.Role) (*confluence.Client, bool) {
+			return client(t, inst), true
+		},
+	})
+	o := &org.Organization{Name: "nimbus"}
+	o.Normalize()
+	query := func(mode knowledge.Mode) knowledge.Result {
+		return searcher.Search(context.Background(), knowledge.Query{
+			Text: "how do we deploy", Org: o, Seat: seat, Mode: mode,
+		})
+	}
+
+	for _, mode := range []knowledge.Mode{"", knowledge.ModeKeyword} {
+		got := query(mode)
+		if len(got.Hits) != 1 || got.ServedMode != knowledge.ModeKeyword ||
+			!got.Coverage.Complete {
+			t.Errorf("mode %q: %d hits served %q complete %v", mode, len(got.Hits),
+				got.ServedMode, got.Coverage.Complete)
+		}
+		if len(got.Modes) != 1 || got.Modes[0] != knowledge.ModeKeyword {
+			t.Errorf("mode %q: modes = %v, want keyword alone", mode, got.Modes)
+		}
+	}
+	if got := query(knowledge.ModeHybrid); got.Degraded != knowledge.DegradedUnsupported {
+		t.Errorf("hybrid degraded %q, want unsupported", got.Degraded)
+	}
+	if got := query(knowledge.ModeKeyword); got.Degraded != knowledge.NotDegraded {
+		t.Errorf("keyword degraded %q", got.Degraded)
+	}
+
+	before := asked.Load()
+	semantic := query(knowledge.ModeSemantic)
+	if len(semantic.Hits) != 0 || semantic.ServedMode != "" ||
+		semantic.Degraded != knowledge.DegradedUnsupported {
+		t.Errorf("semantic served %q with %d hits degraded %q", semantic.ServedMode,
+			len(semantic.Hits), semantic.Degraded)
+	}
+	if asked.Load() != before {
+		t.Error("a semantic search asked the site, which has no such ranking")
 	}
 }
 

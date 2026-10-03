@@ -49,13 +49,18 @@ var sentinels = []sentinel{
 	{"queue.ErrTooLarge", queue.ErrTooLarge},
 	{"queue.ErrNotLive", queue.ErrNotLive},
 
+	{"tracker.ErrAlreadyAnswered", tracker.ErrAlreadyAnswered},
 	{"tracker.ErrBulkInFlight", tracker.ErrBulkInFlight},
+	{"tracker.ErrForbidden", tracker.ErrForbidden},
+	{"tracker.ErrInboxFull", tracker.ErrInboxFull},
+	{"tracker.ErrInvalid", tracker.ErrInvalid},
 	{"tracker.ErrIndexBuilding", tracker.ErrIndexBuilding},
 	{"tracker.ErrNoChartActivation", tracker.ErrNoChartActivation},
 	{"tracker.ErrNoComment", tracker.ErrNoComment},
 	{"tracker.ErrNoFile", tracker.ErrNoFile},
 	{"tracker.ErrNoProject", tracker.ErrNoProject},
 	{"tracker.ErrNoTask", tracker.ErrNoTask},
+	{"tracker.ErrNoType", tracker.ErrNoType},
 	{"tracker.ErrNothingToRestore", tracker.ErrNothingToRestore},
 	{"tracker.ErrReassignmentBudget", tracker.ErrReassignmentBudget},
 	{"tracker.ErrReparentAcrossProjects", tracker.ErrReparentAcrossProjects},
@@ -64,12 +69,12 @@ var sentinels = []sentinel{
 	{"tracker.ErrStepUnvouched", tracker.ErrStepUnvouched},
 	{"tracker.ErrTooBroad", tracker.ErrTooBroad},
 
+	{"pages.ErrBadCursor", pages.ErrBadCursor},
 	{"pages.ErrConflict", pages.ErrConflict},
 	{"pages.ErrInvalid", pages.ErrInvalid},
 	{"pages.ErrNoActivation", pages.ErrNoActivation},
 	{"pages.ErrNotFound", pages.ErrNotFound},
 	{"pages.ErrParent", pages.ErrParent},
-	{"pages.ErrReserved", pages.ErrReserved},
 	{"pages.ErrStaleVersion", pages.ErrStaleVersion},
 	{"pages.ErrTitleTaken", pages.ErrTitleTaken},
 
@@ -120,12 +125,14 @@ type typedKind struct {
 // error — the cause a refusal was concluded from — as a nested wire error, so
 // the cause still answers errors.Is on the far side.
 var typedKinds = []typedKind{
+	{"tracker.AlreadyAnsweredError", reflect.TypeFor[*tracker.AlreadyAnsweredError]()},
 	{"tracker.ErrAmbiguous", reflect.TypeFor[*tracker.ErrAmbiguous]()},
 	{"tracker.ErrAmbiguousAnswer", reflect.TypeFor[*tracker.ErrAmbiguousAnswer]()},
 	{"tracker.ErrFutureVersion", reflect.TypeFor[*tracker.ErrFutureVersion]()},
 	{"tracker.SubtreeStopped", reflect.TypeFor[*tracker.SubtreeStopped]()},
 	{"tracker.TagClash", reflect.TypeFor[*tracker.TagClash]()},
 	{"tracker.TagsFull", reflect.TypeFor[*tracker.TagsFull]()},
+	{"tracker.TextCapError", reflect.TypeFor[*tracker.TextCapError]()},
 
 	{"pages.ErrFutureVersion", reflect.TypeFor[*pages.ErrFutureVersion]()},
 	{"pages.ErrUnknownVersion", reflect.TypeFor[pages.ErrUnknownVersion]()},

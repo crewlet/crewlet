@@ -25,7 +25,7 @@ own infrastructure.
 
 ## Setting it up from the dashboard
 
-Connect Mattermost on the Integrations screen with the instance address, the
+Connect Mattermost in Settings › Integrations with the instance address, the
 team and a system administrator token. The reconcile loop creates each agent's
 bot account on its next tick, running the same pass
 `crewlet mattermost provision` runs. The administrator token is sealed in the

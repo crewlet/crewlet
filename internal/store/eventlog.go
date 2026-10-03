@@ -62,8 +62,8 @@ const (
 	// head is not.
 	MaxTraceEvents = 500
 
-	// defaultListLimit is the page size when a caller names none.
-	defaultListLimit = 50
+	// DefaultListLimit is the page size when a caller names none.
+	DefaultListLimit = 50
 
 	// THERE IS NO OVER-FETCH ANY MORE. The RelatedAgent filter used to pull
 	// five pages of raw history per page it wanted, capped at 500 rows, and
@@ -105,8 +105,9 @@ type EventRecord struct {
 	ParentSpanID string    `json:"parent_span_id"`
 
 	// Tags are the filterable dimensions the writer extracted. The
-	// promoted columns (agent_id, agent_role, task_id, channel_id, sender)
-	// are copies of five of these; the rest exist only here.
+	// promoted columns (agent_id, agent_role, task_id, channel_id, sender,
+	// and since schema/0033 work_item) are copies of six of these; the rest
+	// exist only here.
 	Tags map[string]string `json:"tags,omitempty"`
 
 	// WorkKey is the unit of work this row's run was an attempt at — see
@@ -139,7 +140,7 @@ type EventRecord struct {
 	// Spend is what one LLM call cost, present only on a phase completion.
 	//
 	// Promoted out of the payload and into columns because the rollup that
-	// reads it is an AGGREGATION: it wants nine small values from every
+	// reads it is an AGGREGATION: it wants a dozen small values from every
 	// row in a window, and reaching them through the payload meant hauling
 	// each phase's whole prompt and response across the driver to decode
 	// them in Go. See schema/0015.
@@ -149,7 +150,7 @@ type EventRecord struct {
 // Spend is one LLM call's identity and its token cost.
 //
 // A pointer on [EventRecord] rather than flat fields: it is set on one event
-// type out of dozens, and flattening it would put nine always-empty fields on
+// type out of dozens, and flattening it would put thirteen always-empty fields on
 // every row the dashboard renders.
 type Spend struct {
 	// Phase is which phase ran; HostPhase is the phase a nested call ran
@@ -173,6 +174,21 @@ type Spend struct {
 	InputTokens  int `json:"input_tokens,omitempty"`
 	OutputTokens int `json:"output_tokens,omitempty"`
 	TotalTokens  int `json:"total_tokens,omitempty"`
+
+	// CacheReadTokens and CacheWriteTokens are the share of InputTokens the
+	// provider's prompt cache served and stored — a BREAKDOWN of the input,
+	// never an addition to it (see tokens.Bucket). Columns since
+	// schema/0032, for the reason the counts above are: the rollup reads
+	// columns, so a count left in the payload is a count it reads as zero.
+	CacheReadTokens  int `json:"cache_read_tokens,omitempty"`
+	CacheWriteTokens int `json:"cache_write_tokens,omitempty"`
+
+	// ProviderKey is the configured provider entry that served the call,
+	// as distinct from Model, the model that entry reported: a fallback
+	// chain serves several models under one key. Model falls back to it
+	// when a phase names no model; this is the key itself, never the
+	// fallback. schema/0032.
+	ProviderKey string `json:"provider_key,omitempty"`
 }
 
 // Cursor is an exclusive keyset position: the reader holds this row and wants
@@ -189,7 +205,7 @@ type Cursor struct {
 }
 
 // ListQuery selects a page of the event log. The zero value asks for the most
-// recent defaultListLimit events.
+// recent DefaultListLimit events.
 type ListQuery struct {
 	Limit    int
 	Type     string
@@ -197,6 +213,50 @@ type ListQuery struct {
 	Category string
 	TraceID  string
 	Actor    string
+
+	// ChannelID selects the events of one agent-to-agent conversation, by
+	// the channel id every A2A event carries — the promoted `channel_id`
+	// column (schema/0001), which is set on those events alone. It is what
+	// a conversation's page asks the log, "what happened on this channel",
+	// and it reads the partial index schema/0034 ships.
+	ChannelID string
+
+	// AgentID selects the events ONE SEAT published, by the id every node
+	// derives for it ([org.DeriveAgentID]) — the promoted `agent_id`
+	// column. NOT a role name, which two unit seats share and a rename
+	// changes, and NOT [ListQuery.RelatedAgent], which matches by name the
+	// events that merely involve a seat and pulls in their traces.
+	AgentID string
+
+	// Suspended selects by whether a completion record PARKED its turn — the
+	// `suspended` flag a turn's segment carries when it launched a detached
+	// coding run ([types.AgentTurnCompleted.Suspended]) — and nil means every
+	// row. THREE-VALUED, like the turn list's `failed`, because the absent
+	// case is the ordinary one: false is "not a suspension", which every row
+	// that carries no such flag is, so `Type: agent_turn_completed` with
+	// false is the turns that ENDED, and true the ones that parked.
+	//
+	// It is what a turns axis counts over. One turn that parks and resumes
+	// writes two completion records, so counting the type alone draws that
+	// turn twice beside a list that shows it once — and the second record is
+	// the one that ended it. Read from the payload, as [suspendedExpr] is for
+	// the turn list, since the flag was never promoted to a column: the type
+	// filter narrows first, so the read is over completion records only.
+	Suspended *bool
+
+	// Failed selects by whether the event reports a failure — the rule
+	// [EventRecord.Failed] is stamped by on every read ([types.Failed]: the
+	// stored `failed` tag, or a type in the failure set), spelled once as
+	// [failedRow] — and nil means every row. THREE-VALUED for the reason
+	// Suspended is: absent is the ordinary case.
+	//
+	// A FILTER, not a mark the reader applies to the page it holds. The
+	// event log's "Failures only" used to narrow the rows a tab had already
+	// paged in, so the axis above it counted every event in the window
+	// while the list beneath showed the failures among the newest hundred —
+	// and every older page it fetched was the unfiltered log, most of which
+	// the same mark then hid.
+	Failed *bool
 
 	// TurnID selects one RUN of a turn — every phase of it, its own
 	// completion record, and the fallbacks and breaches that happened
@@ -211,6 +271,17 @@ type ListQuery struct {
 	// turn_id, and that migration's backfill copies it across so the
 	// history answers this filter too. See ADR-0017.
 	WorkKey string
+
+	// WorkItem selects every event on one work item, by its identity
+	// across trackers — `<backend>:<id>`, [types.WorkItem.Ref] — and never by
+	// its key, which a move rewrites. Every turn-level record carries the
+	// item it was charged to, so this is "everything that happened on this
+	// item": each turn's start, its phases, its completion, a coding run it
+	// launched. Backed by the partial index schema/0033 ships, whose
+	// backfill gives the rows already stored their column; their stored
+	// tags blob is not rewritten, so the filter — which reads the column —
+	// is the authority and a `tags.work_item` read is not.
+	WorkItem string
 
 	// RelatedAgent is a broad filter: events whose actor is the agent, or
 	// whose tags name it as agent_role / target / recipient / sender, plus
@@ -265,9 +336,10 @@ INSERT INTO crewlet_events (
 	agent_id, agent_role, task_id, channel_id, sender,
 	summary, actor, tags, payload,
 	phase, host_phase, worker, model, turn_id, work_key, iteration,
-	input_tokens, output_tokens, total_tokens
+	input_tokens, output_tokens, total_tokens,
+	cache_read_tokens, cache_write_tokens, provider_key, work_item
 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-	?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT (event_time, event_id) DO NOTHING`
 
 // ErrIncompleteRecord reports a record missing part of its identity.
@@ -379,6 +451,12 @@ func (l *EventLog) Append(ctx context.Context, rec EventRecord) error {
 			spend.Phase, spend.HostPhase, spend.Worker, spend.Model,
 			spend.TurnID, spend.WorkKey, spend.Iteration,
 			spend.InputTokens, spend.OutputTokens, spend.TotalTokens,
+			spend.CacheReadTokens, spend.CacheWriteTokens, spend.ProviderKey,
+			// THE ITEM THE ROW IS ON, off the tag [ExtractTags] composes
+			// from the nested `work_item` object — a copy of a tag, like
+			// agent_id's beside it, so the column and the tag can never
+			// name two different items. See schema/0033.
+			tags["work_item"],
 		); err != nil {
 			return err
 		}
@@ -488,13 +566,48 @@ func (q ListQuery) predicate() (from string, where []string, args []any, col fun
 			args = append(args, val)
 		}
 	}
+	// A COLUMN WHOSE INDEX IS PARTIAL takes its index's own predicate as a
+	// second term, which is redundant to the answer and is the only thing
+	// that lets the planner use the index at all: it proves a query implies
+	// `x <> ''` only when the query SAYS so, never from `x = ?` with a bound
+	// value it cannot see. Without the term every one of these filters
+	// walked the primary key newest-first until it had a page — for an item,
+	// a unit of work or a channel with fewer rows than a page, the whole
+	// thirty-day log (measured with EXPLAIN QUERY PLAN; see
+	// TestEveryPartiallyIndexedFilterSeeksItsIndex).
+	addIndexed := func(name, val string) {
+		if val != "" {
+			where = append(where, col(name)+" = ?", col(name)+" <> ''")
+			args = append(args, val)
+		}
+	}
 	addEq("event_type", q.Type)
 	addEq("source", q.Source)
 	addEq("category", q.Category)
 	addEq("trace_id", q.TraceID)
 	addEq("actor", q.Actor)
 	addEq("turn_id", q.TurnID)
-	addEq("work_key", q.WorkKey)
+	addEq("agent_id", q.AgentID)
+	addIndexed("work_key", q.WorkKey)
+	addIndexed("work_item", q.WorkItem)
+	addIndexed("channel_id", q.ChannelID)
+	if q.Suspended != nil {
+		// [suspendedExpr]'s own rule, qualified for whichever FROM this is.
+		where = append(where, "COALESCE(json_extract("+col("payload")+", '$.suspended'), 0) = ?")
+		flag := 0
+		if *q.Suspended {
+			flag = 1
+		}
+		args = append(args, flag)
+	}
+	if q.Failed != nil {
+		expr, failedArgs := failedRow(col)
+		if !*q.Failed {
+			expr = "NOT " + expr
+		}
+		where = append(where, expr)
+		args = append(args, failedArgs...)
+	}
 	// THE WINDOW, half-open, on the same column the keyset walks — so it
 	// narrows the index range the read already scans rather than adding a
 	// term the planner has to filter on.
@@ -523,9 +636,28 @@ func (q ListQuery) predicate() (from string, where []string, args []any, col fun
 func (l *EventLog) List(ctx context.Context, q ListQuery) ([]EventRecord, error) {
 	limit := q.Limit
 	if limit <= 0 {
-		limit = defaultListLimit
+		limit = DefaultListLimit
 	}
+	query, args := q.listSQL(limit)
+	out, err := l.scanRows(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	if q.RelatedAgent != "" {
+		siblings, err := l.traceSiblings(ctx, out, limit)
+		if err != nil {
+			return nil, err
+		}
+		out = mergeRelated(out, siblings, limit)
+	}
+	return out, nil
+}
 
+// listSQL is the statement [EventLog.List] runs for one page, and its
+// arguments — a function of its own so the plan a filter gets can be read
+// back for exactly the statement that runs (see
+// TestEveryPartiallyIndexedFilterSeeksItsIndex).
+func (q ListQuery) listSQL(limit int) (string, []any) {
 	from, where, args, col := q.predicate()
 	joined := q.RelatedAgent != ""
 
@@ -550,19 +682,7 @@ func (l *EventLog) List(ctx context.Context, q ListQuery) ([]EventRecord, error)
 	query := "SELECT " + qualifiedListColumns(joined) +
 		" FROM " + from + " WHERE " + strings.Join(where, " AND ") +
 		" ORDER BY " + col("event_time") + " DESC, " + col("event_id") + " DESC LIMIT ?"
-
-	out, err := l.scanRows(ctx, query, args...)
-	if err != nil {
-		return nil, err
-	}
-	if joined {
-		siblings, err := l.traceSiblings(ctx, out, limit)
-		if err != nil {
-			return nil, err
-		}
-		out = mergeRelated(out, siblings, limit)
-	}
-	return out, nil
+	return query, args
 }
 
 // traceSiblings fetches the other events in the traces a page of direct
@@ -578,9 +698,41 @@ func (l *EventLog) List(ctx context.Context, q ListQuery) ([]EventRecord, error)
 // page. The old shape found siblings only among the rows it happened to have
 // over-fetched, which meant a cause older than that window was simply missing.
 func (l *EventLog) traceSiblings(ctx context.Context, direct []EventRecord, limit int) ([]EventRecord, error) {
-	traces := make([]any, 0, len(direct))
-	seen := make(map[string]struct{}, len(direct))
-	for _, rec := range direct {
+	return l.TraceRows(ctx, TraceIDsOf(direct), limit)
+}
+
+// TraceRows is the newest rows of any of these traces, newest first, up to
+// limit — the sibling half of [ListQuery.RelatedAgent], asked on its own.
+//
+// Exported for the one caller that has to ask it SEPARATELY: a fleet, whose
+// related-agent page is merged from several logs before anybody knows which
+// traces it holds, and whose siblings sit in logs that held no direct match at
+// all — the inbound webhook row lives on the node the delivery reached, and
+// the agent work it caused on the node that holds the seat.
+func (l *EventLog) TraceRows(ctx context.Context, traceIDs []string, limit int) ([]EventRecord, error) {
+	if len(traceIDs) == 0 {
+		return []EventRecord{}, nil
+	}
+	if limit <= 0 {
+		limit = DefaultListLimit
+	}
+	args := make([]any, 0, len(traceIDs)+2)
+	for _, id := range traceIDs {
+		args = append(args, id)
+	}
+	args = append(args, EncodeTime(now().Add(-EventHistory)), limit)
+	query := "SELECT " + listColumns + " FROM crewlet_events WHERE trace_id IN (?" +
+		strings.Repeat(",?", len(traceIDs)-1) +
+		") AND event_time >= ? ORDER BY event_time DESC, event_id DESC LIMIT ?"
+	return l.scanRows(ctx, query, args...)
+}
+
+// TraceIDsOf is the distinct non-empty traces of some rows, in first-seen
+// order.
+func TraceIDsOf(rows []EventRecord) []string {
+	out := make([]string, 0, len(rows))
+	seen := make(map[string]struct{}, len(rows))
+	for _, rec := range rows {
 		if rec.TraceID == "" {
 			continue
 		}
@@ -588,15 +740,9 @@ func (l *EventLog) traceSiblings(ctx context.Context, direct []EventRecord, limi
 			continue
 		}
 		seen[rec.TraceID] = struct{}{}
-		traces = append(traces, rec.TraceID)
+		out = append(out, rec.TraceID)
 	}
-	if len(traces) == 0 {
-		return nil, nil
-	}
-	query := "SELECT " + listColumns + " FROM crewlet_events WHERE trace_id IN (?" +
-		strings.Repeat(",?", len(traces)-1) +
-		") ORDER BY event_time DESC, event_id DESC LIMIT ?"
-	return l.scanRows(ctx, query, append(traces, limit)...)
+	return out
 }
 
 // mergeRelated folds the siblings into the direct matches, newest first.
@@ -692,7 +838,7 @@ func (l *EventLog) TurnEventCount(ctx context.Context, turnID string) (int, erro
 // range rather than a scan. Ordered by first appearance, because that is the
 // order a reader follows them in: the trace the turn started under comes
 // first.
-func (l *EventLog) TurnTraces(ctx context.Context, turnID string) ([]string, error) {
+func (l *EventLog) TurnTraces(ctx context.Context, turnID string) ([]TurnTrace, error) {
 	rows, err := l.db.sql.QueryContext(ctx,
 		"SELECT trace_id, MIN(event_time) AS first_at FROM crewlet_events "+
 			"WHERE turn_id = ? AND event_time >= ? AND trace_id != '' "+
@@ -703,19 +849,29 @@ func (l *EventLog) TurnTraces(ctx context.Context, turnID string) ([]string, err
 	}
 	defer func() { _ = rows.Close() }()
 
-	out := []string{}
+	out := []TurnTrace{}
 	for rows.Next() {
 		var id string
 		var first int64
 		if err := rows.Scan(&id, &first); err != nil {
 			return nil, fmt.Errorf("store: scan the traces of turn %s: %w", turnID, err)
 		}
-		out = append(out, id)
+		out = append(out, TurnTrace{TraceID: id, FirstAt: DecodeTime(first)})
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("store: read the traces of turn %s: %w", turnID, err)
 	}
 	return out, nil
+}
+
+// TurnTrace is one trace a turn touched and when it first did.
+//
+// THE INSTANT TRAVELS WITH THE ID because the order is a property of every log
+// the turn wrote to: a turn resumed on another node has a trace on each, and
+// only the instants say which came first once the two lists meet.
+type TurnTrace struct {
+	TraceID string    `json:"trace_id"`
+	FirstAt time.Time `json:"first_at"`
 }
 
 // TraceEventCount is the same question about a trace. See [EventLog.TurnEventCount].
@@ -1049,31 +1205,25 @@ const (
 	// for any org past that many phase completions in the window, which
 	// this file's own arithmetic put at a third of a busy month.
 	//
-	// The numbers are columns now (schema/0015), so a row is nine narrow
+	// The numbers are columns now (schema/0015, 0032), so a row is a few narrow
 	// values instead of a document, and the whole window folds. A cap here
 	// would only reintroduce an undercount that looks like an underspend.
 )
 
 // The price is the one value here still read out of the PAYLOAD, and
-// deliberately: it is set by a single backend on a minority of records, so
+// deliberately: it is set by a single backend on a minority of phases, so
 // promoting it would be a migration and a column that is NULL on almost every
 // row of the table. The extraction is free of a scan cost the filter does not
 // already pay — the event_type and event_time predicates are what choose the
 // rows, and json_extract runs only on the ones they keep.
-//
-// EVERY SPEND TYPE ([tokens.SpendEvents]): the phase completions, and each
-// coding run's usage record, whose columns [SpendFor] fills under the execute
-// phase and its coding agent. One range of the (event_type, event_time) index
-// a type, and one placeholder a type, bound from the same list — so a spend
-// type added there is read here rather than silently left out of every window.
-var phaseTokenSQL = `
+const phaseTokenSQL = `
 SELECT event_time, event_id, agent_id, agent_role,
        phase, host_phase, worker, model, turn_id, work_key, iteration,
        input_tokens, output_tokens, total_tokens,
+       cache_read_tokens, cache_write_tokens, provider_key,
        COALESCE(json_extract(payload, '$.cost_usd'), 0)
 FROM crewlet_events
-WHERE event_type IN (` + strings.TrimSuffix(strings.Repeat("?, ", len(tokens.SpendEvents())), ", ") +
-	`) AND event_time >= ?`
+WHERE event_type = 'agent_phase_completed' AND event_time >= ?`
 
 // AgentPhaseLimit bounds a seat's phase history.
 //
@@ -1112,7 +1262,7 @@ const agentPhaseOrderSQL = ` ORDER BY event_time DESC, event_id DESC LIMIT ?`
 // The seat page's LLM-invocation list. It is a separate method rather than a
 // flag on ListQuery precisely because of the payload: the feed's own listing
 // deliberately never selects it — a page of events with every payload attached
-// is the query that makes an activity screen slow — and a boolean on the
+// is the query that makes a live screen slow — and a boolean on the
 // shared query type would put that mistake one keystroke away.
 //
 // Matched on EITHER identifier, because a caller holds whichever the seat page
@@ -1122,9 +1272,11 @@ const agentPhaseOrderSQL = ` ORDER BY event_time DESC, event_id DESC LIMIT ?`
 // agent_phase_completed only. That is the durable record — the prompts, the
 // response, the tools, the tokens — while agent_turn_progress is stream-only
 // by design, so history here is exactly the calls that finished.
-func (l *EventLog) AgentPhases(ctx context.Context, agentID, agentRole string, before *Cursor) ([]EventRecord, error) {
+//
+// more reports that the seat holds phases past this page — see [pastPage].
+func (l *EventLog) AgentPhases(ctx context.Context, agentID, agentRole string, before *Cursor) (rows []EventRecord, more bool, err error) {
 	if agentID == "" && agentRole == "" {
-		return nil, nil
+		return nil, false, nil
 	}
 	query := agentPhaseSQL
 	args := []any{EncodeTime(now().Add(-EventHistory))}
@@ -1143,8 +1295,13 @@ func (l *EventLog) AgentPhases(ctx context.Context, agentID, agentRole string, b
 		args = append(args, EncodeTime(before.Time), before.ID)
 	}
 	query += agentPhaseOrderSQL
-	args = append(args, AgentPhaseLimit)
-	return l.scanPayloads(ctx, query, args...)
+	args = append(args, AgentPhaseLimit+1)
+	rows, err = l.scanPayloads(ctx, query, args...)
+	if err != nil {
+		return nil, false, err
+	}
+	rows, more = pastPage(rows, AgentPhaseLimit)
+	return rows, more, nil
 }
 
 // seatClause narrows to a seat by whichever identifier the caller holds.
@@ -1188,16 +1345,21 @@ WHERE event_type = 'agent_phase_completed' AND event_time >= ?`
 // It is a read of its own rather than a flag on ListQuery, for the reason
 // AgentPhases gives: the feed's listing deliberately never selects the payload,
 // and a page of ordinary events with every payload attached is the query that
-// makes an activity screen slow. A boolean on the shared type would put that
+// makes a live screen slow. A boolean on the shared type would put that
 // one keystroke away.
 //
-// `role` narrows to one seat when a caller wants it; empty means the company.
-func (l *EventLog) Phases(ctx context.Context, role string, limit int, before *Cursor) ([]EventRecord, error) {
+// `agentID` narrows to ONE SEAT, by the id every node derives for its handle
+// ([org.DeriveAgentID]) — the promoted `agent_id` column [ListQuery.AgentID]
+// reads — and empty means the company. Not a role name: two unit seats stamped
+// from one template share one, so a role filter answered "this seat's phases"
+// with every such seat's, and a rename changes it while the history keeps the
+// old one. more reports that records exist past this page — see [pastPage].
+func (l *EventLog) Phases(ctx context.Context, agentID string, limit int, before *Cursor) (rows []EventRecord, more bool, err error) {
 	query := phasesSQL
 	args := []any{EncodeTime(now().Add(-EventHistory))}
-	if role != "" {
-		query += ` AND agent_role = ?`
-		args = append(args, role)
+	if agentID != "" {
+		query += ` AND agent_id = ?`
+		args = append(args, agentID)
 	}
 	if before != nil && before.ID != "" {
 		query += agentPhaseCursorSQL
@@ -1207,8 +1369,33 @@ func (l *EventLog) Phases(ctx context.Context, role string, limit int, before *C
 	if limit <= 0 || limit > MaxPhasePage {
 		limit = MaxPhasePage
 	}
-	args = append(args, limit)
-	return l.scanPayloads(ctx, query, args...)
+	args = append(args, limit+1)
+	rows, err = l.scanPayloads(ctx, query, args...)
+	if err != nil {
+		return nil, false, err
+	}
+	rows, more = pastPage(rows, limit)
+	return rows, more, nil
+}
+
+// pastPage cuts a read that asked for ONE ROW MORE than its page back to the
+// page, and reports whether that row existed: whether anything lies past the
+// page.
+//
+// ASKED, NEVER INFERRED FROM A FULL PAGE. "The page filled, so there may be
+// more" is a guess that is wrong exactly when the history is a multiple of the
+// page: a seat with fifty turns was offered "older" onto an empty page, and a
+// client counting what it had loaded could only write it as a floor ("50+"),
+// because no answer ever said the walk had ended. The extra row comes from the
+// same statement, so it is the same snapshot as the page — a second query
+// asking whether anything is older could see a row the page did not. Where a
+// row carries a payload it costs that one row's, a page's worth divided by the
+// page size, which is the price of an exact answer.
+func pastPage[T any](rows []T, limit int) ([]T, bool) {
+	if len(rows) > limit {
+		return rows[:limit], true
+	}
+	return rows, false
 }
 
 // MaxPhasePage bounds one page of company-wide phase records.
@@ -1218,17 +1405,19 @@ func (l *EventLog) Phases(ctx context.Context, role string, limit int, before *C
 // than by how many a screen can show.
 const MaxPhasePage = 60
 
-// PhaseTokens returns the spend records inside a window: every phase's, and
-// every detached coding run's (see [tokens.Record]).
+// PhaseTokens returns the per-phase spend records inside a window.
 //
 // The rows the dashboard's spend breakdown is folded from — see
 // internal/tokens, which does the folding for BOTH this and the live window,
 // so a rollup over seven days and a rollup over the live one cannot disagree
 // about what a phase costs.
 //
-// The token counts and every dimension are the PROMOTED COLUMNS (migration
-// 0015) that [SpendFor] fills when the row is written; only the price comes
-// out of the payload, for the reason [phaseTokenSQL] gives.
+// EVERY VALUE BUT THE PRICE IS A COLUMN — the counts since schema/0015, the
+// cache counts and the provider key since schema/0032 — so a month of phases
+// folds without reading one payload. A count left in the payload is a count
+// this reads as zero, which is what the cache share did until 0032: every
+// rollup reported a cache that never hit. The price stays in the payload for
+// the reason given at phaseTokenSQL.
 func (l *EventLog) PhaseTokens(ctx context.Context, q PhaseTokenQuery) ([]tokens.Record, error) {
 	since, until := q.Window(now())
 
@@ -1240,11 +1429,7 @@ func (l *EventLog) PhaseTokens(ctx context.Context, q PhaseTokenQuery) ([]tokens
 	// claims: a phase stamped in the future by a skewed clock inside a
 	// window headed "counted through now" is a number with no window.
 	sql := phaseTokenSQL + " AND event_time < ?"
-	var args []any
-	for _, spend := range tokens.SpendEvents() {
-		args = append(args, spend)
-	}
-	args = append(args, EncodeTime(since), EncodeTime(until))
+	args := []any{EncodeTime(since), EncodeTime(until)}
 	if q.AgentRole != "" {
 		sql += " AND agent_role = ?"
 		args = append(args, q.AgentRole)
@@ -1274,6 +1459,7 @@ func (l *EventLog) PhaseTokens(ctx context.Context, q PhaseTokenQuery) ([]tokens
 			&rec.Phase, &rec.HostPhase, &rec.Worker, &rec.Model,
 			&rec.TurnID, &rec.WorkKey, &rec.Iteration,
 			&rec.InputTokens, &rec.OutputTokens, &rec.TotalTokens,
+			&rec.CacheReadTokens, &rec.CacheWriteTokens, &rec.ProviderKey,
 			&rec.CostUSD,
 		); err != nil {
 			return nil, fmt.Errorf("store: phase tokens: scan: %w", err)

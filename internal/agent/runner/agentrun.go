@@ -113,7 +113,7 @@ func (r *Runner) executeAsAgentRun(ctx context.Context, round int, notes string,
 	}
 	surface = built
 
-	system, user := r.executorPrompt(round, notes, history, snapshot)
+	system, user := r.executorPrompt(ctx, round, notes, history, snapshot)
 	// THE PROMPT REACHES THE RECORD, published here because nothing else
 	// will: a native pass publishes it from inside runPhase, which agent
 	// mode does not enter, and the resume's own record deliberately carries
@@ -125,7 +125,10 @@ func (r *Runner) executeAsAgentRun(ctx context.Context, round int, notes string,
 	// surface, whose definitions are NOT in the Brief below: they reach the
 	// CLI over the MCP bridge, where the CLI's own model is billed for
 	// every one of them. See [emitter.promptSize].
-	r.emitter().started(ctx, phase.Execute, round, system, user, nil, surface)
+	//
+	// NO ROUND CAPS: the rounds are the CLI's, inside its own loop, and
+	// the engine enforces no cap on them to state.
+	r.emitter().started(ctx, phase.Execute, round, system, user, nil, surface, roundCaps{})
 
 	if err := r.cfg.AgentRun.LaunchExecutor(ctx, AgentRunRequest{
 		Brief:   system + "\n\n" + user,

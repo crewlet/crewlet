@@ -26,14 +26,33 @@ var carriedByServer = map[string]string{
 	"tracker.ProjectDetailQuery.Units": "the serving node attaches its own chart (opProject)",
 	"tracker.DetailWants.Units":        "the serving node attaches its own chart (opTask)",
 	"tracker.WorkloadQuery.Units":      "the serving node attaches its own chart (opWorkload)",
+	"tracker.EveryViewQuery.Units":     "the serving node attaches its own chart (opEveryView)",
 
-	"tracker.TaskPatch.Watch":   "carried beside the patch, in updateTaskArgs",
-	"tracker.TaskPatch.Relate":  "carried beside the patch, in updateTaskArgs",
-	"tracker.TaskPatch.Depend":  "carried beside the patch, in updateTaskArgs",
-	"tracker.TaskPatch.Promote": "carried beside the patch, in updateTaskArgs",
+	"tracker.TaskPatch.Watch":     "carried beside the patch, in updateTaskArgs",
+	"tracker.TaskPatch.Relate":    "carried beside the patch, in updateTaskArgs",
+	"tracker.TaskPatch.Depend":    "carried beside the patch, in updateTaskArgs",
+	"tracker.TaskPatch.Promote":   "carried beside the patch, in updateTaskArgs",
+	"tracker.TaskPatch.Checklist": "carried beside the patch, in updateTaskArgs",
+
+	"tracker.DayClock.Zone":       "carried beside the wants by name, in taskArgs",
+	"tracker.ViewQuery.Zone":      "carried beside the query by name, in viewsArgs",
+	"tracker.EveryViewQuery.Zone": "carried beside the query by name, in everyViewArgs",
 
 	"tracker.Total.instant": "decided when the total is compiled and spent by the scan; " +
 		"an answer carries its result as At or Value",
+	"tracker.Total.rank": "decided when the total is compiled and spent by the scan; " +
+		"an answer carries its result as At or Value",
+	"tracker.Total.ranked": "decided when the total is compiled and spent by the scan; " +
+		"an answer carries its result as At or Value",
+	"tracker.Total.value": "decided when the total is compiled and spent by the scan; " +
+		"an answer carries its result as At or Value",
+	"tracker.Total.rankArgs": "decided when the total is compiled and spent by the scan; " +
+		"an answer carries its result as At or Value",
+
+	"tracker.PlaceResult.Unplaced": "carried beside the result as a wire error, in placedTask",
+
+	"tracker.Provenance.Written": "the asking turn's own set: a holder that runs the write " +
+		"answers what it committed to in reply.Written, and the router adds it there",
 }
 
 // extraField is the one field name every record type keeps a newer build's

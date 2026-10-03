@@ -17,11 +17,11 @@ crewlet backup -dir /var/backups/crewlet/2026-08-30T18-00
 ```
 Backup written to /var/backups/crewlet/2026-08-30T18-00 on node-0 in 1.412s
 
-WHAT                          FILE                                  SIZE       CONTENTS
-store (node)                  store.db                              252.0 KiB  20 migrations
-store (partition estate.000)  store-replicated.db                   1.2 MiB    3 migrations
-stream CREWLET_AGENT          streams/CREWLET_AGENT.snapshot        1.1 KiB    5 messages
-bucket crewlet_budgets        streams/KV_crewlet_budgets.snapshot   512 B      3 messages
+WHAT                          FILE                                       SIZE       CONTENTS
+store (node)                  store.db                                   252.0 KiB  20 migrations
+store (partition estate.000)  store-replicated.db                        1.2 MiB    3 migrations
+stream CREWLET_AGENT          streams/CREWLET_AGENT.snapshot             1.1 KiB    5 messages
+bucket crewlet_token_windows  streams/KV_crewlet_token_windows.snapshot  512 B      3 messages
 …
 ```
 
@@ -195,6 +195,35 @@ The manifest records the position **read from the copy itself**, not from the
 live database: the checkpoint commits with the rows, so the position inside a
 file is the only one that describes that file, and the applier ran throughout
 the copy.
+
+**Every backup taken over `POST /backup` is audited.** Once the copy begins,
+the node writes a `backup_requested` event to its own event store — who asked
+(the token's name, and the person it is bound to), which node, which directory,
+and whether it finished — a failed run included, since it can leave files
+behind. A directory refused before the copy began (relative, not empty, or one
+the host cannot create or write because of the path itself) wrote nothing,
+answers `400`, and is not recorded. A disk that fails or fills while the
+directory is prepared is the node's failure rather than the path's: it answers
+`500` and is recorded, and so is a refusal that arrives once part of the copy
+is already in the directory. Filter the event log on `source=operator` to see it beside every other
+change a person made through the engine; see
+[the runtime audit](../reference/api-endpoints.md#the-runtime-audit-sourceoperator).
+
+### From the dashboard
+
+**Settings › Backups & retention** takes one too: **Take a backup** asks the
+node serving the page (`POST /backup`) for a directory on **that node's host**
+— nothing is downloaded — offering a fresh directory beside that node's last
+copy when it has one. The copy can take minutes on a large store; closing the
+dialog does not stop it, and the outcome arrives as a notice either way.
+
+The same screen shows what the fleet has backed up
+([`GET /backups`](../reference/api-endpoints.md#get-backups)): each owner's
+newest copy — its directory, size, reach and whether the trim counts it, with
+the one the trim reads marked **newest** — and the **backup history**, every
+backup a person asked any node for over the event log's 30 days, failures
+included and each with the host that holds it. The register keeps only each
+owner's newest point, so the history is where a failed night shows.
 
 ### One node, or every node?
 
@@ -424,9 +453,11 @@ fresh `stream.store_dir` on a node started for that purpose. Then:
   re-provisioning** — secrets resolve store-first-env-second so a brand-new
   node starts from the environment, and every stream, bucket and mailbox is
   created idempotently at boot — at the price of the non-rebuildables above:
-  budget counters reset (a company somebody stopped on purpose re-arms
-  silently), sandbox-run records vanish (a billed box leaks until its own
-  TTL), and the completion ledger forgets (bounded duplicate turns).
+  the token counters lose the current day's, week's and month's spend (every
+  capped window re-arms silently — a company or seat that had spent its
+  ceiling gets the whole allowance back until that window turns over),
+  sandbox-run records vanish (a billed box leaks until its own TTL), and the
+  completion ledger forgets (bounded duplicate turns).
 
 ## What not to do
 

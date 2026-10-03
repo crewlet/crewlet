@@ -298,6 +298,13 @@ var nodeEstatePlacements = []placement{
 		Why: "The inverted list behind the documents above. Same lifecycle: " +
 			"derived from replicated rows, rebuilt locally, never agreed on.",
 	},
+	{
+		Table: "page_links",
+		Why: "The backlinks: which indexed page or task body carries which " +
+			"page's address. Derived by the lexical indexer from the text it " +
+			"already reads, cascading from the document row, rebuilt by the " +
+			"same local walk — so, like the index, never agreed on.",
+	},
 }
 
 // THE NODE ESTATE'S ANSWERS AND THE PUBLISHED PAGE ARE THE SAME LIST.

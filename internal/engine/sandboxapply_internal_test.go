@@ -111,6 +111,43 @@ func TestAFirstCompanyWithASandboxBringsTheCoordinatorUpWithoutARestart(t *testi
 	})
 }
 
+// AN ANSWER BY TURN FOLLOWS THE RUNTIME CURRENT WHEN IT ARRIVES.
+//
+// The dispatcher is built once, at boot, and the coordinator arrives later, by
+// apply. Bound to the coordinator when the dispatcher was built, a node that
+// booted with no company had no route for an answer by turn for the life of
+// its process: every one was handed back for a coordinator that had long
+// since come up. Before the runtime exists the answer is DEFERRED — this node
+// cannot resume a run, and the delivery is the seat's next holder's to spend —
+// and once the apply brings it up the same route reaches it.
+func TestAnAnswerByTurnReachesACoordinatorTheApplyBroughtUp(t *testing.T) {
+	t.Parallel()
+	e := sandboxNode(t, nil)
+	answer := e.dispatch.AnswerByTurn
+	if answer == nil {
+		t.Fatal("the dispatcher has no route for an answer by turn")
+	}
+	given := types.SandboxAnswerGiven{TurnID: "t1", AgentHandle: "swe", Answer: "main"}
+	trigger := events.New(given, events.TraceContext{})
+
+	disposition, err := answer(t.Context(), given, trigger)
+	if disposition != sandbox.AnswerDeferred || err == nil {
+		t.Fatalf("an answer before any sandbox runtime = (%q, %v), want deferred "+
+			"with the reason — it is not this node's to spend", disposition, err)
+	}
+
+	applyOK(t, e, sandboxDoc(""))
+	if e.sandbox.Load() == nil {
+		t.Fatal("the premise: the apply brought up no sandbox runtime")
+	}
+	disposition, err = answer(t.Context(), given, trigger)
+	if err != nil || disposition != sandbox.AnswerNotMine {
+		t.Fatalf("an answer to a run with no record after the apply = (%q, %v), "+
+			"want the coordinator's not_mine — the route still answers for the "+
+			"runtime the dispatcher was built without", disposition, err)
+	}
+}
+
 // A LATER REVISION THAT CHANGES providers.sandbox RECONFIGURES THE RUNTIME IN
 // PLACE: the same coordinator, so the busy set survives, and a manager the
 // completion poll reaches on its next tick.
@@ -409,10 +446,10 @@ func seedRunningRun(t *testing.T, e *Engine, turnID, sandboxID string) {
 	}, sandbox.Fence{}); err != nil {
 		t.Fatalf("AttachSandbox: %v", err)
 	}
-	suspended, err := store.MarkSuspended(ctx, turnID, map[string]any{
+	suspended, err := store.MarkSuspended(ctx, turnID, sandbox.Suspension{State: map[string]any{
 		"version": float64(1), "pending_tool_call_id": "call-1",
 		"pending_tool_name": builtin.RunSandboxTool,
-	})
+	}})
 	if err != nil || !suspended {
 		t.Fatalf("MarkSuspended = (%v, %v), want the run open to the poll", suspended, err)
 	}

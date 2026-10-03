@@ -432,7 +432,7 @@ func (s Sources) objectMap(ctx context.Context, leases []coord.Lease) FleetObjec
 // once per request.
 //
 // A LAYOUT IS GROUPS × MEMBERS DRAWS — measured at 185 ms for two hundred
-// members over 8192 groups — and the fleet screen polls every fifteen seconds
+// members over 8192 groups — and the Nodes screen polls every fifteen seconds
 // from every tab that has it open, while the map changes a few times a day. So
 // the last map's layout is kept, and a request whose stored map is the same
 // one reuses it: an LRU of one, because only the current map is ever asked

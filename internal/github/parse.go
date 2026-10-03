@@ -481,6 +481,9 @@ func inbound(h hook, reason string) notify.Inbound {
 		"event_type":      reason,
 		"repo":            h.Repository.FullName,
 	}
+	if h.Repository.ID != 0 {
+		meta[RepoIDField] = strconv.FormatInt(h.Repository.ID, 10)
+	}
 	subject, body := subjectAndBody(h)
 	if key, value := itemRef(h); key != "" {
 		meta[key] = value

@@ -11,14 +11,23 @@ package api_test
 // `dashboard` job).
 //
 // What THIS file asserts is the half a rebuild-and-diff cannot see: that the
-// committed tree is a coherent application, and that every byte of it is
-// reachable over HTTP from the server itself, with a content type a browser
-// will accept.
+// committed tree is a coherent application, and that every file a browser is
+// sent to fetch — from the shell, through every static import, every lazy
+// `import()` and the preload list Vite writes beside one, to the faces a
+// stylesheet asks for — is reachable over HTTP from the server itself, with a
+// content type a browser will accept. The crawl that follows them is in
+// dashboardcrawl_test.go, certified there over a bundle with lazy chunks.
 //
 // Those are different failures. A tree can be perfectly in step with its source
 // and still be unservable — an ES module served as text/plain is REFUSED by the
 // module loader, and the page then fails with a MIME error rather than a
 // missing file, which sends a reader looking for the wrong problem.
+//
+// And one rule the dashboard keeps is checked here on the artefact as well as
+// on the source, because the artefact is what a browser runs: nothing it
+// serves renders a price (TestTheDashboardRendersNoPrice, rule 19 in
+// docs/reference/dashboard-design.md). And one property only the artefact
+// has at all: its size, held to one budget by TestTheDashboardFitsItsBudget.
 //
 // The dashboard's own assertions (its protocol, its router, its ordering
 // rules, and the measured contrast of every colour token in both themes) run
@@ -29,12 +38,15 @@ package api_test
 
 import (
 	"bytes"
+	"compress/gzip"
+	"fmt"
 	"io/fs"
 	"net/http"
 	"os"
 	"path"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 	"testing"
 
@@ -77,16 +89,12 @@ func TestTheBuiltDashboardIsWhole(t *testing.T) {
 	// cleaned, which leaves a tree that diffs plausibly and serves a blank
 	// page.
 	//
-	// IT DOES NOT CLAIM THE NAMES ARE HASHED, which is what it used to say on
-	// both counts and could not see either way: `[^"]+` matches `index` as
-	// happily as `index-Cd0p1oTg`, so the assertion was true of every build
-	// and the comment was describing a check nobody had written. The stated
-	// consequence was wrong too — an unhashed name was said to put "a stale
-	// module in every reader's browser", which internal/api/dashboard.go
-	// forecloses: every asset answers `Cache-Control: no-cache` with an ETag
-	// derived from the bytes, so a changed file is picked up on the next
-	// request whatever it is called. What pins the caching contract is
-	// TestAnUnchangedAssetRevalidatesCheaply, where it can fail.
+	// It does not claim the names are hashed: `[^"]+` matches `index` as
+	// happily as `index-Cd0p1oTg`. That claim is
+	// TestEveryFileUnderAssetsIsContentHashed's, and it matters now — every
+	// file under assets/ is served `immutable` for a year, so a name that
+	// does not change with its bytes would pin a stale module in every
+	// reader's browser until they cleared it.
 	entry := regexp.MustCompile(`src="(/static/dashboard/assets/[^"]+\.js)"`)
 	sheet := regexp.MustCompile(`href="(/static/dashboard/assets/[^"]+\.css)"`)
 	if !entry.Match(shell) {
@@ -133,11 +141,29 @@ func TestTheBuiltDashboardIsWhole(t *testing.T) {
 		t.Fatalf("the shell names %s and the tree does not have it: %v", sheetPath, err)
 	}
 	faces := regexp.MustCompile(`url\(([^)]*\.woff2)\)`).FindAllSubmatch(css, -1)
-	// A FLOOR, because a stylesheet that asks for no face at all passes every
-	// assertion below it — which is exactly what dropping the font import
-	// would look like. Two families at two subsets each is four.
-	if len(faces) < 4 {
-		t.Errorf("the stylesheet asks for %d faces; two families at two subsets each is four", len(faces))
+	// EXACTLY THE FOUR GEIST FACES: Geist and Geist Mono, at two subsets each.
+	// A stylesheet that asks for no face at all passes every assertion below
+	// it — which is exactly what dropping the font import would look like —
+	// and one that asks for a FIFTH is a family the design system no longer
+	// ships (0.5.0 retired Inter and JetBrains Mono) arriving from somewhere
+	// it should not. The subsets are the package's to name, so only the
+	// family prefix is read: two faces of `geist-mono-*`, two of `geist-*`.
+	families := map[string]int{}
+	for _, face := range faces {
+		name := path.Base(strings.Trim(string(face[1]), `"'`))
+		switch {
+		case strings.HasPrefix(name, "geist-mono-"):
+			families["Geist Mono"]++
+		case strings.HasPrefix(name, "geist-"):
+			families["Geist"]++
+		default:
+			t.Errorf("the stylesheet asks for %s, which is not a Geist face — the "+
+				"design system's families are Geist and Geist Mono", name)
+		}
+	}
+	if len(faces) != 4 || families["Geist"] != 2 || families["Geist Mono"] != 2 {
+		t.Errorf("the stylesheet asks for %d faces (%v); the design system ships "+
+			"exactly four — Geist and Geist Mono at two subsets each", len(faces), families)
 	}
 	for _, face := range faces {
 		ref := strings.Trim(string(face[1]), `"'`)
@@ -170,31 +196,46 @@ func TestTheBuiltDashboardIsWhole(t *testing.T) {
 	}
 
 	// THE NOTICES TRAVEL WITH WHAT THEY COVER. The bundle redistributes React,
-	// the design system's three packages, the fonts and the Material Symbols
+	// the design system's three packages, the Geist faces and the Lucide
 	// drawings, all under licenses that require their text alongside, and the
 	// release archives and image copy this file from here. Written by the build
 	// (vite.config.ts), so a build that lost `build.license` or the step
-	// appending the fonts and the symbols leaves a tree that serves perfectly
+	// appending the fonts and the glyphs leaves a tree that serves perfectly
 	// and owes notices it no longer carries.
+	//
+	// AND WHAT IT NO LONGER COVERS IS GONE. The faces were Inter and JetBrains
+	// Mono and the glyphs Material Symbols until 0.5.0; a notice still naming
+	// them is a notice written from a file the build no longer reads, which
+	// means the step that appends the real ones is not running either.
 	notices, err := os.ReadFile(filepath.Join(served, "THIRD_PARTY_NOTICES.txt"))
 	if err != nil {
 		t.Errorf("no THIRD_PARTY_NOTICES.txt in the built tree; `npm run build` in "+
 			"dashboard/ writes it through build.license: %v", err)
 	}
 	for _, want := range []string{
-		"## react - ",               // a bundled package, from build.license
-		"## react-dom - ",           // and its renderer
-		"## @crewlethq/ui",          // the design system's components
-		"## @crewlethq/tokens",      // its palette, type and faces
-		"## @crewlethq/icons",       // its glyphs and marks
-		"SIL OPEN FONT LICENSE",     // the font license, appended by sourceNotices
-		"The Inter Project Authors", // naming both faces
-		"The JetBrains Mono Project Authors",
-		"Apache License", // the Material Symbols drawings, appended too
-		"Material Symbols",
+		"## react - ",                   // a bundled package, from build.license
+		"## react-dom - ",               // and its renderer
+		"## @crewlethq/ui",              // the design system's components
+		"## @crewlethq/tokens",          // its palette, type and faces
+		"## @crewlethq/icons",           // its glyphs and marks
+		"SIL OPEN FONT LICENSE",         // the font license, appended by sourceNotices
+		"The Geist Project Authors",     // naming the faces
+		"ISC License",                   // the Lucide drawings, appended too
+		"Lucide Icons and Contributors", // naming who holds them
 	} {
 		if err == nil && !bytes.Contains(notices, []byte(want)) {
 			t.Errorf("THIRD_PARTY_NOTICES.txt does not carry %q", want)
+		}
+	}
+	for _, gone := range []string{
+		"The Inter Project Authors",
+		"The JetBrains Mono Project Authors",
+		"Apache License",
+		"Material Symbols",
+	} {
+		if err == nil && bytes.Contains(notices, []byte(gone)) {
+			t.Errorf("THIRD_PARTY_NOTICES.txt still carries %q, which nothing in "+
+				"this build redistributes any more", gone)
 		}
 	}
 
@@ -207,88 +248,128 @@ func TestTheBuiltDashboardIsWhole(t *testing.T) {
 	}
 }
 
-// staticRef matches a URL the shell or a stylesheet asks the server for.
-var staticRef = regexp.MustCompile(`["'(](/static/[^"')\s]+)`)
+// staticRef matches a file under /static/ that the shell, a stylesheet or a
+// module names by its absolute path: in a quote of any of the three kinds —
+// Rolldown's minifier writes a module's strings as template literals — or in
+// a url().
+//
+// A FILE, never a directory: the path must end in something other than a
+// slash, with its closing quote right behind it. The preload helper every
+// build with a lazy chunk carries holds the base itself — it returns the
+// template literal /static/dashboard/ with a file name added — which is a
+// prefix a name is joined onto and never a request, and reading it as one
+// would fail the crawl over a fetch no browser makes.
+var staticRef = regexp.MustCompile("[\"'`(](/static/[^\"'`)\\s]*[^/\"'`)\\s])[\"'`)]")
 
 // TestTheShellLoadsFromTheBinary does what a browser does.
 //
-// Fetch /dashboard, then fetch everything it names, then everything THOSE name
-// — all from the server rather than from disk. An asset missing from the embed
-// pattern, or served as the wrong type, takes the whole page with it.
+// Fetch /dashboard, then everything it names, then everything THOSE name —
+// static imports, lazy chunks, the preload lists beside them, the faces a
+// stylesheet asks for — all from the server rather than from disk
+// (crawlDashboard). An asset missing from the embed, or served as the wrong
+// type, takes the page with it, or, for a lazy chunk, the one screen that
+// loads it while every other keeps working, which is the failure a reader
+// finds before a test does.
 func TestTheShellLoadsFromTheBinary(t *testing.T) {
 	t.Parallel()
-	a := newApp(t, api.Options{})
+	c := crawlDashboard(t, newApp(t, api.Options{}))
 
-	body := mustFetch(t, a, "/dashboard", "text/html")
-	queue := []string{}
-	for _, m := range staticRef.FindAllStringSubmatch(string(body), -1) {
-		queue = append(queue, m[1])
-	}
 	// A bundled shell names few assets by design: an entry module, a vendor
 	// chunk, a stylesheet, an icon. The floor is what distinguishes that from
 	// a shell that names NOTHING, which is what a build with a broken `base`
 	// produces: relative URLs that resolve against whichever of `/` or
 	// `/dashboard` the reader arrived at.
-	if len(queue) < 2 {
+	if c.named < 2 {
 		t.Fatalf("the shell asked for %d assets; it should name at least an "+
-			"entry module and a stylesheet", len(queue))
+			"entry module and a stylesheet", c.named)
+	}
+	for _, p := range c.problems {
+		t.Error(p)
 	}
 
-	done := map[string]bool{"/dashboard": true}
-	scripts, sheets, fonts := 0, 0, 0
-	for len(queue) > 0 {
-		url := queue[0]
-		queue = queue[1:]
-		if done[url] {
-			continue
-		}
-		done[url] = true
-
-		want, known := map[string]string{
-			".js":    "text/javascript",
-			".css":   "text/css",
-			".svg":   "image/svg+xml",
-			".png":   "image/png",
-			".ico":   "image/x-icon",
-			".woff2": "font/woff2",
-		}[strings.ToLower(path.Ext(url))]
-		if !known {
-			t.Errorf("%s: the shell asked for a kind this test does not know "+
-				"how to check; teach it rather than dropping the asset", url)
-			continue
-		}
-		data := mustFetch(t, a, url, want)
-
-		switch path.Ext(url) {
-		case ".js":
-			scripts++
-		case ".css":
-			sheets++
-			// A stylesheet's own references — the font faces above all,
-			// which are the assets most likely to be left out of a commit.
-			for _, m := range staticRef.FindAllStringSubmatch(string(data), -1) {
-				queue = append(queue, m[1])
-			}
-		case ".woff2":
-			fonts++
-		}
-	}
-
-	if scripts < 1 {
+	if len(c.ofKind(".js")) < 1 {
 		t.Errorf("no script reached from the shell")
 	}
-	if sheets < 1 {
+	if len(c.ofKind(".css")) < 1 {
 		t.Errorf("no stylesheet reached from the shell")
 	}
 	// Every face the stylesheet declares has to be servable. One that is not
 	// fails silently in a browser — the text simply renders in the fallback.
-	if fonts < 4 {
+	if fonts := len(c.ofKind(".woff2")); fonts < 4 {
 		t.Errorf("only %d font faces reached from the stylesheet, want 4", fonts)
 	}
 }
 
-// TestTheShellFitsTheDashboardPolicy checks the committed shell and its
-// stylesheets use nothing the dashboard's Content-Security-Policy refuses.
+// hashedName is the shape the build writes under assets/: the module's or
+// asset's own name, a dash, Rolldown's content hash — eight characters of the
+// base64url alphabet, its default — and the extension.
+//
+// EXACTLY eight, because a looser count passes ordinary words:
+// `settings-overview-panel.js` satisfies eight-or-more. A bundler bump that
+// changes the length fails here, loudly, and the fix is this pattern.
+//
+// It is a SHAPE, and a shape is all a Go test can check: the hash is the
+// bundler's, over its own chunk graph, and nothing here can recompute it. So
+// a fixed name that happens to end in a dash and eight such characters
+// (`use-keyboard.js`) would pass. Every way a hash has actually gone missing
+// from a build — `[hash]` dropped from a file-name pattern, an emitFile with
+// a fixed name, a `public/assets/` directory Vite copies verbatim — names the
+// file after its module alone (`index.js`, `react.js`,
+// `rolldown-runtime.js`), and each of those fails.
+var hashedName = regexp.MustCompile(`^.+-[A-Za-z0-9_-]{8}\.[A-Za-z0-9]+$`)
+
+// TestEveryFileUnderAssetsIsContentHashed holds the built tree to the promise
+// the server makes about it.
+//
+// internal/api/dashboard.go serves everything under dashboard/assets/ as
+// `public, max-age=31536000, immutable` — a browser that has the file never
+// asks for it again, reload or not. That is correct only because the build
+// names every file there `<name>-<hash>.<ext>`, so different bytes are a
+// different URL. A file under assets/ without one — a plugin's emitFile with
+// a fixed name, a `public/assets/` directory Vite copies verbatim, a
+// `chunkFileNames` that dropped `[hash]` — would be pinned in every reader's
+// browser for a year with nothing to say the page is running old code.
+//
+// It reads what the BINARY embeds, the tree the server answers from, and
+// checks the server's answer for each file as well as its name.
+func TestEveryFileUnderAssetsIsContentHashed(t *testing.T) {
+	t.Parallel()
+	a := newApp(t, api.Options{})
+
+	names := 0
+	err := fs.WalkDir(static.FS(), "dashboard/assets", func(p string, d fs.DirEntry, err error) error {
+		if err != nil || d.IsDir() {
+			return err
+		}
+		names++
+		if !hashedName.MatchString(path.Base(p)) {
+			t.Errorf("%s is under assets/ without a content hash in its name, and "+
+				"everything there is served immutable for a year: a changed file "+
+				"under this name would never reach a browser that has it. Emit it "+
+				"as assets/[name]-[hash][extname], or outside assets/", p)
+		}
+		res := fetch(t, a, "/static/"+p, nil)
+		if got := res.Header.Get("Cache-Control"); got != forever {
+			t.Errorf("/static/%s: cache control = %q, want %q — the name is a "+
+				"version, so there is nothing to revalidate", p, got, forever)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("walking the embedded assets/: %v", err)
+	}
+	// A FLOOR: the entry module, the React chunk and the stylesheet. A build
+	// that moved its output elsewhere would leave this walking an empty
+	// directory — or none — and passing.
+	if names < 3 {
+		t.Errorf("the embedded assets/ holds %d files; the entry, the React chunk "+
+			"and the stylesheet are three", names)
+	}
+}
+
+// TestTheShellFitsTheDashboardPolicy checks the committed shell and every
+// stylesheet it reaches use nothing the dashboard's Content-Security-Policy
+// refuses.
 //
 // The policy allows scripts, styles, fonts and images from this origin only,
 // and no inline script, inline style or event-handler attribute. A browser
@@ -326,16 +407,21 @@ func TestTheShellFitsTheDashboardPolicy(t *testing.T) {
 		}
 	}
 
-	for _, m := range staticRef.FindAllSubmatch(shell, -1) {
-		if !strings.HasSuffix(string(m[1]), ".css") {
-			continue
-		}
-		sheet := mustFetch(t, a, string(m[1]), "text/css")
-		for _, u := range cssURL.FindAllSubmatch(sheet, -1) {
-			url := strings.Trim(string(u[1]), `"' `)
-			if !sameOrigin(url) && !strings.HasPrefix(url, "data:") {
+	// EVERY stylesheet the shell reaches, a lazy chunk's included: the
+	// policy governs the whole document, so a sheet a screen loads later is
+	// refused exactly as the one the shell links is — and it is refused on
+	// that screen alone, where nothing else here would ever look.
+	sheets := crawlDashboard(t, a).ofKind(".css")
+	if len(sheets) == 0 {
+		t.Error("no stylesheet was reached, so no url() was checked")
+	}
+	for _, sheet := range sheets {
+		for _, u := range cssURL.FindAllSubmatch(sheet.body, -1) {
+			ref := strings.Trim(string(u[1]), `"' `)
+			if resolved, err := resolve(sheet.url, ref); err == nil && resolved == "" &&
+				!strings.HasPrefix(ref, "data:") {
 				t.Errorf("%s loads %s from another origin, which font-src and img-src refuse",
-					m[1], url)
+					sheet.url, ref)
 			}
 		}
 	}
@@ -370,6 +456,13 @@ func sameOrigin(url string) bool {
 // it: the source says `import` and the cascade says which import was evaluated
 // first, which is the bundler's answer rather than the author's. This reads
 // what the browser is handed.
+//
+// The arrangement it holds is main.tsx's: the kit's token sheets (variables,
+// themes, density, fonts, base) above every module import, the components'
+// own sheets with the modules that import them, and this application's sheets
+// last. There is no alias layer between the kit and ours any more — every
+// sheet here reads the kit's tokens under their own names — so what is left
+// to order is exactly this one tie.
 func TestTheDesignSystemCascadesInOrder(t *testing.T) {
 	t.Parallel()
 	a := newApp(t, api.Options{})
@@ -403,9 +496,68 @@ func TestTheDesignSystemCascadesInOrder(t *testing.T) {
 				"@crewlethq/tokens stylesheets above every module import in main.tsx",
 				m[1], base[0], first[0])
 		}
+		// AND NOTHING RESTATES IT BELOW THEM. A bare focus rule written after
+		// the components is the same tie lost the other way: `:focus { outline:
+		// none }` erased the baseline's ring from every control relying on it,
+		// and the `:focus-visible` copy that answered it drew a second ring
+		// on the field inside every kit Input and a clipped one on the command
+		// palette's field, which the kit draws with none.
+		for _, late := range bareFocus.FindAllIndex(sheet[first[0]:], -1) {
+			at := first[0] + late[0]
+			t.Errorf("%s declares a bare focus rule at %d, after the first component "+
+				"rule (%d): %q. It wins every one-class tie against a component's "+
+				"own focus treatment; leave the ring to @crewlethq/tokens/css/base, "+
+				"and give a control that resets its outline its ring back by name",
+				m[1], at, first[0], strings.TrimSpace(string(sheet[at:min(len(sheet), at+48)])))
+		}
 	}
 	if sheets == 0 {
 		t.Error("the shell named no stylesheet, so nothing was measured")
+	}
+}
+
+// TestNoLazyStylesheetCarriesTheDesignSystem holds the other half of that
+// order: every design system rule is in the sheet the SHELL links, and none
+// arrives with a lazy chunk.
+//
+// The dashboard is split into a chunk per workspace, and a uilet component
+// imports its own stylesheet as a side effect of its module — so a component
+// reached only from one workspace takes its sheet into that workspace's chunk,
+// and a browser appends that sheet when the chunk loads, AFTER the dashboard's
+// own. Every one-class tie the dashboard's rules win against a component's is
+// then lost the moment a reader first opens that workspace, on that screen and
+// every screen after it, and on no screen before. The source says nothing
+// about it and a first-paint screenshot cannot see it. vite.config.ts's
+// `designSystemSheet` is what prevents it: the whole set in one sheet above
+// ours, and every per-component import answered empty.
+func TestNoLazyStylesheetCarriesTheDesignSystem(t *testing.T) {
+	t.Parallel()
+	c := crawlDashboard(t, newApp(t, api.Options{}))
+	for _, p := range c.problems {
+		t.Error(p)
+	}
+	chunks := 0
+	for _, f := range c.ofKind(".js") {
+		if f.how == fromDynamic {
+			chunks++
+		}
+	}
+	// The premise: a build with no lazy chunk has no lazy sheet either, and
+	// would pass below having checked nothing.
+	if chunks == 0 {
+		t.Fatal("no lazy chunk was reached, so the dashboard is not code-split and " +
+			"this test measures nothing; app/lazyScreen.ts imports each workspace with import()")
+	}
+	for _, sheet := range c.ofKind(".css") {
+		if sheet.how == fromShell {
+			continue
+		}
+		if at := componentRule.FindIndex(sheet.body); at != nil {
+			t.Errorf("%s, loaded with a lazy chunk (named by %s), carries a design system rule: %q. "+
+				"It is appended after the dashboard's own sheets and wins every tie they used to; "+
+				"vite.config.ts's designSystemSheet must answer that component's stylesheet import",
+				sheet.url, sheet.by, strings.TrimSpace(string(sheet.body[at[0]:min(len(sheet.body), at[0]+48)])))
+		}
 	}
 }
 
@@ -413,9 +565,183 @@ var (
 	// baselineFocus matches the baseline's own focus rule: `:focus-visible` as
 	// a complete selector, which is how it is told from a component's.
 	baselineFocus = regexp.MustCompile(`(?:^|[{}])\s*:focus-visible\s*\{`)
+	// bareFocus matches any focus rule with no subject of its own — `:focus`
+	// or `:focus-visible` as a complete selector, alone or in a list, which
+	// is the one-class shape that ties with a component.
+	bareFocus = regexp.MustCompile(`(?:^|[{},])\s*:focus(?:-visible)?\s*[{,]`)
 	// componentRule matches the first rule of any design system component.
 	componentRule = regexp.MustCompile(`\.crewlet-[a-z]`)
 )
+
+// protocolModule is the second build target: the socket client alone, which
+// internal/e2e replays captured frames through. No page imports it, so the
+// crawl from the shell never reaches it, and a gate over "everything the
+// engine serves as a script" has to name it.
+const protocolModule = dashboardBase + "protocol.js"
+
+// A priceForm is one shape a price takes in a built module.
+type priceForm struct {
+	what string
+	re   *regexp.Regexp
+}
+
+// priceForms is every shape the bundle scan refuses, written as Rolldown's
+// minifier writes it — any of three quotes around a string, a template literal
+// for most of them, and no whitespace it does not need.
+//
+// ONE FORM IS DELIBERATELY LEFT TO THE SOURCE SCAN: a dollar sign
+// concatenated onto a value, `"$"+n`. React's own key escaping is written
+// exactly that way — a one-character dollar string plus `e.replace(…)` — so
+// in a bundle the two cannot be told apart, and a rule that fired on React's
+// chunk would have to exempt React by name. dashboard/src/money.test.tsx reads
+// that form in the parsed source, where a string in the dashboard's own code
+// is distinguishable from one in a dependency's.
+var priceForms = []priceForm{
+	// The engine's price fields however a client would spell them:
+	// `cost_usd` and `total_cost_usd` off the wire, `priced_calls`, and the
+	// camel-cased copy a parser makes.
+	{"names the engine's price field", regexp.MustCompile(`(?i)cost_?usd|priced_?calls`)},
+	// Intl's currency formatting: the style value, and the option keys that
+	// exist only to go with it.
+	{"asks Intl for its currency style", regexp.MustCompile("[\"'`]currency[\"'`]")},
+	{"passes Intl a currency option", regexp.MustCompile(`\bcurrency(?:Display|Sign)?\s*:`)},
+	// A currency by its code, as a whole word — `costUSD` is the field rule's.
+	{"names a currency by its code", regexp.MustCompile(`\b(?:USD|EUR|GBP)\b`)},
+	// The euro and the pound mean nothing but money here, so they are refused
+	// anywhere, escaped or not: the minifier may write either as `€`.
+	{"carries a currency sign", regexp.MustCompile(
+		`[€£]|\\u(?:20[aA][cC]|00[aA]3|\{20[aA][cC]\}|\{[aA]3\})|\\x[aA]3`)},
+	// The dollar sign is NOT refused on its own: it opens every `${VAR}`
+	// reference the dashboard explains. What is refused is a dollar sign in
+	// front of a value — a template substitution right behind one, or a JSX
+	// child that is a value right behind a text run ending in one. The braced
+	// reference is a text run followed by the CONSTANT `{VAR}`, which the
+	// last class excludes by refusing a quote.
+	{"writes a dollar sign before a substitution", regexp.MustCompile(`\$\$\{`)},
+	{"writes a dollar sign before a rendered value", regexp.MustCompile(
+		"[\\[,]\\s*[\"'`][^\"'`\\n]*\\$\\s*[\"'`]\\s*,\\s*[^\"'`\\s\\]]")},
+}
+
+// A priceFound is one place a module holds a price, with the text around it,
+// since a byte offset into a minified megabyte tells a reader nothing.
+type priceFound struct {
+	what, near string
+}
+
+// pricesInModule is every place a built module holds a price.
+func pricesInModule(module []byte) []priceFound {
+	var out []priceFound
+	for _, form := range priceForms {
+		for _, at := range form.re.FindAllIndex(module, -1) {
+			from, to := max(0, at[0]-60), min(len(module), at[1]+40)
+			out = append(out, priceFound{form.what, string(module[from:to])})
+		}
+	}
+	return out
+}
+
+// TestTheDashboardRendersNoPrice holds what the engine SERVES to rule 19 of
+// docs/reference/dashboard-design.md: the dashboard measures spend in tokens,
+// and never in money.
+//
+// The engine records a price where one is reported — only a subscription
+// coding CLI quotes one — and it is on the wire. A currency covering that
+// minority of calls, beside a token count covering all of them, reads as the
+// company's spend and is a fraction of it, so the client declares no price
+// field and draws none. dashboard/src/money.test.tsx holds the source and the
+// rendered screens; this holds the artefact, because the bundle is what a
+// browser runs and a committed bundle can carry what the source no longer does
+// — which is exactly how this landed: red on the build that still parsed
+// `cost_usd` into a `costUSD` nothing drew.
+//
+// Every module the shell reaches, lazy chunks included, through the crawl
+// TestTheShellLoadsFromTheBinary uses, and protocol.js, which no page imports.
+func TestTheDashboardRendersNoPrice(t *testing.T) {
+	t.Parallel()
+	a := newApp(t, api.Options{})
+	c := crawlDashboard(t, a)
+	// A crawl that lost a file would scan less than the engine serves and
+	// call it clean. TestTheShellLoadsFromTheBinary names each problem; this
+	// only refuses to vouch for a bundle it could not read whole.
+	if len(c.problems) > 0 {
+		t.Fatalf("the crawl could not read %d of the files the shell reaches, so a "+
+			"price in one of them would go unseen; TestTheShellLoadsFromTheBinary names them",
+			len(c.problems))
+	}
+	modules := map[string][]byte{protocolModule: mustFetch(t, a, protocolModule, "text/javascript")}
+	for _, f := range c.ofKind(".js") {
+		modules[f.url] = f.body
+	}
+	// A FLOOR: the entry, the React chunk the build splits out, and
+	// protocol.js. A crawl that reached nothing would otherwise pass.
+	if len(modules) < 3 {
+		t.Fatalf("scanned %d modules; the entry, the React chunk and protocol.js are three",
+			len(modules))
+	}
+	for url, body := range modules {
+		for _, p := range pricesInModule(body) {
+			t.Errorf("%s %s: …%s… — the dashboard renders tokens and never money "+
+				"(rule 19 in docs/reference/dashboard-design.md); remove it from "+
+				"dashboard/src, then `make dashboard`", url, p.what, p.near)
+		}
+	}
+}
+
+// TestThePriceScanReadsWhatTheMinifierWrites certifies the scan itself, in
+// both directions, over modules written the way the build writes them: each
+// form it refuses must be found as exactly that form, and each dollar sign the
+// dashboard and React really do ship must not be. A scan that stopped reading
+// a form passes a bundle that prices something; a scan that cried wolf over
+// React's chunk is one somebody would switch off.
+func TestThePriceScanReadsWhatTheMinifierWrites(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name, module, want string
+	}{
+		{"a parsed price", "sandboxId:String(t.sandbox_id??``),costUSD:Ry(t.cost_usd),",
+			"names the engine's price field"},
+		{"the priced-call count", "f.totals.priced_calls>0&&(0,m.jsxs)(`p`,{})",
+			"names the engine's price field"},
+		{"Intl's currency style", "new Intl.NumberFormat(void 0,{style:`currency`,currency:e})",
+			"asks Intl for its currency style"},
+		{"an Intl currency option", "e.toLocaleString(void 0,{currencyDisplay:`code`})",
+			"passes Intl a currency option"},
+		{"a currency code", `children:[e," USD"]`, "names a currency by its code"},
+		{"the euro sign", "children:[e,` €`]", "carries a currency sign"},
+		{"an escaped euro", `children:[e,"€"]`, "carries a currency sign"},
+		{"an escaped pound", `var p="\xA3";`, "carries a currency sign"},
+		{"a dollar in a template", "var s=`$${e.toFixed(2)}`;", "writes a dollar sign before a substitution"},
+		{"a dollar in JSX", "(0,m.jsxs)(`b`,{children:[`$`,e]})", "writes a dollar sign before a rendered value"},
+		{"a spaced dollar in JSX", `(0,m.jsxs)("b",{children:["US$ ",t.amount]})`,
+			"writes a dollar sign before a rendered value"},
+	} {
+		t.Run("finds "+tc.name, func(t *testing.T) {
+			t.Parallel()
+			found := pricesInModule([]byte(tc.module))
+			if !slices.ContainsFunc(found, func(p priceFound) bool { return p.what == tc.want }) {
+				t.Errorf("%s: found %v, want a finding that it %s", tc.module, found, tc.want)
+			}
+		})
+	}
+	for _, tc := range []struct{ name, module string }{
+		// React's key escaping and its hydration markers, verbatim.
+		{"React's key escaping", "function se(e){var t={\"=\":`=0`,\":\":`=2`};return`$`+e.replace(/[=:]/g,function(e){return t[e]})}"},
+		{"React's marker set", "for(var i=0;i<n.length;i++)t[`$`+n[i]]=!0;"},
+		{"React's comment markers", "if(n===`$`||n===`$?`||n===`$~`||n===`$!`||n===`&`)"},
+		// The dashboard's own dollar signs, as the build writes them today.
+		{"a braced reference in JSX", "(0,m.jsxs)(U,{children:[`$`,`{VAR}`]})"},
+		{"a reference's opening sign", "w=C===``&&n.trimStart().startsWith(`$`)"},
+		{"an escaped reference", "var r=`\\${${e}}`;"},
+		{"a word that holds a code", "var e={focusUSDC:1};"},
+	} {
+		t.Run("leaves "+tc.name, func(t *testing.T) {
+			t.Parallel()
+			if found := pricesInModule([]byte(tc.module)); len(found) > 0 {
+				t.Errorf("%s: found %v in a module that prices nothing", tc.module, found)
+			}
+		})
+	}
+}
 
 // TestTheNoticesAreServedAsText checks a running engine answers its notices,
 // from the binary, as text a browser shows.
@@ -520,4 +846,173 @@ func mustFetch(t *testing.T, a *api.App, url, wantType string) []byte {
 		t.Errorf("%s is empty", url)
 	}
 	return body
+}
+
+// The dashboard's size budget: ONE set of numbers, and this file is where
+// they live. dashboard/vite.config.ts's chunkSizeWarningLimit is derived from
+// lazyChunkBudget and names this test as its authority; the prose in
+// docs/reference/dashboard-design.md ("How it is built") quotes these values.
+//
+// Script and stylesheet sizes are GZIPPED at gzip.BestCompression, because
+// that is exactly what the engine sends a browser that asks
+// (internal/api/dashboard.go compresses each text file once, at that level) —
+// a raw byte count would measure minified whitespace and identifiers the wire
+// never carries, and a default-level count would disagree with the server by a
+// few per cent in the direction that hides a regression.
+const (
+	// initialBudget is the entry, its static import graph and the stylesheet
+	// the shell links: everything a reader downloads before the first screen
+	// can draw. 300 KiB is under two seconds on a 1.5 Mbit/s link, the slow
+	// end of what a person opening a dashboard over a phone tether gets. The
+	// single-bundle build this replaced sent 403 KB here, the org builder —
+	// about 43% of the source — among it; the frame alone (the sidebar, the
+	// header, the palette, the socket client, React and the design system's
+	// sheet) measured about 230 KB when this budget was set.
+	initialBudget = 300 << 10
+	// lazyChunkBudget holds each chunk the page fetches later — a workspace,
+	// the org builder, a stylesheet a preload list names. A chunk is what a
+	// reader waits for on the first click into a workspace the idle prefetch
+	// has not reached yet, so it gets half the initial budget. The largest,
+	// Settings, measured about 60 KB when this was set.
+	lazyChunkBudget = 150 << 10
+	// fontBudget is every face the build embeds, counted as served: woff2 is
+	// compressed already and the engine never recompresses it. The four Geist
+	// and Geist Mono faces (latin and latin-ext) measure 83,736 bytes, so 90 KB
+	// is the four of them and room for the design system to re-cut them — and
+	// a FIFTH face, which every text-bearing screen would fetch, does not fit.
+	fontBudget = 90_000
+	// treeBudget is the whole of static/dashboard, raw, which is what every
+	// engine binary and image carries whether or not anybody opens the page.
+	// It measured about 2.3 MB when this was set; 3 MiB leaves room for the
+	// screens still to come and refuses a bundle that doubled.
+	treeBudget = 3 << 20
+)
+
+// TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers
+// above, measured over what the server actually sends: the crawl
+// TestTheShellLoadsFromTheBinary makes, partitioned by initialLoad into what a
+// reader waits for before the first paint and what a screen fetches later.
+//
+// It exists because the cost of a bundle is paid by every reader on every cold
+// load, and nothing else in the build notices it growing. The split that made
+// each workspace its own chunk is undone by ONE static import of a screen's
+// module from the frame — the bundler follows it and pulls the whole workspace
+// back into the entry with every test still green — and a design-system bump
+// that doubled its sheet or added a face would ride in the same way. A failure
+// lists the files by size, largest first, because the fix is almost always in
+// the biggest one.
+func TestTheDashboardFitsItsBudget(t *testing.T) {
+	t.Parallel()
+	c := crawlDashboard(t, newApp(t, api.Options{}))
+	if len(c.problems) > 0 {
+		t.Fatalf("the crawl could not read %d of the files the shell reaches, so their "+
+			"size is unknown; TestTheShellLoadsFromTheBinary names them", len(c.problems))
+	}
+	initial := initialLoad(c)
+
+	type measured struct {
+		url  string
+		size int
+	}
+	var first []measured
+	firstTotal, lazy := 0, 0
+	for _, f := range c.files {
+		ext := path.Ext(f.url)
+		if ext != ".js" && ext != ".css" {
+			continue
+		}
+		size := gzippedSize(t, f.body)
+		if initial[f.url] {
+			first = append(first, measured{f.url, size})
+			firstTotal += size
+			continue
+		}
+		lazy++
+		if size > lazyChunkBudget {
+			t.Errorf("%s is %s gzipped, over the %s a lazy chunk may be: it is what a reader "+
+				"waits for on the first click into its screen. Split it — a section of a "+
+				"workspace can be its own chunk, as the org builder is (app/lazyScreen.ts)",
+				f.url, kib(size), kib(lazyChunkBudget))
+		}
+	}
+	// FLOORS, so the budget cannot pass by measuring nothing: the initial load
+	// is at least the entry, the React chunk and the stylesheet, and the page
+	// splits into lazy chunks at all — a build that folded every screen back
+	// into the entry would otherwise pass the chunk budget vacuously while
+	// failing only the initial one, and a crawl that lost the lazy half would
+	// pass both.
+	if len(first) < 3 {
+		t.Fatalf("the initial load is %d files; the entry, the React chunk and the "+
+			"stylesheet are three", len(first))
+	}
+	if lazy < 5 {
+		t.Errorf("the crawl reached %d lazy chunks; every workspace is one "+
+			"(app/lazyScreen.ts), so the page has stopped splitting", lazy)
+	}
+	if firstTotal > initialBudget {
+		slices.SortFunc(first, func(a, b measured) int { return b.size - a.size })
+		var list strings.Builder
+		for _, m := range first {
+			fmt.Fprintf(&list, "\n  %9s  %s", kib(m.size), m.url)
+		}
+		t.Errorf("the initial load is %s gzipped, over its %s budget — a reader downloads all "+
+			"of it before the first screen draws. The usual cause is a static import of a "+
+			"screen's module from outside routes/, which pulls its whole workspace into the "+
+			"entry (app/lazy.test.tsx refuses the ones it can see). Largest first:%s",
+			kib(firstTotal), kib(initialBudget), list.String())
+	}
+
+	fonts, faces, tree := 0, 0, 0
+	err := fs.WalkDir(static.FS(), "dashboard", func(p string, d fs.DirEntry, err error) error {
+		if err != nil || d.IsDir() {
+			return err
+		}
+		info, err := d.Info()
+		if err != nil {
+			return err
+		}
+		tree += int(info.Size())
+		if path.Ext(p) == ".woff2" {
+			fonts += int(info.Size())
+			faces++
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("walking the embedded dashboard: %v", err)
+	}
+	if faces == 0 {
+		t.Error("the embedded dashboard carries no woff2 face, so the font budget measured nothing")
+	}
+	if fonts > fontBudget {
+		t.Errorf("the %d embedded faces are %d bytes, over the %d the page may fetch in faces: "+
+			"every screen with text asks for them", faces, fonts, fontBudget)
+	}
+	if tree > treeBudget {
+		t.Errorf("static/dashboard is %s, over its %s: every engine binary and image carries "+
+			"it, opened or not", kib(tree), kib(treeBudget))
+	}
+}
+
+// gzippedSize is what the engine sends for this body to a browser that asks
+// for gzip: the same format at the same level.
+func gzippedSize(t *testing.T, body []byte) int {
+	t.Helper()
+	var buf bytes.Buffer
+	zw, err := gzip.NewWriterLevel(&buf, gzip.BestCompression)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := zw.Write(body); err != nil {
+		t.Fatal(err)
+	}
+	if err := zw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	return buf.Len()
+}
+
+// kib renders a byte count the way the budgets are written.
+func kib(n int) string {
+	return fmt.Sprintf("%.1f KiB", float64(n)/1024)
 }

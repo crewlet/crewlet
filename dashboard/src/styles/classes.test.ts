@@ -1,9 +1,11 @@
 // @vitest-environment node
-import { readdirSync, readFileSync, statSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, test } from "vitest";
+
+import { modules } from "../test/source.ts";
 
 /**
  * The stylesheets and the tree agree about every class name, in BOTH
@@ -536,8 +538,128 @@ interface Allowed {
 
 const ALLOWED: Allowed[] = [
   {
+    name: "crewlet-canvas__controls",
+    why: "uilet's Canvas writes it on the zoom bar a TreeCanvas draws. styles/screens.css moves it to the bottom LEFT corner on the live org chart (`.oc-canvas`), where the approved chart puts it, because the legend takes the bottom right and the kit offers only the right-hand corners. Another rule about OUR composition of the package's component.",
+    pkg: "@crewlethq/ui/styles.css",
+  },
+  {
+    name: "crewlet-canvas",
+    why: "uilet's Canvas writes it on the canvas's root, inside the TreeCanvas the live org chart draws. styles/screens.css dots its ground inside `.oc-canvas`, as the approved chart draws the field a reader pans; the kit paints the ground and nothing on it. Another rule about OUR composition of the package's component.",
+    pkg: "@crewlethq/ui/styles.css",
+  },
+  {
+    name: "crewlet-select__menu",
+    why: "uilet's Select writes it on its listbox panel, which it portals out of the field. styles/screens.css raises the panel's height for My work's whose-day picker (`.whose-day-menu`, the Select's `menuClassName`), whose options are two lines each where the kit sizes the panel for six one-line rows — at 1440×900 it showed three people and cut a group heading in half. The kit's variable is declared on the panel itself, so only a rule on the panel can set it. Another rule about OUR composition of the package's component.",
+    pkg: "@crewlethq/ui/styles.css",
+  },
+  {
+    name: "crewlet-popover",
+    why: "uilet's Popover writes it on its panel, and caps the panel at 360px with a scroll. styles/screens.css raises that cap for Spend › Budgets' ceiling editor (`.ceiling-pop`, the Popover's `className`), whose check can answer a paragraph of the engine's own warning — under the kit's cap it scrolled Save anyway below the fold of the panel. Paired with the kit's class so it wins whichever stylesheet a lazy chunk loads last. Another rule about OUR composition of the package's component.",
+    pkg: "@crewlethq/ui/styles.css",
+  },
+  {
+    name: "crewlet-tree-grid__toggle",
+    why: "uilet's TreeGrid writes it on a row's expand chevron. styles/screens.css sets it on the first line of a row inside the phone's org chart outline (`.oc-outline`), whose rows are three lines — the kit centres it on the whole row, which put it beside the unit line under the badge rather than beside the seat's name. Another rule about OUR composition of the package's component.",
+    pkg: "@crewlethq/ui/styles.css",
+  },
+  {
+    name: "crewlet-combobox__panel",
+    why: "uilet's Combobox writes it on its completion list. styles/screens.css lets the Agents page bar's Find a seat (`.agents-find`) list grow to its content, leftward from the field's end, because the kit spans it across the field and at a search field's width that left a seat's name no room; and it lays the Assign task dialog's matches out in the dialog's flow (`.assign-seat-find`), because the kit's anchored panel, inside a dialog body that scrolls, was clipped to two and a half of eight rows. Another rule about OUR composition of the package's component.",
+    pkg: "@crewlethq/ui/styles.css",
+  },
+  {
+    name: "crewlet-combobox__label",
+    why: "uilet's Combobox writes it on an option's name. styles/screens.css keeps it from shrinking inside Find a seat (`.agents-find`): the kit's hint never shrinks and its label does, so the name was squeezed to 0px beside a seat's handle and unit. Another rule about OUR composition of the package's component.",
+    pkg: "@crewlethq/ui/styles.css",
+  },
+  {
+    name: "crewlet-listbox__hint",
+    why: "uilet's Listbox writes it on an option's hint. styles/screens.css lets it shrink and ellipsise inside Find a seat (`.agents-find`), so the hint rather than the seat's name is what gives way. Another rule about OUR composition of the package's component.",
+    pkg: "@crewlethq/ui/styles.css",
+  },
+  {
+    name: "crewlet-listbox__heading",
+    why: "uilet's Listbox writes it on a group's heading, which is what the CommandPalette draws over each group of results. styles/frame.css sets it in sentence case at the small label step inside the palette (`.palette`), as the approved palette writes its group names, where the listbox's own register is the uppercase micro-label. Another rule about OUR composition of the package's component.",
+    pkg: "@crewlethq/ui/styles.css",
+  },
+  {
+    name: "crewlet-modal__footer-start",
+    why: "uilet's Modal writes it on the start slot of a dialog's foot, which the CommandPalette's key legend is. styles/frame.css lets it take the band inside the palette (`.palette`), so the legend's keys stand at its start and what the search is doing at its end, as the approved palette draws them; the slot is otherwise sized to its content. Another rule about OUR composition of the package's component.",
+    pkg: "@crewlethq/ui/styles.css",
+  },
+  {
+    name: "crewlet-modal__header",
+    why: "uilet's Modal writes it on a dialog's head row, which centres its items. styles/frame.css aligns the row to the top when the head carries a subtitle (`:has(.crewlet-modal__subtitle)`), because a two- or three-line description under the title left the mark floating beside the description rather than on the title's line — the Add an MCP server dialog was the case found. A head with no subtitle keeps the kit's centring. The kit should do this itself; until it does, this is a rule about how every dialog here uses the package's component.",
+    pkg: "@crewlethq/ui/styles.css",
+  },
+  {
+    name: "crewlet-modal__subtitle",
+    why: "uilet's Modal writes it on the description under a dialog's title. styles/frame.css reads its presence (`.crewlet-modal__header:has(...)`) to top-align the head; see crewlet-modal__header.",
+    pkg: "@crewlethq/ui/styles.css",
+  },
+  {
+    name: "crewlet-modal__icon",
+    why: "uilet's Modal writes it on a dialog's mark. styles/frame.css makes its box one title line tall inside a top-aligned head, so the glyph centres on the title's line; see crewlet-modal__header.",
+    pkg: "@crewlethq/ui/styles.css",
+  },
+  {
+    name: "crewlet-app-shell__main",
+    why: "uilet's AppShell writes it on the page column's one scroller. styles/frame.css turns smooth scrolling off on it (the router restores a position per history entry, and a smooth restore animates every Back) and publishes `--sticky-top` from it when a screen draws a toolbar. Another rule about OUR composition of the package's component.",
+    pkg: "@crewlethq/ui/styles.css",
+  },
+  {
+    name: "crewlet-app-shell__content",
+    why: "uilet's AppShell writes it on the content column. styles/frame.css lifts its prose-width cap, because this product's screens are tables, boards and charts and a cap throws away the width a wide window bought. Another rule about OUR composition of the package's component.",
+    pkg: "@crewlethq/ui/styles.css",
+  },
+  {
+    name: "crewlet-app-shell__sheet",
+    why: "uilet's AppShell writes it on the floating sheet. styles/frame.css makes it a two-column grid while a peek is open and the frame has room for one (data-peek=\"column\", which the shell decides from app/layout.ts's peekColumnMin), so the detail rail is a column of the sheet rather than of whichever screen opened it. Another rule about OUR composition of the package's component.",
+    pkg: "@crewlethq/ui/styles.css",
+  },
+  {
+    name: "crewlet-app-shell__rail-foot",
+    why: "uilet's AppShell writes it on the sidebar's foot. styles/frame.css takes the gutter off the Settings navigation inside it, which the foot already stands on. Another rule about OUR composition of the package's component.",
+    pkg: "@crewlethq/ui/styles.css",
+  },
+  {
+    name: "crewlet-sidebar-nav",
+    why: "uilet's SidebarNav writes it. styles/frame.css takes its gutter off inside the sidebar's foot, where the foot's own gutter would otherwise be doubled. See crewlet-app-shell__rail-foot.",
+    pkg: "@crewlethq/ui/styles.css",
+  },
+  {
+    name: "crewlet-nav-item__badge",
+    why: "uilet's SidebarNav writes it on a row's filled figure, which the kit fills with the accent because its one badge is an unread count. styles/frame.css repaints it in the warning pair on a Settings row whose figure is a STATE waiting on the reader (`.section-row-attention` — Integrations' tools needing a person), as the approved Settings artboard draws that figure; in the accent it read as a second inbox. The kit's pill keeps its size, its place and its spoken figure. Another rule about OUR composition of the package's component.",
+    pkg: "@crewlethq/ui/styles.css",
+  },
+  {
+    name: "crewlet-card__header",
+    why: "uilet's Card writes it on a card's head. styles/screens.css lets Home's Recent activity head WRAP on a phone (`.home-feed`), so the title and its four filters take the whole width and 'Full event log' the line under them; unwrapped, the filter was squeezed into what the link left and its last option sat behind a scroll. And on a narrow screen every head holding both a subtitle and actions wraps, so the subtitle takes a line of its own (Configuration's Active revision drew 'Active' over 'revision' beside a cut subtitle). Another rule about OUR composition of the package's component.",
+    pkg: "@crewlethq/ui/styles.css",
+  },
+  {
+    name: "crewlet-card__subtitle",
+    why: "uilet's Card writes it on the head's subtitle, beside the title. styles/screens.css moves it onto a line of its own on a narrow screen in every head that also holds actions, where it sat between the title and the actions and cut both — a seat's Current turn to 'Current tu…', Configuration's Active revision to 'Active' over 'revision'. Another rule about OUR composition of the package's component.",
+    pkg: "@crewlethq/ui/styles.css",
+  },
+  {
+    name: "crewlet-card__header-main",
+    why: "uilet's Card writes it on the head's title group. See crewlet-card__header: on a phone Home's feed head gives this group the whole first line.",
+    pkg: "@crewlethq/ui/styles.css",
+  },
+  {
+    name: "crewlet-stacked-columns__slot",
+    why: "uilet's StackedColumns writes it on each column's slot, oldest first. styles/screens.css paints the LAST slot's segment in the accent on Home's Tasks completed chart (`.home-chart`), because that column is today and the chart is ONE series: drawn as two series so the kit could colour today, the split leaked into the tooltip as a second 'Completed today' row on every column. Another rule about OUR composition of the package's component.",
+    pkg: "@crewlethq/ui/styles.css",
+  },
+  {
+    name: "crewlet-stacked-columns__segment",
+    why: "uilet's StackedColumns writes it on each part of a column. See crewlet-stacked-columns__slot: it is the element whose paint Home's chart overrides on today's column.",
+    pkg: "@crewlethq/ui/styles.css",
+  },
+  {
     name: "is-positive",
-    why: "routes/company/People.tsx builds the workload bar's tone as cx(\"wl-bar\", `is-${tone}`) over lib/workload.ts's LoadTone. The stem is a bare `is-`, which is deliberately not honoured by the collector: half a dozen unrelated components write is-open, is-add, is-remove, is-destructive and is-active literally, and a prefix here would hide the next one of those to die.",
+    why: "routes/agents/People.tsx builds the workload bar's tone as cx(\"wl-bar\", `is-${tone}`) over lib/workload.ts's LoadTone. The stem is a bare `is-`, which is deliberately not honoured by the collector: half a dozen unrelated components write is-open, is-add, is-remove, is-destructive and is-active literally, and a prefix here would hide the next one of those to die.",
   },
   {
     name: "is-caution",
@@ -558,8 +680,33 @@ const ALLOWED: Allowed[] = [
     pkg: "@crewlethq/ui/styles.css",
   },
   {
-    name: "crewlet-segmented",
-    why: "uilet's SegmentedControl writes it. styles/frame.css hides the two in the rail's foot — theme and density — once the rail is a bottom bar, where they took 250px of a 390px phone and left 140px for eight destinations. Both settings are in the command palette's `>` scope, and the collapsed rail already drops them for the same reason. Another rule about OUR composition of the package's component.",
+    name: "crewlet-card__header-main",
+    why: 'uilet\'s Card.Header writes it. styles/screens.css takes the name block out of the shrink where the head holds no actions or panel controls, because the kit\'s 100-to-1 subtitle shrink is proportional and still took a fraction of a pixel off the title — enough, with our ellipsis, to draw "When" as "Wh…" beside a whole subtitle on a phone. Another rule about OUR composition of the package\'s component.',
+    pkg: "@crewlethq/ui/styles.css",
+  },
+  {
+    name: "crewlet-card__header-actions",
+    why: 'uilet\'s Card.Header writes it. styles/screens.css takes the name block out of the shrink where the head holds no actions or panel controls, because the kit\'s 100-to-1 subtitle shrink is proportional and still took a fraction of a pixel off the title — enough, with our ellipsis, to draw "When" as "Wh…" beside a whole subtitle on a phone. Where a head DOES hold actions and a subtitle, a narrow screen moves the subtitle to a line of its own instead (see crewlet-card__subtitle). Another rule about OUR composition of the package\'s component.',
+    pkg: "@crewlethq/ui/styles.css",
+  },
+  {
+    name: "crewlet-card__header-chrome",
+    why: 'uilet\'s Card.Header writes it. styles/screens.css takes the name block out of the shrink where the head holds no actions or panel controls, because the kit\'s 100-to-1 subtitle shrink is proportional and still took a fraction of a pixel off the title — enough, with our ellipsis, to draw "When" as "Wh…" beside a whole subtitle on a phone. Another rule about OUR composition of the package\'s component.',
+    pkg: "@crewlethq/ui/styles.css",
+  },
+  {
+    name: "crewlet-stat-group",
+    why: "uilet's StatGroup writes it on the tile row. Below 1024px the kit folds any row into two columns, so an ODD count leaves its last tile beside an empty half-row that reads as a tile failing to load (Secrets' and Models & keys' three tiles stood 2 + 1 on a phone, the third tile's hairline stopping mid-panel). styles/screens.css lets that last tile take the whole row, restating the kit's own step because a media query cannot be borrowed — and makes each tile in the row a subgrid over its lines (see crewlet-statcard). Another rule about OUR composition of the package's component.",
+    pkg: "@crewlethq/ui/styles.css",
+  },
+  {
+    name: "crewlet-statcard",
+    why: "uilet's StatCard writes it on each tile. Inside a StatGroup, styles/screens.css makes the tile a subgrid over the group's rows, one per line the tile draws: the kit stacks label, number and sub in a flex column per tile, so a label that wrapped pushed its own number down and no other (\"Behind on config\" beside a node's peek at 1440, its figure 18px below the other three). styles/stats.test.tsx holds the span to the lines the kit renders. Another rule about OUR composition of the package's component.",
+    pkg: "@crewlethq/ui/styles.css",
+  },
+  {
+    name: "crewlet-statcard__sub",
+    why: "uilet's StatCard writes it for the line under the number. styles/screens.css lets it wrap rather than end in an ellipsis: inside a StatGroup the grid already stretches every tile in a row to one height, so the kit's one-line reserve buys nothing there, and `nowrap` cut every longer sentence — \"6 seats idle and waiting for …\" on a phone, the input/output caption at 1440. Another rule about OUR composition of the package's component.",
     pkg: "@crewlethq/ui/styles.css",
   },
   {
@@ -570,6 +717,11 @@ const ALLOWED: Allowed[] = [
   {
     name: "crewlet-tabs--pill",
     why: "uilet's Tabs writes it for its default variant. styles/screens.css bounds it at its container and makes it scroll, which the package already does for its underline row and not for this one: `.crewlet-tabs` is `display: inline-flex` and the pill variant is `width: fit-content`, and neither caps — a flex row of nowrap labels has a min-content width equal to the sum of them. Measured on the tracker at 390px, the view switcher stood 497px wide and took the document to 642, so the reader dragged the whole page to reach a tab past the edge. Another rule about OUR composition of the package's component.",
+    pkg: "@crewlethq/ui/styles.css",
+  },
+  {
+    name: "crewlet-tabs",
+    why: "uilet's Tabs writes it on its row. styles/frame.css sizes the row inside ObjectTabs's measuring twin (`.object-tabs-twin-row .crewlet-tabs`) to its max-content width with no scroll, because the twin exists to be measured at every tab's natural width and the package's underline row is `width: 100%` and scrolls — a twin laid out that way reports the box's width, not the tabs'. Another rule about OUR composition of the package's component.",
     pkg: "@crewlethq/ui/styles.css",
   },
 ];
@@ -598,7 +750,7 @@ interface Handle {
 const HANDLES: Handle[] = [
   {
     name: "btable-name",
-    why: "routes/org/builder/TableView.tsx puts it on the design system's OrgTableName so four suites can find a builder row by its NAME cell rather than by whichever cell happens to mention a name. The package's own `.crewlet-org-table__node` already declares every property it would carry, byte for byte, and routes/org/builder/builderStyles.test.ts asserts this tree adds nothing on top.",
+    why: "routes/org/builder/TableView.tsx puts it on the design system's OrgTableName so four suites can find a builder row by its NAME cell rather than by whichever cell happens to mention a name. The package's own `.crewlet-org-label--row` already declares every property it would carry, byte for byte, and routes/org/builder/builderStyles.test.ts asserts this tree adds nothing on top.",
   },
   {
     name: "btable-label",
@@ -630,21 +782,9 @@ export function orphans(
   return out.sort();
 }
 
-function sources(dir: string, out: string[] = []): string[] {
-  for (const entry of readdirSync(dir)) {
-    const p = join(dir, entry);
-    if (statSync(p).isDirectory()) sources(p, out);
-    else if (/\.tsx?$/.test(entry) && !/\.test\.tsx?$/.test(entry)) out.push(p);
-  }
-  return out;
-}
-
 describe("every class the dashboard names", () => {
   const css = declaredIn(sheets());
-  const files = sources(SRC).map((p) => ({
-    name: p.slice(SRC.length),
-    text: readFileSync(p, "utf8"),
-  }));
+  const files = modules().map(({ path, text }) => ({ name: path, text }));
   const all = files.flatMap((f) => usesIn(f.name, f.text));
 
   test("is declared by a stylesheet, or is a handle that says it is not", () => {
@@ -779,8 +919,9 @@ describe("every class the dashboard names", () => {
 
   // THE TAB PANEL CARRIES A COLUMN, and nothing else in the suite can see it.
   //
-  // A screen's switched sections used to be direct children of `.screen-inner`
-  // — a flex column with a gap — and took their vertical rhythm from it.
+  // A screen's switched sections used to be direct children of the page's
+  // content column — a flex column with a gap — and took their vertical
+  // rhythm from it.
   // Giving the tab widget a real `role="tabpanel"` put one plain element
   // between the column and them, so without these three declarations every
   // panel on the Seat screen renders with its cards butted together.
@@ -798,22 +939,21 @@ describe("every class the dashboard names", () => {
     expect(body).toMatch(/flex-direction:\s*column/);
     // THE GAP IS THE COLUMN'S OWN, not merely a rung of the scale. What this
     // test claims is that the panel KEEPS the rhythm its children lost, and
-    // `var(--space-\d+)` accepts every rung there is: set to `--space-1` the
+    // `var(--spacing-\d+)` accepts every rung there is: set to `--spacing-1` the
     // cards on every tabbed screen sit 4px apart instead of 24 and the shape
     // assertion stays green, which is the butted-together failure the rule
     // exists to prevent, just less obviously.
     //
-    // So it is read off `.screen-inner` — the column these panels were lifted
-    // out of — rather than written here as a literal. Self-maintaining in both
-    // directions: change the page column's rhythm and the panel must follow,
-    // which is exactly and only what this test says.
-    // Anchored at the start of its own rule: `.screen[data-fill] > .screen-inner`
-    // is declared first and carries no gap, so an unanchored match reads the
-    // wrong box.
-    const column = /(?:^|\n)\.screen-inner\s*\{([^}]*)\}/.exec(stylesheets());
-    expect(column, ".screen-inner is not declared at all").not.toBeNull();
-    const rhythm = /gap:\s*(var\(--space-\d+\))/.exec(column![1]!);
-    expect(rhythm, ".screen-inner declares no gap to inherit the rhythm from").not.toBeNull();
+    // So it is read off the page column these panels were lifted out of —
+    // the kit's `.crewlet-app-shell__content` now — rather than written here
+    // as a literal. Self-maintaining in both directions: a kit bump that moves
+    // the column's rhythm fails here until the panel follows, which is exactly
+    // and only what this test says.
+    const kit = readFileSync(require_.resolve("@crewlethq/ui/styles.css"), "utf8");
+    const column = /(?:^|\n|\})\s*\.crewlet-app-shell__content\s*\{([^}]*)\}/.exec(kit);
+    expect(column, "the kit's content column is not declared at all").not.toBeNull();
+    const rhythm = /gap:\s*(var\(--spacing-\d+\))/.exec(column![1]!);
+    expect(rhythm, "the kit's content column declares no gap to inherit").not.toBeNull();
     expect(body, "the panel's rhythm must be the column's").toMatch(
       new RegExp(`gap:\\s*${rhythm![1]!.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`),
     );

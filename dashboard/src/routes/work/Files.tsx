@@ -25,19 +25,23 @@
 import { useState } from "react";
 import { QueryState } from "~/components/common.tsx";
 import { Button, Callout, Card, EmptyState } from "@crewlethq/ui";
-import { DescriptionGlyph } from "@crewlethq/icons/glyphs";
+import { FileTextGlyph } from "@crewlethq/icons/glyphs";
 import { useQuery } from "~/lib/useQuery.ts";
 import { useNow } from "~/lib/clock.ts";
 import { fmtBytes, fmtDateTime, relTime } from "~/lib/format.ts";
 import { rest, RestError } from "~/protocol/rest.ts";
 import type { WorkFile } from "~/protocol/index.ts";
 
-/** The route a file's bytes are served from, each segment escaped. */
-export function fileURL(project: string, path: string): string {
-  return (
-    `/work/files/${encodeURIComponent(project)}/` +
-    path.split("/").map(encodeURIComponent).join("/")
-  );
+/**
+ * A file's address under `/work/files/`, each segment escaped — the project,
+ * then the path's own segments, so a `/` in a path stays a separator and a `#`
+ * or a space in a name cannot end the URL early.
+ *
+ * THE TAIL ONLY: the route's head is written where the request is made, so
+ * `src/protocol/proxy.test.ts` reads the path the download reaches.
+ */
+export function fileAddress(project: string, path: string): string {
+  return `${encodeURIComponent(project)}/${path.split("/").map(encodeURIComponent).join("/")}`;
 }
 
 /** The name a download is saved under: the path's last segment. */
@@ -55,14 +59,14 @@ export function ProjectFiles({ project }: { project: string }) {
 
   return (
     <Card>
-      <Card.Header icon={<DescriptionGlyph size="sm" />}>
+      <Card.Header icon={<FileTextGlyph size="sm" />}>
         <Card.Title>Files</Card.Title>
       </Card.Header>
       <QueryState error={state.error} loading={state.loading && !listing}>
         {listing && files.length === 0 && !after && (
           <EmptyState
             size="compact"
-            icon={<DescriptionGlyph size="xl" />}
+            icon={<FileTextGlyph size="xl" />}
             title="No files are kept in this project yet"
             description="A seat writes one with write_project_file — a report, a plan, the notes it leaves for the next — and so can your own assistant at /operator/mcp, attributed to your token. PUT /work/files/{project}/{path} uploads one directly."
           />
@@ -119,7 +123,7 @@ function FileRow({ file }: { file: WorkFile }) {
     setBusy(true);
     setRefusal("");
     try {
-      const bytes = await rest.blob(fileURL(file.project, file.path));
+      const bytes = await rest.blob(`/work/files/${fileAddress(file.project, file.path)}`);
       const url = URL.createObjectURL(bytes);
       const link = document.createElement("a");
       link.href = url;

@@ -136,7 +136,7 @@ func TestAReadIsNeverAnsweredByACopyThatIsBehind(t *testing.T) {
 		BucketPrefix: "cutfleet", Clustered: true, Replicas: 3,
 		RateWindow: time.Minute, ClaimTTL: 10 * time.Minute,
 		LedgerRetention: 10 * time.Minute, FireRetention: 10 * time.Minute,
-		FollowRetention: 10 * time.Minute, CooldownMax: time.Hour,
+		FollowRetention: 10 * time.Minute, BudgetRetention: time.Minute, CooldownMax: time.Hour,
 		RebaseRetention: 10 * time.Minute,
 		StatusFreshness: 10 * time.Minute,
 	}
@@ -315,7 +315,7 @@ func TestAnEstateMapWatchThroughAMemberWithNoCopyStartsAtTheLeadersMap(t *testin
 		BucketPrefix: "watch", Clustered: true, Replicas: 3,
 		RateWindow: time.Minute, ClaimTTL: 10 * time.Minute,
 		LedgerRetention: 10 * time.Minute, FireRetention: 10 * time.Minute,
-		FollowRetention: 10 * time.Minute, CooldownMax: time.Hour,
+		FollowRetention: 10 * time.Minute, BudgetRetention: time.Minute, CooldownMax: time.Hour,
 		RebaseRetention: 10 * time.Minute,
 		StatusFreshness: 10 * time.Minute,
 	}

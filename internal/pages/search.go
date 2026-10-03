@@ -85,6 +85,13 @@ type SearcherOptions struct {
 	// so scans in flight can be counted. Nil counts nothing.
 	Enter func() func()
 
+	// Vectors computes a query's embedding for the semantic ranking. NIL
+	// IS A SEARCH WITH NO MEANING HALF — every hybrid answer then says it
+	// served keyword, and every semantic one says why it served nothing.
+	// Shared with the item search on the same node, so a string either
+	// one embedded is a cache hit for the other.
+	Vectors *search.QueryVectors
+
 	// SkillsContainer names the reserved tool-skills container, excluded
 	// from every result. A FUNCTION because the value is live config; nil,
 	// or one returning empty, excludes nothing — which is the company that
@@ -97,13 +104,14 @@ func NewSearcher(opts SearcherOptions) *Searcher {
 	s := &Searcher{index: opts.Index, skills: opts.SkillsContainer}
 	if opts.Index != nil {
 		s.fan = &search.FanOut{
-			Self:   cmp.Or(opts.Node, soloNode),
-			Local:  search.NodeScanner{Index: opts.Index},
-			Peers:  opts.Peers,
-			Roster: opts.Roster,
-			Corpus: opts.Index.Corpus,
-			Report: opts.Report,
-			Enter:  opts.Enter,
+			Self:    cmp.Or(opts.Node, soloNode),
+			Local:   search.NodeScanner{Index: opts.Index},
+			Peers:   opts.Peers,
+			Roster:  opts.Roster,
+			Corpus:  opts.Index.Corpus,
+			Report:  opts.Report,
+			Enter:   opts.Enter,
+			Vectors: opts.Vectors,
 		}
 	}
 	return s
@@ -119,8 +127,13 @@ const soloNode = "self"
 
 var _ knowledge.Searcher = (*Searcher)(nil)
 
+// Backend is what this knowledge base calls itself wherever a reader has to
+// know which backend a page id is an address in — the searcher's own answer,
+// and every record of a seat reading one of these pages.
+const Backend = "native"
+
 // Backend names the integration answering.
-func (s *Searcher) Backend() string { return "native" }
+func (s *Searcher) Backend() string { return Backend }
 
 // CanSearch is the cheap, no-I/O pre-gate.
 //
@@ -146,25 +159,32 @@ func (s *Searcher) Building(_ context.Context) bool {
 	return s.index != nil && !s.index.Ready()
 }
 
-// Search returns up to Limit ranked hits. Best effort: every failure path is
-// an empty result.
+// Search returns up to Limit ranked hits, and what the search did. Best
+// effort: every failure path is an empty result — and an outcome that says so.
 //
 // ONE CORPUS'S [Searcher.Slice] FUSED BY [MergeSearch] — the same two steps a
 // gather takes over several, so a node answering the whole knowledge base
 // alone and one partition of it among many are ranked by one rule.
-func (s *Searcher) Search(ctx context.Context, q knowledge.Query) knowledge.Answer {
+//
+// WHAT IT COVERED RIDES IN THE ANSWER. It used to be a log line and nothing
+// else, so a caller holding a result over two thirds of the corpus had no way
+// to say so and a screen drew it as the company's whole answer. Every caller
+// now holds [knowledge.Outcome.Coverage] and decides what to say; the log line
+// went with the reason for it.
+func (s *Searcher) Search(ctx context.Context, q knowledge.Query) knowledge.Result {
 	slice, err := s.Slice(ctx, q)
 	if err != nil {
 		log.WarnContext(ctx, "pages_search_failed", "error", err.Error(),
 			"detail", "the knowledge block degrades to empty; a turn must not "+
 				"die because an index was slow")
-		return knowledge.Answer{}
+		return s.failed(err)
 	}
-	return knowledge.Answer{Hits: MergeSearch([]SearchSlice{slice}, q)}
+	return MergeSearch([]SearchSlice{slice}, q)
 }
 
 // SearchSlice is what one corpus answers a knowledge search with BEFORE it is
-// fused: its candidates, and every candidate it can show, by the index's key.
+// fused: its candidates, every candidate it can show by the index's key, and
+// what its ranking did.
 //
 // THE CANDIDATES RATHER THAN A RANKED LIST, because a ranked list is an order
 // and an order means nothing beside another corpus's — see
@@ -179,6 +199,12 @@ type SearchSlice struct {
 	// the index named and could not read back — so the fusion walks past
 	// it to the next rather than counting a hole.
 	Hits map[string]knowledge.Hit `json:"hits,omitempty"`
+
+	// Outcome is what this corpus's ranking did — the mode it served, the
+	// modes it could, its own buckets' coverage and why it served less
+	// than asked — so whoever fuses several can say what the fused answer
+	// did ([knowledge.MergeOutcomes]).
+	Outcome knowledge.Outcome `json:"outcome"`
 }
 
 // Slice answers a knowledge search from this node's corpus, before fusion.
@@ -189,13 +215,22 @@ type SearchSlice struct {
 // silence.
 func (s *Searcher) Slice(ctx context.Context, q knowledge.Query) (SearchSlice, error) {
 	if s.index == nil || strings.TrimSpace(q.Text) == "" {
-		return SearchSlice{}, nil
+		// THE PROBE: nothing runs and nothing is read, but the answer
+		// still says which modes this node would serve as asked and how
+		// the asked one would degrade — a configuration fact, so a screen
+		// can offer the modes honestly before anybody has typed.
+		return SearchSlice{Outcome: knowledge.Outcome{
+			Modes:    s.fan.Modes(),
+			Degraded: s.fan.ProbeDegradation(q.Mode),
+			Coverage: knowledge.Coverage{Nodes: []knowledge.NodeCoverage{}},
+		}}, nil
 	}
 	scope := knowledge.Scope(scopeOf(q.Org))
 	answer, err := s.fan.Search(ctx, search.FanQuery{
 		Text:       q.Text,
 		Containers: scope,
 		Sources:    []string{string(search.SourcePage)},
+		Mode:       q.Mode,
 		// NOT THE CALLER'S LIMIT: what this answers is the candidates,
 		// each method's top FuseN whatever the limit, and the fused cut
 		// the fan-out also makes is not read here.
@@ -204,19 +239,7 @@ func (s *Searcher) Slice(ctx context.Context, q knowledge.Query) (SearchSlice, e
 	if err != nil {
 		return SearchSlice{}, err
 	}
-	if answer.Partial() {
-		// LOGGED, NEVER REFUSED. The block is best effort by contract,
-		// and an answer over part of the corpus is better than none —
-		// but a short result set is indistinguishable from a short
-		// corpus, so the one place that knows says so.
-		log.WarnContext(ctx, "pages_search_scoped",
-			"buckets_answered", answer.BucketsAnswered,
-			"buckets_missing", answer.BucketsMissing,
-			"absent", strings.Join(answer.Absent, ","),
-			"detail", "the answer was complete for what was searched and "+
-				"silent about what was not")
-	}
-	out := SearchSlice{Candidates: answer.Candidates}
+	out := SearchSlice{Candidates: answer.Candidates, Outcome: answer.Outcome()}
 	keys := answer.Candidates.Keys()
 	if len(keys) == 0 {
 		return out, nil
@@ -235,13 +258,15 @@ func (s *Searcher) Slice(ctx context.Context, q knowledge.Query) (SearchSlice, e
 			Container: hit.Container,
 			PageID:    hit.ID,
 			Snippet:   hit.Snippet,
+			Backend:   Backend,
 		}
 	}
 	return out, nil
 }
 
 // MergeSearch fuses the slices of DISJOINT corpora into one answer of up to
-// q's limit hits, best first ([search.FuseCandidates]).
+// q's limit hits, best first ([search.FuseCandidates]), and says what the
+// fused answer did ([knowledge.MergeOutcomes]).
 //
 // THE FUSED ORDER IS WALKED PAST WHAT CANNOT BE SHOWN, rather than cut first
 // and filtered after: a tool-skill page among the leaders costs the answer
@@ -249,10 +274,12 @@ func (s *Searcher) Slice(ctx context.Context, q knowledge.Query) (SearchSlice, e
 // short list. That is what the over-fetch factor this replaced only
 // approximated — three times the limit, cut, then filtered — and a company
 // whose skills filled two thirds of the cut got the short list anyway.
-func MergeSearch(slices []SearchSlice, q knowledge.Query) []knowledge.Hit {
+func MergeSearch(slices []SearchSlice, q knowledge.Query) knowledge.Result {
 	cands := make([]search.Candidates, 0, len(slices))
+	outcomes := make([]knowledge.Outcome, 0, len(slices))
 	for _, slice := range slices {
 		cands = append(cands, slice.Candidates)
+		outcomes = append(outcomes, slice.Outcome)
 	}
 	out := make([]knowledge.Hit, 0, q.Hits())
 	for _, key := range search.FuseCandidates(cands) {
@@ -265,7 +292,7 @@ func MergeSearch(slices []SearchSlice, q knowledge.Query) []knowledge.Hit {
 			break
 		}
 	}
-	return out
+	return knowledge.Result{Hits: out, Outcome: knowledge.MergeOutcomes(outcomes)}
 }
 
 // hitFor is the page behind key in whichever slice named it — exactly one,
@@ -277,6 +304,21 @@ func hitFor(slices []SearchSlice, key string) (knowledge.Hit, bool) {
 		}
 	}
 	return knowledge.Hit{}, false
+}
+
+// failed is the answer to a search this node could not run at all: no hits,
+// nothing served, and THIS node named as the participant that did not cover
+// its range — the coordinator always scans, so a failure here is its own.
+func (s *Searcher) failed(err error) knowledge.Result {
+	return knowledge.Result{Outcome: knowledge.Outcome{
+		Modes: s.fan.Modes(),
+		Coverage: knowledge.Coverage{
+			Nodes: []knowledge.NodeCoverage{{
+				ID: s.fan.Self, Error: "the search could not run here: " + err.Error(),
+			}},
+			BucketsMissing: search.SearchShards,
+		},
+	}}
 }
 
 // isExcluded reports a container a search never returns.

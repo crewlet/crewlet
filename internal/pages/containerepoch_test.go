@@ -252,18 +252,47 @@ func TestAnOlderBuildRetainsAContainerRecord(t *testing.T) {
 // over this harness's log, through the real framework loop, until it has
 // consumed everything on it — and hands back a counter over its rows.
 func (r *roundTrip) olderNodeApplies() func(query string) int {
+	r.t.Helper()
+	older := r.newOlderNode()
+	older.run(versionOneBuild{}, nil)
+	return older.count
+}
+
+// olderNode is a second node over this harness's log, on its own store: a
+// build that reads only record version 1 until it is upgraded.
+type olderNode struct {
+	r      *roundTrip
+	node   *store.DB
+	estate store.PartitionHandle
+
+	// next is the first sequence its next loop has not been handed.
+	next uint64
+}
+
+// newOlderNode opens the node's own store.
+func (r *roundTrip) newOlderNode() *olderNode {
 	t := r.t
 	t.Helper()
-	end := r.logEnd()
-	olderNode, older := storetest.OpenEstate(t, filepath.Join(t.TempDir(), "older.db"), store.Options{}, 1)
-	t.Cleanup(func() { _ = olderNode.Close() })
+	node, estate := storetest.OpenEstate(t, filepath.Join(t.TempDir(), "older.db"), store.Options{}, 1)
+	t.Cleanup(func() { _ = node.Close() })
+	return &olderNode{r: r, node: node, estate: estate, next: 1}
+}
+
+// run drives the node's framework loop as domain until it has consumed
+// everything on the log and settled holds — the loop's own start included,
+// which is where a build that reads more reprocesses what it retained.
+func (o *olderNode) run(domain statelog.Domain, settled func() bool) {
+	t := o.r.t
+	t.Helper()
+	end := o.r.logEnd()
 	runner, err := statelog.NewRunner(statelog.RunnerDeps{
-		Domain: versionOneBuild{}, Spec: statelog.EstateStream(versionOneBuild{}), Layout: statelog.EstateLayout(versionOneBuild{}.Name()), LogID: statelog.EstateLog(versionOneBuild{}),
+		Domain: domain, Spec: statelog.EstateStream(domain),
+		Layout: statelog.EstateLayout(domain.Name()), LogID: statelog.EstateLog(domain),
 		Applier: pages.NewApplier("node-older", nil, nil),
-		Fetch:   &logFetch{log: r.log, next: 1},
-		Log:     r.log,
-		Node:    olderNode,
-		DB:      older,
+		Fetch:   &logFetch{log: o.r.log, next: o.next},
+		Log:     o.r.log,
+		Node:    o.node,
+		DB:      o.estate,
 	})
 	if err != nil {
 		t.Fatalf("build the older node's applier: %v", err)
@@ -272,7 +301,7 @@ func (r *roundTrip) olderNodeApplies() func(query string) int {
 	done := make(chan error, 1)
 	go func() { done <- runner.Run(ctx) }()
 	deadline := time.Now().Add(20 * time.Second)
-	for runner.Committed().Seq < end {
+	for runner.Committed().Seq < end || (settled != nil && !settled()) {
 		if time.Now().After(deadline) {
 			cancel()
 			t.Fatalf("the older node reached %d of %d", runner.Committed().Seq, end)
@@ -283,28 +312,58 @@ func (r *roundTrip) olderNodeApplies() func(query string) int {
 	if err := <-done; err != nil && !errors.Is(err, context.Canceled) {
 		t.Fatalf("the older node's loop: %v", err)
 	}
-	return func(query string) int {
-		t.Helper()
-		var n int
-		if err := older.Read(t.Context(), func(tx *sql.Tx) error {
-			return tx.QueryRowContext(t.Context(), query).Scan(&n)
-		}); err != nil {
-			t.Fatalf("%s: %v", query, err)
-		}
-		return n
-	}
+	o.next = end + 1
 }
 
-// A CONTAINER WHOSE SETTINGS DID NOT CHANGE IS RE-STAMPED WITHOUT HOLDING AN
-// OLDER NODE BACK — and a change to them still is.
+// count runs one counting query over the node's rows.
+func (o *olderNode) count(query string) int {
+	t := o.r.t
+	t.Helper()
+	var n int
+	if err := o.estate.Read(t.Context(), func(tx *sql.Tx) error {
+		return tx.QueryRowContext(t.Context(), query).Scan(&n)
+	}); err != nil {
+		t.Fatalf("%s: %v", query, err)
+	}
+	return n
+}
+
+// container reads one container's document off the node's own rows.
+func (o *olderNode) container(key string) (pages.Container, bool) {
+	t := o.r.t
+	t.Helper()
+	var document []byte
+	err := o.estate.Read(t.Context(), func(tx *sql.Tx) error {
+		return tx.QueryRowContext(t.Context(),
+			`SELECT document FROM pages_containers WHERE key = ?`, key).Scan(&document)
+	})
+	switch {
+	case errors.Is(err, sql.ErrNoRows):
+		return pages.Container{}, false
+	case err != nil:
+		t.Fatalf("read container %s: %v", key, err)
+	}
+	c, err := pages.DecodeContainer(document)
+	if err != nil {
+		t.Fatalf("decode container %s: %v", key, err)
+	}
+	return c, true
+}
+
+// A RE-STAMP OF UNCHANGED SETTINGS CARRIES ITS STAMP AT THE VERSION THAT ADDED
+// IT, and a node still on the previous build holds it back rather than
+// applying it without the stamp — then lands it, stamp and all, once upgraded.
 //
 // A row an older build wrote carries no stamp, and every later activation
 // moves it, so the first upgraded node re-stamps every chart-named container
-// on its first apply. Written at version 2, each of those records was retained
-// by every node still on the previous build, and with it every page write in
-// that space, for the whole of the rolling upgrade: the knowledge base of
-// every unit stalled on every older node although no setting had changed.
-func TestARestampDoesNotHoldBackAnOlderNode(t *testing.T) {
+// on its first apply. Those records were once written at version 1, so that an
+// older node would apply them and not hold back the page writes in the space.
+// Applied there, the stamp is the one thing dropped — and it is the guard:
+// after that node's upgrade its row is the only unstamped copy in the fleet,
+// and the first older activation it applies before re-stamping walks the
+// settings back for every node, since appliers apply what a writer decided.
+// Retained, the record lands with its stamp the moment the node reads it.
+func TestARestampIsHeldBackRatherThanAppliedWithoutItsStamp(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
 	// THE ROW AN OLDER BUILD WROTE: the settings, and no stamp.
@@ -322,22 +381,44 @@ func TestARestampDoesNotHoldBackAnOlderNode(t *testing.T) {
 	if !r.ensure(activation(1), "ENG", "Engineering", "") {
 		t.Fatal("the premise: an unstamped row is re-stamped by the first activation")
 	}
-	if env := r.envelopeAt(r.logEnd()); env.V != 1 {
-		t.Errorf("a re-stamp of unchanged settings carries version %d, want 1 — an "+
-			"older node retains a version-2 record and every page write in its space", env.V)
+	if env := r.envelopeAt(r.logEnd()); env.V != 2 {
+		t.Errorf("a re-stamp of unchanged settings carries version %d, want 2 — "+
+			"a build reading 1 would apply it and drop the stamp", env.V)
 	}
-	if c := r.container("ENG"); c.ChartEpoch == 0 {
-		t.Error("the re-stamp did not stamp the row on a node that reads the stamp")
+	stamped := configplane.ActivationStamp(activation(1))
+	if c := r.container("ENG"); c.ChartEpoch != stamped {
+		t.Errorf("the re-stamp stamped the row %d, want %d", c.ChartEpoch, stamped)
 	}
 	r.write(pages.Actor{Handle: "ops-1", Kind: pages.AuthorOperator},
 		pages.NewPage{Container: "ENG", Title: "a page"})
 
-	count := r.olderNodeApplies()
-	if n := count(`SELECT COUNT(*) FROM pages_log_deferred`); n != 0 {
-		t.Errorf("the older node retained %d record(s) for a container nobody renamed", n)
+	older := r.newOlderNode()
+	older.run(versionOneBuild{}, nil)
+	if c, ok := older.container("ENG"); !ok || c.ChartEpoch != 0 {
+		t.Errorf("the older node's ENG row is (%+v, held %v), want the unstamped "+
+			"one the older build wrote — it cannot have read a stamp", c, ok)
 	}
-	if n := count(`SELECT COUNT(*) FROM pages_heads WHERE container = 'ENG'`); n != 1 {
-		t.Errorf("the older node holds %d page(s) in ENG, want the one written there", n)
+	if n := older.count(`SELECT COUNT(*) FROM pages_log_deferred`); n == 0 {
+		t.Error("the older node retained nothing — it applied the re-stamp " +
+			"without its stamp")
+	}
+	if n := older.count(`SELECT COUNT(*) FROM pages_heads WHERE container = 'ENG'`); n != 0 {
+		t.Errorf("the older node holds %d page(s) in ENG past a container "+
+			"record it retained", n)
+	}
+
+	// UPGRADED, it lands what it held back — the stamp included — and the
+	// page written in the space behind it.
+	older.run(pages.Domain{}, func() bool {
+		return older.count(`SELECT COUNT(*) FROM pages_log_deferred`) == 0
+	})
+	if c, _ := older.container("ENG"); c.ChartEpoch != stamped {
+		t.Errorf("the upgraded node's ENG row is stamped %d, want the re-stamp's "+
+			"%d — its guard has nothing to refuse a stale activation with",
+			c.ChartEpoch, stamped)
+	}
+	if n := older.count(`SELECT COUNT(*) FROM pages_heads WHERE container = 'ENG'`); n != 1 {
+		t.Errorf("the upgraded node holds %d page(s) in ENG, want the one written there", n)
 	}
 
 	// THE GUARD STILL HOLDS on the row the re-stamp stamped: an activation
@@ -345,7 +426,7 @@ func TestARestampDoesNotHoldBackAnOlderNode(t *testing.T) {
 	if r.ensure(activation(0), "ENG", "Walked Back", "") {
 		t.Error("an activation older than the re-stamp rewrote the container")
 	}
-	// AND A REAL CHANGE IS STILL WRITTEN AT THE VERSION THAT CARRIES ITS STAMP.
+	// AND A REAL CHANGE IS WRITTEN AT THE VERSION THAT CARRIES ITS STAMP TOO.
 	if !r.ensure(activation(2), "ENG", "Platform", "") {
 		t.Fatal("a rename under a later activation wrote nothing")
 	}

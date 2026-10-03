@@ -26,17 +26,15 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/crewlet/crewlet/internal/agent/builtin"
-	"github.com/crewlet/crewlet/internal/agent/colleague"
-	"github.com/crewlet/crewlet/internal/agent/ledger/ledgerstore"
 	"github.com/crewlet/crewlet/internal/api"
 	"github.com/crewlet/crewlet/internal/api/auth"
 	"github.com/crewlet/crewlet/internal/api/configapi"
+	"github.com/crewlet/crewlet/internal/api/livestate"
 	"github.com/crewlet/crewlet/internal/api/mcpbridge"
-	"github.com/crewlet/crewlet/internal/api/opsmcp"
 	"github.com/crewlet/crewlet/internal/api/queries"
 	"github.com/crewlet/crewlet/internal/api/secretsapi"
 	"github.com/crewlet/crewlet/internal/api/setupapi"
+	"github.com/crewlet/crewlet/internal/api/stream"
 	"github.com/crewlet/crewlet/internal/api/webhooks"
 	"github.com/crewlet/crewlet/internal/backup"
 	"github.com/crewlet/crewlet/internal/config"
@@ -44,17 +42,15 @@ import (
 	"github.com/crewlet/crewlet/internal/estate"
 	"github.com/crewlet/crewlet/internal/fleetsecrets"
 	"github.com/crewlet/crewlet/internal/integration"
-	"github.com/crewlet/crewlet/internal/knowledge"
-	"github.com/crewlet/crewlet/internal/learning"
 	"github.com/crewlet/crewlet/internal/logging"
 	"github.com/crewlet/crewlet/internal/observe"
-	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/schedule/sqlledger"
 	"github.com/crewlet/crewlet/internal/seat/placement"
 	"github.com/crewlet/crewlet/internal/secrets"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/statelog/metrics"
+	"github.com/crewlet/crewlet/internal/store"
 	"github.com/crewlet/crewlet/internal/tracing"
 	"github.com/crewlet/crewlet/internal/tracker"
 	"github.com/crewlet/crewlet/internal/version"
@@ -188,6 +184,8 @@ func run(args []string, stdout, stderr io.Writer) error {
 		return runEstate(rest, stdout, stderr)
 	case "fleet":
 		return runFleet(rest, stdout, stderr)
+	case "seats":
+		return runSeats(rest, stdout, stderr)
 	case "llm":
 		return runLLM(rest, stdout, stderr)
 	case "search":
@@ -209,7 +207,8 @@ Usage:
   crewlet validate [flags]    Check both config tiers without starting anything
   crewlet schema [tier]       Print a tier's JSON Schema (company by default)
   crewlet migrate [config]    Apply pending schema migrations (-check reports only)
-  crewlet budgets <cmd>       Show or reset the durable token counters
+  crewlet budgets show        Show the durable token counters: each scope's day,
+                              week and month, its ceiling and its state
   crewlet backup -dir PATH    Copy this node's store and stream estate, through
                               the running engine, to a path on ITS host
   crewlet retention <cmd>     What the state log is holding, why it is not
@@ -225,6 +224,8 @@ Usage:
   crewlet fleet broker <cmd>  The fleet broker's members, as the nodes advertise them
                               and as its metadata group counts them: list, and
                               remove a member that is gone for good
+  crewlet seats <cmd>         Pause a seat (-stop also ends the turn it is on)
+                              or resume it, as the person your token is bound to
   crewlet secrets <cmd>       Read and rotate the encrypted secret store
   crewlet config <cmd>        Import, inspect and activate company revisions
   crewlet llm <cmd>           Log in, verify and export the subscription CLI backends
@@ -1321,6 +1322,7 @@ type httpSurface struct {
 	app       *api.App
 	server    *http.Server
 	projector *observe.Projector
+	runs      *observe.SandboxReconciler
 }
 
 // stop closes the HTTP surface, once the engine has drained. See [shutdown]
@@ -1346,6 +1348,8 @@ func (s *httpSurface) stop(ctx context.Context, log *slog.Logger) {
 	if s.projector != nil {
 		s.projector.Stop(grace)
 	}
+	// Nil-safe, and nil on a bridge-only node: it has no panel to keep.
+	s.runs.Stop()
 	if s.app != nil {
 		s.app.Stop()
 	}
@@ -1372,6 +1376,33 @@ func (s *httpSurface) stop(ctx context.Context, log *slog.Logger) {
 // alternative — a listener held open for a build — is the thing the grace
 // exists to stop.
 const apiShutdownGrace = 5 * time.Second
+
+// seedPauses puts every paused seat on the live projection, named by the role
+// the projection keys seats by. A pause whose seat the company no longer has
+// is skipped: the apply that removed the seat clears it.
+func seedPauses(ctx context.Context, e *engine.Engine, live *livestate.LiveState) error {
+	pauses, err := e.Backends().Fleet.ListSeatPauses(ctx)
+	if err != nil {
+		return err
+	}
+	company := e.Company()
+	if company == nil || company.Org == nil {
+		return nil
+	}
+	seeds := make([]livestate.SeedPause, 0, len(pauses))
+	for _, p := range pauses {
+		seat := company.Org.AgentSeatByHandle(p.Handle)
+		if seat == nil {
+			continue
+		}
+		seeds = append(seeds, livestate.SeedPause{Role: seat.Name, Paused: livestate.Paused{
+			By: firstNonEmpty(p.Seat, p.By), At: p.At.UTC().Format(time.RFC3339),
+			Reason: p.Reason, StopRunning: p.StopRunning,
+		}})
+	}
+	live.SeedPauses(seeds)
+	return nil
+}
 
 // companyConfig is the engine's CURRENT company document, or nil.
 func companyConfig(e *engine.Engine) *config.Company {
@@ -1549,6 +1580,12 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 	if err != nil {
 		return nil, err
 	}
+	// ONE operator surface, handed to the routes that serve it and to the
+	// viewer that says what it serves.
+	operators, err := api.NewEngineOperator(e)
+	if err != nil {
+		return nil, err
+	}
 	// The contextcheck exemption is for the two PUSH TICKS this constructor
 	// registers — the roster re-send and the health frame. Both manufacture
 	// a bounded context of their own instead of inheriting one, which is
@@ -1570,17 +1607,30 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 		// bridge would resolve every token to no session and answer 401
 		// to a box whose run is perfectly healthy.
 		Bridge: e.Bridge(),
-		// The OPERATOR MCP surface. Built here rather than in the engine
+		// The OPERATOR surface, both transports. Built here rather than in the engine
 		// because it is an API concern, and because its writer identity
 		// comes off an HTTP request's own credential.
-		Operator:     operatorMCP(e),
+		Operator:     operators,
 		QueueBackend: e.Backends().Queue.Backend(),
-		// The read surface answers from this node's OWN store. A
-		// question it has no source for comes back unknown rather than
-		// empty, which is the difference between "this node has no
-		// event log" and "the company has done nothing".
+		// THIS NODE'S OWN event store, which the webhook edge writes the
+		// deliveries it accepts into.
+		EventLog: e.Backends().Store.Events(),
+		// A question the read surface has no source for comes back
+		// unknown rather than empty, which is the difference between
+		// "this node has no event log" and "the company has done
+		// nothing".
 		Sources: queries.Sources{
-			Events: e.Backends().Store.Events(),
+			// THE FLEET'S turn-level history: every live node's own
+			// store, asked at query time, with the nodes that did not
+			// answer named on every answer (ADR-0021). The ENGINE's,
+			// because the roster is its lease view and the answerer it
+			// registered is the other half of the same protocol.
+			Events: e.History(),
+			// EVERY NODE'S company days, for every named spend window
+			// and its series — the replicated usage domain (ADR-0020),
+			// resolved per read so an adoption's reopened estate is the
+			// one answered from.
+			Usage: e.UsageEstate(),
 			// Read through the ENGINE's epoch rather than a captured
 			// company: an apply replaces it, and a screen bound to the
 			// one this process booted on would describe a company that
@@ -1590,15 +1640,14 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 			Plane:   e.Backends().Fleet,
 			// The object store's placement map, read from the store
 			// every node reads it from, for the fleet view's card.
-			Objects:  e.Backends().Fleet,
-			Runs:     sqlledger.New(e.Backends().Store.SQL()),
-			Diary:    learning.NewDiary(e.Backends().Store),
-			Episodes: learning.NewEpisodes(e.Backends().Store),
-			// The skills a seat drafted for ITSELF. They were written,
-			// versioned and loadable by the agent, and reachable by no
-			// screen — so the operator paying for the learning loop
-			// could not see what it had produced.
-			Skills: learning.NewSkills(e.Backends().Store),
+			Objects: e.Backends().Fleet,
+			Runs:    sqlledger.New(e.Backends().Store.SQL()),
+			// A SEAT'S MEMORY AND ITS CONVERSATION LEDGER, answered by
+			// the node HOLDING the seat. The ENGINE's reader, because
+			// the answerer it registered on every node is the other
+			// half of the same protocol, and a node serving no API may
+			// be the one holding the seat.
+			Memory: memoryReads(e),
 			// The fleet's agent-to-agent authorization record. The
 			// FLEET's, not this node's: a channel is opened by whichever
 			// node owns the requester's seat, so a per-node read would
@@ -1615,8 +1664,12 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 			// answer "no backend" forever for a company whose backend
 			// came up after this line ran.
 			Knowledge: e.Knowledge,
-			Config:    configSurface,
-			Budget:    e.Backends().Fleet,
+			// WHAT A PERSON MAY DO, from the SAME surface the act route
+			// serves: a list computed anywhere else would be a second
+			// opinion about which buttons work.
+			OperatorActs: operators.Acts,
+			Config:       configSurface,
+			Budget:       e.Backends().Fleet,
 			// WHERE THIRD-PARTY APPS REACH THIS DEPLOYMENT, resolved
 			// through this node's own chain. `public_base_url` may be a
 			// whole ${VAR}, and what a surface registered is the address
@@ -1648,11 +1701,14 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 				}
 				return states
 			},
-			// The DURABLE record of detached coding runs. Read rather
-			// than projected: a run parked on a person's question can
-			// wait days, and the live projection sweeps long before
-			// that — so the states that most need somebody were the
-			// ones least likely to be on screen.
+			// Which surfaces a pass converges, so the roll-up can tell a
+			// surface waiting for its first report from one that will
+			// never get one.
+			Converges: e.Converges,
+			// The DURABLE record of detached coding runs, whole: the
+			// board needs the row's own facts (the branch, the pause
+			// TTL, the bridge's call log) that the live panel, which
+			// is reconciled against this same record, does not carry.
 			//
 			// The FLEET's record, so the screen shows every node's
 			// runs rather than this one's. A run is recovered by
@@ -1660,6 +1716,11 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 			// per-node read drew a dashboard that disagreed with
 			// itself depending on which node answered.
 			Sandbox: sandbox.NewCoordStore(e.Backends().Fleet),
+			// A RUNNING RUN'S LIVE OUTPUT, answered by the node that
+			// owns the run. The ENGINE's reader, because the answerer
+			// it registered on every node is the other half of the same
+			// protocol, and a node serving no API may be the owner.
+			SandboxTail: sandboxTails(e),
 			// THIS NODE'S PROJECTION of the company's own tracker and
 			// knowledge base — the same copy a seat's tools read, so an
 			// operator and an agent looking at one item see one item.
@@ -1682,6 +1743,11 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 			// the download route, which reads them through this node's
 			// object client.
 			Files: nativeFiles(e),
+			// WHO LINKS TO A PAGE, from this node's lexical index, which
+			// derives the links from the bodies it already reads. Untyped
+			// nil on a node with no index, which leaves the answer without
+			// `linked_from` rather than claiming nothing links anywhere.
+			Backlinks: nativeBacklinks(e),
 			// RANKED SEARCH, gated on its own index rather than on
 			// the tracker: the rows are the fleet's and the lexical
 			// index is this node's own, so a node still building one
@@ -1689,14 +1755,6 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 			// The accessor already returns an untyped nil in that
 			// case, which is what the registration check needs.
 			WorkSearch: nativeWorkSearch(e),
-			// The seat's own thread ledger, and its counterparty
-			// profiles. Both are per-node stores, both have been
-			// written since their subsystems landed, and neither
-			// reached a screen: the conversations panel drew an
-			// empty list for every seat and the memory answer
-			// carried a `counterparties` key that was always `[]`.
-			Conversations:  ledgerstore.NewConversations(e.Backends().Store),
-			Counterparties: learning.NewCounterparties(e.Backends().Store),
 			// WHAT THIS NODE CAN SAY ABOUT THE LOG'S OWN HISTORY —
 			// how far each domain may be trimmed, what is stopping
 			// it, and what this node costs to replace. Assembled per
@@ -1704,14 +1762,20 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 			// under the answer and the other half is this node's own
 			// loops.
 			Retention: nativeRetention(ctx, e),
-			NodeID:    nodeID,
+			// EVERY MODEL'S KEY BAG: the provenance this node's epoch
+			// resolved and its pools' state, read per call because an
+			// apply replaces every pool — beside the fleet's cooldown
+			// ledger, so a key a peer benched reads cooling here before
+			// this node's refresher has pulled it.
+			CredentialPools: e.CredentialPools,
+			Cooldowns:       e.Backends().Fleet,
+			// WHAT THE FLEET HAS BACKED UP: each owner's newest
+			// announced point, marked by the policy the trim takes —
+			// Tier A, fixed for the life of this process.
+			Backups:     e.Backends().Fleet,
+			BackupFloor: boot.Stream.TrackerRetention.Floor(),
+			NodeID:      nodeID,
 		},
-		// The WRITE half of the counter, for POST /budgets/reset. On the
-		// default topology the coordination store is this engine's own
-		// embedded broker, so a node that is running is the only thing
-		// that can reach it — which is why the reset is a route and not
-		// only a CLI subcommand.
-		Budgets: e.Backends().Fleet,
 		// The fleet's record of what the log may delete, for the one
 		// retention gesture the engine cannot make on its own: an
 		// operator's assertion that a copy has left the host.
@@ -1756,7 +1820,11 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 		// Both estates a node holds, reachable only from inside it: the
 		// store is locked to this process and the broker binds no
 		// socket. See internal/backup.
-		Backup:  backups,
+		Backup: backups,
+		// THE RUNTIME AUDIT goes onto this node's own queue, whose
+		// publish listener writes the event store here — the same
+		// publisher the operator surface audits through.
+		Audit:   e.Backends().Queue,
 		Config:  configSurface,
 		Secrets: secretSurface,
 		Setup:   setupSurface,
@@ -1816,24 +1884,52 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 	// that arrives both ways once. Before the bind, so the first socket to
 	// open sees the seeded snapshot rather than an empty one it will never
 	// be sent a correction for.
+	//
+	// THE FLEET'S HISTORY, read from every live node's store through the
+	// engine's history reader: each node's store holds what that node
+	// published, so a seed read from this one alone showed a restarted node
+	// only its own share of the company.
 	seedCtx, cancelSeed := context.WithTimeout(ctx, projectionSeedBudget)
-	err = observe.Seed(seedCtx, e.Backends().Store.Events(), app.Stream().State())
-	cancelSeed()
+	err = observe.Seed(seedCtx, e.History(), companyConfig(e).AgentRoles(), app.Stream().State())
 	if err != nil {
 		// NOT FATAL, and said out loud rather than swallowed: what a
-		// failed seed costs is a feed and a spend window that start now,
-		// which is invisible on the screen itself.
+		// failed seed costs is a feed, a spend window and a seat's last
+		// turn that start now, which is invisible on the screen itself.
 		log.WarnContext(ctx, "live_projection_not_seeded", "error", err,
-			"hint", "the activity feed and the spend rollup start at this "+
-				"process's boot; older history is still answered by the "+
-				"events and tokens queries, which read the store directly")
+			"hint", "the activity feed, the spend rollup and each seat's last "+
+				"turn start at this process's boot; older history is still "+
+				"answered by the events, turns and tokens queries")
 	}
+	// AND WHICH SEATS A PERSON PAUSED, from the record itself, for the
+	// same reason: a pause taken last week is in no event this process
+	// will hear, and a seat drawn as working while it is paused is the
+	// one state a person pausing it must not be shown.
+	if err = seedPauses(seedCtx, e, app.Stream().State()); err != nil {
+		log.WarnContext(ctx, "seat_pauses_not_seeded", "error", err,
+			"hint", "a seat paused before this process started shows as paused "+
+				"from its next pause or resume; the pause itself is in force")
+	}
+	// AND THE RUNNING CODING RUNS, from the durable record every node
+	// opens, before the bind for the seed's reason: a run parked on a
+	// question for days is exactly the one the events of this process's
+	// lifetime will never mention. Then every interval, which is what
+	// corrects a panel whose completion event never arrived.
+	runs := observe.NewSandboxReconciler(sandbox.NewCoordStore(e.Backends().Fleet), app.Stream())
+	if err = runs.Reconcile(seedCtx); err != nil {
+		log.WarnContext(ctx, "sandbox_panel_not_seeded", "error", err,
+			"hint", "the running-runs panel starts from what this process "+
+				"hears; the durable run record is read again every "+
+				livestate.ReconcileInterval.String())
+	}
+	cancelSeed()
+	runs.Start(ctx)
 
 	server, addr, err := listenAPI(ctx, boot, app, log)
 	if err != nil {
 		// THE PROJECTOR FIRST, in the order httpSurface.stop takes: it is
 		// already running, on a broadcast subscription to the engine's
 		// queue, and nothing else holds it once this returns.
+		runs.Stop()
 		projector.Stop(context.WithoutCancel(ctx))
 		app.Stop()
 		return nil, err
@@ -1868,13 +1964,13 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 	// Registered after the app exists, which is the whole reason it is a
 	// setter — see Engine.SetOnApplied.
 	e.SetOnApplied(func(context.Context) {
-		app.Stream().Broadcast("seats", app.Stream().Roster())
-		app.Stream().Broadcast("org", app.Stream().Org())
-		app.Stream().Broadcast("tools", app.Stream().Tools())
-		app.Stream().Broadcast("schedules", app.Stream().Schedules())
+		app.Stream().Broadcast(stream.KindSeats, app.Stream().Roster())
+		app.Stream().Broadcast(stream.KindOrg, app.Stream().Org())
+		app.Stream().Broadcast(stream.KindTools, app.Stream().Tools())
+		app.Stream().Broadcast(stream.KindSchedules, app.Stream().Schedules())
 	})
 
-	return &httpSurface{app: app, server: server, projector: projector}, nil
+	return &httpSurface{app: app, server: server, projector: projector, runs: runs}, nil
 }
 
 // serveBridgeOnly is serveAPI for a node whose roles leave out ingress: it
@@ -1953,16 +2049,21 @@ func listenAPI(ctx context.Context, boot *config.Bootstrap, handler http.Handler
 // against a listener — costs one slot for ten seconds rather than for ever.
 const apiReadHeaderTimeout = 10 * time.Second
 
-// projectionSeedBudget bounds the store read that seeds the live projection.
+// projectionSeedBudget bounds the fleet reads that seed the live projection and
+// the first read of the durable run record.
 //
-// The read is two indexed range scans of this node's own file, each stopping at
-// the projection's own bound: the newest 400 event rows without their payloads,
-// and the newest 8 000 phase records of one day from promoted columns. Both are
-// milliseconds on a healthy node, so five seconds is three orders of magnitude
-// of headroom and is a ceiling on the one case that matters: a store that will
-// not answer must not hold the listener shut, since nothing else can accept a
-// webhook while the bind is waiting. A seed that times out costs history on a
-// screen, never a delivery.
+// The reads run side by side, so the budget is the slowest of them rather than
+// their sum. On a healthy fleet each is milliseconds: indexed range scans of
+// every node's own file, stopping at the projection's own bounds (the newest
+// 400 event rows without their payloads, the newest 8 000 phase records of one
+// day, three turns a seat), plus one listing of the run record. What sizes the
+// budget is a peer that does NOT answer, which every scatter waits
+// [eventfan.FleetReadBudget] for — and a seat's turn read is two scatters, so
+// five seconds is those two and a second of headroom. It stays a ceiling on
+// the one case that matters: a fleet that will not answer must not hold the
+// listener shut, since nothing else can accept a webhook while the bind is
+// waiting. A seed that times out costs history on a screen, never a delivery,
+// and the warning it logs says which reads it cost.
 const projectionSeedBudget = 5 * time.Second
 
 // apiIdleTimeout bounds how long a kept-alive connection may sit between
@@ -2381,11 +2482,22 @@ func operatorLogFormat() logging.Format {
 // engineConfigWriter lets the reconcile loop remove a block through the same
 // PATCH /config surface every other write uses: one merge, one validation,
 // one compare-and-set onto the document.
+//
+// EVERY WRITE IT MAKES IS THE NODE'S. It is the engine's own writer — the
+// reconcile loop and the setup passes it runs — so the label it is handed
+// ("reconcile loop") is recorded as [store.AuthorNode]. Recorded through the
+// HTTP surface's defaults, those revisions read as an operator's on the audit
+// screen, and a reload nobody asked for is exactly what an audit is read for.
 type engineConfigWriter struct{ surface *configapi.Service }
+
+// nodeAuthor is a label from the engine, as the revision's author.
+func nodeAuthor(name string) store.Author {
+	return store.Author{Name: name, Kind: store.AuthorNode}
+}
 
 func (w engineConfigWriter) Apply(ctx context.Context, patch []byte, summary, operator string) error {
 	_, err := w.surface.Apply(ctx, configapi.ApplyRequest{
-		Patch: patch, Summary: summary, Operator: operator,
+		Patch: patch, Summary: summary, Author: nodeAuthor(operator),
 	})
 	return err
 }
@@ -2393,7 +2505,7 @@ func (w engineConfigWriter) Apply(ctx context.Context, patch []byte, summary, op
 // Reload re-activates the current document, which is how a pass that sealed a
 // credential gets everything built at apply time rebuilt against it.
 func (w engineConfigWriter) Reload(ctx context.Context, summary, operator string) error {
-	_, err := w.surface.Reload(ctx, summary, operator)
+	_, err := w.surface.Reload(ctx, summary, nodeAuthor(operator))
 	return err
 }
 
@@ -2412,7 +2524,8 @@ func (w engineConfigWriter) SetSeat(
 	ctx context.Context, handle string, body []byte, summary, operator string,
 ) error {
 	_, err := w.surface.ApplyEntity(ctx, configapi.ApplyEntityRequest{
-		Kind: "roles", ID: handle, Body: body, Summary: summary, Operator: operator,
+		Kind: "roles", ID: handle, Body: body, Summary: summary,
+		Author: nodeAuthor(operator),
 	})
 	return err
 }
@@ -2528,294 +2641,21 @@ func nativePages(e *engine.Engine) queries.PageReader {
 	return nil
 }
 
-// operatorWriter is the tracker's writer acting as one operator, through this
-// node's estate router ([engine.OperatorWorkWriter]).
-//
-// ONE HELPER FOR THE EIGHT SEAMS BELOW, because turning a tool-layer actor
-// into a writer is a single rule and eight hand-copied spellings of it are
-// eight chances for one seam to carry an identity the other seven do not —
-// which is exactly what happened to [tracker.Provenance.Seat], the field that
-// decides whose person record a write lands on.
-func operatorWriter(as func(estate.Actor) estate.WorkWriter, actor builtin.Actor) estate.WorkWriter {
-	return as(estate.Actor{Handle: actor.Handle, Kind: actor.Kind, Provenance: tracker.Provenance{
-		// THE CREDENTIAL AND THE PERSON IT NAMES, which are two
-		// different facts: the author stays the token, and the seat is
-		// only ever the subject of that person's own state.
-		OperatorID: actor.OperatorID, Seat: actor.Seat,
-	}})
+// nativeBacklinks is the node's "linked from" reader, or an untyped nil.
+func nativeBacklinks(e *engine.Engine) queries.PageBacklinks {
+	if x := e.Backlinks(); x != nil {
+		return x
+	}
+	return nil
 }
 
-// operatorMCP builds the operator's own MCP surface, or nil.
-//
-// THE SAME DEPS A SEAT'S TOOLS GET, with one field different: the actor. That
-// is what makes this one implementation of ten tools rather than two — see
-// [builtin.WorkDeps.Actor].
-//
-// The DEFAULTS are deliberately absent. A seat files into its unit's project
-// when it names none, because a seat HAS a unit; an operator does not, so the
-// argument is required and the tool refuses naming it rather than guessing a
-// project on a person's behalf.
-//
-// Which UNIT the work is filed into is not a default of this surface and no
-// longer needs one: the tracker reads it off the project's own row at the
-// write, so an operator's item belongs to the team that owns the project it
-// named. It used to be stamped from the caller's own team, which an operator
-// has not got — so every item filed here read "Filed into: no unit" beside a
-// project page naming its unit.
-//
-// THROUGH THIS NODE'S ESTATE ROUTER, every read and every write, as a seat's
-// tools are ([engine.OperatorWork]) — so an operator's assistant on a node
-// whose copy is out of service is answered from a peer's, not from the copy
-// this node stopped serving.
-func operatorMCP(e *engine.Engine) *opsmcp.Server {
-	return opsmcp.New(operatorOptions(e))
-}
-
-// operatorOptions is what [operatorMCP] builds its surface from — separate so a
-// test can see which seams the operator's assistant is handed.
-func operatorOptions(e *engine.Engine) opsmcp.Options {
-	var opts opsmcp.Options
-	if c := e.Company(); c != nil && c.Config != nil {
-		opts.Company = c.Config.Name
-	}
-	// THE CHART, resolved per call because a config apply replaces it —
-	// and wired UNCONDITIONALLY, which it was not. It used to be set only
-	// where the company had a knowledge backend, because `search_knowledge`
-	// was the only tool that read it. WHO THE CALLER IS reads it on every
-	// call now: the same chart says which seat a token is bound to, and
-	// without it a bound founder's own marks, pins and queue were written
-	// under their credential's name instead of theirs.
-	opts.Org = func() *org.Organization {
-		c := e.Company()
-		if c == nil {
-			return nil
-		}
-		return c.Org
-	}
-	reader, readable := engine.OperatorWork(e)
-	writer, writable := engine.OperatorWorkWriter(e)
-	if readable && writable {
-		opts.Work = builtin.WorkDeps{
-			Reader: reader,
-			// THE OPERATOR'S OWN CREDENTIAL IS THE PARTY, and it comes
-			// from the request's context rather than from the call: a
-			// tracker whose author field is chosen by the writer is not
-			// an audit trail, and there is deliberately no way to name a
-			// seat to act as.
-			Writer: func(actor builtin.Actor) builtin.WorkWriter {
-				return operatorWriter(writer, actor)
-			},
-			// AND THE TWO SEQUENCES, which this surface went
-			// without — so an operator's assistant was refused
-			// `waiting_on` and `blocking` by name on a tool whose
-			// own description offers them, and would not have been
-			// served the fold at all. Both need the replicated
-			// estate, which this writer has; nothing else about
-			// them differs from a seat's.
-			Dependencies: func(actor builtin.Actor) builtin.WorkDepender {
-				return operatorWriter(writer, actor)
-			},
-			Merges: func(actor builtin.Actor) builtin.WorkMerger {
-				return operatorWriter(writer, actor)
-			},
-			Moves: func(actor builtin.Actor) builtin.WorkMover {
-				return operatorWriter(writer, actor)
-			},
-			// AND THE PROJECT'S FILES — the rows through this node's
-			// tracker, the bytes through its object client.
-			Files: reader,
-			FileWriter: func(actor builtin.Actor) builtin.FileWriter {
-				return operatorWriter(writer, actor)
-			},
-			Objects: e.ObjectStore(),
-			// AND THE RANKED SEARCH. It reads, so it takes no actor —
-			// the corpus is the same for everybody and there is nothing
-			// to attribute — and without it the operator catalogue
-			// listed a verb this surface could never register.
-			Search: engine.WorkSearcher(e),
-			// THE SAVED-VIEW WRITER, which only this surface has: a
-			// view is furniture a person arranges, and no seat is
-			// given the tools that reach it.
-			ViewWriter: func(actor builtin.Actor) builtin.ViewWriter {
-				return operatorWriter(writer, actor)
-			},
-			// AND THE CATALOGUE WRITER: the company's own vocabulary is
-			// a person's to set, never a seat's to widen so its own
-			// create succeeds.
-			CatalogueWriter: func(actor builtin.Actor) builtin.CatalogueWriter {
-				return operatorWriter(writer, actor)
-			},
-			// AND THE PERSON WRITER. Who may write what is the
-			// tracker's own rule; what this surface supplies is the
-			// identity it is judged against.
-			PersonWriter: func(actor builtin.Actor) builtin.PersonWriter {
-				return operatorWriter(writer, actor)
-			},
-			// AND THE INBOX READ. It takes no actor for the reason
-			// Search takes none — it reads, and whose inbox is an
-			// argument rather than an identity — and it is this
-			// surface's alone beside the person writer, because a
-			// seat has a mailbox rather than an inbox.
-			Inbox: reader,
-			// AND THE TRASH. A removal takes an item off every board in
-			// the company and a restore puts it back at any age; neither
-			// destroys anything, which is what separates both from the
-			// purge the CLI guards with a typed confirmation. No seat
-			// holds either — see internal/agent/builtin/worktrash.go.
-			TrashWriter: func(actor builtin.Actor) builtin.TrashWriter {
-				return operatorWriter(writer, actor)
-			},
-			// AND A PROJECT'S OWN SETTINGS. Unlike the five above,
-			// this one is on every surface — declaring a tag is open
-			// to every seat — and what an operator adds here is the
-			// credential the archive facet asks for.
-			ProjectWriter: func(actor builtin.Actor) builtin.ProjectWriter {
-				return operatorWriter(writer, actor)
-			},
-			// THE ROSTER, so an operator's assistant is refused a
-			// handle nobody has rather than silently filing work for
-			// one — the same check every seat's tools make.
-			Seats: func() []colleague.Seat {
-				c := e.Company()
-				if c == nil {
-					return nil
-				}
-				return builtin.Corpus(c.Org)
-			},
-			// AND THE PARTY BEHIND A HANDLE, which the roster above
-			// deliberately does not carry: an operator reading a
-			// person's inbox or their own state is answered about
-			// BOTH the names that person's rows may be filed under,
-			// and the credential is an attribution key rather than
-			// somewhere an agent could mention them.
-			Party: builtin.Parties(opts.Org),
-			// AND THE THREE CHART SEAMS THE SEAT SURFACE HAS AND THIS
-			// ONE WENT WITHOUT. Their absence was invisible and not
-			// harmless: with no Leads, an operator filing an unassigned
-			// task woke nobody at all — the lead fallback is what
-			// catches exactly that task — and with no Units every
-			// project this surface listed read as belonging to no team.
-			Leads:          engine.LiveLeads(e),
-			Units:          engine.LiveUnits(e),
-			DefaultProject: func(string) string { return "" },
-			// THE SAME CHART DECIDES WHO IS WRITING: a token bound to
-			// a human seat writes that PERSON's own state, while the
-			// author on the record stays the token.
-			Actor: opsmcp.WorkActor(opts.Org),
-			// THE MENTION RESOLVER, which this surface went without: a
-			// comment's @-mention is turned into a wake by the tracker's
-			// recipients only when the writer resolved it, so an
-			// operator writing "@alice can you take this" reached her
-			// watchers and never her — while the tool's own description,
-			// which their assistant reads, promised it would.
-			Mentions: engine.LiveMentions(e),
-			// THE ROUTER'S SESSION FLOOR, which every write above
-			// raises — never this node's own applier, which is not the
-			// one that answers the next read once its copy is out of
-			// service.
-			Await: e.AwaitEstate,
-		}
-	}
-	pageReader, pagesReadable := engine.OperatorPages(e)
-	pageWriter, pagesWritable := engine.OperatorPageWriter(e)
-	if pagesReadable && pagesWritable {
-		opts.Pages = builtin.PageDeps{
-			Reader: pageReader, Writer: pageWriter,
-			Actor:    opsmcp.PageActor,
-			Mentions: engine.LiveMentions(e),
-			Reserved: reservedFor(e),
-			Await:    e.AwaitEstate,
-		}
-	}
-	// SEARCH IS OFFERED WHENEVER THE COMPANY HAS A BACKEND, native or not:
-	// unlike the ten write tools, ranked search over the company's own
-	// wiki is exactly as useful to an operator's assistant on Confluence.
-	if e.Knowledge() != nil {
-		// THE CHART THE SEARCH IS SCOPED AGAINST is already wired
-		// above, for every company rather than only this one.
-		opts.Knowledge = operatorKnowledge{engine: e}
-	}
-	// THE LEAD RELATION, which the tracker deliberately does not derive:
-	// it holds no org chart, and one it derived would be a second opinion
-	// about the hierarchy.
-	opts.Leads = leadsOf(e)
-	// AND THE PROJECT'S OWN LEAD, which is a different question: one is
-	// about a person's line, the other about who plans a container's work.
-	opts.LeadsProject = engine.LeadsProjectOf(e)
-	return opts
-}
-
-// leadsOf answers whether one handle leads another, walking the chart's own
-// management chain.
-//
-// ANY ANCESTOR, not just the direct manager: a founder leads everybody, and an
-// authority that stopped at one level would make "a lead may set what somebody
-// in their line does next" mean "a lead may, for the people directly under
-// them" — which is not what a line is.
-//
-// A HANDLE THIS BUILD CANNOT RESOLVE ANSWERS FALSE, which is the conservative
-// direction: the write is then refused unless it is the person's own.
-func leadsOf(e *engine.Engine) builtin.Leads {
-	return func(_ context.Context, actor, handle string) bool {
-		c := e.Company()
-		if c == nil || c.Org == nil || actor == "" || actor == handle {
-			return false
-		}
-		seat := c.Org.SeatByHandle(handle)
-		if seat == nil {
-			return false
-		}
-		for _, manager := range c.Org.Ancestors(seat) {
-			if manager.Handle() == actor {
-				return true
-			}
-		}
-		return false
-	}
-}
-
-// reservedFor is the containers an operator's assistant may not write to
-// directly, on the same terms a seat has them.
-func reservedFor(e *engine.Engine) []string {
-	c := e.Company()
-	if c == nil || c.Config == nil {
-		return nil
-	}
-	var out []string
-	for _, key := range []string{c.Config.SkillsContainerKey(), c.Config.RootSpaceKey()} {
-		if key = strings.TrimSpace(key); key != "" {
-			out = append(out, key)
-		}
-	}
-	return out
-}
-
-// operatorKnowledge resolves the node's searcher per call, for the reason the
-// engine's own liveKnowledge does: an apply REPLACES it, and a value captured
-// when the API was assembled searches with a rotated credential's predecessor.
-type operatorKnowledge struct{ engine *engine.Engine }
-
-func (k operatorKnowledge) CanSearch(seat *org.Role, o *org.Organization) bool {
-	s := k.engine.Knowledge()
-	return s != nil && s.CanSearch(seat, o)
-}
-
-func (k operatorKnowledge) Search(ctx context.Context, q knowledge.Query) knowledge.Answer {
-	s := k.engine.Knowledge()
-	if s == nil {
-		return knowledge.Answer{}
-	}
-	return s.Search(ctx, q)
-}
-
-// nativeRetention is this node's retention answer, or nil where there is none.
+// nativeRetention is this node's retention answer, or nil on a node that runs
+// no state log.
 //
 // NIL RATHER THAN AN EMPTY DOCUMENT, on the rule every optional surface here
 // follows: a process running no state log has no applier, no stream and no
 // floor, and a report of zeros would claim a fleet whose log is perfectly
 // trimmed. The question is simply unregistered instead.
-// nativeRetention is the retention half of the API's node runtime, or nil on a
-// node that runs no state log.
 //
 // IT TAKES THE CALLER'S CONTEXT FOR THE PROBE and not one of its own: the
 // probe is a coordination read, so on a node whose store cannot be reached it
@@ -2830,6 +2670,26 @@ func nativeRetention(ctx context.Context, e *engine.Engine) func(context.Context
 		report, _ := e.RetentionReport(ctx)
 		return report
 	}
+}
+
+// memoryReads is the engine's memory reader as the read surface's seam, or nil
+// when the engine has none — a typed nil in the interface would register
+// `agent_memory` and `conversations` over a reader that cannot answer.
+func memoryReads(e *engine.Engine) queries.SeatMemory {
+	if r := e.MemoryReads(); r != nil {
+		return r
+	}
+	return nil
+}
+
+// sandboxTails is this node's run-output reader, as the read surface wants it
+// — converted for [memoryReads]'s reason: a nil *TailReader in the interface
+// would register a question whose every answer panics.
+func sandboxTails(e *engine.Engine) queries.SandboxTails {
+	if r := e.SandboxTails(); r != nil {
+		return r
+	}
+	return nil
 }
 
 // nativeWorkSearch is the ranked item search, as the read surface wants it —

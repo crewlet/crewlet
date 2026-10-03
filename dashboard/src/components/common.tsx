@@ -10,7 +10,6 @@
 
 import type { ReactNode } from "react";
 import {
-  Avatar,
   Button,
   Callout,
   EmptyState,
@@ -19,30 +18,32 @@ import {
   Tag,
   cx,
 } from "@crewlethq/ui";
-import { CableGlyph, KeyGlyph, ScheduleGlyph, WarningGlyph } from "@crewlethq/icons/glyphs";
+import { SeatAvatar } from "~/ui/SeatAvatar.tsx";
+import { PlugGlyph, KeyGlyph, ClockGlyph, TriangleAlertGlyph } from "@crewlethq/icons/glyphs";
 // STILL OURS: an attention row's mark is named by `lib/attention.ts` as a
 // value, and uilet's glyphs are components. The name -> drawing lookup stays
 // in `~/ui/Icon.tsx`, which is the one place a port of it moves every caller
 // at once - the same call `app/frame/cells.tsx` makes for the same reason.
-import { Mark } from "~/ui/glyph.tsx";
-import { PhaseTag, uiletTone } from "~/ui/primitives.tsx";
+import { PhaseTag } from "~/ui/primitives.tsx";
 import { href } from "~/app/router.tsx";
 import { fmtDateTime, fmtTime, humanize, relTime } from "~/lib/format.ts";
 import { useNow } from "~/lib/clock.ts";
 import { requestToken } from "~/protocol/index.ts";
 import {
+  activityOf,
+  activityWord,
+  handleLabel,
+  ringOf,
   roundLabel,
-  runState,
   seatPath,
-  seatTone,
-  stateLabel,
-  statusLine,
+  stateLine,
   toneOf,
+  type NameOf,
   type Seat,
   type SeatKind,
 } from "~/lib/seats.ts";
-import type { AgentRow, FeedRow, QueryErrorCode, SandboxEntry } from "~/protocol/index.ts";
-import type { Attention } from "~/lib/attention.ts";
+import type { AgentRow, FeedRow } from "~/protocol/index.ts";
+import type { QueryErrorCode } from "~/contract/errors.ts";
 
 /**
  * How tall a block of machine text grows before it scrolls itself, in px.
@@ -95,32 +96,30 @@ export function SeatChip({
       // the accent everywhere it appears is identity-colouring by accident.
       // The affordance is the hover state and the cursor.
       className="row seat-chip"
-      style={{ gap: "var(--space-2)", minWidth: 0 }}
-      href={href(["company", "people", target])}
+      style={{ gap: "var(--spacing-2)", minWidth: 0 }}
+      href={href(["agents", "seats", target])}
     >
-      {/* `dashed` IS A HUMAN SEAT, in uilet's own words: its Avatar doc calls
-          the drawn edge "a HUMAN seat: the engine does not run it", which is
-          the structural fact ours carried. A kind the chart does not hold
-          draws the neutral disc rather than claiming the seat is an agent.
+      {/* THE KIND IS THE OUTLINE: the kit draws a person as a circle and an
+          agent as a squircle, and that is the one cue telling them apart. A
+          kind the chart does not hold takes the kit's default, the agent's
+          squircle — the engine runs agents, and a person is always declared.
           `decorative` because the name is printed immediately beside it —
           without it the row reads "Ada Lovelace avatar, Ada Lovelace". */}
-      <Avatar name={name} size={size} variant={kind === "human" ? "dashed" : "solid"} decorative />
+      <SeatAvatar name={name} size={size} kind={kind === "human" ? "human" : "agent"} decorative />
       <span className="truncate">{name}</span>
     </a>
   );
 }
 
-export function StateBadge({
-  agent,
-  sandboxes,
-}: {
-  agent: AgentRow | null | undefined;
-  sandboxes: SandboxEntry[];
-}) {
-  const state = runState(agent, sandboxes);
+/**
+ * A seat's state as a pill: the engine's word and its ring's tone. An idle
+ * seat is the neutral pill — a green one read as activity.
+ */
+export function StateBadge({ agent }: { agent: AgentRow | null | undefined }) {
+  const state = activityOf(agent);
   return (
-    <Tag variant={uiletTone(toneOf(state))} dot>
-      {stateLabel(state)}
+    <Tag variant={toneOf(state)} dot>
+      {activityWord(state)}
     </Tag>
   );
 }
@@ -128,41 +127,51 @@ export function StateBadge({
 export function SeatCard({
   seat,
   agent,
-  sandboxes,
+  nameOf,
 }: {
   seat: Seat;
   agent: AgentRow | undefined;
-  sandboxes: SandboxEntry[];
+  /** A person's name by their handle, off the chart the caller holds — see `NameOf`. */
+  nameOf: NameOf;
 }) {
   const now = useNow();
-  const sandbox = sandboxes.find((s) => s.role === seat.name) ?? null;
-  const tone = seat.kind === "human" ? "quiet" : seatTone(agent, sandboxes);
+  // THE RING'S TONE, OR NONE: a person is not run by the engine, and an idle
+  // seat draws no edge, for the reason `ringOf` gives.
+  const tone = seat.kind === "human" ? undefined : ringOf(activityOf(agent));
   const call = agent?.live_call;
   // Decoded ONCE, by the helper the attention queue also reads: the number on
   // this card and the sentence in that row are the same reading of one field.
-  const round = call ? roundLabel(call.round_num) : null;
+  const round = call ? roundLabel(call) : null;
   return (
     // `seatPath`, not a handle spelled out again: a seat the engine reported no
-    // handle for is addressed by NAME, and `#/company/people/` opens nothing.
+    // handle for is addressed by NAME, and `#/agents/seats/` opens nothing.
     <a className="seat-card" data-tone={tone} href={href(seatPath(seat))}>
       <div className="row">
-        <Avatar
+        {/* THE RING IS THE STATE, as on the chart's cards: one hue per seat,
+            and it is what the seat is doing. */}
+        <SeatAvatar
           name={seat.name}
           size="lg"
-          variant={seat.kind === "human" ? "dashed" : "solid"}
+          kind={seat.kind === "human" ? "human" : "agent"}
+          {...(tone ? { ring: tone } : {})}
           decorative
         />
         <div className="col" style={{ gap: 0, flex: 1, minWidth: 0 }}>
           <strong className="truncate t-body">{seat.name}</strong>
-          <span className="truncate t-caption mono">@{seat.handle}</span>
+          {seat.handle && (
+            <span className="truncate t-caption mono">{handleLabel(seat.handle)}</span>
+          )}
         </div>
         {seat.kind === "human" ? (
-          <Tag appearance="outline">human</Tag>
+          // THE CIRCLE SAYS IT. A tag reading "human" beside a person's
+          // circle was the outline said twice; the word stays for a
+          // screen reader, which does not see the outline.
+          <span className="sr-only">human</span>
         ) : (
-          <StateBadge agent={agent} sandboxes={sandboxes} />
+          <StateBadge agent={agent} />
         )}
       </div>
-      <div className="seat-line truncate">{statusLine(agent, { sandbox, seat })}</div>
+      <div className="seat-line truncate">{stateLine(agent, { now, seat, nameOf })}</div>
       {call?.in_progress && (
         <div className="row gap-1">
           {/* THE PHASE IN THE PHASE'S OWN HUE, drawn by the one component that
@@ -177,16 +186,15 @@ export function SeatCard({
               way out) and names an absent phase, where this drew a coloured gap.
               The note it replaces called the miss deliberate because `PhaseTag`
               was somebody else's file during the uilet port; it is a `~/ui`
-              primitive this module already imports for `uiletTone`, so there was
-              never a second spelling to avoid — only a second colour. */}
+              primitive this module already imports, so there was never a
+              second spelling to avoid — only a second colour. */}
           <PhaseTag phase={call.phase} />
           {/* NOT A BARE DASH. "round —" on a seat that is plainly working reads
               as a field the engine failed to report; the engine reported it
               exactly — `-1` is the opening frame a phase publishes before its
-              first provider call, so the phase has started and its first model
-              round has not come back. `t-num` stays: it is what keeps the digits
-              from jittering as the round advances, and it does nothing to a
-              word. */}
+              first provider call, so round 1 is in flight, and the hint says it
+              has not come back. `t-num` keeps the digits from jittering as the
+              round advances. */}
           <span className="t-caption t-num" title={round?.hint}>
             {round?.text}
           </span>
@@ -200,95 +208,98 @@ export function SeatCard({
 }
 
 /**
- * One obligation.
- *
- * Every row says WHAT happened and WHAT IT COSTS to leave it — the second half
- * is the part a list of conditions usually omits, and it is the half that lets
- * a reader decide whether to act now.
- */
-export function AttentionRow({ item }: { item: Attention }) {
-  const now = useNow();
-  const inner = (
-    <>
-      <span className="attention-icon">
-        <Mark name={item.icon} size="sm" />
-      </span>
-      <span className="col" style={{ gap: 2, flex: 1, minWidth: 0 }}>
-        <span className="t-body" style={{ fontWeight: "var(--fw-medium)" }}>
-          {item.title}
-        </span>
-        <span className="t-caption">{item.detail}</span>
-      </span>
-      {item.at && (
-        <time className="t-caption nowrap" dateTime={item.at} title={fmtDateTime(item.at)}>
-          {relTime(item.at, now)}
-        </time>
-      )}
-    </>
-  );
-  if (!item.path) {
-    return (
-      <div className="attention-row" data-severity={item.severity}>
-        {inner}
-      </div>
-    );
-  }
-  return (
-    <a
-      className="attention-row clickable"
-      data-severity={item.severity}
-      href={href(item.path, item.query)}
-    >
-      {inner}
-    </a>
-  );
-}
-
-/**
  * One row of the event log.
  *
  * Four fixed columns — when, who, what, where — so a run of rows scans as
  * columns rather than as prose. The category is a WORD, not a hue: eight
  * coloured category chips in one list, repeated on every row, is most of what
  * made the old feed unreadable.
+ *
+ * WHO IS SAID ONCE. An engine event's source and actor are routinely the same
+ * name — a lifecycle event is published BY the node and ABOUT the node — and
+ * drawing both put `harness-0` in two adjacent columns while the sentence
+ * between them was cut to "Organization…". The tail names the source only
+ * where it differs from the actor.
+ *
+ * `compact` is the row a CARD draws, beside other cards: the time and one
+ * line that is the actor followed by what happened, with no tail — the
+ * source and the category are the log's columns, one click away, and at half
+ * a page's width they were what the sentence gave its room up to.
  */
-export function EventRow({ event, onOpen }: { event: FeedRow; onOpen?: () => void }) {
+export function EventRow({
+  event,
+  onOpen,
+  compact = false,
+}: {
+  event: FeedRow;
+  onOpen?: () => void;
+  compact?: boolean;
+}) {
   const now = useNow();
-  const body = (
+  const actor = event.actor || "engine";
+  const what = event.summary || event.type;
+  const failedMark = event.failed && (
+    <TriangleAlertGlyph
+      size="xs"
+      aria-label="failed"
+      style={{ display: "inline", color: "var(--color-feedback-danger-ink)", marginRight: 4 }}
+    />
+  );
+  const time = (
+    <time
+      className="feed-time"
+      dateTime={event.timestamp}
+      title={`${fmtDateTime(event.timestamp)} · ${relTime(event.timestamp, now)}`}
+    >
+      {/* A WALL CLOCK, AND THE TRACK IS SIZED FOR ONE. The full instant is
+          in the title; which DAY a row belongs to is a heading between days
+          (`routes/live/Activity.tsx`), because a date is a property of
+          the rows under it rather than of the first of them — and rendered
+          here it put `fmtDateTime` in a 62px column and wrapped one row per
+          day to three lines. */}
+      {fmtTime(event.timestamp)}
+    </time>
+  );
+  const source = event.source && event.source !== actor ? event.source : "";
+  // THE ENGINE'S OWN SENTENCES OFTEN OPEN WITH THEIR ACTOR ("Agent PM
+  // finished reflecting"), so a card's line prefixed with the actor read
+  // "Agent PM Agent PM finished…". Where the sentence already names them
+  // first, the actor IS its opening words, drawn in the actor's weight.
+  const opens = what.startsWith(`${actor} `);
+  const rest = opens ? what.slice(actor.length) : ` ${what}`;
+  // THE HOVER TEXT IS THE DRAWN LINE, built from the same two pieces: it
+  // spelled "actor — what" over a line reading "actor what", so the full
+  // text of a cut line was not the text that was cut.
+  const said = `${actor}${rest}`;
+  const body = compact ? (
     <>
-      <time
-        className="feed-time"
-        dateTime={event.timestamp}
-        title={`${fmtDateTime(event.timestamp)} · ${relTime(event.timestamp, now)}`}
-      >
-        {/* A WALL CLOCK, AND THE TRACK IS SIZED FOR ONE. The full instant is
-            in the title; which DAY a row belongs to is a heading between days
-            (`routes/activity/Activity.tsx`), because a date is a property of
-            the rows under it rather than of the first of them — and rendered
-            here it put `fmtDateTime` in a 62px column and wrapped one row per
-            day to three lines. */}
-        {fmtTime(event.timestamp)}
-      </time>
-      <span className="feed-actor truncate">{event.actor || "engine"}</span>
-      <span className="feed-what truncate">
-        {event.failed && (
-          <WarningGlyph
-            size="xs"
-            style={{ display: "inline", color: "var(--critical-ink)", marginRight: 4 }}
-          />
-        )}
-        {event.summary || event.type}
+      {time}
+      {/* ONE LINE, and its title is the whole of it: a sentence cut at the
+          card's edge is still readable on hover. */}
+      <span className="feed-what truncate" title={said}>
+        {failedMark}
+        <span className="feed-actor">{actor}</span>
+        {rest}
+      </span>
+    </>
+  ) : (
+    <>
+      {time}
+      <span className="feed-actor truncate">{actor}</span>
+      <span className="feed-what truncate" title={what}>
+        {failedMark}
+        {what}
       </span>
       <span className="feed-tail">
-        {event.source && <span className="truncate">{event.source}</span>}
+        {source && <span className="truncate">{source}</span>}
         <span className="muted">{humanize(event.category) || "system"}</span>
       </span>
     </>
   );
   return (
     <a
-      className={cx("feed-row", event.failed && "failed")}
-      href={href(["activity", "events", event.id])}
+      className={cx("feed-row", compact && "compact", event.failed && "failed")}
+      href={href(["live", "events", event.id])}
       onClick={onOpen}
     >
       {body}
@@ -378,7 +389,7 @@ const REFUSALS: Record<QueryErrorCode, ReactNode> = {
     </Callout>
   ),
   unavailable: (
-    <Callout variant="neutral" icon={<ScheduleGlyph size="md" />}>
+    <Callout variant="neutral" icon={<ClockGlyph size="md" />}>
       This node cannot answer yet: its copy of the company&rsquo;s records is still catching up, or
       it could not reach the coordination store for a moment. Nothing is lost, and this screen asks
       again on its own.
@@ -391,7 +402,7 @@ const REFUSALS: Record<QueryErrorCode, ReactNode> = {
     </Callout>
   ),
   timeout: (
-    <Callout variant="warning" icon={<ScheduleGlyph size="md" />}>
+    <Callout variant="warning" icon={<ClockGlyph size="md" />}>
       The engine did not answer within 10 seconds. It may be under load.
     </Callout>
   ),
@@ -406,7 +417,7 @@ const REFUSALS: Record<QueryErrorCode, ReactNode> = {
   closed: (
     // A SOCKET, drawn as one. `plug` was ours; `Cable` is the nearest thing
     // uilet vendors and says the same thing about a connection that went away.
-    <Callout variant="neutral" icon={<CableGlyph size="md" />}>
+    <Callout variant="neutral" icon={<PlugGlyph size="md" />}>
       The connection went away before this answered. Nothing refused it; the screen reads again once
       the socket is back.
     </Callout>
@@ -423,11 +434,19 @@ const REFUSALS: Record<QueryErrorCode, ReactNode> = {
  */
 export function QueryState({
   error,
+  detail,
   loading,
   empty,
   children,
 }: {
   error: string | null;
+  /**
+   * The engine's own sentence on a `bad_params` refusal (`useQuery`'s
+   * `detail`). Given, the refusal is the ENGINE'S words about what to change
+   * rather than this component's guess that the screen asked wrong — a window
+   * past the spend history is the reader's to change, not a bug.
+   */
+  detail?: string;
   loading: boolean;
   /**
    * `hint` IS REQUIRED, which is uilet's `EmptyState` rule and the reason this
@@ -435,12 +454,15 @@ export function QueryState({
    * on a node whose store could not be read are the same headline and
    * completely different problems, and only the second sentence separates
    * them. It was optional while one caller in the tree had no second sentence
-   * (`routes/cost/Spend.tsx`); that one now says what to do about it, so the
+   * (`routes/spend/Spend.tsx`); that one now says what to do about it, so the
    * type says what the component always meant.
    */
   empty?: { title: ReactNode; hint: ReactNode };
   children?: ReactNode;
 }) {
+  if (error === "bad_params" && detail) {
+    return <Callout variant="warning">The engine refused this request: {detail}</Callout>;
+  }
   const refusal = error ? REFUSALS[error as QueryErrorCode] : undefined;
   if (refusal) return <>{refusal}</>;
   // A CODE THIS BUILD DOES NOT KNOW. A newer node may send one — the wire

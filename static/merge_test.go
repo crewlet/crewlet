@@ -54,7 +54,7 @@ func TestGitWillNotTextMergeTheEmbeddedDashboard(t *testing.T) {
 		"static/dashboard/assets/index-0000000000.css",
 		"static/dashboard/assets/react-0000000000.js",
 		"static/dashboard/protocol.js",
-		"static/dashboard/fonts/inter-latin.woff2",
+		"static/dashboard/fonts/geist-latin.woff2",
 	}
 	for _, path := range governed {
 		if got := mergeAttr(t, path); got != "unset" {
@@ -68,12 +68,11 @@ func TestGitWillNotTextMergeTheEmbeddedDashboard(t *testing.T) {
 
 	// THE OTHER SIDE, because an attribute scoped too widely is its own bug:
 	// the dashboard's SOURCE is hand-written and must merge normally, and so
-	// must the icon static.go embeds from one directory up, which the build
-	// does not write.
+	// must the Go beside the tree, which the build does not write.
 	for _, path := range []string{
 		"dashboard/src/app/App.tsx",
 		"dashboard/vite.config.ts",
-		"static/crewlet-icon.svg",
+		"static/static.go",
 		"internal/api/dashboard.go",
 	} {
 		if got := mergeAttr(t, path); got != "unspecified" {

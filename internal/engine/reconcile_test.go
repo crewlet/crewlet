@@ -120,7 +120,8 @@ func (p *plane) activate(ctx context.Context, t *testing.T, doc string) int64 {
 	t.Helper()
 	document := yamlToJSON(t, doc)
 	id, err := p.store.Configs().InsertActive(ctx, store.Revision{
-		Source: "test", CreatedBy: "operator", Summary: "revision",
+		CreatedByKind: store.AuthorOperator,
+		Source:        "test", CreatedBy: "operator", Summary: "revision",
 		Payload: document, CreatedAt: pinnedNow,
 	})
 	if err != nil {
@@ -139,7 +140,8 @@ func (p *plane) activate(ctx context.Context, t *testing.T, doc string) int64 {
 func (p *plane) activatePayload(t *testing.T, summary string, payload json.RawMessage) int64 {
 	t.Helper()
 	id, err := p.store.Configs().InsertActive(t.Context(), store.Revision{
-		Source: "test", CreatedBy: "operator", Summary: summary,
+		CreatedByKind: store.AuthorOperator,
+		Source:        "test", CreatedBy: "operator", Summary: summary,
 		Payload: payload, CreatedAt: pinnedNow,
 	})
 	if err != nil {
@@ -262,6 +264,72 @@ func TestTheOutcomeIsRecordedWhereEveryPeerReadsIt(t *testing.T) {
 	}
 }
 
+// A CONVERGED NODE KEEPS SAYING SO.
+//
+// The apply-status row ages out after four reconcile intervals by design, so
+// a node that stops reporting vanishes from the fleet view. It was written on
+// an apply alone, so a node that converged stopped reporting a minute later:
+// the fleet view drew it as having applied nothing while its own /health
+// served the current epoch, and every peer dropped it as stale evidence.
+func TestAConvergedNodeKeepsItsApplyStatusFresh(t *testing.T) {
+	t.Parallel()
+	now := pinnedNow
+	p := newPlane(t, func(o *engine.ReconcilerOptions) {
+		o.Now = func() time.Time { return now }
+	})
+	epoch := p.activate(t.Context(), t, grownCompanyDoc)
+	if err := p.recon.Tick(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	// Longer than the row's freshness: without a refresh this is the row
+	// every peer skips and the fleet view drops.
+	now = pinnedNow.Add(2 * coord.StatusFreshness)
+	if err := p.recon.Tick(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	row := p.fleetRow(t)
+	if !row.UpdatedAt.Equal(now) {
+		t.Errorf("row written at %v, want this tick's %v — a converged node stopped reporting",
+			row.UpdatedAt, now)
+	}
+	if row.Epoch != epoch || configplane.ApplyStatus(row.Status) != configplane.StatusOK {
+		t.Errorf("row = %+v, want ok on epoch %d", row, epoch)
+	}
+	// A refresh is not an apply: the epoch is built once.
+	if len(p.applies) != 1 {
+		t.Errorf("%d applies, want the one", len(p.applies))
+	}
+}
+
+// AND A NODE THAT GAVE UP KEEPS SAYING WHY. Out of retries on an epoch, the
+// failure it recorded is what its peers and the fleet view need; aged out, the
+// node read as one that never tried.
+func TestANodeOutOfRetriesKeepsItsFailureFresh(t *testing.T) {
+	t.Parallel()
+	now := pinnedNow
+	p := newPlane(t, func(o *engine.ReconcilerOptions) {
+		o.Now = func() time.Time { return now }
+	})
+	p.activatePayload(t, "broken", brokenRevision)
+	for range configplane.MaxApplyAttempts {
+		_ = p.recon.Tick(t.Context())
+	}
+	first := p.fleetRow(t)
+	now = pinnedNow.Add(2 * coord.StatusFreshness)
+	_ = p.recon.Tick(t.Context())
+	row := p.fleetRow(t)
+	if !row.UpdatedAt.Equal(now) {
+		t.Errorf("row written at %v, want this tick's %v", row.UpdatedAt, now)
+	}
+	if configplane.ApplyStatus(row.Status) != configplane.StatusError || row.Error != first.Error {
+		t.Errorf("row = %+v, want the recorded failure %q restated", row, first.Error)
+	}
+	if len(p.applies) != configplane.MaxApplyAttempts {
+		t.Errorf("%d applies, want the %d attempts and no more", len(p.applies),
+			configplane.MaxApplyAttempts)
+	}
+}
+
 func TestReactivatingAnUnchangedRevisionAppliesAgain(t *testing.T) {
 	t.Parallel()
 	// THE credential-rotation gesture. The payload is identical and the
@@ -322,13 +390,6 @@ func TestAnAlreadyAppliedEpochIsNotReapplied(t *testing.T) {
 	}
 }
 
-// THE FLEET'S REVISION IS THIS NODE'S ACTIVE ONE ONCE THE NODE RUNS IT.
-//
-// A node's active revision is what its GET /config serves, what it boots on,
-// and what it offers the whole fleet at its next start whenever it is newer
-// than the pointer. One that is not the fleet's, left there after the node
-// applied the fleet's epoch, is a node serving a company the fleet is not
-// running, and republishing it one restart later over the one that is.
 // RE-ACTIVATING THE REVISION THIS NODE HOLDS MOVES ITS ACTIVATION INSTANT.
 //
 // Re-activation is the credential-rotation gesture, and the local row's
@@ -367,6 +428,13 @@ func TestReactivatingTheHeldRevisionMovesItsLocalInstant(t *testing.T) {
 	}
 }
 
+// THE FLEET'S REVISION IS THIS NODE'S ACTIVE ONE ONCE THE NODE RUNS IT.
+//
+// A node's active revision is what its GET /config serves, what it boots on,
+// and what it offers the whole fleet at its next start whenever it is newer
+// than the pointer. One that is not the fleet's, left there after the node
+// applied the fleet's epoch, is a node serving a company the fleet is not
+// running, and republishing it one restart later over the one that is.
 func TestTheNodesActiveRevisionFollowsTheFleetOnceApplied(t *testing.T) {
 	t.Parallel()
 	activeID := func(t *testing.T, p *plane) string {
@@ -393,7 +461,8 @@ func TestTheNodesActiveRevisionFollowsTheFleetOnceApplied(t *testing.T) {
 			t.Fatalf("Target: %v", err)
 		}
 		stray, err := p.store.Configs().InsertActive(t.Context(), store.Revision{
-			Source: "test", CreatedBy: "operator", Summary: "stray",
+			CreatedByKind: store.AuthorOperator,
+			Source:        "test", CreatedBy: "operator", Summary: "stray",
 			Payload: yamlToJSON(t, companyDoc), CreatedAt: pinnedNow.Add(time.Hour),
 		})
 		if err != nil {
@@ -418,7 +487,8 @@ func TestTheNodesActiveRevisionFollowsTheFleetOnceApplied(t *testing.T) {
 		t.Parallel()
 		p := newPlane(t)
 		previous, err := p.store.Configs().InsertActive(t.Context(), store.Revision{
-			Source: "test", CreatedBy: "operator", Summary: "before",
+			CreatedByKind: store.AuthorOperator,
+			Source:        "test", CreatedBy: "operator", Summary: "before",
 			Payload: yamlToJSON(t, companyDoc), CreatedAt: pinnedNow,
 		})
 		if err != nil {
@@ -426,7 +496,8 @@ func TestTheNodesActiveRevisionFollowsTheFleetOnceApplied(t *testing.T) {
 		}
 		document := yamlToJSON(t, grownCompanyDoc)
 		held, err := p.store.Configs().Insert(t.Context(), store.Revision{
-			ParentID: previous, Source: "api", CreatedBy: "operator", Summary: "written",
+			CreatedByKind: store.AuthorOperator,
+			ParentID:      previous, Source: "api", CreatedBy: "operator", Summary: "written",
 			Payload: document, CreatedAt: pinnedNow,
 		})
 		if err != nil {

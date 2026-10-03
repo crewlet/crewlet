@@ -9,7 +9,7 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
-// THE INDEX'S OWN RECORDS on the vector log — ADR-0022 — and why they are
+// THE INDEX'S OWN RECORDS on the vector log — ADR-0028 — and why they are
 // records rather than something each node computes for itself.
 //
 // # Published once, applied everywhere, like the vectors themselves

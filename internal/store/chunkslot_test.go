@@ -13,17 +13,17 @@ import (
 	"github.com/crewlet/crewlet/internal/objstore"
 )
 
-// A CHUNK ROW WRITTEN WHEN ROWS CARRIED A GROUP READS ITS SLOT AFTER 0024.
+// A CHUNK ROW WRITTEN WHEN ROWS CARRIED A GROUP READS ITS SLOT AFTER 0032.
 //
-// Replicated migration 0024 replaced `tracker_file_chunks.pg` with `slot`, and
+// Replicated migration 0032 replaced `tracker_file_chunks.pg` with `slot`, and
 // it had to CARRY every row across: nothing re-applies the file records behind
 // them, and a row lost here is a chunk the object store's collector reads as
-// named by nothing and deletes. So the case stands a database up at 0023,
+// named by nothing and deletes. So the case stands a database up at 0031,
 // writes rows in that shape — with the group the old applier wrote beside each
 // — and lets the real migrator take it forward.
 //
 // THE SLOT IS JUDGED AGAINST [objstore.Hash.Slot], the function the applier
-// writes every row after 0024 with — so what this proves is that a row carried
+// writes every row after 0032 with — so what this proves is that a row carried
 // across and a row written fresh file one chunk at the same slot, which is the
 // only agreement a pass over a slot range needs. The addresses are chosen for
 // the hex arithmetic: every digit from 0 to f in every one of the four places
@@ -31,7 +31,7 @@ import (
 func TestAChunkRowFromTheGroupEraReadsItsSlot(t *testing.T) {
 	t.Parallel()
 	path := filepath.Join(t.TempDir(), "replicated.db")
-	old := migratedThrough(t, EstatePartition, path, "0023_a_project_keeps_files.sql")
+	old := migratedThrough(t, EstatePartition, path, "0031_a_project_keeps_files.sql")
 
 	const digits = "0123456789abcdef"
 	chunks := []objstore.Hash{
@@ -59,7 +59,7 @@ func TestAChunkRowFromTheGroupEraReadsItsSlot(t *testing.T) {
 			VALUES (?, ?, ?, ?, ?)`,
 			file, i/2, string(h), 1000+i, groupEraPG(t, h)); err != nil {
 			_ = old.Close()
-			t.Fatalf("write a row in 0023's shape: %v", err)
+			t.Fatalf("write a row in 0031's shape: %v", err)
 		}
 	}
 	if err := old.Close(); err != nil {
@@ -75,8 +75,8 @@ func TestAChunkRowFromTheGroupEraReadsItsSlot(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !slices.Contains(applied, "0024_a_chunk_row_names_its_slot.sql") {
-		t.Fatalf("0024 did not run on a database at 0023: applied %v", applied)
+	if !slices.Contains(applied, "0032_a_chunk_row_names_its_slot.sql") {
+		t.Fatalf("0032 did not run on a database at 0031: applied %v", applied)
 	}
 
 	type row struct {
@@ -106,7 +106,7 @@ func TestAChunkRowFromTheGroupEraReadsItsSlot(t *testing.T) {
 		t.Fatalf("read the migrated rows: %v", err)
 	}
 	if len(got) != len(chunks) {
-		t.Fatalf("%d rows were written at 0023 and %d came through 0024 — a row "+
+		t.Fatalf("%d rows were written at 0031 and %d came through 0032 — a row "+
 			"lost here is a chunk the collector deletes", len(chunks), len(got))
 	}
 	for i, h := range chunks {
@@ -125,7 +125,7 @@ func TestAChunkRowFromTheGroupEraReadsItsSlot(t *testing.T) {
 		}
 	}
 
-	// THE SHAPE 0024 LEAVES: no group column and no index over one, the
+	// THE SHAPE 0032 LEAVES: no group column and no index over one, the
 	// slot index in its place, the aside table gone — and a slot that has
 	// NO DEFAULT, so a writer that forgot it is refused rather than filed
 	// at slot 0, which is a real slot and the one a default would pick.
@@ -181,11 +181,11 @@ func TestAChunkRowFromTheGroupEraReadsItsSlot(t *testing.T) {
 	}
 }
 
-// groupEraPG is the placement group 0023's applier stored beside a chunk: its
+// groupEraPG is the placement group 0031's applier stored beside a chunk: its
 // address's first four bytes, big-endian, modulo the 256 groups a map then
 // had. Restated rather than imported because the function that computed it is
 // gone with the fixed group count — and the value matters only for being the
-// real shape of an old row, since 0024 reads the slot off the chunk itself.
+// real shape of an old row, since 0032 reads the slot off the chunk itself.
 func groupEraPG(t *testing.T, h objstore.Hash) int {
 	t.Helper()
 	raw, err := hex.DecodeString(string(h[:8]))

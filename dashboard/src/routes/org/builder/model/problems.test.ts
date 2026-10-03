@@ -92,7 +92,7 @@ describe("placeProblems", () => {
     const index = placeProblems(sent, {
       problems: [
         problem(["integrations", "datadog", "route_to"]),
-        problem(["scheduling", "timezone"]),
+        problem(["scheduling", "tick_seconds"]),
         problem(["providers", "llm"]),
         problem(null, { message: "yaml: line 3: could not parse" }),
         problem(["roles", 9, "goal"]),

@@ -6,6 +6,7 @@ import (
 	"slices"
 	"testing"
 
+	"github.com/crewlet/crewlet/internal/knowledge"
 	"github.com/crewlet/crewlet/internal/search"
 	"github.com/crewlet/crewlet/internal/tracker"
 )
@@ -18,9 +19,13 @@ type fakeRanker struct {
 	building bool
 }
 
-func (f fakeRanker) Candidates(context.Context, string) (search.Candidates,
-	map[string]tracker.RankedDoc, error) {
-	return search.Candidates{Lexical: f.lexical}, f.docs, nil
+// Candidates answers the keys it was given as a keyword ranking: the words
+// were ranked, which is what makes an empty answer ask the building gate.
+func (f fakeRanker) Candidates(context.Context, tracker.SearchQuery) (tracker.RankedCandidates, error) {
+	return tracker.RankedCandidates{
+		Candidates: search.Candidates{Lexical: f.lexical}, Docs: f.docs,
+		Outcome: knowledge.Outcome{ServedMode: knowledge.ModeKeyword},
+	}, nil
 }
 
 func (f fakeRanker) Building(context.Context) bool { return f.building }
@@ -46,11 +51,11 @@ func TestARankedSearchWalksPastARemovedItemWithoutAGap(t *testing.T) {
 			"task:b": {ID: keep2.ID},
 		},
 	}
-	slice, err := tracker.NewSearcher(r.db.Reader(), rank).Slice(t.Context(), "retry")
+	slice, err := tracker.NewSearcher(r.db.Reader(), rank).Slice(t.Context(), tracker.SearchQuery{Text: "retry"})
 	if err != nil {
 		t.Fatalf("slice: %v", err)
 	}
-	got := tracker.MergeSearch([]tracker.SearchSlice{slice}, 2)
+	got := tracker.MergeSearch([]tracker.SearchSlice{slice}, tracker.SearchQuery{Limit: 2}).Hits
 	if len(got) != 2 || got[0].ID != keep1.ID || got[1].ID != keep2.ID {
 		t.Fatalf("ranked %+v, want the two surviving items, the removed leader walked past", got)
 	}
@@ -67,15 +72,15 @@ func TestAnEmptyRankingFromABuildingIndexSaysSo(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
 	task := r.createTask("Retry backoff")
-	_, err := tracker.NewSearcher(r.db.Reader(), fakeRanker{building: true}).Slice(t.Context(), "retry")
+	_, err := tracker.NewSearcher(r.db.Reader(), fakeRanker{building: true}).Slice(t.Context(), tracker.SearchQuery{Text: "retry"})
 	if !errors.Is(err, tracker.ErrIndexBuilding) {
 		t.Fatalf("an empty ranking from a building index = %v, want ErrIndexBuilding", err)
 	}
 	found := fakeRanker{building: true,
 		lexical: []search.Scored{{Key: "task:a", Score: 1}},
 		docs:    map[string]tracker.RankedDoc{"task:a": {ID: task.ID}}}
-	slice, err := tracker.NewSearcher(r.db.Reader(), found).Slice(t.Context(), "retry")
-	if err != nil || !slices.ContainsFunc(tracker.MergeSearch([]tracker.SearchSlice{slice}, 0),
+	slice, err := tracker.NewSearcher(r.db.Reader(), found).Slice(t.Context(), tracker.SearchQuery{Text: "retry"})
+	if err != nil || !slices.ContainsFunc(tracker.MergeSearch([]tracker.SearchSlice{slice}, tracker.SearchQuery{}).Hits,
 		func(row tracker.Ranked) bool { return row.ID == task.ID }) {
 		t.Fatalf("a ranking that found an item while building = (%+v, %v), want the item", slice, err)
 	}

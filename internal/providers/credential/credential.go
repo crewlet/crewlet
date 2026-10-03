@@ -24,7 +24,7 @@
 //     belongs to the key, so four nodes each discover a 429 on the same key
 //     separately unless one tells the others. [Pool.Share] attaches the
 //     fleet's ledger and [Pool.Refresh] pulls what peers found; both are off
-//     the request path. See fleetKey for why a shared record is scoped.
+//     the request path. See FleetKey for why a shared record is scoped.
 //
 // The pool speaks [llm.ErrorKind] because that is the providers layer's one
 // failure vocabulary — llm.go defines ErrorKind.ExhaustsCredential precisely
@@ -168,7 +168,7 @@ type Pool struct {
 	// on. Nil means the pool behaves exactly as it did before sharing
 	// existed rather than failing: cooldowns stay this process's own.
 	shared Shared
-	// scope namespaces this pool's keys in that ledger. See fleetKey.
+	// scope namespaces this pool's keys in that ledger. See FleetKey.
 	scope string
 }
 
@@ -207,7 +207,7 @@ const publishTimeout = 2 * time.Second
 // two clocks a few seconds apart.
 const refreshTolerance = time.Second
 
-// fleetKey is one credential's name in the shared ledger.
+// FleetKey is one credential's name in the shared ledger.
 //
 // SCOPED BY THE POOL, not bare, because a pool is what benches: a 429 is
 // scoped to a vendor's rate-limit bucket, and one config entry is exactly the
@@ -218,7 +218,11 @@ const refreshTolerance = time.Second
 //
 // The hint, never the key: the ledger is a shared store and a credential must
 // not be legible in it.
-func fleetKey(scope, hint string) string { return scope + ":" + hint }
+//
+// Exported for the one reader outside the pool: the operator surface that
+// reports each key's cooldown (`credential_pool`) reads the same ledger and
+// has to name a record exactly as a pool writes it.
+func FleetKey(scope, hint string) string { return scope + ":" + hint }
 
 // Options configure a pool.
 type Options struct {
@@ -307,7 +311,7 @@ func (p *Pool) Stats() []Stat {
 }
 
 // Share attaches the fleet's cooldown ledger, under a scope that namespaces
-// this pool's keys in it. See fleetKey for why the scope is not optional.
+// this pool's keys in it. See FleetKey for why the scope is not optional.
 //
 // AFTER construction, not in [Options], because a pool is built when the
 // company epoch is — which must work with no network at all, so that
@@ -344,7 +348,7 @@ func (p *Pool) publish(ctx context.Context, hint string, bench time.Duration) {
 	}
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), publishTimeout)
 	defer cancel()
-	if err := shared.Cool(ctx, fleetKey(scope, hint), wall().Add(bench)); err != nil {
+	if err := shared.Cool(ctx, FleetKey(scope, hint), wall().Add(bench)); err != nil {
 		// Warned rather than returned: the caller is mid-rotation and has
 		// nothing useful to do with this. What it costs is that peers
 		// rediscover the same refusal, which is worth a line naming the
@@ -388,7 +392,7 @@ func (p *Pool) Refresh(ctx context.Context) (int, error) {
 		if e.hint == "" {
 			continue
 		}
-		until, ok := cooled[fleetKey(scope, e.hint)]
+		until, ok := cooled[FleetKey(scope, e.hint)]
 		if !ok {
 			continue
 		}

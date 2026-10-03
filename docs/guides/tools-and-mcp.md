@@ -40,9 +40,9 @@ eighteen in full.
 |------|-------------|
 | `list_work_items` | The board, filtered — what you are assigned, what is open in a project, whether something was already filed |
 | `get_work_item` | One item's description, thread, history and links, by key or id |
-| `create_work_item` | File one. `project` defaults to the seat's own unit's, and is required when the unit owns none |
-| `update_work_item` | Move it — status, assignee, priority, labels, links — with an optional `if_match` that refuses on a concurrent edit |
-| `comment_on_work_item` | Post to the thread. Mentions wake the seats they name; the turn's own key makes a re-run turn post once |
+| `create_work_item` | File one. `project` defaults to the seat's own unit's, and is required when the unit owns none. `status` says where it starts (default `todo`). With no `assignee` it goes to the project's default assignee, else to triage for the lead, and the answer's `assignee` says which. `ask` (with an optional `decision`) files it as a question to that person, in one record |
+| `update_work_item` | Move it — status, assignee (with an optional `reason` the new assignee reads), priority, labels, links, one checklist change — with an optional `if_match` that refuses on a concurrent edit |
+| `comment_on_work_item` | Post to the thread. Mentions wake the seats they name; the turn's own key makes a re-run turn post once. `ask` puts a question to somebody and `decision` structures it as options; `answers` with `choice` answers one |
 | `merge_work_item` | Fold a duplicate into the item that survives — linked, its subtasks re-parented, and closed as `cancelled` |
 | `move_work_item` | Move a top-level item and its subtasks to another project, re-keyed there with the old keys still resolving — the project lead's or a person's own |
 | `search_work_items` | Find an item by what it says, ranked over titles and descriptions |
@@ -52,7 +52,7 @@ eighteen in full.
 | `remove_project_file` | Take a file out of a project; its content is deleted from storage |
 | `list_pages` | Browse the knowledge base by container, parent or title |
 | `get_page` | One page's body, breadcrumb, children and history |
-| `write_page` | Create one. Titles are addresses and are unique per container; a `parent` must be a page in the same container that is not in the trash |
+| `write_page` | Create one. Titles are addresses and are unique per container; a `parent` must be a page in the same container that is not in the trash; a body links another page by id, `[its title](#/knowledge/pages/<page id>)`, which is what "Linked from" reads |
 | `save_page` | Edit one, stating the version you read — there is no per-field merge that makes overwriting prose safe. A `parent` moves it, and may not be the page itself or one beneath it; an empty one moves it to the container's top |
 | `comment_on_page` | Remark on a page, or replace one of your own with `edit` |
 
@@ -113,17 +113,25 @@ another node whose ledger reaches back that far.
 
 The same tools are served to **your** AI assistant over
 [`/operator/mcp`](../reference/api-endpoints.md#operatormcp--your-own-assistant),
-with the writes attributed to your token rather than to a seat, and ten more
+with the writes attributed to your token rather than to a seat, and eleven more
 beside them that no seat is given: the saved views, the catalogue write, a
-person's own queue and inbox, and the trash. There, each tracker write's answer
-also carries the **`op_id`** of the operation the call was, and the write tools
-take it back as an argument: an assistant has no turn to repeat, so sending the
-same call with that `op_id` is how it finishes a write that came back
-`unknown` or stopped part of the way through, instead of filing it twice. An
-`op_id` is that one call and no other: it carries a digest of the call's
-arguments, and brought back with any other argument, or to another tool, it is
-refused before anything is written. A seat is never offered the argument — its
-turn is its identity — and a seat's call that sends one is refused.
+person's own queue and inbox, the trash, and the board drag. That set is built
+once per company as ONE operator catalogue, and every operator transport serves
+it, so what a person can do is the same whichever way they reach the company.
+
+Over MCP, each tracker write's answer also carries the **`op_id`** of the
+operation the call was, and the write tools take it back as an argument: an
+assistant has no turn to repeat, so sending the same call with that `op_id` is
+how it finishes a write that came back `unknown` or stopped part of the way
+through, instead of filing it twice. An `op_id` is that one call and no other:
+it carries a digest of the call's arguments, and brought back with any other
+argument, or to another tool, it is refused before anything is written. A seat
+is never offered the argument — its turn is its identity — and a seat's call
+that sends one is refused. The dashboard's transport,
+[`/operator/act`](../reference/api-endpoints.md#operatoract--the-dashboards-write-surface),
+takes no `op_id` either: the operation is derived from the request's own
+`request_id` (a UUIDv7) and the token that sent it, so the retry of a gesture
+is the same request sent again, and an `op_id` beside it is refused.
 
 Note the deliberate split between personal and shared writes: `reflect_and_persist` is **personal-only** (it writes to the agent's private `agent_diary`), while team-shared content is a knowledge-base page — `write_page` on the native backend, or the vendor's own MCP tools on Confluence (see [Knowledge System](../concepts/knowledge-system.md)). `use_skill` resolves the agent's own synthesized skills; shared procedures are knowledge-base pages.
 
@@ -146,7 +154,7 @@ schema, same call signature. With nothing recorded, a tool missing because its
 server failed to start reads as a missing builtin, which sends an operator to
 debug the wrong subsystem.
 
-`GET /tools` reports it as each tool's `source`, and the dashboard's **Tools** screen
+`GET /tools` reports it as each tool's `source`, and the dashboard's **Settings › Tools & MCP** screen
 groups on it:
 
 | `source` | Where the tool came from |
@@ -155,7 +163,33 @@ groups on it:
 | `mcp:<server>` | Discovered on an MCP server. `<server>` is the **bare** template name, never the per-role instance: two seats' children of one template are the same integration to a reader grouping the catalogue |
 
 Those two are the whole grammar. A server that fails to start is visible as a
-**missing group**, rather than its tools quietly going absent from the builtins.
+**missing group**, rather than its tools quietly going absent from the builtins —
+and, above the catalogue on the same screen, as a row of its own: every node
+re-publishes what its MCP starts concluded on its presence heartbeat (per
+server, its instances counted), so **MCP servers** shows each server as
+*Running*, *Partly failing*, *Failing*, *Not started* or *Not reported* with one
+cell per live node and the first failure's reason and seat (`GET /mcp-servers`,
+operator-only; the heartbeat carries each reason bounded, and the whole text is
+the node's `mcp_server_failed` log line). Clicking a server opens its own page:
+its state, reach and launch, every node's reason as the node reported it rather
+than clamped to the grid's two lines, and the catalogue narrowed to its tools —
+which, for a server that never started, says it registered none and why.
+
+### Adding a server from the dashboard
+
+**Add an MCP server** on Settings › Tools & MCP (operator token required) writes
+the same `mcp_servers` entry you would write in YAML: a name, a command and its
+arguments (stdio) or an address (http), `shared` or one per seat, and the
+environment or headers — values as `${NAME}` pointers into the secret store,
+which the form offers as you type `$`. It checks the whole company with the
+server in it before storing, and adds it after every server already declared.
+A name the configuration already carries is refused; a name only a node still
+runs, from a revision it has not applied past yet, is free: the create is
+judged against the configuration alone.
+Over the API it is `PUT /config/mcp-servers/{name}` with `If-None-Match: *` —
+see [configure via the API](configure-via-api.md). A per-seat server still needs
+a seat to declare credentials for it under `mcp_env`, which is written in the
+org builder.
 
 ### What a tool can do
 
@@ -189,6 +223,54 @@ positively assert, whether it reaches outside the company, where it delivers,
 and how many arguments its schema declares. A tool whose server advertised
 nothing shows as `unknown` rather than as a read — which is the row to check
 before granting a seat a new server.
+
+### When a tool refuses
+
+A tool that cannot do what it was asked answers with a **failed result** rather
+than an error: the turn is fine, this call is not, and the sentence goes back to
+the model so it can try again with a better argument. That sentence is written
+for a model and tuned against how models behave, so it is not a contract anybody
+else can parse.
+
+The engine's **own** tools therefore also say what *kind* of refusal it was — a
+machine-readable class beside the sentence, which is what a surface that is not
+a model acts on:
+
+| Class | What it means | What a caller should do |
+|---|---|---|
+| `invalid` | An argument is wrong, and the sentence names which | Send something different |
+| `not_found` | The item, page, skill or colleague the call is *about* does not exist | Stop; it is gone or was never there |
+| `forbidden` | This caller may not do this here — outside a turn, somebody else's inbox or priorities, a view protected for its owner, a project's policy without the lead's authority, a reserved container | Ask whoever the sentence names |
+| `stale_version` | The object changed after the caller read it | Read it again and decide from what it says now |
+| `conflict` | The write lost its race to other writers, or the object's state moved under it | Read it again; a retry may land |
+| `exists` | What the call would create is already there | Edit the existing one |
+| `already_answered` | The question this answers has an answer | Read the answer |
+| `reassignment_budget` | The item has been handed on as often as it may be | Do not reassign it again |
+| `inbox_full` | A person's inbox list is at its ceiling | Mark older entries read |
+| `not_running` | The run or turn the call addresses is not running, or not waiting for this | Nothing to act on |
+| `steer_unsupported` | The running turn's runtime cannot take a note mid-turn | Wait for the turn to end |
+| `budget_exhausted` | The company's token budget has no room left in one of its windows, so a call that would spend tokens was not made; nothing was spent | Wait for the window the sentence names to reset, or raise its ceiling |
+| `unavailable` | This node cannot serve the call right now, or the company does not run what it needs — a read that failed, a log that refused the append (a maintenance or sealed fleet included), an unconfigured backend. **Never** "it does not exist" | Retry, or use the backend the company does run |
+| `peer_upgrading` | A node in the fleet is too old to carry this gesture | Retry after the rolling upgrade |
+
+An argument that merely *names* something missing — a `parent`, a `waiting_on`
+item, an `assignee` nobody has — is `invalid`, not `not_found`: the fix is the
+argument, and the call is not about that object.
+
+**`invalid` is claimed, never assumed.** A write the work tracker refuses on
+what it was asked — a field value it will not round, a tombstoned item, a cap
+the object would pass — is marked as such where the refusal is written. Any
+failure that is *not* marked is read as the node's: a store read or a log call
+that failed mid-write is `unavailable`, so a person is never told to change an
+input that was never wrong.
+
+**A call refused before any tool ran is classed too.** A tool name nothing
+registered is `not_found`; a real tool this phase was not offered, or one a
+skill guard holds back until its skill is loaded, is `forbidden`.
+
+**An MCP server's failure carries no class.** Its prose is the server's, and
+the engine will not guess a class from text it did not write; a reader that
+needs one treats an unclassified failure as the server's own.
 
 ---
 

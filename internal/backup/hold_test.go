@@ -385,7 +385,8 @@ func TestAFinishedBackupAnnouncesWhatItCovers(t *testing.T) {
 		Store: db, Partitions: holdsTheEstate, NodeID: "node-0", Holds: fleet, Backups: fleet,
 		Now: func() time.Time { return clock },
 	})
-	if _, err := service.Take(t.Context(), dir); err != nil {
+	manifest, err := service.Take(t.Context(), dir)
+	if err != nil {
 		t.Fatalf("take: %v", err)
 	}
 
@@ -420,5 +421,18 @@ func TestAFinishedBackupAnnouncesWhatItCovers(t *testing.T) {
 		t.Fatalf("the point names %q as its directory, want %q — \"the newest "+
 			"backup is three days old\" is an answer somebody then has to go "+
 			"and find the directory for", newest.Dir, dir)
+	}
+	// THE WHOLE ARTEFACT'S SIZE, so a screen can say what the copy weighs
+	// without reading a directory on another host.
+	var want int64
+	for _, st := range manifest.Stores {
+		want += st.Bytes
+	}
+	for _, s := range manifest.Streams {
+		want += s.Bytes
+	}
+	if want == 0 || newest.Bytes != want {
+		t.Fatalf("the point says the copy is %d bytes, want the manifest's %d",
+			newest.Bytes, want)
 	}
 }

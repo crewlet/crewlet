@@ -5,8 +5,6 @@ import (
 	"maps"
 	"testing"
 	"time"
-
-	"github.com/crewlet/crewlet/internal/tokens"
 )
 
 // THE ID INDEX HOLDS EXACTLY THE IDS THE RING HOLDS.
@@ -57,10 +55,8 @@ func TestTheSpendIndexDropsWhatTheWindowDrops(t *testing.T) {
 	aged := time.Now().UTC().Add(-LiveSpendWindow - time.Hour).Format(time.RFC3339Nano)
 	fresh := time.Now().UTC().Format(time.RFC3339Nano)
 
-	s.foldSpend(Envelope{ID: "aged", Type: tokens.PhaseCompletedEvent, Timestamp: aged},
-		map[string]any{"total_tokens": 5})
-	s.foldSpend(Envelope{ID: "fresh", Type: tokens.PhaseCompletedEvent, Timestamp: fresh},
-		map[string]any{"total_tokens": 5})
+	s.foldSpend(Envelope{ID: "aged", Timestamp: aged}, map[string]any{"total_tokens": 5})
+	s.foldSpend(Envelope{ID: "fresh", Timestamp: fresh}, map[string]any{"total_tokens": 5})
 	if got := len(s.spend); got != 1 {
 		t.Fatalf("holding %d records, want the aged one pruned", got)
 	}
@@ -71,8 +67,7 @@ func TestTheSpendIndexDropsWhatTheWindowDrops(t *testing.T) {
 
 	// And the count cap prunes the index too, not just the slice.
 	for i := range SpendRecordLimit + 10 {
-		s.foldSpend(Envelope{ID: fmt.Sprintf("n%d", i), Type: tokens.PhaseCompletedEvent,
-			Timestamp: fresh},
+		s.foldSpend(Envelope{ID: fmt.Sprintf("n%d", i), Timestamp: fresh},
 			map[string]any{"total_tokens": 1})
 	}
 	if len(s.spend) != SpendRecordLimit {

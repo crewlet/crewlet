@@ -36,3 +36,30 @@ export const SCREEN_SCROLL_ID = "screen-scroll";
 export function screenScroller(): HTMLElement | null {
   return document.getElementById(SCREEN_SCROLL_ID);
 }
+
+/**
+ * Bring `el` on screen when it is not — and, when asked, put focus on it.
+ *
+ * ON SCREEN MEANS INSIDE THE SHELL'S SCROLLER, not the window: the page bar
+ * sits above the scroller, so an element behind the bar is off screen however
+ * the window's own box reads it. An element already in view is left exactly
+ * where it is, and so is focus — a press that moved the page with nothing to
+ * show would be a jump with no reason. With no shell (a screen rendered bare
+ * in a test) the window is the view.
+ *
+ * `focus` is for a press whose only perceivable result is the thing revealed —
+ * a thread chosen from a stacked list, whose detail is a screen below it — so
+ * a keyboard or a screen reader lands where it opened. Leave it off where the
+ * reader is still stepping through the list they pressed in, as a revision
+ * picked on Configuration's Diff lens is.
+ */
+export function reveal(el: HTMLElement | null, { focus = false }: { focus?: boolean } = {}): void {
+  if (!el) return;
+  const box = el.getBoundingClientRect();
+  const view = screenScroller()?.getBoundingClientRect();
+  const top = view ? view.top : 0;
+  const bottom = view ? view.bottom : window.innerHeight;
+  if (box.top >= top && box.bottom <= bottom) return;
+  el.scrollIntoView({ block: "start" });
+  if (focus) el.focus({ preventScroll: true });
+}

@@ -6,7 +6,10 @@ import (
 	"net/http"
 
 	"github.com/crewlet/crewlet/internal/api/auth"
+	apiOperator "github.com/crewlet/crewlet/internal/api/operator"
 	"github.com/crewlet/crewlet/internal/backup"
+	"github.com/crewlet/crewlet/internal/events/types"
+	"github.com/crewlet/crewlet/internal/org"
 )
 
 // Taking a backup over HTTP.
@@ -64,6 +67,19 @@ func (a *App) serveBackup(w http.ResponseWriter, r *http.Request) {
 	// half-copied store file left where a complete one was about to land
 	// is worth the few seconds it takes to finish.
 	manifest, err := a.backup.Take(context.WithoutCancel(r.Context()), dir)
+	// AUDITED EITHER WAY, once the copy was attempted: a backup is every
+	// credential the company holds written to a directory somebody named,
+	// and the one that failed halfway left files there too. A request
+	// refused before the copy began wrote nothing and is not recorded — and
+	// a DESTINATION refusal is exactly that: backup.ErrBadDestination is
+	// returned only before a byte is copied, and a refusal that arrives with
+	// an estate already in the directory is returned without it (see its
+	// doc), so it is audited as the failed backup it is.
+	// Recorded, a mistyped path read as a failed backup in the history and
+	// in the failures a person counts, beside the field that said why.
+	if !errors.Is(err, backup.ErrBadDestination) {
+		a.auditBackup(r, operator, dir, manifest, err)
+	}
 	if err != nil {
 		// The reason goes to the LOG rather than the body, like every
 		// other route here — except the two an operator can actually act
@@ -101,10 +117,10 @@ func (a *App) serveBackup(w http.ResponseWriter, r *http.Request) {
 
 // backupStatus separates the caller's mistakes from the engine's failures.
 //
-// A destination that is occupied or relative is a 400: nothing is wrong with
-// the node, the request named somewhere it cannot write, and answering 500
-// would send an operator looking at the engine instead of at their own
-// command.
+// A destination that is occupied, relative or one this host cannot prepare is
+// a 400: nothing is wrong with the node, the request named somewhere it cannot
+// write, and answering 500 would send an operator looking at the engine
+// instead of at their own command.
 //
 // A copy naming chunks no data node could supply is a 503: this node is
 // sound and so is the command, and what fails is the fleet holding the
@@ -118,4 +134,44 @@ func backupStatus(err error) int {
 		return http.StatusServiceUnavailable
 	}
 	return http.StatusInternalServerError
+}
+
+// auditBackup publishes the backup's runtime audit record: who asked, the
+// person their token is bound to, where, and whether it finished.
+//
+// WHICH NODE'S DISK is the envelope's `node`, which the queue stamps on the
+// way out — and the queue this publishes through is this node's own, the node
+// that just took the copy. Naming it here as well would state one fact twice.
+func (a *App) auditBackup(r *http.Request, operatorID, dir string,
+	manifest backup.Manifest, err error) {
+
+	record := types.BackupRequested{
+		OperatorID: operatorID,
+		ActorSeat:  apiOperator.BoundSeat(a.chart, operatorID),
+		Dir:        dir,
+		Outcome:    types.AuditApplied,
+		Streams:    len(manifest.Streams),
+	}
+	if err != nil {
+		record.Outcome, record.Streams = types.AuditFailed, 0
+	}
+	apiOperator.Audit(r.Context(), a.audit, types.NewBackupRequested(record))
+}
+
+// chart is the company chart of the current epoch, or nil before one is
+// active — which binds nobody, exactly as an unbound token reads.
+func (a *App) chart() *org.Organization {
+	c := a.company()
+	if c == nil {
+		return nil
+	}
+	// THE SAME DERIVATION the viewer question walks, so the person a
+	// backup names and the person the dashboard says is signed in cannot
+	// differ. A company that does not derive is a chart nobody is bound
+	// in, not a failed backup.
+	organization, err := c.Organization()
+	if err != nil {
+		return nil
+	}
+	return organization
 }

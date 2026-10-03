@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/coord"
+	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tracker"
 )
@@ -35,6 +36,12 @@ type Actor struct {
 	Handle     string             `json:"handle"`
 	Kind       tracker.AuthorKind `json:"kind"`
 	Provenance tracker.Provenance `json:"provenance"`
+
+	// Records asks the serving node to answer which work items the write
+	// committed to ([reply.Written]), because the asker's provenance holds
+	// a turn's [tracker.WriteLog] — a set in the asking process that no
+	// wire carries. Set by the router itself wherever that log is present.
+	Records bool `json:"records,omitempty"`
 }
 
 // opClass is what a failover may do with an operation that went unanswered.
@@ -234,6 +241,14 @@ type reply struct {
 	// Parts is a gather's answer per partition, one per partition the
 	// request named, when it asked for [request.Slices].
 	Parts []partReply `json:"parts,omitempty"`
+
+	// Written is every work item the operation's writes COMMITTED to on
+	// this node, for a request whose actor asked ([Actor.Records]) — what a
+	// writer in the asking process would have reported into the turn's
+	// [tracker.WriteLog] itself. Reported whatever the answer, an error
+	// included, since a walking gesture's earlier steps committed whether
+	// or not a later one failed.
+	Written []types.WorkItem `json:"written,omitempty"`
 }
 
 // partReply is one partition's answer within a gather batch: what [reply]
@@ -383,6 +398,11 @@ type op[A, R any] struct {
 	// cover sets what the answer covered on it, for an operation declared
 	// [op.covered]; nil otherwise.
 	cover func(*R, statelog.Coverage)
+
+	// repeatable reports a ONCE-WRITE whose arguments name the caller's own
+	// idempotency key, and so may be asked again under it — see
+	// [op.repeatableWhen]. Nil for every other operation.
+	repeatable func(A) bool
 }
 
 // partitionsFunc resolves an operation's arguments to the partitions it
@@ -479,6 +499,24 @@ func (o op[A, R]) appends() op[A, R] {
 // see [opSpec.named].
 func (o op[A, R]) named() op[A, R] {
 	o.spec.named = true
+	return o
+}
+
+// repeatableWhen declares a once-write that is IDEMPOTENT for the calls whose
+// arguments say so: a page write that carries the caller's own key
+// ([pages.CallKey]) derives its operation id — and a create its page's id —
+// from that key rather than minting one per call, so a repeat under it is the
+// same operation and the ledger answers it with the first copy's outcome. Such
+// a call fails over as an [opIdempotentWrite] does; one without a key is still
+// never repeated ([opOnceWrite]). A property of the ASKING side, since the
+// class is what the asker may do with an unanswered request, and the server
+// runs the operation the same way either way.
+func (o op[A, R]) repeatableWhen(keyed func(A) bool) op[A, R] {
+	if o.spec.class != opOnceWrite {
+		panic(fmt.Sprintf("estate: %s is not a once-write, so nothing about its "+
+			"arguments can make it repeatable", o.spec.name))
+	}
+	o.repeatable = keyed
 	return o
 }
 

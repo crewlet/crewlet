@@ -11,7 +11,7 @@
 // moves between nodes on a lease — so nothing the map depends on may be a fact
 // about the node that happens to hold it. The copies every chunk keeps and the
 // label they are spread across come from the COMPANY configuration
-// (ADR-0020), stamped with the activation they came from so a holder a
+// (ADR-0027), stamped with the activation they came from so a holder a
 // revision behind cannot set them back; absences are counted in the
 // maintainer's own TICKS rather than timed on its clock
 // ([membership.OutTicks]); and everything a tick has to remember rides in the

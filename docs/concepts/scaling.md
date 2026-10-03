@@ -86,7 +86,7 @@ member counts whatever its roles, and a presence that does not say counts as
 one (see [who has to acknowledge](../guides/retention.md#who-has-to-acknowledge)).
 This is the shape for an agent host you want small and
 disposable — see [Running a Fleet](../guides/fleet.md#nodes-that-hold-no-data)
-and [ADR-0018](https://github.com/crewlet/crewlet/blob/main/adr/0018-a-node-without-data-reaches-the-estate-through-one-that-holds-it.md).
+and [ADR-0025](https://github.com/crewlet/crewlet/blob/main/adr/0025-a-node-without-data-reaches-the-estate-through-one-that-holds-it.md).
 
 The knowledge index is the one place the *work* is divided, and only the work:
 every indexed document carries a

@@ -166,7 +166,7 @@ func TestAStatelessNodeSearchesTheFleetsKnowledge(t *testing.T) {
 			Text: "rollback drain node", Org: p.agent.engine.Company().Org, Limit: 5,
 		})
 		// AND NOTHING MISSING: the one partition was answered.
-		return answer.Coverage.Complete() && slices.ContainsFunc(answer.Hits,
+		return answer.Partitions.Complete() && slices.ContainsFunc(answer.Hits,
 			func(h knowledge.Hit) bool { return h.Title == "Rollback runbook" })
 	})
 }

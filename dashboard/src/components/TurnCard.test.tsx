@@ -33,6 +33,7 @@ function phase(over: Partial<PhaseRecord> = {}): PhaseRecord {
     phase: "execute",
     iteration: 1,
     role: "Dev A",
+    agentId: "",
     model: "scripted",
     providerKey: "",
     live: false,
@@ -64,13 +65,24 @@ function phase(over: Partial<PhaseRecord> = {}): PhaseRecord {
     backend: "",
     codingAgent: "",
     sandboxId: "",
-    costUSD: 0,
+    launchId: "",
+    transcript: "",
     deliveredRefs: [],
     trigger: null,
     at: "2026-09-13T10:03:00Z",
     startedAt: "2026-09-13T10:00:00Z",
     durationMs: 180_000,
     eventId: "ev-1",
+    stage: "",
+    timedRounds: [],
+    hostRound: 0,
+    cacheReadTokens: 0,
+    maxRounds: 0,
+    roundStartedAt: "",
+    runningCall: null,
+    steers: [],
+    node: "",
+    clockStart: "",
     ...over,
   };
 }
@@ -96,9 +108,9 @@ const draw = (node: React.ReactElement) => render(<Router>{node}</Router>);
 
 test("a turn's length spans its first phase, not the gap between landings", () => {
   draw(<TurnCard group={turn()} />);
-  expect(screen.getByText("4m 0s")).toBeTruthy();
+  expect(screen.getByText("4m")).toBeTruthy();
   // The review's own duration, which is what two landing instants gave.
-  expect(screen.queryByText("1m 0s")).toBeNull();
+  expect(screen.queryByText("1m")).toBeNull();
 });
 
 // AND THE ENGINE'S OWN MEASUREMENT WINS over the window this card derived, so
@@ -110,16 +122,19 @@ test("a settled row's measurement wins over the phase window", () => {
     ended_at: "2026-09-13T10:04:35Z",
     duration_ms: 275_000,
     complete: true,
+    parked: false,
     phases: 2,
     iterations: 1,
     failed: false,
     input_tokens: 0,
     output_tokens: 0,
     total_tokens: 0,
+    cache_read_tokens: 0,
+    cache_write_tokens: 0,
   } satisfies TurnRow;
   draw(<TurnCard group={turn()} row={row} />);
   expect(screen.getByText("4m 35s")).toBeTruthy();
-  expect(screen.queryByText("4m 0s")).toBeNull();
+  expect(screen.queryByText("4m")).toBeNull();
 });
 
 // A LIVE TURN COUNTS FROM THE INSTANT THE TURNS TABLE CALLS STARTED. `started_at`
@@ -136,12 +151,15 @@ test("a live turn counts from the start the turns table prints", () => {
     ended_at: "",
     duration_ms: 0,
     complete: false,
+    parked: false,
     phases: 1,
     iterations: 1,
     failed: false,
     input_tokens: 0,
     output_tokens: 0,
     total_tokens: 0,
+    cache_read_tokens: 0,
+    cache_write_tokens: 0,
   } satisfies TurnRow;
   const { container } = draw(<TurnCard group={live} row={row} />);
   expect(container.querySelector("time")?.getAttribute("datetime")).toBe("2026-09-13T10:00:00Z");
@@ -163,36 +181,4 @@ test("the trigger line clamps rather than being cut at one line", () => {
     ".truncate is the cell rule — on a card it cuts the sentence with room underneath",
   ).not.toContain("truncate");
   expect(line.getAttribute("title")).toBe(SUMMARY);
-});
-
-// AND ITS TOKENS, BY THE SAME RULE. A settled turn's row sums every spend record
-// the engine holds for it — the usage record of each coding run it launched
-// among them — where the card holds only the phases this screen loaded and the
-// runs this tab happened to see arrive. A running turn's row is from before its
-// latest phases, so it keeps its own figure.
-test("a settled turn's tokens are its row's, which hold its coding runs", () => {
-  const row = {
-    turn_id: "t1",
-    started_at: "2026-09-13T10:00:00Z",
-    ended_at: "2026-09-13T10:04:35Z",
-    duration_ms: 275_000,
-    complete: true,
-    phases: 2,
-    iterations: 1,
-    failed: false,
-    input_tokens: 5100,
-    output_tokens: 840,
-    total_tokens: 5940,
-  } satisfies TurnRow;
-  const { container } = draw(<TurnCard group={turn({ totalTokens: 120 })} row={row} />);
-  const figure = container.querySelector('[title^="tokens across every phase"]');
-  expect(figure?.textContent).toBe((5940).toLocaleString());
-
-  cleanup();
-  const running = draw(
-    <TurnCard group={turn({ totalTokens: 120 })} row={{ ...row, complete: false }} />,
-  );
-  expect(running.container.querySelector('[title^="tokens across every phase"]')?.textContent).toBe(
-    "240",
-  );
 });

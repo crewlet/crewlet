@@ -276,7 +276,7 @@ func TestAnUnfiledSourceDoesNotScopeToTheWholeCompany(t *testing.T) {
 // retain the record under. So the envelope asks only whether the subject is a
 // subject; whether its KIND is one this build writes is the version-gated
 // second pass's question. Asked of the envelope, every kind a later build adds
-// — the index records of ADR-0022 were the first — stops every older node of
+// — the index records of ADR-0028 were the first — stops every older node of
 // a rolling upgrade instead of being deferred, which is what [search.Source]
 // promises.
 func TestAKindANewerBuildAddedIsDeferredNotStopped(t *testing.T) {

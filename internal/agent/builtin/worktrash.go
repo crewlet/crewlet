@@ -106,9 +106,9 @@ func (t *removeWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	before, err := t.deps.Reader.Task(ctx, ref, tracker.DetailWants{}, seatRead)
 	switch {
 	case errors.Is(err, tracker.ErrNoTask):
-		return failed(fmt.Sprintf("There is no work item %q.", clip(ref))), nil
+		return refused(tools.RefusalNotFound, fmt.Sprintf("There is no work item %q.", clip(ref))), nil
 	case err != nil:
-		return failed(readFailure(tracker.RemoveWorkItemTool, err)), nil
+		return readFailure(tracker.RemoveWorkItemTool, err), nil
 	}
 
 	after := before.Task
@@ -130,10 +130,10 @@ func (t *removeWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		return t.deps.subtreeStopped(ctx, actor, tracker.RemoveWorkItemTool,
 			before.Task.Key, "removed", got, stopped)
 	case err != nil:
-		return failed(writeFailure(actor, tracker.RemoveWorkItemTool, err)), nil
+		return writeFailure(actor, tracker.RemoveWorkItemTool, err), nil
 	case got.Outcome == statelog.OutcomeUnknown:
 		// See [mergeWorkItem]: the seam's contract, held here.
-		return failed(unknownWrite(actor, tracker.RemoveWorkItemTool,
+		return unknownOutcome(unknownWrite(actor, tracker.RemoveWorkItemTool,
 			fmt.Sprintf("%s went to the trash", before.Task.Key), opID,
 			got.Unvouched, unknownNext(got.Unvouched,
 				sameCall(actor, tracker.RemoveWorkItemTool),
@@ -207,9 +207,9 @@ func (t *restoreWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	before, err := t.deps.Reader.Task(ctx, ref, tracker.DetailWants{}, seatRead)
 	switch {
 	case errors.Is(err, tracker.ErrNoTask):
-		return failed(fmt.Sprintf("There is no work item %q.", clip(ref))), nil
+		return refused(tools.RefusalNotFound, fmt.Sprintf("There is no work item %q.", clip(ref))), nil
 	case err != nil:
-		return failed(readFailure(tracker.RestoreWorkItemTool, err)), nil
+		return readFailure(tracker.RestoreWorkItemTool, err), nil
 	}
 	// A LIVE ITEM IS NOT REFUSED HERE, because it is exactly what a restore
 	// that stopped part of the way through leaves: the root is back and
@@ -227,16 +227,19 @@ func (t *restoreWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	var stopped *tracker.SubtreeStopped
 	switch {
 	case errors.Is(err, tracker.ErrNothingToRestore):
-		return failed(fmt.Sprintf("%s is not in the trash, and nothing is in "+
-			"the trash with it, so there is nothing to restore.",
-			before.Task.Key)), nil
+		// CONFLICT: the item's state, not the argument, is what refuses
+		// this — somebody restored it, and what went with it, between the
+		// caller's read and now.
+		return refused(tools.RefusalConflict, fmt.Sprintf("%s is not in the "+
+			"trash, and nothing is in the trash with it, so there is nothing "+
+			"to restore.", before.Task.Key)), nil
 	case errors.As(err, &stopped):
 		return t.deps.subtreeStopped(ctx, actor, tracker.RestoreWorkItemTool,
 			before.Task.Key, "restored", got, stopped)
 	case err != nil:
-		return failed(writeFailure(actor, tracker.RestoreWorkItemTool, err)), nil
+		return writeFailure(actor, tracker.RestoreWorkItemTool, err), nil
 	case got.Outcome == statelog.OutcomeUnknown:
-		return failed(unknownWrite(actor, tracker.RestoreWorkItemTool,
+		return unknownOutcome(unknownWrite(actor, tracker.RestoreWorkItemTool,
 			fmt.Sprintf("%s came out of the trash", before.Task.Key), opID,
 			got.Unvouched, unknownNext(got.Unvouched,
 				sameCall(actor, tracker.RestoreWorkItemTool),

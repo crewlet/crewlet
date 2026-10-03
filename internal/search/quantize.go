@@ -1,7 +1,7 @@
 // Package search is the arithmetic behind the engine's semantic half: the
 // 1-bit quantization its first retrieval stage scans, the Hamming distance
 // that orders it, the inverted file that makes the first stage an INDEX
-// (ADR-0022, ivf.go), the two-stage composition itself, and the rank fusion
+// (ADR-0028, ivf.go), the two-stage composition itself, and the rank fusion
 // that joins it to the lexical half.
 //
 // # The first stage is an index, and the index is replicated state
@@ -14,7 +14,7 @@
 // holds the same centroids and files every row in the same list. How many
 // lists a search reads is that measurement's answer, never a constant, and a
 // partition whose corpus has no structure a partition can find gets no index
-// at all: the full scan stays its first stage. See ADR-0022 for the decision
+// at all: the full scan stays its first stage. See ADR-0028 for the decision
 // and ivf.go, ivfrecord.go, apply_ivf.go and ivfduty.go for each half.
 //
 // # Pure functions over values, and why that is the whole point

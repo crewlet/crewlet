@@ -149,7 +149,7 @@ comes from the node's `stream` block — never from its roles:
 | `client` | `stream.type: nats` | A plain client of an external cluster somebody else runs |
 
 Every node advertises its kind on its presence lease, beside its roles and
-labels, and the Fleet screen and `crewlet fleet broker list` show it. A node
+labels, and **Settings › Nodes** and `crewlet fleet broker list` show it. A node
 running a build older than the field shows as `unknown`, and is counted as a
 member wherever that is the safe reading.
 
@@ -234,7 +234,7 @@ counts the dead one. The whole removal is bounded by one wait (two minutes and
 five seconds): nobody answering as leader for all of it is a group without a
 quorum, which cannot change its own membership, so bring enough members back
 first; a carrying member that goes silent ends it as an outcome nobody knows —
-read `list` before asking again. The Fleet screen's **Broker members** panel
+read `list` before asking again. The **Broker members** panel on **Settings › Nodes**
 offers the same removal, by node id or by peer id.
 
 ## Node roles
@@ -554,7 +554,7 @@ older nodes keep working, newer ones wait — visibly, with
 or is released. A rolling deploy converges because that is what a rolling
 deploy does.
 
-Two consequences worth stating plainly:
+The consequences worth stating plainly:
 
 - **A stalled rollout stalls placement.** If you leave one old node
   running, the new ones hold nothing. The log line says so; watch for it.
@@ -568,6 +568,38 @@ Two consequences worth stating plainly:
   say so once with `coord_kv_duties_wait_for_older_build` (and
   `coord_kv_duties_resumed` when it ends). See
   [Coordination](../concepts/coordination.md#the-rolling-upgrade-across-the-duty-bucket).
+- **Upgrading to the windowed token budgets (protocol 4) splits the
+  counters until the last old node leaves.** The old nodes run every seat
+  and charge the old lifetime counter; the new ones charge the windowed
+  counters once they hold seats, which is exactly when the old ones have
+  gone. Until then only the old nodes publish a live budget meter — the old
+  `budget_reported` frame, which a dashboard served by a new node does not
+  read, so it draws no meter for the rollout rather than a wrong one — and a
+  new node's `GET /budgets` reads windowed counters that start empty. The
+  old counters are not carried over: each window starts from zero at the
+  upgrade, and the retention sweep deletes the old bucket once no old node
+  is live. See
+  [Coordination](../concepts/coordination.md#the-rolling-upgrade-across-the-token-windows).
+- **A gesture a newer build carries out for a person is refused
+  `peer_upgrading` until the node that would carry it out has that
+  build.** Each node advertises what its build can do on its heartbeat,
+  and a gesture another node carries out asks first — so mid-rollout it is
+  refused by name rather than accepted by an older node that never acts on
+  it. A read that cannot conclude (a store blip, a node mid-drain) refuses
+  `unavailable` instead, which a retry clears. See
+  [Coordination](../concepts/coordination.md#why-a-gesture-asks-the-fleet-first).
+- **A node that leaves takes its turn-level history with it.** Every node's
+  event store holds the events it published, and the dashboard's turns,
+  traces and event log are read from every live node at query time. A node
+  you drain for good, or a node whose volume you discard, is a node whose
+  turns, phases and events no screen can show again — the spend, turn
+  counts and page reads it recorded survive it, in the replicated `usage`
+  domain. Export to an OTLP sink first if you need that detail kept. See
+  [Reading the fleet's history](../concepts/event-system.md#reading-the-fleets-history).
+- **Mid-rollout, a history read can name a node as speaking another
+  protocol.** The history scatter carries a version, and a node on a build
+  that reshaped it answers with its own version and nothing else, which
+  the answer's `coverage` names rather than merging rows it cannot read.
 
 ## Watching a fleet
 
@@ -581,9 +613,16 @@ Two consequences worth stating plainly:
   **`objects_store_unhealthy`** is a data node whose store has failed or
   filled. `crewlet objects status` names the node and what the fleet is
   waiting for.
+- **`history_partial`** — history reads are coming back without a node: it
+  did not answer inside the fleet read budget. Every such answer names the
+  node in its `coverage`.
 - **`/health`** carries this node's seats, its in-flight count and its
-  config posture; the dashboard's **Fleet** screen puts every node's
+  config posture; the dashboard's **Settings › Nodes** screen puts every node's
   side by side, with seat ownership and per-node config epoch.
+- **Each node's heartbeat** also carries what its build can carry out and
+  how each of its MCP servers started — one row per server, counting the
+  instances that started and failed, with one failure's reason. See
+  [What a node says about itself](../concepts/coordination.md#what-a-node-says-about-itself).
 
 A node whose applied config epoch lags the fleet's is not an error on its
 own — every rollout produces lag. See

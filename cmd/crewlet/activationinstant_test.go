@@ -26,7 +26,7 @@ func TestAPublishKeepsThePointersInstantLocally(t *testing.T) {
 		t.Parallel()
 		db := seedStore(t)
 		fleet := coordmemory.NewFleet()
-		if err := seedCompany(t.Context(), db, fleet, nil, seedOf(parse(t, companyYAML)), nil, quiet()); err != nil {
+		if err := seedCompany(t.Context(), db, fleet, nil, seedOf(parse(t, companyYAML)), nil, testNode, quiet()); err != nil {
 			t.Fatalf("seed: %v", err)
 		}
 		first, _, err := db.Configs().Active(t.Context())
@@ -41,7 +41,7 @@ func TestAPublishKeepsThePointersInstantLocally(t *testing.T) {
 			t.Fatalf("peer activate: %v", err)
 		}
 		changed := strings.Replace(companyYAML, "name: Acme", "name: Acme Imported", 1)
-		if err = seedCompany(t.Context(), db, fleet, nil, overrideOf(parse(t, changed)), nil, quiet()); err != nil {
+		if err = seedCompany(t.Context(), db, fleet, nil, overrideOf(parse(t, changed)), nil, testNode, quiet()); err != nil {
 			t.Fatalf("import: %v", err)
 		}
 		assertLocalCopyIsThePointers(t, db, fleet)
@@ -50,7 +50,7 @@ func TestAPublishKeepsThePointersInstantLocally(t *testing.T) {
 	t.Run("a boot publish that lands on a pointer it did not read", func(t *testing.T) {
 		t.Parallel()
 		db := seedStore(t)
-		if err := seedCompany(t.Context(), db, coordmemory.NewFleet(), nil, seedOf(parse(t, companyYAML)), nil, quiet()); err != nil {
+		if err := seedCompany(t.Context(), db, coordmemory.NewFleet(), nil, seedOf(parse(t, companyYAML)), nil, testNode, quiet()); err != nil {
 			t.Fatalf("seed: %v", err)
 		}
 		// THE POINTER MOVES BETWEEN THE BOOT'S READ AND ITS WRITE: a peer's
@@ -62,7 +62,7 @@ func TestAPublishKeepsThePointersInstantLocally(t *testing.T) {
 		}); err != nil {
 			t.Fatalf("peer activate: %v", err)
 		}
-		if err := seedCompany(t.Context(), db, unreadPointer{real}, nil, seedOf(parse(t, companyYAML)), nil, quiet()); err != nil {
+		if err := seedCompany(t.Context(), db, unreadPointer{real}, nil, seedOf(parse(t, companyYAML)), nil, testNode, quiet()); err != nil {
 			t.Fatalf("restart: %v", err)
 		}
 		assertLocalCopyIsThePointers(t, db, real)

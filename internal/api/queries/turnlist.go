@@ -4,6 +4,7 @@ package queries
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"time"
 
@@ -26,8 +27,6 @@ import (
 func (s Sources) turns(ctx context.Context, p Params) (any, error) {
 	q := store.TurnQuery{
 		SinceDays: p.Int("days", 0),
-		AgentRole: strings.TrimSpace(p.String("role")),
-		AgentID:   strings.TrimSpace(p.String("agent_id")),
 		Model:     strings.TrimSpace(p.String("model")),
 		// EVERY ATTEMPT AT ONE TRIGGER. A turn id names one run now, so
 		// a redelivered trigger is several rows here — and this is how a
@@ -52,23 +51,81 @@ func (s Sources) turns(ctx context.Context, p Params) (any, error) {
 			return nil, badParams("failed", raw, []string{"true", "false"})
 		}
 	}
+	// THE ORDER, a closed set the store owns: newest first, or the most
+	// tokens first — the spend screen's "which turns cost the most", which
+	// the daily usage rows cannot answer because they hold no turn.
+	if raw := strings.TrimSpace(p.String("sort")); raw != "" {
+		q.Sort = store.TurnSort(raw)
+		if !q.Sort.Valid() {
+			return nil, badParams("sort", raw, names(store.TurnSorts))
+		}
+	}
+	// ONE SEAT'S TURNS, by its HANDLE and nothing else. The list took a
+	// role name and a raw agent id instead, so the sidebar's seat rows —
+	// which link here with `seat=<handle>` — landed on every seat's turns,
+	// and a role name could not tell apart two unit seats stamped from
+	// one template. See seatParam.
+	agentID, err := s.seatParam(p)
+	if err != nil {
+		return nil, err
+	}
+	q.AgentID = agentID
+	// THE TURNS ON ONE WORK ITEM, by its identity across trackers — see
+	// workItemParam for why a malformed one is refused rather than matched.
+	item, err := workItemParam(p)
+	if err != nil {
+		return nil, err
+	}
+	q.WorkItem = item
+	// THE WINDOW AS TWO INSTANTS ON THE TURN'S START, or as whole days back
+	// from now — never both, since one would silently lose. `days` alone
+	// cannot name a window in the past: a bar picked three days ago was
+	// answered with the last day's turns, every one outside it.
+	since, err := instantParam(p, "since")
+	if err != nil {
+		return nil, err
+	}
+	until, err := instantParam(p, "until")
+	if err != nil {
+		return nil, err
+	}
+	if p.Has("days") && (!since.IsZero() || !until.IsZero()) {
+		return nil, fmt.Errorf("%w: name the window by days or by since and until, "+
+			"not both", ErrBadParams)
+	}
+	if !since.IsZero() && !until.IsZero() && !since.Before(until) {
+		return nil, fmt.Errorf("%w: since=%s is not before until=%s — the window "+
+			"starts at since and ends before until", ErrBadParams,
+			since.Format(time.RFC3339), until.Format(time.RFC3339))
+	}
+	q.Since, q.Until = since, until
 	before, err := instantParam(p, "before")
 	if err != nil {
 		return nil, err
 	}
 	q.Before = before
+	if q.Sort == store.TurnSortTokens && !before.IsZero() {
+		// A RANKING HAS NO POSITION TO RESUME FROM, and paging one by
+		// start time would mix two orders on one screen.
+		return nil, fmt.Errorf("%w: sort=%s is a ranking and takes no before=; "+
+			"narrow the window with days= instead", ErrBadParams, q.Sort)
+	}
 
-	rows, err := s.Events.Turns(ctx, q)
+	page, coverage, err := s.Events.Turns(ctx, q)
 	if err != nil {
 		return nil, err
 	}
-	out := map[string]any{"turns": rows, "next": nil}
-	if len(rows) > 0 {
+	out := map[string]any{"turns": page.Turns, "next": nil, "coverage": coverage}
+	if page.Next != nil {
 		// THE CURSOR THE CALLER RESUMES FROM, echoed rather than left for
 		// a client to assemble — the same rule the event list follows,
 		// because a client that built it from the last row's fields would
-		// be reimplementing the one thing that must not drift.
-		out["next"] = rows[len(rows)-1].StartedAt.UTC().Format(time.RFC3339Nano)
+		// be reimplementing the one thing that must not drift. It is the
+		// FLEET's, and so it can be present on an empty page: when a
+		// node holding more than its page stopped before any turn above
+		// it could be shown, the cursor is where that node stopped rather
+		// than the end.
+		out["next"] = page.Next.UTC().Format(time.RFC3339Nano)
 	}
 	return out, nil
 }

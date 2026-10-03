@@ -2,6 +2,7 @@ package estate
 
 import (
 	"context"
+	"fmt"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/knowledge"
@@ -35,7 +36,11 @@ func (w Work) Tasks(ctx context.Context, q tracker.Query, now time.Time) (tracke
 // Task answers one task, whole.
 func (w Work) Task(ctx context.Context, idOrKey string, want tracker.DetailWants,
 	fresh statelog.Freshness) (tracker.TaskDetail, error) {
-	return call(ctx, w.r, opTask, nil, taskArgs{IDOrKey: idOrKey, Want: want, Fresh: fresh})
+	args := taskArgs{IDOrKey: idOrKey, Want: want, Fresh: fresh}
+	if want.Clock != nil {
+		args.Zone = zoneArg(want.Clock.Zone)
+	}
+	return call(ctx, w.r, opTask, nil, args)
 }
 
 // Files answers a page of a project's files.
@@ -51,17 +56,14 @@ func (w Work) File(ctx context.Context, project, path string,
 
 // Views answers the saved views.
 func (w Work) Views(ctx context.Context, q tracker.ViewQuery) (tracker.ViewListing, error) {
-	return call(ctx, w.r, opViews, nil, q)
+	return call(ctx, w.r, opViews, nil, viewsArgs{Query: q, Zone: zoneArg(q.Zone)})
 }
 
 // ExpandedQuery resolves a saved view's parameters into a query.
 func (w Work) ExpandedQuery(ctx context.Context, params map[string]any,
 	viewer tracker.Viewer, now time.Time, loc *time.Location) (tracker.Query, error) {
-	args := expandArgs{Params: params, Viewer: viewer, Now: now}
-	if loc != nil {
-		args.Zone = loc.String()
-	}
-	return call(ctx, w.r, opExpandedQuery, nil, args)
+	return call(ctx, w.r, opExpandedQuery, nil,
+		expandArgs{Params: params, Viewer: viewer, Now: now, Zone: zoneArg(loc)})
 }
 
 // Catalogue answers the workspace catalogue.
@@ -86,9 +88,10 @@ func (w Work) Activity(ctx context.Context, q tracker.ActivityQuery, now time.Ti
 	return call(ctx, w.r, opActivity, nil, activityArgs{Query: q, Now: now})
 }
 
-// MyWork answers what is on one seat's plate.
-func (w Work) MyWork(ctx context.Context, q tracker.MyWorkQuery, now time.Time) (tracker.MyWork, error) {
-	return call(ctx, w.r, opMyWork, nil, myWorkArgs{Query: q, Now: now})
+// MyWork answers what is on one seat's plate, "today" cut on loc.
+func (w Work) MyWork(ctx context.Context, q tracker.MyWorkQuery, now time.Time,
+	loc *time.Location) (tracker.MyWork, error) {
+	return call(ctx, w.r, opMyWork, nil, myWorkArgs{Query: q, Now: now, Zone: zoneArg(loc)})
 }
 
 // Projects lists the company's projects.
@@ -104,15 +107,21 @@ func (w Work) Project(ctx context.Context, q tracker.ProjectDetailQuery) (tracke
 // Search is the tracker's ranked search: every partition holding the corpus
 // of work items asked, the candidates fused, and the partitions that did not
 // answer named on the answer.
-func (w Work) Search(ctx context.Context, text string, limit int) (tracker.SearchAnswer, error) {
-	hits, cov, err := gather(ctx, w.r, opWorkSearch, "", workSearchArgs{Text: text, Limit: limit})
-	return tracker.SearchAnswer{Hits: hits, Coverage: cov}, err
+func (w Work) Search(ctx context.Context, q tracker.SearchQuery) (tracker.SearchAnswer, error) {
+	if !q.Mode.Valid() {
+		return tracker.SearchAnswer{}, fmt.Errorf("tracker: unknown search mode %q — "+
+			"the modes are hybrid, keyword and semantic", q.Mode)
+	}
+	answer, cov, err := gather(ctx, w.r, opWorkSearch, "",
+		workSearchArgs{Text: q.Text, Limit: q.Limit, Mode: q.Mode})
+	answer.Partitions = cov
+	return answer, err
 }
 
-// Workload answers a unit's workload.
-func (w Work) Workload(ctx context.Context, q tracker.WorkloadQuery, now time.Time) (
-	tracker.WorkloadAnswer, error) {
-	return call(ctx, w.r, opWorkload, nil, workloadArgs{Query: q, Now: now})
+// Workload answers a unit's workload, its days cut on loc.
+func (w Work) Workload(ctx context.Context, q tracker.WorkloadQuery, now time.Time,
+	loc *time.Location) (tracker.WorkloadAnswer, error) {
+	return call(ctx, w.r, opWorkload, nil, workloadArgs{Query: q, Now: now, Zone: zoneArg(loc)})
 }
 
 // Inbox answers what the company has asked of one person.
@@ -125,6 +134,42 @@ func (w Work) Inbox(ctx context.Context, q tracker.InboxQuery, now time.Time) (
 func (w Work) Routing(ctx context.Context, q tracker.RoutingQuery, now time.Time) (
 	tracker.RoutingAnswer, error) {
 	return call(ctx, w.r, opRouting, nil, routingArgs{Query: q, Now: now})
+}
+
+// TurnsOf answers a page of the turns charged to one task.
+func (w Work) TurnsOf(ctx context.Context, idOrKey, cursor string, limit int,
+	fresh statelog.Freshness) (tracker.TaskTurns, error) {
+	return call(ctx, w.r, opTurnsOf, nil,
+		turnsOfArgs{IDOrKey: idOrKey, Cursor: cursor, Limit: limit, Fresh: fresh})
+}
+
+// EveryView answers every saved view, whoever owns it.
+func (w Work) EveryView(ctx context.Context, q tracker.EveryViewQuery) (tracker.ViewListing, error) {
+	return call(ctx, w.r, opEveryView, nil, everyViewArgs{Query: q, Zone: zoneArg(q.Zone)})
+}
+
+// Flow answers how work moved through the company, its days cut on loc.
+func (w Work) Flow(ctx context.Context, q tracker.FlowQuery, now time.Time,
+	loc *time.Location) (tracker.FlowAnswer, error) {
+	return call(ctx, w.r, opFlow, nil, flowArgs{Query: q, Now: now, Zone: zoneArg(loc)})
+}
+
+// CompanyFeed answers a page of the company's feed.
+func (w Work) CompanyFeed(ctx context.Context, q tracker.FeedQuery) (tracker.FeedPage, error) {
+	return call(ctx, w.r, opCompanyFeed, nil, q)
+}
+
+// Decisions answers the structured asks waiting on a decision, "overdue" cut
+// on loc.
+func (w Work) Decisions(ctx context.Context, q tracker.DecisionsQuery, now time.Time,
+	loc *time.Location) (tracker.DecisionsAnswer, error) {
+	return call(ctx, w.r, opDecisions, nil, decisionsArgs{Query: q, Now: now, Zone: zoneArg(loc)})
+}
+
+// TurnPlaces answers which task each run was charged to.
+func (w Work) TurnPlaces(ctx context.Context, runs []string,
+	fresh statelog.Freshness) (map[string]tracker.TurnPlace, error) {
+	return call(ctx, w.r, opTurnPlaces, nil, turnPlacesArgs{Runs: runs, Fresh: fresh})
 }
 
 // WorkWriter is the tracker's write side, acting as one party.
@@ -149,6 +194,27 @@ func (w WorkWriter) CreateTask(ctx context.Context, opID string, task tracker.Ta
 	return out, err
 }
 
+// CreateTaskAsking files a task with a structured ask on it, in one gesture.
+func (w WorkWriter) CreateTaskAsking(ctx context.Context, opID string, task tracker.Task,
+	ask tracker.Comment, notify *tracker.Notify) (tracker.WriteResult, error) {
+	out, err := call(ctx, w.r, opCreateTaskAsking, &w.actor,
+		createTaskAskingArgs{OpID: opID, Task: task, Ask: ask, Notify: notify})
+	w.settled(out.Result)
+	return out, err
+}
+
+// PlaceTask drops a card on the board: its lane, then its place.
+func (w WorkWriter) PlaceTask(ctx context.Context, opID string, place tracker.Place,
+	notify *tracker.Notify) (tracker.PlaceResult, error) {
+	out, err := call(ctx, w.r, opPlaceTask, &w.actor,
+		placeTaskArgs{OpID: opID, Place: place, Notify: notify})
+	res := out.Result
+	res.Unplaced = decodeError(out.Unplaced)
+	w.settled(res.Lane.Result)
+	w.settled(res.Order.Result)
+	return res, err
+}
+
 // UpdateTask patches a task, gestures included.
 func (w WorkWriter) UpdateTask(ctx context.Context, opID, id, project string, ifMatch uint64,
 	patch tracker.TaskPatch, kind tracker.ChangeKind,
@@ -156,7 +222,7 @@ func (w WorkWriter) UpdateTask(ctx context.Context, opID, id, project string, if
 	out, err := call(ctx, w.r, opUpdateTask, &w.actor, updateTaskArgs{
 		OpID: opID, ID: id, Project: project, IfMatch: ifMatch, Patch: patch,
 		Watch: patch.Watch, Relate: patch.Relate, Depend: patch.Depend, Promote: patch.Promote,
-		Kind: kind, Notify: notify,
+		Checklist: patch.Checklist, Kind: kind, Notify: notify,
 	})
 	w.settled(out.Result)
 	return out, err
@@ -271,33 +337,29 @@ func (w WorkWriter) WriteFields(ctx context.Context, opID string, fields []track
 	return out, err
 }
 
-// WriteInbox marks a person's inbox entries.
-func (w WorkWriter) WriteInbox(ctx context.Context, opID, handle string,
-	read, unread, snoozed []tracker.InboxEntry, reasons []tracker.Reason,
-	seenThrough tracker.Position) (tracker.WriteResult, error) {
-	out, err := call(ctx, w.r, opWriteInbox, &w.actor, writeInboxArgs{
-		OpID: opID, Handle: handle, Read: read, Unread: unread, Snoozed: snoozed,
-		Reasons: reasons, SeenThrough: seenThrough,
-	})
+// MarkInbox applies one gesture to a person's inbox.
+func (w WorkWriter) MarkInbox(ctx context.Context, opID, handle string,
+	gesture tracker.InboxGesture) (tracker.WriteResult, error) {
+	out, err := call(ctx, w.r, opMarkInbox, &w.actor,
+		markInboxArgs{OpID: opID, Handle: handle, Gesture: gesture})
 	w.settled(out.Result)
 	return out, err
 }
 
-// WritePins sets a person's pinned views and favourites.
+// WritePins applies one gesture to a person's pinned views and favourites.
 func (w WorkWriter) WritePins(ctx context.Context, opID, handle string,
-	pinnedViews []string, favorites []tracker.Favorite) (tracker.WriteResult, error) {
-	out, err := call(ctx, w.r, opWritePins, &w.actor, writePinsArgs{
-		OpID: opID, Handle: handle, PinnedViews: pinnedViews, Favorites: favorites,
-	})
+	gesture tracker.PinGesture) (tracker.WriteResult, error) {
+	out, err := call(ctx, w.r, opWritePins, &w.actor,
+		writePinsArgs{OpID: opID, Handle: handle, Gesture: gesture})
 	w.settled(out.Result)
 	return out, err
 }
 
-// WritePriorities sets a person's priority order.
+// WritePriorities sets a person's priority order, conditioned on ifMatch.
 func (w WorkWriter) WritePriorities(ctx context.Context, opID, handle string,
-	priorities []string, authority tracker.PersonAuthority) (tracker.WriteResult, error) {
+	priorities []string, ifMatch *uint64, authority tracker.PersonAuthority) (tracker.WriteResult, error) {
 	out, err := call(ctx, w.r, opWritePriorities, &w.actor, writePrioritiesArgs{
-		OpID: opID, Handle: handle, Priorities: priorities, Authority: authority,
+		OpID: opID, Handle: handle, Priorities: priorities, IfMatch: ifMatch, Authority: authority,
 	})
 	w.settled(out.Result)
 	return out, err
@@ -375,7 +437,10 @@ func (p Pages) Revision(ctx context.Context, pageID string, version int,
 	return out.Revision, out.Found, err
 }
 
-// Create writes a new page. Never repeated when unanswered — see [ErrOutcomeUnknown].
+// Create writes a new page. Never repeated when unanswered — see
+// [ErrOutcomeUnknown] — unless it carries the caller's key, under which a
+// repeat is the same operation ([op.repeatableWhen]). So for every page write
+// below.
 func (p Pages) Create(ctx context.Context, actor pages.Actor, in pages.NewPage) (pages.Written, error) {
 	out, err := call(ctx, p.r, opCreatePage, nil, createPageArgs{Actor: actor, Page: in})
 	p.r.Observe(out.Outcome.Position)
@@ -392,9 +457,9 @@ func (p Pages) SavePage(ctx context.Context, actor pages.Actor, pageID string,
 
 // Rename moves a page to a new title. Never repeated when unanswered.
 func (p Pages) Rename(ctx context.Context, actor pages.Actor, pageID, title string,
-	quiet bool) (pages.Written, error) {
+	quiet bool, key pages.CallKey) (pages.Written, error) {
 	out, err := call(ctx, p.r, opRenamePage, nil, renamePageArgs{
-		Actor: actor, PageID: pageID, Title: title, Quiet: quiet,
+		Actor: actor, PageID: pageID, Title: title, Quiet: quiet, Key: key,
 	})
 	p.r.Observe(out.Outcome.Position)
 	return out, err
@@ -410,9 +475,9 @@ func (p Pages) Comment(ctx context.Context, actor pages.Actor, pageID string,
 
 // EditComment rewrites a comment. Never repeated when unanswered.
 func (p Pages) EditComment(ctx context.Context, actor pages.Actor, pageID, commentID,
-	body string) (pages.Comment, pages.Written, error) {
+	body string, key pages.CallKey) (pages.Comment, pages.Written, error) {
 	out, err := call(ctx, p.r, opEditComment, nil, editCommentArgs{
-		Actor: actor, PageID: pageID, CommentID: commentID, Body: body,
+		Actor: actor, PageID: pageID, CommentID: commentID, Body: body, Key: key,
 	})
 	p.r.Observe(out.Written.Outcome.Position)
 	return out.Comment, out.Written, err
@@ -444,22 +509,26 @@ func (Knowledge) CanSearch(*org.Role, *org.Organization) bool { return true }
 // the knowledge base's corpus is asked, and one that did not answer is named on
 // the answer's coverage, so "nothing matched" is never what a seat is told
 // about a part of the knowledge base nobody searched.
-func (k Knowledge) Search(ctx context.Context, q knowledge.Query) knowledge.Answer {
-	args := knowledgeArgs{Text: q.Text, Limit: q.Limit, Scoped: q.Org != nil}
+func (k Knowledge) Search(ctx context.Context, q knowledge.Query) knowledge.Result {
+	args := knowledgeArgs{Text: q.Text, Limit: q.Limit, Mode: q.Mode, Scoped: q.Org != nil}
 	if q.Seat != nil {
 		args.Seat = q.Seat.Handle()
 	}
 	if q.ExcludeAncestors != nil {
 		args.Exclusion, args.ExcludeAncestors = true, q.ExcludeAncestors
 	}
-	hits, cov, err := gather(ctx, k.r, opKnowledgeSearch, "", args)
+	result, cov, err := gather(ctx, k.r, opKnowledgeSearch, "", args)
 	if err != nil {
 		log.WarnContext(ctx, "knowledge_search_failed", "error", err.Error(),
 			"detail", "the knowledge block degrades to empty and names what it did not "+
 				"reach; a turn must not die because the node holding the index was slow")
-		return knowledge.Answer{Coverage: cov}
+		return knowledge.Result{Outcome: knowledge.Outcome{
+			Coverage:   knowledge.Coverage{Nodes: []knowledge.NodeCoverage{}},
+			Partitions: cov,
+		}}
 	}
-	return knowledge.Answer{Hits: hits, Coverage: cov}
+	result.Partitions = cov
+	return result
 }
 
 // Building reports whether the index of any partition a search reads is still

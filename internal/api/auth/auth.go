@@ -24,13 +24,16 @@ package auth
 import (
 	"context"
 	"crypto/subtle"
+	"maps"
 	"net/http"
+	"slices"
 	"strings"
 
 	"github.com/crewlet/crewlet/internal/api/httpjson"
 	"github.com/crewlet/crewlet/internal/api/mcpbridge"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/logging"
+	"github.com/crewlet/crewlet/internal/org"
 )
 
 var log = logging.Get("api.auth")
@@ -80,11 +83,12 @@ func AlwaysGuarded(path string) bool {
 // AnonymousOperator is the attribution recorded when auth is disabled.
 //
 // Config refuses it as a token id, so a real operator's writes can never be
-// confused in an audit row with the ones made while the guard was off. Taken
-// from there rather than restated: two copies would disagree silently, each
-// side staying self-consistent while the reservation stopped covering what the
-// API actually stamps.
-const AnonymousOperator = config.ReservedOperatorID
+// confused in an audit row with the ones made while the guard was off, and the
+// chart refuses it as a seat binding, so a caller the guard never checked is
+// never a person. Taken from [org.ReservedOperatorID] rather than restated: two
+// copies would disagree silently, each side staying self-consistent while the
+// reservation stopped covering what the API actually stamps.
+const AnonymousOperator = org.ReservedOperatorID
 
 // unguardedExact and unguardedPrefixes are the routes served without a bearer
 // token, because they authenticate by other means or because a client must
@@ -237,6 +241,17 @@ func (g *Guard) Disabled() bool { return g.disabled }
 
 // Tokens reports how many credentials are loaded, for the same startup line.
 func (g *Guard) Tokens() int { return len(g.tokens) }
+
+// TokenIDs names the credentials this guard accepts, sorted — their LABELS and
+// never their values, for the `access` answer.
+//
+// Read off the guard rather than off Tier A, because the guard is what decides:
+// a disabled guard accepts every caller as [AnonymousOperator] and no listed
+// token at all, and an answer built from the document would name credentials
+// that authenticate nobody.
+func (g *Guard) TokenIDs() []string {
+	return slices.Sorted(maps.Keys(g.tokens))
+}
 
 // Operator returns the operator id a bare token authenticates as.
 //

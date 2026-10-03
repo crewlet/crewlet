@@ -61,7 +61,7 @@ func TestTheRowCarriesTheSnapshotThisNodeHolds(t *testing.T) {
 	}})
 
 	if row.SnapshotBytes != 4<<20 {
-		t.Errorf("snapshot_bytes = %d, want %d — the fleet screen renders what "+
+		t.Errorf("snapshot_bytes = %d, want %d — Settings › Nodes renders what "+
 			"this node costs to transfer from this field", row.SnapshotBytes, 4<<20)
 	}
 	if row.SnapshotSkip != "" {

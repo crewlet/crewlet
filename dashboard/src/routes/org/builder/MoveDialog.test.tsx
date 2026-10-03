@@ -149,7 +149,7 @@ describe("a seat", () => {
         { name: "Other" },
       ],
     };
-    const agents: AgentRow[] = [{ id: "1", role: "Runner", handle: "runner", state: "working" }];
+    const agents: AgentRow[] = [{ id: "1", role: "Runner", handle: "runner", activity: "working" }];
     open(keyedState(doc), "seat:runner", { agents });
     choose("Other");
     expect(screen.getByText(/Schedule sweep on Ops would have no runner/)).toBeDefined();
@@ -163,7 +163,7 @@ describe("a seat", () => {
 
 describe("a unit", () => {
   test("a unit that moves with a seat working inside it names that seat", () => {
-    const agents: AgentRow[] = [{ id: "1", role: "SRE", handle: "sre", state: "working" }];
+    const agents: AgentRow[] = [{ id: "1", role: "SRE", handle: "sre", activity: "working" }];
     open(keyedState(fixtureCompany()), "unit:Platform", { agents });
     expect(
       screen.getByText(

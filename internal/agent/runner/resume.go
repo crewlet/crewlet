@@ -64,6 +64,12 @@ func (r *Runner) Resume(ctx context.Context, history []ledger.Iteration) (turn.W
 	}
 	state := r.cfg.Resume.State
 	answer := r.cfg.Resume.Answer
+	// THE NOTES THE TURN READ BEFORE IT PARKED, so the phases after this
+	// one open with them as the phases before it did. The re-entered
+	// conversation already holds the ones this phase read.
+	r.mu.Lock()
+	r.steered = append([]string(nil), state.Steered...)
+	r.mu.Unlock()
 
 	// THE RUN'S CALL LOG STARTS FROM WHAT THE RUN ALREADY CALLED. A resume
 	// is the same run in a fresh process, so a count it derives must see
@@ -222,8 +228,23 @@ func priorRounds(state execstate.State) toolloop.Result {
 		RoundsUsed:   state.RoundsUsed,
 		InputTokens:  state.InputTokens,
 		OutputTokens: state.OutputTokens,
-		CacheRead:    state.CacheRead,
-		CacheWrite:   state.CacheWrite,
+		CacheRead:    state.CacheReadTokens,
+		CacheWrite:   state.CacheWriteTokens,
+	}
+	for _, m := range state.Steers {
+		out.Steers = append(out.Steers, toolloop.SteerMark{Round: m.Round, ID: m.NoteID})
+	}
+	for _, r := range state.Rounds {
+		out.Rounds = append(out.Rounds, toolloop.Round{
+			Round: r.Round, StartedAt: r.StartedAt,
+			Duration:     time.Duration(r.DurationMS) * time.Millisecond,
+			Model:        r.Model,
+			InputTokens:  r.InputTokens,
+			OutputTokens: r.OutputTokens,
+			CacheRead:    r.CacheReadTokens,
+			CacheWrite:   r.CacheWriteTokens,
+			ToolCalls:    r.ToolCalls,
+		})
 	}
 	for _, exec := range state.ToolExecutions {
 		name, _ := exec["name"].(string)
@@ -241,6 +262,21 @@ func priorRounds(state execstate.State) toolloop.Result {
 		if ok, present := exec["success"].(bool); present {
 			ex.Failed = !ok
 		}
+		// THE TIMING AND THE ORIGIN TRAVEL TOO, or the resumed record
+		// states every pre-suspend call as untimed and unattributed — the
+		// run_sandbox call that parked the phase first among them. A row
+		// that carries no start (an older build wrote it) stays untimed
+		// rather than acquiring a zero duration.
+		if at, ok := exec["started_at"].(string); ok {
+			if parsed, err := time.Parse(time.RFC3339Nano, at); err == nil {
+				ex.StartedAt = parsed
+				if ms, ok := intField(exec["duration_ms"]); ok {
+					ex.Duration = time.Duration(ms) * time.Millisecond
+				}
+			}
+		}
+		ex.Origin, _ = exec["origin"].(string)
+		ex.Server, _ = exec["server"].(string)
 		out.Executions = append(out.Executions, ex)
 	}
 	for _, narr := range state.RoundNarration {
@@ -295,8 +331,6 @@ func (r *Runner) recordSuspension(round int, surface *tools.Surface,
 		Round:           round,
 		InputTokens:     res.InputTokens,
 		OutputTokens:    res.OutputTokens,
-		CacheRead:       res.CacheRead,
-		CacheWrite:      res.CacheWrite,
 		ToolExecutions:  toolExecutions(res.Executions),
 		// The rounds themselves, so the resumed phase continues the count
 		// instead of restarting it — and so they reach the store at all.
@@ -305,6 +339,10 @@ func (r *Runner) recordSuspension(round int, surface *tools.Surface,
 		// progress frames are stream-only.
 		RoundsUsed:     res.RoundsUsed,
 		RoundNarration: roundNarration(res.Narration),
+		// Their timing and their cache share, for the same reason.
+		Rounds:           phaseRounds(res.Rounds),
+		CacheReadTokens:  res.CacheRead,
+		CacheWriteTokens: res.CacheWrite,
 		// THE CLOCK FOLDS TOO, like the rounds above and for the same
 		// reason: this phase publishes no completed event, so a resume that
 		// started its clock at zero would report a run that took minutes as
@@ -318,6 +356,11 @@ func (r *Runner) recordSuspension(round int, surface *tools.Surface,
 		// transcript it was re-entering — and every required tool it had
 		// unlocked before the suspend was refused again.
 		LoadedSkills: r.loadedSkills(),
+		// EVERY NOTE THE TURN HAD READ, for the later phases of the turn
+		// the resume continues, and this phase's own marks, for its
+		// record. See [execstate.State.Steered].
+		Steered: r.carriedSteers(),
+		Steers:  phaseSteers(res.Steers),
 	}
 	if err := state.Validate(); err != nil {
 		log.Error("execute_suspension_invalid", "round", round, "error", err.Error())

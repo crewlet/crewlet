@@ -9,7 +9,7 @@
 import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, test, vi } from "vitest";
 
-import { useViewer } from "./viewer.ts";
+import { ViewerProvider, useViewer } from "./viewer.ts";
 import { useClient, useConnection } from "./store-hooks.ts";
 
 vi.mock("./store-hooks.ts", () => ({
@@ -38,7 +38,7 @@ describe("who the dashboard thinks you are", () => {
       name: "Ana Diaz",
       kind: "human",
     });
-    const { result } = renderHook(() => useViewer());
+    const { result } = renderHook(() => useViewer(), { wrapper: ViewerProvider });
     await waitFor(() => expect(result.current.handle).toBe("ana"));
     expect(result.current.name).toBe("Ana Diaz");
     expect(result.current.kind).toBe("human");
@@ -50,7 +50,7 @@ describe("who the dashboard thinks you are", () => {
   // screen can only say which line if it has the id to put in it.
   test("a token no seat claims is UNBOUND and still carries its operator id", async () => {
     answering({ operator_id: "ops-7", operator: true, handle: "", name: "", kind: "" });
-    const { result } = renderHook(() => useViewer());
+    const { result } = renderHook(() => useViewer(), { wrapper: ViewerProvider });
     await waitFor(() => expect(result.current.unbound).toBe(true));
     expect(result.current.operatorID).toBe("ops-7");
     expect(result.current.anonymous).toBe(false);
@@ -58,7 +58,7 @@ describe("who the dashboard thinks you are", () => {
 
   test("no token at all is ANONYMOUS, which is a different sentence", async () => {
     answering({ operator_id: "", operator: false, handle: "", name: "", kind: "" });
-    const { result } = renderHook(() => useViewer());
+    const { result } = renderHook(() => useViewer(), { wrapper: ViewerProvider });
     await waitFor(() => expect(result.current.anonymous).toBe(true));
     expect(result.current.unbound).toBe(false);
     expect(result.current.operator).toBe(false);
@@ -79,7 +79,7 @@ describe("who the dashboard thinks you are", () => {
     const query = vi.fn(() => refused);
     vi.mocked(useClient).mockReturnValue({ socket: { query } } as never);
     vi.mocked(useConnection).mockReturnValue({ connected: true } as never);
-    const { result } = renderHook(() => useViewer());
+    const { result } = renderHook(() => useViewer(), { wrapper: ViewerProvider });
     await act(async () => {
       await refused.catch(() => {});
     });
@@ -96,9 +96,45 @@ describe("who the dashboard thinks you are", () => {
     const query = vi.fn(() => new Promise(() => {}));
     vi.mocked(useClient).mockReturnValue({ socket: { query } } as never);
     vi.mocked(useConnection).mockReturnValue({ connected: true } as never);
-    const { result } = renderHook(() => useViewer());
+    const { result } = renderHook(() => useViewer(), { wrapper: ViewerProvider });
     expect(result.current.loading).toBe(true);
     expect(result.current.anonymous).toBe(false);
     expect(result.current.unbound).toBe(false);
+  });
+});
+
+// WHO THIS BROWSER IS IS ASKED ONCE, by the frame, however many surfaces ask
+// the hook. A reader per caller was a standing query per caller: the frame,
+// the sidebar and the Inbox count made three of the socket's four slots, and
+// each polled on its own clock.
+describe("one reading", () => {
+  test("every reader under one provider shares one query", async () => {
+    const query = vi.fn().mockResolvedValue({
+      operator_id: "ops-1",
+      operator: true,
+      handle: "ana",
+      name: "Ana Diaz",
+      kind: "human",
+    });
+    vi.mocked(useClient).mockReturnValue({ socket: { query } } as never);
+    vi.mocked(useConnection).mockReturnValue({ connected: true } as never);
+    const { result } = renderHook(() => [useViewer(), useViewer(), useViewer()], {
+      wrapper: ViewerProvider,
+    });
+    await waitFor(() => expect(result.current[2]!.handle).toBe("ana"));
+    expect(query).toHaveBeenCalledTimes(1);
+  });
+
+  // AND A CALLER OUTSIDE ONE IS TOLD, rather than answered by a read of its
+  // own: that fallback is the per-caller read, back, and it would work.
+  test("outside a provider the hook refuses rather than asking for itself", () => {
+    const query = vi.fn();
+    vi.mocked(useClient).mockReturnValue({ socket: { query } } as never);
+    vi.mocked(useConnection).mockReturnValue({ connected: true } as never);
+    // React reports the throw on the console as well as throwing it.
+    const quiet = vi.spyOn(console, "error").mockImplementation(() => {});
+    expect(() => renderHook(() => useViewer())).toThrow(/outside a ViewerProvider/);
+    quiet.mockRestore();
+    expect(query).not.toHaveBeenCalled();
   });
 });

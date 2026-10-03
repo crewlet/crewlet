@@ -21,15 +21,16 @@ import (
 // to know the queue it gets behaves identically is to run every case the
 // member's queue runs against it.
 func TestConformanceThroughALeaf(t *testing.T) {
-	queuetest.RunWith(t, func(t *testing.T) queue.EventQueue {
-		return openLeafForTest(t, Config{})
-	}, capabilitiesFor(openLeafForTest))
+	queuetest.RunWith(t, func(t *testing.T, opts ...queue.Option) queue.EventQueue {
+		return openLeafForTest(t, Config{}, opts...)
+	}, capabilitiesFor(func(t *testing.T, cfg Config) *Queue { return openLeafForTest(t, cfg) }))
 }
 
 // openLeafForTest starts a member with a leaf listener and a leaf joined to
 // it, and returns a client of the LEAF — inspected through the member, which
-// is where everything it writes actually lives.
-func openLeafForTest(t *testing.T, cfg Config) *Queue {
+// is where everything it writes actually lives. The leaf's client is built
+// with opts.
+func openLeafForTest(t *testing.T, cfg Config, opts ...queue.Option) *Queue {
 	t.Helper()
 	cfg = testTimings(cfg)
 
@@ -56,7 +57,7 @@ func openLeafForTest(t *testing.T, cfg Config) *Queue {
 		t.Fatalf("start the leaf: %v", err)
 	}
 	t.Cleanup(leaf.Shutdown)
-	return clientUnderTest(t, leaf, member)
+	return clientUnderTest(t, leaf, member, opts...)
 }
 
 // unusedPort is a loopback port nothing held a moment ago. The race to bind

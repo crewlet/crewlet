@@ -557,7 +557,7 @@ func (c *converging) settle(g int) {
 		}
 	}
 
-	// 8. Retire what is no longer wanted, under ADR-0019's two
+	// 8. Retire what is no longer wanted, under ADR-0026's two
 	// conditions. THAT IS ALSO WHY THE LAST SERVER IS NEVER RETIRED, with
 	// no count of its own: a copy goes only while a non-empty target
 	// serves the partition, and a target node is never the one retired,
@@ -573,7 +573,7 @@ func (c *converging) settle(g int) {
 }
 
 // targetServes reports whether every node of a partition's target serves it,
-// by BOTH accounts and at the same epoch — ADR-0019's two conditions for
+// by BOTH accounts and at the same epoch — ADR-0026's two conditions for
 // letting any other copy go, adapted to a map with one writer:
 //
 //   - (a) the map lists it serving, and its own lease — one the tick counts

@@ -1261,7 +1261,7 @@
           ]
         },
         "vectors": {
-          "description": "Fuse semantic recall into knowledge search. Unset derives from providers.embeddings.",
+          "description": "Fuse semantic recall into knowledge and work search; false also stops embedding the corpus. Unset derives from providers.embeddings.",
           "pattern": "^(?:y|Y|yes|Yes|YES|n|N|no|No|NO|on|On|ON|off|Off|OFF)$",
           "type": [
             "boolean",
@@ -2403,12 +2403,8 @@
           ]
         },
         "token_budget": {
-          "description": "Per-seat token ceiling; 0 = unlimited.",
-          "minimum": 0,
-          "type": [
-            "integer",
-            "null"
-          ]
+          "$ref": "#/$defs/TokenBudget",
+          "description": "This seat's own token ceilings per calendar window on the company clock: day, week and month, each optional. Absent = only the company's ceilings apply."
         },
         "unit": {
           "description": "Home unit for a root-level seat; the seat is moved into it.",
@@ -3010,15 +3006,6 @@
             "null"
           ]
         },
-        "default_timezone": {
-          "description": "IANA zone for schedules that name none.",
-          "type": [
-            "string",
-            "number",
-            "boolean",
-            "null"
-          ]
-        },
         "enabled": {
           "description": "Master switch for the scheduler (default on).",
           "pattern": "^(?:y|Y|yes|Yes|YES|n|N|no|No|NO|on|On|ON|off|Off|OFF)$",
@@ -3386,6 +3373,39 @@
         "null"
       ]
     },
+    "TokenBudget": {
+      "additionalProperties": false,
+      "properties": {
+        "day": {
+          "description": "Most tokens one day may spend, local midnight to midnight on the company clock. Absent = no daily ceiling; 0 is refused.",
+          "minimum": 1,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "month": {
+          "description": "Most tokens one calendar month (on the company clock) may spend. Absent = no monthly ceiling; 0 is refused.",
+          "minimum": 1,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "week": {
+          "description": "Most tokens one ISO week (from Monday, on the company clock) may spend. Absent = no weekly ceiling; 0 is refused.",
+          "minimum": 1,
+          "type": [
+            "integer",
+            "null"
+          ]
+        }
+      },
+      "type": [
+        "object",
+        "null"
+      ]
+    },
     "Tracker": {
       "additionalProperties": false,
       "properties": {
@@ -3417,15 +3437,6 @@
           "minimum": 0,
           "type": [
             "integer",
-            "null"
-          ]
-        },
-        "timezone": {
-          "description": "IANA timezone for authored dates (default UTC).",
-          "type": [
-            "string",
-            "number",
-            "boolean",
             "null"
           ]
         }
@@ -3887,13 +3898,18 @@
         "null"
       ]
     },
-    "token_budget": {
-      "description": "Org-wide token ceiling across all seats; 0 = unlimited.",
-      "minimum": 0,
+    "timezone": {
+      "description": "The company's one clock, an IANA zone (default UTC): where its days and weeks begin, what a relative or all-day date resolves to, and what a schedule naming no zone fires on.",
       "type": [
-        "integer",
+        "string",
+        "number",
+        "boolean",
         "null"
       ]
+    },
+    "token_budget": {
+      "$ref": "#/$defs/TokenBudget",
+      "description": "Org-wide token ceilings across all seats, per calendar window on the company clock: day, week and month, each optional. Absent = uncapped."
     },
     "tracker": {
       "$ref": "#/$defs/Tracker"

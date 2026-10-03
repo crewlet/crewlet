@@ -23,7 +23,7 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
-// The object store, wired — ADR-0019.
+// The object store, wired — ADR-0026.
 //
 // # What every node runs, and what only a data node does
 //

@@ -30,6 +30,7 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog/metrics"
 	"github.com/crewlet/crewlet/internal/store"
 	"github.com/crewlet/crewlet/internal/tracker"
+	"github.com/crewlet/crewlet/internal/usage"
 	"github.com/crewlet/crewlet/internal/version"
 )
 
@@ -1341,7 +1342,7 @@ func (s *stateLog) haltAppliers() {
 // because the order is load-bearing for the operator surfaces and an
 // init-order registration is exactly the thing nobody can read off the source.
 func registeredDomains() []statelog.Domain {
-	return []statelog.Domain{tracker.Domain{}, search.Domain{}, pages.Domain{}}
+	return []statelog.Domain{tracker.Domain{}, search.Domain{}, pages.Domain{}, usage.Domain{}}
 }
 
 // registeredNames is every registered domain's name, in the register's order.
@@ -1350,6 +1351,23 @@ func registeredNames() []string {
 	out := make([]string, 0, len(domains))
 	for _, d := range domains {
 		out = append(out, d.Name())
+	}
+	return out
+}
+
+// ledgeredNames is every registered domain that keeps an operation ledger —
+// the domains the maintenance sweep runs a `<domain>_ops` job for.
+//
+// NOT [registeredNames]: a compacted domain declares no ledger
+// ([statelog.Domain.OpsTable] empty), and a job for one is named after a table
+// that does not exist, purges nothing every tick, and is listed beside the
+// real sweeps as though it were one.
+func ledgeredNames() []string {
+	var out []string
+	for _, d := range registeredDomains() {
+		if d.OpsTable() != "" {
+			out = append(out, d.Name())
+		}
 	}
 	return out
 }
@@ -1457,8 +1475,8 @@ func (s *stateLog) start(ctx, provisionCtx context.Context, host domainHost, dom
 	}
 	at := checkpoint.At
 	// THE SEQUENCE'S CONTEXT, not the caller's: this is a replicated create
-	// like the stream above it, and the three domains share one ceiling so
-	// a wedged metadata group cannot spend a full per-create budget three
+	// like the stream above it, and the four domains share one ceiling so
+	// a wedged metadata group cannot spend a full per-create budget four
 	// times over. Everything else here takes the ordinary boot context.
 	consumer, err := host.DomainConsumer(provisionCtx, spec.Name, s.nodeID, at.Seq)
 	if err != nil {
@@ -1690,6 +1708,15 @@ func (s *stateLog) publisherOver(domain statelog.Domain, id statelog.LogID, spec
 		fence.Committed = runner.Committed
 		deps.Rows, deps.Fence, deps.Gates = rows, fence, pages.NewGates(s.estate(id.Partition).Reader())
 		evicted = fence.Evicted
+	case usage.Domain{}.Name():
+		rows, err := usage.NewRows(s.estate(id.Partition).Reader(), spec)
+		if err != nil {
+			return nil, nil, fmt.Errorf("engine: build %s's read seam: %w", domain.Name(), err)
+		}
+		// NO EVICTION READER, for the vectors' reason and one of its own: an
+		// evicted node's usage is still what its seats did, and a fence
+		// here would erase that from every peer.
+		deps.Rows, deps.Fence, deps.Gates = rows, usage.NewFence(), usage.NewGates()
 	default:
 		return nil, nil, fmt.Errorf("engine: domain %q is registered and has no "+
 			"write authority, so nothing could ever append to its log",
@@ -2408,7 +2435,7 @@ func (s *stateLog) everyReadiness(ctx context.Context, in func(*runningLog) bool
 // applying its way out.
 //
 // Whatever reads this must also ACT on it — the `deferred_old` alarm once told
-// an operator "its seats move at 30m0s" about a node nothing ever moved. What
+// an operator "its seats move at 30m" about a node nothing ever moved. What
 // the answer does now is stop the node serving the partition, which the alarms
 // and the lease both say.
 //
@@ -2615,6 +2642,8 @@ func (s *stateLog) applierFor(domain statelog.Domain) (statelog.Applier, error) 
 		// take before the native runtime exists: it is a non-blocking
 		// send that returns when there is nothing to send to.
 		return pages.NewApplier(s.nodeID, s.skills, s.nudgeSkills), nil
+	case usage.Domain{}.Name():
+		return usage.NewApplier(), nil
 	}
 	return nil, fmt.Errorf("engine: domain %q is registered and has no applier, "+
 		"so its records would be consumed and produce no rows on this node",
@@ -3883,7 +3912,7 @@ func (e *Engine) snapshotLoop(s *stateLog, plan snapshotPlan, interval time.Dura
 	// THE REASON LAST REPORTED, per partition, is the other half: a state
 	// that has not changed is not news, and the loop retries every thirty
 	// seconds for as long as it holds. A tick that changes nothing says
-	// nothing; the register is still stamped, so the fleet screen and the
+	// nothing; the register is still stamped, so Settings › Nodes and the
 	// trim see every tick whether or not the log does.
 	reported := map[statelog.PartitionID]statelog.SkipReason{}
 	// AND THE PARTITIONS WHOSE HOLDING THE LAST PASS COULD NOT TELL, by the
@@ -4911,7 +4940,12 @@ func (s *stateLog) logOf(stream string) *runningLog {
 func (s *stateLog) opsLedgers(domain string) []maintenance.OpsLedger {
 	var out []maintenance.OpsLedger
 	for _, r := range s.running() {
-		if r.domain.Name() == domain && r.runner != nil {
+		// A DOMAIN THAT KEEPS NO LEDGER HAS NOTHING TO SWEEP. The compacted
+		// domains declare none, and handing their runners over anyway put a
+		// `vectors_ops` job on every node's sweep — named after a table that
+		// does not exist, purging nothing every tick, and listed beside the
+		// real sweeps as though it were one.
+		if r.domain.Name() == domain && r.runner != nil && r.domain.OpsTable() != "" {
 			out = append(out, r.runner)
 		}
 	}

@@ -298,6 +298,13 @@ type exchange struct {
 	// did what it asked ([Router.Gate]). Nil for every other; never told
 	// where no holder answered at all.
 	from func(node string)
+
+	// written is the asking turn's [tracker.WriteLog], which every holder
+	// that RAN the operation remotely answers into ([reply.Written]) — the
+	// one an answer kept is not the only one that committed, since a walk
+	// asks the next holder after an unvouched one. Nil where the actor
+	// holds none; an in-process run reports into it directly.
+	written tracker.WriteLog
 }
 
 // call runs one operation on a node that serves its partition.
@@ -311,6 +318,23 @@ func callFrom[A, R any](ctx context.Context, r *Router, o op[A, R], actor *Actor
 	from func(node string)) (R, error) {
 	var zero R
 	spec := o.spec
+	var written tracker.WriteLog
+	if actor != nil && actor.Provenance.Written != nil {
+		// THE TURN'S SET OF ITEMS IT WROTE is in this process, so a holder
+		// that runs the write elsewhere is asked to name them instead —
+		// on a copy, so the caller's actor is never changed under it.
+		written = actor.Provenance.Written
+		asked := *actor
+		asked.Records = true
+		actor = &asked
+	}
+	if o.repeatable != nil && o.repeatable(args) {
+		// A KEYED ONCE-WRITE is repeated as an idempotent write is: a copy
+		// of its spec, for this call alone ([op.repeatableWhen]).
+		keyed := *spec
+		keyed.class = opIdempotentWrite
+		spec = &keyed
+	}
 	encoded, err := json.Marshal(args)
 	if err != nil {
 		return zero, fmt.Errorf("estate: %s: encode the arguments: %w", spec.name, err)
@@ -328,7 +352,8 @@ func callFrom[A, R any](ctx context.Context, r *Router, o op[A, R], actor *Actor
 			decodeErr := json.Unmarshal(raw, &out)
 			return out, decodeErr
 		},
-		from: from,
+		from:    from,
+		written: written,
 	}
 	var answer any
 	if o.addr.partitions == nil {
@@ -618,6 +643,7 @@ func (r *Router) askFor(ctx context.Context, spec *opSpec, actor *Actor, x excha
 	}
 	if answered {
 		r.session.Forget(named(floors, rep.Obsolete)...)
+		x.record(rep)
 	}
 	return rep, answered, nil
 }
@@ -683,6 +709,17 @@ func (r *Router) settle(spec *opSpec, x exchange, p statelog.PartitionID, node s
 	}
 	x.tell(node)
 	return value, true, nil
+}
+
+// record adds what a holder's write committed to into the asking turn's own
+// set ([exchange.written]).
+func (x exchange) record(rep reply) {
+	if x.written == nil {
+		return
+	}
+	for _, item := range rep.Written {
+		x.written.Add(item)
+	}
 }
 
 // tell tells the caller which node gave the answer the router returns, where
@@ -852,6 +889,7 @@ func (r *Router) anyNode(ctx context.Context, spec *opSpec, actor *Actor, x exch
 			reasons = append(reasons, node+": no answer")
 			continue
 		}
+		x.record(rep)
 		if rep.Unserved != "" {
 			reasons = append(reasons, fmt.Sprintf("%s: %s", node, rep.Detail))
 			continue
@@ -969,11 +1007,14 @@ func appendedNothing(err error) bool {
 
 // unvouched reports an idempotent write's answer that is NOT final: an
 // `unknown` the answering holder's operation ledger could not vouch for
-// ([statelog.Result.Unvouched]), or a walking gesture that stopped at such a
-// step ([tracker.ErrStepUnvouched]). Another holder's ledger may hold the row
-// this one lost, so the router asks it, under the same operation id, before
-// reporting the outcome unknown. Never true for another class: a read has no
-// ledger, and a once-write is never repeated.
+// ([statelog.Result.Unvouched]) on ANY step the answer reports — a walking
+// gesture answers one outcome per step ([tracker.PlaceResult]), and a page
+// write names its outcome rather than embedding it ([pages.Written]) — or a
+// walking gesture that stopped at such a step ([tracker.ErrStepUnvouched]).
+// Another holder's ledger may hold the row this one lost, so the router asks
+// it, under the same operation id, before reporting the outcome unknown. Never
+// true for another class: a read has no ledger, and a once-write is never
+// repeated.
 func unvouched(spec *opSpec, value any, err error) bool {
 	if spec.class != opIdempotentWrite {
 		return false
@@ -981,41 +1022,44 @@ func unvouched(spec *opSpec, value any, err error) bool {
 	if err != nil {
 		return errors.Is(err, tracker.ErrStepUnvouched)
 	}
-	res, ok := resultIn(value)
-	return ok && res.Outcome == statelog.OutcomeUnknown && res.Unvouched
+	for _, res := range resultsIn(value) {
+		if res.Outcome == statelog.OutcomeUnknown && res.Unvouched {
+			return true
+		}
+	}
+	return false
 }
 
 var resultType = reflect.TypeFor[statelog.Result]()
 
-// resultIn is the write outcome an answer carries: the answer itself, or the
-// first [statelog.Result] among its fields, embedded ones searched first and
-// depth first — every write answer here either is one or embeds one.
-func resultIn(value any) (statelog.Result, bool) {
+// resultsIn is every write outcome an answer carries: the answer itself, or
+// each [statelog.Result] among its exported struct fields, embedded or named,
+// depth first — every write answer here either is one, embeds one, or names
+// one per step it took.
+func resultsIn(value any) []statelog.Result {
 	v := reflect.ValueOf(value)
 	for v.IsValid() && v.Kind() == reflect.Pointer {
 		if v.IsNil() {
-			return statelog.Result{}, false
+			return nil
 		}
 		v = v.Elem()
 	}
-	return findResult(v)
+	return findResults(v, nil)
 }
 
-func findResult(v reflect.Value) (statelog.Result, bool) {
+func findResults(v reflect.Value, out []statelog.Result) []statelog.Result {
 	if !v.IsValid() || v.Kind() != reflect.Struct {
-		return statelog.Result{}, false
+		return out
 	}
 	if v.Type() == resultType {
-		return v.Interface().(statelog.Result), true
+		return append(out, v.Interface().(statelog.Result))
 	}
 	for i := range v.NumField() {
-		if f := v.Type().Field(i); f.Anonymous && f.IsExported() {
-			if res, ok := findResult(v.Field(i)); ok {
-				return res, true
-			}
+		if v.Type().Field(i).IsExported() {
+			out = findResults(v.Field(i), out)
 		}
 	}
-	return statelog.Result{}, false
+	return out
 }
 
 // Serves answers the admission question for a seat on this node: whether p's

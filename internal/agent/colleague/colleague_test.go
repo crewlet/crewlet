@@ -238,3 +238,27 @@ func TestFuzzyScoresAreRankedBestFirst(t *testing.T) {
 		}
 	}
 }
+
+// EVERY TIER SAYS WHY, TO A PERSON. The dashboard draws each candidate beside
+// the reason it is one; a tier with no words would be a row in a list with
+// nothing saying whether it is the answer or a near miss.
+func TestEveryTierSaysWhyToAPerson(t *testing.T) {
+	t.Parallel()
+	seen := map[string]colleague.Method{}
+	for _, m := range colleague.Methods {
+		if !m.Valid() {
+			t.Errorf("%q is listed in Methods and not Valid", m)
+		}
+		why := m.Why()
+		if why == "" {
+			t.Errorf("%q has no sentence for a person", m)
+		}
+		if other, dup := seen[why]; dup {
+			t.Errorf("%q and %q read the same (%q), so a reader cannot tell the tiers apart", other, m, why)
+		}
+		seen[why] = m
+	}
+	if colleague.Method("guessed").Valid() {
+		t.Error("an unknown tier reads as valid")
+	}
+}

@@ -292,7 +292,9 @@ func indicatingWith(t *testing.T, mode notify.StatusMode, prov llm.Provider) (*E
 	}
 	t.Cleanup(func() { _ = q.Stop(context.Background()) })
 
-	e := &Engine{backends: &Backends{Queue: q}}
+	// A COORDINATION STORE, as every engine `crewlet run` builds has one —
+	// see [starting] for what a turn needs it for.
+	e := &Engine{backends: &Backends{Queue: q, Fleet: coordmem.NewFleet()}}
 	e.epoch.current.Store(&Company{
 		Org:    organization,
 		Models: models,
@@ -667,7 +669,7 @@ func TestASuspendedTurnKeepsItsIndicatorOnlyIfItsRunWasRecorded(t *testing.T) {
 // whether it landed — the one answer that is neither "resumable" nor "lost".
 type unwritableRuns struct{ sandbox.PendingStore }
 
-func (unwritableRuns) MarkSuspended(context.Context, string, map[string]any) (bool, error) {
+func (unwritableRuns) MarkSuspended(context.Context, string, sandbox.Suspension) (bool, error) {
 	return false, errors.New("the coordination store did not answer")
 }
 
@@ -681,10 +683,17 @@ func (unwritableRuns) MarkSuspended(context.Context, string, map[string]any) (bo
 // a suspension, which is what these cases are about.
 func equipForCode(t *testing.T, e *Engine, pending sandbox.PendingStore) {
 	t.Helper()
+	equipForCodeWith(t, e, pending, suspendingTool{})
+}
+
+// equipForCodeWith is [equipForCode] with the detaching tool supplied, for a
+// case about what the turn did before it detached.
+func equipForCodeWith(t *testing.T, e *Engine, pending sandbox.PendingStore, detaching tools.Callable) {
+	t.Helper()
 	company := e.Company()
 	seat := company.Org.AgentSeatByHandle("swe")
 	seat.Sandbox = &org.RoleSandbox{Enabled: true}
-	if err := company.Tools.Register(suspendingTool{}, tools.OriginBuiltin); err != nil {
+	if err := company.Tools.Register(detaching, tools.OriginBuiltin); err != nil {
 		t.Fatalf("registering the detaching tool: %v", err)
 	}
 	manager, err := sandbox.NewManager(sandbox.ManagerOptions{
@@ -695,7 +704,8 @@ func equipForCode(t *testing.T, e *Engine, pending sandbox.PendingStore) {
 		t.Fatalf("NewManager: %v", err)
 	}
 	coordinator, err := sandbox.NewCoordinator(sandbox.CoordinatorOptions{
-		Queue: e.backends.Queue, Pending: pending, Manager: manager,
+		Audience: noAudience{},
+		Queue:    e.backends.Queue, Pending: pending, Manager: manager,
 		// THE ENGINE'S OWN, because these cases are about what the
 		// indicator does across the seam between the two and a stub
 		// would be a second answer to the question under test.

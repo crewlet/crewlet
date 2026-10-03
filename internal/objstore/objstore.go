@@ -4,7 +4,7 @@
 //
 // # What is divided, and what is replicated
 //
-// ADR-0019. Everything the company has to agree on — that a file exists, what
+// ADR-0026. Everything the company has to agree on — that a file exists, what
 // it is called, which project it is in, which chunks it is made of — stays in
 // the replicated estate, held whole on every data node and derived from a
 // state log like any other row. What is DIVIDED is the bytes: each chunk is

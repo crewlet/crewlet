@@ -34,9 +34,17 @@ func (a *Applier) applyTask(ctx context.Context, tx *sql.Tx, c applyContext) (in
 		return a.purgeTask(ctx, tx, c)
 	}
 
-	current, held, err := readTask(ctx, tx, id)
+	current, filed, held, err := readTaskRow(ctx, tx, id)
 	if err != nil {
 		return 0, err
+	}
+	if held && c.record.V < keepsPlaceVersion {
+		// A RECORD AN OLDER BUILD WROTE, applied by that build's rule: the
+		// rank its document was filed at, not the one the order moved the
+		// row to. Every node applies it this way whichever build it runs,
+		// which is the only way two builds reading one log keep one row —
+		// see [keepsPlaceVersion].
+		current.Rank = filed
 	}
 	if held && c.packed <= int64(max(current.Version, current.ScopedThrough)) {
 		// A REDELIVERY OR A REPROCESS, and both are ordinary traffic. The
@@ -45,8 +53,19 @@ func (a *Applier) applyTask(ctx context.Context, tx *sql.Tx, c applyContext) (in
 		// and its own guard makes THAT idempotent.
 		// NO DELTAS: this record changed no document, so there is
 		// nothing for the history row to say moved.
-		return a.writeHistory(ctx, tx, c,
+		history, werr := a.writeHistory(ctx, tx, c,
 			subjectKeys{Project: current.Project, Key: current.Key}, nil)
+		if werr != nil {
+			return 0, werr
+		}
+		// A LATE RECORD STILL MOVES WHEN THE TASK LAST CHANGED: its
+		// history row raised every successor's effective instant, and
+		// the stamp follows the newest of them — see [restampUpdated].
+		restamped, rerr := restampUpdated(ctx, tx, id)
+		if rerr != nil {
+			return 0, rerr
+		}
+		return history + restamped, nil
 	}
 
 	next, err := mergeTask(current, held, c)
@@ -54,6 +73,21 @@ func (a *Applier) applyTask(ctx context.Context, tx *sql.Tx, c applyContext) (in
 		return 0, err
 	}
 	next.Version = uint64(c.packed)
+
+	// WHEN THE TASK LAST CHANGED IS THE APPLIER'S, on the rule the finish
+	// stamps below follow: the fleet-agreed instant of the record that
+	// changed it — the same `effective_at` its history row takes in this
+	// apply — and never a writer's clock. It was nobody's: the create stamped
+	// `updated_at` and no later record moved it, so every list's Updated
+	// column and its "recently updated" order read the day a task was FILED,
+	// however much had happened to it since. See [restampUpdated] for the
+	// same rule over rows a build without it wrote.
+	//nolint:govet // shadow: scoped to this block; see .golangci.yml
+	updated, err := effectiveAt(ctx, tx, id, c)
+	if err != nil {
+		return 0, err
+	}
+	next.UpdatedAt = updated.UTC()
 
 	// THE FINISH STAMPS ARE THE APPLIER'S, derived from the group the
 	// task has just entered rather than carried by the record.
@@ -282,26 +316,64 @@ func effectiveOf(c applyContext) (time.Time, error) {
 	return c.brokerAt.UTC(), nil
 }
 
-// readTask reads the stored document, reporting whether the row exists.
+// readTask reads the stored task, reporting whether the row exists — with the
+// rank its ROW holds, which is the task's place on its board.
+//
+// THE RANK IS THE COLUMN'S, never the document's. After its create a task's
+// place is the ORDER's to write — [Applier.applyRankOrder] moves the column
+// and stamps `scoped_through`, and deliberately leaves the task's own document
+// alone — so the document's copy is whatever the create or the last project
+// move minted. Every writer deciding against a task, and the applier merging a
+// record at [keepsPlaceVersion] or above, reads the place from here, so a task
+// write carries the order's key through unchanged and only a record that
+// MINTS one — a create, a move into another project — changes it.
 func readTask(ctx context.Context, tx *sql.Tx, id string) (Task, bool, error) {
+	task, _, held, err := readTaskRow(ctx, tx, id)
+	return task, held, err
+}
+
+// readTaskRow is [readTask] plus the rank the task's DOCUMENT holds — the key
+// it was filed or last re-homed at — which is what a record below
+// [keepsPlaceVersion] is applied with, because it is what the build that
+// wrote that record applies it with.
+func readTaskRow(ctx context.Context, tx *sql.Tx, id string) (Task, Rank, bool, error) {
 	var document []byte
 	var version, scoped int64
+	var rank string
 	err := tx.QueryRowContext(ctx,
-		`SELECT document, version, scoped_through FROM tracker_tasks WHERE id = ?`,
-		id).Scan(&document, &version, &scoped)
+		`SELECT document, version, scoped_through, rank FROM tracker_tasks WHERE id = ?`,
+		id).Scan(&document, &version, &scoped, &rank)
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
-		return Task{}, false, nil
+		return Task{}, "", false, nil
 	case err != nil:
-		return Task{}, false, fmt.Errorf("tracker: read task %s: %w", id, err)
+		return Task{}, "", false, fmt.Errorf("tracker: read task %s: %w", id, err)
 	}
 	var task Task
 	if err := json.Unmarshal(document, &task); err != nil {
-		return Task{}, false, fmt.Errorf("tracker: decode the stored task %s: %w", id, err)
+		return Task{}, "", false, fmt.Errorf("tracker: decode the stored task %s: %w", id, err)
 	}
 	task.Version = uint64(version)
 	task.ScopedThrough = uint64(scoped)
-	return task, true, nil
+	filed := task.Rank
+	task.Rank = Rank(rank)
+	return task, filed, true, nil
+}
+
+// mergesIntoRow reports whether a record on subject is applied by MERGING into
+// a task row that already exists — the three ops [mergeTask] decodes as a
+// [TaskPatch]. Those are the records that carry [MutationRecord.KeepsPlace]:
+// a create mints its own rank and a purge removes the row, so neither has a
+// place to keep.
+func mergesIntoRow(subject Subject, op OpKind) bool {
+	if subject.Kind != KindTask {
+		return false
+	}
+	switch op {
+	case OpPatch, OpTombstone, OpRestore:
+		return true
+	}
+	return false
 }
 
 // mergeTask produces the new state from the stored one and the record.
@@ -312,11 +384,15 @@ func readTask(ctx context.Context, tx *sql.Tx, id string) (Task, bool, error) {
 func mergeTask(current Task, held bool, c applyContext) (Task, error) {
 	switch c.record.Op {
 	case OpCreate:
-		var created Task
-		if err := decodePayload(c.record.Mutation, &created); err != nil {
+		// A [TaskCreate]: the task, and the question it was filed as —
+		// which is a comment ROW, written by [Applier.writeThread], and
+		// never part of the document this returns.
+		var payload TaskCreate
+		if err := decodePayload(c.record.Mutation, &payload); err != nil {
 			return Task{}, fmt.Errorf("tracker: decode the create at %s: %w",
 				c.position, err)
 		}
+		created := payload.Task
 		// A CREATE ON A LIVE ROW IS APPLIED, NOT REFUSED — and the
 		// reason is the rule the whole applier is written to: a record
 		// the broker committed is a record every node must be able to
@@ -519,13 +595,13 @@ func upsertTask(ctx context.Context, tx *sql.Tx, task Task, document []byte,
 			 reporter, assignee, start_at, due_at, due_all_day, estimate_min,
 			 points, spend_turns, spend_rounds, spend_input, spend_output,
 			 spend_cache_read, spend_cache_write, spend_wall_ms, spend_tokens,
-			 done_at, closed_at, finished_at, archived, archived_at, removed_at,
+			 spend_workers, spend_sent_back, done_at, closed_at, finished_at, archived, archived_at, removed_at,
 			 removed_with, batch_id, merging, moving, reassignments, policy_stamp,
 			 unblocked_told_at, search_rev, embed_rev, inconsistent_project,
 			 cycle, too_deep, key_collision, created_at, updated_at, version,
 			 scoped_through, document)
 		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,0,?,?,?,?,?,?,?,?,?,?,
-		        ?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,NULL,0,0,0,0,0,0,?,?,?,0,?)
+		        ?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,NULL,0,0,0,0,0,0,?,?,?,0,?)
 		ON CONFLICT (id) DO UPDATE SET
 			key = excluded.key, project_key = excluded.project_key,
 			routing_unit = excluded.routing_unit,
@@ -556,7 +632,8 @@ func upsertTask(ctx context.Context, tx *sql.Tx, task Task, document []byte,
 		nullableTime(task.DueAt), boolInt(task.DueAllDay), task.EstimateMinutes,
 		task.Points, task.Spend.Turns, task.Spend.Rounds, task.Spend.Input,
 		task.Spend.Output, task.Spend.CacheRead, task.Spend.CacheWrite,
-		task.Spend.WallMs, task.Spend.Tokens, nullableTime(task.DoneAt),
+		task.Spend.WallMs, task.Spend.Tokens, task.Spend.Workers,
+		task.Spend.SentBack, nullableTime(task.DoneAt),
 		nullableTime(task.ClosedAt), nullableTime(task.FinishedAt()),
 		boolInt(task.Archived), nullableTime(task.ArchivedAt),
 		removedAt(task), removedWith(task), batchOf(c.record),
@@ -912,48 +989,76 @@ func (a *Applier) maintainKeys(ctx context.Context, tx *sql.Tx, task Task,
 	return written, nil
 }
 
-// maintainProjectCounts moves the three maintained counters.
+// maintainProjectCounts moves the maintained census.
 //
 // MAINTAINED, NEVER SCANNED: an aggregate over every task in every project on
 // every sixty-second poll is half a million index entries at year five, for
-// three numbers a commit already knows how to move. They are a pure function
+// four numbers a commit already knows how to move. They are a pure function
 // of the applied records, which is what lets the identity assertion recompute
 // them and compare.
+//
+// TWO MOVES, because the census is two partitions of one set rather than one
+// of four. The three BUCKETS — open, done, closed — are disjoint and cover
+// every task not removed; `active_count` is the part of the open bucket in the
+// `active` group, which is what the answer's `todo` is the remainder of. So a
+// task going todo → in progress moves active and leaves the buckets alone, and
+// one going in progress → done moves both.
 func (a *Applier) maintainProjectCounts(ctx context.Context, tx *sql.Tx,
 	current, next Task, held bool) (int, error) {
 
 	was, is := "", bucketOf(next)
+	wasActive, isActive := false, activeOf(next)
 	if held {
-		was = bucketOf(current)
+		was, wasActive = bucketOf(current), activeOf(current)
 	}
-	if was == is && current.Project == next.Project {
-		return 0, nil
-	}
+	moved := current.Project != next.Project
 	written := 0
-	if was != "" {
-		n, err := moveProjectCount(ctx, tx, was, current.Project, -1)
-		if err != nil {
-			return 0, err
+	if was != is || moved {
+		if was != "" {
+			n, err := moveProjectCount(ctx, tx, was, current.Project, -1)
+			if err != nil {
+				return 0, err
+			}
+			written += n
 		}
-		written += n
+		if is != "" {
+			n, err := moveProjectCount(ctx, tx, is, next.Project, +1)
+			if err != nil {
+				return 0, err
+			}
+			written += n
+		}
 	}
-	if is != "" {
-		n, err := moveProjectCount(ctx, tx, is, next.Project, +1)
-		if err != nil {
-			return 0, err
+	if wasActive != isActive || (moved && isActive) {
+		if wasActive {
+			n, err := moveProjectCount(ctx, tx, censusActive, current.Project, -1)
+			if err != nil {
+				return 0, err
+			}
+			written += n
 		}
-		written += n
+		if isActive {
+			n, err := moveProjectCount(ctx, tx, censusActive, next.Project, +1)
+			if err != nil {
+				return 0, err
+			}
+			written += n
+		}
 	}
 	return written, nil
 }
 
-// moveProjectCount moves one of the three maintained counters by one.
+// censusActive is the column name `active_count` is moved under — see
+// [moveProjectCount].
+const censusActive = "active"
+
+// moveProjectCount moves one of the four maintained counters by one.
 //
 // ONE STATEMENT BUILDER FOR THE THREE CALLERS — a task entering a bucket, a
 // task leaving one, and the purge that deletes the row instead of writing one.
-// The bucket is always [bucketOf]'s own closed answer and never a value off
-// the wire, which is what makes interpolating it into the column name safe: a
-// column cannot be a parameter.
+// The counter is always [bucketOf]'s own closed answer or [censusActive] and
+// never a value off the wire, which is what makes interpolating it into the
+// column name safe: a column cannot be a parameter.
 //
 // The decrement CLAMPS AT ZERO. A negative census is a number no screen can
 // render and no repair can interpret, and the clamp costs nothing on the path
@@ -989,6 +1094,14 @@ func bucketOf(task Task) string {
 		return "closed"
 	}
 	return "open"
+}
+
+// activeOf is whether a task counts in `active_count`: not removed, and in the
+// `active` status group. THE ONE STATEMENT OF THE RULE, read by the apply and
+// by [rederiveActiveCounts] alike — which reads the `status_group` and
+// `removed_at` columns this apply writes from the same two facts.
+func activeOf(task Task) bool {
+	return task.Removed == nil && statusOf(task).Group() == GroupActive
 }
 
 // purgeTask is the one operation that removes rows, and it removes them
@@ -1089,6 +1202,17 @@ func (a *Applier) purgeTask(ctx context.Context, tx *sql.Tx, c applyContext) (in
 	if bucket := bucketOf(task); held && bucket != "" {
 		//nolint:govet // shadow: `x, err := f()` declares x too; see .golangci.yml
 		n, err := moveProjectCount(ctx, tx, bucket, task.Project, -1)
+		if err != nil {
+			return 0, err
+		}
+		written += n
+	}
+	// AND ITS SHARE OF THE ACTIVE COUNT, on the same gate: a purged task
+	// that was in progress is otherwise counted as somebody's work for
+	// ever.
+	if held && activeOf(task) {
+		//nolint:govet // shadow: `x, err := f()` declares x too; see .golangci.yml
+		n, err := moveProjectCount(ctx, tx, censusActive, task.Project, -1)
 		if err != nil {
 			return 0, err
 		}
@@ -1840,10 +1964,27 @@ func (a *Applier) writeThread(ctx context.Context, tx *sql.Tx, task Task,
 	}
 	written += items
 
+	if c.record.Op == OpCreate {
+		// A CREATE CARRIES AT MOST ONE COMMENT — the question the task
+		// was filed as ([TaskCreate]) — and never a body revision, since
+		// there is no earlier body for one to keep.
+		var created TaskCreate
+		if err := decodePayload(c.record.Mutation, &created); err != nil {
+			return 0, fmt.Errorf("tracker: decode the create at %s: %w", c.position, err)
+		}
+		if created.Comment != nil {
+			n, err := writeComment(ctx, tx, task, *created.Comment, c)
+			if err != nil {
+				return 0, err
+			}
+			written += n
+		}
+		return written, nil
+	}
 	if c.record.Op != OpPatch {
-		// ONLY A PATCH CARRIES ONE. A create carries the task and a
-		// tombstone carries a stamp, and decoding either as a patch to
-		// look for a comment would be reading a shape that is not there.
+		// ONLY A PATCH OR A CREATE CARRIES ONE. A tombstone carries a
+		// stamp, and decoding it as a patch to look for a comment would
+		// be reading a shape that is not there.
 		return written, nil
 	}
 	var patch TaskPatch

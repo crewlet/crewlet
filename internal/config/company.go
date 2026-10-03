@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/org"
+	"github.com/crewlet/crewlet/internal/period"
 	"github.com/crewlet/crewlet/internal/queue"
 )
 
@@ -33,6 +34,24 @@ type Company struct {
 	Mission  string   `yaml:"mission,omitempty" json:"mission,omitempty" desc:"One line on what the company is for; reaches every seat's prompt."`
 	Vision   string   `yaml:"vision,omitempty" json:"vision,omitempty" desc:"Longer statement of where the company is going."`
 	Policies []string `yaml:"policies,omitempty" json:"policies,omitempty" desc:"Company-wide rules injected into every seat's prompt."`
+
+	// Timezone is the company's ONE clock, as an IANA name; empty is UTC.
+	// Read it through [Company.Location].
+	//
+	// Every calendar edge the engine cuts is cut on it: where "today",
+	// "this week" and "this month" begin for a `due=` filter, a due band, a
+	// row's overdue mark and a person's own day; the instant a relative date
+	// ("next Friday") or an all-day date resolves to; and the wall clock a
+	// schedule that names no zone of its own fires on. One clock, and a
+	// top-level field rather than a setting of any one subsystem, because
+	// the three this replaced — the native tracker's own clock, the
+	// scheduler's default zone and the UTC every other day boundary
+	// assumed — disagreed about where one company's day began (ADR-0018).
+	//
+	// A clock for AUTHORED INSTANTS AND CALENDAR BOUNDARIES only: no
+	// duration is measured against it, because a duration measured on a
+	// wall clock changes length twice a year.
+	Timezone string `yaml:"timezone,omitempty" json:"timezone,omitempty" desc:"The company's one clock, an IANA zone (default UTC): where its days and weeks begin, what a relative or all-day date resolves to, and what a schedule naming no zone fires on."`
 
 	// Integrations is how external events REACH agents and how
 	// notifications are delivered — the inbound side. Agent TOOLS are
@@ -84,10 +103,11 @@ type Company struct {
 	// server from one.
 	MCPServers []MCPServer `yaml:"mcp_servers,omitempty" json:"mcp_servers,omitempty" desc:"Tool servers, stdio or http. Per-agent credentials live in role.mcp_env."`
 
-	// TokenBudget is the org-wide LLM token ceiling across every seat;
-	// 0 is unlimited. Charged before the per-seat budget, so the first
-	// completion that would cross it stops that turn.
-	TokenBudget int `yaml:"token_budget,omitempty" json:"token_budget,omitempty" js:"min=0" desc:"Org-wide token ceiling across all seats; 0 = unlimited."`
+	// TokenBudget is the org-wide LLM token ceiling per calendar window,
+	// across every seat; a window it does not name is uncapped. Charged
+	// before a seat's own budget, so the first completion that would cross
+	// it stops that turn. See [TokenBudget].
+	TokenBudget TokenBudget `yaml:"token_budget,omitempty" json:"token_budget,omitzero" desc:"Org-wide token ceilings across all seats, per calendar window on the company clock: day, week and month, each optional. Absent = uncapped."`
 
 	// NotificationRateLimit caps how many INBOUND notifications may wake one
 	// seat per second; 0, the default, is unlimited.
@@ -171,6 +191,25 @@ func DefaultCompany() Company {
 		Scheduling:                   DefaultScheduling(),
 		NotificationCoalesceMaxBatch: 20,
 	}
+}
+
+// Location is the company's ONE clock (ADR-0018): the zone [Company.Timezone]
+// names, or UTC when it names none.
+//
+// Validation refuses a name [period.LoadZone] does not load, so on every
+// company a node admits or applies this is the configured clock. A company
+// assembled in code and never validated may hold a name that does not load,
+// and reads as UTC — the default clock, and the one reading that is the same
+// on every node — rather than handing a caller a nil location to crash on.
+func (c *Company) Location() *time.Location {
+	if c == nil {
+		return time.UTC
+	}
+	loc, err := period.LoadZone(c.Timezone)
+	if err != nil {
+		return time.UTC
+	}
+	return loc
 }
 
 // skillVariableKey is the substitution-identifier rule.
@@ -362,6 +401,12 @@ func (c *Company) validateRunnable(o *org.Organization) error {
 	if strings.TrimSpace(c.Name) == "" {
 		p.add(field("name"), ErrMissing, "the company needs a name: it is half of every seat's derived id")
 	}
+	// THE ONE CLOCK, through the one reader every other zone name goes
+	// through, so the company's clock and a schedule's own zone are
+	// admitted by the same rule — a host's own clock refused by both.
+	if _, err := period.LoadZone(c.Timezone); err != nil {
+		p.add(field("timezone"), ErrUnknownValue, "%v", err)
+	}
 
 	// A SEAT MAY NOT BE CALLED WHAT "NOBODY" IS CALLED.
 	//
@@ -447,9 +492,7 @@ func (c *Company) validateRunnable(o *org.Organization) error {
 		}
 	}
 
-	if c.TokenBudget < 0 {
-		p.add(field("token_budget"), ErrOutOfRange, "must not be negative, got %d", c.TokenBudget)
-	}
+	p.wrap(c.TokenBudget.validate(field("token_budget")))
 	if c.NotificationRateLimit < 0 {
 		p.add(field("notification_rate_limit"), ErrOutOfRange,
 			"must not be negative, got %d", c.NotificationRateLimit)
@@ -516,9 +559,8 @@ func (c *Company) validateRunnable(o *org.Organization) error {
 	}
 	p.wrap(c.Tracker.Native.validate(field("tracker.native")))
 	// A NATIVE BLOCK ON A COMPANY THAT IS NOT NATIVE describes nothing,
-	// and the failure that produces is silence: an operator sets a
-	// timezone the authored dates of somebody else's tracker will never
-	// be read in.
+	// and the failure that produces is silence: an operator sets an inbox
+	// horizon for inbox rows somebody else's tracker will never write.
 	//
 	// The check is against the DERIVED backend rather than the literal
 	// field, because an empty `backend` with no Jira integration IS
@@ -672,15 +714,17 @@ type Knowledge struct {
 	// at the top of the chain exactly where a new seat starts reading.
 	RootSpace *string `yaml:"root_space,omitempty" json:"root_space,omitempty" desc:"Container for org-level pages such as the root Onboarding. Absent takes the default."`
 
-	// Vectors adds semantic recall to the knowledge search.
+	// Vectors adds semantic recall to the knowledge search and the
+	// tracker's item search.
 	//
 	// A POINTER because the zero value is a real setting and the absent
 	// value is a different one: unset DERIVES from whether the company
 	// configured an embeddings provider (it already has one for the diary,
 	// so a company that pays for embeddings gets the better search), and an
 	// explicit false keeps the search purely lexical on a company that has
-	// one for its diary and does not want its pages embedded.
-	Vectors *bool `yaml:"vectors,omitempty" json:"vectors,omitempty" desc:"Fuse semantic recall into knowledge search. Unset derives from providers.embeddings."`
+	// one for its diary and does not want its pages embedded — which is
+	// why false stops the embedding duty as well, not only the query side.
+	Vectors *bool `yaml:"vectors,omitempty" json:"vectors,omitempty" desc:"Fuse semantic recall into knowledge and work search; false also stops embedding the corpus. Unset derives from providers.embeddings."`
 }
 
 // KnowledgeBackend is which knowledge base a company runs.
@@ -723,29 +767,26 @@ type Tracker struct {
 	// Native is the engine's own tracker's policy — the settings that
 	// exist because the company owns the tracker rather than renting one.
 	//
-	// PRESENT ONLY ON A NATIVE COMPANY, and refused otherwise: a clock and
-	// an inbox horizon on a company running Jira is config that describes
-	// nothing, and the failure it produces is silence.
+	// PRESENT ONLY ON A NATIVE COMPANY, and refused otherwise: an inbox
+	// horizon on a company running Jira is config that describes nothing,
+	// and the failure it produces is silence.
 	Native *TrackerNativeConfig `yaml:"native,omitempty" json:"native,omitempty"`
 }
 
 // TrackerNativeConfig is the founder's policy over the engine's own tracker.
 //
-// # Why these two and nothing else
+// # Why this and nothing else
 //
 // Everything else a tracker could be told is either a fact about the operator
-// (which is Tier A, under `stream.`) or a decision the engine makes once for
-// everybody. What is left is genuinely a company's own: which clock its dates
-// mean, and how long a person's inbox keeps a row.
+// (which is Tier A, under `stream.`), a fact about the whole company rather
+// than its tracker, or a decision the engine makes once for everybody. What is
+// left is genuinely the tracker's own: how long a person's inbox keeps a row.
+//
+// The clock its dates mean USED to be here, and it is the company's top-level
+// `timezone` now (ADR-0018): the tracker's "today" and the scheduler's 09:00
+// are one company's calendar, and a clock held by one subsystem left every
+// other day boundary cut on UTC.
 type TrackerNativeConfig struct {
-	// Timezone is the company's ONE clock, as an IANA name.
-	//
-	// It resolves a relative date ("next Friday") and places an all-day
-	// date at midnight. It is a clock for AUTHORED INSTANTS AND CALENDAR
-	// BOUNDARIES ONLY — no duration is measured against it, because a
-	// duration measured against a wall clock changes length twice a year.
-	Timezone string `yaml:"timezone,omitempty" json:"timezone,omitempty" desc:"IANA timezone for authored dates (default UTC)."`
-
 	// InboxRetentionDays is how long a person's inbox keeps a row.
 	//
 	// THE ONE HORIZON HERE THAT DELETES ANYTHING, and it deletes a row
@@ -780,30 +821,10 @@ func (t *TrackerNativeConfig) InboxRetention() time.Duration {
 	return time.Duration(days) * 24 * time.Hour
 }
 
-// Location is the company's clock, or UTC. Validation has already established
-// that a configured name loads.
-func (t *TrackerNativeConfig) Location() *time.Location {
-	if t == nil || strings.TrimSpace(t.Timezone) == "" {
-		return time.UTC
-	}
-	loc, err := time.LoadLocation(strings.TrimSpace(t.Timezone))
-	if err != nil {
-		return time.UTC
-	}
-	return loc
-}
-
 func (t *TrackerNativeConfig) validate(path Path) error {
 	var p problems
 	if t == nil {
 		return nil
-	}
-	if tz := strings.TrimSpace(t.Timezone); tz != "" {
-		if _, err := time.LoadLocation(tz); err != nil {
-			p.add(at(path, "timezone"), ErrUnknownValue,
-				"%q is not an IANA timezone (e.g. Europe/Berlin, America/New_York): %v",
-				tz, err)
-		}
 	}
 	if d := t.InboxRetentionDays; d != 0 && (d < MinInboxRetentionDays || d > MaxInboxRetentionDays) {
 		p.add(at(path, "inbox_retention_days"), ErrOutOfRange,
@@ -935,7 +956,9 @@ func (c *Company) RunsStateLog() bool {
 	return c.TrackerBackendFor() == TrackerNative || c.KnowledgeBackendFor() == KnowledgeNative
 }
 
-// VectorsEnabled reports whether knowledge search fuses semantic recall.
+// VectorsEnabled reports whether the corpus is embedded and searched by
+// meaning. The engine's embedding model is the one reader, and the duty, the
+// coverage gauge and a search's query vector all read that.
 func (c *Company) VectorsEnabled() bool {
 	if c.Knowledge.Vectors != nil {
 		return *c.Knowledge.Vectors
@@ -1085,6 +1108,27 @@ func (c *Company) DeclaresIntegration(surface string) bool {
 		// same rule integration.Kind.Valid states for the loop itself.
 		return true
 	}
+}
+
+// AgentRoles is the name of every seat the engine runs a turn for — every role
+// in the company, in a unit or at the root, bar the human ones, which have no
+// turn. Nil on a nil company (no active revision).
+//
+// HERE rather than beside its first caller, because the live projection's boot
+// seed is keyed by it and two wirings build that seed — `crewlet run` and the
+// end-to-end harness that has to wire a node the way it does. Two copies of
+// "which seats have turns" are two answers to which seats a screen seeds.
+func (c *Company) AgentRoles() []string {
+	if c == nil {
+		return nil
+	}
+	var out []string
+	for role := range c.EachRole() {
+		if role.Name != "" && role.Kind != org.KindHuman {
+			out = append(out, role.Name)
+		}
+	}
+	return out
 }
 
 // EachRole yields EVERY seat in the company, with the path an operator typed:

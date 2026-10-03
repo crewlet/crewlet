@@ -92,6 +92,20 @@ type ExternalNotification struct {
 	// decode as unaddressed, which is the freedom to stay silent rather
 	// than an obligation to post.
 	Addressed bool `json:"addressed,omitempty"`
+
+	// Owes is the CHAT SURFACE this turn must post on before it is done,
+	// when that is not the notification's own source — `mattermost` or
+	// `slack`, from the answer to a decision whose asker said it would
+	// report the outcome there. The turn engine raises the delivery
+	// obligation on it rather than on NotificationSource, so a turn woken
+	// by the tracker is held open until a chat tool has run rather than
+	// being closed out by a comment on the item.
+	//
+	// ADDITIVE AND ABSENT-SAFE, like Addressed: an older build's events
+	// decode with no surface owed, which is the obligation that event's
+	// writer recorded.
+	Owes string `json:"owes,omitempty"`
+
 	// Messages are the constituents when this event is a COALESCED trigger.
 	//
 	// Empty — the overwhelmingly common case — means a plain single-webhook

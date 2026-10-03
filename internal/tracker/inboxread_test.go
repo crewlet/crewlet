@@ -1,6 +1,7 @@
 package tracker_test
 
 import (
+	"database/sql"
 	"slices"
 	"testing"
 	"time"
@@ -20,6 +21,12 @@ func (r *roundTrip) inbox(q tracker.InboxQuery) tracker.InboxAnswer {
 	r.t.Helper()
 	if q.Level == "" {
 		q.Level = statelog.ReadStale
+	}
+	if q.Snoozed == "" {
+		// WHAT EVERY SURFACE DEFAULTS TO — the reader itself refuses the
+		// zero value, so a harness that did not state one would be
+		// testing a question no caller can ask.
+		q.Snoozed = tracker.SnoozeExclude
 	}
 	answer, err := r.reader.Inbox(r.t.Context(), q, wednesday)
 	if err != nil {
@@ -146,9 +153,9 @@ func TestThePrimarySplitDefaultsRatherThanEmptying(t *testing.T) {
 
 	// AND A DECLARED LIST REPLACES IT, so the preference has an effect
 	// rather than being storage for a rule nobody wrote.
-	if _, err := asBob(r).WriteInbox(t.Context(), "op-prefs", "bob", nil, nil,
-		nil, []tracker.Reason{tracker.ReasonMention},
-		tracker.Position{}); err != nil {
+	if _, err := asBob(r).MarkInbox(t.Context(), "op-prefs", "bob", tracker.InboxGesture{
+		PrimaryReasons: &[]tracker.Reason{tracker.ReasonMention},
+	}); err != nil {
 
 		t.Fatalf("declare the split: %v", err)
 	}
@@ -173,7 +180,7 @@ func TestThePrimarySplitDefaultsRatherThanEmptying(t *testing.T) {
 }
 
 // TestReadIsTheSeenThroughPositionAndTheEntries protects the half of the mark
-// that is easy to leave out. The entry lists are PRUNED at every write to what
+// that is easy to leave out. The read list is PRUNED at every write to what
 // sits above the seen-through position, so reading only the lists reports
 // every pruned notice unread — which is every notice older than the person's
 // last visit, the exact set an inbox must not resurface.
@@ -200,11 +207,12 @@ func TestReadIsTheSeenThroughPositionAndTheEntries(t *testing.T) {
 
 	// THE POSITION MARKS EVERYTHING AT OR BELOW IT, with no entry rows
 	// at all, which is the pruned state.
-	if _, err := asBob(r).WriteInbox(t.Context(), "op-seen", "bob", nil, nil,
-		nil, nil, tracker.Position{
+	if _, err := asBob(r).MarkInbox(t.Context(), "op-seen", "bob", tracker.InboxGesture{
+		ReadThrough: &statelog.Position{
 			Stream: oldest.LogStream, Generation: oldest.LogGeneration,
 			Seq: oldest.LogSeq,
-		}); err != nil {
+		},
+	}); err != nil {
 
 		t.Fatalf("mark the seen-through position: %v", err)
 	}
@@ -224,12 +232,8 @@ func TestReadIsTheSeenThroughPositionAndTheEntries(t *testing.T) {
 
 	// AND AN ENTRY ABOVE IT IS MARKED TOO, which is what a person working
 	// their queue out of order does.
-	if _, err := asBob(r).WriteInbox(t.Context(), "op-read", "bob",
-		[]tracker.InboxEntry{{RecordID: newest.RecordID, Position: newest.LogSeq}},
-		nil, nil, nil, tracker.Position{
-			Stream: oldest.LogStream, Generation: oldest.LogGeneration,
-			Seq: oldest.LogSeq,
-		}); err != nil {
+	if _, err := asBob(r).MarkInbox(t.Context(), "op-read", "bob",
+		tracker.InboxGesture{Read: []string{newest.RecordID}}); err != nil {
 
 		t.Fatalf("mark the newer notice read: %v", err)
 	}
@@ -258,15 +262,24 @@ func TestAStreamMismatchIsNotReadPast(t *testing.T) {
 	}
 	notice := got.Notices[0]
 
-	if _, err := asBob(r).WriteInbox(t.Context(), "op-dead", "bob", nil, nil,
-		nil, nil, tracker.Position{
-			Stream:     "CREWLET_TRACKER_LOG_FROM_A_PREVIOUS_LIFE",
-			Generation: notice.LogGeneration, Seq: notice.LogSeq + 1_000,
-		}); err != nil {
-
-		t.Fatalf("mark a position in a dead stream: %v", err)
+	// A WRITER REFUSES such a position outright, so the row this case is
+	// about — a position left behind by a stream that was recreated — is
+	// planted: it is the state a person's record is in after the fact, and
+	// the reader is what has to survive it.
+	if _, err := asBob(r).MarkInbox(t.Context(), "op-prefs", "bob", tracker.InboxGesture{
+		PrimaryReasons: &[]tracker.Reason{},
+	}); err != nil {
+		t.Fatalf("write bob's record: %v", err)
 	}
 	r.drain()
+	if err := r.db.Tx(t.Context(), func(tx *sql.Tx) error {
+		_, err := tx.ExecContext(t.Context(), `UPDATE tracker_persons
+			SET seen_through = ?, seen_through_stream = ? WHERE handle = 'bob'`,
+			int64(notice.LogSeq+1_000), "CREWLET_TRACKER_LOG_FROM_A_PREVIOUS_LIFE")
+		return err
+	}); err != nil {
+		t.Fatalf("plant a position in a dead stream: %v", err)
+	}
 
 	if got := r.inbox(tracker.InboxQuery{Who: tracker.PartyOf("bob")}); got.Unread != 1 {
 		t.Fatal("a position from another stream marked the live stream's " +
@@ -284,10 +297,9 @@ func TestASnoozeMeansNotNow(t *testing.T) {
 
 	notice := r.inbox(tracker.InboxQuery{Who: tracker.PartyOf("bob")}).Notices[0]
 	asleep := wednesday.Add(48 * time.Hour)
-	if _, err := asBob(r).WriteInbox(t.Context(), "op-snooze", "bob", nil, nil,
-		[]tracker.InboxEntry{{
-			RecordID: notice.RecordID, Position: notice.LogSeq, Until: &asleep,
-		}}, nil, tracker.Position{}); err != nil {
+	if _, err := asBob(r).MarkInbox(t.Context(), "op-snooze", "bob", tracker.InboxGesture{
+		Snooze: []tracker.Snooze{{RecordID: notice.RecordID, Until: asleep}},
+	}); err != nil {
 
 		t.Fatalf("snooze: %v", err)
 	}
@@ -296,23 +308,23 @@ func TestASnoozeMeansNotNow(t *testing.T) {
 	if got := r.inbox(tracker.InboxQuery{Who: tracker.PartyOf("bob")}); len(got.Notices) != 0 {
 		t.Fatalf("a snoozed notice is still in the inbox: %+v", got.Notices)
 	}
-	got := r.inbox(tracker.InboxQuery{Who: tracker.PartyOf("bob"), IncludeSnoozed: true})
+	got := r.inbox(tracker.InboxQuery{Who: tracker.PartyOf("bob"),
+		Snoozed: tracker.SnoozeInclude})
 	if len(got.Notices) != 1 || !got.Notices[0].Snoozed {
-		t.Fatalf("include_snoozed did not return the snoozed notice: %+v",
+		t.Fatalf("snoozed=include did not return the snoozed notice: %+v",
 			got.Notices)
 	}
 
-	// AND ONE WHOSE TIME HAS COME IS BACK, without a write to promote it.
-	past := wednesday.Add(-time.Hour)
-	if _, err := asBob(r).WriteInbox(t.Context(), "op-due", "bob", nil, nil,
-		[]tracker.InboxEntry{{
-			RecordID: notice.RecordID, Position: notice.LogSeq, Until: &past,
-		}}, nil, tracker.Position{}); err != nil {
-
-		t.Fatalf("snooze into the past: %v", err)
+	// AND ONE WHOSE TIME HAS COME IS BACK, without a write to promote it:
+	// the same rows, read after the instant.
+	back, err := r.reader.Inbox(t.Context(), tracker.InboxQuery{
+		Who: tracker.PartyOf("bob"), Level: statelog.ReadStale,
+		Snoozed: tracker.SnoozeExclude,
+	}, asleep.Add(time.Minute))
+	if err != nil {
+		t.Fatalf("Inbox: %v", err)
 	}
-	r.drain()
-	if got := r.inbox(tracker.InboxQuery{Who: tracker.PartyOf("bob")}); len(got.Notices) != 1 {
+	if len(back.Notices) != 1 {
 		t.Fatal("a snooze whose time has come did not come back, so `not " +
 			"now` is a delete that does not say so")
 	}
@@ -365,10 +377,17 @@ func TestTheInboxPagesAndRefuses(t *testing.T) {
 	}
 
 	for name, q := range map[string]tracker.InboxQuery{
-		"no handle": {Level: statelog.ReadStale},
-		"no level":  {Who: tracker.PartyOf("bob")},
+		"no handle": {Level: statelog.ReadStale, Snoozed: tracker.SnoozeExclude},
+		"no level":  {Who: tracker.PartyOf("bob"), Snoozed: tracker.SnoozeExclude},
 		"an unknown reason": {Who: tracker.PartyOf("bob"), Level: statelog.ReadStale,
+			Snoozed: tracker.SnoozeExclude,
 			Reasons: []tracker.Reason{"because-i-said-so"}},
+		// THE ZERO SCOPE IS REFUSED, not read as one of the three: each
+		// is some caller's right default, so a reader that picked one
+		// would answer the other two's question wrong without saying so.
+		"no snoozed scope": {Who: tracker.PartyOf("bob"), Level: statelog.ReadStale},
+		"an unknown snoozed scope": {Who: tracker.PartyOf("bob"),
+			Level: statelog.ReadStale, Snoozed: "sometimes"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			if _, err := r.reader.Inbox(t.Context(), q, wednesday); err == nil {
@@ -448,5 +467,160 @@ func TestACreationsNoticeCarriesTheKeyTheWriteMinted(t *testing.T) {
 		t.Fatalf("the notice names %q and the item is %q — the key is minted "+
 			"by the write, so only the row the applier read can supply it",
 			got.Notices[0].SubjectKey, detail.Task.Key)
+	}
+}
+
+// AND THE WAKE THE SEAT IS DELIVERED NAMES IT TOO. The notice reads its key
+// off the applier's row; the wake is the record's own snapshot, which the
+// caller built before the write minted a key — so a seat woken by a create
+// was handed `item_key: ""`, its turn was charged to the task's uuid alone,
+// and every turn list drew that turn as `native:<uuid>`.
+func TestACreatesWakeCarriesTheKeyTheWriteMinted(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+	task := newTask("t-wake")
+	task.Assignee = "bob"
+	if _, err := r.writer.CreateTask(t.Context(), "op-t-wake", task, &tracker.Notify{
+		Kind:     tracker.ChangeCreated,
+		Snapshot: tracker.Snapshot{Project: "ENG", Title: task.Title, Assignee: "bob"},
+	}); err != nil {
+		t.Fatalf("create t-wake: %v", err)
+	}
+	r.drain()
+	detail := r.task(t, "t-wake")
+	wake := r.lastWake()
+	if wake == nil {
+		t.Fatal("the create published no wake")
+	}
+	if wake.Snapshot.Key == "" || wake.Snapshot.Key != detail.Task.Key {
+		t.Fatalf("the wake names %q and the item is %q", wake.Snapshot.Key, detail.Task.Key)
+	}
+}
+
+// createOf is the history row id of the create that minted `key` — what the
+// notification rows of that change are filed under.
+func createOf(r *roundTrip, key string) string {
+	r.t.Helper()
+	ids := r.strings(`SELECT h.id FROM tracker_history h
+		JOIN tracker_tasks t ON t.id = h.subject_id
+		WHERE t.key = ? AND h.kind = 'created'`, key)
+	if len(ids) != 1 {
+		r.t.Fatalf("the create of %s left history rows %v, want one", key, ids)
+	}
+	return ids[0]
+}
+
+// A CHANGE IS NOT NEWS TO THE PERSON WHO MADE IT — under EITHER of their
+// names. A founder who files work on her own seat through her assistant must
+// not find it in her own inbox, unread, as "assigned to you": that is a
+// notice about what she just did, and every one inflated her unread count.
+// The wake already dropped her ([tracker.Route]); the inbox rows did not.
+func TestYourOwnChangeIsNotInYourInbox(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+	token := r.writer.As("founder", tracker.AuthorOperator, tracker.Provenance{
+		OperatorID: "founder", Seat: "jane-founder",
+	})
+	routeAs(t, r, token, "t-own", "ENG-1", "jane-founder")
+	// AND A COLLEAGUE'S CHANGE STILL REACHES HER, or the rule would be
+	// emptying the inbox rather than keeping her own actions out of it.
+	bob := r.writer.As("bob", tracker.AuthorHuman, tracker.Provenance{})
+	routeAs(t, r, bob, "t-bob", "ENG-2", "jane-founder")
+
+	got := r.inbox(tracker.InboxQuery{
+		Who: tracker.Party{Handle: "jane-founder", OperatorID: "founder"},
+	})
+	var keys []string
+	for _, n := range got.Notices {
+		keys = append(keys, n.SubjectKey)
+	}
+	if !slices.Equal(keys, []string{"ENG-2"}) {
+		t.Fatalf("jane's inbox holds %v, want only the task bob filed on her", keys)
+	}
+	// AND NO ROW WAS WRITTEN FOR HER: `work_routing` reads this table by
+	// record, and "every candidate was the actor" is what it says an empty
+	// one means.
+	if rows := r.strings(`SELECT recipient FROM tracker_notifications
+		WHERE record_id = ?`, createOf(r, "ENG-1")); len(rows) != 0 {
+		t.Errorf("the change jane made wrote notification rows for %v", rows)
+	}
+	// AND THE COLLEAGUE'S DID, or the check above proves nothing.
+	if rows := r.strings(`SELECT recipient FROM tracker_notifications
+		WHERE record_id = ?`, createOf(r, "ENG-2")); !slices.Contains(rows, "jane-founder") {
+		t.Errorf("bob's change wrote notification rows for %v, want jane among them", rows)
+	}
+}
+
+// AN UPGRADE REMOVES THE ROWS A PREDECESSOR WROTE FOR A CHANGE'S OWN AUTHOR —
+// and nothing else: a colleague's notice stays, and so does the one reason
+// that IS news to the actor (their own blocker cleared, `unblocked`).
+func TestAnUpgradeRemovesTheNoticesAPredecessorWroteForTheirAuthor(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+	token := r.writer.As("founder", tracker.AuthorOperator, tracker.Provenance{
+		OperatorID: "founder", Seat: "jane-founder",
+	})
+	routeAs(t, r, token, "t-own", "ENG-1", "jane-founder")
+	bob := r.writer.As("bob", tracker.AuthorHuman, tracker.Provenance{})
+	routeAs(t, r, bob, "t-bob", "ENG-2", "jane-founder")
+
+	rederive := func() int {
+		var repaired int
+		if err := r.db.Tx(t.Context(), func(tx *sql.Tx) error {
+			n, err := r.applier.Rederive(t.Context(), tx, statelog.ApplyOptions{})
+			repaired = n
+			return err
+		}); err != nil {
+			t.Fatalf("re-derive: %v", err)
+		}
+		return repaired
+	}
+	if n := rederive(); n != 0 {
+		t.Errorf("re-deriving rows this build wrote repaired %d of them", n)
+	}
+	own, theirs := createOf(r, "ENG-1"), createOf(r, "ENG-2")
+
+	// THE PREDECESSOR'S ROWS for the change jane made: one telling her about
+	// it under her seat — which the upgrade removes — and one under her
+	// credential for the one reason that IS news to an author, her own
+	// blocker cleared, which it keeps. Copied from a row the applier wrote,
+	// so every other column is one a real apply produces.
+	if err := r.db.Tx(t.Context(), func(tx *sql.Tx) error {
+		for _, row := range []struct{ recipient, reason string }{
+			{"jane-founder", "assignee"},
+			{"founder", "unblocked"},
+		} {
+			if _, err := tx.ExecContext(t.Context(), `
+				INSERT INTO tracker_notifications
+					(record_id, recipient, subject_id, subject_key, kind, reason,
+					 addressed, fallback_only, fallback_rank, excerpt, created_at,
+					 log_seq, log_stream, log_generation)
+				SELECT ?, ?, subject_id, subject_key, kind, ?, addressed,
+				       fallback_only, fallback_rank, excerpt, created_at, log_seq,
+				       log_stream, log_generation
+				FROM tracker_notifications
+				WHERE record_id = ? AND recipient = 'jane-founder'`,
+				own, row.recipient, row.reason, theirs); err != nil {
+				return err
+			}
+		}
+		return nil
+	}); err != nil {
+		t.Fatalf("write the predecessor's rows: %v", err)
+	}
+	if n := rederive(); n != 1 {
+		t.Errorf("re-deriving one of the author's own rows repaired %d", n)
+	}
+	if left := r.strings(`SELECT recipient || '/' || reason FROM tracker_notifications
+		WHERE record_id = ?`, own); !slices.Equal(left, []string{"founder/unblocked"}) {
+		t.Errorf("after the upgrade the author's change holds %v, want only the "+
+			"unblocked notice, which is news to its author", left)
+	}
+	if kept := r.strings(`SELECT recipient FROM tracker_notifications
+		WHERE record_id = ? AND recipient = 'jane-founder'`, theirs); len(kept) != 1 {
+		t.Errorf("the colleague's notice to jane is %v after the upgrade, want kept", kept)
+	}
+	if tracker.DerivationVersion < 6 {
+		t.Error("who a notification row is written for is derived and the derivation version did not move")
 	}
 }

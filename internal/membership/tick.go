@@ -69,7 +69,7 @@ func ByNode[P any](live []P, of func(P) Presence) map[string]P {
 // the company's data, and a replica count read off whichever node held the
 // map's duty — its own stream.replicas — dropped every group of the object map
 // to one copy the day a node left at the default held it, and the collectors
-// deleted the rest (ADR-0020).
+// deleted the rest (ADR-0027).
 type Company struct {
 	// Epoch is the activation this came from: newer activations are
 	// larger. 0 is no company at all, and the zero Company is therefore

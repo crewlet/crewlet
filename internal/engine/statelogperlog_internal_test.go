@@ -24,6 +24,7 @@ import (
 	"github.com/crewlet/crewlet/internal/search"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tracker"
+	"github.com/crewlet/crewlet/internal/usage"
 )
 
 // THE RUNNING LAYOUT-0 RUNTIME IS TODAY'S ESTATE: its streams, its keys and its
@@ -50,6 +51,7 @@ func TestTheRunningLayoutZeroRuntimeIsTodaysEstate(t *testing.T) {
 		tracker.Domain{}.Name(): {topics.TrackerLogStream, topics.TrackerLogPrefix, topics.TrackerLogWildcard},
 		search.Domain{}.Name():  {topics.TrackerVectorsStream, topics.TrackerVectorsPrefix, topics.TrackerVectorsWildcard},
 		pages.Domain{}.Name():   {topics.PagesLogStream, topics.PagesLogPrefix, topics.PagesLogWildcard},
+		usage.Domain{}.Name():   {topics.UsageLogStream, topics.UsageLogPrefix, topics.UsageLogWildcard},
 	}
 	var registered []string
 	for _, d := range registeredDomains() {

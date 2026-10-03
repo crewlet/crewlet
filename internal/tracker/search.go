@@ -5,8 +5,8 @@ import (
 	"database/sql"
 	"fmt"
 
+	"github.com/crewlet/crewlet/internal/knowledge"
 	"github.com/crewlet/crewlet/internal/search"
-	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/store"
 )
 
@@ -44,6 +44,11 @@ type Ranked struct {
 	Type     string `json:"type"`
 	Status   Status `json:"status"`
 	Assignee string `json:"assignee,omitempty"`
+	// Priority is the item's own, so a ranked answer says how much a hit
+	// matters beside what it is — the palette draws it as the Board does,
+	// and a seat weighing which of twenty hits to open reads it as the
+	// board's reader would.
+	Priority Priority `json:"priority"`
 	// Rank is this hit's 1-based place in the answer.
 	//
 	// A PLACE AND NOT A SCORE, because a place is what the fan-out
@@ -71,16 +76,49 @@ type RankedDoc struct {
 	Snippet string
 }
 
+// SearchQuery is one ranked item search.
+type SearchQuery struct {
+	// Text is plain language.
+	Text string
+
+	// Limit caps the answer. Zero takes [SearchLimit]; past
+	// [MaxSearchLimit] is served the ceiling.
+	Limit int
+
+	// Mode is how to rank, in the knowledge search's own vocabulary —
+	// one set of three modes for both of the engine's ranked searches.
+	// The zero value is hybrid.
+	Mode knowledge.Mode
+}
+
+// SearchAnswer is a ranked item search's hits and what the search did — the
+// mode it served, what it covered, why it served less than was asked, and
+// which partitions of a divided estate answered ([knowledge.Outcome]).
+type SearchAnswer struct {
+	Hits []Ranked `json:"hits"`
+	knowledge.Outcome
+}
+
+// RankedCandidates is the index's answer over one corpus: each method's top
+// candidates with their scores, the item behind every key, and what the
+// ranking did.
+type RankedCandidates struct {
+	Candidates search.Candidates
+	Docs       map[string]RankedDoc
+	knowledge.Outcome
+}
+
 // Ranker is the index seam, declared here because this is the caller.
 //
 // THE INDEX IS THIS NODE'S OWN and the rows are the fleet's, which is why the
 // two halves of this search are two reads rather than a join — the same estate
 // boundary every other reader here crosses the same way.
 type Ranker interface {
-	// Candidates is each method's top candidates for text, with scores, by
-	// the index's own document key — and the work item behind each key, with
-	// the index's excerpt of it.
-	Candidates(ctx context.Context, text string) (search.Candidates, map[string]RankedDoc, error)
+	// Candidates is each method the query's mode runs, its top candidates
+	// for the text with their scores, by the index's own document key —
+	// the work item behind each key with the index's excerpt of it — and
+	// what the ranking did.
+	Candidates(ctx context.Context, q SearchQuery) (RankedCandidates, error)
 
 	// Building reports an index that has not caught up with this node's
 	// own rows, so a caller can tell "nothing matched" from "not indexed
@@ -118,19 +156,9 @@ func NewSearcher(db store.PartitionReader, rank Ranker) *Searcher {
 // is nothing" — which it would otherwise act on by filing a duplicate.
 var ErrIndexBuilding = fmt.Errorf("tracker: the search index is still building")
 
-// SearchAnswer is a ranked search's hits, best first, and what it covered.
-type SearchAnswer struct {
-	Hits []Ranked `json:"hits"`
-
-	// Coverage is what a search answered PARTITION BY PARTITION covered —
-	// see [statelog.Coverage]. A partition that did not answer is work
-	// this search never ranked, and a caller renders a non-empty Missing as
-	// its Notice rather than as the shorter list.
-	Coverage statelog.Coverage `json:"coverage,omitzero"`
-}
-
 // SearchSlice is what one corpus answers a ranked search with BEFORE it is
-// fused: its candidates, and every work item it can show, by the index's key.
+// fused: its candidates, every work item it can show by the index's key, and
+// what its ranking did.
 //
 // THE CANDIDATES RATHER THAN A RANKED LIST, for [search.Candidates]' reason:
 // a list's order means nothing beside another corpus's, so each corpus sends
@@ -143,33 +171,61 @@ type SearchSlice struct {
 	// design — so the fusion walks past it rather than reporting an item
 	// nobody can open.
 	Items map[string]Ranked `json:"items,omitempty"`
+
+	// Outcome is what this corpus's ranking did, for the fused answer's
+	// own ([knowledge.MergeOutcomes]).
+	Outcome knowledge.Outcome `json:"outcome"`
+}
+
+// Search ranks the company's work items against plain text: this node's
+// corpus, as one [Searcher.Slice] fused by [MergeSearch] — the two steps a
+// gather takes over several, so one corpus and many are ranked by one rule.
+func (s *Searcher) Search(ctx context.Context, q SearchQuery) (SearchAnswer, error) {
+	slice, err := s.Slice(ctx, q)
+	if err != nil {
+		return SearchAnswer{}, err
+	}
+	return MergeSearch([]SearchSlice{slice}, q), nil
 }
 
 // Slice answers a ranked search from this node's corpus, before fusion.
-func (s *Searcher) Slice(ctx context.Context, text string) (SearchSlice, error) {
-	if s == nil || s.rank == nil || s.db.IsZero() {
+func (s *Searcher) Slice(ctx context.Context, q SearchQuery) (SearchSlice, error) {
+	switch {
+	case s == nil || s.rank == nil || s.db.IsZero():
 		return SearchSlice{}, fmt.Errorf("tracker: this node has no search index")
+	case !q.Mode.Valid():
+		return SearchSlice{}, fmt.Errorf("tracker: unknown search mode %q — "+
+			"the modes are hybrid, keyword and semantic", q.Mode)
 	}
-	cands, docs, err := s.rank.Candidates(ctx, text)
+	ranked, err := s.rank.Candidates(ctx, q)
 	if err != nil {
 		return SearchSlice{}, err
 	}
-	if len(docs) == 0 {
+	out := SearchSlice{Candidates: ranked.Candidates, Outcome: ranked.Outcome}
+	if len(ranked.Docs) == 0 {
 		// THE GATE IS ASKED ONLY ON AN EMPTY ANSWER, because that is the
 		// only answer it changes: a search that found something has
 		// found it whether or not the index is still catching up, and
 		// asking every time would put one indexed count on every call.
-		if s.rank.Building(ctx) {
+		//
+		// AND ONLY WHEN THE WORDS WERE RANKED. The gate is the LEXICAL
+		// index's state; a semantic search never read that index, and
+		// one that ran nothing at all (no provider, a failed query
+		// vector) already carries the degradation that explains its
+		// empty answer — which "still building" would throw away,
+		// telling the reader to wait for something that will not
+		// change what they were told.
+		if lexicalRan(ranked.ServedMode) && s.rank.Building(ctx) {
 			return SearchSlice{}, ErrIndexBuilding
 		}
-		return SearchSlice{Candidates: cands}, nil
+		return out, nil
 	}
-	rows, err := s.itemsByID(ctx, docs)
+	rows, err := s.itemsByID(ctx, ranked.Docs)
 	if err != nil {
 		return SearchSlice{}, err
 	}
-	out := SearchSlice{Candidates: cands, Items: make(map[string]Ranked, len(docs))}
-	for key, doc := range docs {
+	out.Items = make(map[string]Ranked, len(ranked.Docs))
+	for key, doc := range ranked.Docs {
 		row, held := rows[doc.ID]
 		if !held {
 			// INDEXED AND GONE. The index is behind this node's own
@@ -184,14 +240,23 @@ func (s *Searcher) Slice(ctx context.Context, text string) (SearchSlice, error) 
 	return out, nil
 }
 
+// lexicalRan reports whether an answer served in this mode read the lexical
+// index. The EMPTY mode is a search that ranked nothing, so it read nothing —
+// which [knowledge.Mode.Resolved] alone would call hybrid.
+func lexicalRan(served knowledge.Mode) bool {
+	return served != "" && served.Lexical()
+}
+
 // MergeSearch fuses the slices of DISJOINT corpora into one ranked answer of up
-// to limit items, best first ([search.FuseCandidates]).
+// to q's limit items, best first ([search.FuseCandidates]), and says what the
+// fused answer did ([knowledge.MergeOutcomes]).
 //
 // THE PLACE IS COUNTED OVER WHAT SURVIVES, so an item dropped as gone leaves no
 // gap in the numbering a reader would take for a result that went missing —
 // and the fused order is walked past it rather than cut first, so a removed
 // item costs the answer that item and never a place.
-func MergeSearch(slices []SearchSlice, limit int) []Ranked {
+func MergeSearch(slices []SearchSlice, q SearchQuery) SearchAnswer {
+	limit := q.Limit
 	switch {
 	case limit <= 0:
 		limit = SearchLimit
@@ -199,8 +264,10 @@ func MergeSearch(slices []SearchSlice, limit int) []Ranked {
 		limit = MaxSearchLimit
 	}
 	cands := make([]search.Candidates, 0, len(slices))
+	outcomes := make([]knowledge.Outcome, 0, len(slices))
 	for _, slice := range slices {
 		cands = append(cands, slice.Candidates)
+		outcomes = append(outcomes, slice.Outcome)
 	}
 	out := make([]Ranked, 0, limit)
 	for _, key := range search.FuseCandidates(cands) {
@@ -214,7 +281,7 @@ func MergeSearch(slices []SearchSlice, limit int) []Ranked {
 			break
 		}
 	}
-	return out
+	return SearchAnswer{Hits: out, Outcome: knowledge.MergeOutcomes(outcomes)}
 }
 
 // itemFor is the item behind key in whichever slice named it — exactly one,
@@ -241,7 +308,7 @@ func (s *Searcher) itemsByID(ctx context.Context, docs map[string]RankedDoc) (ma
 	out := make(map[string]Ranked, len(ids))
 	err := s.db.Read(ctx, func(tx *sql.Tx) error {
 		rows, err := tx.QueryContext(ctx, `
-			SELECT id, key, project_key, type, title, status, assignee
+			SELECT id, key, project_key, type, title, status, assignee, priority
 			  FROM tracker_tasks
 			 WHERE removed_at IS NULL AND id IN (`+placeholders(len(ids))+`)`,
 			ids...)
@@ -252,7 +319,7 @@ func (s *Searcher) itemsByID(ctx context.Context, docs map[string]RankedDoc) (ma
 		for rows.Next() {
 			var row Ranked
 			if err := rows.Scan(&row.ID, &row.Key, &row.Project, &row.Type,
-				&row.Title, &row.Status, &row.Assignee); err != nil {
+				&row.Title, &row.Status, &row.Assignee, &row.Priority); err != nil {
 				return err
 			}
 			out[row.ID] = row

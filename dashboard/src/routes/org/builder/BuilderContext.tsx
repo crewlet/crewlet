@@ -1,5 +1,5 @@
 /**
- * The org builder's context: what every view and dialog of the Builder lens
+ * The org builder's context: what every view and dialog of the builder
  * reads, and the only way they change anything.
  *
  * ONE DOOR. The canvas, the outline, the node editor and the dialogs never
@@ -27,6 +27,7 @@
 
 import { createContext, useContext, useEffect } from "react";
 import type { Route } from "~/app/router.tsx";
+import { resolve } from "~/app/routes.ts";
 import type {
   AgentRow,
   ConfigProblem,
@@ -42,42 +43,42 @@ import type { BuilderAction, BuilderState } from "./model/reducer.ts";
 export type AddKind = "unit" | "agent" | "human";
 
 /**
- * Whether a move to `to` keeps the Builder lens mounted: the Company screen's
- * Builder lens under any view, chart or selection.
+ * Whether a move to `to` keeps the Builder mounted: Edit org under any view,
+ * chart or selection.
  *
  * WHAT A LEAVE GUARD HOLDS IS A MOVE THAT LOSES WORK. The Builder owns the
  * draft and the dialog that is open, form and all, so a move that keeps the
- * lens (Back from the outline to the canvas, say) loses none of it, and
+ * builder (Back from the outline to the canvas, say) loses none of it, and
  * asking before it would be a question about nothing, worded as a departure
- * that is not one. Every guard in the lens asks this one rule, so the draft's
- * and an editor's agree on what leaving is.
+ * that is not one. Every guard in the builder asks this one rule, so the
+ * draft's and an editor's agree on what leaving is.
  *
- * THE ADDRESS IS THE SCREEN'S, AND IT IS THE WHOLE OF THE RULE. This lens
- * hangs off `routes/company/Company.tsx` at `#/company?lens=builder`; it read
- * `path[0] === "org"`, which is where the screen used to live. That spelling
- * does not fail loudly — `keepsTheLens` answers FALSE for every move, so the
- * guard holds moves it was written to let through: choosing the table view,
- * switching the chart, pressing Back within the builder's own history each
- * put a "discard your changes?" question in front of a reader who was not
- * leaving anything. Which is the shape this doc warns about, arrived at from
- * the other side.
+ * THE ADDRESS IS THE SECTION'S, AND IT IS THE WHOLE OF THE RULE. The builder
+ * is Agents › Edit org, `#/agents/edit`. It was a `lens=builder` on the
+ * company screen, and before that a screen at `#/org`; each move left this
+ * predicate spelling the old address, which does not fail loudly —
+ * `keepsTheLens` answers FALSE for every move, so the guard holds moves it was
+ * written to let through: choosing the table view, switching the chart,
+ * pressing Back within the builder's own history each put a "discard your
+ * changes?" question in front of a reader who was not leaving anything.
+ * `keepsTheLens.test.ts` holds it against the route table's own resolver, so
+ * the next move of the section moves this answer with it.
  *
  * IT IS DELIBERATELY NOT KEYED ON A SELECTION. `unit=` and `seat=` are
  * FILTERS, so the router REPLACES for them and a replace is never put to a
- * guard at all (see `app/router.tsx`'s `go`); the `lens`, `view` and `chart`
- * parameters are SECTIONS and push, which is exactly the set this predicate
- * has to answer for. A peek — `?peek=`, this frame's rail — is a filter too,
- * so opening one over the builder neither asks nor unmounts anything.
+ * guard at all (see `app/router.tsx`'s `go`); the `view` and `chart`
+ * parameters are SECTIONS of the builder and push, which is exactly the set
+ * this predicate has to answer for. A peek — `?peek=`, this frame's rail — is
+ * a filter too, so opening one over the builder neither asks nor unmounts
+ * anything.
  */
 export function keepsTheLens(to: Route): boolean {
-  // THE SCREEN'S OWN ADDRESS AND NOTHING UNDER IT. `#/company` is where the
-  // lens lives, and every move the Builder itself makes stays on that path —
-  // `nav.section` and `nav.filter` both rebuild the query over the CURRENT
-  // path. Anything deeper is another screen. The one route that is neither
-  // (`#/company/units` with no unit named, which mounts this screen too) is
-  // reachable only by hand, and asking there costs a question; answering yes
-  // to it would cost the draft, so this errs towards asking.
-  return to.path.length === 1 && to.path[0] === "company" && to.query.get("lens") === "builder";
+  // THE SECTION'S OWN ADDRESS AND NOTHING UNDER IT. Every move the Builder
+  // itself makes stays on that path — `nav.section` and `nav.filter` both
+  // rebuild the query over the CURRENT path — and anything else is another
+  // screen, which unmounts the draft.
+  const where = resolve(to.path);
+  return where.resolved && where.screen === "org-edit";
 }
 
 /**
@@ -149,7 +150,7 @@ export interface BuilderApi {
    * Where a view or dialog that creates a node mints its key, in its own event
    * handler (see `model/keys.ts`). The Builder's own source, which is the
    * browser's random one (`runtime.randomKeys`) unless a suite injects
-   * another, so every key and write id the lens makes comes from one place.
+   * another, so every key and write id the builder makes comes from one place.
    */
   keys: KeySource;
   /**

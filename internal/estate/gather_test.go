@@ -477,8 +477,8 @@ func (r recorder) Serve(ctx context.Context, subject string, h queue.AnswerFunc)
 // workSearcherOf makes a partRead a [WorkSearcher].
 type workSearcherOf struct{ partRead }
 
-func (w workSearcherOf) Slice(_ context.Context, text string) (tracker.SearchSlice, error) {
-	return w.workSlice(text)
+func (w workSearcherOf) Slice(_ context.Context, q tracker.SearchQuery) (tracker.SearchSlice, error) {
+	return w.workSlice(q.Text)
 }
 
 func tp(i uint16) statelog.PartitionID {
@@ -730,9 +730,9 @@ func TestAGatherOfOnePartitionIsASingleRead(t *testing.T) {
 	if err := json.Unmarshal(replies[0], &rep); err != nil {
 		t.Fatal(err)
 	}
-	var hits []knowledge.Hit
-	if err := json.Unmarshal(rep.Result, &hits); err != nil || len(hits) != 1 || rep.Parts != nil {
-		t.Fatalf("an older asker's search was answered %+v (%v), want its whole list", rep, err)
+	var whole knowledge.Result
+	if err := json.Unmarshal(rep.Result, &whole); err != nil || len(whole.Hits) != 1 || rep.Parts != nil {
+		t.Fatalf("an older asker's search was answered %+v (%v), want its whole answer", rep, err)
 	}
 }
 
@@ -1742,7 +1742,7 @@ func TestTheSearchesAreGathersOverTheirCorpus(t *testing.T) {
 	})
 	r := f.router(t, "agent-1", nil)
 	got := r.Knowledge().Search(t.Context(), knowledge.Query{Text: "deploys", Limit: 5})
-	if !got.Coverage.Complete() || got.Coverage.Addressed != 2 || len(got.Hits) != 2 {
+	if !got.Partitions.Complete() || got.Partitions.Addressed != 2 || len(got.Hits) != 2 {
 		t.Fatalf("knowledge search = %+v, want both pages partitions' hits", got)
 	}
 	// FUSED BY SCORE, so pages.001's stronger candidate ranks first.
@@ -1754,9 +1754,9 @@ func TestTheSearchesAreGathersOverTheirCorpus(t *testing.T) {
 	}
 	// THE WORK ITEMS' CORPUS IS THE TRACKER SPACE'S, and not the company
 	// space's catalogue, which carries the tracker's log and indexes nothing.
-	work, err := r.Work().Search(t.Context(), "retry backoff", 10)
-	if err != nil || work.Coverage.Addressed != 4 || len(work.Hits) != 4 ||
-		slices.Contains(work.Coverage.Answered, "company.000") {
+	work, err := r.Work().Search(t.Context(), tracker.SearchQuery{Text: "retry backoff", Limit: 10})
+	if err != nil || work.Partitions.Addressed != 4 || len(work.Hits) != 4 ||
+		slices.Contains(work.Partitions.Answered, "company.000") {
 		t.Fatalf("work search = (%+v, %v), want the four tracker partitions' hits", work, err)
 	}
 	if work.Hits[0].ID != "tracker.003" || work.Hits[3].Rank != 4 {
@@ -1765,9 +1765,9 @@ func TestTheSearchesAreGathersOverTheirCorpus(t *testing.T) {
 
 	f.nodes["data-b"].set(func(n *partNode) { n.silent = true })
 	got = r.Knowledge().Search(t.Context(), knowledge.Query{Text: "deploys", Limit: 5})
-	if len(got.Hits) != 1 || len(got.Coverage.Missing) != 1 ||
-		got.Coverage.Missing[0].Partition != "pages.001" ||
-		got.Coverage.Missing[0].Reason != statelog.MissingUnreachable {
+	if len(got.Hits) != 1 || len(got.Partitions.Missing) != 1 ||
+		got.Partitions.Missing[0].Partition != "pages.001" ||
+		got.Partitions.Missing[0].Reason != statelog.MissingUnreachable {
 		t.Fatalf("with pages.001's holder gone the search answered %+v, want it named", got)
 	}
 
@@ -1775,11 +1775,11 @@ func TestTheSearchesAreGathersOverTheirCorpus(t *testing.T) {
 	// names every partition it did not reach, though the search failed.
 	f.nodes["data-a"].set(func(n *partNode) { n.silent = true })
 	got = r.Knowledge().Search(t.Context(), knowledge.Query{Text: "deploys", Limit: 5})
-	if len(got.Hits) != 0 || got.Coverage.Addressed != 2 || len(got.Coverage.Missing) != 2 {
+	if len(got.Hits) != 0 || got.Partitions.Addressed != 2 || len(got.Partitions.Missing) != 2 {
 		t.Fatalf("with every holder gone the search answered %+v, want both pages "+
 			"partitions named missing", got)
 	}
-	for _, m := range got.Coverage.Missing {
+	for _, m := range got.Partitions.Missing {
 		if m.Reason != statelog.MissingUnreachable {
 			t.Errorf("%s is missing as %q, want unreachable", m.Partition, m.Reason)
 		}

@@ -269,7 +269,7 @@ func (c *scanCorpus) run(b *testing.B, readers int) {
 // was bought at.
 //
 // The figures this benchmark produced are in the package doc of semantic.go
-// and in ADR-0022; the per-source coefficient is what [SemanticScanBudget]'s
+// and in ADR-0028; the per-source coefficient is what [SemanticScanBudget]'s
 // supported-corpus projection is derived from.
 func BenchmarkSemanticIVFUnderLoad(b *testing.B) {
 	for _, n := range []int{10_000, 40_000} {
@@ -559,7 +559,7 @@ func (c *indexedCorpus) run(b *testing.B, readers int, scan bool) {
 // a head row carrying the blob cost on every read, because a row is read
 // whole whatever columns are selected. The difference, times the embeds a
 // node applies catching up, is why the blob is not in the head (migration
-// 0025).
+// 0033).
 func BenchmarkIndexHeadRead(b *testing.B) {
 	db, _ := storetest.OpenEstate(b, filepath.Join(b.TempDir(), "node.db"), store.Options{}, 1)
 	b.Cleanup(func() { _ = db.Close() })

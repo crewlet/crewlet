@@ -6,8 +6,10 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/api/httpjson"
-	"github.com/crewlet/crewlet/internal/api/stream"
+	"github.com/crewlet/crewlet/internal/engine"
+	"github.com/crewlet/crewlet/internal/eventfan"
 	"github.com/crewlet/crewlet/internal/store"
+	"github.com/crewlet/crewlet/internal/usage"
 	"github.com/crewlet/crewlet/internal/version"
 )
 
@@ -25,15 +27,28 @@ const (
 )
 
 // Health is what the /health endpoint and the dashboard's health push both
-// carry.
+// carry — WHOLE, on both.
 //
 // ONE shape backing both, so a field added here reaches the endpoint, the
 // snapshot and the periodic push together — and a reconnect restores it with no
-// second round trip.
+// second round trip. The push used to carry three fields of it while a `stream`
+// query answered the rest, and five screens polled that query at two cadences
+// of their own: the rail could say a revision had applied while the panel in
+// front of it said it had not, for as long as fifteen seconds. There is no such
+// query any more; a screen reads the pushed body.
 //
 // Every field the engine answers is ALWAYS PRESENT, and a zero here is a real
 // zero: every process that serves the API runs the engine beside it, so there is
-// no answer this body could honestly leave out.
+// no answer this body could honestly leave out. The OMITTED fields are the ones
+// where absence is itself the answer — a lag or a stranding that is not
+// happening, a read that did not happen, an evaluation that has not run — and
+// each says which.
+//
+// PUBLIC, like every probe: /health is unguarded and the push reaches an
+// anonymous tab. That is why the fleet and the alarm table appear here as
+// COUNTS — how many nodes, how many alarms and the one longest unanswered —
+// and never as their rows: which nodes hold what, and what each alarm
+// measured, are the operator-only `fleet` and `work_retention` answers.
 type Health struct {
 	Status string `json:"status"`
 
@@ -70,6 +85,14 @@ type Health struct {
 	// re-derive the unit is a second place the number can be wrong.
 	EventHistorySeconds int `json:"event_history_seconds"`
 
+	// SpendHistorySeconds is how far back a NAMED spend window can reach:
+	// the replicated usage domain's own history (ADR-0020), which is not
+	// the event log's. The two floors answer different questions — "can I
+	// still open that turn" and "can I still chart that month" — and a
+	// screen stating one under the other's name tells a reader a ninety-day
+	// spend chart is impossible, or that a month-old turn can still be read.
+	SpendHistorySeconds int `json:"spend_history_seconds"`
+
 	InFlight     int      `json:"in_flight"`
 	ShuttingDown bool     `json:"shutting_down"`
 	Posture      string   `json:"posture"`
@@ -90,6 +113,40 @@ type Health struct {
 	// served it, so the only evidence of a seat out of service for a week
 	// was a log line re-raised every twenty heartbeats.
 	UnprovenSeconds map[string]float64 `json:"unproven_seconds,omitempty"`
+
+	// Nodes is how many nodes hold a presence lease: the fleet this node's
+	// fan-outs divide their work by. ABSENT WHEN THE PRESENCE READ FAILED,
+	// never 0 — the node answering is itself a node, so a zero could only
+	// ever be a failed read wearing a number, and "node count unavailable"
+	// is what a screen must say instead.
+	Nodes *int `json:"nodes,omitempty"`
+
+	// Alarms counts this node's standing alarms from the ONE evaluation
+	// the gauge and the alarm log lines come from. Absent before that
+	// evaluation first runs, and on a node running no state log: neither
+	// has looked, and `{count: 0}` would tell a health card it is healthy.
+	Alarms *HealthAlarms `json:"alarms,omitempty"`
+
+	// SeededFrom is which nodes this node's live projection was seeded
+	// from at boot — the feed, the spend window and each seat's last turn
+	// every screen starts from — absent until that seed has run. A seed
+	// that missed a node started those screens a node short, and this is
+	// the only place that says so after the log line scrolled away.
+	SeededFrom *eventfan.Coverage `json:"seeded_from,omitempty"`
+}
+
+// HealthAlarms is the alarm table as a public health body can carry it: how
+// many, and which has stood longest.
+type HealthAlarms struct {
+	// Count is how many alarms are firing. Zero is a real zero: the table
+	// was evaluated and nothing holds.
+	Count int `json:"count"`
+
+	// Worst names the alarm that has been firing LONGEST
+	// ([statelog.Tracker.Standing]) — the condition that has gone
+	// unanswered longest, since the table asserts no severity of its own.
+	// Absent when nothing is firing.
+	Worst string `json:"worst,omitempty"`
 }
 
 // Readiness is what /ready answers.
@@ -131,7 +188,22 @@ var divergedPostures = map[string]struct{}{"shed": {}, "stuck": {}}
 // health builds the body every health surface shares.
 func (a *App) health(ctx context.Context) Health {
 	configured := a.Configured()
+	// THE FLEET COUNTS BESIDE THE SNAPSHOT, NOT AFTER IT, and under their
+	// own budget. This body answers the LIVENESS probe, and both reads can
+	// reach the coordination plane: the posture inside the snapshot is
+	// bounded to engine.ProbeReadBudget, and run one after the other a
+	// wedged broker would cost the probe twice that — most of a 5 s
+	// liveness timeout, which an orchestrator answers by killing a healthy
+	// node over a coordination blip. Concurrent, the probe's worst case is
+	// one budget. The counts are the part of the envelope it can best
+	// afford to lose: an out-of-budget presence read is an absent `nodes`,
+	// which is already what "cannot say" means here.
+	fleetCtx, cancel := context.WithTimeout(ctx, engine.ProbeReadBudget)
+	defer cancel()
+	fleetRead := make(chan FleetState, 1)
+	go func() { fleetRead <- a.runtime.Fleet(fleetCtx) }()
 	state := a.runtime.Snapshot(ctx)
+	fleet := <-fleetRead
 	seats := state.Seats
 	if seats == nil {
 		// A node holding no seats holds an empty list, and says so as one:
@@ -154,6 +226,7 @@ func (a *App) health(ctx context.Context) Health {
 		// The floor is the store's own, not a number this package picked:
 		// it is what every read is bounded by.
 		EventHistorySeconds: int(store.EventHistory.Seconds()),
+		SpendHistorySeconds: int(usage.History.Seconds()),
 	}
 	if state.StallLag > 0 {
 		// Only when there is something to say. A field that is always
@@ -167,6 +240,19 @@ func (a *App) health(ctx context.Context) Health {
 		for seat, stranded := range state.Unproven {
 			body.UnprovenSeconds[seat] = stranded.Seconds()
 		}
+	}
+	if fleet.LiveNodes != nil {
+		nodes := *fleet.LiveNodes
+		body.Nodes = &nodes
+	}
+	if fleet.Alarms != nil {
+		body.Alarms = &HealthAlarms{Count: len(fleet.Alarms)}
+		if len(fleet.Alarms) > 0 {
+			body.Alarms.Worst = fleet.Alarms[0]
+		}
+	}
+	if coverage, seeded := a.state.SeededFrom(); seeded {
+		body.SeededFrom = &coverage
 	}
 
 	// IN THE PRECEDENCE THE STATUSES DECLARE. The posture case used to be
@@ -187,7 +273,7 @@ func (a *App) health(ctx context.Context) Health {
 
 // tickReadBudget bounds a read done for a push tick rather than a request.
 //
-// The dashboard's shared tick and its roster re-send have no request context
+// The dashboard's shared tick and its placement read have no request context
 // to inherit, and what they call reaches the coordination plane. Five seconds
 // is far longer than the read needs and far shorter than the tick's own
 // cadence, so a wedged plane costs one stale push rather than a goroutine per
@@ -204,6 +290,11 @@ const tickReadBudget = 5 * time.Second
 // Also not ready before the first config revision applies: an unconfigured node
 // cannot verify a webhook signature, and taking it out of rotation is how a
 // fleet avoids answering with a node that would only reject the delivery.
+//
+// IT NEVER ASKS [NodeRuntime.Fleet]. The fleet counts decide nothing here, and
+// the presence count is a scan of the fleet's keys: a readiness probe paying
+// for one on every call, to throw it away, is a probe a wedged broker can
+// slow for a fact it never reads.
 func (a *App) readiness(ctx context.Context) (Readiness, int) {
 	configured := a.Configured()
 	state := a.runtime.Snapshot(ctx)
@@ -227,20 +318,15 @@ func (a *App) readiness(ctx context.Context) (Readiness, int) {
 	return body, http.StatusServiceUnavailable
 }
 
-// streamHealth is the shared tick's view of the same facts.
+// streamHealth is the shared tick's view of the same facts: the WHOLE body.
 //
 // A CONTEXT OF ITS OWN, and this is one of the few places that is right: the
 // push tick is a timer, not a request, so there is nothing to inherit. It is
-// bounded rather than Background alone, because the posture read underneath
-// reaches the coordination plane and a push tick must not outlive the
+// bounded rather than Background alone, because the posture and presence reads
+// underneath reach the coordination plane and a push tick must not outlive the
 // interval that will fire the next one.
-func (a *App) streamHealth() stream.Health {
+func (a *App) streamHealth() any {
 	ctx, cancel := context.WithTimeout(context.Background(), tickReadBudget)
 	defer cancel()
-	full := a.health(ctx)
-	return stream.Health{
-		Status:       full.Status,
-		InFlight:     full.InFlight,
-		ShuttingDown: full.ShuttingDown,
-	}
+	return a.health(ctx)
 }

@@ -150,21 +150,23 @@ func (a *Applier) upsertDocument(ctx context.Context, tx *sql.Tx, table, key str
 		res, err = tx.ExecContext(ctx, `
 			INSERT INTO tracker_projects
 				(key, name, purpose, unit, chart_epoch, default_assignee,
-				 policy_version, archived, rank_respread_pending,
-				 rank_duplicate_pending, open_count, done_count, closed_count,
-				 last_change_at, last_change_actor, last_change_actor_kind,
-				 last_change_seq, created_at, updated_at, version, document)
-			VALUES (?,?,?,?,?,?,?,?,0,0,0,0,0,NULL,'','',0,?,?,?,?)
+				 target_date, policy_version, archived, rank_respread_pending,
+				 rank_duplicate_pending, open_count, active_count, done_count,
+				 closed_count, last_change_at, last_change_actor,
+				 last_change_actor_kind, last_change_seq, created_at,
+				 updated_at, version, document)
+			VALUES (?,?,?,?,?,?,?,?,?,0,0,0,0,0,0,NULL,'','',0,?,?,?,?)
 			ON CONFLICT (key) DO UPDATE SET
 				name = excluded.name, purpose = excluded.purpose,
 				unit = excluded.unit, chart_epoch = excluded.chart_epoch,
 				default_assignee = excluded.default_assignee,
+				target_date = excluded.target_date,
 				policy_version = excluded.policy_version,
 				archived = excluded.archived, updated_at = excluded.updated_at,
 				version = excluded.version, document = excluded.document
 			WHERE excluded.version > tracker_projects.version`,
 			key, project.Name, project.Purpose, project.Unit, project.ChartEpoch,
-			project.DefaultAssignee,
+			project.DefaultAssignee, nullableStringPtr(&project.TargetDate),
 			project.PolicyVersion, boolInt(project.Archived),
 			store.EncodeTime(project.CreatedAt), store.EncodeTime(project.UpdatedAt),
 			c.packed, []byte(c.record.Mutation))
@@ -241,7 +243,7 @@ func (a *Applier) upsertDocument(ctx context.Context, tx *sql.Tx, table, key str
 				priorities_set_at = excluded.priorities_set_at,
 				version = excluded.version
 			WHERE excluded.version > tracker_persons.version`,
-			key, person.Generation, int64(person.SeenThrough.Seq),
+			key, person.Generation, int64(person.SeenThrough.packed()),
 			person.SeenThrough.Stream, jsonOf(person.Read), jsonOf(person.Unread),
 			jsonOf(person.Snoozed), jsonOf(person.PrimaryReasons),
 			jsonOf(person.Priorities), jsonOf(person.PinnedViews),
@@ -319,7 +321,7 @@ func (a *Applier) applyCounter(ctx context.Context, tx *sql.Tx, c applyContext) 
 // placeTask writes one placement of a rank order, by the rule of the record's
 // own version ([rewriteVersion]).
 //
-// FROM VERSION 4, INTO THE MOVED TASK'S DOCUMENT, not its rank column alone
+// FROM [rewriteVersion], INTO THE MOVED TASK'S DOCUMENT, not its rank column alone
 // ([rewriteOther]): the document is what the task's own next record is merged
 // from, and a rank written only to the column was put back by it — every drag
 // undone by the next edit to the card that was dragged. And only a task in
@@ -328,8 +330,8 @@ func (a *Applier) applyCounter(ctx context.Context, tx *sql.Tx, c applyContext) 
 // has no position in it and a write to it would be outside what the record
 // declared.
 //
-// BELOW VERSION 4, THE COLUMN ALONE AND WHEREVER THE TASK IS FILED, which is
-// what every build before version 4 wrote for the same record — and what every
+// BELOW [rewriteVersion], THE COLUMN ALONE AND WHEREVER THE TASK IS FILED, which is
+// what every build before that version wrote for the same record — and what every
 // node that applied one already holds. Applying an older record by the newer
 // rule on a node that replays it would give that node rows no other node has.
 func placeTask(ctx context.Context, tx *sql.Tx, c applyContext, project string,

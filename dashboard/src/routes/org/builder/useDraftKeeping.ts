@@ -17,9 +17,9 @@
  * - a different revision runs the update-my-draft flow through the reducer's
  *   `restore`, and the kept draft stays stored until that flow ends;
  * - a draft kept for the other mode is discarded, and the operator is told;
- * - a draft this page itself kept a moment ago (the operator switched lens
+ * - a draft this page itself kept a moment ago (the operator left Edit org
  *   and came back) is restored without asking: the offer exists for a draft
- *   somebody may have walked away from, not for a lens switch.
+ *   somebody may have walked away from, not for a trip away and back.
  *
  * WHAT CLEARS IT: whatever makes the plan say so (a save, a discard, an empty
  * log), and a state that may no longer be kept (`keep` false after a token
@@ -29,7 +29,7 @@
  * marks the kept log with its write id before it goes (`markWrite`), and
  * the mark stays until the save is known not to have landed. A draft found
  * still marked is a save whose answer this tab lost, perhaps after the
- * operator left the lens, and it may have landed: offered as an update onto
+ * operator left the builder, and it may have landed: offered as an update onto
  * its own revision it would replay every operation a second time. So the
  * decision waits (`unsettled`) while the Builder settles that save through
  * the model's lost-answer resolution, and resumes once it is known.
@@ -51,7 +51,7 @@ import type { SaveAttempt } from "./model/writes.ts";
 
 /**
  * When this page last kept a draft, by its `savedAt`. Module state, because a
- * lens switch unmounts the Builder and the next mount is the one that has to
+ * trip away from Edit org unmounts the Builder and the next mount is the one that has to
  * recognize the draft as its own.
  */
 let keptByThisPage: number | null = null;
@@ -66,7 +66,7 @@ export interface DraftKeeping {
   readonly offer: KeptDraft | null;
   /**
    * Whether the draft as it stands is found again after a reload or a trip
-   * off the lens: false while storage refuses it or it is over the cap.
+   * off the builder: false while storage refuses it or it is over the cap.
    */
   readonly survives: boolean;
   /** True until the kept draft, if any, is decided. */
@@ -80,7 +80,7 @@ export interface DraftKeeping {
    * Marks the kept draft with the write id of a save being sent, or clears
    * the mark once the save is known not to have landed (`null`), which also
    * lets a draft held for it be decided. Works on storage directly, so a save
-   * settling after the lens was left still marks what it must.
+   * settling after the builder was left still marks what it must.
    */
   markWrite(write: string | null): void;
   readonly notice: KeepNotice | null;

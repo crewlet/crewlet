@@ -46,8 +46,10 @@
 //     What the lease carries is internal/estate/partmap's.
 //
 // What belongs here rather than in a node's own database is ADR-0003, the
-// tri-state below is ADR-0005, and why [ProtocolVersion] REFUSES an older
-// peer where an event envelope round-trips one is ADR-0016.
+// tri-state below is ADR-0005, why [ProtocolVersion] REFUSES an older
+// peer where an event envelope round-trips one is ADR-0016, and why a token
+// budget is counted per calendar window — rolled inside the charge that
+// crosses a boundary, with no reset — is ADR-0019 (budget.go).
 //
 // Three rules carry the correctness of everything above:
 //
@@ -186,10 +188,14 @@ import (
 //
 // Bump this when the MEANING of holding a lease changes, never when
 // something merely gains a field. The history: v2 = holding a seat means
-// consulting the completion ledger; v3 = claiming
-// a seat means this node satisfies the role's placement. Both were silent
-// corruption in a mixed fleet, which is the bar.
-const ProtocolVersion = 3
+// consulting the completion ledger; v3 = claiming a seat means this node
+// satisfies the role's placement; v4 = running a seat means charging its
+// rounds to the WINDOWED token counters ([WindowedCountersProtocol]). Every
+// one was silent corruption in a mixed fleet, which is the bar: a v3 node and
+// a v4 node running seats side by side would each charge a different counter,
+// so each would see only its own share of the company's spend and every cap
+// would bind late — by as much as the other build had spent.
+const ProtocolVersion = 4
 
 // ErrUnavailable is the canonical "store could not answer" error. Backends
 // wrap their transport failures in it. Callers should not switch on it —
@@ -291,6 +297,26 @@ type Lease struct {
 	// clock, never the caller's: nodes must never compare their own wall
 	// clocks to decide ownership.
 	ExpiresAt time.Time
+
+	// AcquiredAt is when THIS TENURE began, on the store's clock like
+	// ExpiresAt: stamped when the epoch is minted — a takeover, a first
+	// claim, or the same owner re-claiming after its own lease lapsed — and
+	// carried unchanged through every renewal, whether by [Backend.Renew] or
+	// by a live holder's own re-claim. It moves exactly when Epoch moves,
+	// because both answer one question: since when has this holder held
+	// this without a gap. An operator reading "node-2 since 08:02" is
+	// reading a tenure, and a stamp that followed the heartbeat would say
+	// "since a few seconds ago" about a seat that has not moved all day.
+	//
+	// ZERO MEANS UNKNOWN, never "the epoch of time": a record written by a
+	// build that predates the field carries none, and its tenure began at a
+	// moment nobody wrote down. A reader renders zero as absent. A renewal
+	// does not invent one either, since the moment it would stamp is the
+	// renewal's and not the claim's.
+	//
+	// Nothing decides ownership by it. It is a fact for a person to read,
+	// and the fencing token is still Epoch alone.
+	AcquiredAt time.Time
 
 	// Preferred is a stickiness hint naming the node that last held this
 	// resource. It ORDERS claims and never gates them — the hint outlives
