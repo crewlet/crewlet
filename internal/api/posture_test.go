@@ -402,10 +402,6 @@ func (postureNoSeats) Seat(context.Context, string) (session.Seat, bool, error) 
 	return session.Seat{}, false, nil
 }
 
-func (postureNoSeats) Position(context.Context) (uint64, time.Duration, error) {
-	return 1, 0, nil
-}
-
 // postureSecrets is the real /secrets surface over a memory fleet, so the
 // matrix composes the route the way a running node does rather than an inert
 // stand-in that would admit anybody.

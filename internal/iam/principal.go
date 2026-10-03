@@ -109,23 +109,6 @@ type Principal struct {
 	// holds.
 	Seat string
 
-	// SeatAt is the CHART POSITION the binding was decided at: the
-	// position the org chart's own log had reached when somebody wrote
-	// this person's seat down.
-	//
-	// A POSITION AND NOT A CLOCK, and the difference is the whole point of
-	// the field. What reads it is a three-valued lookup: a seat missing
-	// from this node's chart view means either that the seat is GONE or
-	// that this node has NOT YET APPLIED the hire, and those answers are
-	// 403 and 503. Comparing this node's own chart position against this
-	// value is what tells them apart — and comparing two nodes' wall
-	// clocks is what the coordination layer states it never does.
-	//
-	// It is comparable across a reanchor because a packed position carries
-	// the generation in its high bits. Zero means no binding has ever been
-	// decided, which is the only honest reading when Seat is "".
-	SeatAt uint64
-
 	// Grants are the capabilities this principal carries. A slice rather
 	// than a set, because it is a row's own list and the order it was
 	// written in is what an operator sees when they read it back.

@@ -124,7 +124,7 @@ func holderRecordOf(ctx context.Context, dir bindingDirectory, chart session.Cha
 	}
 	return recordThrough(ctx, chart, login, session.PersonRow{
 		Found: true, Stage: seen.Stage, Login: seen.Login,
-		Seat: seen.Seat, SeatAt: seen.SeatAt,
+		Seat: seen.Seat,
 	})
 }
 

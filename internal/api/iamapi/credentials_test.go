@@ -521,7 +521,3 @@ type noSeats struct{}
 func (noSeats) Seat(context.Context, string) (session.Seat, bool, error) {
 	return session.Seat{}, false, nil
 }
-
-func (noSeats) Position(context.Context) (uint64, time.Duration, error) {
-	return 1, 0, nil
-}

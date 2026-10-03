@@ -153,7 +153,7 @@ func boundRowOf(ctx context.Context, dir bindingDirectory, login string) (
 	// credential the configuration pinned.
 	return session.PersonRow{
 		Found: true, Stage: seen.Stage, Login: seen.Login,
-		Seat: seen.Seat, SeatAt: seen.SeatAt,
+		Seat: seen.Seat,
 	}, nil
 }
 

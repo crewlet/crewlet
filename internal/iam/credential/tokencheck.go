@@ -100,10 +100,9 @@ type TokenOwner struct {
 	// Epoch is the owner's CURRENT revocation epoch.
 	Epoch uint64
 
-	// Seat and SeatAt are the owner's binding, for the caller to resolve
-	// through the chart exactly as a session's is.
-	Seat   string
-	SeatAt uint64
+	// Seat is the owner's binding, for the caller to resolve through the
+	// running organisation exactly as a session's is.
+	Seat string
 }
 
 // TokenCheck is one token's verdict.

@@ -17,7 +17,7 @@ import (
 func loginHeldBy(login, seat string, stage iam.Stage) iamdomain.Sighting {
 	return iamdomain.Sighting{
 		ID: "018f3a9c-0000-7000-8000-00000000" + login[:4], Kind: iam.KindPerson,
-		Stage: stage, Login: login, Seat: seat, SeatAt: 900,
+		Stage: stage, Login: login, Seat: seat,
 	}
 }
 
@@ -109,13 +109,10 @@ func TestNobodyAndAGoneSeatAreAnswersAndABlindNodeIsNot(t *testing.T) {
 	rows := map[string]iamdomain.Sighting{
 		"half.done": {ID: "018f3a9c-0000-7000-8000-0000000000aa",
 			Login: "half.done", Reserved: true},
-		"left.lead": loginHeldBy("left.lead", "old-lead", iam.StageActive),
+		"left.lead": loginHeldBy("left.lead", "gone-lead", iam.StageActive),
 		"bot.bound": loginHeldBy("bot.bound", "triage-bot", iam.StageActive),
-		"new.hire":  loginHeldBy("new.hire", "not-applied-yet", iam.StageActive),
 		"jane.doe":  loginHeldBy("jane.doe", "platform-lead", iam.StageActive),
 	}
-	behind := companyChart()
-	behind.position = 100 // below every binding's 900
 	for _, c := range []struct {
 		name  string
 		dir   fakeBindings
@@ -131,8 +128,6 @@ func TestNobodyAndAGoneSeatAreAnswersAndABlindNodeIsNot(t *testing.T) {
 			"left.lead", iam.ErrHolderUnseated},
 		{"a seat that is an agent's", fakeBindings{rows: rows}, companyChart(),
 			"bot.bound", iam.ErrHolderUnseated},
-		{"a hire this node's chart has not applied", fakeBindings{rows: rows}, behind,
-			"new.hire", nil},
 		{"a directory that could not be read",
 			fakeBindings{err: errors.New("store blip")}, companyChart(), "jane.doe", nil},
 		{"a directory past the stall grace, for a holder",
@@ -143,8 +138,8 @@ func TestNobodyAndAGoneSeatAreAnswersAndABlindNodeIsNot(t *testing.T) {
 			companyChart(), "ghost.person", nil},
 		{"a record this node cannot decode", fakeBindings{rows: rows, deferred: true},
 			companyChart(), "ghost.person", nil},
-		{"a chart this node cannot read", fakeBindings{rows: rows},
-			seatTable{posErr: errors.New("no chart view")}, "jane.doe", nil},
+		{"an organisation this node cannot read", fakeBindings{rows: rows},
+			seatTable{seatErr: errors.New("no company yet")}, "jane.doe", nil},
 		// A TOKEN LOGIN IS HELD BY ITS TIER A ENTRY. A typo is nobody's —
 		// and so is a login whose entry is gone although the directory
 		// still binds it, since no credential can act as it here.

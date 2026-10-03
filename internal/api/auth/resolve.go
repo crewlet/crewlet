@@ -169,16 +169,15 @@ func (g *Guard) principalFor(ctx context.Context, entry config.APIToken,
 		return iam.Principal{}, iam.Unknown, nil
 	case session.AnswerServe:
 		p.Kind, p.Seat = iam.KindPerson, binding.Handle()
-		p.SeatAt, p.Position = row.SeatAt, binding.Seat.Unit
+		p.Position = binding.Seat.Unit
 		return p, iam.Resolved, nil
 	}
 	// RESOLVED AND REFUSED, as a signed-in person bound to a gone seat is:
 	// this node knows exactly which credential this is and will not say
-	// what it acts as. It stays the MACHINE it is, with SeatAt beside an
-	// empty seat — the pair that says "a binding was decided and this node
-	// will not honour it" — and the guard writes the 403 everywhere but
-	// the one surface that never reads a seat.
-	p.SeatAt = row.SeatAt
+	// what it acts as. It stays the MACHINE it is, with an empty seat, and
+	// the refusal beside it is what says a binding was decided and this
+	// node will not honour it: the guard writes the 403 everywhere but the
+	// one surface that never reads a seat.
 	return p, iam.Resolved, seatRefusal(binding)
 }
 

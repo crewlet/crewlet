@@ -13,7 +13,6 @@ import (
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/iam/credential"
-	"github.com/crewlet/crewlet/internal/queue/topics"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
@@ -789,7 +788,7 @@ func (w *Writer) Claim(ctx context.Context, kind ObjectKind, token, personID,
 // [Enrolment.alreadyEnrolled].
 //
 // payload carries what a claim states beside its token — an address's sealed
-// form — and nothing else: the person and the chart position are the decide's.
+// form — and nothing else: the person is the decide's.
 func (w *Writer) claim(ctx context.Context, at *statelog.Position,
 	kind ObjectKind, token, personID string, payload Claim, opID string,
 	enrolling *Enrolment) (statelog.Result, error) {
@@ -912,20 +911,8 @@ func (w *Writer) claim(ctx context.Context, at *statelog.Position,
 				return err
 			}
 		}
-		claim := Claim{V: DocumentVersion, Person: personID,
-			Sealed: payload.Sealed}
-		if kind == KindSeat {
-			// AND THE POSITION THAT READ WAS TAKEN AT GOES ON THE
-			// RECORD, which is the half that IS load-bearing. It is
-			// read in the SAME TRANSACTION as the seat row above, so
-			// the number states exactly what was seen: any node whose
-			// own chart position covers it has seen everything this
-			// decide saw, and one below it has not. That is what turns
-			// a seat missing from a node's view into two answers
-			// instead of one wrong one.
-			claim.ChartPosition = chartPositionOf(ctx, tx)
-		}
-		mutation, err := EncodeClaim(claim)
+		mutation, err := EncodeClaim(Claim{V: DocumentVersion,
+			Person: personID, Sealed: payload.Sealed})
 		if err != nil {
 			return err
 		}
@@ -934,36 +921,6 @@ func (w *Writer) claim(ctx context.Context, at *statelog.Position,
 	}
 	return w.publishAt(ctx, at,
 		w.request(ctx, &rec, opID, statelog.PatternCreate, decide))
-}
-
-// chartPositionOf is the org chart log's checkpoint on THIS node, read inside
-// a decide's own transaction.
-//
-// ZERO WHEN IT CANNOT BE READ, and that is the safe direction rather than a
-// swallowed error. The value is a FLOOR a reader compares its own position
-// against, so zero says "this bind claims to have seen nothing", which every
-// node's position covers — and a seat absent from the view then answers 403
-// naming the seat rather than 503 for ever. The opposite default, refusing the
-// bind, would make a node that has never applied a chart record unable to bind
-// anybody to a seat at all, which is exactly the node a first company sets up
-// on.
-func chartPositionOf(ctx context.Context, tx *sql.Tx) uint64 {
-	var generation, seq int64
-	err := tx.QueryRowContext(ctx,
-		`SELECT generation, seq FROM statelog_cursor WHERE stream = ?`,
-		topics.ChartLogStream).Scan(&generation, &seq)
-	if err != nil {
-		return 0
-	}
-	// UINT64 ON THE RECORD, int64 in the column, which is the framework's
-	// own convention for a packed position ([statelog.EvictionRow.From] is
-	// the same). A packed position is never negative — the generation is a
-	// uint32 shifted 40, which cannot reach the sign bit — so the two forms
-	// name one value.
-	return uint64(statelog.Position{
-		Stream: topics.ChartLogStream, Generation: uint32(generation),
-		Seq: uint64(seq),
-	}.Packed())
 }
 
 // Release gives a claim back.

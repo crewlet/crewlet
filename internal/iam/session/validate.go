@@ -115,11 +115,9 @@ type PersonRow struct {
 	Colleague iam.Colleague
 	Grants    []iam.Grant
 
-	// Seat is the seat handle this person is bound to, and SeatAt the
-	// chart position that binding was decided at. seat.go is what they
-	// are for.
-	Seat   string
-	SeatAt uint64
+	// Seat is the seat handle this person is bound to. seat.go is what it
+	// is for.
+	Seat string
 }
 
 // Row is which row of the session table a bearer landed on.

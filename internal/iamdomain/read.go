@@ -330,13 +330,12 @@ func readPersonRow(ctx context.Context, tx *sql.Tx, person string,
 	}
 	var (
 		kind, stage, login, seat string
-		chartPosition            int64
 		document                 []byte
 	)
 	err := tx.QueryRowContext(ctx, `
-		SELECT kind, stage, login, seat_id, chart_position, document
+		SELECT kind, stage, login, seat_id, document
 		  FROM iam_people WHERE id = ?`, person).
-		Scan(&kind, &stage, &login, &seat, &chartPosition, &document)
+		Scan(&kind, &stage, &login, &seat, &document)
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
 		return nil
@@ -372,7 +371,6 @@ func readPersonRow(ctx context.Context, tx *sql.Tx, person string,
 	out.Colleague = doc.Colleague
 	out.Grants = doc.Grants
 	out.Seat = seat
-	out.SeatAt = uint64(chartPosition)
 	return nil
 }
 
@@ -487,13 +485,12 @@ func readTokenOwner(ctx context.Context, tx *sql.Tx, id string,
 
 	var (
 		stage, login, seat string
-		chartPosition      int64
 		document           []byte
 	)
 	err := tx.QueryRowContext(ctx, `
-		SELECT stage, login, seat_id, chart_position, document
+		SELECT stage, login, seat_id, document
 		  FROM iam_people WHERE id = ?`, id).
-		Scan(&stage, &login, &seat, &chartPosition, &document)
+		Scan(&stage, &login, &seat, &document)
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
 		return nil
@@ -514,7 +511,6 @@ func readTokenOwner(ctx context.Context, tx *sql.Tx, id string,
 	out.Grants = doc.Grants
 	out.Colleague = doc.Colleague
 	out.Seat = seat
-	out.SeatAt = uint64(chartPosition)
 	return readEpoch(ctx, tx, id, &out.Epoch)
 }
 
@@ -552,7 +548,6 @@ type Sighting struct {
 	Grants      []iam.Grant
 	Colleague   iam.Colleague
 	Seat        string
-	SeatAt      uint64
 
 	// Reserved reports a RESERVATION: the row an enrolment's claims leave
 	// before its content record fills it in — see [reservation]. It holds
@@ -623,13 +618,12 @@ func sightingIn(ctx context.Context, tx *sql.Tx, column, token string,
 
 	var (
 		kind, stage, login, seat string
-		chartPosition            int64
 		document                 []byte
 	)
 	err := tx.QueryRowContext(ctx, `
-		SELECT id, kind, stage, login, seat_id, chart_position, document
+		SELECT id, kind, stage, login, seat_id, document
 		  FROM iam_people WHERE `+column+` = ?`, token).
-		Scan(&out.ID, &kind, &stage, &login, &seat, &chartPosition, &document)
+		Scan(&out.ID, &kind, &stage, &login, &seat, &document)
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
 		// NOBODY, and the zero value is the answer. See the doc on
@@ -643,8 +637,7 @@ func sightingIn(ctx context.Context, tx *sql.Tx, column, token string,
 		// claimed columns are the row's; everything a caller would
 		// decide with is absent, which is what makes a reservation act
 		// as nobody without every caller having to know the shape.
-		*out = Sighting{ID: out.ID, Login: login, Seat: seat,
-			SeatAt: uint64(chartPosition), Reserved: true}
+		*out = Sighting{ID: out.ID, Login: login, Seat: seat, Reserved: true}
 		return nil
 	}
 	doc, err := DecodePerson(document)
@@ -660,7 +653,6 @@ func sightingIn(ctx context.Context, tx *sql.Tx, column, token string,
 	out.Grants = doc.Grants
 	out.Colleague = doc.Colleague
 	out.Seat = seat
-	out.SeatAt = uint64(chartPosition)
 	return nil
 }
 

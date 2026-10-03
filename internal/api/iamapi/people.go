@@ -59,10 +59,8 @@ type personView struct {
 
 	// Seat is the bound seat's IDENTITY — the handle it was created under,
 	// which is what a binding records (ADR-0027) and which always resolves to
-	// the seat however it has been renamed — and SeatAt the chart position
-	// the bind was decided at.
-	Seat   string `json:"seat,omitempty"`
-	SeatAt uint64 `json:"seat_at,omitempty"`
+	// the seat however it has been renamed.
+	Seat string `json:"seat,omitempty"`
 
 	Grants    []iam.Grant   `json:"grants,omitempty"`
 	Colleague iam.Colleague `json:"colleague"`
@@ -78,7 +76,7 @@ type personView struct {
 func (s *Service) viewOf(ctx context.Context, row iamdomain.PersonRow) personView {
 	out := personView{
 		ID: row.ID, Kind: row.Kind, Stage: row.Stage, Login: row.Login,
-		Seat: row.Seat, SeatAt: row.SeatAt, Grants: row.Grants,
+		Seat: row.Seat, Grants: row.Grants,
 		Colleague: row.Colleague, Epoch: row.Epoch,
 		CreatedAt: row.CreatedAt, UpdatedAt: row.UpdatedAt,
 		Version: row.Version, Reserved: row.Reserved,

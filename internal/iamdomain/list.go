@@ -62,10 +62,8 @@ type PersonRow struct {
 	EmailSealed []byte
 
 	// Seat is the IDENTITY of the seat this person is bound to — the handle
-	// it was created under, which no rename moves (ADR-0027) — and SeatAt
-	// the chart position the bind was decided at.
-	Seat   string
-	SeatAt uint64
+	// it was created under, which no rename moves (ADR-0027).
+	Seat string
 
 	Grants    []iam.Grant
 	Colleague iam.Colleague
@@ -161,7 +159,7 @@ func (r *Reader) People(ctx context.Context, q PeopleQuery) (PeoplePage, error) 
 	query := strings.Builder{}
 	query.WriteString(`
 		SELECT p.id, p.kind, p.stage, p.login, p.name_sealed, p.email_sealed,
-		       p.seat_id, p.chart_position, p.document,
+		       p.seat_id, p.document,
 		       p.created_at, p.updated_at, MAX(p.version, p.scoped_through),
 		       COALESCE(e.epoch, 0)
 		FROM iam_people p
@@ -217,7 +215,7 @@ func (r *Reader) Person(ctx context.Context, id string) (PersonRow, error) {
 	err := r.withTx(ctx, func(tx *sql.Tx) error {
 		rows, err := tx.QueryContext(ctx, `
 			SELECT p.id, p.kind, p.stage, p.login, p.name_sealed, p.email_sealed,
-			       p.seat_id, p.chart_position, p.document,
+			       p.seat_id, p.document,
 			       p.created_at, p.updated_at, MAX(p.version, p.scoped_through),
 			       COALESCE(e.epoch, 0)
 			FROM iam_people p
@@ -259,7 +257,7 @@ func scanPerson(rows *sql.Rows) (PersonRow, error) {
 		epoch    int64
 	)
 	if err := rows.Scan(&out.ID, &kind, &stage, &out.Login, &out.NameSealed,
-		&out.EmailSealed, &out.Seat, &out.SeatAt, &document,
+		&out.EmailSealed, &out.Seat, &document,
 		&created, &updated, &version, &epoch); err != nil {
 		return PersonRow{}, fmt.Errorf("iamdomain: scan a directory row: %w", err)
 	}
@@ -642,10 +640,8 @@ type SeatBinding struct {
 	Person, Login string
 
 	// Seat is the seat's IDENTITY — the handle it was created under, which
-	// no rename moves (ADR-0027) — and SeatAt the chart position the bind's
-	// decide read it at.
-	Seat   string
-	SeatAt uint64
+	// no rename moves (ADR-0027).
+	Seat string
 
 	// Stage is the bound person's stage, from the column; empty for a
 	// reservation.
@@ -655,8 +651,7 @@ type SeatBinding struct {
 // Binding is the row's seat binding, as [Reader.SeatBindings] answers it.
 func (p PersonRow) Binding() SeatBinding {
 	return SeatBinding{
-		Person: p.ID, Login: p.Login, Seat: p.Seat, SeatAt: p.SeatAt,
-		Stage: p.Stage,
+		Person: p.ID, Login: p.Login, Seat: p.Seat, Stage: p.Stage,
 	}
 }
 
@@ -679,7 +674,7 @@ func (r *Reader) SeatBindings(ctx context.Context) ([]SeatBinding, error) {
 	err := r.withTx(ctx, func(tx *sql.Tx) error {
 		out = out[:0]
 		rows, err := tx.QueryContext(ctx, `
-			SELECT id, login, stage, seat_id, chart_position
+			SELECT id, login, stage, seat_id
 			  FROM iam_people
 			 WHERE seat_id != ''
 			 ORDER BY seat_id, id`)
@@ -690,12 +685,11 @@ func (r *Reader) SeatBindings(ctx context.Context) ([]SeatBinding, error) {
 		for rows.Next() {
 			var b SeatBinding
 			var stage string
-			var at int64
-			if err := rows.Scan(&b.Person, &b.Login, &stage, &b.Seat,
-				&at); err != nil {
+			if err := rows.Scan(&b.Person, &b.Login, &stage,
+				&b.Seat); err != nil {
 				return fmt.Errorf("iamdomain: read a seat binding: %w", err)
 			}
-			b.Stage, b.SeatAt = iam.Stage(stage), uint64(max(at, 0))
+			b.Stage = iam.Stage(stage)
 			out = append(out, b)
 		}
 		return rows.Err()

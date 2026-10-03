@@ -534,10 +534,10 @@ func (s *Sessions) resolve(w http.ResponseWriter, r *http.Request,
 		// anything that would use a seat; [ActsAsThemselves] is the
 		// one surface it does not cover, and nothing there reads one.
 		//
-		// [iam.Principal.SeatAt] IS KEPT while Seat is empty, which is
-		// the pair that says "a binding was decided and this node will
-		// not honour it" — a principal with neither is a genuinely
-		// seatless person, and the two must never read alike.
+		// THE REFUSAL IS WHAT SAYS a binding was decided and this node
+		// will not honour it: the principal's seat is empty either way,
+		// and a genuinely seatless person carries no refusal, so the two
+		// never read alike.
 		//
 		// THE COOKIE IS NOT CLEARED, unlike a refused session: the
 		// bearer is live and works the moment somebody rebinds them,
@@ -783,7 +783,6 @@ func (s *Sessions) principal(v session.Validation, binding session.Binding,
 		// taking the row would write audit rows under a handle nothing
 		// answers to.
 		Seat:     binding.Handle(),
-		SeatAt:   person.SeatAt,
 		Position: binding.Seat.Unit,
 		// WHAT THE PERSON WAS GIVEN HERE, clamped to this node's
 		// ceiling. A session carries no authority of its own: the grants

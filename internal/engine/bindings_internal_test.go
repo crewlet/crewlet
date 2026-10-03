@@ -20,15 +20,14 @@ import (
 	"github.com/crewlet/crewlet/internal/store"
 )
 
-// seatTable is a [session.Chart] answering from a table, counting the seat
-// reads it serves.
+// seatTable is a [seatOrg] answering from a table, counting the seat reads it
+// serves.
 type seatTable struct {
-	position uint64
-	lag      time.Duration
-	posErr   error
-	seats    map[string]session.Seat
-	seatErr  error
-	reads    *atomic.Int64
+	version    uint64
+	versionErr error
+	seats      map[string]session.Seat
+	seatErr    error
+	reads      *atomic.Int64
 }
 
 func (c seatTable) Seat(_ context.Context, ref string) (session.Seat, bool, error) {
@@ -42,74 +41,59 @@ func (c seatTable) Seat(_ context.Context, ref string) (session.Seat, bool, erro
 	return seat, found, nil
 }
 
-func (c seatTable) Position(context.Context) (uint64, time.Duration, error) {
-	return c.position, c.lag, c.posErr
+func (c seatTable) Version(context.Context) (uint64, error) {
+	return c.version, c.versionErr
 }
 
-// companyChart is a chart at position 1 000 holding a human seat, an agent
-// seat and a tombstone.
+// companyChart is an organisation at version 1 holding a human seat and an
+// agent seat.
 func companyChart() seatTable {
-	return seatTable{position: 1000, reads: &atomic.Int64{}, seats: map[string]session.Seat{
+	return seatTable{version: 1, reads: &atomic.Int64{}, seats: map[string]session.Seat{
 		"platform-lead": {Handle: "platform-lead", Kind: session.SeatKindHuman},
 		"triage-bot":    {Handle: "triage-bot", Kind: "agent"},
-		"old-lead":      {Handle: "old-lead", Tombstoned: true},
 	}}
 }
 
-// bound is a person bound to a seat, decided at a chart position.
-func bound(id, seat string, at uint64) iamdomain.SeatBinding {
+// bound is a person bound to a seat.
+func bound(id, seat string) iamdomain.SeatBinding {
 	return iamdomain.SeatBinding{
-		Person: id, Login: id + ".person", Stage: iam.StageActive,
-		Seat: seat, SeatAt: at,
+		Person: id, Login: id + ".person", Stage: iam.StageActive, Seat: seat,
 	}
 }
 
-// A BINDING DANGLES EXACTLY WHEN THE REQUEST PATH WOULD REFUSE OR HOLD THE
-// PERSON FOR WANT OF THE SEAT — both residues, and nothing else.
+// A BINDING DANGLES EXACTLY WHEN THE REQUEST PATH WOULD REFUSE THE PERSON FOR
+// WANT OF THE SEAT, and nothing else.
 //
 // The predicate this replaced asked whether the chart held a row by that
 // handle, so a person bound to an AGENT seat — refused 403 on every request
 // they made — was one the report and the alarm said nothing about. The rule is
 // now the seat table itself, and this walks every row of it.
-func TestABindingDanglesExactlyWhenTheSeatTableRefusesOrHoldsItsPerson(t *testing.T) {
+func TestABindingDanglesExactlyWhenTheSeatTableRefusesItsPerson(t *testing.T) {
 	t.Parallel()
 	for name, tc := range map[string]struct {
 		chart    seatTable
 		row      iamdomain.SeatBinding
 		dangling bool
-		settled  bool
-		unknown  bool
 		says     string
+		unknown  bool
 	}{
-		"a human seat the chart holds": {
-			chart: companyChart(), row: bound("p1", "platform-lead", 900),
+		"a held human seat": {
+			chart: companyChart(), row: bound("p1", "platform-lead"),
 		},
 		"no binding at all": {
-			chart: companyChart(), row: bound("p1", "", 0),
+			chart: companyChart(), row: bound("p1", ""),
 		},
-		"an agent seat, which the old predicate called held": {
-			chart: companyChart(), row: bound("p1", "triage-bot", 900),
-			dangling: true, settled: true, says: `"agent" seat`,
+		"an agent's seat": {
+			chart: companyChart(), row: bound("p1", "triage-bot"),
+			dangling: true, says: `"agent" seat`,
 		},
-		"a tombstoned seat": {
-			chart: companyChart(), row: bound("p1", "old-lead", 900),
-			dangling: true, settled: true, says: "tombstoned",
+		"a seat the running company does not hold": {
+			chart: companyChart(), row: bound("p1", "gone-lead"),
+			dangling: true, says: "not a seat of the company",
 		},
-		"an absent seat on a chart that has seen the bind": {
-			chart: companyChart(), row: bound("p1", "gone-lead", 900),
-			dangling: true, settled: true, says: "covers the binding",
-		},
-		"an absent seat on a chart that has not applied the hire yet": {
-			chart: companyChart(), row: bound("p1", "new-hire", 1200),
-			dangling: true, settled: false, says: "clears when",
-		},
-		"a chart applier past the stall grace": {
-			chart: seatTable{position: 1000, lag: 2 * statelog.StallGrace},
-			row:   bound("p1", "new-hire", 1200), unknown: true,
-		},
-		"a chart view that cannot be read": {
-			chart: seatTable{position: 1000, seatErr: errors.New("estate closed")},
-			row:   bound("p1", "platform-lead", 900), unknown: true,
+		"an organisation that cannot be read": {
+			chart: seatTable{seatErr: errors.New("no company yet")},
+			row:   bound("p1", "platform-lead"), unknown: true,
 		},
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -131,10 +115,6 @@ func TestABindingDanglesExactlyWhenTheSeatTableRefusesOrHoldsItsPerson(t *testin
 			}
 			if !dangling {
 				return
-			}
-			if residue.Settled != tc.settled {
-				t.Errorf("settled = %v, want %v — the two residues have two "+
-					"remedies", residue.Settled, tc.settled)
 			}
 			if !strings.Contains(residue.Detail, tc.says) ||
 				!strings.Contains(residue.Detail, tc.row.Seat) {
@@ -222,7 +202,7 @@ func firing(w *bindingWatch) (statelog.Reading, bool) {
 func TestAResidueYoungerThanTheGraceDoesNotFire(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()
-	w := newWatchOver(dirOf(bound("p1", "triage-bot", 900)), companyChart())
+	w := newWatchOver(dirOf(bound("p1", "triage-bot")), companyChart())
 	t0 := time.Date(2031, 4, 2, 9, 0, 0, 0, time.UTC)
 
 	var fired bool
@@ -261,19 +241,19 @@ func TestAResidueYoungerThanTheGraceDoesNotFire(t *testing.T) {
 func TestAResidueThatClearedStartsItsClockAgain(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()
-	dir := dirOf(bound("p1", "triage-bot", 900))
+	dir := dirOf(bound("p1", "triage-bot"))
 	w := newWatchOver(dir, companyChart())
 	t0 := time.Date(2031, 4, 2, 9, 0, 0, 0, time.UTC)
 	w.observe(ctx, t0)
 
-	dir.set(bound("p1", "platform-lead", 900))
+	dir.set(bound("p1", "platform-lead"))
 	w.observe(ctx, t0.Add(time.Hour))
 	if reading, fired := firing(w); fired || reading.DanglingBindings != 0 {
 		t.Fatalf("a repaired binding still reads %d dangling (fired %v)",
 			reading.DanglingBindings, fired)
 	}
 
-	dir.set(bound("p1", "triage-bot", 900))
+	dir.set(bound("p1", "triage-bot"))
 	w.observe(ctx, t0.Add(2*time.Hour))
 	if _, fired := firing(w); fired {
 		t.Error("a residue seen once, after a repair, fired on the age of the " +
@@ -293,7 +273,7 @@ func TestAResidueThatClearedStartsItsClockAgain(t *testing.T) {
 func TestAFiringAlarmHoldsThroughAFailedReadAndAStalledChart(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()
-	dir := dirOf(bound("p1", "triage-bot", 900))
+	dir := dirOf(bound("p1", "triage-bot"))
 	chart := companyChart()
 	w := newWatchOver(dir, chart)
 	t0 := time.Date(2031, 4, 2, 9, 0, 0, 0, time.UTC)
@@ -317,11 +297,12 @@ func TestAFiringAlarmHoldsThroughAFailedReadAndAStalledChart(t *testing.T) {
 			"two minutes it was last seen at", reading.DanglingBindingFor)
 	}
 
-	// THE CHART STALLS for the next beat: the row is unknown, not clear.
+	// THE ORGANISATION CANNOT BE READ for the next beat: the row is unknown,
+	// not clear.
 	dir.mu.Lock()
 	dir.fail = nil
 	dir.mu.Unlock()
-	w.chart = seatTable{position: 1001, lag: 2 * statelog.StallGrace}
+	w.org = seatTable{version: 2, seatErr: errors.New("no company yet")}
 	w.observe(ctx, t0.Add(4*time.Minute))
 	if reading, fired := firing(w); !fired || reading.DanglingBindings != 1 {
 		t.Fatalf("a chart that could not judge the row cleared it (%d, fired %v)",
@@ -329,7 +310,7 @@ func TestAFiringAlarmHoldsThroughAFailedReadAndAStalledChart(t *testing.T) {
 	}
 
 	// AND WHEN BOTH RECOVER, the residue is as old as it always was.
-	w.chart = companyChart()
+	w.org = companyChart()
 	w.observe(ctx, t0.Add(5*time.Minute))
 	reading, fired = firing(w)
 	if !fired || reading.DanglingBindingFor != 5*time.Minute {
@@ -352,7 +333,7 @@ func TestAFiringAlarmHoldsThroughAFailedReadAndAStalledChart(t *testing.T) {
 func TestAFailingWalkIsSaidWhenItStartsAndWhenItEnds(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()
-	dir := dirOf(bound("p1", "triage-bot", 900))
+	dir := dirOf(bound("p1", "triage-bot"))
 	w := newWatchOver(dir, companyChart())
 	var logs bytes.Buffer
 	w.logger = slog.New(slog.NewJSONHandler(&logs, nil))
@@ -434,7 +415,7 @@ func TestAFailingWalkIsSaidWhenItStartsAndWhenItEnds(t *testing.T) {
 func TestABeatReadsNothingThatHasNotMoved(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()
-	dir := dirOf(bound("p1", "triage-bot", 900), bound("p2", "platform-lead", 900))
+	dir := dirOf(bound("p1", "triage-bot"), bound("p2", "platform-lead"))
 	chart := companyChart()
 	w := newWatchOver(dir, chart)
 	t0 := time.Date(2031, 4, 2, 9, 0, 0, 0, time.UTC)
@@ -466,7 +447,7 @@ func TestABeatReadsNothingThatHasNotMoved(t *testing.T) {
 			dir.readCount(), chart.reads.Load())
 	}
 
-	w.chart = seatTable{position: 1001, seats: chart.seats, reads: chart.reads}
+	w.org = seatTable{version: 2, seats: chart.seats, reads: chart.reads}
 	w.observe(ctx, t0.Add(6*statelog.AlarmInterval))
 	if chart.reads.Load() != 4 {
 		t.Errorf("a chart that moved was asked about %d seat(s), want both "+
@@ -488,7 +469,7 @@ func TestABeatReadsNothingThatHasNotMoved(t *testing.T) {
 func TestTheBindingWatchFeedsTheReadingTheTableEvaluates(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()
-	w := newWatchOver(dirOf(bound("p1", "old-lead", 900), bound("p2", "triage-bot", 900)),
+	w := newWatchOver(dirOf(bound("p1", "gone-lead"), bound("p2", "triage-bot")),
 		companyChart())
 	t0 := time.Date(2031, 4, 2, 9, 0, 0, 0, time.UTC)
 	w.observe(ctx, t0)

@@ -222,11 +222,10 @@ func (b inboxBindings) BoundSeat(_ context.Context, login string) (session.Perso
 		return session.PersonRow{}, nil
 	}
 	return session.PersonRow{Found: true, Stage: iam.StageActive, Login: login,
-		Seat: seat, SeatAt: 1}, nil
+		Seat: seat}, nil
 }
 
-// inboxChart holds each bound seat as a human seat, at a position that covers
-// every binding.
+// inboxChart holds each bound seat as a human seat.
 type inboxChart map[string]string
 
 func (c inboxChart) Seat(_ context.Context, ref string) (session.Seat, bool, error) {
@@ -236,8 +235,4 @@ func (c inboxChart) Seat(_ context.Context, ref string) (session.Seat, bool, err
 		}
 	}
 	return session.Seat{}, false, nil
-}
-
-func (inboxChart) Position(context.Context) (uint64, time.Duration, error) {
-	return 1, 0, nil
 }

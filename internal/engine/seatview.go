@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"time"
 
 	"github.com/crewlet/crewlet/internal/chart"
 	"github.com/crewlet/crewlet/internal/iam/session"
@@ -14,29 +13,8 @@ import (
 // SeatView answers [session.Chart] — which seat a signed-in person acts as —
 // against the org chart this node has applied.
 //
-// # Why it reads the chart domain and not the running company
-//
-// [ChartAuthority] asks the RUNNING company's org (`e.Company().Org`), because
-// what it needs is the tree with lead inheritance and manages-expansion
-// applied, which is a derivation the chart rows do not hold. This needs
-// something else entirely, and the difference is a spurious 403.
-//
-// The running org is composed at an EPOCH. It is rebuilt when a revision is
-// applied, not when a chart record lands, so a seat created a second ago is
-// absent from it while the chart applier has long since committed the row —
-// and `e.Company().ChartAt` names the position that composition read, which is
-// BEHIND the chart's own checkpoint by however long it has been since the last
-// apply. A person hired between two epochs would be told their seat is gone,
-// on a node that has the seat, for as long as nothing else triggered a
-// recompose.
-//
-// So this reads the chart domain directly, at [statelog.ReadStale] — this
-// node's own committed rows — and takes its position from the same reader.
-// The two then come from ONE source with nothing between them, which is what
-// makes [session.Chart]'s central distinction sound: a seat absent from a
-// view whose position covers the binding is GONE, and one absent from a view
-// below it is a node that has not seen the hire. Reading rows from one place
-// and a position from another is how those two answers swap.
+// It reads this node's own committed chart rows, at [statelog.ReadStale]: a
+// seat the rows do not hold is not a seat anybody may act as here.
 type SeatView struct{ reader *chart.Reader }
 
 var _ session.Chart = SeatView{}
@@ -64,27 +42,16 @@ var errNoChartDomain = errors.New("engine: this engine holds no org chart, so " 
 // under — to the seat as it is known now.
 //
 // AN IDENTITY LOOKUP AND NOT AN ADDRESS ONE ([chart.Reader.SeatByIdentity]),
-// because a binding names the seat by its identity (ADR-0027). Resolved as an
-// address — the live handle first, a retired one after — a person bound before
-// a rename signed in as whichever seat later took the old handle, and a
-// suspended one's standing landed on that stranger. The ROW and nothing else:
-// this runs on every signed-in request and on every binding the
+// because a binding names the seat by its identity (ADR-0027). The ROW and
+// nothing else: this runs on every signed-in request and on every binding the
 // dangling-binding alarm classifies, and neither reads the seats it manages or
-// its history.
-//
-// AN ABSENT SEAT IS PROBED FOR A TOMBSTONE, because a tombstone is CONCLUSIVE
-// where an absence is not. [session.ResolveSeat] can answer 403 from one
-// without first establishing that this node has caught up with the binding,
-// and that is the difference between refusing a leaver immediately and making
-// them wait out a grace that will never change the answer. The chart writes
-// one on a removed seat's identity as well as on the handle it last held, so
-// the probe by identity finds a seat renamed before it was removed.
+// its history. A removed seat is simply absent.
 func (v SeatView) Seat(ctx context.Context, identity string) (session.Seat, bool, error) {
 	if v.reader == nil {
 		return session.Seat{}, false, errNoChartDomain
 	}
-	fresh := statelog.Freshness{Level: statelog.ReadStale}
-	seat, err := v.reader.SeatByIdentity(ctx, identity, fresh)
+	seat, err := v.reader.SeatByIdentity(ctx, identity,
+		statelog.Freshness{Level: statelog.ReadStale})
 	switch {
 	case err == nil:
 		return session.Seat{
@@ -92,40 +59,21 @@ func (v SeatView) Seat(ctx context.Context, identity string) (session.Seat, bool
 			Kind:   string(seat.Kind),
 			Unit:   seat.UnitKey,
 		}, true, nil
-	case !errors.Is(err, chart.ErrNotFound):
-		// THE UNKNOWN ARM, never "no such seat": an unreadable estate
-		// and an absent row are 503 and 403, and the sentinel above is
-		// the only thing that tells them apart.
-		return session.Seat{}, false, fmt.Errorf(
-			"engine: read the seat created under %q: %w", identity, err)
-	}
-	removal, found, _, err := v.reader.Removed(ctx,
-		chart.ObjectRef{Kind: chart.KindSeat, ID: identity}, fresh)
-	if err != nil {
-		return session.Seat{}, false, fmt.Errorf(
-			"engine: read the removal of the seat created under %q: %w",
-			identity, err)
-	}
-	if !found {
-		// ABSENT AND NOT TOMBSTONED. Reported as not found with no
-		// error, which is what sends the caller to the position
-		// comparison: this is either a seat that never existed or a
-		// hire this node has not applied, and only the position can
-		// say which.
+	case errors.Is(err, chart.ErrNotFound):
 		return session.Seat{}, false, nil
 	}
-	return session.Seat{
-		Handle:     removal.Object.ID,
-		Tombstoned: true,
-	}, true, nil
+	// THE UNKNOWN ARM, never "no such seat": an unreadable estate and an
+	// absent row are 503 and 403, and the sentinel above is the only thing
+	// that tells them apart.
+	return session.Seat{}, false, fmt.Errorf(
+		"engine: read the seat created under %q: %w", identity, err)
 }
 
-// Position is how far this node's chart applier has committed, and how far
-// behind the log it is.
-func (v SeatView) Position(context.Context) (uint64, time.Duration, error) {
+// Version names the chart rows [SeatView.Seat] answers from: the position this
+// node's chart applier has committed, which moves whenever a row does.
+func (v SeatView) Version(context.Context) (uint64, error) {
 	if v.reader == nil {
-		return 0, 0, errNoChartDomain
+		return 0, errNoChartDomain
 	}
-	at := v.reader.At()
-	return uint64(at.Packed()), v.reader.Lag(), nil
+	return uint64(v.reader.At().Packed()), nil
 }

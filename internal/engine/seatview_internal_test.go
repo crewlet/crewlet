@@ -25,14 +25,14 @@ func TestASeatViewWithNoChartRefusesRatherThanAnsweringSeatless(t *testing.T) {
 		t.Errorf("Seat answered found=%v with no error, so a view with no chart "+
 			"would report every seat in the company as gone", found)
 	}
-	if _, _, err := view.Position(t.Context()); err == nil {
-		t.Error("Position answered with no error, so a view with no chart " +
-			"would read as a node that has applied everything")
+	if _, err := view.Version(t.Context()); err == nil {
+		t.Error("Version answered with no error, so a view with no chart " +
+			"would read as one the binding watch may classify against")
 	}
 	// AND THROUGH THE RESOLVER, which is where it matters: the row must
 	// be `stalled` rather than `seatless`.
 	binding := session.ResolveSeat(t.Context(), view,
-		session.PersonRow{Found: true, Seat: "platform-lead", SeatAt: 900})
+		session.PersonRow{Found: true, Seat: "platform-lead"})
 	if binding.Row != session.SeatRowStalled {
 		t.Errorf("row %q, want %q", binding.Row, session.SeatRowStalled)
 	}
@@ -42,14 +42,13 @@ func TestASeatViewWithNoChartRefusesRatherThanAnsweringSeatless(t *testing.T) {
 }
 
 // A BINDING'S SEAT IS FOUND BY THE HANDLE IT WAS CREATED UNDER, on a running
-// node, through a rename and through a removal.
+// node, through a rename, and is absent once removed.
 //
 // A binding names its seat by that identity (ADR-0027), and this is the one
 // place the request path and the dangling-binding rule turn it back into a
 // seat. Looked up as an ADDRESS, the seat's new handle would answer for the
 // identity too — which is how a person bound before a rename came to sign in
-// as whichever seat took the old handle next — and a seat renamed and then
-// removed would read as merely absent rather than conclusively gone.
+// as whichever seat took the old handle next.
 func TestTheSeatViewFindsABindingsSeatByItsIdentity(t *testing.T) {
 	t.Parallel()
 	e := bootDirectoryNode(t, nil)
@@ -78,11 +77,9 @@ func TestTheSeatViewFindsABindingsSeatByItsIdentity(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("remove the seat: %v", err)
 	}
-	seat, found, err = view.Seat(t.Context(), founderSeat)
-	if err != nil || !found || !seat.Tombstoned {
-		t.Errorf("the removed seat's identity reads %+v (found %v, %v), want a "+
-			"tombstone — conclusive, so a leaver is refused without waiting "+
-			"out a grace", seat, found, err)
+	if seat, found, err = view.Seat(t.Context(), founderSeat); err != nil || found {
+		t.Errorf("the removed seat's identity reads %+v (found %v, %v), want it "+
+			"absent — a leaver is refused at once", seat, found, err)
 	}
 }
 

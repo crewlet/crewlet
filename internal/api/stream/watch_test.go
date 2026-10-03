@@ -322,7 +322,7 @@ func (b watchBindings) BoundSeat(_ context.Context, login string) (session.Perso
 		return session.PersonRow{}, nil
 	}
 	return session.PersonRow{Found: true, Stage: iam.StageActive, Login: login,
-		Seat: seat, SeatAt: 1}, nil
+		Seat: seat}, nil
 }
 
 // watchSeats holds every bound seat as a human seat, at a position covering
@@ -336,10 +336,6 @@ func (c watchSeats) Seat(_ context.Context, ref string) (session.Seat, bool, err
 		}
 	}
 	return session.Seat{}, false, nil
-}
-
-func (watchSeats) Position(context.Context) (uint64, time.Duration, error) {
-	return 1, 0, nil
 }
 
 // watchDirectory is the identity directory a watched login resolves through:
