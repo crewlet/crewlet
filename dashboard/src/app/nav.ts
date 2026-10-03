@@ -421,6 +421,12 @@ export const WORKSPACES: WorkspaceRow[] = [
     chord: "t",
     place: "workspace",
     renderer: "tabs",
+    // THE WINDOW IS THE WORKSPACE'S QUESTION: Overview and Expensive tasks
+    // both read it, and a tab that dropped it opened the next section on the
+    // default while the overview's own "All" link carried it — one section
+    // reached two ways on two windows. Budgets reads its own calendar windows
+    // and ignores it, but carries it, so the way back keeps the reader's.
+    keep: ["window"],
     sections: [
       {
         key: "overview",
