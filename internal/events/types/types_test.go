@@ -372,7 +372,7 @@ var wireTags = map[string][]string{
 	"iam_session_ended":               {"by", "lineage", "operator_id", "person", "reason"},
 	"iam_login_failures":              {"attempts", "client", "clients", "methods", "minute", "people", "subjects", "throttled"},
 	"iam_stepup_completed":            {"lineage", "login", "person", "remote", "replaces", "second_factor"},
-	"iam_credential_minted":           {"by", "colleague", "credential", "expires_at", "grants", "kind", "operator_id", "owner", "reason"},
+	"iam_credential_minted":           {"by", "credential", "expires_at", "grants", "kind", "operator_id", "owner", "reason"},
 	"iam_credential_revoked":          {"by", "credential", "kind", "operator_id", "owner", "reason"},
 	"iam_grants_changed":              {"added", "by", "operator_id", "person", "removed", "version"},
 	"iam_token_first_use":             {"every_use", "remote", "route", "token"},

@@ -45,21 +45,21 @@ const iamUsage = `crewlet iam — the company's people, credentials and sessions
 Usage:
   crewlet iam people [-q TERM] [-stage S] [-limit N]   The directory
   crewlet iam show ID                                  One person, in full
-  crewlet iam invite EMAIL [-grants G,...] [-colleague L] [-seat SEAT]
+  crewlet iam invite EMAIL [-grants G,...] [-seat SEAT]
                                                        Issue a link, shown ONCE
   crewlet iam create -login L [-email E] [-kind K]     Create somebody directly
   crewlet iam bind ID SEAT                             Bind a person to a chart seat
   crewlet iam unbind ID                                Take the binding back
-  crewlet iam grant ID [-grants G,...] [-colleague L]  Change what somebody carries
+  crewlet iam grant ID -grants G,...                   Change what somebody carries
   crewlet iam suspend ID                               Stop them acting, keep the row
   crewlet iam activate ID                              Let them act again
   crewlet iam remove ID                                Tombstone them and erase what is theirs
   crewlet iam revoke ID                                End every session and token they hold
   crewlet iam sessions ID                              Their sessions, newest first
   crewlet iam credentials [-person ID]                 What somebody proves themselves with
-  crewlet iam token -login L [-label L] [-days N] [-grants G,...] [-colleague L]
+  crewlet iam token -login L [-label L] [-days N] [-grants G,...]
                                                        Mint YOUR OWN machine token, shown ONCE
-  crewlet iam token -person ID [-label L] [-days N] [-grants G,...] [-colleague L]
+  crewlet iam token -person ID [-label L] [-days N] [-grants G,...]
                                                        Mint a service account's, shown ONCE
   crewlet iam revoke-credential CREDENTIAL_ID [-person ID]
                                                        Withdraw one credential
@@ -133,8 +133,6 @@ func runIAM(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 	reason := fs.String("reason", "", "recorded on the change")
 	grants := fs.String("grants", "",
 		"a comma-separated grant list, or `none` for an empty one")
-	colleague := fs.String("colleague", "",
-		"reach into the company's work: none, read or write")
 	stage := fs.String("stage", "", "narrow the directory to one enrolment stage")
 	term := fs.String("q", "", "narrow the directory on a login or a seat")
 	limit := fs.Int("limit", 0, "how many rows at most")
@@ -226,12 +224,9 @@ func runIAM(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 		// YOUR OWN TOKEN, which only your own session may mint: this
 		// signs in for the one request and never reads
 		// CREWLET_API_TOKEN. See iamself.go.
-		body, bodyErr := iamTokenBody(*grants, *colleague, *label, *days)
-		if bodyErr != nil {
-			return bodyErr
-		}
 		return out.token(mintOwnToken(ctx, boot, *apiURL,
-			strings.TrimSpace(*login), body, stdin, stderr))
+			strings.TrimSpace(*login), iamTokenBody(*grants, *label, *days),
+			stdin, stderr))
 	}
 	client, err := newIAMClient(boot, *apiURL)
 	if err != nil {
@@ -251,19 +246,13 @@ func runIAM(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 	case "show":
 		return out.one(client.get(ctx, "/iam/people/"+subject, nil))
 	case "invite":
-		body, err := iamGrantsBody(*grants, *colleague)
-		if err != nil {
-			return err
-		}
+		body := iamGrantsBody(*grants)
 		body["email"] = subject
 		body["seat"] = strings.TrimSpace(*seat)
 		body["reason"] = *reason
 		return out.invite(client.post(ctx, "/iam/invitations", body))
 	case "create":
-		body, err := iamGrantsBody(*grants, *colleague)
-		if err != nil {
-			return err
-		}
+		body := iamGrantsBody(*grants)
 		body["login"], body["email"] = *login, *email
 		body["name"], body["kind"] = *name, *kind
 		body["reason"] = *reason
@@ -275,12 +264,9 @@ func runIAM(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 		return out.written(client.patch(ctx, "/iam/people/"+subject,
 			map[string]any{"seat": "", "reason": *reason}))
 	case "grant":
-		body, err := iamGrantsBody(*grants, *colleague)
-		if err != nil {
-			return err
-		}
+		body := iamGrantsBody(*grants)
 		if len(body) == 0 {
-			return errors.New("name what to change: -grants, -colleague")
+			return errors.New("name what to change: -grants")
 		}
 		body["reason"] = *reason
 		return out.written(client.patch(ctx, "/iam/people/"+subject, body))
@@ -309,12 +295,9 @@ func runIAM(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 		// value the authority table decides on, and a body naming
 		// somebody else is a second answer to "whose" the route no
 		// longer reads.
-		body, err := iamTokenBody(*grants, *colleague, *label, *days)
-		if err != nil {
-			return err
-		}
 		return out.token(client.call(ctx, http.MethodPost, "/iam/credentials",
-			withPerson(orSubject(*person, subject)), body))
+			withPerson(orSubject(*person, subject)),
+			iamTokenBody(*grants, *label, *days)))
 	case "revoke-credential":
 		return out.written(client.delete(ctx, "/iam/credentials/"+subject,
 			withPerson(*person)))
@@ -435,13 +418,13 @@ func withPerson(person string) url.Values {
 	return q
 }
 
-// iamGrantsBody turns the two authority flags into a patch body.
+// iamGrantsBody turns the -grants flag into a patch body.
 //
 // `none` IS A VALUE AND AN OMITTED FLAG IS NOT. Stripping somebody's last
 // grant and not mentioning grants at all are opposite intentions, and an
 // empty string cannot carry both — so the word is explicit, and it is the one
 // spelling that could never be a grant.
-func iamGrantsBody(grants, colleague string) (map[string]any, error) {
+func iamGrantsBody(grants string) map[string]any {
 	body := map[string]any{}
 	switch strings.TrimSpace(grants) {
 	case "":
@@ -457,29 +440,18 @@ func iamGrantsBody(grants, colleague string) (map[string]any, error) {
 		}
 		body["grants"] = out
 	}
-	switch level := strings.TrimSpace(colleague); level {
-	case "":
-	case "none", "read", "write":
-		body["colleague"] = level
-	default:
-		return nil, fmt.Errorf("%q is not a colleague level: none, read or write",
-			level)
-	}
-	return body, nil
+	return body
 }
 
 // iamTokenBody is a mint's request: what the token carries, what it is called
 // and how long it lasts — the same whoever the owner is.
-func iamTokenBody(grants, colleague, label string, days int) (map[string]any, error) {
-	body, err := iamGrantsBody(grants, colleague)
-	if err != nil {
-		return nil, err
-	}
+func iamTokenBody(grants, label string, days int) map[string]any {
+	body := iamGrantsBody(grants)
 	body["label"] = label
 	if days > 0 {
 		body["expires_in_days"] = days
 	}
-	return body, nil
+	return body
 }
 
 // --- the client ---------------------------------------------------------- //
@@ -704,13 +676,13 @@ func (p *iamPrinter) people(answer map[string]any, err error) error {
 	}
 	rows, _ := answer["people"].([]any)
 	tw := tabwriter.NewWriter(p.w, 0, 0, 2, ' ', 0)
-	fmt.Fprintln(tw, "ID\tLOGIN\tNAME\tSEAT\tSTAGE\tCOLLEAGUE\tGRANTS")
+	fmt.Fprintln(tw, "ID\tLOGIN\tNAME\tSEAT\tSTAGE\tGRANTS")
 	for _, raw := range rows {
 		row, _ := raw.(map[string]any)
-		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
+		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\n",
 			str(row["id"]), dash(str(row["login"])), dash(personName(row)),
 			dash(str(row["seat"])), str(row["stage"]),
-			str(row["colleague"]), dash(joinAny(row["grants"])))
+			dash(joinAny(row["grants"])))
 	}
 	if err := tw.Flush(); err != nil {
 		return err
@@ -752,7 +724,6 @@ func (p *iamPrinter) one(answer map[string]any, err error) error {
 		{"name", dash(personName(answer))},
 		{"email", dash(str(answer["email"]))},
 		{"seat", dash(str(answer["seat"]))},
-		{"colleague", str(answer["colleague"])},
 		{"grants", dash(joinAny(answer["grants"]))},
 		{"revocation epoch", str(answer["revocation_epoch"])},
 		{"version", str(answer["version"])},
@@ -919,8 +890,7 @@ func (p *iamPrinter) token(answer map[string]any, err error) error {
 	fmt.Fprintf(p.w, "%s\n\n", str(answer["token"]))
 	fmt.Fprintf(p.w, "credential %s for %s, expires %s\n", str(answer["id"]),
 		str(answer["person"]), stamp(answer["expires_at"]))
-	fmt.Fprintf(p.w, "carries %s, reaching the company's work at %s\n",
-		dash(joinAny(answer["grants"])), dash(str(answer["colleague"])))
+	fmt.Fprintf(p.w, "carries %s\n", dash(joinAny(answer["grants"])))
 	fmt.Fprintln(p.w, "This value is shown once. What the estate holds is a "+
 		"hash of it, so nothing can read it back. Present it as "+
 		apiTokenEnv+", or as an `Authorization: Bearer` header.")

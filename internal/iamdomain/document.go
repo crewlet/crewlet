@@ -92,23 +92,6 @@ type Person struct {
 	// than dropped — see [iam.Principal.UnknownGrants].
 	Grants []iam.Grant `json:"grants,omitempty"`
 
-	// Colleague is how far into the company's own WORK this person
-	// reaches: nothing, reading, or writing.
-	//
-	// THE SECOND HAT, and it is not a rung on the grant ladder. A grant is
-	// authority over the DEPLOYMENT and this is reach into the company,
-	// and folding them names the same counterexample pair every time — an
-	// auditor holding two grants who must not be assignable, and an SRE
-	// who files bugs and changes nothing about the deployment. See
-	// [iam.Colleague].
-	//
-	// ITS ZERO IS THE CLOSED END and is a real setting, which is the one
-	// place a zero value in this estate is meaningful rather than refused:
-	// a person enrolled with nothing said about their reach into the work
-	// reaches none of it, which is the answer that is safe to be wrong
-	// about.
-	Colleague iam.Colleague `json:"colleague,omitempty"`
-
 	Extra map[string]json.RawMessage `json:"-"`
 }
 
@@ -178,10 +161,6 @@ type Invitation struct {
 	// again by whoever happens to process the redemption.
 	InvitedBy string      `json:"invited_by,omitempty"`
 	Grants    []iam.Grant `json:"grants,omitempty"`
-
-	// Colleague is the reach redeeming this confers, on the same
-	// two-hats split the person's own carries. See [Person.Colleague].
-	Colleague iam.Colleague `json:"colleague,omitempty"`
 
 	// Verifier is [InvitationVerifier] of the secret the link carries
 	// beside the id ([Blinder.InvitationSecret]) — what a redemption's
@@ -319,14 +298,12 @@ type Credential struct {
 	// able to read back.
 	Label string `json:"label,omitempty"`
 
-	// Grants and Colleague are what a MACHINE TOKEN was minted carrying: a
-	// subset of its owner's grants and a reach no wider than theirs, both
-	// decided in the snapshot the mint read the owner in. They are a
-	// CEILING on the token rather than a grant of its own — a request
-	// carries only what the owner still holds — so demoting a person
-	// demotes every token they made. Empty on every other method.
-	Grants    []iam.Grant   `json:"grants,omitempty"`
-	Colleague iam.Colleague `json:"colleague,omitempty"`
+	// Grants are what a MACHINE TOKEN was minted carrying: a subset of its
+	// owner's grants, decided in the snapshot the mint read the owner in.
+	// They are a CEILING on the token rather than a grant of its own — a
+	// request carries only what the owner still holds — so demoting a
+	// person demotes every token they made. Empty on every other method.
+	Grants []iam.Grant `json:"grants,omitempty"`
 
 	// Epoch is the owner's revocation epoch when a machine token was
 	// minted. A token is refused once the owner's epoch moves past it,

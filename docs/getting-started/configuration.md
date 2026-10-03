@@ -926,7 +926,6 @@ api:
                  fleet:operate, people:manage, sandbox:run]
                         # what it may do, and the most an invitation it
                         #   issues may confer — the first person's included
-        colleague: none        # none (default) | read | write
         audit_every_use: false # true writes a row per request, not per hour
 
 logging:

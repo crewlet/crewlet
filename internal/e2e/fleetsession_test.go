@@ -151,7 +151,7 @@ func signIn(t *testing.T, n *node, b *browser) {
 	// THE INVITATION, as `crewlet iam invite` issues it: the deployment's
 	// own token, since the company has nobody in it who could.
 	status, issued := tierA(t, n, http.MethodPost, "/iam/invitations", map[string]any{
-		"email": janeAddress, "grants": janeGrants, "colleague": iam.ColleagueWrite,
+		"email": janeAddress, "grants": janeGrants,
 		"seat": janeSeat, "reason": "the fleet session case",
 	})
 	if status != http.StatusCreated && status != http.StatusAccepted {

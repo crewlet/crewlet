@@ -24,22 +24,13 @@ import (
 // tokenOwner enrols one person holding a spread of grants, and returns them.
 func tokenOwner(t *testing.T, rig *writeRig, login string) string {
 	t.Helper()
-	return tokenOwnerAt(t, rig, login, iam.ColleagueWrite)
-}
-
-// tokenOwnerAt is [tokenOwner] reaching the company's work at a given level.
-func tokenOwnerAt(t *testing.T, rig *writeRig, login string,
-	colleague iam.Colleague) string {
-
-	t.Helper()
 	person := uuid.Must(uuid.NewV7()).String()
 	if err := rig.enrol(iamdomain.Enrolment{
 		PersonID: person, Kind: iam.KindPerson, Stage: iam.StageActive,
 		Name: "Jane Doe", Email: login + "@example.com", Login: login,
 		Grants: []iam.Grant{iam.GrantStateRead, iam.GrantWorkWrite,
 			iam.GrantPeopleManage, iam.GrantSecretRead},
-		Colleague: colleague,
-		OpID:      "op-enrol-" + person, Reason: "a hire",
+		OpID: "op-enrol-" + person, Reason: "a hire",
 	}); err != nil {
 		t.Fatalf("enrol: %v", err)
 	}
@@ -107,8 +98,8 @@ func checked(t *testing.T, rig *writeRig, token credential.Token) credential.Tok
 //
 // Asked for nothing in particular, it carries every grant the owner holds that
 // a token may carry — never secrets:read or people:manage, which need a person
-// present — and the owner's own reach. Mutation: drop the refused grants'
-// filter and the token carries the secret store.
+// present. Mutation: drop the refused grants' filter and the token carries the
+// secret store.
 func TestATokenIsMintedFromItsOwnersCurrentGrantsAndVerifies(t *testing.T) {
 	t.Parallel()
 	rig := newWriteRig(t)
@@ -120,9 +111,9 @@ func TestATokenIsMintedFromItsOwnersCurrentGrantsAndVerifies(t *testing.T) {
 		t.Fatalf("mint: %v", err)
 	}
 	if !slices.Equal(minted.Grants, []iam.Grant{iam.GrantStateRead,
-		iam.GrantWorkWrite}) || minted.Colleague != iam.ColleagueWrite {
-		t.Errorf("the token carries %v at %q, want the owner's grants a token "+
-			"may carry, at their reach", minted.Grants, minted.Colleague)
+		iam.GrantWorkWrite}) {
+		t.Errorf("the token carries %v, want the owner's grants a token may "+
+			"carry", minted.Grants)
 	}
 	if got := checked(t, rig, token); got.Answer != credential.TokenValid {
 		t.Fatalf("a freshly minted token answered %q (%s)", got.Answer, got.Detail)
@@ -155,8 +146,6 @@ func TestAMintRefusesWhatATokenMayNotCarry(t *testing.T) {
 			Grants: []iam.Grant{iam.GrantSecretRead}}, iamdomain.ErrRefused},
 		{"people:manage, which the owner holds", asOwner(rig, owner), iamdomain.TokenMint{
 			Grants: []iam.Grant{iam.GrantPeopleManage}}, iamdomain.ErrRefused},
-		{"a reach that is no level at all", asOwner(rig, owner), iamdomain.TokenMint{
-			Grants: []iam.Grant{}, Colleague: "admin"}, iamdomain.ErrInvalidToken},
 		// THE OWNER THEMSELVES, signed in holding less than their row
 		// declares — a session whose provider carried fewer grants, a
 		// node whose ceiling is lower: whoever mints a token sees its
@@ -175,15 +164,6 @@ func TestAMintRefusesWhatATokenMayNotCarry(t *testing.T) {
 		if _, _, err := mintFor(t, rig, tc.w, tc.in); !errors.Is(err, tc.wants) {
 			t.Errorf("%s: the mint answered %v, want %v", tc.name, err, tc.wants)
 		}
-	}
-
-	// MORE REACH THAN THE OWNER HAS: a token narrows and never widens.
-	reader := tokenOwnerAt(t, rig, "ravi.reader", iam.ColleagueRead)
-	if _, _, err := mintFor(t, rig, asOwner(rig, reader), iamdomain.TokenMint{
-		PersonID: reader, Colleague: iam.ColleagueWrite}); !errors.Is(err,
-		iamdomain.ErrRefused) {
-		t.Errorf("a token reaching the work at write was minted for an owner "+
-			"who reads it (%v)", err)
 	}
 
 	// A SUSPENDED OWNER, and the Tier A token's own binding row, are

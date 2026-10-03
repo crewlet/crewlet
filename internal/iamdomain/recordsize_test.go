@@ -49,7 +49,7 @@ func TestTheLargestRecordHoldsTheLargestPerson(t *testing.T) {
 		NameSealed:  seal(iamdomain.FieldName, iamdomain.MaxName),
 		EmailSealed: seal(iamdomain.FieldEmail, iamdomain.MaxAddress),
 		Credentials: widestCredentials(t, sealer, person),
-		Grants:      iam.AllGrants, Colleague: iam.ColleagueWrite,
+		Grants:      iam.AllGrants,
 	}
 	if len(doc.Credentials) != iamdomain.MaxHeldCredentials {
 		t.Fatalf("built %d credentials, want the cap of %d",
@@ -122,8 +122,8 @@ func widestCredentials(t *testing.T, sealer *iamdomain.Sealer, person string) []
 			Verifier:  credential.TokenVerifier(id(i), strings.Repeat("S", 52)),
 			ExpiresAt: at.Add(credential.MaxTokenLifetime), RevokedAt: at,
 			Label:  strings.Repeat("<", iamdomain.MaxTokenLabel),
-			Grants: iam.AllGrants, Colleague: iam.ColleagueWrite,
-			Epoch: math.MaxUint64, Generation: math.MaxUint64,
+			Grants: iam.AllGrants,
+			Epoch:  math.MaxUint64, Generation: math.MaxUint64,
 		})
 	}
 	return out

@@ -286,8 +286,7 @@ func Unguarded(path string) bool {
 // only that.
 type Guard struct {
 	// tokens maps operator id to that token's whole Tier A entry — its
-	// value, the grants it may use and the colleague level it reaches
-	// the company's work at. Empty is a real posture: no candidate can
+	// value and the grants it may use. Empty is a real posture: no candidate can
 	// match, so every guarded route is refused outright. Config refuses
 	// it once the API is served, which is where a `crewlet validate` on
 	// a laptop catches it.

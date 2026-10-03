@@ -35,11 +35,10 @@ type credentialView struct {
 	RevokedAt time.Time                  `json:"revoked_at,omitzero"`
 	Revoked   bool                       `json:"revoked"`
 
-	// Grants and Colleague are what a machine token was minted carrying:
-	// the ceiling on what it does, re-cut to its owner's own grants on
-	// every request. Absent on every other method.
-	Grants    []iam.Grant   `json:"grants,omitempty"`
-	Colleague iam.Colleague `json:"colleague,omitempty"`
+	// Grants are what a machine token was minted carrying: the ceiling on
+	// what it does, re-cut to its owner's own grants on every request.
+	// Absent on every other method.
+	Grants []iam.Grant `json:"grants,omitempty"`
 }
 
 // GetCredentials is `GET /iam/credentials?person=`.
@@ -64,7 +63,6 @@ func (s *Service) GetCredentials(w http.ResponseWriter, r *http.Request) {
 			Label: row.Label, CreatedAt: row.CreatedAt,
 			ExpiresAt: row.ExpiresAt, RevokedAt: row.RevokedAt,
 			Revoked: row.Revoked(now), Grants: row.Grants,
-			Colleague: row.Colleague,
 		})
 	}
 	httpjson.Write(w, http.StatusOK, map[string]any{"credentials": out})
@@ -86,12 +84,10 @@ type mintBody struct {
 	// is stating an intention the answer has to contradict out loud.
 	ExpiresInDays int `json:"expires_in_days"`
 
-	// Grants and Colleague are what the token carries. Both NARROW the
-	// owner and never widen them — see [iamdomain.Writer.MintToken].
-	// Omitted, the token carries every grant the owner holds that a token
-	// may carry, at the owner's own reach.
-	Grants    []iam.Grant   `json:"grants"`
-	Colleague iam.Colleague `json:"colleague"`
+	// Grants are what the token carries. They NARROW the owner's and never
+	// widen them — see [iamdomain.Writer.MintToken]. Omitted, the token
+	// carries every grant the owner holds that a token may carry.
+	Grants []iam.Grant `json:"grants"`
 }
 
 // PostCredentials is `POST /iam/credentials`: a machine token — a person's own
@@ -225,7 +221,6 @@ func (s *Service) PostCredentials(w http.ResponseWriter, r *http.Request) {
 		Verifier:  credential.TokenVerifier(id, secret),
 		Label:     strings.TrimSpace(in.Label),
 		Grants:    in.Grants,
-		Colleague: in.Colleague,
 		ExpiresAt: s.now().Add(lifetime),
 		// A FRESH OPERATION EVERY TIME, and never the caller's
 		// Idempotency-Key. The key makes a retry land ONCE, which for a
@@ -277,7 +272,7 @@ func (s *Service) PostCredentials(w http.ResponseWriter, r *http.Request) {
 	}
 	s.audit.Emit(r.Context(), types.IAMCredentialMinted{
 		Credential: id, Kind: types.CredentialToken, Owner: owner,
-		Grants: granted, Colleague: string(minted.Colleague),
+		Grants:     granted,
 		ExpiresAt:  minted.ExpiresAt,
 		By:         iam.ActorFor(principal).Name,
 		OperatorID: iam.ActorFor(principal).OperatorID, Reason: reason,
@@ -291,8 +286,7 @@ func (s *Service) PostCredentials(w http.ResponseWriter, r *http.Request) {
 	s.answer(w, r, opID, minted.Result, nil, http.StatusCreated,
 		map[string]any{
 			"id": id, "person": owner, "token": token.Value(),
-			"grants": minted.Grants, "colleague": minted.Colleague,
-			"expires_at": minted.ExpiresAt,
+			"grants": minted.Grants, "expires_at": minted.ExpiresAt,
 			"detail": "this value is shown once and cannot be read back; " +
 				"what the estate holds is a hash of it",
 		})

@@ -478,9 +478,9 @@ carries, so everybody signing in again once lets them straight back:
   regenerated since are all as they were when the artefact was taken — so a
   factor you reset because a phone was lost works again, and so do the
   recovery codes it replaced.
-- **A grant, a colleague level or a seat binding taken away since is held
-  again** — never above `api.auth.max_grants`, which is Tier A and not in the
-  artefact, but up to it.
+- **A grant or a seat binding taken away since is held again** — never
+  above `api.auth.max_grants`, which is Tier A and not in the artefact, but up
+  to it.
 
 The restored estate cannot list any of these: its own trail
 ([`crewlet iam audit`](../reference/cli.md#crewlet-iam)) and every node's event

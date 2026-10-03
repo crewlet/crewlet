@@ -64,8 +64,7 @@ type personView struct {
 	Seat   string `json:"seat,omitempty"`
 	SeatAt uint64 `json:"seat_at,omitempty"`
 
-	Grants    []iam.Grant   `json:"grants,omitempty"`
-	Colleague iam.Colleague `json:"colleague"`
+	Grants []iam.Grant `json:"grants,omitempty"`
 
 	Epoch uint64 `json:"revocation_epoch"`
 
@@ -79,7 +78,7 @@ func (s *Service) viewOf(ctx context.Context, row iamdomain.PersonRow) personVie
 	out := personView{
 		ID: row.ID, Kind: row.Kind, Stage: row.Stage, Login: row.Login,
 		Seat: row.Seat, SeatAt: row.SeatAt, Grants: row.Grants,
-		Colleague: row.Colleague, Epoch: row.Epoch,
+		Epoch:     row.Epoch,
 		CreatedAt: row.CreatedAt, UpdatedAt: row.UpdatedAt,
 		Version: row.Version, Reserved: row.Reserved,
 	}
@@ -151,14 +150,13 @@ func (s *Service) GetPerson(w http.ResponseWriter, r *http.Request) {
 // once. A create that accepted a password would be an administrator choosing
 // somebody else's, which every one of them then keeps.
 type personBody struct {
-	Kind      string        `json:"kind"`
-	Login     string        `json:"login"`
-	Name      string        `json:"name"`
-	Email     string        `json:"email"`
-	Seat      string        `json:"seat"`
-	Grants    []iam.Grant   `json:"grants"`
-	Colleague iam.Colleague `json:"colleague"`
-	Reason    string        `json:"reason"`
+	Kind   string      `json:"kind"`
+	Login  string      `json:"login"`
+	Name   string      `json:"name"`
+	Email  string      `json:"email"`
+	Seat   string      `json:"seat"`
+	Grants []iam.Grant `json:"grants"`
+	Reason string      `json:"reason"`
 }
 
 // PostPeople is `POST /iam/people`.
@@ -204,8 +202,8 @@ func (s *Service) PostPeople(w http.ResponseWriter, r *http.Request) {
 		// has to act.
 		Stage: iam.StageActive,
 		Name:  in.Name, Email: in.Email, Login: in.Login,
-		Grants: in.Grants, Colleague: in.Colleague,
-		OpID: opID, Reason: reasonOr(in.Reason, "created through /iam/people"),
+		Grants: in.Grants,
+		OpID:   opID, Reason: reasonOr(in.Reason, "created through /iam/people"),
 	})
 	if err != nil || !landed(enrolled) {
 		s.answerWrite(w, r, opID, enrolled, err, map[string]any{"id": person})
@@ -260,12 +258,11 @@ func (s *Service) PostPeople(w http.ResponseWriter, r *http.Request) {
 // that reads exactly like a body that never mentioned grants, and the strip
 // would silently not happen.
 type patchBody struct {
-	Name      *string        `json:"name"`
-	Login     *string        `json:"login"`
-	Seat      *string        `json:"seat"`
-	Grants    *[]iam.Grant   `json:"grants"`
-	Colleague *iam.Colleague `json:"colleague"`
-	Stage     *iam.Stage     `json:"stage"`
+	Name   *string      `json:"name"`
+	Login  *string      `json:"login"`
+	Seat   *string      `json:"seat"`
+	Grants *[]iam.Grant `json:"grants"`
+	Stage  *iam.Stage   `json:"stage"`
 
 	Reason string `json:"reason"`
 }
@@ -276,8 +273,7 @@ type patchBody struct {
 // THE WHOLE BODY, BEFORE THE FIRST RECORD. An edit is a sequence, and a value
 // refused halfway leaves every record before it landed: a stage this build
 // cannot name used to be refused after the seat and the login had already
-// moved, and a colleague level only inside the last record's decide — as a
-// 500. What needs the estate to judge — a login's grammar against its holder's
+// moved. What needs the estate to judge — a login's grammar against its holder's
 // kind, a seat the chart holds, a name somebody else has — is the domain's,
 // and each of those is decided before its own record publishes.
 func (b patchBody) refusal() string {
@@ -288,9 +284,6 @@ func (b patchBody) refusal() string {
 			"while they hold no seat"
 	case b.Stage != nil && !b.Stage.Valid():
 		return strconv.Quote(string(*b.Stage)) + " is not an enrolment stage"
-	case b.Colleague != nil && !b.Colleague.Valid():
-		return strconv.Quote(string(*b.Colleague)) + " is not a colleague " +
-			"level — want none, read or write"
 	case len(b.Reason) > iamdomain.MaxReason:
 		return "the reason is " + strconv.Itoa(len(b.Reason)) + " bytes and " +
 			"the cap is " + strconv.Itoa(iamdomain.MaxReason)
@@ -312,8 +305,8 @@ func (b patchBody) refusal() string {
 // # Nothing is published until the whole body is known to be acceptable
 //
 // A sequence that meets a bad value halfway leaves the half before it landed.
-// So every value this surface can judge on its own — a stage, a colleague
-// level, a login being cleared — is refused before the first record, and so is
+// So every value this surface can judge on its own — a stage, a login being
+// cleared — is refused before the first record, and so is
 // everything this node's rows can already establish a LATER record would be
 // refused for ([Service.judgeEdit]): a login its holder's kind may not hold, a
 // login somebody else holds, a grant the caller may not confer. Those used to be met only at their own record, so `{"seat", "login":
@@ -442,7 +435,7 @@ func (s *Service) PatchPerson(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	if in.Name == nil && in.Grants == nil && in.Colleague == nil {
+	if in.Name == nil && in.Grants == nil {
 		// NOTHING LEFT FOR THE PERSON'S OWN SUBJECT. A body that moved
 		// only a claim or a stage has already landed its records, so
 		// publishing an empty document write here would be a record
@@ -468,9 +461,6 @@ func (s *Service) PatchPerson(w http.ResponseWriter, r *http.Request) {
 		Apply: func(p iamdomain.Person) (iamdomain.Person, error) {
 			if in.Grants != nil {
 				p.Grants = *in.Grants
-			}
-			if in.Colleague != nil {
-				p.Colleague = *in.Colleague
 			}
 			return p, nil
 		},

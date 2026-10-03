@@ -25,9 +25,8 @@ const InviteWindow = 168 * time.Hour
 
 // inviteBody is what issuing an invitation accepts.
 type inviteBody struct {
-	Email     string        `json:"email"`
-	Grants    []iam.Grant   `json:"grants"`
-	Colleague iam.Colleague `json:"colleague"`
+	Email  string      `json:"email"`
+	Grants []iam.Grant `json:"grants"`
 
 	// Seat is a seat redeeming the invitation BINDS the new person to, by
 	// any handle the chart answers to it by, or empty. It must be a HUMAN
@@ -109,7 +108,7 @@ func (s *Service) PostInvite(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	issued, err := writer.Invite(r.Context(), iamdomain.InviteMint{
-		Email: address, Grants: in.Grants, Colleague: in.Colleague,
+		Email: address, Grants: in.Grants,
 		Seat:      strings.TrimSpace(in.Seat),
 		ExpiresAt: s.now().Add(InviteWindow),
 		// THE SEED, which the domain derives the invitation's id from and

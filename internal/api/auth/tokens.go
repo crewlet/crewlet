@@ -174,8 +174,7 @@ func (g *Guard) token(r *http.Request, presented credential.Token,
 		ID: id, Login: owner.Login, Kind: owner.Kind, Stage: owner.Stage,
 		// THE MINT'S GRANTS THE OWNER STILL HOLDS, cut to this node's
 		// ceiling on this request.
-		Grants:    intersect(row.EffectiveGrants(), g.ceiling),
-		Colleague: row.EffectiveColleague(),
+		Grants: intersect(row.EffectiveGrants(), g.ceiling),
 		// AND THROUGH WHAT. The token acts as its owner, so without this
 		// every write it made was recorded exactly as the owner's own —
 		// and a token minted on somebody's account could file, edit and

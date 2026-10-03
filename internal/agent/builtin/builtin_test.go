@@ -146,7 +146,7 @@ func personHolding(grants ...iam.Grant) context.Context {
 	p := iam.Principal{
 		ID:   uuid.MustParse("018f3a9c-0000-7000-8000-00000000fee2"),
 		Kind: iam.KindPerson, Login: "tester", Stage: iam.StageActive,
-		Colleague: iam.ColleagueWrite, Grants: grants,
+		Grants: grants,
 	}
 	return iam.WithPrincipal(context.Background(), p)
 }
@@ -161,7 +161,7 @@ func callerHolding(grants ...iam.Grant) context.Context {
 	return iam.WithPrincipal(context.Background(), iam.Principal{
 		ID:   uuid.MustParse("018f3a9c-0000-7000-8000-00000000fee1"),
 		Kind: iam.KindSeat, Seat: "tester", Stage: iam.StageActive,
-		Colleague: iam.ColleagueWrite, Grants: grants,
+		Grants: grants,
 	})
 }
 

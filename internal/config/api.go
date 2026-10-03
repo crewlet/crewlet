@@ -738,12 +738,6 @@ type APIToken struct {
 	// every key the company owns.
 	Grants []iam.Grant `yaml:"grants,omitempty" json:"grants,omitempty" desc:"What this credential may do. Required and non-empty."`
 
-	// Colleague is how far into the company's own WORK this credential
-	// reaches, and it defaults to [iam.ColleagueNone]: a pipeline is
-	// nobody's colleague, so it is invisible to the roster, to a mention
-	// and to a delegation.
-	Colleague iam.Colleague `yaml:"colleague,omitempty" json:"colleague,omitempty" js:"enum=none|read|write" desc:"How far into the company's own work this credential reaches (default none)."`
-
 	// AuditEveryUse writes a use row per REQUEST rather than one
 	// coalesced per token per hour.
 	//
@@ -754,14 +748,6 @@ type APIToken struct {
 	// interesting row unfindable. On is for the credential a company has
 	// decided is worth watching individually: break-glass.
 	AuditEveryUse bool `yaml:"audit_every_use,omitempty" json:"audit_every_use,omitempty" desc:"Write a use row per request rather than one per hour."`
-}
-
-// Level is this token's colleague level with the default applied.
-func (t APIToken) Level() iam.Colleague {
-	if t.Colleague == "" {
-		return iam.ColleagueNone
-	}
-	return t.Colleague
 }
 
 func (a *APIAuth) validate(path Path, api API) error {
@@ -918,12 +904,6 @@ func (a *APIAuth) validateTokens(path Path, api API) error {
 		p.wrap(checkGrants(at(tp, "grants"), t.Grants, a.MaxGrants,
 			"a token may not carry authority the deployment's own ceiling "+
 				"withholds from everybody else"))
-
-		if lvl := t.Colleague; lvl != "" && !lvl.Valid() {
-			p.add(at(tp, "colleague"), ErrUnknownValue,
-				"%q (want %s, %s or %s)", lvl, iam.ColleagueNone,
-				iam.ColleagueRead, iam.ColleagueWrite)
-		}
 	}
 
 	// A DEPLOYMENT WITH NO TIER A TOKEN IS A FAULT, on both backends, and

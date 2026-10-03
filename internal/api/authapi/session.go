@@ -74,13 +74,12 @@ func (s *Service) Config(w http.ResponseWriter, r *http.Request) {
 
 // sessionResponse is who the caller is.
 type sessionResponse struct {
-	Person    string        `json:"person"`
-	Login     string        `json:"login"`
-	Seat      string        `json:"seat,omitempty"`
-	Kind      iam.Kind      `json:"kind"`
-	Stage     iam.Stage     `json:"stage"`
-	Grants    []iam.Grant   `json:"grants"`
-	Colleague iam.Colleague `json:"colleague"`
+	Person string      `json:"person"`
+	Login  string      `json:"login"`
+	Seat   string      `json:"seat,omitempty"`
+	Kind   iam.Kind    `json:"kind"`
+	Stage  iam.Stage   `json:"stage"`
+	Grants []iam.Grant `json:"grants"`
 
 	// ExpiresAt is the absolute deadline of the session this request
 	// carried, which no re-issue moves. ABSENT for a caller presenting a
@@ -156,7 +155,6 @@ func (s *Service) Session(w http.ResponseWriter, r *http.Request) {
 		Kind:               principal.Kind,
 		Stage:              principal.Stage,
 		Grants:             principal.Grants,
-		Colleague:          principal.Colleague,
 		ExpiresAt:          expires,
 		ReauthAt:           principal.ReauthAt,
 		SensitiveReauthAt:  principal.SensitiveReauthAt,
@@ -548,8 +546,8 @@ func (s *Service) clearIfPresented(w http.ResponseWriter, r *http.Request, linea
 //
 // THE OPERATOR EXCEPTION is `fleet:operate`, and it is what somebody does when
 // a laptop is stolen and its holder cannot be reached. It is the deployment's
-// grant rather than a colleague level, because ending a person's sessions is
-// an act on the DEPLOYMENT's security rather than on the company's work.
+// grant, because ending a person's sessions is an act on the DEPLOYMENT's
+// security rather than on the company's work.
 func mayEnd(r *http.Request, p iam.Principal, owner string) bool {
 	if owner != "" && owner == subjectOf(r, p) {
 		return true

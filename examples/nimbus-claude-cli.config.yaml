@@ -238,7 +238,6 @@ api:
           - fleet:operate
           - people:manage
           - sandbox:run
-        colleague: none
 
 # ── The keyring (REQUIRED) ────────────────────────────────────────────
 #

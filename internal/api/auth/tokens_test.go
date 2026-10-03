@@ -61,15 +61,13 @@ func newMachineRig(t *testing.T) *machineRig {
 			Verifier:  credential.TokenVerifier(presented.ID, secret),
 			ExpiresAt: at.Add(24 * time.Hour),
 			Grants:    []iam.Grant{iam.GrantStateRead, iam.GrantWorkWrite},
-			Colleague: iam.ColleagueRead,
 			Epoch:     2,
 			Owner: credential.TokenOwner{
 				Found: true, ID: tokenOwner, Kind: iam.KindPerson,
 				Stage: iam.StageActive, Login: "sarah.chen",
 				Grants: []iam.Grant{iam.GrantStateRead, iam.GrantWorkWrite,
 					iam.GrantConfigRead},
-				Colleague: iam.ColleagueRead,
-				Epoch:     2,
+				Epoch: 2,
 			},
 		},
 		chart: &fakeChart{position: 1000, seats: map[string]session.Seat{
@@ -155,9 +153,6 @@ func TestATokenActsAsItsOwnerWithTheNarrowestOfThreeGrantSets(t *testing.T) {
 	}
 	if !slices.Equal(p.Grants, []iam.Grant{iam.GrantStateRead, iam.GrantWorkWrite}) {
 		t.Errorf("grants %v, want exactly what the mint conferred", p.Grants)
-	}
-	if p.Colleague != iam.ColleagueRead {
-		t.Errorf("reach %q, want the mint's read", p.Colleague)
 	}
 	if token != m.presented.ID {
 		t.Errorf("the request carries token %q, want %q — the mint route "+

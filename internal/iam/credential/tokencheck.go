@@ -67,11 +67,10 @@ type TokenRow struct {
 	ExpiresAt time.Time
 	RevokedAt time.Time
 
-	// Grants and Colleague are what the MINT carried, a subset of what the
-	// owner held then; Epoch is the owner's revocation epoch at the mint,
-	// and Generation the company's session generation at it.
+	// Grants are what the MINT carried, a subset of what the owner held
+	// then; Epoch is the owner's revocation epoch at the mint, and
+	// Generation the company's session generation at it.
 	Grants     []iam.Grant
-	Colleague  iam.Colleague
 	Epoch      uint64
 	Generation uint64
 
@@ -92,10 +91,9 @@ type TokenOwner struct {
 	Stage iam.Stage
 	Login string
 
-	// Grants and Colleague are the owner's CURRENT ones, which is what
-	// makes demoting a person demote every token they minted.
-	Grants    []iam.Grant
-	Colleague iam.Colleague
+	// Grants are the owner's CURRENT ones, which is what makes demoting a
+	// person demote every token they minted.
+	Grants []iam.Grant
 
 	// Epoch is the owner's CURRENT revocation epoch.
 	Epoch uint64
@@ -220,19 +218,4 @@ func (row TokenRow) EffectiveGrants() []iam.Grant {
 		}
 	}
 	return out
-}
-
-// EffectiveColleague is how far a valid token reaches into the company's work:
-// the narrower of what its mint named and what its owner reaches now.
-//
-// THE ZERO VALUE IS THE CLOSED END, as it is wherever a reach is stored.
-func (row TokenRow) EffectiveColleague() iam.Colleague {
-	minted, owner := row.Colleague, row.Owner.Colleague
-	if minted == "" {
-		minted = iam.ColleagueNone
-	}
-	if owner == "" {
-		owner = iam.ColleagueNone
-	}
-	return minted.AtMost(owner)
 }

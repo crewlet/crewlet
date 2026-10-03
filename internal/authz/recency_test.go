@@ -304,8 +304,7 @@ func TestAStaleProofIsRefusedExactlyWhereTheRowAsksForOne(t *testing.T) {
 	t.Parallel()
 	holding := func(age time.Duration) iam.Principal {
 		p := iam.Principal{ID: uuid.New(), Login: "jane.doe",
-			Kind: iam.KindPerson, Stage: iam.StageActive, Grants: iam.AllGrants,
-			Colleague: iam.ColleagueWrite}
+			Kind: iam.KindPerson, Stage: iam.StageActive, Grants: iam.AllGrants}
 		if age < 0 {
 			return p // nothing ever proved
 		}

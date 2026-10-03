@@ -143,13 +143,13 @@ func TestAnIamCommandWithNoSubjectSaysWhatIsMissing(t *testing.T) {
 }
 
 // `iam token` ASKS FOR WHAT THE ROUTE READS: the owner on the QUERY, which is
-// what the authority table decides on, and the grants, reach and lifetime in
-// the body — and it prints the value with what it carries.
+// what the authority table decides on, and the grants and lifetime in the body
+// — and it prints the value with what it carries.
 //
-// It used to name the owner in a body field the route no longer reads, and to
-// drop -colleague on the floor, so every token it minted was the caller's own
-// at the caller's own reach whatever the command said. Mutation: send the
-// person in the body again and the node sees no `person` query.
+// It used to name the owner in a body field the route no longer reads, so
+// every token it minted was the caller's own whatever the command said.
+// Mutation: send the person in the body again and the node sees no `person`
+// query.
 func TestIamTokenAsksForWhatTheRouteReads(t *testing.T) {
 	var seen struct {
 		method, path, person, auth string
@@ -163,7 +163,7 @@ func TestIamTokenAsksForWhatTheRouteReads(t *testing.T) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusCreated)
 		_, _ = w.Write([]byte(`{"id":"c-1","person":"p-1","token":"cwl_pat_the-value",` +
-			`"grants":["state:read"],"colleague":"read",` +
+			`"grants":["state:read"],` +
 			`"expires_at":"2026-07-01T00:00:00Z"}`))
 	}))
 	defer node.Close()
@@ -172,7 +172,7 @@ func TestIamTokenAsksForWhatTheRouteReads(t *testing.T) {
 
 	var out, errs bytes.Buffer
 	if err := run([]string{"iam", "token", "-person", "p-1", "-label", "ci",
-		"-days", "30", "-grants", "state:read", "-colleague", "read",
+		"-days", "30", "-grants", "state:read",
 		"-config", cfg, "-api", node.URL}, &out, &errs); err != nil {
 		t.Fatalf("iam token: %v\n%s", err, errs.String())
 	}
@@ -185,8 +185,7 @@ func TestIamTokenAsksForWhatTheRouteReads(t *testing.T) {
 	if _, inBody := seen.body["person"]; inBody {
 		t.Errorf("the owner travelled in the body too: %v", seen.body)
 	}
-	if seen.body["colleague"] != "read" || seen.body["label"] != "ci" ||
-		seen.body["expires_in_days"] != float64(30) {
+	if seen.body["label"] != "ci" || seen.body["expires_in_days"] != float64(30) {
 		t.Errorf("the body was %v", seen.body)
 	}
 	if grants, _ := seen.body["grants"].([]any); len(grants) != 1 ||
@@ -210,35 +209,20 @@ func TestIamTokenAsksForWhatTheRouteReads(t *testing.T) {
 // `grants: []` strips, and one with no `grants` key leaves them alone. Without
 // the word, the strip silently does not happen.
 func TestStrippingGrantsIsSpeltAndNotImplied(t *testing.T) {
-	empty, err := iamGrantsBody("", "")
-	if err != nil {
-		t.Fatalf("no flags: %v", err)
-	}
+	empty := iamGrantsBody("")
 	if _, mentioned := empty["grants"]; mentioned {
 		t.Errorf("an omitted -grants sent a grants field: %v, which would "+
 			"strip somebody nobody asked to strip", empty)
 	}
-	stripped, err := iamGrantsBody("none", "")
-	if err != nil {
-		t.Fatalf("-grants none: %v", err)
-	}
+	stripped := iamGrantsBody("none")
 	held, ok := stripped["grants"].([]string)
 	if !ok || len(held) != 0 {
 		t.Errorf("-grants none sent %v, want an empty list", stripped["grants"])
 	}
-	listed, err := iamGrantsBody(" state:read , audit:read ", "write")
-	if err != nil {
-		t.Fatalf("a list: %v", err)
-	}
+	listed := iamGrantsBody(" state:read , audit:read ")
 	if got := listed["grants"].([]string); len(got) != 2 ||
 		got[0] != "state:read" || got[1] != "audit:read" {
 		t.Errorf("the list parsed to %v", got)
-	}
-	if listed["colleague"] != "write" {
-		t.Errorf("the colleague level parsed to %v", listed["colleague"])
-	}
-	if _, err := iamGrantsBody("", "boss"); err == nil {
-		t.Error("`boss` was accepted as a colleague level")
 	}
 }
 

@@ -63,7 +63,7 @@ func person(seat string, grants ...iam.Grant) iam.Principal {
 	return iam.Principal{ID: uuid.NewSHA1(uuid.NameSpaceOID, []byte(login)),
 		Login: login, Seat: seat,
 		Kind: iam.KindPerson, Stage: iam.StageActive,
-		Colleague: iam.ColleagueWrite, Grants: grants}
+		Grants: grants}
 }
 
 // colleague is a person holding the ordinary grants and no deployment grant:

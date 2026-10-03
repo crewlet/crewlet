@@ -60,16 +60,11 @@ func Principal(t *Turn) iam.Principal {
 		return iam.Principal{}
 	}
 	return iam.Principal{
-		Kind:  iam.KindSeat,
-		Seat:  seat.Handle(),
-		Stage: iam.StageActive,
-		// EVERY SEAT IS A COLLEAGUE WHO WRITES, which is not a grant and
-		// not a rung on the same ladder: a colleague level is reach into
-		// the company's own WORK, and a seat that could not be assigned
-		// to, mentioned or delegated to is a seat nothing can use.
-		Colleague: iam.ColleagueWrite,
-		Grants:    SeatGrants,
-		Position:  unitOf(t, seat),
+		Kind:     iam.KindSeat,
+		Seat:     seat.Handle(),
+		Stage:    iam.StageActive,
+		Grants:   SeatGrants,
+		Position: unitOf(t, seat),
 	}
 }
 

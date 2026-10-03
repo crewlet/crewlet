@@ -183,8 +183,8 @@ func TestAMintTheDomainRefusesIsAnsweredForWhatItIs(t *testing.T) {
 		{"a grant the owner does not hold",
 			fmt.Errorf("%w: config:write is not among [state:read]",
 				iamdomain.ErrRefused), http.StatusForbidden},
-		{"a reach that is no level", fmt.Errorf("%w: \"admin\" is not a "+
-			"colleague level", iamdomain.ErrInvalidToken), http.StatusBadRequest},
+		{"an expiry already past", fmt.Errorf("%w: the expiry has passed",
+			iamdomain.ErrInvalidToken), http.StatusBadRequest},
 	} {
 		r := newRig(t)
 		r.writer.err = tc.err

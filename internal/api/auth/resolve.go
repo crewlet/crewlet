@@ -117,12 +117,11 @@ func (g *Guard) principalFor(ctx context.Context, entry config.APIToken,
 	now time.Time) (iam.Principal, iam.Resolution, *Refusal) {
 
 	p := iam.Principal{
-		ID:        uuid.NewSHA1(TokenNamespace, []byte(entry.ID)),
-		Login:     iam.TokenLogin(entry.ID),
-		Kind:      iam.KindMachine,
-		Grants:    intersect(entry.Grants, g.ceiling),
-		Colleague: entry.Level(),
-		Stage:     iam.StageActive,
+		ID:     uuid.NewSHA1(TokenNamespace, []byte(entry.ID)),
+		Login:  iam.TokenLogin(entry.ID),
+		Kind:   iam.KindMachine,
+		Grants: intersect(entry.Grants, g.ceiling),
+		Stage:  iam.StageActive,
 	}
 	// PRESENTING THE TOKEN IS THE PROOF, so it is fresh for BOTH windows:
 	// the sensitive one included.

@@ -19,14 +19,14 @@ func liveRow(token credential.Token, verifier string) credential.TokenRow {
 	return credential.TokenRow{
 		Applied: token.Position + 10, Found: true, IsToken: true,
 		Verifier: verifier, ExpiresAt: checkAt.Add(24 * time.Hour),
-		Grants:    []iam.Grant{iam.GrantStateRead, iam.GrantWorkWrite},
-		Colleague: iam.ColleagueWrite, Epoch: 2,
+		Grants:     []iam.Grant{iam.GrantStateRead, iam.GrantWorkWrite},
+		Epoch:      2,
 		Generation: 1, FleetGeneration: 1,
 		Owner: credential.TokenOwner{
 			Found: true, ID: "0192f00d-0000-7000-8000-00000000000a",
 			Kind: iam.KindPerson, Stage: iam.StageActive, Login: "jane.doe",
-			Grants:    []iam.Grant{iam.GrantStateRead, iam.GrantWorkWrite},
-			Colleague: iam.ColleagueWrite, Epoch: 2,
+			Grants: []iam.Grant{iam.GrantStateRead, iam.GrantWorkWrite},
+			Epoch:  2,
 		},
 	}
 }
@@ -159,19 +159,5 @@ func TestATokenCarriesOnlyWhatItsOwnerStillHolds(t *testing.T) {
 	if got := row.EffectiveGrants(); !slices.Equal(got,
 		[]iam.Grant{iam.GrantStateRead}) {
 		t.Errorf("the token carries %v after its owner lost work:write", got)
-	}
-	row.Owner.Colleague = iam.ColleagueRead
-	if got := row.EffectiveColleague(); got != iam.ColleagueRead {
-		t.Errorf("the token reaches the company at %q past its owner's read",
-			got)
-	}
-	row.Owner.Colleague, row.Colleague = iam.ColleagueWrite, iam.ColleagueNone
-	if got := row.EffectiveColleague(); got != iam.ColleagueNone {
-		t.Errorf("a token minted at none reaches the company at %q", got)
-	}
-	row.Colleague = ""
-	if got := row.EffectiveColleague(); got != iam.ColleagueNone {
-		t.Errorf("a token with no reach stated reaches the company at %q, "+
-			"want the closed end", got)
 	}
 }

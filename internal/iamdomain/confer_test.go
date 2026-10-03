@@ -107,7 +107,6 @@ func TestARedemptionConfersWhatTheInvitationSaid(t *testing.T) {
 		if err := rig.draining(func() error {
 			issued, err := rig.writer.Invite(rig.t.Context(), iamdomain.InviteMint{
 				Email: address, Grants: offered,
-				Colleague: iam.ColleagueRead,
 				ExpiresAt: brokerAt.Add(168 * time.Hour),
 				OpID:      operationKey(), Reason: "onboarding",
 			})
@@ -120,16 +119,13 @@ func TestARedemptionConfersWhatTheInvitationSaid(t *testing.T) {
 		rig.drain()
 		return id
 	}
-	redeem := func(invitation, address string, grants []iam.Grant,
-		colleague iam.Colleague) error {
-
+	redeem := func(invitation, address string, grants []iam.Grant) error {
 		person := uuid.Must(uuid.NewV7()).String()
 		return rig.draining(func() error {
 			_, err := nodeWriter(rig).Enrol(rig.t.Context(), iamdomain.Enrolment{
 				PersonID: person, Kind: iam.KindPerson, Stage: iam.StageActive,
 				Name: "A joiner", Email: address, Login: iam.LoginFromAddress(address),
-				Grants:    grants,
-				Colleague: colleague, Invitation: invitation,
+				Grants: grants, Invitation: invitation,
 				InvitationSecret: secrets[invitation],
 				OpID:             "op-redeem-" + person, Reason: "redeemed an invitation",
 			})
@@ -138,34 +134,30 @@ func TestARedemptionConfersWhatTheInvitationSaid(t *testing.T) {
 	}
 
 	sarah := issue("sarah@example.com")
-	if err := redeem(sarah, "sarah@example.com", offered,
-		iam.ColleagueRead); err != nil {
+	if err := redeem(sarah, "sarah@example.com", offered); err != nil {
 		t.Fatalf("redeeming exactly what was offered was refused: %v — the "+
 			"node's writer holds none of it, and the invitation is the "+
 			"authority", err)
 	}
 
 	for _, refused := range []struct {
-		name      string
-		address   string
-		grants    []iam.Grant
-		colleague iam.Colleague
-		other     string
+		name    string
+		address string
+		grants  []iam.Grant
+		other   string
 	}{
 		{"a grant the invitation did not carry", "a1@example.com",
-			[]iam.Grant{iam.GrantStateRead, iam.GrantSecretRead}, iam.ColleagueRead, ""},
-		{"more reach than the invitation offered", "a2@example.com",
-			offered, iam.ColleagueWrite, ""},
+			[]iam.Grant{iam.GrantStateRead, iam.GrantSecretRead}, ""},
 		{"an address the invitation was not issued to", "a3@example.com",
-			offered, iam.ColleagueRead, "someone-else@example.com"},
+			offered, "someone-else@example.com"},
 	} {
 		invitation := issue(refused.address)
 		address := refused.address
 		if refused.other != "" {
 			address = refused.other
 		}
-		if err := redeem(invitation, address, refused.grants,
-			refused.colleague); !errors.Is(err, iamdomain.ErrRefused) {
+		if err := redeem(invitation, address,
+			refused.grants); !errors.Is(err, iamdomain.ErrRefused) {
 			t.Errorf("a redemption asking for %s was not refused (%v)",
 				refused.name, err)
 		}
@@ -202,16 +194,16 @@ func TestARedemptionConfersWhatTheInvitationSaid(t *testing.T) {
 		t.Fatalf("spend and release: %v", err)
 	}
 	rig.drain()
-	if err := redeem(spent, "spent@example.com", offered,
-		iam.ColleagueRead); !errors.Is(err, iamdomain.ErrRefused) {
+	if err := redeem(spent, "spent@example.com",
+		offered); !errors.Is(err, iamdomain.ErrRefused) {
 		t.Errorf("an invitation somebody already redeemed enrolled a second "+
 			"person once the first had gone (%v)", err)
 	}
 
 	// AND WITHOUT NAMING THE INVITATION the node writer is only itself: it
 	// holds neither state:read nor work:write, so it may confer neither.
-	if err := redeem("", "unnamed@example.com", offered,
-		iam.ColleagueRead); !errors.Is(err, iamdomain.ErrRefused) {
+	if err := redeem("", "unnamed@example.com",
+		offered); !errors.Is(err, iamdomain.ErrRefused) {
 		t.Errorf("the node's own writer conferred grants it does not hold "+
 			"with no invitation behind them (%v)", err)
 	}
@@ -242,7 +234,6 @@ func TestTheFirstPersonIsInvitedUnderATierAToken(t *testing.T) {
 		var err error
 		issued, err = token.Invite(rig.t.Context(), iamdomain.InviteMint{
 			Email: "founder@example.com", Grants: iam.AllGrants,
-			Colleague: iam.ColleagueWrite,
 			ExpiresAt: brokerAt.Add(168 * time.Hour),
 			OpID:      operationKey(), Reason: "the first person",
 		})
@@ -260,8 +251,8 @@ func TestTheFirstPersonIsInvitedUnderATierAToken(t *testing.T) {
 		_, err := nodeWriter(rig).Enrol(rig.t.Context(), iamdomain.Enrolment{
 			PersonID: person, Kind: iam.KindPerson, Stage: iam.StageActive,
 			Name: "The founder", Email: "founder@example.com",
-			Login:  "the.founder",
-			Grants: iam.AllGrants, Colleague: iam.ColleagueWrite,
+			Login:      "the.founder",
+			Grants:     iam.AllGrants,
 			Invitation: issued.ID, InvitationSecret: issued.Secret,
 			OpID: "op-redeem-" + person, Reason: "redeemed the first invitation",
 		})

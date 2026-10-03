@@ -369,7 +369,6 @@ func readPersonRow(ctx context.Context, tx *sql.Tx, person string,
 	// it, and a suspended person's session validated as `active`.
 	out.Stage = iam.Stage(stage)
 	out.Login = login
-	out.Colleague = doc.Colleague
 	out.Grants = doc.Grants
 	out.Seat = seat
 	out.SeatAt = uint64(chartPosition)
@@ -461,7 +460,6 @@ func (r *Reader) MachineToken(ctx context.Context, id string) (credential.TokenR
 		out.ExpiresAt = fromMillis(expires)
 		out.RevokedAt = fromMillis(revoked)
 		out.Grants = held.Grants
-		out.Colleague = held.Colleague
 		out.Epoch = held.Epoch
 		out.Generation = held.Generation
 		if err = readGeneration(ctx, tx, &out.FleetGeneration); err != nil {
@@ -512,7 +510,6 @@ func readTokenOwner(ctx context.Context, tx *sql.Tx, id string,
 	out.Stage = iam.Stage(stage)
 	out.Login = login
 	out.Grants = doc.Grants
-	out.Colleague = doc.Colleague
 	out.Seat = seat
 	out.SeatAt = uint64(chartPosition)
 	return readEpoch(ctx, tx, id, &out.Epoch)
@@ -550,7 +547,6 @@ type Sighting struct {
 	Login       string
 	Credentials []Credential
 	Grants      []iam.Grant
-	Colleague   iam.Colleague
 	Seat        string
 	SeatAt      uint64
 
@@ -658,7 +654,6 @@ func sightingIn(ctx context.Context, tx *sql.Tx, column, token string,
 	out.Login = login
 	out.Credentials = doc.Credentials
 	out.Grants = doc.Grants
-	out.Colleague = doc.Colleague
 	out.Seat = seat
 	out.SeatAt = uint64(chartPosition)
 	return nil
@@ -873,7 +868,6 @@ type InvitationRow struct {
 	Sealed     string
 	InvitedBy  string
 	Grants     []iam.Grant
-	Colleague  iam.Colleague
 	ExpiresAt  time.Time
 	RedeemedAt time.Time
 	Person     string
@@ -960,7 +954,6 @@ func (r *Reader) InvitationByID(ctx context.Context, id string) (InvitationRow, 
 		out.Sealed = doc.Sealed
 		out.InvitedBy = doc.InvitedBy
 		out.Grants = doc.Grants
-		out.Colleague = doc.Colleague
 		out.Verifier = doc.Verifier
 		out.Seat = doc.Seat
 		out.ExpiresAt = fromMillis(expires)

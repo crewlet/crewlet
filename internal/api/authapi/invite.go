@@ -242,7 +242,6 @@ func (s *Service) RedeemInvite(w http.ResponseWriter, r *http.Request) {
 		// and so does the seat the invitation binds: claimed first, and
 		// refused as the link's own refusal if it moved since the issue.
 		Grants:           held.Grants,
-		Colleague:        held.Colleague,
 		Invitation:       held.ID,
 		InvitationSecret: in.Secret,
 		Seat:             held.Seat,
@@ -273,7 +272,7 @@ func (s *Service) RedeemInvite(w http.ResponseWriter, r *http.Request) {
 		"invitation", held.ID, "person", person, "login", in.Login)
 	s.completeSignIn(w, r, iamdomain.Sighting{
 		ID: person, Kind: iam.KindPerson, Stage: iam.StageActive,
-		Login: in.Login, Grants: held.Grants, Colleague: held.Colleague,
+		Login: in.Login, Grants: held.Grants,
 		Seat: held.Seat,
 	}, signIn{method: types.SignInInvite})
 }

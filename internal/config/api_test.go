@@ -256,25 +256,6 @@ func TestATokenMustStateWhatItMayDo(t *testing.T) {
 		b.API.Auth.Tokens[0].Grants = []iam.Grant{iam.GrantSecretWrite}
 		refuses(t, b, "outside `api.auth.max_grants`")
 	})
-	t.Run("a colleague level that is not one", func(t *testing.T) {
-		t.Parallel()
-		b := serving()
-		b.API.Auth.Tokens[0].Colleague = "admin"
-		refuses(t, b, "colleague")
-	})
-}
-
-// THE DEFAULT COLLEAGUE LEVEL IS THE CLOSED END. A pipeline is nobody's
-// colleague, and an unset field must not make it one — which is the opposite
-// of how `allow_anonymous_read`'s unset value behaved.
-func TestAnUnsetColleagueLevelIsNone(t *testing.T) {
-	t.Parallel()
-	if got := (APIToken{}).Level(); got != iam.ColleagueNone {
-		t.Errorf("an unstated colleague level = %q, want %q", got, iam.ColleagueNone)
-	}
-	if got := (APIToken{Colleague: iam.ColleagueWrite}).Level(); got != iam.ColleagueWrite {
-		t.Errorf("a stated level was not honoured: %q", got)
-	}
 }
 
 // --- the retired keys ---------------------------------------------------- //

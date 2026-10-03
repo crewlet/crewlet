@@ -468,8 +468,8 @@ func (s *Service) answer(w http.ResponseWriter, r *http.Request, opID string,
 		// administrator who wrote `jane` the engine was broken.
 		errors.Is(err, iamdomain.ErrInvalidLogin),
 		errors.Is(err, iamdomain.ErrNotEnrollable),
-		// AND A VALUE OUTSIDE A BOUND — a reason past the cap, a colleague
-		// level this build cannot name — for the same reason.
+		// AND A VALUE OUTSIDE A BOUND — a reason or a name past its cap —
+		// for the same reason.
 		errors.Is(err, iamdomain.ErrInvalid):
 		refuse(http.StatusBadRequest, httpjson.CodeInvalidBody,
 			httpjson.Detail{"detail": err.Error()})

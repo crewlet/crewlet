@@ -59,8 +59,7 @@ func tokenBoot(t *testing.T) config.Bootstrap {
 	b.API.Auth.Tokens = []config.APIToken{
 		{ID: "ops", Token: opsValue, Grants: []iam.Grant{
 			iam.GrantStateRead, iam.GrantPeopleManage, iam.GrantSandboxRun}},
-		{ID: "lead", Token: boundValue, Grants: []iam.Grant{iam.GrantWorkWrite},
-			Colleague: iam.ColleagueWrite},
+		{ID: "lead", Token: boundValue, Grants: []iam.Grant{iam.GrantWorkWrite}},
 	}
 	return b
 }
@@ -112,7 +111,7 @@ func (r *exchangeRig) rebuild(b config.Bootstrap) {
 		}
 		_ = json.NewEncoder(w).Encode(map[string]any{
 			"login": p.Login, "kind": p.Kind, "seat": p.Seat,
-			"grants": p.Grants, "colleague": p.Colleague,
+			"grants":   p.Grants,
 			"fresh":    p.Fresh(time.Now()),
 			"operator": iam.ActorFor(p).OperatorID,
 		})

@@ -1540,8 +1540,8 @@ func TestAnEnrolmentOutOfBoundsClaimsNothing(t *testing.T) {
 		{"a reason past the cap", func(e *iamdomain.Enrolment) {
 			e.Reason = strings.Repeat("x", iamdomain.MaxReason+1)
 		}},
-		{"a colleague level this build cannot name", func(e *iamdomain.Enrolment) {
-			e.Colleague = iam.Colleague("admin")
+		{"a name past the cap", func(e *iamdomain.Enrolment) {
+			e.Name = strings.Repeat("x", iamdomain.MaxName+1)
 		}},
 	} {
 		in := iamdomain.Enrolment{
@@ -1570,7 +1570,6 @@ func TestAnEnrolmentOutOfBoundsClaimsNothing(t *testing.T) {
 		Kind:     iam.KindPerson, Stage: iam.StageActive,
 		Name: "Sarah Chen", Email: "sarah.chen@example.com",
 		Login: "sarah.chen", OpID: "op-bounds-ok", Reason: "a hire",
-		Colleague: iam.ColleagueWrite,
 	}); err != nil {
 		t.Fatalf("the corrected enrolment was refused: %v", err)
 	}

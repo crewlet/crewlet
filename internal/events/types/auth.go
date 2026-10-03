@@ -467,11 +467,10 @@ type IAMCredentialMinted struct {
 	Kind       CredentialKind `json:"kind"`
 	Owner      string         `json:"owner"`
 
-	// Grants and Colleague are what a TOKEN was minted to carry — a subset
-	// of its owner's, which is what an investigation asks first. Empty on
-	// a second factor, which carries no authority of its own.
-	Grants    []string `json:"grants,omitempty"`
-	Colleague string   `json:"colleague"`
+	// Grants are what a TOKEN was minted to carry — a subset of its
+	// owner's, which is what an investigation asks first. Empty on a
+	// second factor, which carries no authority of its own.
+	Grants []string `json:"grants,omitempty"`
 
 	// ExpiresAt is when it stops working, zero for a credential with no
 	// deadline of its own.

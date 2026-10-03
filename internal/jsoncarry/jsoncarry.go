@@ -103,8 +103,8 @@ func Decode(data []byte, out any, known Fields) (map[string]json.RawMessage, err
 // trap the package doc warns about, left for every domain to fall into by
 // hand: a name missing from the list is decoded into the struct AND carried as
 // unknown, so the next encode writes the stale carried copy back over what the
-// caller set — and it had been fallen into four times, silently (a person's
-// and an invitation's `colleague`, a unit's `origin_key`, a seat's
+// caller set — and it had been fallen into four times, silently (a field on a
+// person and on an invitation, a unit's `origin_key`, a seat's
 // `origin_handle`), each one a field that could never be cleared back to its
 // zero value. The tags already say every name; reading them is the only list
 // nobody has to remember to update.

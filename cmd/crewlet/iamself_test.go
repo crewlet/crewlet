@@ -91,7 +91,7 @@ func newSelfNode(t *testing.T) *selfNode {
 		}
 		httpjson.Write(w, http.StatusCreated, map[string]any{
 			"id": "c-1", "person": "p-jane", "token": "cwl_pat_the-value",
-			"grants": []string{"state:read"}, "colleague": "read",
+			"grants":     []string{"state:read"},
 			"expires_at": "2026-07-01T00:00:00Z",
 		})
 	})

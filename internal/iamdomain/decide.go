@@ -230,7 +230,6 @@ func (w *Writer) Enrol(ctx context.Context, in Enrolment) (statelog.Result, erro
 		V: DocumentVersion, Kind: in.Kind, Stage: in.Stage,
 		NameSealed: sealedName, EmailSealed: sealedEmail,
 		Credentials: in.Credentials, Grants: in.Grants,
-		Colleague: in.Colleague,
 	}
 	mutation, err := EncodePerson(person)
 	if err != nil {
@@ -426,11 +425,6 @@ type Enrolment struct {
 	Credentials []Credential
 	Grants      []iam.Grant
 
-	// Colleague is how far into the company's own work this person
-	// reaches. Its zero is the CLOSED end and a real setting — see
-	// [Person.Colleague].
-	Colleague iam.Colleague
-
 	// Invitation is the id of the invitation this enrolment REDEEMS, or
 	// empty. When set, what the enrolment confers is bounded by what the
 	// invitation says rather than by the writer's own grants — see
@@ -530,13 +524,6 @@ func (in Enrolment) validate() error {
 			"the cap is %d — it is rendered into an authentication trail "+
 			"beside the op that caused it, so it says WHICH cause fired "+
 			"rather than narrating", ErrInvalid, len(in.Reason), MaxReason)
-	case in.Colleague != "" && !in.Colleague.Valid():
-		// UNSET IS THE CLOSED END and a real setting — see
-		// [Person.Colleague] — so only a value this build cannot place on
-		// its ladder is refused. Stored, it would read as no reach on
-		// this build and as whatever a newer one means by it on the next.
-		return fmt.Errorf("%w: %q is not a colleague level — want one of %v",
-			ErrInvalid, in.Colleague, iam.Colleagues)
 	case in.Kind == iam.KindPerson && in.Email == "":
 		return fmt.Errorf("%w: enrolling a person needs an address — it is "+
 			"the interactive login key, and somebody with none can never "+
@@ -633,11 +620,6 @@ func (w *Writer) redeemable(ctx context.Context, tx *sql.Tx, in Enrolment,
 				invitation.Grants, g)
 		}
 	}
-	if !colleagueWithin(in.Colleague, invitation.Colleague) {
-		return fmt.Errorf("%w: redeeming invitation %s reaches the company's "+
-			"work at %q, and the enrolment asks for %q", ErrRefused,
-			in.Invitation, invitation.Colleague, in.Colleague)
-	}
 	// THE SEAT IS THE INVITATION'S, and exactly it: one the invitation
 	// did not carry would be a redemption asking for more than was
 	// offered, and one it carried and the enrolment dropped would spend
@@ -675,21 +657,6 @@ func redeemableSeat(ctx context.Context, tx *sql.Tx, in Enrolment,
 	}
 	return fmt.Errorf("%w: invitation %s binds a seat it can no longer bind "+
 		"(%w)", ErrRefused, in.Invitation, err)
-}
-
-// colleagueWithin reports whether a reach is no wider than a bound.
-//
-// THE ZERO VALUE IS THE CLOSED END, as it is everywhere a person's reach is
-// stored, and a level this build cannot name is never within anything.
-func colleagueWithin(asked, bound iam.Colleague) bool {
-	rung := func(c iam.Colleague) int {
-		if c == "" {
-			return 0
-		}
-		return slices.Index(iam.Colleagues, c)
-	}
-	mine, theirs := rung(asked), rung(bound)
-	return mine >= 0 && theirs >= 0 && mine <= theirs
 }
 
 // LoginFits refuses a login that is not in its holder's kind's grammar.
@@ -730,8 +697,7 @@ func LoginFits(kind iam.Kind, login string) error {
 var ErrInvalidLogin = errors.New("iamdomain: that login does not fit its holder's kind")
 
 // ErrInvalid reports a value outside a bound this domain holds a record to: a
-// reason past [MaxReason], a colleague level this build cannot name, a stage
-// that is not one.
+// reason past [MaxReason], a stage that is not one.
 //
 // ITS OWN SENTINEL for [ErrInvalidLogin]'s reason: it is a value the caller
 // supplied and can correct, so a surface answers it 400 naming the field — and
@@ -2133,19 +2099,6 @@ func (w *Writer) MintToken(ctx context.Context, in TokenMint) (TokenMinted, erro
 		if err != nil {
 			return err
 		}
-		colleague := in.Colleague
-		if colleague == "" {
-			colleague = owner.Colleague
-		}
-		if !colleague.Valid() && colleague != "" {
-			return fmt.Errorf("%w: %q is not a colleague level", ErrInvalidToken,
-				colleague)
-		}
-		if !colleagueWithin(colleague, owner.Colleague) {
-			return fmt.Errorf("%w: a token reaches the company's work no "+
-				"further than its owner, who reaches it at %q, and this one "+
-				"asks for %q", ErrRefused, owner.Colleague, colleague)
-		}
 		epoch, err := epochOf(ctx, tx, in.PersonID)
 		if err != nil {
 			return err
@@ -2157,8 +2110,7 @@ func (w *Writer) MintToken(ctx context.Context, in TokenMint) (TokenMinted, erro
 		token := Credential{
 			V: DocumentVersion, ID: in.ID, Method: MethodToken,
 			Verifier: in.Verifier, Label: in.Label, ExpiresAt: in.ExpiresAt,
-			Grants: grants, Colleague: colleague, Epoch: epoch,
-			Generation: generation,
+			Grants: grants, Epoch: epoch, Generation: generation,
 		}
 		kept := make([]Credential, 0, len(owner.Credentials)+1)
 		for _, c := range owner.Credentials {
@@ -2177,8 +2129,8 @@ func (w *Writer) MintToken(ctx context.Context, in TokenMint) (TokenMinted, erro
 		if owner.Credentials, err = fitHeld(kept, now, ErrInvalidToken); err != nil {
 			return err
 		}
-		minted = TokenMinted{Grants: grants, Colleague: colleague,
-			ExpiresAt: in.ExpiresAt, Epoch: epoch, Generation: generation}
+		minted = TokenMinted{Grants: grants, ExpiresAt: in.ExpiresAt,
+			Epoch: epoch, Generation: generation}
 		rec.Mutation, err = EncodePerson(owner)
 		return err
 	}
@@ -2217,10 +2169,8 @@ type TokenMint struct {
 	Label string
 
 	// Grants is what the token may carry, or nil for every grant the owner
-	// holds that a token may carry. Colleague is its reach, or empty for
-	// the owner's own. See [Writer.MintToken].
-	Grants    []iam.Grant
-	Colleague iam.Colleague
+	// holds that a token may carry. See [Writer.MintToken].
+	Grants []iam.Grant
 
 	// ExpiresAt is REQUIRED, and at most [credential.MaxTokenLifetime]
 	// away.
@@ -2239,7 +2189,6 @@ type TokenMinted struct {
 	Result statelog.Result
 
 	Grants     []iam.Grant
-	Colleague  iam.Colleague
 	ExpiresAt  time.Time
 	Epoch      uint64
 	Generation uint64
@@ -2443,13 +2392,6 @@ func (w *Writer) Invite(ctx context.Context, in InviteMint) (
 		return InviteIssued{}, errors.New("iamdomain: an invitation needs " +
 			"an expiry; one read as `never` is a superuser claim that stays " +
 			"live in somebody's mailbox for the life of the company")
-	case in.Colleague != "" && !in.Colleague.Valid():
-		// REFUSED AT THE INVITATION rather than at its redemption: what
-		// redeeming confers is decided here, once, and a level the
-		// enrolment would refuse is a link that can never be redeemed —
-		// found out by the person it was sent to.
-		return InviteIssued{}, fmt.Errorf("%w: %q is not a colleague "+
-			"level — want one of %v", ErrInvalid, in.Colleague, iam.Colleagues)
 	}
 	if w.blinds == nil || w.sealer == nil {
 		return InviteIssued{}, fmt.Errorf("iamdomain: this node cannot "+
@@ -2502,7 +2444,7 @@ func (w *Writer) Invite(ctx context.Context, in InviteMint) (
 	// rather than redeeming it on its id.
 	mutation, err := EncodeInvitation(Invitation{
 		V: DocumentVersion, ID: id, Sealed: sealed,
-		InvitedBy: w.Actor, Grants: in.Grants, Colleague: in.Colleague,
+		InvitedBy: w.Actor, Grants: in.Grants,
 		Verifier: InvitationVerifier(secret), Seat: seat,
 		ExpiresAt: in.ExpiresAt,
 	})
@@ -2707,7 +2649,7 @@ func (w *Writer) issuedBefore(ctx context.Context, tx *sql.Tx, id, blind, seat s
 	}
 	switch {
 	case held != blind || !sameGrants(stored.Grants, in.Grants) ||
-		stored.Colleague != in.Colleague || stored.Seat != seat:
+		stored.Seat != seat:
 		return fmt.Errorf("%w: operation %s already issued invitation %s on "+
 			"other terms — a retry is the same request; a new invitation needs "+
 			"a new key", ErrOperationReused, in.OpID, id)
@@ -2789,12 +2731,11 @@ type InviteMint struct {
 	// subject and sealed for the row before anything is published.
 	Email string
 
-	// Grants and Colleague are what redeeming it confers, decided ONCE by
-	// whoever issued it rather than again by whoever processes the
-	// redemption — which is also what stops a redemption being a way to
-	// ask for more than was offered.
-	Grants    []iam.Grant
-	Colleague iam.Colleague
+	// Grants are what redeeming it confers, decided ONCE by whoever issued
+	// it rather than again by whoever processes the redemption — which is
+	// also what stops a redemption being a way to ask for more than was
+	// offered.
+	Grants []iam.Grant
 
 	// Seat is a seat redeeming it BINDS the new person to, by any address
 	// the chart answers to it by, or empty. It must be a human seat nobody
@@ -2910,8 +2851,8 @@ func (w *Writer) UpdatePerson(ctx context.Context, in PersonUpdate) (
 	})
 	result, err := w.publish(ctx, req)
 	// ONE ROW PER PERSON WRITE THAT MOVED A GRANT, and none for a write
-	// that changed a name or a colleague level: "who can do what to this
-	// deployment, and since when" is the question the row answers.
+	// that changed only a name: "who can do what to this deployment, and
+	// since when" is the question the row answers.
 	if added, removed := grantDelta(before, after); len(added)+len(removed) > 0 {
 		w.announce(ctx, result, err, types.IAMGrantsChanged{
 			Person: in.PersonID, Added: added, Removed: removed, By: w.Actor,
@@ -2973,8 +2914,8 @@ type PersonUpdate struct {
 	// read it separately.
 	//
 	// IT MAY REFUSE, which a caller uses for everything this package
-	// cannot judge — an unknown colleague level, a stage the surface will
-	// not set here — and the refusal travels out of the decide unwrapped.
+	// cannot judge — a stage the surface will not set here — and the
+	// refusal travels out of the decide unwrapped.
 	//
 	// And on a COLLAPSED result what it formed may not be what landed, for
 	// [CredentialSet.Apply]'s reason.

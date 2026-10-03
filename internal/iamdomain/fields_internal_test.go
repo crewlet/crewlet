@@ -14,13 +14,13 @@ import (
 // field tagged omitempty or omitzero does not marshal at zero — so it has to
 // be listed by hand, and a name missing from the list is decoded into the
 // struct AND carried as unknown. The next encode then writes that stale
-// carried copy back whenever the struct's own value is the zero one: a person
-// whose colleague level was cleared to the closed end was re-published at the
-// level they had before, on every node, by the very write that cleared it.
+// carried copy back whenever the struct's own value is the zero one: a field
+// cleared to its zero value was re-published at the value it had before, on
+// every node, by the very write that cleared it.
 //
-// Person.Colleague and Invitation.Colleague were both missing, and nothing
-// said so: a list written beside a struct is a list nothing compares. This
-// walks every document type's tags against its set.
+// A list written beside a struct is a list nothing compares, and two fields
+// had been missing from theirs with nothing saying so. This walks every
+// document type's tags against its set.
 func TestEveryOmittedNameIsListedInItsDocumentsFieldSet(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {

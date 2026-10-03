@@ -48,7 +48,6 @@ var ownRecordCallers = []struct {
 // as is a context carrying one of those callers with exactly these grants.
 func as(caller iam.Principal, grants ...iam.Grant) context.Context {
 	caller.ID, caller.Stage, caller.Grants = uuid.New(), iam.StageActive, grants
-	caller.Colleague = iam.ColleagueWrite
 	return iam.WithPrincipal(context.Background(), caller)
 }
 

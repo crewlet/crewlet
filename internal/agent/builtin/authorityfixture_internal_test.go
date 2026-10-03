@@ -18,6 +18,6 @@ func everyGrant() context.Context {
 	return iam.WithPrincipal(context.Background(), iam.Principal{
 		ID:   uuid.MustParse("018f3a9c-0000-7000-8000-00000000fee1"),
 		Kind: iam.KindSeat, Seat: "tester", Stage: iam.StageActive,
-		Colleague: iam.ColleagueWrite, Grants: iam.AllGrants,
+		Grants: iam.AllGrants,
 	})
 }

@@ -789,9 +789,8 @@ func (s *Sessions) principal(v session.Validation, binding session.Binding,
 		// ceiling. A session carries no authority of its own: the grants
 		// are the person's row's, so an administrator's edit reaches
 		// every session they hold on its next request.
-		Grants:    intersect(person.Grants, ceiling),
-		Colleague: person.Colleague,
-		Stage:     person.Stage,
+		Grants: intersect(person.Grants, ceiling),
+		Stage:  person.Stage,
 		// AND THROUGH WHAT: this session, by its lineage. The person is
 		// the author of what they write, and the operator column beside
 		// them says which sign-in it came through — it used to repeat

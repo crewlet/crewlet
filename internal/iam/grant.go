@@ -50,6 +50,14 @@ func (a Access) Valid() bool { return slices.Contains(Accesses, a) }
 // THE ZERO IS INVALID, and that is load-bearing rather than decorative: a gate
 // somebody forgot to fill in holds the zero Grant, and a zero that validated
 // would ship that gate as "granted".
+//
+// IT IS THE ONLY AUTHORITY A PRINCIPAL CARRIES. The company's own work is
+// reached through [GrantWorkWrite] and [GrantKnowledgeWrite] exactly as the
+// deployment is reached through the rest — internal/authz's colleague-write
+// class decides on those two and on nothing else. A second ladder beside the
+// grants, a "colleague level" stored on every person, invitation and token,
+// was carried everywhere and decided on nowhere, so a value somebody set
+// changed nothing; it is gone rather than kept as a setting that lies.
 type Grant string
 
 const (

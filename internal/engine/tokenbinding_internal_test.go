@@ -107,10 +107,10 @@ func TestOnlyAnActiveMachineBindsATierAToken(t *testing.T) {
 			if row.Seat != "platform-lead" || row.SeatAt != 900 {
 				t.Errorf("row %+v, want platform-lead at 900", row)
 			}
-			if len(row.Grants) != 0 || row.Colleague != "" {
+			if len(row.Grants) != 0 {
 				t.Errorf("the directory row's authority travelled with the "+
-					"binding (%v, %q): a Tier A token's grants are Tier A's",
-					row.Grants, row.Colleague)
+					"binding (%v): a Tier A token's grants are Tier A's",
+					row.Grants)
 			}
 		})
 	}

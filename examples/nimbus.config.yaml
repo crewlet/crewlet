@@ -236,10 +236,6 @@ api:
           - fleet:operate
           - people:manage
           - sandbox:run
-        # How far into the company's own WORK it reaches: none (the
-        # default) is invisible to the roster, to a mention and to a
-        # delegation, which is what a machine credential should be.
-        colleague: none
 
 # ── The keyring (REQUIRED) ────────────────────────────────────────────
 #

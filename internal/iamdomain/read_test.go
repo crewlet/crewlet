@@ -83,8 +83,7 @@ func TestAnAbsentLoginIsNobodyRatherThanAnError(t *testing.T) {
 		PersonID: id, Kind: iam.KindPerson, Stage: iam.StageActive,
 		Name: "Sarah Chen", Email: "sarah.chen@example.com",
 		Login: "sarah.chen", OpID: "op-1", Reason: "the joiner",
-		Grants:    []iam.Grant{iam.GrantStateRead},
-		Colleague: iam.ColleagueWrite,
+		Grants: []iam.Grant{iam.GrantStateRead},
 	}); err != nil {
 		t.Fatalf("enrol: %v", err)
 	}
@@ -100,16 +99,10 @@ func TestAnAbsentLoginIsNobodyRatherThanAnError(t *testing.T) {
 	if held.Stage != iam.StageActive {
 		t.Errorf("stage = %q, want active", held.Stage)
 	}
-	// BOTH HATS COME BACK. A grant is authority over the deployment and a
-	// colleague level is reach into the company's own work, and a reader
-	// that dropped either would compose a principal that is half right —
-	// which is indistinguishable from a person who was given less.
-	if !held.Grants[0].Valid() || held.Grants[0] != iam.GrantStateRead {
+	// THE GRANTS COME BACK: a reader that dropped them would compose a
+	// principal indistinguishable from a person who was given less.
+	if len(held.Grants) != 1 || held.Grants[0] != iam.GrantStateRead {
 		t.Errorf("grants = %v, want state:read", held.Grants)
-	}
-	if held.Colleague != iam.ColleagueWrite {
-		t.Errorf("colleague = %q, want write: the second hat was dropped, so "+
-			"somebody who may file work reaches none of it", held.Colleague)
 	}
 }
 

@@ -146,8 +146,8 @@ func boundRowOf(ctx context.Context, dir bindingDirectory, login string) (
 			"machine's bucket, so it cannot say the binding still stands",
 			login, seen.Seat)
 	}
-	// THE BINDING AND NOTHING ELSE. The row's grants and colleague level
-	// are deliberately left behind: a Tier A token's authority is what
+	// THE BINDING AND NOTHING ELSE. The row's grants are deliberately
+	// left behind: a Tier A token's authority is what
 	// Tier A declares for it, clamped by the ceiling, and a directory row
 	// that could widen it would make the identity estate a way to raise a
 	// credential the configuration pinned.

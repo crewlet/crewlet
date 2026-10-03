@@ -110,10 +110,9 @@ type PersonRow struct {
 
 	Stage iam.Stage
 
-	// Login, Colleague and Grants are what a principal is composed from.
-	Login     string
-	Colleague iam.Colleague
-	Grants    []iam.Grant
+	// Login and Grants are what a principal is composed from.
+	Login  string
+	Grants []iam.Grant
 
 	// Seat is the seat handle this person is bound to, and SeatAt the
 	// chart position that binding was decided at. seat.go is what they

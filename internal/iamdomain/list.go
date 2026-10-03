@@ -67,8 +67,7 @@ type PersonRow struct {
 	Seat   string
 	SeatAt uint64
 
-	Grants    []iam.Grant
-	Colleague iam.Colleague
+	Grants []iam.Grant
 
 	// Epoch is the person's revocation epoch: every session and token
 	// they hold carries the value it was minted at, and anything below
@@ -275,7 +274,6 @@ func scanPerson(rows *sql.Rows) (PersonRow, error) {
 				out.ID, err)
 		}
 		out.Grants = person.Grants
-		out.Colleague = person.Colleague
 	}
 	out.CreatedAt = fromMillis(created)
 	out.UpdatedAt = fromMillis(updated)
@@ -312,11 +310,10 @@ type CredentialRow struct {
 	// tokens and needs to know which is which.
 	Label string
 
-	// Grants and Colleague are what a machine token was minted carrying —
-	// the ceiling on what it can do, re-cut to its owner's own grants on
-	// every request. Empty on every other method.
-	Grants    []iam.Grant
-	Colleague iam.Colleague
+	// Grants are what a machine token was minted carrying — the ceiling on
+	// what it can do, re-cut to its owner's own grants on every request.
+	// Empty on every other method.
+	Grants []iam.Grant
 }
 
 // Revoked reports a credential that has been withdrawn or has aged out.
@@ -360,7 +357,7 @@ func (r *Reader) Credentials(ctx context.Context, personID string) (
 			row.RevokedAt = fromMillis(revoked)
 			if held, err := DecodeCredential(document); err == nil {
 				row.Label = held.Label
-				row.Grants, row.Colleague = held.Grants, held.Colleague
+				row.Grants = held.Grants
 			}
 			out = append(out, row)
 		}

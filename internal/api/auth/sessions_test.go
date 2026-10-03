@@ -78,8 +78,7 @@ func newSignedIn(t *testing.T) *signedIn {
 			Person: session.PersonRow{
 				Found: true, Epoch: 3, Stage: iam.StageActive,
 				Login: "sarah.chen", Seat: sessionSeat, SeatAt: 900,
-				Colleague: iam.ColleagueWrite,
-				Grants:    []iam.Grant{iam.GrantStateRead, iam.GrantConfigRead},
+				Grants: []iam.Grant{iam.GrantStateRead, iam.GrantConfigRead},
 			},
 		}},
 		chart: &fakeChart{position: 1000, seats: map[string]session.Seat{

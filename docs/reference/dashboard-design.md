@@ -5772,8 +5772,8 @@ edited in the org builder (**Edit in org**).
 
 **People & access** is the identity directory, read-only, over the routes
 `/iam` serves to a reader holding `people:manage` or `audit:read`: **People**
-is every person in the directory (`/iam/people`) — their login, stage, grants
-and colleague level, and the seat the directory binds them to — with their
+is every person in the directory (`/iam/people`) — their login, stage and
+grants, and the seat the directory binds them to — with their
 credentials (`/iam/credentials`) and sessions beside them; a sealed value this
 node's keyring cannot open reads *sealed*, never blank. **API tokens** is this
 node's Tier A labels joined to the directory rows holding their logins

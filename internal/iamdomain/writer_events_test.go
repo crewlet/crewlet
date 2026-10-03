@@ -53,12 +53,12 @@ func grantRows(t *testing.T, seen []events.Payload) []types.IAMGrantsChanged {
 // the writer and not the route announces it: a route reading the row itself
 // would describe a different transaction, and on a contended row the
 // difference is a grant the feed says somebody gained that they never held.
-// A write that moved no grant — a colleague level here — announces nothing,
-// or the audit question "who can do what to this deployment" drowns in
+// A write that moved no grant — the same grants restated here — announces
+// nothing, or the audit question "who can do what to this deployment" drowns in
 // renames. And a write REFUSED announces nothing: the row it would describe
 // never existed.
 //
-// Mutations: drop the delta check and the colleague write announces an empty
+// Mutations: drop the delta check and the reordering write announces an empty
 // row; announce before the refusal and the widening shows up; take the before
 // from outside the decide and the delta is wrong.
 func TestAGrantChangeIsAnnouncedWithWhatItAddedAndRemoved(t *testing.T) {
@@ -120,12 +120,13 @@ func TestAGrantChangeIsAnnouncedWithWhatItAddedAndRemoved(t *testing.T) {
 			"work:write removed", got)
 	}
 
-	// A WRITE THAT MOVED NO GRANT announces nothing.
-	if err := update(broad, "op-colleague", func(p iamdomain.Person) iamdomain.Person {
-		p.Colleague = iam.ColleagueWrite
+	// A WRITE THAT MOVED NO GRANT announces nothing: the same two grants,
+	// stated in the other order.
+	if err := update(broad, "op-reorder", func(p iamdomain.Person) iamdomain.Person {
+		p.Grants = []iam.Grant{iam.GrantSecretRead, iam.GrantSecretWrite}
 		return p
 	}); err != nil {
-		t.Fatalf("colleague: %v", err)
+		t.Fatalf("reorder: %v", err)
 	}
 	if seen := rig.events.take(); len(seen) != 0 {
 		t.Errorf("a write that moved no grant announced %#v", seen)

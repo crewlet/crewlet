@@ -50,8 +50,7 @@ func newRig(t *testing.T, options ...func(*iamapi.Options)) *rig {
 			ID: alice.String(), Kind: iam.KindPerson, Stage: iam.StageActive,
 			Login: "alice.admin", Seat: "founder",
 			NameSealed: []byte("sealed-name"), EmailSealed: []byte("sealed-email"),
-			Grants:    []iam.Grant{iam.GrantPeopleManage, iam.GrantStateRead},
-			Colleague: iam.ColleagueWrite,
+			Grants: []iam.Grant{iam.GrantPeopleManage, iam.GrantStateRead},
 		},
 		bob.String(): {
 			ID: bob.String(), Kind: iam.KindPerson, Stage: iam.StageActive,
@@ -432,7 +431,7 @@ func (w *fakeWriter) MintToken(_ context.Context, in iamdomain.TokenMint) (
 		return iamdomain.TokenMinted{Result: at}, iamdomain.ErrCollapsed
 	}
 	return iamdomain.TokenMinted{Result: at, Grants: in.Grants,
-		Colleague: in.Colleague, ExpiresAt: in.ExpiresAt}, err
+		ExpiresAt: in.ExpiresAt}, err
 }
 
 func (w *fakeWriter) Claim(_ context.Context, kind iamdomain.ObjectKind,
@@ -1216,8 +1215,8 @@ func TestALoginOrASeatIsMovedNeverReleasedAndReclaimed(t *testing.T) {
 
 	// AND WHAT THE SURFACE CAN JUDGE IS REFUSED BEFORE ANY RECORD, each
 	// beside a seat move that would otherwise already have landed: a login
-	// cleared, a stage or a colleague level this build cannot name — and
-	// what this node's rows can already establish a LATER record would
+	// cleared, a stage this build cannot name — and what this node's rows
+	// can already establish a LATER record would
 	// refuse: a login outside its holder's grammar, a login somebody else
 	// holds, a grant the caller may not confer. Those four used to be met
 	// at their own record, after the seat had moved.
@@ -1229,8 +1228,6 @@ func TestALoginOrASeatIsMovedNeverReleasedAndReclaimed(t *testing.T) {
 			"login": ""}, http.StatusBadRequest},
 		"a stage nobody can name": {map[string]any{"seat": "platform-lead",
 			"stage": "paused"}, http.StatusBadRequest},
-		"a colleague level": {map[string]any{"seat": "platform-lead",
-			"colleague": "admin"}, http.StatusBadRequest},
 		"a login outside the grammar": {map[string]any{"seat": "platform-lead",
 			"login": "Alice.Admin"}, http.StatusBadRequest},
 		"a login somebody holds": {map[string]any{"seat": "platform-lead",

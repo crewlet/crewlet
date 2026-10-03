@@ -63,7 +63,7 @@ func TestTheFirstPersonIsInvitedUnderATierAToken(t *testing.T) {
 	}
 	var out, errs bytes.Buffer
 	if err := runIAM([]string{"invite", "jane@example.com",
-		"-grants", strings.Join(grants, ","), "-colleague", "write",
+		"-grants", strings.Join(grants, ","),
 		"-config", tierA, "-api", base}, nil, &out, &errs); err != nil {
 		t.Fatalf("iam invite under a Tier A token on an empty estate: %v\n%s",
 			err, errs.String())
@@ -94,9 +94,6 @@ func TestTheFirstPersonIsInvitedUnderATierAToken(t *testing.T) {
 		if !slices.Contains(held.Grants, g) {
 			t.Errorf("the founder does not carry %s: %v", g, held.Grants)
 		}
-	}
-	if held.Colleague != iam.ColleagueWrite {
-		t.Errorf("the founder reaches the work at %q, want write", held.Colleague)
 	}
 
 	// AND THEY CAN SIGN IN with the password they chose, and the session

@@ -265,7 +265,7 @@ the grants land from:
 | Enrolment | Its authority | What the record refuses |
 |---|---|---|
 | Created by an administrator (`POST /iam/people`) | The administrator's own grants | Any grant they do not hold, before the first claim is taken |
-| Redeeming an invitation — the company's first person's included | The invitation, as its issuer wrote it, and the secret its link carries | A secret that is not the link's, a grant or a reach the invitation did not carry, an address it was not issued to, a seat other than the one it binds — or that one, once it is removed, an agent's or bound to somebody else — and a link already spent or aged out |
+| Redeeming an invitation — the company's first person's included | The invitation, as its issuer wrote it, and the secret its link carries | A secret that is not the link's, a grant the invitation did not carry, an address it was not issued to, a seat other than the one it binds — or that one, once it is removed, an agent's or bound to somebody else — and a link already spent or aged out |
 
 An enrolment is a sequence — the seat when it binds one, the address, then the
 login, then the person — and the authority in that table is checked **twice**:
@@ -421,8 +421,7 @@ a token declaring `people:manage`:
 ```sh
 export CREWLET_API_TOKEN=...   # the value of one of api.auth.tokens
 crewlet iam invite founder@example.com \
-  -grants state:read,audit:read,config:read,secrets:read,work:write,knowledge:write,config:write,secrets:write,fleet:operate,people:manage,sandbox:run \
-  -colleague write
+  -grants state:read,audit:read,config:read,secrets:read,work:write,knowledge:write,config:write,secrets:write,fleet:operate,people:manage,sandbox:run
 ```
 
 The command prints a link, shown once. The person opens it — the dashboard's
@@ -1162,19 +1161,17 @@ starts `pat:`, so the name always means a machine token. See [who a write is
 attributed to](../reference/api-endpoints.md#who-a-write-is-attributed-to).
 
 **It carries what it was minted with that its owner still holds.** The grants
-and the reach are named at the mint (`-grants`, `-colleague`); left out, the
-token carries every grant its owner holds that a token may carry, at the
-owner's own reach. On every request the minted set is cut to the owner's
-**current** grants and to this node's ceiling, and the reach to the narrower of
-the two — so demoting a person demotes every token they made, and nothing ever
-widens one.
+are named at the mint (`-grants`); left out, the token carries every grant its
+owner holds that a token may carry. On every request the minted set is cut to
+the owner's **current** grants and to this node's ceiling — so demoting a
+person demotes every token they made, and nothing ever widens one.
 
 **What a mint refuses:**
 
 | Refused | Why |
 |---|---|
 | `secrets:read` and `people:manage`, whatever the owner holds | Revealing a credential and deciding who may do anything are gestures that need a person present, and a token is what an attacker holding a pipeline's environment already has |
-| A grant the owner does not hold, or a reach wider than theirs | A token narrows its owner and never widens them |
+| A grant the owner does not hold | A token narrows its owner and never widens them |
 | A grant the **minting party** does not hold | Whoever mints a token sees its value once, so minting one for somebody else is holding their grants oneself — the same rule as an enrolment |
 | A **person's** token minted by anybody but that person — an administrator included | It acts as them, and its value is shown to whoever minted it |
 | A **service account's** token minted without `people:manage` | It has no login page, so nobody can mint for it as itself; minting for it is managing people |
@@ -2392,9 +2389,8 @@ The identity vocabulary above is what the engine *names*. What an operator sets
 today is smaller, and lives in two places:
 
 - **Tier A, `api.auth`** — `tokens`, the deployment's own credentials,
-  each carrying an id recorded as the author of anything written with it, the
-  `grants` it may use and the `colleague` level it reaches the company's work
-  at; `max_grants`, the ceiling above; `backend`, how people sign in; and the
+  each carrying an id recorded as the author of anything written with it and
+  the `grants` it may use; `max_grants`, the ceiling above; `backend`, how people sign in; and the
   `session`, `audit` and `local` blocks under it. `allow_anonymous_read`,
   `disabled` and `oidc` are all retired and refused by name — see
   [Configuration § Auth](configuration.md#auth) for what replaced each.
