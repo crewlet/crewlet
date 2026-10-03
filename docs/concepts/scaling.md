@@ -80,6 +80,13 @@ broker — the same router a data node's own seats go through, which answers
 from the node's own copy where it has one — carrying the node's own writes as a
 floor so whichever data node answers has applied them, and what it publishes about its turns is kept in
 exactly one data node's event log ([custody](../guides/deployment.md#custody-the-rows-of-a-node-without-data)).
+It joins no **fleet-wide consumer group** whose handler needs data — the
+custody group and each domain's wake feed — and takes its share of the ones
+that do not, inbound notifications and post-turn reflection: a group any node
+may attach hands a message to whichever member takes it first, so a stateless
+member of a group that reads the estate would answer its share of the messages
+from nothing. Every such group says which it is in one table the build holds
+against the code in both directions (`internal/engine/groups.go`).
 It is never counted as a copy: the trim, the eviction
 gate and the search fan-out read the role off the presence lease, and the
 capacity handshake reads the role AND the broker kind beside it — a broker

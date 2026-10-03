@@ -196,8 +196,13 @@ func (e *Engine) serveEstate(ctx context.Context) error {
 // wrote. A node without `data` cannot run beside such a node in any case — it
 // reaches the estate through the fleet's broker.
 func (e *Engine) takeCustody(ctx context.Context) error {
-	if e.local == nil || e.backends == nil || e.backends.Store == nil ||
+	if e.backends == nil || e.backends.Store == nil ||
 		e.backends.Fleet == nil || e.backends.Queue == nil {
+		return nil
+	}
+	// THROUGH THE ONE DOOR every fleet-wide group passes ([Engine.joins]),
+	// which keeps a node without `data` out of it.
+	if !e.joins(ctx, observe.CustodyGroup) {
 		return nil
 	}
 	keeper, err := observe.NewKeeper(e.backends.Store.Events(), e.backends.Fleet, e.id)

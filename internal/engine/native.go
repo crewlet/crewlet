@@ -961,6 +961,12 @@ func (e *Engine) startNativeFeeds(ctx context.Context) {
 			// absent for the same reason.
 			continue
 		}
+		// THROUGH THE ONE DOOR every fleet-wide group passes
+		// ([Engine.joins]): a feed reads its domain's log, applied
+		// only where the estate is held.
+		if !e.joins(ctx, translator.Source().Group) {
+			continue
+		}
 		feed, err := changefeed.New(changefeed.Options{
 			Opener: opener, Publisher: e.backends.Queue,
 			Claims: e.backends.Fleet, Translator: translator,

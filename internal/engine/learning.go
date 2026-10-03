@@ -250,6 +250,10 @@ func (e *Engine) attachReflection(ctx context.Context, c *Company) error {
 	if c == nil || e.backends == nil || e.backends.Queue == nil {
 		return nil
 	}
+	// THROUGH THE ONE DOOR every fleet-wide group passes ([Engine.joins]).
+	if !e.joins(ctx, learning.ReflectGroup) {
+		return nil
+	}
 	reflector, err := learning.NewReflector(c.Org, e.backends.Queue,
 		e.buildReflectionWorkers(c), e.learningBudget(c))
 	if err != nil {
