@@ -243,6 +243,9 @@ func TestAnUnreadableVerifierRefusesLikeAWrongPassword(t *testing.T) {
 		"bad base64":       "$argon2id$v=19$m=8192,t=1,p=1$!!!!$ZGlnZXN0",
 		"empty digest":     "$argon2id$v=19$m=8192,t=1,p=1$c2FsdHNhbHQ$",
 		"zero parallelism": "$argon2id$v=19$m=8192,t=1,p=0$c2FsdHNhbHQ$ZGlnZXN0",
+		// argon2 PANICS at zero passes rather than refusing them, so a
+		// verifier stating it must be unreadable before it is derived.
+		"zero passes": "$argon2id$v=19$m=8192,t=0,p=1$c2FsdHNhbHQ$ZGlnZXN0",
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()

@@ -435,7 +435,7 @@ func decode(verifier string) (Params, []byte, []byte, error) {
 	var threads int
 	if _, err := fmt.Sscanf(parts[3], "m=%d,t=%d,p=%d",
 		&params.Memory, &params.Time, &threads); err != nil ||
-		threads <= 0 || threads > 255 {
+		threads < 0 || threads > 255 {
 		return Params{}, nil, nil, errVerifier
 	}
 	params.Threads = uint8(threads)
@@ -444,9 +444,25 @@ func decode(verifier string) (Params, []byte, []byte, error) {
 		return Params{}, nil, nil, errVerifier
 	}
 	digest, err := base64.RawStdEncoding.DecodeString(parts[5])
-	if err != nil || len(digest) == 0 {
+	if err != nil {
 		return Params{}, nil, nil, errVerifier
 	}
 	params.KeyLen = uint32(len(digest))
+	if !params.derivable() {
+		return Params{}, nil, nil, errVerifier
+	}
 	return params, salt, digest, nil
+}
+
+// derivable reports whether p is a cost argon2 can derive at: at least one
+// pass, one lane and one byte of digest.
+//
+// argon2 PANICS below the first two rather than refusing them, and a digest of
+// nothing is no verifier at all. So a stored verifier outside it is unreadable
+// ([decode]) and answers as a wrong password does, rather than taking a
+// derivation slot and crashing the request that presented it — which is what a
+// verifier stating zero passes did, since only the lanes and the digest were
+// checked.
+func (p Params) derivable() bool {
+	return p.Time >= 1 && p.Threads >= 1 && p.KeyLen >= 1
 }
