@@ -461,10 +461,8 @@ func (c *Configs) Chain(ctx context.Context) ([]Revision, error) {
 // Every node keeps its OWN copy of every revision it ever met, in an
 // append-only table, and nothing deleted from it — so a company that edits
 // its configuration daily accumulates a row per edit per node for the life of
-// the deployment, and each row is a copy of the whole document. It is also
-// where a pre-split revision's `roles[].email` lives, which is why this ships
-// beside `crewlet config scrub`: the scrub erases what is inside a row it
-// keeps, and this is what eventually removes the row.
+// the deployment, and each row is a copy of the whole document — every seat's
+// address among it, which this is what eventually removes.
 //
 // # The chain is kept whatever its age
 //

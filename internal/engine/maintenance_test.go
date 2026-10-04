@@ -57,10 +57,8 @@ func TestTheEngineSweepsEveryShortHorizonTable(t *testing.T) {
 		// THE CONFIGURATION ARCHIVE, which had no horizon at all: every
 		// node adopts its own copy of every revision it has ever met,
 		// one row per config write holding the whole document, and
-		// nothing deleted from it. It is also where a pre-split
-		// revision's roles[].email sits, which is the half `crewlet
-		// config scrub` reaches — the scrub erases what is inside a row
-		// this keeps, and this is what eventually removes the row.
+		// nothing deleted from it — every seat's address among it,
+		// which this is what eventually removes.
 		//
 		// PER NODE for the reason the ops ledgers below are: each node
 		// holds its own copy, so a singleton would tidy the node with
