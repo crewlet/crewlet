@@ -129,12 +129,11 @@ var errNoCore = errors.New("engine: the native tracker and knowledge base run " 
 // without waiting for hydration: seat acquisition is what waits, through
 // [Engine.StateLogHydrated].
 //
-// IT DOES NOT APPLY THE CHART. The projects and containers a chart names
-// follow a PUBLISHED company, at the position on the chart's log its view was
-// composed at ([Company.ChartAt]), through [Engine.convergeOn] — which both
-// callers reach once they have composed one. Applying it here as well would
-// write every project and container twice on a node's first company, and
-// from a chart no view has read yet.
+// IT DOES NOT APPLY THE CHART. The projects and containers a company's org
+// names follow a PUBLISHED company, stamped with the instant its revision was
+// activated, through [Engine.followCompany] — which both callers reach once
+// they have installed one. Applying it here as well would write every project
+// and container twice on a node's first company.
 //
 // The store and the fleet are not nil-checked: [New] refuses a Backends
 // without either, so every engine that reaches this holds both.

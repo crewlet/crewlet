@@ -356,7 +356,7 @@ func TestAChartApplyWithNoActivationIsRefused(t *testing.T) {
 // The guard is only worth having if a reader can see it: the reconcile compares
 // the stored number against the activation it is applying, so a column the
 // applier never filled would make every node's comparison read zero and every
-// reconcile a write. And the column it replaced — a chart log position nothing
+// reconcile a write. And the column it replaced — a log position nothing
 // writes any more — is gone, because a guard column nothing fills reads as a
 // fact about the row and is exactly the kind of value a later reader compares.
 func TestTheChartEpochIsWrittenOntoTheProjectRow(t *testing.T) {

@@ -53,13 +53,10 @@ import (
 //     whichever writer sees the seat again first: the sweep, or a node
 //     registering the seat on an apply.
 //   - UNKNOWN IS NEVER ABSENT. The sweep reads the roster of the company the
-//     fleet is running, and a roster it cannot read, a node that has not
-//     applied the revision the fleet is pointed at, or one whose org chart
-//     view does not yet carry every record the chart log holds, stamps
-//     nothing and retires nothing. A store blip or a lagging duty holder must
-//     not be able to delete a live seat's mail — and a hire moves the chart
-//     with no revision at all, so a duty holder gated on the revision alone
-//     read a seat hired on another node as gone.
+//     fleet is running, and a roster it cannot read, or a node that has not
+//     applied the activation the fleet is pointed at, stamps nothing and
+//     retires nothing. A store blip or a lagging duty holder must not be able
+//     to delete a live seat's mail.
 //   - EVERY WRITE IS A COMPARE-AND-SET. Two sweeps that overlap during a duty
 //     handoff read the same record and exactly one wins the mark that starts a
 //     retirement; a returning seat's registration that lands first makes the
@@ -216,10 +213,8 @@ type SeatRunRetirer func(ctx context.Context, handle, owner string, epoch int64)
 // along as the label every log line and every refusal reads.
 //
 // An error means UNKNOWN, never "no seats": it is returned when the pointer
-// cannot be read, when this node has not applied the revision it names, when
-// its chart view does not yet carry every record the chart log holds (it is
-// behind, or holds a record it could not apply), and [ErrNoActiveRevision]
-// when nothing has ever been activated.
+// cannot be read, when this node has not applied the activation it names, and
+// [ErrNoActiveRevision] when nothing has ever been activated.
 type SeatRoster func(ctx context.Context) ([]placement.Seat, error)
 
 // MailboxOptions configures [NewMailboxes].

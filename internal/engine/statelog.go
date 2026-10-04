@@ -2148,23 +2148,7 @@ const (
 //  4. THE APPLIERS START AGAIN, whatever happened: a join that found no
 //     donor leaves the node as it was, below the floor and refusing, and a
 //     node with no appliers at all would be worse than that.
-//
-//  5. AND THE CHART VIEW IS REBUILT AFTER THEY DO. An adoption REPLACES the
-//     replicated file wholesale, so this node's chart rows are now a donor's
-//     and no apply happened to say so: a node that waited for the next
-//     committed record would serve a view over rows it abandoned, for
-//     however long nobody is hired, while reporting itself caught up —
-//     because it IS caught up, its cursor having moved without its view.
-//     The periodic trigger would find it within its interval; doing it here
-//     means the node rejoins with a correct view rather than a wrong one for
-//     up to that long.
-//
-//     AFTER THE RELAUNCH AND NOT BEFORE IT, which is what makes it safe to
-//     do at all: rebuilding the view publishes a company, and everything
-//     that converges on a published company includes writes of its own — the
-//     tracker's projects, the knowledge containers. A write published while
-//     this node's appliers are halted waits out its budget for an apply that
-//     cannot happen, which would turn every rejoin into a stall.
+
 func (e *Engine) rejoin(ctx context.Context, s *stateLog) error {
 	// ONE RECOVERY AT A TIME: a reanchor moving a checkpoint in the file
 	// this is about to replace would be writing into a file with no name.

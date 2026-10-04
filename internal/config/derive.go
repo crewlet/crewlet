@@ -161,7 +161,7 @@ func Derive(c *Company) Derived {
 }
 
 // DeriveFrom is [Derive] over an organization that is already built — the
-// company VIEW a node composes from its chart rows.
+// one a node builds when it applies an epoch.
 //
 // # Why the derivation has two entry points
 //

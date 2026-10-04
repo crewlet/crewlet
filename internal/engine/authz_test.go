@@ -15,9 +15,9 @@ import (
 // A NODE WITH NO COMPANY SAYS SO, RATHER THAN DEMOTING EVERY LEAD.
 //
 // The seam this replaces opened with `if c == nil || c.Org == nil { return
-// false }`, and a node holds no company while it is booting, while it is
-// installing a revision, and for as long as it is behind the chart log. Every
-// one of those told a lead they lead nobody — a refusal naming the project
+// false }`, and a node holds no company while it is booting, before its first
+// revision is applied, and while it is installing one. Every one of those told
+// a lead they lead nobody — a refusal naming the project
 // rather than the lag, on a node reporting itself healthy.
 //
 // Asserted on EVERY method, because the collapse was written once per method

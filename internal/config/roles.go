@@ -599,11 +599,10 @@ func (r *Role) Seat() *org.Role {
 		}
 	}
 	// AND THE CODE HOST'S, which this conversion used to DROP. Everything
-	// that needed a seat's app read it off the company document instead —
-	// and a stored revision carries no seats at all, so each of those walks
-	// silently became a walk of nothing. A seat is its chart rows plus this
-	// runtime document now, so a fact about a seat that is in neither is a
-	// fact the running company cannot see.
+	// that needed a seat's app then read it off the document beside the
+	// running organisation, which is a second walk that can disagree with
+	// the first — a fact about a seat that the running seat does not carry
+	// is a fact the running company cannot see.
 	if g := r.Integrations.GitHub; g != nil {
 		seat.GitHub = &org.GitHubApp{
 			Tier: g.Tier, Repos: append([]string(nil), g.Repos...),

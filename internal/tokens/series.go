@@ -166,9 +166,8 @@ func (g Group) key(c Cell, seats Seats) (string, bool) {
 //
 // Not "unknown", which this package already spends on a dimension the row
 // failed to carry: a root seat's unit is not missing, there is none. And it is
-// a key no unit can hold: a unit's key on the chart is an address, which
-// `chart.NormalizeKey` folds to carry no whitespace, and this has a space in
-// it.
+// a key no unit can hold: a unit's key is an address, which
+// [org.NormalizeKey] folds to carry no whitespace, and this has a space in it.
 const unattachedUnit = "no unit"
 
 // DefaultSeriesGroups is how many bands a stacked chart carries before the

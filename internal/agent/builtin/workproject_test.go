@@ -496,11 +496,11 @@ var (
 	chartRefuses = projectChart{}
 )
 
-// chartUnknown is a chart that could not answer — a node booting, applying a
-// revision, or behind the chart log. It is a fixture rather than an error
+// chartUnknown is a chart that could not answer — a node booting, or one
+// running no company yet. It is a fixture rather than an error
 // literal at the call sites because the outcome it drives is the one the
 // two-valued seam could not express at all.
-var chartUnknown = projectChart{err: errors.New("this node is behind the chart log")}
+var chartUnknown = projectChart{err: errors.New("this node runs no company yet")}
 
 func projectRegistry(t *testing.T, trk *fakeTracker, chart authz.Chart) *tools.Registry {
 	return projectRegistryIn(t, trk, chart, "")
@@ -533,8 +533,8 @@ func projectRegistryIn(t *testing.T, trk *fakeTracker, chart authz.Chart,
 // enough for the operator half of this authority, so a chart that could not
 // answer would land a lead's edit as an operator's — or, for a seat, refuse
 // it naming the lead relation rather than the lag. A node holds no company
-// while it is booting, while it is installing a revision, and for as long as
-// it is behind the chart log, and none of those is "you do not lead this".
+// while it is booting, before its first revision is applied, and while it is
+// installing one, and none of those is "you do not lead this".
 //
 // TOLD TO TRY AGAIN, which is the difference that matters to whoever is
 // holding the keyboard: they try again and it works, rather than going to
@@ -555,7 +555,7 @@ func TestWriteProjectRefusesWhenTheChartCannotAnswer(t *testing.T) {
 		t.Errorf("the write landed with authority %+v, decided without the "+
 			"one relation it turns on", trk.tagAuthority[0])
 	}
-	for _, want := range []string{"could not decide", "chart"} {
+	for _, want := range []string{"could not decide", "no company yet"} {
 		if !strings.Contains(got.Output, want) {
 			t.Errorf("the refusal does not say %q:\n%s", want, got.Output)
 		}

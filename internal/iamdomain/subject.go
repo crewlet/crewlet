@@ -63,14 +63,13 @@
 // and every reading of them ([Reader.SeatHolders], [Reader.SeatBindings], the
 // notify registry's standing, the request path's seat table, the
 // dangling-binding rule) — names the seat by the handle it was
-// CREATED under: `chart.Seat.Origin`, the same anchor ADR-0026 derives the
-// agent id from, which no rename moves and the chart never issues twice.
+// CREATED under: [org.Role.Origin], the same anchor ADR-0026 derives the
+// agent id from, which no rename moves.
 //
-// An administrator names a seat by any address it answers to; the bind
-// resolves that address through the chart's own resolution and claims the
-// identity it names ([Writer.seatIdentity]). Every reader turns the identity
-// back into a seat through the chart's IDENTITY lookup and never by comparing
-// it to a handle. Keyed on the handle typed at the time, a rename made one seat
+// An administrator names a seat by its handle; the bind resolves it through
+// the running organisation and claims the identity it names
+// ([Writer.seatOf]). Every reader turns the identity back into a seat through
+// [org.Role.Origin] and never by comparing it to a handle. Keyed on the handle typed at the time, a rename made one seat
 // claimable twice (two subjects that never contend), a removal's tombstone
 // under the old handle withheld the seat's next holder for ever, and a new seat
 // that took the freed handle inherited somebody else's suspension.
@@ -88,10 +87,9 @@ import (
 // ObjectKind is what a subject on the iam log addresses.
 //
 // A NAMED STRING TYPE whose Valid is false for a kind this build has never
-// heard of — and the literal is RETAINED either way, for the reason
-// [chart.ObjectKind] gives: a newer peer publishes a kind this build does not
-// know, and the deferral this build files it under is reported to an operator
-// with that literal in it.
+// heard of — and the literal is RETAINED either way: a newer peer publishes a
+// kind this build does not know, and the deferral this build files it under is
+// reported to an operator with that literal in it.
 type ObjectKind string
 
 // The ten kinds.

@@ -24,9 +24,8 @@ import (
 // nothing reports it, because a blind is opaque by construction.
 //
 // There were two. The org chart's was minted on demand for a keyed address
-// index no chart row holds — the chart matches on the address's normalised
-// form — and it was the one mint with no guard against a deleted key. It went
-// with the unwired index it was for; see [Engine.chartSealer].
+// index nothing ever held, and it was the one mint with no guard against a
+// deleted key. It went with the unwired index it was for.
 //
 // # Every key is minted behind a guard
 //

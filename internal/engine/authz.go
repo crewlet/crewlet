@@ -20,9 +20,9 @@ import (
 //	c := e.Company()
 //	if c == nil || c.Org == nil { return false }
 //
-// A node holds no company while it is booting, while it is installing a
-// revision, and for as long as it is behind the chart log. Every one of those
-// moments answered "you do not lead this project" about a person who leads it
+// A node holds no company while it is booting, before its first revision is
+// applied, and while it is installing one. Every one of those moments
+// answered "you do not lead this project" about a person who leads it
 // — so a lead was locked out of their own project's policy by a node that was
 // merely lagging, the refusal named the project rather than the lag, and the
 // node reported itself healthy throughout. The two facts are opposite and were

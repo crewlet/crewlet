@@ -294,7 +294,7 @@ func (e *Engine) refreshParties(ctx context.Context, c *Company) {
 // running turn may be reading.
 func (e *Engine) rebuildPartiesLocked(c *Company, standing notify.Standing) {
 	// ONE SNAPSHOT for both halves, because a seat's address and its contact
-	// ids are both `${VAR}` references a chart row carries, and two reads of
+	// ids may both be `${VAR}` references, and two reads of
 	// the resolver could straddle a refresh and index the seat's address and
 	// its identities against two different stores.
 	lookup := e.resolver().LookupOK

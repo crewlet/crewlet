@@ -192,7 +192,7 @@ func firing(w *bindingWatch) (statelog.Reading, bool) {
 // A RESIDUE YOUNGER THAN THE GRACE DOES NOT FIRE — the control the alarm is
 // built around — and one past it fires within a beat.
 //
-// A bind racing a removal, or a hire this node's chart applier reaches a few
+// A bind racing a removal, or a hire in a revision this node applies a few
 // seconds late, is a dangling binding for moments. The alarm fires once a
 // residue has been FOUND by this node's own observations for longer than the
 // stall grace, measured from the first that found it to the latest — and not a
@@ -408,10 +408,10 @@ func TestAFailingWalkIsSaidWhenItStartsAndWhenItEnds(t *testing.T) {
 //
 // The alarm is evaluated every [statelog.AlarmInterval] on every node, so what a
 // beat costs has to be bounded by what CHANGED: a beat on which neither the
-// identity applier nor the chart applier committed reads nothing at all and
+// identity applier committed nor the company moved reads nothing at all and
 // extends the residues to now; a sign-in — the bulk of the identity log —
-// re-reads the bindings and asks the chart about none of them; and only a
-// chart that moved, or a binding that did, costs a seat read.
+// re-reads the bindings and asks the company about none of them; and only a
+// company that moved, or a binding that did, costs a seat read.
 func TestABeatReadsNothingThatHasNotMoved(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()

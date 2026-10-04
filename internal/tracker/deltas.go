@@ -252,7 +252,7 @@ func documentDeltas(ctx context.Context, tx *sql.Tx, s Subject,
 //
 // THE CHART-OWNED FIELDS AND THE LEAD-OWNED ONES TOGETHER, because one record
 // may carry either: a chart apply rewrites the name, the purpose and the unit
-// stamped with the chart log's position, and a lead's edit rewrites the field
+// stamped with the activation they came from, and a lead's edit rewrites the field
 // declarations, the default assignee, the target date and the archive flag. A
 // comparison that named only one half would be empty for every write of the
 // other.

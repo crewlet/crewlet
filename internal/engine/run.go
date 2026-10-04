@@ -1200,7 +1200,7 @@ func New(ctx context.Context, opts Options) (_ *Engine, err error) {
 	// THE CORE'S DUTIES — the log's own trim and the identity estate's —
 	// and this node's own usage publisher, on every node that publishes,
 	// company or not: a fleet nobody has configured still writes its
-	// identity and chart logs, and without the trim a domain's log only
+	// identity log, and without the trim a domain's log only
 	// ever grows, to its ceiling, where appends are refused. Beside the
 	// sweep and after the node exists for the same reason: each duty is
 	// claimed under the node's incarnation, and one that ran before the

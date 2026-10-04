@@ -359,7 +359,7 @@ func TestEveryRegisteredDomainHasACeilingCase(t *testing.T) {
 // offer's terms are compared in and the order every operator surface reports.
 //
 // AND THE SET: the org chart is part of the company document, applied with
-// every revision, so the core runs exactly these five logs and no chart log.
+// every revision, so the core runs exactly these five logs.
 func TestTheRegisteredOrderIsTheDeclaredOrder(t *testing.T) {
 	want := []string{
 		tracker.Domain{}.Name(),

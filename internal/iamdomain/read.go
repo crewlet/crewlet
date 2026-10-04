@@ -60,10 +60,9 @@ type ReaderOptions struct {
 	// DB is the replicated estate. REQUIRED.
 	DB *store.DB
 
-	// Log is this domain's read authority. REQUIRED, for the reason
-	// internal/chart's reader states: without it every read level is a
-	// label rather than a guarantee, and a degradation invisible in the
-	// answer is worse than a refusal.
+	// Log is this domain's read authority. REQUIRED: without it every read
+	// level is a label rather than a guarantee, and a degradation invisible
+	// in the answer is worse than a refusal.
 	Log *statelog.Reader
 
 	// Committed is this node's applied position and Lag how far behind the
@@ -1111,12 +1110,11 @@ func (r *Reader) HeldSeats(ctx context.Context) (map[string]bool, error) {
 // and nothing about what that means for a Slack mention.
 type SeatHolder struct {
 	// Seat is the seat's IDENTITY — the handle it was created under, which
-	// no rename moves and the chart never issues twice (ADR-0027) — and
-	// never the handle it answers to now. A reader turns it into a seat by
-	// the chart's identity lookup ([chart.Reader.SeatByIdentity], or
-	// [org.Role.Origin] over a built tree), never by comparing it to a
-	// handle: after a rename the two differ, and after the old handle is
-	// reused they name different seats.
+	// no rename moves (ADR-0027) — and never the handle it answers to now.
+	// A reader turns it into a seat by [org.Role.Origin] over the running
+	// organisation, never by comparing it to a handle: after a rename the
+	// two differ, and after the old handle is reused they name different
+	// seats.
 	Seat string
 
 	// Person is who holds it, or who last held it before a removal.

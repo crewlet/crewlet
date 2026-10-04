@@ -85,10 +85,10 @@ type Applier struct {
 // NewApplier builds the identity estate's applier for one node.
 //
 // directory is called after a committed batch that moved a seat's standing —
-// see the field. AFTER the commit and never inside the transaction, for the
-// reason internal/chart's view trigger gives: the store re-runs the body of an
-// attempt that failed transiently, and a listener told about rows that then
-// rolled back would rebuild from rows no node holds.
+// see the field. AFTER the commit and never inside the transaction, because
+// the store re-runs the body of an attempt that failed transiently, and a
+// listener told about rows that then rolled back would rebuild from rows no
+// node holds.
 func NewApplier(nodeID string, directory func()) *Applier {
 	return &Applier{NodeID: nodeID, directory: directory}
 }

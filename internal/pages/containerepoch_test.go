@@ -50,8 +50,8 @@ func (r *roundTrip) container(key string) pages.Container {
 // A CONTAINER IS STAMPED WITH THE ACTIVATION ITS SETTINGS CAME FROM, and an
 // older activation applied late writes nothing.
 //
-// A node whose chart applier is behind used to rewrite every container's name
-// and purpose back to its own old ones — the same walk-back the chart's
+// A node applying an older activation late used to rewrite every container's
+// name and purpose back to its own old ones — the same walk-back the chart's
 // projects had — because nothing on the row said which chart had written it.
 func TestAnOlderChartDoesNotWalkAContainerBack(t *testing.T) {
 	t.Parallel()

@@ -5,17 +5,13 @@ import "strings"
 // ---- the unit seam ------------------------------------------------------ //
 //
 // A unit reference stored here is a STRING, and the same unit answers to
-// several of them. Its KEY is an ADDRESS in the org chart: the chart mints one
-// when the unit is created, and a rename moves it — while the key the unit was
-// CREATED under and every key it has answered to since go on resolving to it
-// (internal/chart, where a key is not an identity). And a unit keyed before
-// the chart gave units keys — or built in Go with none — answers to its NAME.
-// Which spelling a row holds depends on when it was written, because a task's
-// `filed_unit` is a record of what was true and nothing rewrites it: work
-// filed before a rename holds the key the unit had then. So every question
-// about a unit — what to store, what to display, which rows to match, whose
-// lead to wake — goes through one resolution, and the chart is the only thing
-// that can perform it.
+// several of them: its KEY — the unit's `id` in the company document — and,
+// for a unit built with no key, its NAME. Which spelling a row holds depends
+// on when it was written, because a task's `filed_unit` is a record of what
+// was true and nothing rewrites it. So every question about a unit — what to
+// store, what to display, which rows to match, whose lead to wake — goes
+// through one resolution, and the running organisation is the only thing that
+// can perform it.
 
 // Units is what a CHART can answer about a unit.
 //

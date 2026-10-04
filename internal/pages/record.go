@@ -29,13 +29,12 @@ import (
 // # What each version added
 //
 //   - 1: every shape this domain has.
-//   - 2: RETIRED. The field it carried — `chart_epoch`, a container's stamp
-//     of the configuration activation its settings were written from — does
-//     not exist in this build: a container is stamped by the org chart's log
-//     position instead, at 3. The position does not take the number over,
-//     because a version is a statement about which fields a record may
-//     carry, and one number naming two different fields is two builds
-//     disagreeing about what a record at it holds.
+//   - 2: RETIRED, and not reused. A version is a statement about which
+//     fields a record may carry, and once two builds have read one number as
+//     two different fields the number means nothing either can trust: 2 once
+//     named a container's activation stamp, a later build stamped containers
+//     with a log position at 3 instead, and the stamp is the activation's
+//     again at 3.
 //   - 3: a container's settings carry the activation they were derived
 //     from ([ContainerPayload.ChartEpoch]).
 const RecordVersion = 3
