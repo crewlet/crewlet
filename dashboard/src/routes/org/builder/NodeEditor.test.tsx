@@ -117,8 +117,6 @@ function connected(): CompanyDocument {
     github: { enabled: true, webhook_secret: "__redacted__" },
     slack: {},
     mattermost: { enabled: true, url: "https://chat.example.com", team: "acme" },
-    jira: { enabled: true },
-    confluence: { enabled: true },
   };
   doc.units![0]!.roles![1] = {
     name: "Dev",
@@ -135,7 +133,6 @@ function connected(): CompanyDocument {
       slack: {
         bot_token: "Bearer sk-live-${SUFFIX}",
         signing_secret: "${DEV_SLACK_SECRET}",
-        channel: "C1",
       },
       mattermost: { bot_token: "${DEV_MM_TOKEN}", channel: "eng", username: "dev-bot" },
     },
@@ -740,12 +737,16 @@ describe("seat fields", () => {
 describe("integrations", () => {
   test("a tool the company has not connected says so and links to Integrations", () => {
     edit(keyedState(fixtureCompany()), "seat:dev");
-    for (const tool of ["GitHub", "Slack", "Mattermost", "Jira", "Confluence"]) {
+    for (const tool of ["GitHub", "Slack", "Mattermost"]) {
       const note = screen.getByText(`${tool} is not connected.`, { exact: false });
       expect(within(note).getByRole("link").getAttribute("href")).toBe("#/settings/integrations");
     }
     expect(screen.queryByLabelText(labelled("Access tier"))).toBeNull();
-    expect(screen.queryByLabelText(labelled("Jira project"))).toBeNull();
+    // WHAT A SEAT OWNS IS NO TOOL'S. The tracker project and the knowledge
+    // space are the document's own fields, whichever backend runs either, so
+    // they are drawn with no vendor connected.
+    expect(field("Tracker project")).toBeDefined();
+    expect(field("Knowledge space")).toBeDefined();
     // GitLab provisioning is connected in the fixture.
     expect(field("Access level")).toBeDefined();
   });
@@ -755,7 +756,9 @@ describe("integrations", () => {
     // A tool's section is a part of Integrations, and is heard as one.
     expect(screen.getByRole("heading", { name: "Integrations", level: 2 })).toBeDefined();
     expect(screen.getByRole("heading", { name: "GitHub", level: 3 })).toBeDefined();
-    expect((field("Slack channel ID") as HTMLInputElement).value).toBe("C1");
+    // A seat's Slack app carries no channel: there is nothing here to set.
+    expect(screen.queryByLabelText(labelled("Slack channel ID"))).toBeNull();
+    expect(screen.getByText(/speaks through a Slack app of its own/)).toBeDefined();
     expect((field("Mattermost channel") as HTMLInputElement).value).toBe("eng");
     expect(screen.queryByLabelText(labelled("Bot username"))).toBeNull();
     expect(
@@ -763,11 +766,9 @@ describe("integrations", () => {
         "The engine provisions this bot, because its token names a secret store entry. Changing the username would make the provisioner find or create a second bot.",
       ),
     ).toBeDefined();
-    expect(
-      screen.getByText("Where unrouted work for this seat goes. Not a permission."),
-    ).toBeDefined();
-    expect(field("Jira project")).toBeDefined();
-    expect(field("Confluence space")).toBeDefined();
+    expect(screen.getByText(/Where unrouted work for this seat goes/)).toBeDefined();
+    expect(field("Tracker project")).toBeDefined();
+    expect(field("Knowledge space")).toBeDefined();
     expect(screen.getByText("Not the Datadog fallback.")).toBeDefined();
     // Already enrolled: its block exists, so a tier says nothing about enrolling.
     expect(screen.queryByText(/This enrols the seat in GitHub/)).toBeNull();
@@ -825,9 +826,8 @@ describe("integrations", () => {
     expect(screen.getByText(/This enrols the seat in GitHub/)).toBeDefined();
   });
 
-  test("a Slack channel needs the seat's own app, and the Datadog fallback is named on its seat", () => {
+  test("a seat with no chat app of its own says so, and the Datadog fallback is named on its seat", () => {
     edit(keyedState(connected()), "seat:sre");
-    expect(screen.queryByLabelText(labelled("Slack channel ID"))).toBeNull();
     expect(screen.getByText(/has no Slack app of its own/)).toBeDefined();
     // The same for a Mattermost channel, which a bot of the seat's own carries.
     expect(screen.queryByLabelText(labelled("Mattermost channel"))).toBeNull();
@@ -891,26 +891,26 @@ describe("problems", () => {
   // A problem about a field this form does not draw must not be attached to
   // one: it would be reported nowhere a reader can see it.
   test("a problem about a field the form does not draw is listed at the top", () => {
-    // The fixture company has not connected Jira, so the seat's Jira field is
-    // not drawn at all.
+    // The fixture company has not connected GitHub, so the seat's GitHub
+    // fields are not drawn at all.
     const state = checkWithProblems(keyedState(fixtureCompany()), [
       problemAt(
-        ["units", 0, "roles", 1, "integrations", "jira", "project"],
-        "units[0].roles[1].integrations.jira.project: names no project",
+        ["units", 0, "roles", 1, "integrations", "github", "tier"],
+        "units[0].roles[1].integrations.github.tier: names no tier",
       ),
     ]);
     edit(state, "seat:dev");
     const alerts = screen.getAllByRole("alert");
     expect(alerts).toHaveLength(1);
-    expect(alerts[0]!.textContent).toContain("names no project");
+    expect(alerts[0]!.textContent).toContain("names no tier");
     expect(describesAControl(alerts[0]!)).toBe(false);
     cleanup();
 
-    // The same for a unit, whose Confluence field is not drawn either.
+    // The same for a unit, whose tool credentials are a fact, not a field.
     const unit = checkWithProblems(keyedState(fixtureCompany()), [
       problemAt(
-        ["units", 0, "integrations", "confluence", "space"],
-        "units[0].integrations.confluence.space: names no space",
+        ["units", 0, "mcp_env", "tracker", "TOKEN"],
+        "units[0].mcp_env.tracker.TOKEN: names no secret",
       ),
     ]);
     edit(unit, "unit:Engineering");
@@ -1105,7 +1105,7 @@ describe("a unit", () => {
     apply();
     const found = locate(view.state().draft, "unit:Engineering");
     expect(found?.kind === "unit" && found.node.data.schedules?.[0]?.enabled).toBe(false);
-    expect(screen.getByText(/Knowledge/)).toBeDefined();
+    expect(screen.getByText(/^Knowledge$/)).toBeDefined();
     expect(screen.getByText("Free-text references, not a read scope.")).toBeDefined();
   });
 });

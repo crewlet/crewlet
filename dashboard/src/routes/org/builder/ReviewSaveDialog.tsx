@@ -101,7 +101,7 @@ export function changeSentences(changes: ChangeSet): { changes: string[]; conseq
     );
   }
   for (const r of changes.routing) {
-    const tool = r.tool === "jira" ? "Jira project" : "Confluence space";
+    const tool = r.owns === "project" ? "tracker project" : "knowledge space";
     const shared = r.shared
       ? " More than one owner declares it, and the engine routes to the first it finds."
       : "";

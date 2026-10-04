@@ -923,6 +923,10 @@ export interface ConfigRole {
   sandbox?: Record<string, unknown>;
   placement?: Record<string, unknown>;
   integrations?: ConfigRoleIntegrations;
+  /** A root seat's own tracker project; a seat inside a unit takes its unit's. Guarded. */
+  project?: string;
+  /** A root seat's own knowledge container, as [project]. Guarded. */
+  space?: string;
   schedules?: ScheduleSpec[];
   [key: string]: unknown;
 }
@@ -952,10 +956,8 @@ export interface ConfigRoleIntegrations {
     webhook_secret?: string;
     [key: string]: unknown;
   };
-  slack?: { bot_token?: string; signing_secret?: string; channel?: string; [key: string]: unknown };
+  slack?: { bot_token?: string; signing_secret?: string; [key: string]: unknown };
   mattermost?: { bot_token?: string; username?: string; channel?: string; [key: string]: unknown };
-  jira?: { project?: string; [key: string]: unknown };
-  confluence?: { space?: string; [key: string]: unknown };
   [key: string]: unknown;
 }
 
@@ -981,7 +983,6 @@ export interface ConfigUnit {
   project?: string;
   /** The knowledge container this unit writes pages in. Guarded. */
   space?: string;
-  integrations?: { jira?: { project?: string }; confluence?: { space?: string } };
   roles?: ConfigRole[];
   children?: ConfigUnit[];
   schedules?: ScheduleSpec[];

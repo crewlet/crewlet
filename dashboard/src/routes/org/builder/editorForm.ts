@@ -65,8 +65,10 @@ export interface UnitForm {
   readonly goals: readonly string[];
   readonly channel: string;
   readonly knowledge: readonly string[];
-  readonly jira: string;
-  readonly confluence: string;
+  /** The tracker project the unit owns (`project`). */
+  readonly project: string;
+  /** The knowledge container the unit owns (`space`). */
+  readonly space: string;
   /** Schedule name to whether it runs. */
   readonly schedules: Readonly<Record<string, boolean>>;
 }
@@ -94,13 +96,14 @@ export interface SeatForm {
   readonly schedules: Readonly<Record<string, boolean>>;
   readonly githubTier: string;
   readonly githubRepos: readonly string[];
-  readonly slackChannel: string;
   readonly mattermostChannel: string;
   readonly mattermostUsername: string;
   /** The seat's own GitLab access level override; "" for the company default. */
   readonly accessLevel: string;
-  readonly jira: string;
-  readonly confluence: string;
+  /** The tracker project a root seat owns (`project`). */
+  readonly project: string;
+  /** The knowledge container a root seat owns (`space`). */
+  readonly space: string;
 }
 
 /** A calendar window a `token_budget:` caps: `day`, `week` or `month`. */
@@ -148,8 +151,8 @@ export function unitForm(data: ConfigUnit): UnitForm {
     goals: strings(data.goals),
     channel: text(data.channel),
     knowledge: strings(data.knowledge),
-    jira: text(getPath(data, ["integrations", "jira", "project"])),
-    confluence: text(getPath(data, ["integrations", "confluence", "space"])),
+    project: text(data.project),
+    space: text(data.space),
     schedules: scheduleToggles(data),
   };
 }
@@ -200,12 +203,11 @@ export function seatForm(data: ConfigRole, accessLevel: string): SeatForm {
     schedules: scheduleToggles(data),
     githubTier: text(getPath(data, ["integrations", "github", "tier"])),
     githubRepos: strings(getPath(data, ["integrations", "github", "repos"])),
-    slackChannel: text(getPath(data, ["integrations", "slack", "channel"])),
     mattermostChannel: text(getPath(data, ["integrations", "mattermost", "channel"])),
     mattermostUsername: text(getPath(data, ["integrations", "mattermost", "username"])),
     accessLevel,
-    jira: text(getPath(data, ["integrations", "jira", "project"])),
-    confluence: text(getPath(data, ["integrations", "confluence", "space"])),
+    project: text(data.project),
+    space: text(data.space),
   };
 }
 
@@ -310,8 +312,8 @@ export function unitParts(key: NodeKey, initial: UnitForm, form: UnitForm): Edit
     ...changed(["goals"], listValue(initial.goals), listValue(form.goals)),
     ...textPart(["channel"], initial.channel, form.channel, line),
     ...changed(["knowledge"], listValue(initial.knowledge), listValue(form.knowledge)),
-    ...textPart(["integrations", "jira", "project"], initial.jira, form.jira, line),
-    ...textPart(["integrations", "confluence", "space"], initial.confluence, form.confluence, line),
+    ...textPart(["project"], initial.project, form.project, line),
+    ...textPart(["space"], initial.space, form.space, line),
   ];
   if (set.length > 0) parts.push({ type: "updateUnit", target: key, set });
   if (form.lead !== initial.lead) {
@@ -394,12 +396,6 @@ export function seatParts(
       listValue(form.githubRepos),
     ),
     ...textPart(
-      ["integrations", "slack", "channel"],
-      initial.slackChannel,
-      form.slackChannel,
-      line,
-    ),
-    ...textPart(
       ["integrations", "mattermost", "channel"],
       initial.mattermostChannel,
       form.mattermostChannel,
@@ -411,8 +407,8 @@ export function seatParts(
       form.mattermostUsername,
       line,
     ),
-    ...textPart(["integrations", "jira", "project"], initial.jira, form.jira, line),
-    ...textPart(["integrations", "confluence", "space"], initial.confluence, form.confluence, line),
+    ...textPart(["project"], initial.project, form.project, line),
+    ...textPart(["space"], initial.space, form.space, line),
   ];
   const levelChanged = form.accessLevel !== initial.accessLevel;
   if (set.length > 0 || levelChanged) {

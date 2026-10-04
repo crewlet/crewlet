@@ -94,11 +94,10 @@ describe("an untouched form", () => {
       name: "Dev",
       email: "dev@example.com ",
       contact: { github_login: " dev" },
+      project: "OPS ",
+      space: " ENG",
       integrations: {
-        slack: { channel: "C1 " },
         mattermost: { channel: " eng", username: "dev-bot " },
-        jira: { project: "OPS " },
-        confluence: { space: " ENG" },
       },
     };
     const initial = seatForm(padded, "");
@@ -134,7 +133,7 @@ describe("an untouched form", () => {
       name: "Ops",
       type: "team ",
       channel: " ops",
-      integrations: { jira: { project: " OPS" } },
+      project: " OPS",
     };
     const unitInitial = unitForm(unit);
     expect(unitParts("unit:Ops", unitInitial, { ...unitInitial, purpose: "Run it" })).toEqual([
@@ -271,13 +270,17 @@ describe("a seat", () => {
     expect(seatParts("seat:a", mapped, form, form, { editableHandle: false })).toEqual([]);
   });
 
-  test("the integration fields write inside the seat's own blocks", () => {
+  // THE PROJECT IS THE DOCUMENT'S OWN FIELD. No seat and no unit carries a
+  // vendor's block for it: the engine refuses `integrations.jira` as an
+  // unknown key, so a form that wrote one was refused on every check.
+  test("the integration fields write inside the seat's own blocks, and what it owns beside them", () => {
     const initial = seatForm(dev(), "");
     const form = {
       ...initial,
       githubTier: "review",
       githubRepos: ["acme/api"],
-      jira: " OPS ",
+      project: " OPS ",
+      space: "ENG",
     };
     expect(seatParts("seat:dev", dev(), initial, form, { editableHandle: false })).toEqual([
       {
@@ -286,7 +289,8 @@ describe("a seat", () => {
         set: [
           { path: ["integrations", "github", "tier"], value: "review" },
           { path: ["integrations", "github", "repos"], value: ["acme/api"] },
-          { path: ["integrations", "jira", "project"], value: "OPS" },
+          { path: ["project"], value: "OPS" },
+          { path: ["space"], value: "ENG" },
         ],
       },
     ]);
@@ -303,6 +307,7 @@ describe("a unit and the company", () => {
       name: "Product Engineering",
       purpose: "Build it",
       lead: "",
+      space: "ENG",
       schedules: { standup: false },
     };
     expect(unitParts("unit:Engineering", initial, form)).toEqual([
@@ -310,7 +315,10 @@ describe("a unit and the company", () => {
       {
         type: "updateUnit",
         target: "unit:Engineering",
-        set: [{ path: ["purpose"], value: "Build it" }],
+        set: [
+          { path: ["purpose"], value: "Build it" },
+          { path: ["space"], value: "ENG" },
+        ],
       },
       { type: "setLead", target: "unit:Engineering" },
       {
