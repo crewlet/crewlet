@@ -42,14 +42,12 @@ var dutyTTLs = map[string]struct {
 	"embedDutyTTL":       {embedDutyTTL, true},
 	"integrationDutyTTL": {integrationDutyTTL, true},
 	"learningDutyTTL":    {learningDutyTTL, true},
-	// THE IDENTITY DUTIES' LEASE is three of their intervals, and the
-	// longest of those — the sweep's and the claim report's — is an hour.
-	"identityDutyTTL(interval)": {identityDutyTTL(max(IdentitySweepInterval,
-		IdentityClaimsInterval)), true},
-	"setup.LeaseTTL":          {setup.LeaseTTL, true},
-	"companyKeyHoldTTL":       {companyKeyHoldTTL, true},
-	"schedule.DutyTTL(tick)":  {schedule.DutyTTL(schedule.MaxTick), true},
-	"waiterDutyTTL(interval)": {waiterDutyTTL(coord.MaxDutyTTL / dutyTTLTicks), false},
+	// THE IDENTITY DUTY'S LEASE is three of its interval, the sweep's hour.
+	"identityDutyTTL(interval)": {identityDutyTTL(IdentitySweepInterval), true},
+	"setup.LeaseTTL":            {setup.LeaseTTL, true},
+	"companyKeyHoldTTL":         {companyKeyHoldTTL, true},
+	"schedule.DutyTTL(tick)":    {schedule.DutyTTL(schedule.MaxTick), true},
+	"waiterDutyTTL(interval)":   {waiterDutyTTL(coord.MaxDutyTTL / dutyTTLTicks), false},
 }
 
 // TestEveryDutyTTLFitsTheDutyCeiling ties coord.MaxDutyTTL to the duties that

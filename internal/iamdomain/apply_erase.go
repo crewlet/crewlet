@@ -6,7 +6,6 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
-	"slices"
 	"strings"
 
 	"github.com/crewlet/crewlet/internal/secrets"
@@ -43,19 +42,20 @@ import (
 // next field added to a payload is missing from; the shape is the one fact
 // every sealed value shares.
 //
-// # Which addresses are theirs, and why the removal's SCOPE names them
+// # Which address is theirs, and why the removal's SCOPE names it
 //
 // An invitation is filed under its ADDRESS's bucket, not a person's — it has no
 // person until it is redeemed — and so is the trail row its record wrote. So
-// the rows this erasure clears sit in the buckets of the addresses that were
-// the person's: the one the removal releases, and every one an invitation they
-// redeemed was sent to, which is not always the same address once one has
-// been claimed in place of another. [erasedBlinds] is the one answer to which
-// those are, asked by the removal's WRITER before it publishes — whose record
-// must declare every bucket its apply writes, or a node that deferred an
-// invitation to one of those addresses applied the removal ahead of it and was
-// left with a copy of the address nobody erased — and by the apply that
-// clears them.
+// the rows this erasure clears sit in the bucket of the address the removal
+// releases, which is the only address a person ever holds: a redemption binds
+// the address its invitation was sent to, and no record moves a person's
+// address after their enrolment. The removal's WRITER therefore declares that
+// bucket beside the person's — or a node that deferred an invitation to that
+// address applied the removal ahead of it and was left with a copy of the
+// address nobody erased — and the apply clears every invitation and every
+// issue's trail row the address holds. An issue's trail row is found by the
+// ADDRESS rather than by its invitation ([Applier.applyDirectory]), so it is
+// erased even once the sweep has collected the invitation itself.
 //
 // # Deterministic, because every node does it
 //
@@ -65,58 +65,15 @@ import (
 // bytes — the identity claim holds across the erasure as it does across every
 // other apply. A document with nothing to clear is left byte for byte.
 
-// erasedBlinds is every address blind whose rows a removal of personID
-// erases: released — the address claim the removal gives back, or empty for
-// somebody who held none — and the address of every invitation they redeemed,
-// sorted and without repeats.
-//
-// THE INVITATIONS AN ADDRESS WAS SENT are about nobody until one is redeemed,
-// and their trail rows name nobody at all, so an address is the only thing
-// they are found by; and a person may have redeemed an invitation to an
-// address they hold no longer. Read from the rows the caller's transaction
-// sees, so the writer's snapshot and each node's apply answer it the same way
-// for the same log.
-func erasedBlinds(ctx context.Context, tx *sql.Tx, personID, released string) (
-	[]string, error) {
-
-	var out []string
-	if released != "" {
-		out = append(out, released)
-	}
-	rows, err := tx.QueryContext(ctx, `
-		SELECT DISTINCT email_blind FROM iam_invites
-		WHERE person_id = ? AND email_blind <> ''`, personID)
-	if err != nil {
-		return nil, fmt.Errorf("iamdomain: read the addresses person %s was "+
-			"invited at: %w", personID, err)
-	}
-	defer func() { _ = rows.Close() }()
-	for rows.Next() {
-		var blind string
-		if err := rows.Scan(&blind); err != nil {
-			return nil, fmt.Errorf("iamdomain: read the addresses person %s was "+
-				"invited at: %w", personID, err)
-		}
-		out = append(out, blind)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("iamdomain: read the addresses person %s was "+
-			"invited at: %w", personID, err)
-	}
-	slices.Sort(out)
-	return slices.Compact(out), nil
-}
-
 // eraseSealed clears every sealed value of one removed person's that a row not
 // their own still holds, reporting how many rows it rewrote.
 //
-// blind is the address claim the removal released, or empty for somebody who
-// held none; the addresses erased are that one and every one the person
-// redeemed an invitation at ([erasedBlinds]).
+// blind is the address the removal released, or empty for somebody who held
+// none — a machine, which no invitation was ever sent to.
 func eraseSealed(ctx context.Context, tx *sql.Tx, personID, blind string) (int, error) {
-	blinds, err := erasedBlinds(ctx, tx, personID, blind)
-	if err != nil {
-		return 0, err
+	var blinds []string
+	if blind != "" {
+		blinds = []string{blind}
 	}
 	among, args := inList(blinds)
 	invites, err := eraseIn(ctx, tx, "iam_invites", `
@@ -130,7 +87,8 @@ func eraseSealed(ctx context.Context, tx *sql.Tx, personID, blind string) (int, 
 	trail, err := eraseIn(ctx, tx, "iam_history", `
 		SELECT id, document FROM iam_history
 		WHERE person_id = ?
-		   OR (person_id = '' AND object_kind = 'email' AND object_id IN `+among+`)`,
+		   OR (person_id = '' AND object_kind = '`+historyObjectAddress+`'
+		       AND object_id IN `+among+`)`,
 		`UPDATE iam_history SET document = ? WHERE id = ?`,
 		append([]any{personID}, args...)...)
 	return invites + trail, err

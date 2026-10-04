@@ -71,8 +71,8 @@ func (s *Service) PostInvite(w http.ResponseWriter, r *http.Request) {
 	if address == "" {
 		httpjson.FailWith(w, http.StatusBadRequest, httpjson.CodeInvalidBody,
 			map[string]string{"detail": "an invitation needs the address it " +
-				"is for: that address is what it arbitrates on, so one with " +
-				"none would contend with nothing and two would both win"})
+				"is for: it is what the directory holds the invitation against " +
+				"every person and every open invitation by"})
 		return
 	}
 	if s.external == "" {

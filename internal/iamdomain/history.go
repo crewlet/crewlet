@@ -23,7 +23,8 @@ type HistoryClass string
 
 const (
 	// ClassChange is a change to WHO SOMEBODY IS or WHAT THEY MAY DO: an
-	// enrolment, a claim, a status move, a revocation, a removal.
+	// invitation, an enrolment, a login or seat change, a status move, a
+	// revocation, a removal.
 	ClassChange HistoryClass = "change"
 
 	// ClassSession is a session beginning or ending.
@@ -45,15 +46,13 @@ func (c HistoryClass) Valid() bool { return slices.Contains(HistoryClasses, c) }
 // see. [ClassOf]'s exhaustiveness is a build failure, so an op added without a
 // class fails here rather than silently writing no trail.
 var historyClass = map[OpKind]HistoryClass{
-	OpInvite:  ClassChange,
-	OpClaim:   ClassChange,
-	OpRedeem:  ClassChange,
-	OpRelease: ClassChange,
-	OpEnrol:   ClassChange,
-	OpUpdate:  ClassChange,
-	OpStatus:  ClassChange,
-	OpRevoke:  ClassChange,
-	OpRemove:  ClassChange,
+	OpInvite:   ClassChange,
+	OpEnrol:    ClassChange,
+	OpIdentity: ClassChange,
+	OpUpdate:   ClassChange,
+	OpStatus:   ClassChange,
+	OpRevoke:   ClassChange,
+	OpRemove:   ClassChange,
 
 	OpOpen:  ClassSession,
 	OpClose: ClassSession,

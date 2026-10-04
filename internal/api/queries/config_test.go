@@ -65,7 +65,7 @@ func configSurface(t *testing.T, docs ...string) (*configapi.Service, []string) 
 	}
 	svc, err := configapi.New(configapi.Options{
 		Store: db, Plane: coordmemory.NewFleet(), Cipher: cipher,
-		Holders: func(context.Context, []string) (map[string][]configapi.SeatHolder, error) {
+		Holders: func(context.Context, []string) (map[string]configapi.SeatHolder, error) {
 			return nil, nil
 		},
 	})

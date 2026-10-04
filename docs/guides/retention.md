@@ -1630,34 +1630,23 @@ its own sake, which only moves when a record *may* go.
 
 ### The identity duties
 
-Three things keep the identity estate honest, and two of them are fleet
-singletons, each on its own lease so that a flap on one costs that one an
-interval rather than both. Each of the two runs once as soon as a node claims
-it — so a restored node names a duplicate the moment it is back rather than an
-hour later — and then on its interval.
+Two things keep the identity estate's retention, and one of them is a fleet
+singleton on its own lease. It runs once as soon as a node claims it, and then
+on its interval.
 
 | Duty | Interval | What it does |
 |---|---|---|
 | `iam_sweep` | 1 hour | Resolves `api.auth.audit.changes` (400 days) and `api.auth.audit.sessions` (90 days) to positions and publishes one sweep record for each bucket that is **due** — one holding something at least a day past its horizon. The day of slack is what bounds the log: a bucket is swept at most about once a day, so the sweep adds at most 64 records a day however often it runs. |
-| `iam_claims` | 1 hour | Logs every duplicated claim and every orphaned reservation at WARN, every tick it stands, naming each holder by id. A login or a seat is logged as it is; an address by its kind alone, never by its keyed blind, which would be a stable pseudonym for it in every system your logs are shipped to. |
 
-The third is the operation ledger's sweep, which runs in the ordinary
+The other is the operation ledger's sweep, which runs in the ordinary
 maintenance tick on every node.
 
-A node arms these only if it runs the `workers` role: every node applies the
+A node arms the duty only if it runs the `workers` role: every node applies the
 identity log, but a node without `workers` claims no singleton, so it arms none
 rather than running loops its roles would refuse on every tick.
 `identity_duty_seconds` on [`GET /health`](../reference/api-endpoints.md#the-health-envelope)
-names the ones a node armed and each interval — the only way to tell a duty
+names the duty a node armed and its interval — the only way to tell a duty
 that is running and finding nothing from one that was never armed.
-
-**The claim report never repairs.** The broker cannot put two people on one
-address, one login or one seat, but a restore or a reanchor can, and the
-estate has no unique index to refuse it with — a violation inside an apply
-would stop that node's log for good. So a duplicate is *reported*, with every
-person holding it, and an operator decides who keeps it. An orphaned
-reservation — claims an enrolment took before it stopped, older than an hour —
-is released by removing its id.
 
 A person's **inbox** — one row per routed change per recipient — is swept at
 `tracker.native.inbox_retention_days`, **365 days** by default and settable

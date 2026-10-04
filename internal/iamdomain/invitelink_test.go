@@ -6,6 +6,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/iamdomain"
 	"github.com/crewlet/crewlet/internal/statelog"
@@ -34,17 +36,15 @@ func inviteFor(t *testing.T, rig *writeRig, address, seat string) (
 }
 
 // redeemAs enrols the person an invitation creates through the node's own
-// writer, as the sign-in surface does, presenting secret and binding seat.
+// writer, as the sign-in surface does, presenting secret and binding seat —
+// a fresh person per attempt, as the surface mints one.
 func redeemAs(t *testing.T, rig *writeRig, issued iamdomain.InviteIssued,
 	address, secret, seat string) (statelog.Result, error) {
 
 	t.Helper()
-	person, err := iamdomain.InvitedPersonID(issued.ID)
-	if err != nil {
-		t.Fatalf("derive the invited person: %v", err)
-	}
+	person := uuid.Must(uuid.NewV7()).String()
 	var result statelog.Result
-	err = rig.draining(func() error {
+	err := rig.draining(func() error {
 		var err error
 		result, err = nodeWriter(rig).Enrol(t.Context(), iamdomain.Enrolment{
 			PersonID: person, Kind: iam.KindPerson, Stage: iam.StageActive,
@@ -142,8 +142,8 @@ func TestAnInvitationKeepsItsLinksSecretOnlyAsAVerifier(t *testing.T) {
 //
 // The route checks it too, but a record can be published by more than a route,
 // and naming an invitation's id — which every snapshot holds — is not holding
-// its link. A wrong or absent secret is refused before the first claim, so it
-// leaves nothing behind; the right one lands.
+// its link. A wrong or absent secret is refused in the record's own snapshot,
+// so it leaves nothing behind; the right one lands.
 //
 // Mutation: drop the secret from the person record's basis and the wrong
 // secret enrols the person.
@@ -193,8 +193,7 @@ func TestAnInvitationBindsOnlyAHumanSeatNobodyHolds(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("enrol the colleague: %v", err)
 	}
-	if err := rig.claim(iamdomain.KindSeat, "held-seat", colleague,
-		"op-colleague-seat"); err != nil {
+	if err := rig.bind("held-seat", colleague, "op-colleague-seat"); err != nil {
 		t.Fatalf("bind the colleague: %v", err)
 	}
 
@@ -211,9 +210,9 @@ func TestAnInvitationBindsOnlyAHumanSeatNobodyHolds(t *testing.T) {
 				refused.seat, refused.want, err)
 		}
 	}
-	var claimed *iamdomain.ErrClaimed
+	var taken *iamdomain.ErrTaken
 	if _, err := inviteFor(t, rig, "second@example.com",
-		"held-seat"); !errors.As(err, &claimed) || claimed.Holder != colleague {
+		"held-seat"); !errors.As(err, &taken) || taken.Person != colleague {
 		t.Errorf("an invitation binding a seat the colleague holds was not "+
 			"refused naming them (%v)", err)
 	}
@@ -238,7 +237,7 @@ func TestAnInvitationBindsOnlyAHumanSeatNobodyHolds(t *testing.T) {
 // A REDEMPTION BINDS THE SEAT ITS INVITATION NAMED, and nothing else.
 //
 // A redemption naming another seat, or none, asks for something the invitation
-// did not offer and is refused before the first claim.
+// did not offer and is refused, publishing nothing.
 //
 // Mutation: drop the seat comparison from the person record's basis and the
 // redemption naming no seat spends the link without the binding.
@@ -275,9 +274,9 @@ func TestARedemptionBindsTheSeatItsInvitationNamed(t *testing.T) {
 	if err != nil || result.Outcome != statelog.OutcomeApplied {
 		t.Fatalf("the redemption answered %+v (%v)", result, err)
 	}
-	person, _ := iamdomain.InvitedPersonID(issued.ID)
-	if got := rig.column(`SELECT seat_id FROM iam_people WHERE id = ?`,
-		person); len(got) != 1 || got[0] != "platform-lead" {
+	if got := rig.column(`SELECT seat_id FROM iam_people WHERE login = ?`,
+		iam.LoginFromAddress("lead@example.com")); len(got) != 1 ||
+		got[0] != "platform-lead" {
 		t.Errorf("the person holds seat %v, want platform-lead", got)
 	}
 }
@@ -287,13 +286,13 @@ func TestARedemptionBindsTheSeatItsInvitationNamed(t *testing.T) {
 //
 // The chart and the directory move between an issue and a redemption — a
 // week, by default — and a seat an administrator bound to somebody else in
-// that time is a link that no longer works. It is refused as the link's
-// refusal, whose remedy is a new invitation, and it is refused before the
-// first claim: a reservation holding the invited address behind it would
-// refuse the next invitation to the same person as "claimed" by this one.
+// that time is a link that no longer works. It is refused naming the seat as
+// taken, whose remedy is a new invitation, and the refusal publishes nothing:
+// the invited address is not held against the next invitation to the same
+// person.
 //
-// Mutation: drop the seat's holder check from the basis and the redemption
-// claims the address and the login before the seat claim refuses it.
+// Mutation: drop the seat check from Enrol's decide and the redemption binds
+// a second person to the colleague's seat.
 func TestASeatBoundSinceTheIssueRefusesTheRedemptionBeforeAnything(t *testing.T) {
 	t.Parallel()
 	rig := newWriteRig(t)
@@ -310,70 +309,19 @@ func TestASeatBoundSinceTheIssueRefusesTheRedemptionBeforeAnything(t *testing.T)
 	}); err != nil {
 		t.Fatalf("enrol the colleague: %v", err)
 	}
-	if err := rig.claim(iamdomain.KindSeat, "platform-lead", colleague,
-		"op-colleague-seat"); err != nil {
+	if err := rig.bind("platform-lead", colleague, "op-colleague-seat"); err != nil {
 		t.Fatalf("bind the colleague: %v", err)
 	}
 
+	var taken *iamdomain.ErrTaken
 	if _, err := redeemAs(t, rig, issued, "lead@example.com", issued.Secret,
-		"platform-lead"); !errors.Is(err, iamdomain.ErrRefused) {
+		"platform-lead"); !errors.As(err, &taken) ||
+		taken.Field != iamdomain.UniqueSeat || taken.Person != colleague {
 		t.Fatalf("a redemption binding a seat a colleague took since the issue "+
-			"was not refused as the link's refusal (%v)", err)
+			"was not refused naming the seat's holder (%v)", err)
 	}
 	if rows := rig.column(`SELECT id FROM iam_people WHERE id <> ?`,
 		colleague); len(rows) != 0 {
-		t.Errorf("the refused redemption left a reservation behind: %v", rows)
-	}
-}
-
-// AN INVITATION'S SEAT IS CLAIMED FIRST, before the address.
-//
-// It is the one claim nothing about the redemption can vouch for — the seat is
-// the chart's, and a colleague's bind is ordered against nothing on this log —
-// so a redemption that stops at it must leave nothing behind: no reservation
-// holding the invited address. Here the seat claim's outcome is one nobody can
-// establish, which is where a sequence stops.
-//
-// Mutation: claim the seat after the address and the address is held by a
-// reservation when the redemption stops.
-func TestAnInvitationsSeatIsClaimedFirst(t *testing.T) {
-	t.Parallel()
-	var broker *silentBroker
-	rig := newWriteRigWith(t, func(inner statelog.Appender) statelog.Appender {
-		broker = &silentBroker{Appender: inner, on: ".seat."}
-		return broker
-	})
-	rig.seatOnly("platform-lead")
-	issued, err := inviteFor(t, rig, "lead@example.com", "platform-lead")
-	if err != nil {
-		t.Fatalf("invite: %v", err)
-	}
-	person, err := iamdomain.InvitedPersonID(issued.ID)
-	if err != nil {
-		t.Fatalf("derive the invited person: %v", err)
-	}
-
-	broker.silent.Store(true)
-	result, err := redeemAs(t, rig, issued, "lead@example.com", issued.Secret,
-		"platform-lead")
-	if err != nil || result.Outcome != statelog.OutcomeUnknown {
-		t.Fatalf("a redemption whose seat claim nobody could confirm answered "+
-			"%+v (%v), want unknown", result, err)
-	}
-	if rows := rig.column(`SELECT id FROM iam_people WHERE email_blind <> '' ` +
-		`OR login <> ''`); len(rows) != 0 {
-		t.Errorf("the address or the login was claimed before the seat: %v", rows)
-	}
-
-	// THE RETRY, once the broker answers, is the same redemption and lands.
-	broker.silent.Store(false)
-	result, err = redeemAs(t, rig, issued, "lead@example.com", issued.Secret,
-		"platform-lead")
-	if err != nil || result.Outcome != statelog.OutcomeApplied {
-		t.Fatalf("the retry answered %+v (%v), want applied", result, err)
-	}
-	if got := rig.column(`SELECT seat_id FROM iam_people WHERE id = ?`,
-		person); len(got) != 1 || got[0] != "platform-lead" {
-		t.Errorf("the retry left the person holding seat %v", got)
+		t.Errorf("the refused redemption left a row behind: %v", rows)
 	}
 }

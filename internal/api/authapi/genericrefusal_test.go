@@ -49,8 +49,6 @@ func (d armsDirectory) PersonByLogin(_ context.Context, login string) (
 	case "sam.suspended":
 		return iamdomain.Sighting{ID: "p-sam", Kind: iam.KindPerson,
 			Stage: iam.StageSuspended, Login: login, Credentials: password}, nil
-	case "half.enrolled":
-		return iamdomain.Sighting{ID: "p-half", Login: login, Reserved: true}, nil
 	case "no.password":
 		return iamdomain.Sighting{ID: "p-nopass", Kind: iam.KindPerson,
 			Stage: iam.StageActive, Login: login,
@@ -112,8 +110,8 @@ func (armsDirectory) PersonByEmailBlind(context.Context, string) (iamdomain.Sigh
 // ONE GENERIC REFUSAL FOR EVERY LOGIN ARM.
 //
 // A sign-in surface must not be a roster: whatever went wrong — nobody by that
-// login, nobody at that address, a person suspended, a half-finished
-// enrolment, somebody who holds no password, a wrong password,
+// login, nobody at that address, a person suspended, somebody who holds no
+// password, a wrong password,
 // a directory this node could not read, or the right password with a wrong app
 // code or a recovery code already spent — the caller gets ONE status and ONE
 // body, byte for byte, and one failed attempt on the trail. The last two leave
@@ -190,7 +188,6 @@ func TestOneGenericRefusalForEveryLoginArm(t *testing.T) {
 		{"nobody at that address", "gone@example.com", rightPassword, ""},
 		{"a directory this node cannot read", "broken.store", rightPassword, ""},
 		{"a person suspended, with the right password", "sam.suspended", rightPassword, ""},
-		{"an enrolment nobody finished", "half.enrolled", rightPassword, ""},
 		{"a person who holds no password", "no.password", rightPassword, ""},
 		{"a wrong password", "dana.sre", "not-the-passphrase-at-all", ""},
 		// PAST THE FIRST FACTOR, and refused at the second — a path of its

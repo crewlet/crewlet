@@ -19,8 +19,8 @@ import (
 //
 // The directory report asks the seam [api.NewHumanSurfaces] wires whether a
 // person's seat binding dangles, and that seam is the one place the engine's
-// rule — the request path's own seat table, which the `iam_binding_dangling`
-// alarm asks too — is connected to the report. internal/api/iamapi's suite
+// rule — the request path's own seat table — is connected to the report, the
+// one place a dangling binding is said. internal/api/iamapi's suite
 // hands the report a function of its own, so a node whose wiring passed nil,
 // or a seam asking a narrower question, left every suite green while `crewlet
 // iam check` said nothing about a person refused on every request. So this
@@ -54,7 +54,7 @@ func TestTheCheckNamesADanglingBindingThroughTheNodesOwnWiring(t *testing.T) {
 	}
 	// OPERATION IDS IN THE ENGINE'S GRAMMAR, as every surface mints them: an
 	// id carrying no instant is one no ledger can vouch for once it has
-	// swept, and every step of the enrolment is derived from this one.
+	// swept.
 	if _, err := writer.Enrol(ctx, iamdomain.Enrolment{
 		PersonID: bot, Kind: iam.KindMachine, Stage: iam.StageActive,
 		Login: "ci:bot", OpID: statelog.NewOpID(time.Now(), "enrol-bot"),
@@ -64,8 +64,11 @@ func TestTheCheckNamesADanglingBindingThroughTheNodesOwnWiring(t *testing.T) {
 	}
 	// THE CEO'S SEAT IS AN AGENT'S, which the request path refuses a
 	// person on every request for.
-	if _, err := writer.Claim(ctx, iamdomain.KindSeat, "ceo", bot,
-		statelog.NewOpID(time.Now(), "bind-bot")); err != nil {
+	ceo := "ceo"
+	if _, err := writer.SetIdentity(ctx, iamdomain.IdentityEdit{
+		PersonID: bot, Seat: &ceo,
+		OpID: statelog.NewOpID(time.Now(), "bind-bot"), Reason: "a pipeline",
+	}); err != nil {
 		t.Fatalf("bind: %v", err)
 	}
 

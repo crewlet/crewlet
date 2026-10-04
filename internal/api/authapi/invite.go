@@ -161,8 +161,8 @@ func (s *Service) inviteSeatOf(ctx context.Context, handle string) *inviteSeat {
 	return &inviteSeat{Handle: seat.Handle, Name: seat.Name}
 }
 
-// RedeemInvite creates the person an invitation was issued for — and binds the
-// seat it names, when it names one, as the first step of the same enrolment.
+// RedeemInvite creates the person an invitation was issued for — binding the
+// seat it names, when it names one, and spending the link — in ONE record.
 //
 // THE BODY IS READ BEFORE THE INVITATION, because the secret is in it — and
 // nothing in it is answered until the invitation has opened: a password too
@@ -190,45 +190,14 @@ func (s *Service) RedeemInvite(w http.ResponseWriter, r *http.Request) {
 			map[string]string{"detail": err.Error()})
 		return
 	}
-	// THE PERSON IS THE INVITATION'S, DERIVED rather than minted, so every
-	// attempt at one redemption names one person. Minted per request, a
-	// redemption refused halfway — a login somebody else holds, a record
-	// that did not land — left its address claim holding the invitation's
-	// address for an id no later attempt named, and the retry was refused
-	// as "that address belongs to somebody" by its own first attempt. A
-	// redeemer told their login was taken could never choose another.
-	person, err := iamdomain.InvitedPersonID(held.ID)
-	if err != nil {
-		log.ErrorContext(r.Context(), "api_invite_person_underivable",
-			"error", err, "invitation", held.ID)
-		httpjson.Fail(w, http.StatusInternalServerError, httpjson.CodeInternalError)
-		return
-	}
+	// A FRESH PERSON PER ATTEMPT: a redemption is one record, so an attempt
+	// the directory refused — a login somebody else holds — published
+	// nothing, and the next attempt is a new person with nothing in its way.
+	// What keeps the link single-use is the link: the record that lands
+	// the person spends it, and one already spent is refused in the
+	// record's own snapshot.
+	person := uuid.Must(uuid.NewV7()).String()
 	opID := redemptionOpID(held.ID)
-	// AN ADDRESS SOMEBODY IS ENROLLED UNDER IS A LINK ALREADY USED — and
-	// with the person derived, it is what keeps the link single-use when
-	// the spend did not land: a re-redemption would otherwise re-enrol the
-	// same person and reset their password with nothing but the link. A
-	// RESERVATION is not somebody: it is this redemption's own stopped
-	// attempt when it names this person, which the enrolment below
-	// finishes, and a claim the enrolment refuses by name when it does not.
-	holder, err := s.directory.PersonByEmailBlind(r.Context(), held.Blind)
-	if err != nil {
-		log.WarnContext(r.Context(), "api_invite_holder_unreadable",
-			"error", err, "invitation", held.ID)
-		httpjson.Unavailable(w, httpjson.CodeIdentityUnavailable, auth.RetryIdentity(err))
-		return
-	}
-	if holder.ID != "" && !holder.Reserved {
-		if holder.ID == person {
-			// THIS LINK ENROLLED THEM AND ITS SPEND NEVER LANDED, so the
-			// row still reads redeemable. Close it now — the same op id
-			// as the first attempt's, so the ledger collapses the two.
-			s.spendInvitation(r, held, person, opID)
-		}
-		s.refuseInvitation(w, r, adm, true)
-		return
-	}
 	email, err := s.openSealed(r, held)
 	if err != nil {
 		httpjson.Unavailable(w, httpjson.CodeIdentityUnavailable, auth.RetryIdentity(err))
@@ -258,8 +227,8 @@ func (s *Service) RedeemInvite(w http.ResponseWriter, r *http.Request) {
 		// of what an invitation usually confers.
 		//
 		// THE SECRET GOES WITH IT, checked again where the grants land,
-		// and so does the seat the invitation binds: claimed first, and
-		// refused as the link's own refusal if it moved since the issue.
+		// and so does the seat the invitation binds: refused as the
+		// link's own refusal if it moved since the issue.
 		Grants:           held.Grants,
 		Invitation:       held.ID,
 		InvitationSecret: in.Secret,
@@ -280,13 +249,12 @@ func (s *Service) RedeemInvite(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !landed(enrolled) {
-		// NO SPEND AND NO SESSION ON AN ENROLMENT NOBODY CAN CONFIRM.
-		// The op id is the invitation's own, so following the link again
-		// is the same enrolment.
+		// NO SESSION ON AN ENROLMENT NOBODY CAN CONFIRM. The op id is the
+		// invitation's own, so following the link again is answered from
+		// the ledger if this one landed.
 		unresolved(w, r, "api_invite_enrol_unresolved", enrolled)
 		return
 	}
-	s.spendInvitation(r, held, person, opID)
 	log.InfoContext(r.Context(), "api_invite_redeemed",
 		"invitation", held.ID, "person", person, "login", in.Login)
 	s.completeSignIn(w, r, iamdomain.Sighting{
@@ -297,10 +265,10 @@ func (s *Service) RedeemInvite(w http.ResponseWriter, r *http.Request) {
 }
 
 // redemptionOpID is the operation an invitation's redemption is published
-// under: DERIVED from the invitation, so every attempt at one redemption — a
-// retry after `unknown`, a redeemer told their login was taken choosing
-// another — is the same operation, and the steps its first attempt landed are
-// answered from the ledger rather than claimed a second time.
+// under: DERIVED from the invitation, so every attempt at one redemption is
+// the same operation — a retry after `unknown` whose first attempt landed is
+// answered from the ledger, and refused as the link already used, rather than
+// enrolling a second person on one link.
 //
 // AT THE INVITATION'S OWN INSTANT, which its id carries (a uuid7 minted when it
 // was issued — [iamdomain.Blinder.InvitationID]), in the grammar the ledger
@@ -336,14 +304,17 @@ const redemptionNamespace = "crewlet.authapi.invite-redeem"
 //
 // # What the 409 does and does not say
 //
-// It says the login or the address is taken, which the person needs in order
-// to choose another, and it does NOT say by whom. The domain's own refusal
-// names the holder's id, which is right for an administrator and wrong here:
-// the caller is holding an invitation link, which is evidence of who THEY are
-// and of nothing about anybody else.
+// It says the login or the seat is taken, which the person needs in order to
+// choose another login or ask for another link, and it does NOT say by whom.
+// The domain's own refusal names the holder's id, which is right for an
+// administrator and wrong here: the caller is holding an invitation link,
+// which is evidence of who THEY are and of nothing about anybody else.
+//
+// AN ADDRESS SOMEBODY IS ENROLLED UNDER is the 410 every way a link stops
+// working is: the person the link was for already exists.
 func refuseEnrolment(w http.ResponseWriter, r *http.Request, event, opID string,
 	err error) {
-	var claimed *iamdomain.ErrClaimed
+	var taken *iamdomain.ErrTaken
 	switch {
 	case errors.Is(err, iamdomain.ErrInvalidLogin),
 		errors.Is(err, iamdomain.ErrNotFindable),
@@ -352,14 +323,14 @@ func refuseEnrolment(w http.ResponseWriter, r *http.Request, event, opID string,
 		log.InfoContext(r.Context(), event, "refused", "invalid", "error", err)
 		httpjson.FailWith(w, http.StatusBadRequest, httpjson.CodeInvalidBody,
 			map[string]string{"detail": err.Error()})
-	case errors.As(err, &claimed):
-		log.InfoContext(r.Context(), event, "refused", "claimed",
-			"claim", string(claimed.Kind))
-		detail := "that address already belongs to somebody in this company"
-		switch claimed.Kind {
-		case iamdomain.KindLogin:
-			detail = "that login is already taken — choose another"
-		case iamdomain.KindSeat:
+	case errors.As(err, &taken) && taken.Field == iamdomain.UniqueEmail:
+		log.InfoContext(r.Context(), event, "refused", "address enrolled")
+		httpjson.Fail(w, http.StatusGone, httpjson.CodeInviteSpent)
+	case errors.As(err, &taken):
+		log.InfoContext(r.Context(), event, "refused", "taken",
+			"field", string(taken.Field))
+		detail := "that login is already taken — choose another"
+		if taken.Field == iamdomain.UniqueSeat {
 			// NAMING NEITHER THE SEAT'S HOLDER NOR THE SEAT'S OTHER
 			// NAMES, for the paragraph above's reason: what the caller
 			// can act on is that the seat is gone, and the remedy is
@@ -369,15 +340,6 @@ func refuseEnrolment(w http.ResponseWriter, r *http.Request, event, opID string,
 		}
 		httpjson.FailWith(w, http.StatusConflict, httpjson.CodeBadParams,
 			map[string]string{"detail": detail})
-	case removed(err), errors.Is(err, iamdomain.ErrOperationReused):
-		// THE PERSON THIS LINK CREATES WAS CREATED AND THEN REMOVED — its
-		// spend never landed, so the row still read redeemable, and the
-		// person it names is one nothing will ever write again — or the
-		// redemption's operation, which the invitation derives, already
-		// names another record. Either way the link has stopped working,
-		// which is every way a link stops working.
-		log.InfoContext(r.Context(), event, "refused", "link used", "error", err)
-		httpjson.Fail(w, http.StatusGone, httpjson.CodeInviteSpent)
 	default:
 		writeFailed(w, r, event, opID, err)
 	}
@@ -416,20 +378,19 @@ func (s *Service) presentedInvitation(w http.ResponseWriter, r *http.Request,
 	return held, true
 }
 
-// refuseInvitation is every 410 this surface answers: an invitation nobody
-// issued, one redeemed, one aged out, and one whose address somebody is
-// already enrolled under — and one presented with a secret that is not its
-// link's. ONE ANSWER for all of them, in the same bytes, for
-// [Service.presentedInvitation]'s reason.
+// refuseInvitation is every 410 this surface answers before a redemption's
+// record: an invitation nobody issued, one redeemed, one aged out — and one
+// presented with a secret that is not its link's. ONE ANSWER for all of them,
+// in the same bytes, for [Service.presentedInvitation]'s reason.
 //
 // # A failed attempt only where the link did not prove itself
 //
 // The link is the credential, and walking ids and secrets is how somebody
 // without one looks for one — so an id nobody issued and a secret that is not
 // its link's are FAILED ATTEMPTS, in the audit trail's failure count. A link
-// that DID prove itself and no longer works — redeemed, aged out, its address
-// enrolled — is not a guess: it is the link's holder, or a mail scanner that
-// fetched it for them, and those fetch the same link again and again. Counted,
+// that DID prove itself and no longer works — redeemed, aged out — is not a
+// guess: it is the link's holder, or a mail scanner that fetched it for them,
+// and those fetch the same link again and again. Counted,
 // a scanner re-reading one spent link put the address it scans from in the
 // count as a guesser — and while a link was on its source's curve, it put that
 // address on the curve, which on a deployment behind one proxy address was the
@@ -445,27 +406,6 @@ func (s *Service) refuseInvitation(w http.ResponseWriter, r *http.Request,
 		})
 	}
 	httpjson.Fail(w, http.StatusGone, httpjson.CodeInviteSpent)
-}
-
-// spendInvitation records a link being used, naming the person it created.
-//
-// LOGGED AND NOT REPORTED. The person exists and can sign in; the residue of a
-// spend that did not land is an invitation row that still reads redeemable,
-// and the next redemption of it finds the address enrolled, answers 410 and
-// publishes this again under the same op id — so the row closes then.
-func (s *Service) spendInvitation(r *http.Request, held iamdomain.InvitationRow,
-	person, opID string) {
-
-	spent, err := s.writer.SpendInvitation(r.Context(), iamdomain.InvitationSpend{
-		ID: held.ID, Blind: held.Blind, Person: person,
-		OpID: statelog.StepOpID(opID, "spend"), Reason: "redeemed",
-	})
-	if err != nil || !landed(spent) {
-		log.WarnContext(r.Context(), "api_invite_spend_failed",
-			"error", errText(err), "op_id", spent.OpID,
-			"outcome", string(spent.Outcome), "invitation", held.ID,
-			"person", person)
-	}
 }
 
 // openSealed opens the invitation's address for this one answer.

@@ -225,8 +225,8 @@ type Options struct {
 	// without it every authority rule asking "do you lead this" falls
 	// through to the admin grant. The binding used to be a field on a
 	// seat's contact block naming the token id; it is a directory row now,
-	// arbitrated on `iam.seat.<identity>` so two holders cannot claim one
-	// seat.
+	// bound by one record on the directory subject so two holders cannot
+	// hold one seat.
 	//
 	// THE ZERO VALUE BINDS NOTHING, which is what an API stood up in a
 	// suite has: every credential then acts as itself. `crewlet run`

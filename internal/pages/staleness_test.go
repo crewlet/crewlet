@@ -106,9 +106,7 @@ func TestAPageReadWaitsForTheFloorTheCallerNamed(t *testing.T) {
 	if err != nil {
 		t.Fatalf("waiting read authority: %v", err)
 	}
-	reader, err := pages.NewReader(pages.ReaderOptions{
-		DB: r.db, Log: waiting, Committed: r.waiter.Committed,
-	})
+	reader, err := pages.NewReader(pages.ReaderOptions{DB: r.db, Log: waiting})
 	if err != nil {
 		t.Fatalf("pages reader: %v", err)
 	}

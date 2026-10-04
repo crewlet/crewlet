@@ -4,15 +4,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log/slog"
-	"slices"
-	"sync"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/iam/session"
 	"github.com/crewlet/crewlet/internal/iamdomain"
-	"github.com/crewlet/crewlet/internal/statelog"
-	"github.com/crewlet/crewlet/internal/store"
 )
 
 // A SEAT BINDING THAT DANGLES, and the one rule that says so.
@@ -25,9 +20,19 @@ import (
 // afterwards, and a revision applied elsewhere first is one this node has not
 // seen. The residue — a binding to a seat the running company does not hold as
 // a human seat — is LEGAL rather than corruption, and nothing clears it but a
-// record: an unbind, or a bind to another seat. It is reported by `crewlet iam
-// check` and `GET /iam/check` (`binding_dangling`, naming the seat) and, once
-// it has outlived the race that makes it, by the `iam_binding_dangling` alarm.
+// record: an unbind, or a bind to another seat. It is reported in one place,
+// `crewlet iam check` and `GET /iam/check` (`binding_dangling`, naming the
+// seat), and it is ENFORCED, which is not reporting, on the request path
+// (`403 seat_unavailable`) and at the company write (`409 seat_held`).
+//
+// # Why it is a finding and never an alarm
+//
+// An alarm answers whether a NODE is doing its job (ADR-0015). A person bound
+// to a seat the company no longer holds is a fact about the company's CONTENT:
+// every node would raise it at once, for a state no node can repair, and its
+// age is nowhere in any record — so an alarm over it had to keep a clock of
+// its own per node. The report names who and why when somebody asks, which is
+// all a residue a record repairs needs.
 //
 // # Why the rule is the REQUEST PATH's own table
 //
@@ -38,59 +43,16 @@ import (
 // handle") is how the report came to miss a binding to an AGENT seat: it asked
 // whether the row existed, the request path asks whether it is a human seat,
 // and a person the request path refused on every call was one the report said
-// nothing about. So both surfaces ask this function, and this function asks
-// the table.
-//
-// # Why the alarm's age is observed, not read
-//
-// Nothing records when a binding began to dangle: it began when THIS node
-// applied the later of a bind and a removal, which no record carries. So the
-// age the alarm compares against the stall grace is how long this node's own
-// observations have kept finding the residue — first sighting to latest — and
-// never a persistence nobody saw. The observations are the alarm table's own
-// heartbeat, every [statelog.AlarmInterval] (see [retention.heartbeat]) on every
-// node, since every node runs the identity domain. That is what
-// lets the alarm fire at the stall grace the design gives it rather than at the
-// trim's quarter-hour, and what keeps the three surfaces in step: the gauge,
-// the log line and the screen all read the same observation.
-//
-// # Why a heartbeat can afford it
-//
-// An observation reads nothing that has not moved. A residue is a function of
-// this node's identity rows and the organisation it runs and nothing else: the
-// first has an applier position that moves whenever a row does and the second
-// a version that moves whenever an epoch is published — so a beat on which
-// neither moved re-reads nothing and extends what the last one found. When one
-// did move, the bindings are one read over the bound people rather than a walk
-// of the directory, and a binding is re-classified only when it, or the
-// organisation, changed since it was last classified. The organisation moving
-// is the rare case — an applied revision — and the identity log moving is the
-// common one, since every sign-in is a record on it: that arm costs one indexed
-// read and no seat lookup at all.
-
-// BindingResidue is one person whose seat binding the company this node runs
-// does not hold as a human seat.
-type BindingResidue struct {
-	// Person is the directory id, Login the name the dashboard prints and
-	// Seat the seat their row names, by its handle.
-	Person, Login, Seat string
-
-	// Detail is the sentence every surface prints: which seat, why, and
-	// what to do.
-	Detail string
-}
-
-// key is what the alarm's clock follows a residue by: the person AND the seat,
-// so a person rebound from one dangling seat to another starts a new clock
-// rather than inheriting the first one's age.
-func (r BindingResidue) key() string { return r.Person + "\x00" + r.Seat }
+// nothing about. So the report asks this function, and this function asks the
+// table.
 
 // bindingProbeBudget bounds one person's seat lookup.
 //
-// TWO SECONDS, and it is a per-ROW budget on a classification that may cover
-// every binding in the company — so the number is what one local SQL read on a
-// busy node costs at its worst rather than what a network call would. A lookup
-// that cannot answer inside it is the unknown arm, which both surfaces skip.
+// TWO SECONDS, and it is a per-ROW budget on a report that may cover every
+// binding in the company — so the number is what one local SQL read on a busy
+// node costs at its worst rather than what a network call would. A lookup that
+// cannot answer inside it is the unknown arm, which the report counts as
+// unchecked.
 const bindingProbeBudget = 2 * time.Second
 
 // errSeatUnknown is the unknown arm when the resolver has no read failure of
@@ -99,28 +61,32 @@ var errSeatUnknown = errors.New("engine: this node runs no company, so it " +
 	"cannot say whether that seat exists")
 
 // DanglingBinding classifies one person's seat binding against the company this
-// node runs.
+// node runs: whether it dangles, and if so the sentence every surface prints —
+// which seat, why, and what to do.
 //
 // THREE-VALUED: dangling, not dangling, or an error when this node cannot tell
-// — it runs no company yet, or the lookup failed. Every caller skips the third
-// rather than guessing, because reporting a binding as dangling on a node that
-// could not say sends an administrator to unbind somebody whose seat is
-// perfectly there.
+// — it runs no company yet, or the lookup failed. The report counts the third
+// as unchecked rather than guessing, because reporting a binding as dangling on
+// a node that could not say sends an administrator to unbind somebody whose
+// seat is perfectly there.
+//
+// ITS SHAPE IS THE REPORT'S SEAM, internal/api/iamapi's Bindings, so the
+// method value is what the report is wired with and nothing adapts between
+// them.
 func (e *Engine) DanglingBinding(ctx context.Context, row iamdomain.PersonRow) (
-	BindingResidue, bool, error) {
+	dangling bool, detail string, err error) {
 
 	return danglingBinding(ctx, SeatViewOf(e), row.Binding())
 }
 
 // danglingBinding is the rule, over any organisation.
 func danglingBinding(ctx context.Context, chart session.Chart, b iamdomain.SeatBinding) (
-	BindingResidue, bool, error) {
+	bool, string, error) {
 
-	residue := BindingResidue{Person: b.Person, Login: b.Login, Seat: b.Seat}
 	if b.Seat == "" {
 		// NO BINDING. A removed person has no row to be asked about at
 		// all: a removal deletes it and leaves the tombstone.
-		return residue, false, nil
+		return false, "", nil
 	}
 	ctx, cancel := context.WithTimeout(ctx, bindingProbeBudget)
 	defer cancel()
@@ -129,320 +95,15 @@ func danglingBinding(ctx context.Context, chart session.Chart, b iamdomain.SeatB
 	})
 	switch binding.Row {
 	case session.SeatRowGone:
-		residue.Detail = binding.Detail + "; unbind them, or bind them to " +
-			"another seat"
-		return residue, true, nil
+		return true, binding.Detail + "; unbind them, or bind them to " +
+			"another seat", nil
 	case session.SeatRowStalled:
 		cause := binding.Err
 		if cause == nil {
 			cause = errSeatUnknown
 		}
-		return residue, false, fmt.Errorf("engine: resolve %q's seat %q: %s: %w",
+		return false, "", fmt.Errorf("engine: resolve %q's seat %q: %s: %w",
 			b.Person, b.Seat, binding.Detail, cause)
 	}
-	return residue, false, nil
-}
-
-// bindingSource is the directory's read side, as narrowly as the watch needs
-// it: every binding in one read, and the position that read reflects.
-type bindingSource interface {
-	SeatBindings(ctx context.Context) ([]iamdomain.SeatBinding, error)
-	At() statelog.Position
-}
-
-// bindingSighting is what one classification of the bindings found.
-type bindingSighting struct {
-	// residues are the bindings that dangle, in the order they were read.
-	residues []BindingResidue
-
-	// unknown are the residues' keys this classification could not settle.
-	// They are neither dangling nor clear, and the clock treats them as
-	// neither: a residue that was dangling before a failed lookup is still
-	// dangling after it unless something said otherwise.
-	unknown map[string]bool
-}
-
-// classified is one binding's last classification, and what it was taken
-// against — so an observation re-classifies a binding only when the binding or
-// the organisation moved.
-type classified struct {
-	binding  iamdomain.SeatBinding
-	orgAt    uint64
-	residue  BindingResidue
-	dangling bool
-}
-
-// seatOrg is what the watch classifies against: the session seam over the
-// organisation this node runs, and which organisation that is.
-//
-// THE VERSION IS THE WATCH'S OWN NEED, so it is declared here rather than
-// widening [session.Chart], whose only caller per request has no use for it.
-type seatOrg interface {
-	session.Chart
-
-	// Version names the organisation Seat answers from: two equal
-	// versions answer every seat alike, so a classification taken at one
-	// still holds at the other. An error is a node that cannot say.
-	Version(ctx context.Context) (uint64, error)
-}
-
-// bindingWatch is how long each dangling binding has persisted on this node.
-//
-// PER NODE AND IN MEMORY, which is the honest answer to "who has to agree on
-// it": the seat half of a residue is the organisation this node has applied,
-// so two nodes legitimately disagree about a revision one of them has not
-// applied yet, and the age is this node's observation of its own state. Losing it at a
-// restart costs one grace of re-observation, which is the price of never
-// claiming a persistence this process did not see.
-type bindingWatch struct {
-	// dir and org are this node's directory and the organisation it runs.
-	// A nil dir is an engine with no core runtime, which observes nothing.
-	dir bindingSource
-	org seatOrg
-
-	mu sync.Mutex
-	// first is when each residue was first found, carried across
-	// observations that found it again or could not classify it.
-	first map[string]time.Time
-	// at, seen and known are the latest observation: when it was taken,
-	// what dangled and whether any classification has ever succeeded.
-	at    time.Time
-	seen  []BindingResidue
-	known bool
-
-	// dirAt and orgAt are what the latest classification was taken at,
-	// and unsettled marks one that could not classify every binding —
-	// which the next beat re-reads whether or not anything moved.
-	dirAt     statelog.Position
-	orgAt     uint64
-	unsettled bool
-	// classes is each binding's last classification, by person.
-	classes map[string]classified
-
-	// failingSince is when the current run of walks that could not read
-	// the bindings began, and failed how many beats it has lasted; both
-	// zero while the last walk read them. See [bindingWatch.walkFailed]
-	// for why a run is said twice rather than once a beat.
-	failingSince time.Time
-	failed       int
-
-	// logger is where the walk speaks: the package's own outside a case.
-	logger *slog.Logger
-}
-
-// newBindingWatch is the watch over one engine, or nil on an engine with no
-// core runtime — which has no directory to walk, so it reports nothing rather
-// than a company with no residue.
-func newBindingWatch(e *Engine) *bindingWatch {
-	dir := e.IAM()
-	if dir == nil {
-		return nil
-	}
-	return newWatchOver(dir, SeatViewOf(e))
-}
-
-// newWatchOver is a watch over any directory and organisation.
-func newWatchOver(dir bindingSource, org seatOrg) *bindingWatch {
-	return &bindingWatch{dir: dir, org: org, first: map[string]time.Time{},
-		classes: map[string]classified{}, logger: log}
-}
-
-// observe takes one observation of this node's bindings at now.
-//
-// NOTHING MOVED IS NOTHING TO READ: when the identity applier has committed
-// nothing and no epoch was published since the last classification, and that
-// one settled every binding, the residues are exactly what they were, and the
-// observation extends them to now. The two are read BEFORE the bindings, so
-// they are a floor under what the read saw: a record landing between the two is
-// one the next beat re-reads for.
-func (w *bindingWatch) observe(ctx context.Context, now time.Time) {
-	if w == nil || w.dir == nil {
-		return
-	}
-	dirAt := w.dir.At()
-	orgAt, orgErr := w.org.Version(ctx)
-	w.mu.Lock()
-	quiet := w.known && !w.unsettled && orgErr == nil &&
-		dirAt == w.dirAt && orgAt == w.orgAt
-	if quiet {
-		w.at = now
-		w.mu.Unlock()
-		return
-	}
-	previous := w.classes
-	w.mu.Unlock()
-
-	bindings, err := w.dir.SeatBindings(ctx)
-	if err != nil {
-		// UNREADABLE IS NOT CLEAR, and it is not "still dangling" either:
-		// the observation is not taken at all, so a firing alarm stays up
-		// on the reading it fired on and a residue that has not fired
-		// does not age through an outage it was not seen through. The
-		// clocks are kept, so a residue that outlives the outage is not
-		// made to wait out the grace again.
-		if errors.Is(err, store.ErrNoEstate) || errors.Is(err, context.Canceled) {
-			// A stop this process asked for — a shutdown, an
-			// adoption's rename — is not an unreadable directory.
-			return
-		}
-		w.walkFailed(ctx, now, err)
-		return
-	}
-	w.walkRecovered(ctx, now)
-	sighting, classes, settled := classify(ctx, w.org, bindings, previous,
-		orgAt, orgErr == nil)
-	w.record(now, sighting, classes, dirAt, orgAt, !settled || orgErr != nil)
-}
-
-// classify settles every binding, re-using a classification whose binding and
-// organisation have not moved since it was taken.
-//
-// A binding whose seat could not be judged is left out of the cache, so the
-// next observation asks again; settled reports whether there was none.
-func classify(ctx context.Context, chart session.Chart, bindings []iamdomain.SeatBinding,
-	previous map[string]classified, orgAt uint64, orgKnown bool) (
-	bindingSighting, map[string]classified, bool) {
-
-	out := bindingSighting{unknown: map[string]bool{}}
-	classes := make(map[string]classified, len(bindings))
-	settled := true
-	for _, b := range bindings {
-		if c, ok := previous[b.Person]; ok && orgKnown && c.orgAt == orgAt &&
-			c.binding == b {
-			classes[b.Person] = c
-			if c.dangling {
-				out.residues = append(out.residues, c.residue)
-			}
-			continue
-		}
-		residue, dangling, err := danglingBinding(ctx, chart, b)
-		if err != nil {
-			out.unknown[residue.key()] = true
-			settled = false
-			continue
-		}
-		if orgKnown {
-			classes[b.Person] = classified{binding: b, orgAt: orgAt,
-				residue: residue, dangling: dangling}
-		}
-		if dangling {
-			out.residues = append(out.residues, residue)
-		}
-	}
-	return out, classes, settled
-}
-
-// record folds one classification into the clocks.
-//
-// A RESIDUE THAT COULD NOT BE JUDGED THIS TIME STAYS A RESIDUE if it was one
-// before: a failed lookup says nothing about the binding, and dropping it would
-// clear a firing alarm on the failure and raise it again a beat after the
-// lookup recovered — two transitions on every surface for a state that never
-// changed.
-func (w *bindingWatch) record(now time.Time, s bindingSighting,
-	classes map[string]classified, dirAt statelog.Position, orgAt uint64,
-	unsettled bool) {
-
-	w.mu.Lock()
-	defer w.mu.Unlock()
-	residues := slices.Clone(s.residues)
-	for _, r := range w.seen {
-		if s.unknown[r.key()] {
-			residues = append(residues, r)
-		}
-	}
-	next := make(map[string]time.Time, len(residues))
-	for _, r := range residues {
-		if since, seen := w.first[r.key()]; seen {
-			next[r.key()] = since
-			continue
-		}
-		next[r.key()] = now
-	}
-	for key := range s.unknown {
-		if since, seen := w.first[key]; seen {
-			next[key] = since
-		}
-	}
-	// A RESIDUE THIS CLASSIFICATION FOUND CLEAR IS DROPPED, so the same
-	// binding dangling again later — a seat removed, restored and removed —
-	// starts a new clock rather than firing at once on an age it did not
-	// have.
-	w.first, w.at, w.seen, w.known = next, now, residues, true
-	w.classes, w.dirAt, w.orgAt, w.unsettled = classes, dirAt, orgAt, unsettled
-}
-
-// walkFailed notes a beat whose read of the bindings failed, and says so only
-// if it is the first of its run.
-//
-// # The rate is the alarm table's own
-//
-// The walk runs on the alarm heartbeat, so a directory that cannot be read
-// fails it every [statelog.AlarmInterval] — four lines a minute for as long as
-// the outage lasts, where the quarter-hourly evaluation it replaced wrote one.
-// A failing walk is a STATE of the same shape as an alarm: it holds for minutes
-// or days, and while it holds the `iam_binding_dangling` alarm is blind,
-// standing on the reading it last took. So it is said at the rate
-// [statelog.Tracker] says an alarm: once when it begins and once when it ends,
-// the second carrying how long it lasted — because a level repeated every beat
-// makes the log useless for the one thing an operator reads it for, when the
-// state STARTED, and the end is what says how long the alarm's silence meant
-// nothing. Both at WARN, as the tracker's pair is, so a filter that shows one
-// end shows the other.
-func (w *bindingWatch) walkFailed(ctx context.Context, now time.Time, err error) {
-	w.mu.Lock()
-	first := w.failingSince.IsZero()
-	if first {
-		w.failingSince = now
-	}
-	w.failed++
-	w.mu.Unlock()
-	if !first {
-		return
-	}
-	w.logger.WarnContext(ctx, "iam_binding_walk_failed", "err", err,
-		"detail", "the iam_binding_dangling alarm holds what it last "+
-			"observed until a read of the bindings succeeds; "+
-			"iam_binding_walk_recovered says when that is")
-}
-
-// walkRecovered notes a beat that read the bindings, and ends a run of failed
-// ones by saying how long it lasted.
-func (w *bindingWatch) walkRecovered(ctx context.Context, now time.Time) {
-	w.mu.Lock()
-	since, failed := w.failingSince, w.failed
-	w.failingSince, w.failed = time.Time{}, 0
-	w.mu.Unlock()
-	if since.IsZero() {
-		return
-	}
-	w.logger.WarnContext(ctx, "iam_binding_walk_recovered",
-		"for", now.Sub(since).Round(time.Second).String(), "failed_beats", failed,
-		"detail", "the bindings are readable again, and iam_binding_dangling "+
-			"reflects them from this beat")
-}
-
-// fill writes the latest observation into a reading.
-//
-// THE AGE IS FIRST SIGHTING TO LATEST OBSERVATION, never to now: a report
-// assembled between two beats knows the residue was there at the last one and
-// nothing since, so measuring to now would call a residue old that may have
-// been repaired a moment after the beat — and would let the screen fire an
-// alarm the gauge beside it, set at the beat, does not.
-func (w *bindingWatch) fill(out *statelog.Reading) {
-	if w == nil {
-		return
-	}
-	w.mu.Lock()
-	defer w.mu.Unlock()
-	if !w.known {
-		return
-	}
-	for _, r := range w.seen {
-		age := w.at.Sub(w.first[r.key()])
-		out.DanglingBindings++
-		if out.DanglingBindingSeat == "" || age > out.DanglingBindingFor {
-			out.DanglingBindingFor, out.DanglingBindingSeat = age, r.Seat
-		}
-	}
+	return false, "", nil
 }

@@ -2,7 +2,6 @@ package authapi_test
 
 import (
 	"encoding/json"
-	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"slices"
@@ -10,7 +9,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/crewlet/crewlet/internal/api/authapi"
 	"github.com/crewlet/crewlet/internal/api/httpjson"
 	"github.com/crewlet/crewlet/internal/iam/credential"
 	"github.com/crewlet/crewlet/internal/iam/session"
@@ -282,7 +280,8 @@ func TestAnUnvouchedUnknownSendsTheCallerElsewhere(t *testing.T) {
 // unavailability it was, a client was told to come back for a person who no
 // longer exists. Each way in answers what it already answers for somebody who
 // is not there: the sign-in's generic refusal, a session that has ended, a
-// session already ended, a link that has stopped working.
+// session already ended. A redemption is not among them: it creates a person
+// nobody has ever removed.
 //
 // Mutation: drop any route's removal arm and its row answers 503.
 func TestAWriteNamingARemovedPersonIsNeverA503(t *testing.T) {
@@ -347,23 +346,6 @@ func TestAWriteNamingARemovedPersonIsNeverA503(t *testing.T) {
 			t.Errorf("answered %d %s, want 401 session_revoked", rec.Code, rec.Body)
 		}
 	})
-	for name, refusal := range map[string]error{
-		"an invitation's redemption":                      gone,
-		"an invitation whose operation names another one": fmt.Errorf("%w: %w", iamdomain.ErrOperationReused, &statelog.Unavailable{Reason: statelog.ReasonOpReused}),
-	} {
-		t.Run(name, func(t *testing.T) {
-			t.Parallel()
-			writer := &recordingWriter{refusals: []error{refusal}}
-			mux := http.NewServeMux()
-			buildWith(t, bootstrapFor(t), func(o *authapi.Options) {
-				o.Directory = liveInvitation{}
-				o.Writer = writer
-			}).Routes(mux)
-			if got := redeem(t, mux, "dana.sre"); got != http.StatusGone {
-				t.Errorf("answered %d, want 410: the link has stopped working", got)
-			}
-		})
-	}
 }
 
 // A VERIFIER ANOTHER REWRITE ALREADY MOVED IS NOT WRITTEN AGAIN.

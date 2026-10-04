@@ -47,10 +47,9 @@ type GateCandidate struct {
 
 	// About is a record ABOUT object id published on a subject that does
 	// NOT name it, for a domain that has such records — the identity
-	// estate's claims, sessions and spends, which arbitrate on an address,
-	// a login or a lineage while the person a removal gates them by is in
-	// the payload. Nil for a domain whose every record names its object in
-	// its subject.
+	// estate's directory records and sessions, which name their person in
+	// the payload while their subject names nobody, or a lineage. Nil for a
+	// domain whose every record names its object in its subject.
 	//
 	// Set, the cases apply one about a purged object (which the applier
 	// must drop) and one about a live object, and ask the reader about each

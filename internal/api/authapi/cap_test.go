@@ -124,7 +124,6 @@ func TestEverySignInArmWaitsForTheVerifyCap(t *testing.T) {
 		"nobody at that address":            signIn("gone@example.com", rightPassword),
 		"a directory this node cannot read": signIn("broken.store", rightPassword),
 		"a person suspended":                signIn("sam.suspended", rightPassword),
-		"an enrolment nobody finished":      signIn("half.enrolled", rightPassword),
 		"a person who holds no password":    signIn("no.password", rightPassword),
 		"a wrong password":                  signIn("dana.sre", "not-the-passphrase-at-all"),
 		"a step-up": postFrom(gone, mux, "/auth/step-up", from(),

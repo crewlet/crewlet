@@ -95,8 +95,6 @@ export interface DirectoryRow {
   email?: string;
   /** Ciphertext this node's keyring cannot open — a STATE, never an empty name. */
   sealed?: boolean;
-  /** An enrolment whose claims landed and whose content record has not. */
-  reserved?: boolean;
   /** The seat the row is bound to, by its handle. */
   seat?: string;
   grants?: string[] | null;
@@ -143,7 +141,8 @@ export interface SeatRow {
   name: string;
   /** The key of the unit the seat sits in, "" at the root. */
   unit?: string;
-  holders: { person: string; login?: string; stage?: string }[];
+  /** Whoever the directory binds to it, absent for a seat nobody holds. */
+  holder?: { person: string; login?: string; stage?: string };
 }
 
 /** One of this node's Tier A tokens, by label, joined to its directory row. */
@@ -151,14 +150,15 @@ export interface NodeToken {
   id: string;
   /** `token:<id>`, the login the token acts under. */
   login: string;
-  /** `none`, `reserved` or `held`. */
+  /** `none` or `held`. */
   row: string;
   person?: string;
   stage?: string;
+  /**
+   * The seat the row binds the token to, by handle — what the row holds, never
+   * a verdict: whether the company still holds it is `/iam/check`'s finding.
+   */
   seat?: string;
-  /** `bound`, `unbound`, `dangling` or `unknown`. */
-  binding: string;
-  detail?: string;
 }
 
 /** One row of `GET /iam/check`. */
@@ -168,8 +168,6 @@ export interface DirectoryFinding {
   login?: string;
   seat?: string;
   grant?: string;
-  claim?: string;
-  people?: string[] | null;
   detail: string;
 }
 
@@ -235,36 +233,7 @@ export const TOKEN_ROW_WORDS: Record<string, Words> = {
     tone: "neutral",
     hint: "Nobody in the directory holds this login, so the token acts as itself and is bound to no seat. Bind it with crewlet iam if it should act as one.",
   },
-  reserved: {
-    label: "Reservation",
-    tone: "warning",
-    hint: "An enrolment claimed this login and stopped before its record landed. Remove the reservation's id to release it.",
-  },
   held: { label: "Row", tone: "success", hint: "A directory row holds this login." },
-};
-
-/** Whether a token's row names a seat the chart still holds. */
-export const BINDING_WORDS: Record<string, Words> = {
-  bound: {
-    label: "Acts as its seat",
-    tone: "success",
-    hint: "The row names a human seat the chart holds, so what this token writes is recorded as that seat.",
-  },
-  unbound: {
-    label: "Acts as itself",
-    tone: "neutral",
-    hint: "The row names no seat, so the token writes under its own login.",
-  },
-  dangling: {
-    label: "Seat gone",
-    tone: "warning",
-    hint: "The row names a seat this node's chart no longer holds as a human seat, so the token is refused acting as it.",
-  },
-  unknown: {
-    label: "Could not tell",
-    tone: "neutral",
-    hint: "This node could not read the chart just now to say whether the seat is still there.",
-  },
 };
 
 /** The directory report's kinds, in the engine's order (`iamapi.FindingKinds`). */
@@ -273,8 +242,6 @@ export const FINDING_WORDS: Record<string, { label: string; tone: Tone }> = {
   person_without_credential: { label: "Active, no credential", tone: "warning" },
   binding_dangling: { label: "Seat gone", tone: "warning" },
   grant_clamped_by_ceiling: { label: "Grant withheld here", tone: "neutral" },
-  claim_duplicated: { label: "Held twice", tone: "danger" },
-  claim_orphaned: { label: "Reservation left behind", tone: "warning" },
 };
 
 /** What a credential method is called. */
@@ -394,9 +361,9 @@ export function PeopleAndAccess() {
   const people = useMemo(() => directory.data ?? [], [directory.data]);
   const active = people.filter((p) => p.stage === "active").length;
   const seatRows = useMemo(() => seats.data ?? [], [seats.data]);
-  const unheld = seatRows.filter((s) => s.holders.length === 0).length;
+  const unheld = seatRows.filter((s) => !s.holder).length;
   const tokenRows = useMemo(() => tokens.data ?? [], [tokens.data]);
-  const boundTokens = tokenRows.filter((t) => t.binding === "bound").length;
+  const boundTokens = tokenRows.filter((t) => t.seat).length;
   const openedRow = people.find((p) => p.id === opened) ?? null;
 
   return (
@@ -457,7 +424,7 @@ export function PeopleAndAccess() {
                 icon={<KeyGlyph size="xs" />}
                 label="API tokens on this node"
                 value={tokens.data ? tokenRows.length : EMPTY_VALUE}
-                sub={tokens.data ? `${boundTokens} acting as a seat` : "not read"}
+                sub={tokens.data ? `${boundTokens} bound to a seat` : "not read"}
               />
             </StatGroup>
           </Card>
@@ -507,28 +474,13 @@ export function PeopleAndAccess() {
                   header: "Stage",
                   shrink: true,
                   sortValue: (p) => p.stage,
-                  cell: (p) =>
-                    p.reserved ? (
-                      <Tag
-                        size="sm"
-                        variant="warning"
-                        title="An enrolment's claims landed and its record has not: this row holds an address, a login or a seat and is nobody yet."
-                      >
-                        Reservation
-                      </Tag>
-                    ) : (
-                      <WordTag words={STAGE_WORDS[p.stage]} fallback={p.stage} />
-                    ),
+                  cell: (p) => <WordTag words={STAGE_WORDS[p.stage]} fallback={p.stage} />,
                 },
                 {
                   key: "seat",
                   header: "Seat",
                   sortValue: (p) => p.seat ?? "",
-                  cell: (p) => {
-                    if (!p.seat) return <EmptyValue label="Bound to no seat" />;
-                    const seat = index.byHandle.get(p.seat);
-                    return <SeatCell handle={p.seat} name={seat?.name ?? p.seat} kind="human" />;
-                  },
+                  cell: (p) => <BoundSeat seat={p.seat} index={index} />,
                 },
                 {
                   key: "grants",
@@ -578,10 +530,10 @@ export function PeopleAndAccess() {
                     },
                   },
                   {
-                    key: "holders",
+                    key: "holder",
                     header: "Held by",
-                    sortValue: (s) => s.holders.length,
-                    cell: (s) => <Holders holders={s.holders} />,
+                    sortValue: (s) => s.holder?.login ?? s.holder?.person ?? "",
+                    cell: (s) => <Holder holder={s.holder} />,
                   },
                   {
                     key: "reach",
@@ -643,11 +595,11 @@ export function PeopleAndAccess() {
                     cell: (t) => <WordTag words={TOKEN_ROW_WORDS[t.row]} fallback={t.row} />,
                   },
                   {
-                    key: "binding",
-                    header: "Acts as",
+                    key: "seat",
+                    header: "Seat",
                     floor: "10rem",
-                    sortValue: (t) => t.binding,
-                    cell: (t) => <TokenBinding token={t} index={index} />,
+                    sortValue: (t) => t.seat ?? "",
+                    cell: (t) => <BoundSeat seat={t.seat} index={index} />,
                   },
                 ]}
               />
@@ -712,21 +664,16 @@ function Grants({ grants }: { grants?: string[] | null }) {
 }
 
 /** Whoever holds a seat, by login and stage — or the plain fact that nobody does. */
-function Holders({ holders }: { holders: SeatRow["holders"] }) {
-  if (holders.length === 0) return <EmptyValue label="Nobody holds it" />;
+function Holder({ holder }: { holder: SeatRow["holder"] }) {
+  if (!holder) return <EmptyValue label="Nobody holds it" />;
   return (
-    <span className="row gap-1" style={{ flexWrap: "wrap" }}>
-      {holders.map((h) => (
-        <Tag
-          key={h.person}
-          size="sm"
-          variant={STAGE_WORDS[h.stage ?? ""]?.tone ?? "neutral"}
-          title={STAGE_WORDS[h.stage ?? ""]?.label ?? h.stage}
-        >
-          <span className="mono">{h.login || h.person}</span>
-        </Tag>
-      ))}
-    </span>
+    <Tag
+      size="sm"
+      variant={STAGE_WORDS[holder.stage ?? ""]?.tone ?? "neutral"}
+      title={STAGE_WORDS[holder.stage ?? ""]?.label ?? holder.stage}
+    >
+      <span className="mono">{holder.login || holder.person}</span>
+    </Tag>
   );
 }
 
@@ -745,26 +692,20 @@ function Contacts({ contact }: { contact: ConfigRole["contact"] }) {
   );
 }
 
-/** What a token acts as: the seat it is bound to, or why it is not. */
-function TokenBinding({ token, index }: { token: NodeToken; index: ReturnType<typeof indexOrg> }) {
-  const words = BINDING_WORDS[token.binding];
-  const tag = (
-    <Tag
-      size="sm"
-      variant={words?.tone ?? "neutral"}
-      title={token.detail ? sentence(token.detail) : words?.hint}
-    >
-      {words?.label ?? token.binding}
-    </Tag>
-  );
-  if (token.binding !== "bound" || !token.seat) return tag;
-  const seat = index.byHandle.get(token.seat);
-  return (
-    <span className="row gap-2">
-      <SeatCell handle={token.seat} name={seat?.name ?? token.seat} kind="human" />
-      {tag}
-    </span>
-  );
+/**
+ * The seat a directory row binds — a person's or a token's — or the plain fact
+ * that it binds none. What the row holds, never a verdict on it: a seat the
+ * company no longer holds is the report's finding, below.
+ *
+ * THE KIND IS THE CHART'S, never assumed: a row bound to an AGENT seat is the
+ * residue the report names, and drawn with a person's badge this cell would
+ * state the opposite of the chart on the row the report calls dangling. A seat
+ * the chart does not hold has no kind, which the cell draws as its default.
+ */
+function BoundSeat({ seat, index }: { seat?: string; index: ReturnType<typeof indexOrg> }) {
+  if (!seat) return <EmptyValue label="Bound to no seat" />;
+  const held = index.byHandle.get(seat);
+  return <SeatCell handle={seat} name={held?.name ?? seat} kind={held?.kind} />;
 }
 
 /**
@@ -791,7 +732,7 @@ function Findings({ check }: { check: RestResult<DirectoryCheck | null> }) {
           {findings.map((f, i) => {
             const words = FINDING_WORDS[f.kind];
             return (
-              <div key={`${f.kind}:${f.person ?? f.claim ?? f.seat ?? i}`} className="row gap-2">
+              <div key={`${f.kind}:${f.person ?? f.seat ?? i}`} className="row gap-2">
                 <Tag size="sm" variant={words?.tone ?? "neutral"}>
                   {words?.label ?? f.kind}
                 </Tag>

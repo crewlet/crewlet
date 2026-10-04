@@ -123,8 +123,8 @@ type retention struct {
 	// quarter-hour because none summarises anything that moves faster than
 	// a corpus, a day or a tick. Every other input the reading carries —
 	// apply lag, the backup register, the maintenance window, free space,
-	// the other windowed metrics, the bindings' observation, each log's
-	// held record and whether each log's floor can be read — is re-read on
+	// the other windowed metrics, each log's held record and whether each
+	// log's floor can be read — is re-read on
 	// every [statelog.AlarmInterval] beat. See [retention.measureCoverage]
 	// and [retention.heartbeat].
 	coverFraction float64
@@ -140,11 +140,6 @@ type retention struct {
 	// Guarded by mu, for the coverage cache's reason. See lograte.go.
 	rates map[string]*uint64
 
-	// bindings follows the seat bindings this node's chart does not hold,
-	// for `iam_binding_dangling`. Nil on an engine with no core runtime.
-	// See bindings.go.
-	bindings *bindingWatch
-
 	// floors follows how long this node has been unable to read the trim
 	// floor, for `floor_unknown`. See floorwatch.go.
 	floors *floorWatch
@@ -154,9 +149,9 @@ type retention struct {
 	now func() time.Time
 
 	// beating serialises one alarm evaluation against another: the
-	// heartbeat and the trim tick both evaluate, and two observations of
-	// the bindings interleaved would each fold the other's half-read state
-	// into the clocks.
+	// heartbeat and the trim tick both evaluate, and two interleaved would
+	// fold an earlier beat's look at the floors over a later one's and hand
+	// the tracker an older reading after a newer one.
 	beating sync.Mutex
 
 	// logger is where a block's transitions are said; nil is the package's
@@ -196,7 +191,6 @@ func (e *Engine) startRetention(ctx context.Context, boot *config.Bootstrap, s *
 		alarms:      statelog.NewTracker(e.metrics, nil),
 		coverage:    e.vectorCoverage,
 		pooled:      map[string]poolCounters{},
-		bindings:    newBindingWatch(e),
 		floors:      newFloorWatch(e.backends.Fleet.Floors),
 	}
 	// DETACHED from the caller's context, for the reason every other
@@ -370,9 +364,8 @@ func (r *retention) evaluate(ctx context.Context) {
 // by the trim's quarter-hour silently raised each of them to fifteen minutes.
 // The expensive measurements stay on the trim's tick and are read back here;
 // what a beat reads is what the report reads — one listing of each fleet
-// fact and one state read per log — plus one observation of the bindings,
-// which reads nothing that has not moved (see bindings.go), and one of the
-// trim floor, which is a single listing (see floorwatch.go).
+// fact and one state read per log — plus one observation of the trim floor,
+// which is a single listing (see floorwatch.go).
 func (r *retention) heartbeat(ctx context.Context) {
 	ticker := time.NewTicker(statelog.AlarmInterval)
 	defer ticker.Stop()
@@ -386,14 +379,12 @@ func (r *retention) heartbeat(ctx context.Context) {
 	}
 }
 
-// beat is one alarm evaluation: the bindings and the trim floor observed, and
-// the table evaluated against everything the report reads.
+// beat is one alarm evaluation: the trim floor observed, and the table
+// evaluated against everything the report reads.
 func (r *retention) beat(ctx context.Context) {
 	r.beating.Lock()
 	defer r.beating.Unlock()
-	now := r.clock()
-	r.bindings.observe(ctx, now)
-	r.floors.observe(ctx, now, r.floorSubjects())
+	r.floors.observe(ctx, r.clock(), r.floorSubjects())
 	if r.alarms == nil {
 		return
 	}

@@ -447,12 +447,6 @@ func (r *retention) reading(ctx context.Context, now time.Time,
 		out.ApplyLag = max(out.ApplyLag, applyLagOf(health, running))
 	}
 	out.SemanticCoverage = r.semanticCoverage()
-	// THE HEARTBEAT'S OBSERVATION, read back rather than taken, for the same
-	// reason as the rates — and because a binding's age is an interval
-	// between observations, which one per poll would make whatever the poll
-	// rate is. An unreadable floor's age is one too, and is read back per
-	// log in [retention.Report].
-	r.bindings.fill(&out)
 	r.space(&out)
 	r.maintenance(ctx, now, &out)
 	r.observed(&out)

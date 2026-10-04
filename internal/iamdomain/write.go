@@ -13,7 +13,6 @@ import (
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/iam/session"
-	"github.com/crewlet/crewlet/internal/logging"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/store"
 )
@@ -28,13 +27,15 @@ import (
 //
 // # What this domain adds to the rule
 //
-// EVERY CLAIM IS A CREATE AT ZERO. There is no unique index anywhere in this
-// estate and there cannot be one, so an address, a login and a seat binding are
-// kept single-holder by the broker refusing the second publish on their
-// subject — which means the create pattern is not an occasional path here, it
-// is the hot path of every enrolment, every address change and every seat
-// assignment. [Fence.ClearForZero] is what stops a node below the trim floor
-// guessing that an absent anchor means an unclaimed address.
+// UNIQUENESS IS DECIDED ON ONE SUBJECT. There is no unique index anywhere in
+// this estate and there cannot be one, so every write that sets or frees a
+// login, an address or a seat is a record on the DIRECTORY subject
+// ([Writer.publishDirectory]): its decide reads the whole directory in its own
+// snapshot and refuses a value somebody else holds, and the broker refuses a
+// second write decided from the same snapshot. What the snapshot cannot vouch
+// for is a record this node RETAINED, which still moved the subject's anchor
+// without writing its rows — so a decide that takes a value first asks whether
+// any such record exists ([wholeDirectory]).
 //
 // AND THE READ INSIDE THE SNAPSHOT IS ADVISORY WHERE IT CROSSES A LOG. A seat
 // binding is checked against the ORG CHART, which is a different domain on a
@@ -61,8 +62,8 @@ type Writer struct {
 	// decided against it is paired with an expectation.
 	db *store.DB
 
-	// blinds derives the subject a claim on an address arbitrates on, and
-	// sealer seals the values that belong to somebody.
+	// blinds derives the blind a directory decide compares an address by,
+	// and sealer seals the values that belong to somebody.
 	//
 	// A WRITER WITH NEITHER CAN STILL DO MOST OF THIS. Ending a session,
 	// bumping an epoch, suspending somebody and removing them need no key
@@ -127,31 +128,6 @@ type Writer struct {
 	// so the zero value is fail-closed rather than refused.
 	Grants []iam.Grant
 
-	// seq is this writer's SEQUENCE — the high-water mark a party's
-	// successive writes hand forward, so each decides from a state
-	// containing the one before it — or nil on a SHARED writer.
-	//
-	// # Two kinds of writer, and why the shared one carries no mark
-	//
-	// [NewWriter] builds the SHARED writer: the node's own, handed to the
-	// identity duties, the sign-in surface and every request that acts as
-	// the deployment, concurrently. It used to carry the mark itself, and
-	// that was a data race — the sweep, the probe and every sign-in
-	// advanced one unguarded field from their own goroutines — and a wrong
-	// answer even where it did not race: one gesture's position became the
-	// session wait of an unrelated one, so a sign-in waited for the sweep's
-	// records to apply. So a shared writer holds nothing mutable, and each
-	// of its calls is a gesture of its own: a multi-step call (an
-	// enrolment is claim, claim, person) sequences its own steps and hands
-	// nothing to the next call.
-	//
-	// [Writer.As] builds a SEQUENCE: one party's writer, for one request,
-	// whose calls are ordered — the directory surface's enrol-then-bind is
-	// two calls, and the bind's decide reads the enrolment's row. A
-	// sequence is one goroutine's and is not safe for concurrent use; the
-	// surface derives one per request precisely so that it never is.
-	seq *sequence
-
 	// Now is the writer's clock, for the AUTHORED instant only. Nothing
 	// this clock produces reaches a row: every instant the applier stores
 	// is the broker's, which is what makes one node's copy byte-identical
@@ -203,7 +179,7 @@ type WriterDeps struct {
 	Publisher *statelog.Publisher
 	DB        *store.DB
 
-	// Blinds derives claim subjects, and Sealer seals the values that
+	// Blinds derives address blinds, and Sealer seals the values that
 	// belong to somebody. Both optional: see [Writer.blinds].
 	Blinds Blinds
 	Sealer *Sealer
@@ -252,8 +228,9 @@ func NewWriter(deps WriterDeps) (*Writer, error) {
 	if now == nil {
 		now = time.Now
 	}
-	// SHARED: no sequence, so nothing about one call survives into the
-	// next and the writer is safe for concurrent use. See [Writer.seq].
+	// SAFE FOR CONCURRENT USE: nothing a call writes outlives it, so the
+	// node's own writer serves the sign-in surface, the duties and every
+	// request that acts as the deployment at once.
 	return &Writer{
 		publisher: deps.Publisher, db: deps.DB,
 		blinds: deps.Blinds, sealer: deps.Sealer, seats: deps.Seats,
@@ -262,8 +239,7 @@ func NewWriter(deps WriterDeps) (*Writer, error) {
 	}, nil
 }
 
-// As is a writer for the party a principal is, sharing this one's plumbing,
-// whose calls form ONE SEQUENCE.
+// As is a writer for the party a principal is, sharing this one's plumbing.
 //
 // THE PARTY IS THE PRINCIPAL, derived whole and in one place: the name its
 // records and events carry and the credential beside it ([iam.ActorFor]), its
@@ -276,12 +252,8 @@ func NewWriter(deps WriterDeps) (*Writer, error) {
 // which is the whole point: a surface serving many parties derives one writer
 // per request, and grants, a credential or an id that carried forward would
 // hand the next caller the last one's authority — or the last one's name on
-// their events.
-//
-// THE SEQUENCE IS FRESH, and deriving one is safe from any goroutine: nothing
-// it copies is ever written after construction, so a sign-in publishing
-// through the shared writer and a request deriving its own from it at the same
-// instant touch no common state.
+// their events. Deriving one is safe from any goroutine: nothing it copies is
+// ever written after construction.
 func (w *Writer) As(p iam.Principal) *Writer {
 	if w == nil {
 		return nil
@@ -296,20 +268,7 @@ func (w *Writer) As(p iam.Principal) *Writer {
 	if p.ID != uuid.Nil {
 		next.Principal = p.ID.String()
 	}
-	next.seq = &sequence{}
 	return &next
-}
-
-// sequence is one party's high-water mark across the calls of a request.
-type sequence struct{ after statelog.Position }
-
-// gesture is the mark one call's steps hand forward: the writer's own sequence
-// when it has one, and a fresh mark of the call's own when it is shared.
-func (w *Writer) gesture() *statelog.Position {
-	if w.seq != nil {
-		return &w.seq.after
-	}
-	return new(statelog.Position)
 }
 
 // announce publishes one decided fact once its record is known to have landed.
@@ -358,28 +317,6 @@ var ErrCollapsed = fmt.Errorf("iamdomain: this operation landed as a copy "+
 // already moved past the one it was asked about. [Writer.request] turns it
 // into the framework's empty decision, which answers `applied` with no record.
 var errNothingToPublish = errors.New("iamdomain: nothing to publish")
-
-// writeLog is where the writer says what it could not report as an outcome:
-// a record that closes a trail rather than one a gesture is built on.
-var writeLog = logging.Get("iam.write")
-
-// unresolved is a SEQUENCE's answer when one of its steps could not be
-// resolved: unknown, under the GESTURE's operation id.
-//
-// # Three outcomes stay three, a step's included
-//
-// An enrolment claims an address, then a login, then writes the person; a
-// rename claims the new login and then releases the old. A step whose outcome
-// nothing can establish may or may not be on the log, and the step after it
-// would be built on a guess — so the gesture stops there and says unknown,
-// exactly as a single write would. It is answered under the gesture's own id
-// because that is what a caller retries under: every step's id is derived
-// from it, so the retry lands exactly the steps that did not. A move's release
-// is the one step this does not reach: nothing is built on it, so its outcome
-// is the old token's trail's and never the gesture's (see [Writer.replace]).
-func unresolved(opID string) statelog.Result {
-	return statelog.Result{Outcome: statelog.OutcomeUnknown, OpID: opID}
-}
 
 // grantDelta is what one write added to a grant set and what it took away,
 // each sorted, so two nodes describing one write describe it identically.
@@ -461,45 +398,137 @@ func (w *Writer) mayAdminister(op OpKind) error {
 // whose tests use a stub writer.
 const AdminGrant = iam.GrantPeopleManage
 
-// publish runs one decide through the framework's own write authority, as a
-// gesture of its own on a shared writer or as the next step of a sequence.
+// publish runs one decide through the framework's own write authority.
 //
-// EVERY PATH IN THIS FILE GOES THROUGH IT or through [Writer.publishAt], which
-// is what makes the actor, the clock and the high-water mark impossible to
-// forget: a decide that built its own [statelog.Request] would be one append
-// that did not carry them.
+// EVERY PATH IN THIS FILE GOES THROUGH IT, which is what makes the actor and
+// the clock impossible to forget: a decide that built its own
+// [statelog.Request] would be one append that did not carry them.
 func (w *Writer) publish(ctx context.Context, req statelog.Request) (
 	statelog.Result, error) {
-
-	return w.publishAt(ctx, w.gesture(), req)
-}
-
-// publishAt runs one STEP of a gesture that writes more than once, waiting for
-// the mark the steps before it left and advancing it.
-func (w *Writer) publishAt(ctx context.Context, at *statelog.Position,
-	req statelog.Request) (statelog.Result, error) {
 
 	// NO MINT INSTANT BESIDE THE ID: the id carries its own
 	// ([statelog.OpMintedAt]), and one stamped here would be this CALL's —
 	// later than the mint on every retry, which is the one case the ledger
 	// cannot vouch for.
-	req.Session = *at
 	result, err := w.publisher.Publish(ctx, req)
 	var refused *statelog.Unavailable
 	if errors.As(err, &refused) && refused.Reason == statelog.ReasonOpReused {
 		// THE FRAMEWORK'S "this id already names another write", in this
 		// domain's words. Every create here derives what it creates from its
-		// operation KEY, so a key reused for another address or another login
-		// is refused by the ledger before any decide runs — and a caller that
-		// answers a reused key with 409 and a fresh key asks for this
-		// domain's sentinel, which the framework cannot know. Both stay
-		// readable: the refusal is still the framework's, with its position.
+		// operation KEY, so a key reused for another request is refused by
+		// the ledger before any decide runs — and a caller that answers a
+		// reused key with 409 and a fresh key asks for this domain's
+		// sentinel, which the framework cannot know. Both stay readable: the
+		// refusal is still the framework's, with its position.
 		err = fmt.Errorf("%w: %w", ErrOperationReused, err)
 	}
-	if err == nil && result.Position.Packed() > at.Packed() {
-		*at = result.Position
-	}
 	return result, err
+}
+
+// publishDirectory publishes one record on the DIRECTORY subject.
+//
+// # The scope is read before the snapshot and confirmed inside it
+//
+// A record's scope is stated before the framework takes the snapshot its
+// decide runs in — the framework needs it to probe for a deferral and to wait
+// — and a directory record's scope depends on rows: the buckets of the people
+// whose removal tombstones a seat bind stamps ([leaversOf]), and of the
+// address a removal erases ([eraseSealed]). So scopeOf is asked once
+// outside and again inside, and a round whose snapshot names a bucket the
+// scope did not publishes nothing and is read again — at most
+// [directoryScopeAttempts] times.
+//
+// decide forms the payload in the record's own snapshot, or refuses.
+func (w *Writer) publishDirectory(ctx context.Context, op OpKind, person, opID,
+	reason string, scopeOf func(context.Context, *sql.Tx) (ScopeSet, error),
+	decide func(*sql.Tx) ([]byte, error)) (statelog.Result, error) {
+
+	for attempt := 1; ; attempt++ {
+		var scope ScopeSet
+		if err := w.db.Replicated().Read(ctx, func(tx *sql.Tx) (err error) {
+			scope, err = scopeOf(ctx, tx)
+			return err
+		}); err != nil {
+			return statelog.Result{}, err
+		}
+		rec, err := w.record(DirectorySubject(), op, person, scope, nil, reason)
+		if err != nil {
+			return statelog.Result{}, err
+		}
+		result, err := w.publish(ctx, w.request(ctx, &rec, opID,
+			statelog.PatternArbitrated, func(tx *sql.Tx) (err error) {
+				var now ScopeSet
+				if now, err = scopeOf(ctx, tx); err != nil {
+					return err
+				}
+				if !scope.Covers(now) {
+					return errScopeMoved
+				}
+				rec.Mutation, err = decide(tx)
+				return err
+			}))
+		if !errors.Is(err, errScopeMoved) || attempt == directoryScopeAttempts {
+			return result, err
+		}
+	}
+}
+
+// errScopeMoved is a directory record whose snapshot named a bucket its scope,
+// read a moment before, did not cover. [Writer.publishDirectory] reads it
+// again.
+var errScopeMoved = fmt.Errorf("iamdomain: the people a directory record "+
+	"writes moved between reading its scope and deciding it: %w",
+	statelog.ErrConflict)
+
+// directoryScopeAttempts bounds how often a directory record re-reads a scope
+// its snapshot overtook.
+//
+// THREE, for the reason every bounded re-read here gives: what moves the set is
+// a removal of the seat's earlier holder, or an invitation redeemed at the
+// person's address, between two reads a few milliseconds apart — each of which
+// lands once — and a set still moving after two re-reads is being rewritten in
+// a loop, worth the conflict it answers rather than a write that spins on it.
+const directoryScopeAttempts = 3
+
+// wholeDirectory refuses a decide that reads the whole directory on a node
+// that RETAINS a record it could not apply.
+//
+// # Why a decide that takes a value asks this
+//
+// A directory decide calls a login, an address or a seat FREE because no row
+// in its snapshot holds it. A record this node retained — a newer build's, one
+// signed under a keyring key it was not restarted with — moved the directory's
+// anchor without writing its rows, so it may be the very record that took the
+// value, and the broker would accept a write decided from rows that do not
+// hold it. The framework's own probe ([statelog.Snap]) asks only about the
+// buckets the record declares, which is the people it writes, never the
+// people whose values it compares against — so this asks the WHOLE deferral
+// index.
+//
+// THE FRAMEWORK'S OWN REFUSAL, `deferred`, so every surface already maps it to
+// a 503 another node can serve. It costs a node holding any retained record its
+// directory writes for the length of a rolling upgrade, which is when they are
+// rarest. A REMOVAL does not ask it: it frees values rather than taking one,
+// and a record retained about the same person is refused by the framework's
+// probe over the removal's own buckets.
+func wholeDirectory(ctx context.Context, tx *sql.Tx) error {
+	d, hit, err := statelog.DeferredIn(ctx, tx, Domain{},
+		RootScope().Resolve(DirectorySubject()))
+	if err != nil {
+		return fmt.Errorf("iamdomain: ask whether this node retains a record "+
+			"the directory may hold: %w", err)
+	}
+	if !hit {
+		return nil
+	}
+	return &statelog.Unavailable{
+		Reason:   statelog.ReasonDeferred,
+		Position: d.Position,
+		Detail: fmt.Sprintf("this node holds a record at version %d it cannot "+
+			"decode, at %s, and a directory decision reads every person's "+
+			"login, address and seat — that record may hold one of them, so "+
+			"another node can decide this", d.Version, d.Position),
+	}
 }
 
 // record builds one of this writer's records, with everything the writer
@@ -559,8 +588,8 @@ func (w *Writer) record(subject Subject, op OpKind, person string,
 //
 // THE RECORD IS TAKEN BY POINTER, and that is what lets a decide FILL IT. Half
 // the gestures in this domain form their payload inside the snapshot — a
-// revocation reads the epoch it is bumping, a seat claim reads the chart
-// position it was decided at, a removal reads the claims it is releasing — and
+// revocation reads the epoch it is bumping, an identity change reads the login
+// and the seat it leaves alone, a removal reads the values it is releasing — and
 // the framework may run a decide AGAIN against a fresh snapshot, so the
 // mutation the encode below reads has to be the one the last run produced.
 // Taken by value, every one of those wrote into a copy nothing encoded and
@@ -611,8 +640,8 @@ func (w *Writer) request(ctx context.Context, rec *MutationRecord, opID string,
 }
 
 // removedPersonIn refuses, inside a decide's snapshot, a record about a person
-// a removal has destroyed whose SUBJECT is not that person's own — a claim, a
-// release, a session, a spend.
+// a removal has destroyed whose SUBJECT is not that person's own — a directory
+// record, a session.
 //
 // # Why the domain asks here and the framework does not
 //
@@ -622,9 +651,10 @@ func (w *Writer) request(ctx context.Context, rec *MutationRecord, opID string,
 // gate decodes — and which the publisher-side reader reads too only for the
 // body it is handed ([gatedPerson]): a record this node appended and a removal
 // raced is named `deleted` there, but a person removed BEFORE the snapshot
-// would have had the record appended only to be dropped by every node.
-// Refused here, it is refused as what it is before anything is appended, with
-// the reason the resolution would have given for a person's own subject.
+// would have had the record appended only to be dropped by every node — a
+// second removal of somebody already removed among them. Refused here, it is
+// refused as what it is before anything is appended, with the reason the
+// resolution would have given for a person's own subject.
 //
 // ONE PRIMARY-KEY READ, and only on a record that names a person: an
 // invitation, a sweep, an invalidation and the log's own gates name nobody.

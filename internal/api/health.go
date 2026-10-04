@@ -120,8 +120,8 @@ type Health struct {
 	// interval it runs at, in seconds — `{}` on a node that armed none.
 	// Always an object, for Seats' reason: the engine always knows what
 	// it armed, so a null would be a claim this body never has to make. It
-	// is where an operator reads that the retention sweep and the claim
-	// report are running at all, and at which interval each runs.
+	// is where an operator reads that the retention sweep is running at
+	// all, and at which interval.
 	IdentityDutySeconds map[string]float64 `json:"identity_duty_seconds"`
 
 	// StallLagSeconds is how far behind this node's watched duty is,

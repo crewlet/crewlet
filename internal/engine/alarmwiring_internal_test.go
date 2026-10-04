@@ -27,50 +27,6 @@ import (
 // `floor_unknown` shipped unable to fire, and `trim_blocked` able to fire on
 // every fresh fleet.
 
-// A BINDING TO AN AGENT'S SEAT FIRES `iam_binding_dangling` — through the real
-// directory, the real seat view and the real alarm tracker.
-func TestTheDanglingBindingAlarmFiresOnARunningNode(t *testing.T) {
-	t.Parallel()
-	ctx := t.Context()
-	e := bootDirectoryNode(t, nil)
-	r := quietRetention(t, e)
-	if r.bindings == nil {
-		t.Fatal("a node running the identity domain armed no binding watch")
-	}
-
-	// A MACHINE BOUND TO THE CEO'S SEAT, which is an agent's: a settled
-	// residue, refused 403 on every request it makes.
-	bot := uuid.Must(uuid.NewV7()).String()
-	writer := e.IAMWriter()
-	if _, err := writer.Enrol(ctx, iamdomain.Enrolment{
-		PersonID: bot, Kind: iam.KindMachine, Stage: iam.StageActive,
-		Login: "ci:bot", OpID: "op-enrol-bot", Reason: "a pipeline",
-	}); err != nil {
-		t.Fatalf("enrol: %v", err)
-	}
-	if _, err := writer.Claim(ctx, iamdomain.KindSeat, "ceo", bot, "op-bind-bot"); err != nil {
-		t.Fatalf("bind: %v", err)
-	}
-	awaitBinding(t, e, bot)
-
-	t0 := time.Now().UTC()
-	r.now = func() time.Time { return t0 }
-	r.beat(ctx)
-	if alarmed(r.Report(ctx), statelog.KindBindingDangling) {
-		t.Fatal("a residue seen once fired before it outlived the stall grace")
-	}
-	r.now = func() time.Time { return t0.Add(statelog.StallGrace + statelog.AlarmInterval) }
-	r.beat(ctx)
-	if !alarmed(r.Report(ctx), statelog.KindBindingDangling) {
-		t.Fatal("a binding to an agent's seat, a beat past the stall grace, " +
-			"raised no iam_binding_dangling")
-	}
-	if got := alarmGauge(t, e, statelog.KindBindingDangling); got != 1 {
-		t.Errorf("the alarm gauge for %s reads %v, want 1",
-			statelog.KindBindingDangling, got)
-	}
-}
-
 // A LOG WHOSE CEILING CANNOT HOLD ITS REPLAY WINDOW FIRES `log_ceiling_short`
 // — and the evaluation measures every strict log's intake on the way.
 //
@@ -465,15 +421,15 @@ type domainAt struct{ First, Last uint64 }
 //
 // Every alarm there fires at a threshold of a minute or more, and an evaluation
 // paced by the trim silently raised each of them to fifteen minutes: the
-// binding watch this node runs is observed on every beat, so a second
+// floor watch this node runs is observed on every beat, so a second
 // observation arriving within one [statelog.AlarmInterval] of the first is the
 // heartbeat running.
 func TestTheAlarmTableIsEvaluatedOnTheHeartbeat(t *testing.T) {
 	t.Parallel()
 	e := bootDirectoryNode(t, nil)
 	r := e.retention.Load()
-	if r == nil || r.bindings == nil {
-		t.Fatal("this node runs no retention loop or no binding watch")
+	if r == nil || r.floors == nil || r.floors.floors == nil {
+		t.Fatal("this node runs no retention loop or no floor watch")
 	}
 	first := awaitObservation(t, r, time.Time{}, statelog.AlarmInterval+10*time.Second)
 	second := awaitObservation(t, r, first, statelog.AlarmInterval+10*time.Second)
@@ -498,37 +454,16 @@ func quietRetention(t *testing.T, e *Engine) *retention {
 	return r
 }
 
-// awaitBinding waits for this node's identity applier to hold a person's
-// binding.
-func awaitBinding(t *testing.T, e *Engine, person string) {
-	t.Helper()
-	deadline := time.Now().Add(10 * time.Second)
-	for {
-		bindings, err := e.IAM().SeatBindings(t.Context())
-		if err == nil {
-			for _, b := range bindings {
-				if b.Person == person && b.Seat != "" {
-					return
-				}
-			}
-		}
-		if time.Now().After(deadline) {
-			t.Fatalf("the binding never applied (%v)", err)
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
-}
-
-// awaitObservation waits for the binding watch's latest observation to move
+// awaitObservation waits for the floor watch's latest observation to move
 // past after, and answers it.
 func awaitObservation(t *testing.T, r *retention, after time.Time,
 	within time.Duration) time.Time {
 	t.Helper()
 	deadline := time.Now().Add(within)
 	for {
-		r.bindings.mu.Lock()
-		at := r.bindings.at
-		r.bindings.mu.Unlock()
+		r.floors.mu.Lock()
+		at := r.floors.at
+		r.floors.mu.Unlock()
 		if at.After(after) {
 			return at
 		}

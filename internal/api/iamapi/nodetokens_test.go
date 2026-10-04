@@ -21,11 +21,15 @@ import (
 // directory row — leaves a token acting as itself while its operator believes
 // it acts as a seat, and nothing else can say so: the labels are a node's
 // configuration and no directory read reaches them. Each answer is one the
-// dashboard renders differently — no row, a reservation an enrolment stopped
-// at, a row naming no seat, a seat the chart still holds, one it does not — so
-// each is asserted. Mutation: join on the bare label instead of `token:<id>`
-// and every row reads `none`; read a reservation as no row and `half` reads
-// `none`; drop the bindings seam and the dangling row reads `bound`.
+// dashboard renders differently — no row, a row naming no seat, a row naming
+// a seat — so each is asserted.
+//
+// AND A ROW IS REPORTED AS WHAT IT HOLDS, never judged: a seat the company no
+// longer holds is `/iam/check`'s finding about the same row, so the token
+// naming one reads exactly like a token naming a seat that is there, with no
+// verdict of this route's own beside it. Mutation: join on the bare label
+// instead of `token:<id>` and every row reads `none`; add a `binding` back and
+// the field check goes red.
 func TestNodeTokensJoinEachLabelToItsRow(t *testing.T) {
 	t.Parallel()
 	ops := uuid.MustParse("018f3a9c-0000-7000-8000-0000000000d4")
@@ -33,7 +37,7 @@ func TestNodeTokensJoinEachLabelToItsRow(t *testing.T) {
 	stale := uuid.MustParse("018f3a9c-0000-7000-8000-0000000000f6")
 	r := newRig(t, func(o *iamapi.Options) {
 		// UNSORTED, as a Tier A file lists them: the answer is sorted.
-		o.TokenIDs = func() []string { return []string{"stale", "ops", "half", "ci", "deploy"} }
+		o.TokenIDs = func() []string { return []string{"stale", "ops", "ci", "deploy"} }
 		o.Bindings = func(_ context.Context, row iamdomain.PersonRow) (bool, string, error) {
 			if row.Seat == "gone" {
 				return true, "the seat gone is not in the org chart", nil
@@ -49,36 +53,43 @@ func TestNodeTokensJoinEachLabelToItsRow(t *testing.T) {
 		row.ID, row.Kind, row.Stage = id.String(), iam.KindMachine, iam.StageActive
 		r.directory.people[id.String()] = row
 	}
-	// AN ENROLMENT THAT STOPPED AFTER CLAIMING THE LOGIN: a reservation,
-	// held by nobody yet, which is neither "no row" nor a row to bind.
-	r.directory.reserved = map[string]bool{"token:half": true}
-
 	got := r.as(administrator(), http.MethodGet, "/iam/node-tokens", nil)
 	if got.status != http.StatusOK {
 		t.Fatalf("GET /iam/node-tokens = %d %v", got.status, got.body)
 	}
 	tokens, _ := got.body["tokens"].([]any)
-	type row struct{ id, login, row, person, seat, binding string }
+	type row struct{ id, login, row, person, stage, seat string }
 	var have []row
 	for _, raw := range tokens {
 		m, _ := raw.(map[string]any)
 		str := func(k string) string { s, _ := m[k].(string); return s }
 		have = append(have, row{str("id"), str("login"), str("row"), str("person"),
-			str("seat"), str("binding")})
+			str("stage"), str("seat")})
+		for key := range m {
+			switch key {
+			case "id", "login", "row", "person", "stage", "seat":
+			default:
+				t.Errorf("token %s carries %q, a field beyond the row it holds — "+
+					"whether its seat dangles is /iam/check's to say", str("id"), key)
+			}
+		}
 	}
 	want := []row{
-		{"ci", "token:ci", "none", "", "", "unbound"},
-		{"deploy", "token:deploy", "held", deploy.String(), "", "unbound"},
-		{"half", "token:half", "reserved", "", "", "unbound"},
-		{"ops", "token:ops", "held", ops.String(), "cto", "bound"},
-		{"stale", "token:stale", "held", stale.String(), "gone", "dangling"},
+		{"ci", "token:ci", "none", "", "", ""},
+		{"deploy", "token:deploy", "held", deploy.String(), "active", ""},
+		{"ops", "token:ops", "held", ops.String(), "active", "cto"},
+		{"stale", "token:stale", "held", stale.String(), "active", "gone"},
 	}
 	if !reflect.DeepEqual(have, want) {
 		t.Errorf("tokens =\n  %+v\nwant\n  %+v", have, want)
 	}
-	last, _ := tokens[len(tokens)-1].(map[string]any)
-	if detail, _ := last["detail"].(string); !strings.Contains(detail, "not in the org chart") {
-		t.Errorf("the dangling binding carries detail %q, want the seam's own words", detail)
+
+	// THE ONE REPORT NAMES THE STALE TOKEN'S SEAT, under the token's login.
+	check := r.as(administrator(), http.MethodGet, "/iam/check", nil)
+	finding := findingOf(check.body, string(iamapi.KindDanglingBinding))
+	if finding == nil || finding["login"] != "token:stale" || finding["seat"] != "gone" {
+		t.Errorf("GET /iam/check named %v, want the stale token's row and its seat",
+			finding)
 	}
 }
 

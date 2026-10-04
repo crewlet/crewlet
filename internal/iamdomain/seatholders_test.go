@@ -1,6 +1,7 @@
 package iamdomain_test
 
 import (
+	"database/sql"
 	"errors"
 	"testing"
 	"time"
@@ -65,8 +66,7 @@ func TestSeatHoldersNamesWhoHoldsEachSeatAndAtWhatStage(t *testing.T) {
 	// seat's current rows alone, the removal became the seat's last word
 	// again here and withheld it indefinitely — whatever its contact map
 	// had since been pointed at.
-	if _, err := rig.writer.Release(t.Context(), iamdomain.KindSeat, "ops-lead",
-		successor, "op-unbind", "moved teams"); err != nil {
+	if _, err := rig.writer.SetIdentity(t.Context(), iamdomain.IdentityEdit{PersonID: successor, Seat: seatRef(""), OpID: "op-unbind", Reason: "moved teams"}); err != nil {
 		t.Fatalf("unbind: %v", err)
 	}
 	rig.drain()
@@ -120,13 +120,11 @@ func TestTheApplierSignalsTheDirectoryOnlyWhenAStandingMoved(t *testing.T) {
 			return err
 		}},
 		{"an unbind", true, func() error {
-			_, err := rig.writer.Release(t.Context(), iamdomain.KindSeat,
-				"sarah-chen", person, "op-unbind", "moved teams")
+			_, err := rig.writer.SetIdentity(t.Context(), iamdomain.IdentityEdit{PersonID: person, Seat: seatRef(""), OpID: "op-unbind", Reason: "moved teams"})
 			return err
 		}},
 		{"a bind", true, func() error {
-			_, err := rig.writer.Claim(t.Context(), iamdomain.KindSeat,
-				"sarah-chen", person, "op-rebind")
+			_, err := rig.writer.SetIdentity(t.Context(), iamdomain.IdentityEdit{PersonID: person, Seat: seatRef("sarah-chen"), OpID: "op-rebind"})
 			return err
 		}},
 		{"a removal", true, func() error {
@@ -160,13 +158,15 @@ func bindNew(t *testing.T, rig *writeRig, login, seat string) string {
 	}
 	rig.drain()
 	rig.seatOnly(seat)
-	if _, err := rig.writer.Claim(t.Context(), iamdomain.KindSeat, seat, id,
-		"op-bind-"+id); err != nil {
+	if _, err := rig.writer.SetIdentity(t.Context(), iamdomain.IdentityEdit{PersonID: id, Seat: seatRef(seat), OpID: "op-bind-" + id}); err != nil {
 		t.Fatalf("bind %s to %s: %v", login, seat, err)
 	}
 	rig.drain()
 	return id
 }
+
+// seatRef is a seat an identity edit names, "" for none.
+func seatRef(seat string) *string { return &seat }
 
 // holdersBySeat is the directory's answer keyed by seat, refusing a seat the
 // answer names twice.
@@ -201,9 +201,9 @@ func assertHolders(t *testing.T, got, want map[string]iamdomain.SeatHolder) {
 // THE BINDINGS READ IS EXACTLY THE BOUND PEOPLE, with what the seat table
 // needs of each and the same values a directory page carries.
 //
-// It is what the dangling-binding alarm reads on every heartbeat instead of
+// It is what the seat listing and the seat-holder check read instead of
 // walking the whole directory, so it must neither miss a binding the page walk
-// would have classified nor answer for somebody bound to nothing.
+// would have found nor answer for somebody bound to nothing.
 func TestSeatBindingsIsEveryBindingAndNothingElse(t *testing.T) {
 	t.Parallel()
 	rig := newWriteRig(t)
@@ -217,8 +217,7 @@ func TestSeatBindingsIsEveryBindingAndNothingElse(t *testing.T) {
 	}
 	rig.drain()
 	unbound := bindNew(t, rig, "omar.haddad", "ops-lead")
-	if _, err := rig.writer.Release(t.Context(), iamdomain.KindSeat, "ops-lead",
-		unbound, "op-unbind", "moved teams"); err != nil {
+	if _, err := rig.writer.SetIdentity(t.Context(), iamdomain.IdentityEdit{PersonID: unbound, Seat: seatRef(""), OpID: "op-unbind", Reason: "moved teams"}); err != nil {
 		t.Fatalf("unbind: %v", err)
 	}
 	rig.drain()
@@ -253,12 +252,15 @@ func TestSeatBindingsIsEveryBindingAndNothingElse(t *testing.T) {
 	}
 }
 
-// WHO HOLDS A SEAT A COMPANY WRITE WOULD TAKE AWAY IS EVERY PERSON WITH A ROW.
+// WHO HOLDS A SEAT A COMPANY WRITE WOULD TAKE AWAY IS THE PERSON WITH A ROW.
 //
 // It is the question a company write asks before it removes a human seat, so
 // a suspended person still holds theirs — suspending somebody is not giving
 // their seat away — while a removed one and an unbound one do not, and a seat
-// the write did not ask about is not answered.
+// the write did not ask about is not answered. A seat two rows bind is the
+// unknown arm: this node cannot say which of them holds it.
+//
+// Mutation: answer the first of two rows and the duplicate is a holder.
 func TestHoldersOfNamesEveryUnremovedHolderOfTheSeatsAsked(t *testing.T) {
 	t.Parallel()
 	rig := newWriteRig(t)
@@ -278,8 +280,7 @@ func TestHoldersOfNamesEveryUnremovedHolderOfTheSeatsAsked(t *testing.T) {
 	}
 	rig.drain()
 	lena := bindNew(t, rig, "lena.fischer", "support-lead")
-	if _, err := rig.writer.Release(t.Context(), iamdomain.KindSeat, "support-lead",
-		lena, "op-unbind", "moved teams"); err != nil {
+	if _, err := rig.writer.SetIdentity(t.Context(), iamdomain.IdentityEdit{PersonID: lena, Seat: seatRef(""), OpID: "op-unbind", Reason: "moved teams"}); err != nil {
 		t.Fatalf("unbind: %v", err)
 	}
 	rig.drain()
@@ -289,18 +290,31 @@ func TestHoldersOfNamesEveryUnremovedHolderOfTheSeatsAsked(t *testing.T) {
 	if err != nil {
 		t.Fatalf("HoldersOf: %v", err)
 	}
-	if len(held) != 1 || len(held["platform-lead"]) != 1 ||
-		held["platform-lead"][0].Person != priya ||
-		held["platform-lead"][0].Login != "priya.shah" ||
-		held["platform-lead"][0].Stage != iam.StageSuspended {
+	if len(held) != 1 || held["platform-lead"].Person != priya ||
+		held["platform-lead"].Login != "priya.shah" ||
+		held["platform-lead"].Stage != iam.StageSuspended {
 		t.Errorf("HoldersOf = %+v, want the suspended platform lead alone — a "+
 			"removed holder, an unbound one and a seat nobody held hold nothing, "+
 			"and a seat not asked about is not answered", held)
 	}
 	// THE CONTROL: the active holder is answered when asked about.
 	if held, err := reader.HoldersOf(t.Context(), []string{"sarah-chen"}); err != nil ||
-		len(held["sarah-chen"]) != 1 || held["sarah-chen"][0].Person != sarah {
+		held["sarah-chen"].Person != sarah {
 		t.Errorf("HoldersOf(sarah-chen) = %+v (%v), want Sarah", held, err)
+	}
+
+	// TWO ROWS ON ONE SEAT, as a retained record's residue leaves them.
+	if err := rig.db.Replicated().Tx(t.Context(), func(tx *sql.Tx) error {
+		_, err := tx.ExecContext(t.Context(),
+			`UPDATE iam_people SET seat_id = 'sarah-chen' WHERE id = ?`, priya)
+		return err
+	}); err != nil {
+		t.Fatalf("bind Priya's row to Sarah's seat: %v", err)
+	}
+	if held, err := reader.HoldersOf(t.Context(), []string{"sarah-chen"}); !errors.Is(err,
+		statelog.ErrUnavailable) {
+		t.Errorf("HoldersOf a seat two rows bind = %+v (%v), want the unknown arm",
+			held, err)
 	}
 }
 
@@ -332,8 +346,7 @@ func TestARemovalsSayEndsAtTheNextBind(t *testing.T) {
 		t.Fatalf("enrol lena: %v", err)
 	}
 	rig.drain()
-	if _, err := rig.writer.Claim(t.Context(), iamdomain.KindSeat, "ops-lead",
-		lena, "op-bind-lena"); err != nil {
+	if _, err := rig.writer.SetIdentity(t.Context(), iamdomain.IdentityEdit{PersonID: lena, Seat: seatRef("ops-lead"), OpID: "op-bind-lena"}); err != nil {
 		t.Fatalf("bind lena: %v", err)
 	}
 	rig.drain()
@@ -343,8 +356,7 @@ func TestARemovalsSayEndsAtTheNextBind(t *testing.T) {
 
 	// AND IT STAYS ENDED when she is unbound: the seat goes back to the
 	// company, not to Omar's tombstone.
-	if _, err := rig.writer.Release(t.Context(), iamdomain.KindSeat, "ops-lead",
-		lena, "op-unbind-lena", "moved teams"); err != nil {
+	if _, err := rig.writer.SetIdentity(t.Context(), iamdomain.IdentityEdit{PersonID: lena, Seat: seatRef(""), OpID: "op-unbind-lena", Reason: "moved teams"}); err != nil {
 		t.Fatalf("unbind lena: %v", err)
 	}
 	rig.drain()
@@ -368,8 +380,7 @@ func TestBindingASeatTheRunningCompanyDoesNotHoldIsRefused(t *testing.T) {
 	rig.seatOnly("departed")
 	rig.dropSeat("departed")
 	for _, seat := range []string{"no-such-seat", "departed"} {
-		_, err := rig.writer.Rebind(t.Context(), person, "sarah-chen",
-			seat, "op-typo-"+seat, "a typo")
+		_, err := rig.writer.SetIdentity(t.Context(), iamdomain.IdentityEdit{PersonID: person, Seat: seatRef(seat), OpID: "op-typo-" + seat, Reason: "a typo"})
 		if !errors.Is(err, iamdomain.ErrInvalid) {
 			t.Errorf("a bind to %s answered %v, want %v", seat, err,
 				iamdomain.ErrInvalid)
@@ -409,14 +420,12 @@ func TestABindWithNoSeatLookupIsUnavailable(t *testing.T) {
 	if err != nil {
 		t.Fatalf("build a writer with no organisation: %v", err)
 	}
-	_, err = blind.Claim(t.Context(), iamdomain.KindSeat, "sarah-chen", person,
-		"op-bind-blind")
+	_, err = blind.SetIdentity(t.Context(), iamdomain.IdentityEdit{PersonID: person, Seat: seatRef("sarah-chen"), OpID: "op-bind-blind"})
 	if !errors.Is(err, statelog.ErrUnavailable) {
 		t.Errorf("a bind through a writer with no organisation answered %v, "+
 			"want %v", err, statelog.ErrUnavailable)
 	}
-	if _, err := rig.writer.Claim(t.Context(), iamdomain.KindSeat, "sarah-chen",
-		person, "op-bind-seen"); err != nil {
+	if _, err := rig.writer.SetIdentity(t.Context(), iamdomain.IdentityEdit{PersonID: person, Seat: seatRef("sarah-chen"), OpID: "op-bind-seen"}); err != nil {
 		t.Fatalf("the control: a bind through the rig's writer was refused: %v", err)
 	}
 	rig.drain()

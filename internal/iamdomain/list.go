@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -77,18 +78,6 @@ type PersonRow struct {
 
 	// Version is the iam position that last wrote this row.
 	Version uint64
-
-	// Reserved reports a RESERVATION: an enrolment whose claims landed and
-	// whose content record has not — see [Sighting.Reserved]. It carries
-	// the claimed columns and nothing a person is: no kind, no stage, no
-	// grants, and nothing sealed that the content record would have
-	// placed.
-	//
-	// LISTED RATHER THAN HIDDEN, because it holds an address, a login or
-	// a seat nobody else can take, and an administrator whose enrolment
-	// was refused as "claimed" has to be able to find what claimed it.
-	// Decoded as a person, it failed the whole directory page instead.
-	Reserved bool
 }
 
 // PeopleQuery is one page of the directory.
@@ -159,7 +148,7 @@ func (r *Reader) People(ctx context.Context, q PeopleQuery) (PeoplePage, error) 
 	query.WriteString(`
 		SELECT p.id, p.kind, p.stage, p.login, p.name_sealed, p.email_sealed,
 		       p.seat_id, p.document,
-		       p.created_at, p.updated_at, MAX(p.version, p.scoped_through),
+		       p.created_at, p.updated_at, p.version,
 		       COALESCE(e.epoch, 0)
 		FROM iam_people p
 		LEFT JOIN iam_revocation_epochs e ON e.person_id = p.id
@@ -215,7 +204,7 @@ func (r *Reader) Person(ctx context.Context, id string) (PersonRow, error) {
 		rows, err := tx.QueryContext(ctx, `
 			SELECT p.id, p.kind, p.stage, p.login, p.name_sealed, p.email_sealed,
 			       p.seat_id, p.document,
-			       p.created_at, p.updated_at, MAX(p.version, p.scoped_through),
+			       p.created_at, p.updated_at, p.version,
 			       COALESCE(e.epoch, 0)
 			FROM iam_people p
 			LEFT JOIN iam_revocation_epochs e ON e.person_id = p.id
@@ -263,16 +252,12 @@ func scanPerson(rows *sql.Rows) (PersonRow, error) {
 	out.Kind = iam.Kind(kind)
 	out.Stage = iam.Stage(stage)
 	out.Epoch = uint64(epoch)
-	if reservation(kind) {
-		out.Reserved = true
-	} else {
-		person, err := DecodePerson(document)
-		if err != nil {
-			return PersonRow{}, fmt.Errorf("iamdomain: open person %q: %w",
-				out.ID, err)
-		}
-		out.Grants = person.Grants
+	person, err := DecodePerson(document)
+	if err != nil {
+		return PersonRow{}, fmt.Errorf("iamdomain: open person %q: %w",
+			out.ID, err)
 	}
+	out.Grants = person.Grants
 	out.CreatedAt = fromMillis(created)
 	out.UpdatedAt = fromMillis(updated)
 	out.Version = uint64(version)
@@ -450,9 +435,15 @@ func (r *Reader) Sessions(ctx context.Context, personID string) (
 
 // HistoryRow is one entry of the identity estate's own trail.
 type HistoryRow struct {
-	ID         string
-	Class      HistoryClass
-	ObjectKind ObjectKind
+	ID    string
+	Class HistoryClass
+
+	// ObjectKind and ObjectID are what the entry is filed under: a record's
+	// subject, or — for a directory record, whose subject names nobody — the
+	// person it is about (`person`) or an invitation's address blind
+	// (`email`). A trail column rather than a subject kind, so a plain
+	// string: `email` is no [ObjectKind] any more.
+	ObjectKind string
 	ObjectID   string
 	PersonID   string
 	Op         OpKind
@@ -553,21 +544,19 @@ func (r *Reader) History(ctx context.Context, q HistoryQuery) (HistoryPage, erro
 		defer rows.Close()
 		for rows.Next() {
 			var (
-				row        HistoryRow
-				class      string
-				objectKind string
-				op         string
-				actorKind  string
-				at         int64
-				version    int64
+				row       HistoryRow
+				class     string
+				op        string
+				actorKind string
+				at        int64
+				version   int64
 			)
-			if err := rows.Scan(&row.ID, &class, &objectKind, &row.ObjectID,
+			if err := rows.Scan(&row.ID, &class, &row.ObjectKind, &row.ObjectID,
 				&row.PersonID, &op, &row.Actor, &actorKind, &row.OperatorID,
 				&row.Reason, &row.Summary, &at, &version); err != nil {
 				return fmt.Errorf("iamdomain: scan a trail entry: %w", err)
 			}
 			row.Class = HistoryClass(class)
-			row.ObjectKind = ObjectKind(objectKind)
 			row.Op = OpKind(op)
 			row.ActorKind = iam.Kind(actorKind)
 			row.At = fromMillis(at)
@@ -639,8 +628,7 @@ type SeatBinding struct {
 	// Seat is the seat's handle, which is immutable (ADR-0013).
 	Seat string
 
-	// Stage is the bound person's stage, from the column; empty for a
-	// reservation.
+	// Stage is the bound person's stage, from the column.
 	Stage iam.Stage
 }
 
@@ -652,34 +640,52 @@ func (p PersonRow) Binding() SeatBinding {
 }
 
 // HoldersOf is who this node's directory binds to each of seats, read in ONE
-// snapshot: every person with a row, at whatever stage — a reservation, an
-// invited or suspended person, an active one — because a removal deletes the
-// row and every other stage is somebody the seat still names. A seat nobody
-// holds is absent from the answer, and a seat two people hold (a duplicate a
-// restore left behind) names both.
+// snapshot: the person with a row, at whatever stage — an invited or
+// suspended person, an active one — because a removal deletes the row and
+// every other stage is somebody the seat still names. A seat nobody holds is
+// absent from the answer.
 //
 // It is the company write's question — may this seat leave the company? — so
 // it answers about the seats asked and no others. Three-valued like everything
-// here: an error is the unknown arm, never "nobody".
+// here: an error is the unknown arm, never "nobody" — and so is a seat asked
+// about that two rows hold ([BySeat]).
 func (r *Reader) HoldersOf(ctx context.Context, seats []string) (
-	map[string][]SeatBinding, error) {
+	map[string]SeatBinding, error) {
 
 	if len(seats) == 0 {
-		return map[string][]SeatBinding{}, nil
-	}
-	asked := make(map[string]bool, len(seats))
-	for _, seat := range seats {
-		asked[seat] = true
+		return map[string]SeatBinding{}, nil
 	}
 	bindings, err := r.SeatBindings(ctx)
 	if err != nil {
 		return nil, err
 	}
-	out := map[string][]SeatBinding{}
+	asked := make([]SeatBinding, 0, len(seats))
 	for _, b := range bindings {
-		if asked[b.Seat] {
-			out[b.Seat] = append(out[b.Seat], b)
+		if slices.Contains(seats, b.Seat) {
+			asked = append(asked, b)
 		}
+	}
+	return BySeat(asked)
+}
+
+// BySeat is bindings keyed by their seat, ONE holder per seat.
+//
+// TWO ROWS BINDING ONE SEAT ARE THE UNKNOWN ARM, never a pick. The directory
+// decides every binding on one subject in one snapshot, so ordinary traffic
+// never produces two; a node that retained the record moving somebody off a
+// seat, and applied a later one binding it to somebody else, holds both until
+// it reprocesses the first — as a restore can. That node cannot say who holds
+// the seat, so another node answers.
+func BySeat(bindings []SeatBinding) (map[string]SeatBinding, error) {
+	out := make(map[string]SeatBinding, len(bindings))
+	for _, b := range bindings {
+		if first, twice := out[b.Seat]; twice {
+			return nil, fmt.Errorf("%w: this node holds two rows bound to seat "+
+				"%s (%s and %s), which only a record it retained or a restore "+
+				"leaves behind — another node can answer", statelog.ErrUnavailable,
+				b.Seat, first.Person, b.Person)
+		}
+		out[b.Seat] = b
 	}
 	return out, nil
 }
@@ -689,12 +695,11 @@ func (r *Reader) HoldersOf(ctx context.Context, seats []string) (
 //
 // # Why not a walk of [Reader.People]
 //
-// The dangling-binding alarm asks about bindings on every heartbeat, and a
-// directory page reads every person — bound or not — and decodes each row's
-// document to answer it. This reads the binding columns of the bound rows and
-// nothing else, over the partial index the duplicate-seat report already
-// ships (`iam_people_seat_claim_idx`), so its cost is the number of people
-// bound to a seat rather than the size of the company.
+// A directory page reads every person — bound or not — and decodes each row's
+// document, and the seat listing and every company write that takes a human
+// seat away ask only who holds which seat. This reads the binding columns of
+// the bound rows and nothing else, over the seat index, so its cost is the
+// number of people bound to a seat rather than the size of the company.
 //
 // Three-valued like everything here: an error is the unknown arm, and an
 // empty answer is a real one.

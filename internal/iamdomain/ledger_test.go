@@ -276,11 +276,12 @@ func TestARetriedIssueOfACollectedInvitationIsAKeyAlreadyUsed(t *testing.T) {
 // an id was minted at, read off the id itself; an id outside the grammar reads
 // as minted at the epoch, and once the ledger has lost a row of its kind —
 // every month for most kinds, every hour for a session's — every write under
-// one is answered `unknown` without being published. An enrolment's steps named themselves with a colon
-// suffix and the sweep with a string of its own; both are in the grammar now.
+// one is answered `unknown` without being published. An enrolment is one
+// record under its caller's key, and the sweep, which once named itself with a
+// string of its own, derives its id from its plan's instant.
 //
-// Mutation: go back to either spelling and the ledger holds an id with no
-// instant.
+// Mutation: name the sweep outside the grammar again and the ledger holds an
+// id with no instant.
 func TestEveryOperationAGestureDerivesCarriesItsMintInstant(t *testing.T) {
 	t.Parallel()
 	rig := newWriteRig(t)
@@ -320,16 +321,14 @@ func TestEveryOperationAGestureDerivesCarriesItsMintInstant(t *testing.T) {
 		t.Fatalf("the sweep published nothing (plan %+v), so this case is not "+
 			"reading a sweep's id at all", report.Plan)
 	}
-	keyAt, _ := statelog.OpMintedAt(key)
-	sweeps := 0
+	enrolments, sweeps := 0, 0
 	for _, op := range rig.column(`SELECT op_id FROM iam_ops ORDER BY op_id`) {
 		at, minted := statelog.OpMintedAt(op)
-		switch {
-		case !minted:
+		if !minted {
 			t.Errorf("the ledger holds %q, which carries no mint instant", op)
-		case len(op) > len(key) && op[:len(key)] == key && !at.Equal(keyAt):
-			t.Errorf("the enrolment's step %q is minted at %s, want the "+
-				"gesture's %s", op, at, keyAt)
+		}
+		if op == key {
+			enrolments++
 		}
 		if env := rig.envelopeOf(op); env.Op == iamdomain.OpSweep {
 			sweeps++
@@ -338,6 +337,10 @@ func TestEveryOperationAGestureDerivesCarriesItsMintInstant(t *testing.T) {
 					"instant %s", op, at, report.Plan.At)
 			}
 		}
+	}
+	if enrolments != 1 {
+		t.Errorf("the ledger holds the enrolment's key %d times, want once — "+
+			"one record under the caller's key", enrolments)
 	}
 	if sweeps != len(report.Published) {
 		t.Errorf("the ledger holds %d sweep operations for %d published buckets",

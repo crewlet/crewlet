@@ -74,13 +74,6 @@ func TestOnlyAnActiveMachineBindsATierAToken(t *testing.T) {
 			s.Stage = iam.StageSuspended
 			return s
 		}, false},
-		// AS THE READER ANSWERS ONE: the claimed columns, no kind, no
-		// stage, and marked as what it is — which it used to answer as
-		// an error, so this token got 503 on every guarded route.
-		{"a reservation nobody finished enrolling", func(s iamdomain.Sighting) iamdomain.Sighting {
-			return iamdomain.Sighting{ID: s.ID, Login: s.Login, Seat: s.Seat,
-				Reserved: true}
-		}, false},
 		{"an active machine bound to nothing", func(s iamdomain.Sighting) iamdomain.Sighting {
 			s.Seat = ""
 			return s

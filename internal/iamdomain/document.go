@@ -28,7 +28,7 @@ import (
 // fleet keyring is what keeps every one of those ciphertext. See [Sealer].
 //
 // A BLIND IS ALWAYS THE MATCHED FORM. Never the address it was derived from —
-// a blind is what a claim arbitrates on and what a lookup compares, and the
+// a blind is what a directory decide and a lookup compare, and the
 // address it came from is the one value the estate is built to not hold.
 //
 // EVERY DOCUMENT CARRIES ITS OWN VERSION and an Extra map, so a field a newer
@@ -66,13 +66,13 @@ type Person struct {
 	// Credentials are every way this person can prove themselves, as FULL
 	// POST-STATE like the rest of the document.
 	//
-	// ON THE PERSON RATHER THAN ON A SUBJECT OF THEIR OWN, which is the
-	// one place this domain does NOT give something its own arbitration
-	// unit — and the reason is that a credential has no address. An
-	// address, a login and a seat are tokens two writers can RACE FOR;
-	// a credential belongs to exactly one person from the moment it
-	// exists, so the only contention it can have is with that person's
-	// other edits, and their subject already serialises those.
+	// ON THE PERSON RATHER THAN ON A SUBJECT OF THEIR OWN, and the
+	// reason is that a credential has no address. An address, a login and
+	// a seat are values two writers can RACE FOR, which is why the
+	// directory decides them; a credential belongs to exactly one person
+	// from the moment it exists, so the only contention it can have is
+	// with that person's other edits, and their subject already
+	// serialises those.
 	//
 	// The cost is stated rather than glossed: changing a password is a
 	// read-modify-write of the whole person. That is the write authority's
@@ -94,29 +94,50 @@ type Person struct {
 	Extra map[string]json.RawMessage `json:"-"`
 }
 
-// Claim is one address, login or seat binding, and who holds it.
+// Enrolled is an enrolment's payload: a person created whole, on the
+// directory subject ([OpEnrol]).
 //
-// THE SAME SHAPE FOR ALL THREE, because what differs between them is the
-// SUBJECT they arbitrate on rather than anything about the claim itself: an
-// address contends on its blind, a login on the login, a seat on the seat id,
-// and each is "this token belongs to this person from now".
-type Claim struct {
+// THE DOCUMENT AND THE UNIQUE VALUES TOGETHER, because the record is the one
+// that creates the row: the document is what the person's own subject owns
+// from here on, and the identifiers are what the directory owns — so a node
+// applying it writes the whole row once, and every later record touches one
+// half of it or the other.
+type Enrolled struct {
 	V int `json:"v"`
 
-	// Person is the id the claim binds the token to. Empty on a release,
-	// which is what makes a release readable as one without an op lookup.
-	Person string `json:"person,omitempty"`
+	// Person is the document the row stores: their kind, stage, sealed
+	// name and address, first credentials and grants.
+	Person Person `json:"person"`
 
-	// Sealed is the cleartext form of the claimed token, sealed as the
-	// person's address ([Sealer.Seal]), for the ONE claim whose token is
-	// not readable: an address. A login and a seat id are their own subject and are not
-	// secret, so they carry nothing here.
-	//
-	// IT IS WHAT LETS A PERSON READ BACK THE ADDRESS THEY ENROLLED WITH.
-	// The blind is one-way by construction, so without this the company
-	// could authenticate somebody and never show them which address it
-	// authenticated.
-	Sealed string `json:"sealed,omitempty"`
+	// Holds is the login, the address blind and the seat the person is
+	// enrolled holding — each decided free in the record's own snapshot.
+	Holds Identifiers `json:"holds"`
+
+	// Invitation is the invitation this enrolment REDEEMS, or empty for an
+	// administrator's create. The apply marks it spent in the same
+	// transaction that writes the person, so a redemption is never a
+	// person with a link that still opens.
+	Invitation string `json:"invitation,omitempty"`
+
+	Extra map[string]json.RawMessage `json:"-"`
+}
+
+// IdentityChange is an identity change's payload ([OpIdentity]): the login and
+// the seat an enrolled person holds from this record on.
+//
+// BOTH ARE ALWAYS STATED, as post-state, and the decide fills the one the
+// caller left alone from its own snapshot — so a record frees whatever its
+// person held before by stating what they hold now, and a node applying it
+// needs nothing but the record.
+type IdentityChange struct {
+	V int `json:"v"`
+
+	// Login is never empty: every principal holds one.
+	Login string `json:"login"`
+
+	// SeatID is the seat's handle (ADR-0013), or empty for a person bound
+	// to none.
+	SeatID string `json:"seat_id"`
 
 	Extra map[string]json.RawMessage `json:"-"`
 }
@@ -127,6 +148,11 @@ type Invitation struct {
 
 	// ID is the invitation's own id, which is what a redemption names.
 	ID string `json:"id"`
+
+	// EmailBlind is the keyed blind of the address it was issued to — the
+	// value a directory decide compares against every person's and every
+	// other open invitation's, and never the address itself.
+	EmailBlind string `json:"email_blind"`
 
 	// Sealed is the address, sealed as the INVITATION's own rather than a
 	// person's — there is no person yet — so it opens as nothing else
@@ -150,9 +176,9 @@ type Invitation struct {
 	Verifier string `json:"verifier,omitempty"`
 
 	// Seat is the HANDLE of the seat redeeming this BINDS (ADR-0013), or
-	// empty for an invitation that binds none. Decided once by whoever issued it, on a seat the
-	// chart held as a human seat nobody was bound to, and claimed as one
-	// more step of the redemption's own sequence.
+	// empty for an invitation that binds none. Decided once by whoever
+	// issued it, on a seat the chart held as a human seat nobody was bound
+	// to, and bound by the redemption's own record.
 	Seat string `json:"seat,omitempty"`
 
 	// ExpiresAt is when it stops being redeemable. THE WRITER'S CLOCK is
@@ -160,9 +186,6 @@ type Invitation struct {
 	// redemption compares against the BROKER's, so two nodes reach the
 	// same verdict.
 	ExpiresAt time.Time `json:"expires_at,omitzero"`
-
-	// Person is set by the REDEMPTION record, naming who it created.
-	Person string `json:"person,omitempty"`
 
 	Extra map[string]json.RawMessage `json:"-"`
 }
@@ -517,30 +540,33 @@ type StatusChange struct {
 type Removal struct {
 	V int `json:"v"`
 
-	// Released are the claim tokens this removal gives back, as BLINDS and
+	// Released are the identifiers this removal gives back, as BLINDS and
 	// logins rather than addresses — the row that records them outlives
 	// the person, and writing an address into the one row designed to
 	// outlive somebody would be the removal's own promise broken by the
 	// mechanism that makes it.
-	Released Claims `json:"released,omitzero"`
+	Released Identifiers `json:"released,omitzero"`
 
 	Extra map[string]json.RawMessage `json:"-"`
 }
 
-// Claims is the set of tokens one person holds, by class.
+// Identifiers is the set of unique values one person holds, by class.
 //
 // A STRUCT AND NOT A MAP, so a class added later is a field with a name rather
 // than a key every reader has to know to look for — and so the removal that
 // releases them cannot silently miss one it has never heard of.
-type Claims struct {
+//
+// THE JSON KEYS ARE READ BY SQL: a removal's tombstone stores them as
+// `iam_removed.claims_json`, and the seat a removal released is found by
+// `json_extract(claims_json, '$.seat_id')`.
+type Identifiers struct {
 	EmailBlind string `json:"email_blind,omitempty"`
 	Login      string `json:"login,omitempty"`
 	SeatID     string `json:"seat_id,omitempty"`
 }
 
-// Empty reports a person holding no claims at all, which is ordinary: an
-// invited person has none until they redeem.
-func (c Claims) Empty() bool {
+// Empty reports a person holding no identifiers at all.
+func (c Identifiers) Empty() bool {
 	return c.EmailBlind == "" && c.Login == "" && c.SeatID == ""
 }
 
@@ -674,20 +700,45 @@ func DecodePerson(data []byte) (Person, error) {
 	return p, nil
 }
 
-// EncodeClaim is the bytes a claim's payload travels as, with every field a
-// newer build wrote folded back in.
-func EncodeClaim(c Claim) ([]byte, error) { return jsoncarry.Encode(c, c.Extra) }
+// EncodeEnrolled is the bytes an enrolment's payload travels as, with every
+// field a newer build wrote folded back in.
+func EncodeEnrolled(e Enrolled) ([]byte, error) { return jsoncarry.Encode(e, e.Extra) }
 
-// DecodeClaim reads a claim's payload, keeping every field this build has no
-// home for, and refuses one written at a version above [DocumentVersion].
-func DecodeClaim(data []byte) (Claim, error) {
-	var c Claim
-	extra, err := jsoncarry.Decode(data, &c, claimFields)
+// DecodeEnrolled reads an enrolment's payload, keeping every field this build
+// has no home for, and refuses one written at a version above
+// [DocumentVersion]. The person document inside it is held to the same rule.
+func DecodeEnrolled(data []byte) (Enrolled, error) {
+	var e Enrolled
+	extra, err := jsoncarry.Decode(data, &e, enrolledFields)
 	if err != nil {
-		return Claim{}, fmt.Errorf("iamdomain: decode a claim: %w", err)
+		return Enrolled{}, fmt.Errorf("iamdomain: decode an enrolment: %w", err)
+	}
+	if err := checkVersion(e.V); err != nil {
+		return Enrolled{}, err
+	}
+	if err := checkVersion(e.Person.V); err != nil {
+		return Enrolled{}, err
+	}
+	e.Extra = extra
+	return e, nil
+}
+
+// EncodeIdentity is the bytes an identity change's payload travels as, with
+// every field a newer build wrote folded back in.
+func EncodeIdentity(c IdentityChange) ([]byte, error) { return jsoncarry.Encode(c, c.Extra) }
+
+// DecodeIdentity reads an identity change's payload, keeping every field this
+// build has no home for, and refuses one written at a version above
+// [DocumentVersion].
+func DecodeIdentity(data []byte) (IdentityChange, error) {
+	var c IdentityChange
+	extra, err := jsoncarry.Decode(data, &c, identityFields)
+	if err != nil {
+		return IdentityChange{}, fmt.Errorf("iamdomain: decode an identity "+
+			"change: %w", err)
 	}
 	if err := checkVersion(c.V); err != nil {
-		return Claim{}, err
+		return IdentityChange{}, err
 	}
 	c.Extra = extra
 	return c, nil
@@ -908,7 +959,8 @@ func checkVersion(got int) error {
 // again — see [jsoncarry.Names] for the four names hand-kept lists missed.
 var (
 	personFields       = jsoncarry.Names(Person{})
-	claimFields        = jsoncarry.Names(Claim{})
+	enrolledFields     = jsoncarry.Names(Enrolled{})
+	identityFields     = jsoncarry.Names(IdentityChange{})
 	invitationFields   = jsoncarry.Names(Invitation{})
 	sessionFields      = jsoncarry.Names(Session{})
 	revocationFields   = jsoncarry.Names(Revocation{})

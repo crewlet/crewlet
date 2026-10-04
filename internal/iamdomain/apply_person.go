@@ -3,7 +3,6 @@ package iamdomain
 import (
 	"context"
 	"database/sql"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"time"
@@ -11,36 +10,39 @@ import (
 	"github.com/crewlet/crewlet/internal/iam"
 )
 
-// THE PERSON'S OWN SUBJECT, and the five ops that arbitrate on it.
+// THE PERSON'S OWN SUBJECT, and the three ops that arbitrate on it.
 //
-// Everything about somebody that is not a CLAIM contends here — their content,
-// their stage, their revocation epoch and their removal — so two administrators
-// editing one person contend and two editing two people never do.
+// Everything about somebody that is not unique contends here — their content,
+// their stage and their revocation epoch — so two administrators editing one
+// person contend and two editing two people never do. A person's row is
+// created and removed on the directory ([Applier.applyDirectory]), never here.
 
 // applyPerson dispatches the ops on [KindPerson].
 func (a *Applier) applyPerson(ctx context.Context, tx *sql.Tx, at applyContext) (int, error) {
 	id := at.record.Subject.ID
 	switch at.record.Op {
-	case OpEnrol, OpUpdate:
+	case OpUpdate:
 		return a.writePerson(ctx, tx, at, id)
 	case OpStatus:
 		return a.writeStage(ctx, tx, at, id)
 	case OpRevoke:
 		return a.writeRevocation(ctx, tx, at, id)
-	case OpRemove:
-		return a.writeRemoval(ctx, tx, at, id)
 	}
 	return 0, fmt.Errorf("iamdomain: the record at %s is op %q on a person, "+
 		"which this build has no case for", at.position, at.record.Op)
 }
 
-// writePerson writes the person's own row and their credentials, as FULL
-// POST-STATE.
+// writePerson writes the person's own document and their credentials, as FULL
+// POST-STATE, onto the row the directory created.
 //
 // ONE RECORD, TWO TABLES, and the credential rows are REPLACED rather than
 // merged: the payload is the complete set, so a credential absent from it is
 // one the writer removed. A merge would make deleting a credential impossible
 // to express and would leave a revoked machine token live for ever.
+//
+// AN UPDATE AND NEVER AN INSERT: a content record never creates a person —
+// the directory does — so one for an id with no row writes nothing, rather
+// than a row holding no login, no address and no seat that nothing enrolled.
 func (a *Applier) writePerson(ctx context.Context, tx *sql.Tx, at applyContext,
 	id string) (int, error) {
 
@@ -59,56 +61,42 @@ func (a *Applier) writePerson(ctx context.Context, tx *sql.Tx, at applyContext,
 	// ordinary traffic, and a constraint violation inside this transaction
 	// would abort it identically on every node and stall the fleet's log.
 	//
-	// `created_at` IS NOT TOUCHED ON CONFLICT, which is what makes a
-	// replay of the whole log reproduce the instant somebody was enrolled
-	// rather than the instant of their last edit.
+	// THE UNIQUE COLUMNS ARE THE DIRECTORY'S, and this statement leaves
+	// them out: a content record that wrote one would be a record
+	// overwriting a decision the directory made, in a domain where the
+	// columns are somebody's identity.
 	result, err := tx.ExecContext(ctx, `
-		INSERT INTO iam_people
-			(id, kind, stage, login, email_blind, seat_id,
-			 name_sealed, email_sealed, bucket,
-			 created_at, updated_at, version, scoped_through, document)
-		VALUES (?, ?, ?, '', '', '', ?, ?, ?, ?, ?, ?, 0, ?)
-		ON CONFLICT(id) DO UPDATE SET
-			kind         = excluded.kind,
-			stage        = excluded.stage,
-			name_sealed  = excluded.name_sealed,
-			email_sealed = excluded.email_sealed,
-			updated_at   = excluded.updated_at,
-			version      = excluded.version,
-			document     = excluded.document
-		WHERE excluded.version > iam_people.version`,
-		id, string(person.Kind), string(person.Stage),
+		UPDATE iam_people
+		SET kind = ?, stage = ?, name_sealed = ?, email_sealed = ?,
+		    updated_at = ?, version = ?, document = ?
+		WHERE id = ? AND version < ?`,
+		string(person.Kind), string(person.Stage),
 		[]byte(person.NameSealed), []byte(person.EmailSealed),
-		at.bucket(), at.unix(), at.unix(), at.packed, document)
+		at.unix(), at.packed, document, id, at.packed)
 	if err != nil {
 		return 0, fmt.Errorf("iamdomain: write person %s: %w", id, err)
 	}
 	written, _ := result.RowsAffected()
-	if written > 0 {
-		// A CONTENT RECORD STATES A STAGE, so a person's standing may
-		// have moved with it — an enrolment arriving on a reservation
-		// that already holds a seat is the ordinary case.
-		a.moved.Seats = true
+	if written == 0 {
+		// NOBODY TO WRITE, or a record this row is already past — the
+		// skip every guard here is, and the credentials below belong to a
+		// state that is not current.
+		return 0, nil
 	}
-
-	// THE CLAIM COLUMNS ARE NOT TOUCHED HERE, and that is the one thing
-	// this statement deliberately leaves out. A claim arrives on its own
-	// subject, so a content record that wrote one would be a record
-	// overwriting a decision another record arbitrated, in a domain where
-	// the columns are somebody's identity.
+	// A CONTENT RECORD STATES A STAGE, so a person's standing may have
+	// moved with it.
+	a.moved.Seats = true
 
 	credentials, err := a.writeCredentials(ctx, tx, at, id, person.Credentials)
 	if err != nil {
 		return int(written) + credentials, err
 	}
-	if written > 0 || credentials > 0 {
-		// AND EVERY CREDENTIAL ACTING FOR THEM is to be decided again:
-		// the grants a session or a machine token carries are this row's,
-		// and a machine token this record revoked or dropped from the set
-		// is one it ended — named by its owner, whose row it is.
-		if err := a.movedPerson(ctx, tx, id); err != nil {
-			return int(written) + credentials, err
-		}
+	// AND EVERY CREDENTIAL ACTING FOR THEM is to be decided again: the
+	// grants a session or a machine token carries are this row's, and a
+	// machine token this record revoked or dropped from the set is one it
+	// ended — named by its owner, whose row it is.
+	if err := a.movedPerson(ctx, tx, id); err != nil {
+		return int(written) + credentials, err
 	}
 	return int(written) + credentials, nil
 }
@@ -242,15 +230,7 @@ func (a *Applier) writeStage(ctx context.Context, tx *sql.Tx, at applyContext,
 }
 
 // restage is a stored person document with its stage replaced.
-//
-// AN EMPTY DOCUMENT IS A RESERVATION — the half of an enrolment a claim
-// writes before the content record fills it in — and stays empty: there is
-// no post-state to amend, and the content record that follows states its own
-// stage.
 func restage(document []byte, stage iam.Stage) ([]byte, error) {
-	if len(document) == 0 {
-		return document, nil
-	}
 	person, err := DecodePerson(document)
 	if err != nil {
 		return nil, err
@@ -301,100 +281,6 @@ func (a *Applier) writeRevocation(ctx context.Context, tx *sql.Tx,
 		if err := a.movedPerson(ctx, tx, id); err != nil {
 			return int(written), err
 		}
-	}
-	return int(written), nil
-}
-
-// writeRemoval is the one operation here with no inverse.
-//
-// IT DELETES THE ROWS AND LEAVES A TOMBSTONE, and the tombstone is what makes
-// it permanent: without it a redelivery of any earlier record about this
-// person would write them back, on one node, for ever — and in this domain
-// that is somebody the company off-boarded still signing in.
-//
-// THE CLAIMS ARE RELEASED IN THE SAME STATEMENT LIST rather than by a cascade,
-// because a cascade is a delete nobody committed: the deletion is part of this
-// record's own effect and is therefore identical on every node.
-//
-// AND EVERY SEALED VALUE OF THEIRS IS ERASED, in the same transaction: the
-// rows it deletes take their name, address and seeds with them, and the rows
-// that outlive them — an invitation addressed to them, their authentication
-// trail — keep every column but the sealed ones ([eraseSealed]).
-func (a *Applier) writeRemoval(ctx context.Context, tx *sql.Tx, at applyContext,
-	id string) (int, error) {
-
-	removal, err := DecodeRemoval(at.record.Mutation)
-	if err != nil {
-		return 0, fmt.Errorf("iamdomain: the removal record at %s: %w",
-			at.position, err)
-	}
-	claims, err := json.Marshal(removal.Released)
-	if err != nil {
-		return 0, fmt.Errorf("iamdomain: encode person %s's released claims: %w",
-			id, err)
-	}
-	// THE LOGIN THEY HOLD, read before the row that holds it is deleted:
-	// a credential bound through it is bound through nothing afterwards.
-	login, err := heldLogin(ctx, tx, id)
-	if err != nil {
-		return 0, err
-	}
-
-	// THE TOMBSTONE FIRST, so a transaction that fails partway leaves the
-	// person present rather than deleted-and-reclaimable. It is keyed on
-	// the person and carries the record's OP ID rather than its position,
-	// because the apply that writes it is the one that must be able to run
-	// twice and a position changes under a republish.
-	result, err := tx.ExecContext(ctx, `
-		INSERT INTO iam_removed
-			(person_id, at, record_id, actor, actor_kind, reason,
-			 claims_json, bucket, version)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-		ON CONFLICT(person_id) DO NOTHING`,
-		id, at.unix(), at.record.OpID, at.record.Actor,
-		string(at.record.ActorKind), at.record.Reason, string(claims),
-		at.bucket(), at.packed)
-	if err != nil {
-		return 0, fmt.Errorf("iamdomain: record person %s's removal: %w", id, err)
-	}
-	written, _ := result.RowsAffected()
-
-	// AND EVERY ROW THAT IS THEIRS. The order is deliberate: the sessions
-	// go before the person, so a reader that sees the person gone can
-	// never find a live session pointing at them.
-	for _, statement := range []struct{ what, sql string }{
-		{"sessions", `DELETE FROM iam_sessions WHERE person_id = ?`},
-		{"revocation epoch", `DELETE FROM iam_revocation_epochs WHERE person_id = ?`},
-		{"credentials", `DELETE FROM iam_credentials WHERE person_id = ?`},
-		{"person", `DELETE FROM iam_people WHERE id = ?`},
-	} {
-		deleted, execErr := tx.ExecContext(ctx, statement.sql, id)
-		if execErr != nil {
-			return int(written), fmt.Errorf("iamdomain: delete person %s's %s: %w",
-				id, statement.what, execErr)
-		}
-		n, _ := deleted.RowsAffected()
-		written += n
-	}
-
-	// THE HISTORY IS NOT DELETED, and that is the whole reason the id
-	// outlives the person: an authentication trail whose authors evaporate
-	// is not an audit trail. What makes the removal real is that their
-	// NAME, ADDRESS and SEEDS are gone from every row — erased here, in the
-	// transaction that deletes the rest.
-	erased, err := eraseSealed(ctx, tx, id, removal.Released.EmailBlind)
-	written += int64(erased)
-	if err != nil {
-		return int(written), fmt.Errorf("iamdomain: erase person %s's "+
-			"sealed values: %w", id, err)
-	}
-	if written > 0 {
-		// A REMOVAL RELEASES THE SEAT with every other claim, and the
-		// tombstone is what the directory then reads as the seat's
-		// standing — see [Reader.SeatHolders]. And it ends every
-		// credential they held, with the rows it deleted.
-		a.moved.Seats = true
-		a.moved.person(id, login)
 	}
 	return int(written), nil
 }

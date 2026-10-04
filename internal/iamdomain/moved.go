@@ -32,8 +32,9 @@ import "slices"
 // A listener told about somebody nothing happened to re-reads a row and
 // changes nothing. A listener NOT told leaves a revoked credential serving an
 // open connection until it closes on its own. So an apply names everybody whose
-// row it moved — a release reads who held the claim before it clears it — and
-// [Moved.Everyone] is left for the few moves that cannot name anyone.
+// row it moved — an identity change names the login it took and the one it
+// left — and [Moved.Everyone] is left for the few moves that cannot name
+// anyone.
 type Moved struct {
 	// Seats is whether a seat's STANDING may have moved — a person's
 	// stage, a seat bound or released, a removal — which is what this
@@ -43,14 +44,15 @@ type Moved struct {
 
 	// People are the persons whose row a committed record moved — their
 	// content (grants, the credentials and machine tokens they hold),
-	// their stage, their revocation epoch, a claim bound to them or taken
-	// off them, their removal — by id, each once. Every credential acting
+	// their stage, their revocation epoch, a login or seat set or cleared,
+	// their removal — by id, each once. Every credential acting
 	// FOR one of them, a session they signed in with or a machine token
 	// they own, may now be over or may carry other grants.
 	People []string
 
 	// Logins are the logins those people held when their row moved, and
-	// every login a claim gave or took — each once. A credential composed
+	// every login an identity change gave or took — each once. A
+	// credential composed
 	// from configuration (a Tier A token) is bound through the directory
 	// row under its own login, `token:<id>`, whose person id it never
 	// learns, so the login is the one name that reaches it.

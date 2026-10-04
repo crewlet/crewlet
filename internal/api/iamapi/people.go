@@ -49,13 +49,6 @@ type personView struct {
 	// "removed" row to render: a removal deletes the row it would be.
 	Sealed bool `json:"sealed,omitempty"`
 
-	// Reserved reports an enrolment whose claims landed and whose content
-	// record has not: the row holds an address, a login or a seat and is
-	// nobody yet. A STATE rather than a failure, and the answer to an
-	// administrator whose enrolment was refused as claimed by an id they
-	// do not recognise.
-	Reserved bool `json:"reserved,omitempty"`
-
 	// Seat is the bound seat's handle, which is what a binding records
 	// (ADR-0013).
 	Seat string `json:"seat,omitempty"`
@@ -76,7 +69,7 @@ func (s *Service) viewOf(ctx context.Context, row iamdomain.PersonRow) personVie
 		Seat: row.Seat, Grants: row.Grants,
 		Epoch:     row.Epoch,
 		CreatedAt: row.CreatedAt, UpdatedAt: row.UpdatedAt,
-		Version: row.Version, Reserved: row.Reserved,
+		Version: row.Version,
 	}
 	name, openedName := s.open(ctx, row.ID, iamdomain.FieldName, row.NameSealed)
 	email, openedEmail := s.open(ctx, row.ID, iamdomain.FieldEmail, row.EmailSealed)
@@ -178,7 +171,7 @@ func (s *Service) PostPeople(w http.ResponseWriter, r *http.Request) {
 	}
 	// THE PERSON IS THE OPERATION'S, derived from its key, so a retry
 	// under the key an unknown answer handed back names the person its
-	// first attempt claimed for — see [Service.createKey].
+	// first attempt created — see [Service.createKey].
 	opID, seed, ok := s.createKey(w, r)
 	if !ok {
 		return
@@ -189,6 +182,24 @@ func (s *Service) PostPeople(w http.ResponseWriter, r *http.Request) {
 			map[string]string{"detail": err.Error()})
 		return
 	}
+	// PUBLISHED UNDER A STEP OF THE KEY BOUND TO THIS REQUEST, for
+	// [Service.opIDFor]'s reason: the ledger answers an operation it holds
+	// before any decide runs, and every create is on the directory's one
+	// subject, so the key itself sent with ANOTHER body was this create
+	// answered `applied` with nothing of the second written. The person
+	// stays the seed's, so another body under the key reaches the person
+	// the first created and is refused as a reused key.
+	digest, err := opkey.Digest(r, in)
+	if err != nil {
+		log.ErrorContext(r.Context(), "api_iam_request_digest_failed",
+			"error", err)
+		httpjson.Fail(w, http.StatusInternalServerError, httpjson.CodeInternalError)
+		return
+	}
+	published := statelog.StepOpID(opID, "people-create", digest)
+	// ONE RECORD, THE SEAT INCLUDED: the directory decides the address,
+	// the login and the seat together, so a create whose seat somebody
+	// else holds is refused having created nobody.
 	enrolled, err := writer.Enrol(r.Context(), iamdomain.Enrolment{
 		PersonID: person, Kind: kind,
 		// ACTIVE FROM THE MOMENT IT IS CREATED, because an
@@ -197,53 +208,18 @@ func (s *Service) PostPeople(w http.ResponseWriter, r *http.Request) {
 		// other path and it is the one with stages, because the person
 		// has to act.
 		Stage: iam.StageActive,
-		Name:  in.Name, Email: in.Email, Login: in.Login,
+		Name:  in.Name, Email: in.Email, Login: in.Login, Seat: in.Seat,
 		Grants: in.Grants,
-		OpID:   opID, Reason: reasonOr(in.Reason, "created through /iam/people"),
+		OpID:   published, Reason: reasonOr(in.Reason, "created through /iam/people"),
 	})
-	if err != nil || !landed(enrolled) {
-		s.answerWrite(w, r, opID, enrolled, err, map[string]any{"id": person})
-		return
+	// THE ID ONLY BESIDE A CREATE THAT MAY HAVE LANDED: a refused one
+	// created nobody, and naming the person it would have made reads as
+	// somebody who exists.
+	var created map[string]any
+	if err == nil {
+		created = map[string]any{"id": person}
 	}
-	if in.Seat == "" {
-		s.answerWrite(w, r, opID, enrolled, nil, map[string]any{"id": person})
-		return
-	}
-	{
-		// THE BIND IS ITS OWN RECORD, on the seat's subject, because
-		// that is where "one holder per seat" is arbitrated. A create
-		// whose bind is refused leaves a person with no seat, which is
-		// an ordinary state an administrator fixes with one more call —
-		// and the alternative, rolling the enrolment back, would mean
-		// deleting somebody the log already says exists.
-		bound, err := writer.Claim(r.Context(), iamdomain.KindSeat, in.Seat,
-			person, statelog.StepOpID(opID, "seat"))
-		if err != nil {
-			// THE REFUSAL IS THE BIND'S, and it says the person exists:
-			// this answer used to carry the bind's 409 alone, so an
-			// administrator read a create that failed and made the person
-			// a second time under a new key.
-			s.answerWrite(w, r, opID, enrolled, err, map[string]any{
-				"id": person, "landed": []string{"person"},
-				"hint": "the person was created and the seat binding was " +
-					"refused; bind them with PATCH /iam/people/" + person,
-			})
-			return
-		}
-		if !landed(bound) {
-			s.answerWrite(w, r, opID, sequence(opID, enrolled, bound), nil,
-				map[string]any{
-					"id": person, "landed": []string{"person"},
-					"detail": "the person was created and nothing can say " +
-						"whether the seat binding landed; retry with the same " +
-						opkey.Header + ", or bind them with PATCH " +
-						"/iam/people/" + person,
-				})
-			return
-		}
-		s.answerWrite(w, r, opID, sequence(opID, enrolled, bound), nil,
-			map[string]any{"id": person})
-	}
+	s.answerWrite(w, r, opID, enrolled, err, created)
 }
 
 // patchBody is what an edit accepts.
@@ -266,12 +242,13 @@ type patchBody struct {
 // refusal is what is wrong with an edit that this surface can judge before
 // publishing anything, or "".
 //
-// THE WHOLE BODY, BEFORE THE FIRST RECORD. An edit is a sequence, and a value
-// refused halfway leaves every record before it landed: a stage this build
-// cannot name used to be refused after the seat and the login had already
-// moved. What needs the estate to judge — a login's grammar against its holder's
-// kind, a seat the chart holds, a name somebody else has — is the domain's,
-// and each of those is decided before its own record publishes.
+// THE WHOLE BODY, BEFORE THE FIRST RECORD. An edit is up to three records, and
+// a value refused halfway leaves every record before it landed: a stage this
+// build cannot name used to be refused after the seat and the login had
+// already moved. What needs the estate to judge — a login's grammar against
+// its holder's kind, a seat the chart holds, a value somebody else holds — is
+// the directory's, decided in the identity record's own snapshot, which goes
+// first.
 func (b patchBody) refusal() string {
 	switch {
 	case b.Login != nil && *b.Login == "":
@@ -289,38 +266,28 @@ func (b patchBody) refusal() string {
 
 // PatchPerson is `PATCH /iam/people/{id}`.
 //
-// # Four different kinds of change, and they are four records
+// # Up to three records, and the one other people's values can refuse goes first
 //
-// A person's DOCUMENT (their name, their grants), their STAGE,
-// their LOGIN and their SEAT arbitrate on different subjects — the person's
-// own for the first two, the login token and the seat id for the others,
-// because those are what two writers can race for. So one PATCH is a
-// SEQUENCE, in the order that leaves the most useful residue: the claims
-// first, because they are what can be refused.
+// A person's LOGIN and SEAT are the directory's — values two writers can race
+// for — and they move in ONE identity record, decided in its own snapshot
+// against everybody else's ([iamdomain.Writer.SetIdentity]); their STAGE and
+// their DOCUMENT (name, grants) are their own subject's. So one PATCH is up to
+// three records, and the identity record goes FIRST: it is the one a value
+// somebody else holds can refuse, and refused first it is refused with
+// nothing landed.
 //
-// # Nothing is published until the whole body is known to be acceptable
+// # Nothing is published until what can be judged early has been
 //
-// A sequence that meets a bad value halfway leaves the half before it landed.
-// So every value this surface can judge on its own — a stage, a login being
-// cleared — is refused before the first record, and so is
-// everything this node's rows can already establish a LATER record would be
-// refused for ([Service.judgeEdit]): a login its holder's kind may not hold, a
-// login somebody else holds, a grant the caller may not confer. Those used to be met only at their own record, so `{"seat", "login":
-// "Bob.SRE"}` moved the seat and then answered 400 — refused, with the seat
-// already moved. A login or a seat MOVES through the domain's own gesture,
-// which claims the new one before it releases the old. This used to release
-// the old login first and then claim the new: a new login the holder's grammar
-// refused (`ops.bot` for a machine, `Jane.Doe` for anybody) left the row with
-// no login at all, which recorded a person as nobody and silently unbound a
-// Tier A token from the seat its machine row named.
+// A stage this build cannot name, a login being cleared and a grant the caller
+// may not confer are refused before the first record ([patchBody.refusal],
+// [iamdomain.Writer.MayConfer]) — each used to be met only at its own record,
+// after a seat or a login ahead of it had already moved.
 //
-// # What only a record can decide is answered with what landed
+// # What only a later record can decide is answered with what landed
 //
-// A login taken between the read and its record, a seat removed from the
-// chart a moment ago: those are decided by the record, and a sequence cannot
-// un-land the steps before one. So a refusal or an unknown met after the first
-// record names the steps that landed (`landed`), rather than reading as an
-// edit that changed nothing.
+// A stage or a document refused after the identity record landed cannot
+// un-land it, so the refusal names the steps that did (`landed`), rather than
+// reading as an edit that changed nothing.
 func (s *Service) PatchPerson(w http.ResponseWriter, r *http.Request) {
 	in, ok := readBody[patchBody](w, r)
 	if !ok {
@@ -354,19 +321,20 @@ func (s *Service) PatchPerson(w http.ResponseWriter, r *http.Request) {
 	// below is published under op.id, a step of it bound to this request.
 	opID := op.key
 	reason := reasonOr(in.Reason, "changed through /iam/people")
-	refused, unreadable := s.judgeEdit(r.Context(), writer, id, in, held)
-	switch {
-	case unreadable != nil:
-		s.unavailable(w, r, "read who holds a login", unreadable)
-		return
-	case refused != nil:
-		s.answerWrite(w, r, opID, statelog.Result{}, refused,
-			map[string]any{"id": id})
-		return
+	if in.Grants != nil {
+		// THE RECORD'S OWN CONFERRAL RULE, asked before anything lands:
+		// it reads nothing, so a grant the caller may not confer is
+		// refused with nothing moved. The document's decide asks it again
+		// in the snapshot the grants land from, which is the authority.
+		if err = writer.MayConfer(held.Grants, *in.Grants); err != nil {
+			s.answerWrite(w, r, opID, statelog.Result{}, err,
+				map[string]any{"id": id})
+			return
+		}
 	}
 
 	// EVERY STEP'S ANSWER IS KEPT, and a step that did not land ends the
-	// sequence there: an unknown claim, stage or move is one the next
+	// edit there: an unknown identity record or stage is one the next
 	// record must not be built on, and the answer says unknown under the
 	// op id a retry re-derives every step's id from. Either way it names
 	// the steps that DID land before it, which is what the person now is.
@@ -402,26 +370,16 @@ func (s *Service) PatchPerson(w http.ResponseWriter, r *http.Request) {
 			return true
 		}
 	}
-	if in.Seat != nil && *in.Seat != held.Seat {
-		var bound statelog.Result
-		switch {
-		case *in.Seat == "":
-			bound, err = writer.Release(r.Context(), iamdomain.KindSeat,
-				held.Seat, id, statelog.StepOpID(op.id, "unbind"), reason)
-		case held.Seat == "":
-			bound, err = writer.Claim(r.Context(), iamdomain.KindSeat, *in.Seat,
-				id, statelog.StepOpID(op.id, "bind"))
-		default:
-			bound, err = writer.Rebind(r.Context(), id, held.Seat, *in.Seat,
-				op.id, reason)
-		}
-		if !step("seat")(bound, err) {
-			return
-		}
-	}
+	edit := iamdomain.IdentityEdit{PersonID: id,
+		OpID: statelog.StepOpID(op.id, "identity"), Reason: reason}
 	if in.Login != nil && *in.Login != held.Login {
-		if !step("login")(writer.Rename(r.Context(), id, held.Login, *in.Login,
-			op.id, reason)) {
+		edit.Login = in.Login
+	}
+	if in.Seat != nil && *in.Seat != held.Seat {
+		edit.Seat = in.Seat
+	}
+	if edit.Login != nil || edit.Seat != nil {
+		if !step("identity")(writer.SetIdentity(r.Context(), edit)) {
 			return
 		}
 	}
@@ -432,9 +390,9 @@ func (s *Service) PatchPerson(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if in.Name == nil && in.Grants == nil {
-		// NOTHING LEFT FOR THE PERSON'S OWN SUBJECT. A body that moved
-		// only a claim or a stage has already landed its records, so
-		// publishing an empty document write here would be a record
+		// NOTHING LEFT FOR THE PERSON'S OWN DOCUMENT. A body that moved
+		// only a login, a seat or a stage has already landed its records,
+		// so publishing an empty document write here would be a record
 		// that changes nothing and a version bump every reader sees.
 		//
 		// READ BACK only where every record is applied HERE: a pending
@@ -473,47 +431,6 @@ func (s *Service) PatchPerson(w http.ResponseWriter, r *http.Request) {
 	}
 	s.answerWrite(w, r, opID, sequence(opID, append(steps, updated)...), err,
 		extra)
-}
-
-// judgeEdit refuses, BEFORE THE FIRST RECORD, what a later record of an edit
-// would be refused for and this node's rows can already establish: a login its
-// holder's kind may not hold, a login somebody else holds, and a grant the
-// caller may not confer. Each is the domain's own rule
-// ([iamdomain.LoginFits], [iamdomain.Writer.MayConfer]) or the holder the
-// claim's own decide would name, asked early — and each used to be met only at
-// its own record, after a seat or a login ahead of it had already moved.
-//
-// THE SEAT IS NOT HERE because it moves FIRST: a seat the chart does not hold,
-// or one somebody else is bound to, is refused before anything has landed.
-//
-// ADVISORY, as every read outside a decide is: a login taken between this read
-// and its record is refused by the record, which is the residue
-// [Service.PatchPerson] answers with the steps that landed before it.
-//
-// refused is answered as the domain's own refusal would be; unreadable is a
-// read this node could not make, with nothing judged.
-func (s *Service) judgeEdit(ctx context.Context, writer Writer, id string,
-	in patchBody, held iamdomain.PersonRow) (refused, unreadable error) {
-
-	if in.Login != nil && *in.Login != held.Login {
-		if err := iamdomain.LoginFits(held.Kind, *in.Login); err != nil {
-			return err, nil
-		}
-		holder, err := s.directory.PersonByLogin(ctx, *in.Login)
-		if err != nil {
-			return nil, err
-		}
-		if holder.ID != "" && holder.ID != id {
-			return &iamdomain.ErrClaimed{Kind: iamdomain.KindLogin,
-				Token: *in.Login, Holder: holder.ID}, nil
-		}
-	}
-	if in.Grants != nil {
-		if err := writer.MayConfer(held.Grants, *in.Grants); err != nil {
-			return err, nil
-		}
-	}
-	return nil, nil
 }
 
 // DeletePerson is `DELETE /iam/people/{id}`.
@@ -636,9 +553,9 @@ func callerOperator(ctx context.Context) string {
 }
 
 // answerWritten answers an edit whose every record landed HERE and left
-// nothing for the person's own document — a seat, a login, a link or a stage
-// moved — by reading the row back, so the caller sees the person as the edit
-// left them.
+// nothing for the person's own document — a seat, a login or a stage moved —
+// by reading the row back, so the caller sees the person as the edit left
+// them.
 //
 // WITH THE WRITE'S OWN THREE FACTS beside the row — its outcome, its op id and
 // its position — because it answers a WRITE, and every write answer carries

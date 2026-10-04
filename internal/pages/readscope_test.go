@@ -70,9 +70,7 @@ func (r *roundTrip) retainReported(reported uint64, position int64,
 	if err != nil {
 		r.t.Fatalf("read authority: %v", err)
 	}
-	reader, err := pages.NewReader(pages.ReaderOptions{
-		DB: r.db, Log: authority, Committed: r.waiter.Committed,
-	})
+	reader, err := pages.NewReader(pages.ReaderOptions{DB: r.db, Log: authority})
 	if err != nil {
 		r.t.Fatalf("pages reader: %v", err)
 	}

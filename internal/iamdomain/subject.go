@@ -8,59 +8,58 @@
 // query registry without any of them pulling in a store. This package is the
 // durable half, and it imports that leaf rather than restating it.
 //
-// # ONE SUBJECT PER CLAIM, and why that is the whole design
+// # ONE SUBJECT FOR THE DIRECTORY, and why that is the whole design
 //
 // The replicated estate forbids a UNIQUE index outside a primary key, because
 // a constraint violation inside an apply transaction aborts it
 // DETERMINISTICALLY on every node at once — a rare cosmetic anomaly becomes a
 // fleet-wide stalled log with no partial-failure arm to recover through. So
-// there is no uniqueness check anywhere in this estate, and there is nothing
-// to add one to.
+// there is no uniqueness constraint anywhere in this estate, and there is
+// nothing to add one to.
 //
-// What makes an address, a login and a seat binding unique instead is the
-// SUBJECT GRAMMAR: each claim arbitrates on ITSELF, create-only at an
-// expectation of zero, so two operators enrolling one address contend at the
-// broker and exactly one wins. It is the knowledge base's create rule —
-// arbitrate on the TITLE, because two writers must contend for a name and two
-// uuids never would — applied to every address a person can be known by.
+// What keeps an address, a login and a seat binding to one holder instead is
+// that EVERY WRITE THAT SETS OR FREES ONE IS A RECORD ON ONE SUBJECT — the
+// directory ([KindDirectory]): an enrolment, a redemption, an invitation, an
+// identity change and a removal. Its decide reads the whole directory in its
+// own snapshot, refuses a value somebody else holds by naming them
+// ([ErrTaken]), and publishes at that one subject's arbitration anchor — so two
+// directory writes contend at the broker and the loser decides again from rows
+// that hold the winner. It is the org chart's structure rule applied to the
+// directory: directory writes are an administrator's or an invitation's, so
+// serialising them costs nothing, and a uniqueness question answered by one
+// read in one snapshot needs no sequence, no reservation and no release.
 //
-// The consequence is that NO TWO CLAIMS MAY SHARE A SUBJECT. A single
-// `iam.claim.<something>` carrying both an email and a login would make two
-// people taking two different unclaimed addresses contend with each other,
-// which is the opposite failure: correct, and serialising every enrolment in
-// the company behind one subject. A shared subject in the other direction —
-// two distinct claims folded onto one token — is worse and silent: the second
-// claim never contends at all, and the duplicate identity nobody refused is
-// discovered by a person signing in as somebody else.
+// EVERYTHING THAT SETS NOTHING UNIQUE STAYS OFF IT. A person's own content —
+// their name, grants, credentials, stage and revocation epoch — arbitrates on
+// their own subject, and a session on its lineage, so two administrators
+// editing two people never contend and a thousand people signing in at nine
+// o'clock do not either.
 //
-// # A person is minted, and the claims are taken one at a time
+// # Two subjects meet on one row, and never on one column
 //
-// A person's id is a uuid7 that nothing renames, and every claim record names
-// it. An enrolment is therefore a SEQUENCE — take the address, take the login,
-// write the person — for the reason the tracker's dependency edge is one: each
-// end arbitrates on its own subject, and a record has exactly one subject to
-// arbitrate on. A sequence that stops halfway leaves a CLAIMED ADDRESS WITH NO
-// PERSON, which is a legal named state rather than corruption: the claim report
-// names it ([Reader.Claims]), and removing the reservation's id releases it.
-// Until then it is a RESERVATION to every reader — a row with no kind that acts
-// as nobody — and never a person whose document failed to decode, which is the
-// unknown answer and a 503 wherever it reaches a request.
+// The directory CREATES a person's row, sets and clears its three unique
+// columns, and DELETES it; the person's own subject owns the document and the
+// columns derived from it. A directory record after the enrolment never
+// touches the document, and a person record never touches a unique column and
+// never creates a row — so the two halves are disjoint, and since every record
+// about one person is applied in log order, one `version` is the whole guard.
 //
 // # What a record states that it is not the subject of
 //
 // Every record declares a SCOPE — the set of identity BUCKETS its apply may
 // write — because that is what a node which cannot decode it files the
 // deferral under. The buckets are this domain's own partition and `scope.go`
-// argues them; what matters here is that a claim's subject is a BLIND or a
-// token, and the person it concerns is inside a payload the deferring node
-// cannot read. The scope is the only thing that can connect the two, which is
-// why it is on the envelope and readable at every version.
+// argues them; what matters here is that a directory record's subject names
+// nobody and a session's names a lineage, and the person each is about is
+// inside a payload the deferring node cannot read. The scope is the only thing
+// that can connect the two, which is why it is on the envelope and readable at
+// every version.
 //
 // # A seat is bound by its HANDLE (ADR-0013)
 //
-// A seat binding — the claim subject `iam.seat.<handle>`, the row's `seat_id`,
-// the seat a removal's tombstone records, the successor's stamp on that
-// tombstone, and every reading of them ([Reader.SeatHolders],
+// A seat binding — the row's `seat_id`, the seat a removal's tombstone
+// records, the successor's stamp on that tombstone, and every reading of them
+// ([Reader.SeatHolders],
 // [Reader.SeatBindings], the notify registry's standing, the request path's
 // seat table, the dangling-binding rule) — names the seat by its handle, which
 // is immutable in the company document: a document that changes a handle has
@@ -85,68 +84,44 @@ import (
 // reported to an operator with that literal in it.
 type ObjectKind string
 
-// The ten kinds.
+// The eight kinds.
 //
 // EXPORTED AND ENUMERATED because four readers that cannot see each other all
 // compare against them: the publisher builds the subject, the wake feed's
 // filter includes or excludes the kind, the applier's dispatch switches on it,
 // and the domain's own Tables declaration must classify every one.
 const (
+	// KindDirectory is the company's whole directory, on ONE subject with
+	// no id: every record that sets or frees a unique identity value — a
+	// person's login, their address and the seat they hold — and every
+	// record that creates or removes a person row. See the package doc.
+	//
+	// ONE OBJECT, DELIBERATELY. Two administrators enrolling one address,
+	// a redemption racing an administrator's create, a rename racing an
+	// enrolment that takes the same login: each is a decide that reads
+	// the whole directory, and only one subject makes the snapshot it
+	// read the one the broker arbitrates against. Directory writes are an
+	// administrator's or an invitation's, so the serialisation costs
+	// nothing a person would notice.
+	//
+	// NOT ROOT-SCOPED, although it is about everybody's values: a record
+	// here declares the buckets of the rows its apply writes, so a node
+	// that cannot decode one holds back the people it is about rather
+	// than every sign-in in the company. What a decide here adds — that
+	// the WHOLE directory it read is complete — it asks of the deferral
+	// index itself ([wholeDirectory]).
+	KindDirectory ObjectKind = "directory"
+
 	// KindPerson is one person, machine or human, by the uuid7 that was
 	// minted for them and that nothing ever renames.
 	//
-	// EVERYTHING ABOUT A PERSON THAT IS NOT A CLAIM arbitrates here: their
-	// name and contacts, their status, their grants, their credentials,
-	// and the REVOCATION EPOCH that ends every session they hold. Two
+	// EVERYTHING ABOUT A PERSON THAT IS NOT UNIQUE arbitrates here: their
+	// name, their status, their grants, their credentials, and the
+	// REVOCATION EPOCH that ends every session they hold. Two
 	// administrators editing one person contend; two editing two people
-	// never do.
+	// never do. A person's row is created and removed on the directory,
+	// never here.
 	KindPerson ObjectKind = "person"
-
-	// KindEmail is a claim on one email ADDRESS, and its id is the keyed
-	// BLIND rather than the address.
-	//
-	// A blind because a subject is a broker path: it is carried in
-	// cleartext in every delivery, every consumer's filter and every
-	// operator's stream listing, and an address is personal data. The
-	// blind is a keyed hash, so the broker sees a token, a node holding
-	// the key can compute it from an address, and nobody else can go the
-	// other way. `blind.go` owns the derivation.
-	//
-	// It is also what an INVITATION arbitrates on, which is the point: an
-	// invitation is a claim on an address by somebody who does not have a
-	// person yet, so an invite and an enrolment for one address must
-	// contend, and they do because they share this subject.
-	KindEmail ObjectKind = "email"
-
-	// KindLogin is a claim on one LOGIN — a person's `jane.doe` or a
-	// machine's `ci:release`.
-	//
-	// THE SHAPE IS THE HOLDER'S KIND, and a claim is refused in its decide
-	// when the two disagree ([iam.ValidLoginFor]): `token:<id>` is the
-	// login a Tier A token acts under, so a person holding one would make
-	// the deployment's credential act as their seat.
-	//
-	// ITS ID IS THE LOGIN ITSELF, not a blind, and the asymmetry with
-	// [KindEmail] is deliberate. A login is a name the company CHOSE, in a
-	// grammar internal/iam defines, typed into an audit row and read back
-	// by everybody; an email address is a person's own contact detail that
-	// reaches this engine from outside it. Blinding a value the dashboard
-	// prints beside every change would cost an operator the ability to
-	// read their own log for nothing.
-	KindLogin ObjectKind = "login"
-
-	// KindSeat is a claim binding one person to one SEAT, by the seat's
-	// identity — see the package doc.
-	//
-	// The claim is on the SEAT rather than on the person because that is
-	// the side that must be exclusive: one seat is held by at most one
-	// person, and two administrators binding two people to one seat have
-	// to contend. A person holding no seat is ordinary, and a person
-	// holding a seat that the running company has since removed is a LEGAL
-	// named state the session layer answers with a 403 naming the seat —
-	// not a state this domain can prevent, because the company document is
-	// applied apart from this log and a read of it guarantees nothing.
-	KindSeat ObjectKind = "seat"
 
 	// KindSession is one signed-in session's whole life, by its LINEAGE:
 	// the uuid7 the session was opened with, which never changes while it
@@ -229,7 +204,7 @@ const (
 	KindBarrier ObjectKind = "barrier"
 )
 
-// ObjectKinds are the ten, and THE ORDER IS LOAD-BEARING.
+// ObjectKinds are the eight, and THE ORDER IS LOAD-BEARING.
 //
 // [statelogtest] publishes the FIRST THREE a domain declares, twice each, in
 // order — so the declaration decides what the framework's own suite certifies,
@@ -237,12 +212,12 @@ const (
 // third place.
 //
 // These three are a real sequence rather than three unrelated records: a
-// person is minted, their address is claimed for them, and their login is
-// claimed for them. A claim naming a person nobody minted is a record whose
-// apply has nothing to attach to, so any other order would certify a failure
-// rather than a domain.
+// person is enrolled (the directory), their content changes (their own
+// subject), and they sign in (a session). A content record for a person
+// nobody enrolled is a record whose apply has nothing to change, so any other
+// order would certify a failure rather than a domain.
 var ObjectKinds = []ObjectKind{
-	KindPerson, KindEmail, KindLogin, KindSeat, KindSession,
+	KindDirectory, KindPerson, KindSession,
 	KindInvalidation, KindSweep, KindEviction, KindGeneration, KindBarrier,
 }
 
@@ -252,7 +227,7 @@ func (k ObjectKind) Valid() bool { return slices.Contains(ObjectKinds, k) }
 // Arbitrated reports whether writes on this kind carry a per-subject
 // expectation.
 //
-// NINE OF TEN DO. The barrier shares one subject across the whole domain, so
+// SEVEN OF EIGHT DO. The barrier shares one subject across the whole domain, so
 // an expectation there would serialise every linearizable read behind every
 // other one and write an anchor row per read into the transaction holding this
 // store's only writer.
@@ -260,12 +235,13 @@ func (k ObjectKind) Arbitrated() bool { return k != KindBarrier }
 
 // Identified reports whether this kind's subject carries an id.
 //
-// EIGHT OF TEN DO. The invalidation and the barrier are the two kinds with
-// exactly one object in the whole domain, and each is a singleton for a reason
-// stated at its constant rather than because an id was hard to choose.
+// FIVE OF EIGHT DO. The directory, the invalidation and the barrier are the
+// kinds with exactly one object in the whole domain, and each is a singleton
+// for a reason stated at its constant rather than because an id was hard to
+// choose.
 func (k ObjectKind) Identified() bool {
 	switch k {
-	case KindInvalidation, KindBarrier:
+	case KindDirectory, KindInvalidation, KindBarrier:
 		return false
 	}
 	return true
@@ -274,7 +250,7 @@ func (k ObjectKind) Identified() bool {
 // RootScoped reports whether a record on this kind may state the whole estate
 // as its scope.
 //
-// FOUR OF TEN MAY, and it is the tightest rule in this package because the
+// FOUR OF EIGHT MAY, and it is the tightest rule in this package because the
 // cost of the root term here is the highest in the tree: a deferred record at
 // the root blocks every read whose closure it covers, which is every read in
 // the domain — so one record a node cannot decode would freeze every
@@ -308,34 +284,15 @@ type Subject struct {
 // PersonSubject names one person by the id nothing renames.
 //
 // There is a constructor per kind rather than a Subject{Kind, ID} literal at
-// every call site, because several of these ids are DERIVED — a blind, a
-// folded login, a bucket number — and a derivation written twice is a subject
-// two writers disagree about.
+// every call site, because several of these ids are DERIVED — a bucket number,
+// a generation — and a derivation written twice is a subject two writers
+// disagree about.
 func PersonSubject(personID string) Subject {
 	return Subject{Kind: KindPerson, ID: personID}
 }
 
-// EmailSubject names a claim on one address, taking the BLIND rather than the
-// address: this package never sees a cleartext address in a subject, so no
-// caller can accidentally publish one.
-func EmailSubject(blind string) Subject {
-	return Subject{Kind: KindEmail, ID: blind}
-}
-
-// LoginSubject names a claim on one login.
-//
-// THE LOGIN IS FOLDED HERE, once, so a caller cannot arbitrate on the
-// author's own capitalisation: `Jane.Doe` and `jane.doe` are one address, and
-// two subjects would make them two people — which is exactly the duplicate
-// nothing in this estate can refuse after the fact.
-func LoginSubject(login string) Subject {
-	return Subject{Kind: KindLogin, ID: strings.ToLower(strings.TrimSpace(login))}
-}
-
-// SeatSubject names a claim on one seat, by its handle (ADR-0013).
-func SeatSubject(seatID string) Subject {
-	return Subject{Kind: KindSeat, ID: seatID}
-}
+// DirectorySubject is the company's one directory: see [KindDirectory].
+func DirectorySubject() Subject { return Subject{Kind: KindDirectory} }
 
 // SessionSubject names one session's whole life by its lineage.
 func SessionSubject(lineage string) Subject {
@@ -409,8 +366,8 @@ func (s Subject) Validate() error {
 	}
 	if s.ID == "" && s.Kind.Identified() {
 		return fmt.Errorf("iamdomain: a %s subject needs an id — the "+
-			"invalidation and the barrier are the only kinds with exactly one "+
-			"object", s.Kind)
+			"directory, the invalidation and the barrier are the only kinds "+
+			"with exactly one object", s.Kind)
 	}
 	if strings.ContainsAny(s.ID, " \t\n*>") {
 		return fmt.Errorf("iamdomain: subject id %q carries whitespace or a "+
@@ -424,10 +381,9 @@ func (s Subject) Validate() error {
 	// never from a subject id, so no id of any kind reaches a path — which
 	// is one of the things the bucketed scope buys.
 	//
-	// A DOT IS NOT REFUSED EITHER, and it must not be: a person's login is
-	// `jane.doe` by construction, because internal/iam requires the dot to
-	// tell a login apart from a seat handle in an audit row. topics.IamLogPath
-	// splits only the FIRST dot for exactly that reason.
+	// A DOT IS NOT REFUSED EITHER: a node id may carry one, and
+	// topics.IamLogPath splits only the FIRST dot, so an id keeps every
+	// dot it was published with.
 	return nil
 }
 

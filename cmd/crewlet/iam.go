@@ -809,24 +809,9 @@ func (p *iamPrinter) check(answer map[string]any, err error) error {
 	return nil
 }
 
-// findingWho is the WHO column for one finding.
-//
-// A DUPLICATE NAMES EVERYBODY HOLDING THE CLAIM, prefixed by which claim — and
-// by the claim's value where it is readable (a login, a seat); an address is
-// named by its kind alone, because the report carries no form of it. Every
-// other finding is about one person, by their login where they have one.
+// findingWho is the WHO column for one finding: the person it is about, by
+// their login where they have one.
 func findingWho(row map[string]any) string {
-	if people, _ := row["people"].([]any); len(people) > 0 {
-		ids := make([]string, 0, len(people))
-		for _, p := range people {
-			ids = append(ids, str(p))
-		}
-		claim := str(row["claim"])
-		if value := str(row["login"]) + str(row["seat"]); value != "" {
-			claim += " " + value
-		}
-		return claim + ": " + strings.Join(ids, ", ")
-	}
 	if who := str(row["login"]); who != "" {
 		return who
 	}

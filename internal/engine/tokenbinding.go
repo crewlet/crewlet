@@ -21,8 +21,8 @@ import (
 // DOCUMENT says who a credential is — a seat's contact block is how to reach a
 // person, and a credential is something they hold. The identity estate says it
 // instead: a MACHINE enrolled under the token's own login (`token:<id>`) and
-// bound to a seat, arbitrated on `iam.seat.<identity>` so two holders cannot
-// claim one seat.
+// bound to a seat — a directory row, bound by one record on the directory
+// subject, so two holders cannot hold one seat.
 //
 // # This is half, and the other half is the SAME as a session's
 //
@@ -65,18 +65,6 @@ var errNoDirectory = errors.New("engine: this engine holds no identity " +
 // honouring it is the deployment's own token acting as whoever chose that
 // name. A suspended or retired machine binds nothing either, because only an
 // active principal may act and a binding is a way of acting.
-//
-// # A reservation binds nothing
-//
-// A row whose enrolment stopped after its login claim — a machine enrolled
-// under `token:<id>` whose content record never landed — holds the login and
-// is nobody: no kind, no stage, no seat anybody decided. The reader reports it
-// as a RESERVATION rather than failing to decode it — a sighting with no kind —
-// and the machine check below answers UNBOUND for it, which is the narrower
-// surface. It used to answer UNKNOWN, and the
-// token it names then got 503 on every guarded route until a sweep collected
-// the row — a break-glass credential locked out by a binding that never
-// existed.
 //
 // # When a row cannot be vouched for
 //

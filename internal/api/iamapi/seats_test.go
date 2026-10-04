@@ -31,18 +31,19 @@ func seatsRig(t *testing.T) *rig {
 	return r
 }
 
-// seatsOf is the listing's rows keyed by handle, with each row's holders.
-func seatsOf(t *testing.T, got answered) map[string][]any {
+// seatsOf is the listing's rows keyed by handle, with each row's holder — nil
+// for a seat nobody holds.
+func seatsOf(t *testing.T, got answered) map[string]map[string]any {
 	t.Helper()
 	if got.status != http.StatusOK {
 		t.Fatalf("GET /iam/seats = %d, want 200: %v", got.status, got.body)
 	}
 	rows, _ := got.body["seats"].([]any)
-	out := map[string][]any{}
+	out := map[string]map[string]any{}
 	for _, row := range rows {
 		seat, _ := row.(map[string]any)
-		holders, _ := seat["holders"].([]any)
-		out[seat["handle"].(string)] = holders
+		holder, _ := seat["holder"].(map[string]any)
+		out[seat["handle"].(string)] = holder
 	}
 	return out
 }
@@ -59,8 +60,10 @@ func TestIamSeatsListsHumanSeatsAndWhoHoldsThem(t *testing.T) {
 	r := seatsRig(t)
 
 	all := seatsOf(t, r.as(administrator(), http.MethodGet, "/iam/seats", nil))
-	if len(all) != 3 || len(all["founder"]) != 1 || len(all["ops-lead"]) != 1 ||
-		len(all["support"]) != 0 {
+	if len(all) != 3 || all["founder"]["login"] != "alice.admin" ||
+		all["ops-lead"]["login"] != "bob.sre" ||
+		all["ops-lead"]["stage"] != string(iam.StageSuspended) ||
+		all["support"] != nil {
 		t.Errorf("the listing = %v, want three seats: the founder's and the ops "+
 			"lead's held, support's not", all)
 	}
@@ -69,7 +72,7 @@ func TestIamSeatsListsHumanSeatsAndWhoHoldsThem(t *testing.T) {
 	}
 
 	unheld := seatsOf(t, r.as(auditor(), http.MethodGet, "/iam/seats?unheld=true", nil))
-	if len(unheld) != 1 || unheld["support"] == nil {
+	if _, listed := unheld["support"]; len(unheld) != 1 || !listed {
 		t.Errorf("?unheld=true = %v, want support alone — a suspended "+
 			"person still holds their seat", unheld)
 	}
@@ -79,12 +82,16 @@ func TestIamSeatsListsHumanSeatsAndWhoHoldsThem(t *testing.T) {
 	}
 }
 
-// AN UNREADABLE DIRECTORY IS 503, NEVER A LIST OF VACANCIES — and a node with
-// no company says so rather than listing none.
+// AN UNREADABLE DIRECTORY IS 503, NEVER A LIST OF VACANCIES — and so is a seat
+// two rows bind, and a node with no company says so rather than listing none.
 //
 // Read as "nobody holds anything", `?unheld=true` would list every seat in the
-// company under a parameter that promised the vacancies. The control is the
-// same request against a directory that reads.
+// company under a parameter that promised the vacancies. Two rows binding one
+// seat — a record this node retained, or a restore — leave this node unable
+// to say who holds it, so another node answers rather than this one picking.
+// The control is the same request against a directory that reads.
+//
+// Mutation: answer the first of two holders and the duplicate reads 200.
 func TestIamSeatsRefusesWhatItCannotRead(t *testing.T) {
 	t.Parallel()
 	r := seatsRig(t)
@@ -97,6 +104,11 @@ func TestIamSeatsRefusesWhatItCannotRead(t *testing.T) {
 	r.directory.bindingsErr = nil
 	if got := r.as(administrator(), http.MethodGet, "/iam/seats?unheld=true", nil); got.status != http.StatusOK {
 		t.Errorf("the control: a directory that reads = %d, want 200", got.status)
+	}
+	r.directory.bindings = append(r.directory.bindings, iamdomain.SeatBinding{
+		Person: "p-twin", Login: "twin.person", Seat: "founder", Stage: iam.StageActive})
+	if got := r.as(administrator(), http.MethodGet, "/iam/seats", nil); got.status != http.StatusServiceUnavailable {
+		t.Errorf("a seat two rows bind = %d %v, want 503", got.status, got.body)
 	}
 
 	none := newRig(t, func(o *iamapi.Options) { o.Seats = fakeSeats{missing: true} })

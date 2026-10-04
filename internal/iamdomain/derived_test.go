@@ -13,56 +13,18 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
-// A REDEMPTION'S PERSON IS ONE UUID7 PER CREDENTIAL.
+// A REDEMPTION REFUSED FOR ITS LOGIN PUBLISHES NOTHING, SO A RETRY WITH ANOTHER
+// LOGIN LANDS AND SPENDS THE LINK.
 //
-// Every attempt at one redemption must name the person its first attempt
-// claimed the address for, so the derivation is a function of the credential
-// and nothing else — and it is a uuid7 at the credential's own instant,
-// because the directory pages in id order and that order is creation order.
-func TestARedemptionsPersonIsOneUUID7PerCredential(t *testing.T) {
-	t.Parallel()
-	invitation := uuid.Must(uuid.NewV7())
-	first, err := iamdomain.InvitedPersonID(invitation.String())
-	if err != nil {
-		t.Fatalf("derive: %v", err)
-	}
-	again, _ := iamdomain.InvitedPersonID(invitation.String())
-	if first != again {
-		t.Errorf("one invitation derived two people: %s and %s", first, again)
-	}
-	person := uuid.MustParse(first)
-	if person.Version() != 7 || person.Variant() != uuid.RFC4122 {
-		t.Errorf("the derived person %s is version %d, variant %v — want a "+
-			"uuid7 like every minted person id", person, person.Version(),
-			person.Variant())
-	}
-	if !sameMillisecond(person, invitation) {
-		t.Errorf("the derived person %s is not at the invitation's instant %s",
-			person, invitation)
-	}
-	other, _ := iamdomain.InvitedPersonID(uuid.Must(uuid.NewV7()).String())
-	if other == first {
-		t.Error("two invitations derived one person")
-	}
-
-	// AN ID THIS BUILD NEVER MINTS FOR AN INVITATION IS REFUSED rather than
-	// derived at some instant nobody chose.
-	for _, bad := range []string{"inv-1", uuid.NewString()} {
-		if _, err := iamdomain.InvitedPersonID(bad); err == nil {
-			t.Errorf("invitation %q derived a person", bad)
-		}
-	}
-}
-
-// A STOPPED ENROLMENT FINISHES UNDER ITS OWN PERSON, AND ONLY UNDER IT.
+// A redemption is one record: the person, their address, their login and the
+// spent link land together or not at all. So a redeemer told their login was
+// taken has left nothing behind — no address held for a person nobody
+// finished, no link half spent — and the attempt that names another login is
+// a fresh person that lands whole.
 //
-// The domain half of a derived person: an enrolment refused after its address
-// claim — here, on a login somebody else holds — leaves the address held by
-// the person it named, so a retry naming that SAME person takes the address
-// it already holds, claims another login and lands. A retry naming a fresh id
-// is refused by the reservation, which is what every redemption met when the
-// person was minted per request.
-func TestAStoppedEnrolmentFinishesUnderItsOwnPerson(t *testing.T) {
+// Mutation: publish the person before deciding the login, and the refused
+// attempt's address refuses the retry.
+func TestARedemptionRefusedForItsLoginPublishesNothing(t *testing.T) {
 	t.Parallel()
 	rig := newWriteRig(t)
 	if err := rig.enrol(iamdomain.Enrolment{
@@ -73,110 +35,63 @@ func TestAStoppedEnrolmentFinishesUnderItsOwnPerson(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("enrol the login's holder: %v", err)
 	}
-	person, err := iamdomain.InvitedPersonID(uuid.Must(uuid.NewV7()).String())
-	if err != nil {
-		t.Fatalf("derive: %v", err)
-	}
-	redemption := func(login string) iamdomain.Enrolment {
-		return iamdomain.Enrolment{
-			PersonID: person, Kind: iam.KindPerson, Stage: iam.StageActive,
-			Name: "Dana Sre", Email: "dana@example.com", Login: login,
-			OpID: "invite:the-link", Reason: "redeemed an invitation",
-		}
-	}
-	var claimed *iamdomain.ErrClaimed
-	if err := rig.enrol(redemption("dana.sre")); !errors.As(err, &claimed) ||
-		claimed.Kind != iamdomain.KindLogin {
-		t.Fatalf("the first attempt answered %v, want the login refused as held", err)
-	}
-	// THE CONTROL FIRST: a fresh id for the same address is refused by the
-	// stopped attempt's reservation — the failure a minted id produced.
-	fresh := redemption("dana.ops")
-	fresh.PersonID, fresh.OpID = uuid.Must(uuid.NewV7()).String(), "invite:fresh"
-	if err := rig.enrol(fresh); !errors.As(err, &claimed) ||
-		claimed.Kind != iamdomain.KindEmail || claimed.Holder != person {
-		t.Errorf("a fresh id answered %v, want the address refused as held by "+
-			"the stopped attempt's person %s", err, person)
-	}
-	if err := rig.enrol(redemption("dana.ops")); err != nil {
-		t.Fatalf("the retry under the same person was refused: %v", err)
-	}
 	rig.drain()
-	if got := rig.column(`SELECT login FROM iam_people WHERE id = ?`,
-		person); len(got) != 1 || got[0] != "dana.ops" {
-		t.Errorf("the redeemed person holds logins %v, want [dana.ops]", got)
-	}
-}
-
-// A RETRY THAT NAMES ANOTHER LOGIN CLAIMS THAT LOGIN.
-//
-// A retry of one enrolment runs under the same operation id — that is what
-// lets the ledger collapse the appends that already landed — but a redeemer
-// may change their login between attempts. The login's claim carried the
-// operation id alone, so inside the broker's duplicate window the second
-// login's claim was acknowledged as the first's: it never happened, and the
-// person was left holding the login they had given up. The login is part of
-// its claim's op id now.
-//
-// THE FIRST ATTEMPT STOPS before its person record, which is what a retry is
-// for: here its person record goes unanswered, so it may or may not exist and
-// the gesture says unknown.
-func TestARetryThatNamesAnotherLoginClaimsIt(t *testing.T) {
-	t.Parallel()
-	var broker *silentBroker
-	rig := newWriteRigWith(t, func(inner statelog.Appender) statelog.Appender {
-		broker = &silentBroker{Appender: inner, on: ".person."}
-		return broker
-	})
-	person, err := iamdomain.InvitedPersonID(uuid.Must(uuid.NewV7()).String())
+	issued, err := inviteFor(t, rig, "dana@example.com", "")
 	if err != nil {
-		t.Fatalf("derive: %v", err)
+		t.Fatalf("invite: %v", err)
 	}
-	attempt := func(login string) (statelog.Result, error) {
-		var result statelog.Result
-		err := rig.draining(func() error {
-			var err error
-			result, err = rig.writer.Enrol(rig.t.Context(), iamdomain.Enrolment{
-				PersonID: person, Kind: iam.KindPerson, Stage: iam.StageActive,
-				Name: "Dana Sre", Email: "dana@example.com", Login: login,
-				OpID: "invite:the-link", Reason: "redeemed an invitation",
+	end, err := rig.log.End(t.Context())
+	if err != nil {
+		t.Fatalf("read the log's end: %v", err)
+	}
+	redeem := func(login string) error {
+		return rig.draining(func() error {
+			_, err := nodeWriter(rig).Enrol(t.Context(), iamdomain.Enrolment{
+				PersonID: uuid.Must(uuid.NewV7()).String(), Kind: iam.KindPerson,
+				Stage: iam.StageActive, Name: "Dana Sre", Email: "dana@example.com",
+				Login: login, Grants: []iam.Grant{iam.GrantStateRead},
+				Invitation: issued.ID, InvitationSecret: issued.Secret,
+				OpID: "invite:" + issued.ID, Reason: "redeemed an invitation",
 			})
 			return err
 		})
-		return result, err
 	}
-	broker.silent.Store(true)
-	if result, err := attempt("dana.sre"); err != nil ||
-		result.Outcome != statelog.OutcomeUnknown {
-		t.Fatalf("the first attempt answered %+v (%v), want unknown at its "+
-			"unanswered person record", result, err)
+	var taken *iamdomain.ErrTaken
+	if err := redeem("dana.sre"); !errors.As(err, &taken) ||
+		taken.Field != iamdomain.UniqueLogin {
+		t.Fatalf("the first attempt answered %v, want the login refused as held", err)
 	}
-	broker.silent.Store(false)
-	if _, err := attempt("dana.ops"); err != nil {
-		t.Fatalf("the retry: %v", err)
+	if after, err := rig.log.End(t.Context()); err != nil || after != end {
+		t.Errorf("a refused redemption moved the log from %d to %d (%v)", end,
+			after, err)
+	}
+	if err := redeem("dana.ops"); err != nil {
+		t.Fatalf("the retry with another login was refused: %v", err)
 	}
 	rig.drain()
-	if got := rig.column(`SELECT login FROM iam_people WHERE id = ?`,
-		person); len(got) != 1 || got[0] != "dana.ops" {
-		t.Errorf("after a retry naming dana.ops the person holds %v — the "+
-			"second login's claim was collapsed into the first's", got)
+	held := rig.column(`SELECT id FROM iam_people WHERE login = 'dana.ops'`)
+	if len(held) != 1 {
+		t.Fatalf("dana.ops is held by %v, want one person", held)
+	}
+	if got := rig.column(`SELECT person_id FROM iam_invites WHERE id = ?
+		AND redeemed_at <> 0`, issued.ID); len(got) != 1 || got[0] != held[0] {
+		t.Errorf("the link is spent by %v, want the person the retry created %s",
+			got, held[0])
 	}
 }
 
 // AN ENROLMENT CREATES; IT NEVER REWRITES SOMEBODY WHO EXISTS.
 //
-// Every enrolment's person is derived — from an invitation, a code, or an
-// administrator's operation key — so an enrolment reaching a person who is
-// already enrolled is a second request under one derivation. The person record
-// is arbitrated rather than a create, so nothing at the broker stopped it
-// landing over them: a key reused for another address gave the existing person
-// a second one, and a second redemption rewrote the person the first created.
-// What still lands is the retry of the very enrolment that created them, which
-// the operation ledger answers.
+// An administrator's create derives its person from its operation key, so an
+// enrolment reaching a person who is already enrolled is a second request under
+// one key: a surface binds the operation it publishes to the request, so the
+// same key with another body arrives under another operation id naming the
+// same derived person — and landing it would rewrite them. What still lands is
+// the retry of the very create that made them, which the operation ledger
+// answers.
 //
-// Mutation: drop the guard on the claims and the reused key's address lands on
-// the existing person; drop the one on the person record and a second
-// redemption answers applied.
+// Mutation: drop createsNobodyTwice from Enrol's decide, and the second
+// request lands over the existing person.
 func TestAnEnrolmentNeverRewritesSomebodyWhoExists(t *testing.T) {
 	t.Parallel()
 	rig := newWriteRig(t)
@@ -200,10 +115,12 @@ func TestAnEnrolmentNeverRewritesSomebodyWhoExists(t *testing.T) {
 	if err := rig.enrol(create); err != nil {
 		t.Errorf("the create's own retry was refused: %v", err)
 	}
-	// THE SAME KEY FOR ANOTHER ADDRESS is another request, refused before
-	// its claim gives the existing person a second address.
+	// THE SAME KEY FOR ANOTHER ADDRESS is another request — published under
+	// another operation, as a surface binds it — refused before it gives the
+	// existing person a second address.
 	reused := create
 	reused.Email, reused.Login = "somebody.else@example.com", "somebody.else"
+	reused.OpID = statelog.StepOpID(key, "people-create", "another-request")
 	if err := rig.enrol(reused); !errors.Is(err, iamdomain.ErrOperationReused) {
 		t.Errorf("a key reused for another address answered %v, want %v",
 			err, iamdomain.ErrOperationReused)
@@ -213,8 +130,8 @@ func TestAnEnrolmentNeverRewritesSomebodyWhoExists(t *testing.T) {
 		person); len(got) != 1 || got[0] != blindOf(t, "omar@example.com") {
 		t.Errorf("the existing person's address is %v after a reused key", got)
 	}
-	// AND A PERSON RECORD UNDER ANOTHER OPERATION is refused even where
-	// every claim it names is already theirs.
+	// AND A CREATE UNDER ANOTHER OPERATION is refused even where every
+	// value it names is already theirs.
 	other := create
 	other.OpID = operationKey()
 	if err := rig.enrol(other); !errors.Is(err, iamdomain.ErrOperationReused) {
@@ -225,12 +142,12 @@ func TestAnEnrolmentNeverRewritesSomebodyWhoExists(t *testing.T) {
 
 // A CREATE'S PERSON AND AN ISSUE'S INVITATION ARE THE OPERATION'S.
 //
-// Each used to be minted per request, so the retry an unknown answer asks for
-// named a second object that the first attempt's claim on the address then
-// refused. Derived from the operation key, every attempt of one operation names
-// one id — and an invitation's is derived under the company's key, because the
-// id is what its link's secret is derived from and a guessable key must not
-// make it a guessable link.
+// Each used to be minted per request, so the retry an unknown answer asks for —
+// or the ledger's answer to it — named a second object nobody created. Derived
+// from the operation key, every attempt of one operation names one id — and an
+// invitation's is derived under the company's key, because the id is what its
+// link's secret is derived from and a guessable key must not make it a
+// guessable link.
 func TestACreatesIdentityIsItsOperationKeys(t *testing.T) {
 	t.Parallel()
 	key := operationKey()
@@ -264,9 +181,10 @@ func TestACreatesIdentityIsItsOperationKeys(t *testing.T) {
 	if !sameMillisecond(uuid.MustParse(invitation), uuid.MustParse(key)) {
 		t.Errorf("the invitation %s is not at its key's instant", invitation)
 	}
-	// THE INVITED PERSON IS DERIVED FROM IT in turn, which needs the uuid7.
-	if _, err := iamdomain.InvitedPersonID(invitation); err != nil {
-		t.Errorf("the derived invitation derives no person: %v", err)
+	// A UUID7 IN ITS OWN RIGHT, because a redemption's operation id carries
+	// the invitation's instant.
+	if parsed := uuid.MustParse(invitation); parsed.Version() != 7 {
+		t.Errorf("the derived invitation %s is not a uuid7", invitation)
 	}
 	// UNDER THE COMPANY'S KEY: another company's key derives another id from
 	// the same operation key, so the link is not computable from the key.
@@ -299,10 +217,10 @@ func TestACreatesIdentityIsItsOperationKeys(t *testing.T) {
 // AN ISSUE RETRIED UNDER ITS KEY ANSWERS THE INVITATION IT ISSUED.
 //
 // The retry an unknown answer asks for used to name a second invitation, which
-// the address refused as spoken for by the first — a 409 against its own first
+// the address refused as held by the first — a 409 against its own first
 // attempt, and a link to the one that landed shown to nobody. Mutation: mint the
-// id per call and the retry is refused as claimed; drop the terms comparison
-// and a reused key answers another request's invitation.
+// id per call and the retry is refused as taken; drop the terms comparison and
+// a reused key answers another request's invitation.
 func TestAnIssueRetriedUnderItsKeyAnswersTheInvitationItIssued(t *testing.T) {
 	t.Parallel()
 	rig := newWriteRig(t)

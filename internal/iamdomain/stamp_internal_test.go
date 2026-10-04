@@ -44,10 +44,12 @@ func TestEveryRecordTheWriterBuildsKeepsItsVersion(t *testing.T) {
 			EnrolmentOnly: restricted}
 	}
 	invitation := func(seat string) any {
-		return Invitation{V: DocumentVersion, ID: "inv-1", Sealed: "sealed:address",
-			Verifier: InvitationVerifier("secret"), Seat: seat,
-			ExpiresAt: now().Add(time.Hour)}
+		return Invitation{V: DocumentVersion, ID: "inv-1", EmailBlind: blind,
+			Sealed: "sealed:address", Verifier: InvitationVerifier("secret"),
+			Seat: seat, ExpiresAt: now().Add(time.Hour)}
 	}
+	document := Person{V: DocumentVersion, Kind: iam.KindPerson,
+		Stage: iam.StageActive, NameSealed: "sealed:name"}
 	type build struct {
 		name    string
 		op      OpKind
@@ -61,31 +63,28 @@ func TestEveryRecordTheWriterBuildsKeepsItsVersion(t *testing.T) {
 		base, operated int
 	}
 	builds := []build{
-		{"an invitation", OpInvite, EmailSubject(blind), BucketScope(BucketOf(blind)),
+		{"an invitation", OpInvite, DirectorySubject(), BucketScope(BucketOf(blind)),
 			"", invitation(""), 4, 4},
-		{"an invitation that binds a seat", OpInvite, EmailSubject(blind),
+		{"an invitation that binds a seat", OpInvite, DirectorySubject(),
 			BucketScope(BucketOf(blind)), "", invitation("0192f00d-0000-7000-8000-0000000000cc"),
 			4, 4},
-		{"an address claim", OpClaim, EmailSubject(blind), PeopleScope(person), person,
-			Claim{V: DocumentVersion, Person: person, Sealed: "sealed:address"}, 1, 3},
-		{"a login claim", OpClaim, LoginSubject("sarah.chen"), PeopleScope(person), person,
-			Claim{V: DocumentVersion, Person: person}, 1, 3},
-		{"a redemption", OpRedeem, EmailSubject(blind),
+		{"an enrolment", OpEnrol, DirectorySubject(), PeopleScope(person), person,
+			Enrolled{V: DocumentVersion, Person: document,
+				Holds: Identifiers{EmailBlind: blind, Login: "sarah.chen"}}, 1, 3},
+		{"a redemption", OpEnrol, DirectorySubject(),
 			BucketScope(bucket, BucketOf(blind)), person,
-			Claim{V: DocumentVersion, Person: person, Sealed: "sealed:address"}, 1, 3},
-		{"a release", OpRelease, LoginSubject("sarah.chen"), PeopleScope(person), person,
-			nil, 1, 3},
-		{"an enrolment", OpEnrol, PersonSubject(person), PeopleScope(person), person,
-			Person{V: DocumentVersion, Kind: iam.KindPerson, Stage: iam.StageActive,
-				NameSealed: "sealed:name"}, 1, 3},
+			Enrolled{V: DocumentVersion, Person: document,
+				Holds:      Identifiers{EmailBlind: blind, Login: "sarah.chen"},
+				Invitation: "inv-1"}, 1, 3},
+		{"an identity change", OpIdentity, DirectorySubject(), PeopleScope(person),
+			person, IdentityChange{V: DocumentVersion, Login: "sarah.c"}, 1, 3},
 		{"a person's update", OpUpdate, PersonSubject(person), PeopleScope(person), person,
-			Person{V: DocumentVersion, Kind: iam.KindPerson, Stage: iam.StageActive,
-				NameSealed: "sealed:name"}, 1, 3},
+			document, 1, 3},
 		{"a stage change", OpStatus, PersonSubject(person), PeopleScope(person), person,
 			nil, 1, 3},
 		{"a revocation", OpRevoke, PersonSubject(person), PeopleScope(person), person,
 			nil, 1, 3},
-		{"a removal", OpRemove, PersonSubject(person), PeopleScope(person), person,
+		{"a removal", OpRemove, DirectorySubject(), PeopleScope(person), person,
 			nil, 1, 1},
 		{"a session start", OpOpen, SessionSubject("lineage-1"), PeopleScope(person), person,
 			session(false), 1, 3},

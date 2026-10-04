@@ -108,19 +108,23 @@ func retain(t *testing.T, e *Engine, b config.Bootstrap, why retentionCause,
 	return 0
 }
 
-// claimRecord is the first record of an enrolment on a peer: a login claim for
-// a person this node has never seen.
-func claimRecord(t *testing.T, person, login string) iamdomain.MutationRecord {
+// enrolRecord is a peer's enrolment of a person this node has never seen,
+// holding login and, where it is not empty, the blind of an address.
+func enrolRecord(t *testing.T, person, login, blind string) iamdomain.MutationRecord {
 	t.Helper()
-	mutation, err := iamdomain.EncodeClaim(iamdomain.Claim{V: iamdomain.DocumentVersion,
-		Person: person})
+	mutation, err := iamdomain.EncodeEnrolled(iamdomain.Enrolled{
+		V: iamdomain.DocumentVersion,
+		Person: iamdomain.Person{V: iamdomain.DocumentVersion,
+			Kind: "person", Stage: "active"},
+		Holds: iamdomain.Identifiers{Login: login, EmailBlind: blind},
+	})
 	if err != nil {
-		t.Fatalf("encode the claim: %v", err)
+		t.Fatalf("encode the enrolment: %v", err)
 	}
 	return iamdomain.MutationRecord{
 		RecordEnvelope: iamdomain.RecordEnvelope{
 			V: iamdomain.BaseRecordVersion, OpID: uuid.Must(uuid.NewV7()).String(),
-			Subject: iamdomain.LoginSubject(login), Op: iamdomain.OpClaim,
+			Subject: iamdomain.DirectorySubject(), Op: iamdomain.OpEnrol,
 			CreatedAt: time.Now().UTC(), Writer: "node-peer",
 			Scope: iamdomain.PeopleScope(person),
 		},
@@ -132,8 +136,8 @@ func claimRecord(t *testing.T, person, login string) iamdomain.MutationRecord {
 // THE BLIND KEY IS NOT MINTED OVER ROWS A NODE RETAINED.
 //
 // A missing blind-index key on an estate that holds a blind was DELETED, and
-// minting another orphans every address. Here the only blinded rows are a
-// peer's address claim this node retained, so its rows hold none — and judged
+// minting another orphans every address. Here the only blinded row is a peer's
+// enrolment this node retained, so its rows hold none — and judged
 // "caught up" off its checkpoint the node minted a fresh key over the deleted
 // one on the first sign-in by address.
 func TestTheBlindKeyIsNotMintedOverRowsANodeRetained(t *testing.T) {
@@ -152,9 +156,7 @@ func TestTheBlindKeyIsNotMintedOverRowsANodeRetained(t *testing.T) {
 				t.Fatalf("blind: %v", err)
 			}
 			person := uuid.Must(uuid.NewV7()).String()
-			rec := claimRecord(t, person, "unused")
-			rec.Subject = iamdomain.EmailSubject(blind)
-			retain(t, e, b, why, rec)
+			retain(t, e, b, why, enrolRecord(t, person, "dana.example", blind))
 
 			_, err = e.PersonBlinder().Blinder(ctx)
 			if !errors.Is(err, iamdomain.ErrNotCurrent) {

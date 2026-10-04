@@ -28,7 +28,8 @@ func TestEveryOmittedNameIsListedInItsDocumentsFieldSet(t *testing.T) {
 		fields jsoncarry.Fields
 	}{
 		{Person{}, personFields},
-		{Claim{}, claimFields},
+		{Enrolled{}, enrolledFields},
+		{IdentityChange{}, identityFields},
 		{Invitation{}, invitationFields},
 		{Session{}, sessionFields},
 		{Revocation{}, revocationFields},

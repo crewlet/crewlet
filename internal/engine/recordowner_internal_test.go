@@ -35,8 +35,6 @@ func TestALoginNamesTheRecordItsHolderActsUnder(t *testing.T) {
 		"jane.doe":  loginHeldBy("jane.doe", "platform-lead", iam.StageActive),
 		"bo.smith":  loginHeldBy("bo.smith", "", iam.StageActive),
 		"away.gone": loginHeldBy("away.gone", "platform-lead", iam.StageSuspended),
-		"half.done": {ID: "018f3a9c-0000-7000-8000-0000000000aa",
-			Login: "half.done", Reserved: true},
 		"token:ops": boundMachine(),
 		"token:off": func() iamdomain.Sighting {
 			row := boundMachine()
@@ -89,8 +87,8 @@ func declares(ids ...string) func(string) bool {
 // NOBODY, AND A HOLDER WHOSE SEAT IS GONE, ARE TWO ANSWERS — and neither is
 // what a node that cannot say gives.
 //
-// A login nobody holds, the reservation an unfinished enrolment leaves, and a
-// token login this node's Tier A declares no entry for, name no record. A
+// A login nobody holds, and a token login this node's Tier A declares no entry
+// for, name no record. A
 // holder bound to a seat the chart has removed, or to an agent's seat, names
 // none this node can say either: their record is not under the login, and
 // writing it there is the second record nobody reads.
@@ -100,8 +98,6 @@ func declares(ids ...string) func(string) bool {
 func TestNobodyAndAGoneSeatAreAnswersAndABlindNodeIsNot(t *testing.T) {
 	t.Parallel()
 	rows := map[string]iamdomain.Sighting{
-		"half.done": {ID: "018f3a9c-0000-7000-8000-0000000000aa",
-			Login: "half.done", Reserved: true},
 		"left.lead": loginHeldBy("left.lead", "gone-lead", iam.StageActive),
 		"bot.bound": loginHeldBy("bot.bound", "triage-bot", iam.StageActive),
 		"jane.doe":  loginHeldBy("jane.doe", "platform-lead", iam.StageActive),
@@ -115,8 +111,6 @@ func TestNobodyAndAGoneSeatAreAnswersAndABlindNodeIsNot(t *testing.T) {
 	}{
 		{"a login nobody holds", fakeBindings{rows: rows}, companyChart(),
 			"ghost.person", iam.ErrNoHolder},
-		{"a reservation nobody fills yet", fakeBindings{rows: rows}, companyChart(),
-			"half.done", iam.ErrNoHolder},
 		{"a seat the chart removed", fakeBindings{rows: rows}, companyChart(),
 			"left.lead", iam.ErrHolderUnseated},
 		{"a seat that is an agent's", fakeBindings{rows: rows}, companyChart(),

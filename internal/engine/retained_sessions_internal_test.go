@@ -93,8 +93,8 @@ func TestARetainedRecordCoversExactlyItsPersonsBucket(t *testing.T) {
 		}
 	}
 
-	retain(t, e, b, retainedFromNewerBuild, claimRecord(t, a, "anna.first"))
-	retain(t, e, b, retainedUnderUnknownKey, claimRecord(t, c, "cora.later"))
+	retain(t, e, b, retainedFromNewerBuild, enrolRecord(t, a, "anna.first", ""))
+	retain(t, e, b, retainedUnderUnknownKey, enrolRecord(t, c, "cora.later", ""))
 	for _, tc := range cases {
 		if got := vouched(tc.login).Deferred; got != tc.want {
 			t.Errorf("%s: deferred %v, want %v", tc.name, got, tc.want)
@@ -172,7 +172,7 @@ func TestAMachineTokenIsVouchedForOnlyWhereNothingRetainedCoversItsOwner(t *test
 	}
 
 	retain(t, e, b, retainedFromNewerBuild,
-		claimRecord(t, machines[0], "ci:successor"))
+		enrolRecord(t, machines[0], "ci:successor", ""))
 	for _, tc := range []struct {
 		name string
 		id   string

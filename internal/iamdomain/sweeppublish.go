@@ -85,8 +85,8 @@ const sweepReason = "retention sweep"
 // Horizons is how long the authentication trail keeps each class of row, as
 // Tier A's `api.audit` configures it.
 type Horizons struct {
-	// Changes is how long a grant, status, credential, claim or removal
-	// row is kept.
+	// Changes is how long a grant, status, credential, login, seat or
+	// removal row is kept.
 	Changes time.Duration
 
 	// Sessions is how long a sign-in and a sign-out are kept.

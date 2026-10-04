@@ -12,7 +12,7 @@
 import { cleanup, render, screen, within } from "@testing-library/react";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 
-import { BINDING_WORDS, PeopleAndAccess, STAGE_WORDS, TOKEN_ROW_WORDS } from "./Access.tsx";
+import { PeopleAndAccess, STAGE_WORDS, TOKEN_ROW_WORDS } from "./Access.tsx";
 import { Router } from "~/app/router.tsx";
 import { ClientContext } from "~/lib/store-hooks.ts";
 import { ViewerProvider } from "~/lib/viewer.ts";
@@ -57,31 +57,28 @@ const SEATS = {
     {
       handle: "jane",
       name: "Jane Founder",
-      holders: [{ person: "p-ana", login: "ana.diaz", stage: "active" }],
+      holder: { person: "p-ana", login: "ana.diaz", stage: "active" },
     },
+    { handle: "sam", name: "Sam Support" },
+    { handle: "lee", name: "Lee Legal" },
   ],
 };
 
 const TOKENS = {
   tokens: [
-    {
-      id: "deploy",
-      login: "token:deploy",
-      row: "held",
-      person: "p-deploy",
-      seat: "jane",
-      binding: "bound",
-    },
-    { id: "spare", login: "token:spare", row: "none", binding: "unbound" },
+    { id: "deploy", login: "token:deploy", row: "held", person: "p-deploy", seat: "jane" },
+    { id: "spare", login: "token:spare", row: "none" },
   ],
 };
 
 const CHECK = {
   findings: [
     {
-      kind: "claim_orphaned",
-      claim: "iam.login.ghost",
-      detail: "a reservation holds login ghost and is nobody",
+      kind: "binding_dangling",
+      person: "p-gone",
+      login: "gone.person",
+      seat: "removed-seat",
+      detail: "the seat removed-seat is not in the org chart",
     },
   ],
   people_with_people_manage: 1,
@@ -191,19 +188,58 @@ test("a row this node cannot open is drawn as sealed", async () => {
 });
 
 // FROM BOTH ENDS: the seat with whoever holds it, and each of this node's
-// tokens with the row its login names and the seat that row binds it to.
-test("a seat names who holds it and a token what it acts as", async () => {
+// tokens with the row its login names and the seat that row binds it to — what
+// the row holds, with the report alone saying whether a seat is gone.
+test("a seat names who holds it and a token the seat its row binds", async () => {
   stubIam();
   mount();
   const deploy = (await screen.findByText("token:deploy")).closest(".grid-row") as HTMLElement;
   expect(within(deploy).getByText(TOKEN_ROW_WORDS.held!.label)).toBeTruthy();
-  expect(within(deploy).getByText(BINDING_WORDS.bound!.label)).toBeTruthy();
   expect(within(deploy).getByRole("link", { name: /Jane Founder/ })).toBeTruthy();
   const spare = screen.getByText("token:spare").closest(".grid-row") as HTMLElement;
   expect(within(spare).getByText(TOKEN_ROW_WORDS.none!.label)).toBeTruthy();
-  expect(within(spare).getByText(BINDING_WORDS.unbound!.label)).toBeTruthy();
+  expect(within(spare).getByText("Bound to no seat")).toBeTruthy();
+  const tokensTile = screen
+    .getByText("API tokens on this node", {
+      selector: ".crewlet-statcard *",
+    })
+    .closest(".crewlet-statcard") as HTMLElement;
+  expect(within(tokensTile).getByText("1 bound to a seat")).toBeTruthy();
   // The directory's own finding, in the engine's words.
-  expect(screen.getByText("A reservation holds login ghost and is nobody.")).toBeTruthy();
+  expect(screen.getByText("The seat removed-seat is not in the org chart.")).toBeTruthy();
+  // A SEAT IS HELD BY ONE PERSON OR BY NOBODY: two of the three are vacant.
+  const vacant = screen.getByText("Human seats nobody holds").closest(".crewlet-statcard");
+  expect(vacant?.querySelector(".crewlet-statcard__value")?.textContent).toBe("2");
+  expect(within(vacant as HTMLElement).getByText("of 3 human seats")).toBeTruthy();
+});
+
+// THE BOUND SEAT'S KIND IS THE CHART'S: a token bound to an AGENT seat is the
+// residue the report names, and a person's badge on it would say the opposite
+// of the chart on the very row the report calls dangling.
+test("a row bound to an agent seat draws the agent's badge", async () => {
+  stubIam((url) =>
+    url.pathname === "/iam/node-tokens"
+      ? json(200, {
+          tokens: [
+            { id: "deploy", login: "token:deploy", row: "held", person: "p-deploy", seat: "jane" },
+            { id: "boss", login: "token:boss", row: "held", person: "p-boss", seat: "ceo" },
+          ],
+        })
+      : null,
+  );
+  mount();
+  const row = async (login: string) =>
+    (await screen.findByText(login)).closest(".grid-row") as HTMLElement;
+  const outline = (r: HTMLElement) => {
+    const mark = r.querySelector(".crewlet-avatar") as HTMLElement;
+    return mark.classList.contains("crewlet-avatar--human") ? "human" : "agent";
+  };
+  const boss = await row("token:boss");
+  // RESOLVED by the chart, so the outline is the seat's own kind and not the
+  // default a handle the chart does not hold is drawn with.
+  expect(within(boss).getByRole("link", { name: /CEO/ })).toBeTruthy();
+  expect(outline(boss)).toBe("agent");
+  expect(outline(await row("token:deploy"))).toBe("human");
 });
 
 // A REFUSED DIRECTORY IS NOT AN EMPTY COMPANY: the reader sees the refusal and
@@ -232,11 +268,12 @@ test("a refused reader sees the refusal and its grants, and no tiles", async () 
 test("a reader without config:read is told what reading a seat's surfaces needs", async () => {
   stubIam();
   const { queried } = mount({ login: "ana.diaz", owner: "jane", grants: ["audit:read"] });
+  // ONE SENTENCE PER SEAT, every seat refused alike.
   expect(
-    await screen.findByText(
+    await screen.findAllByText(
       "Reading where a seat is reached needs config:read, which the credential you presented does not carry.",
     ),
-  ).toBeTruthy();
+  ).toHaveLength(3);
   expect(queried).not.toContain("config");
 });
 

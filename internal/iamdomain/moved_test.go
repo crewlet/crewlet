@@ -23,15 +23,16 @@ import (
 // would end every socket on the node for every unbind in the company.
 //
 // So each gesture is held to exactly what it names: the session it ended, or
-// the person whose row it moved WITH THE LOGIN THEY HOLD — a release and a
-// rename included, which read whom they took a claim off before taking it —
-// because a Tier A token is bound through the directory row under its own
-// login and never learns that row's id. Only the fleet-wide generation names
+// the person whose row it moved WITH THE LOGIN THEY HOLD — a rename naming the
+// login it gave up as well as the one it took — because a Tier A token is
+// bound through the directory row under its own login and never learns that
+// row's id. Only the fleet-wide generation names
 // everyone. A sign-in names nothing, which is the control: it is the bulk of
 // this log's traffic and ends nobody's credential.
 //
-// Mutation: drop the holder read from a release, or the login from a person's
-// move, and the unbind or the machine's suspension names nobody.
+// Mutation: drop the old login from an identity change's move, or the login
+// from a person's move, and the rename or the machine's suspension names
+// less than it moved.
 func TestABatchSaysWhoseCredentialsItMoved(t *testing.T) {
 	t.Parallel()
 	rig := newWriteRig(t)
@@ -96,21 +97,26 @@ func TestABatchSaysWhoseCredentialsItMoved(t *testing.T) {
 			}, iamdomain.Moved{Seats: true, People: []string{machine},
 				Logins: []string{"token:ops"}}},
 		{"an unbind names the person it took the seat off", func() error {
-			_, err := rig.writer.Release(t.Context(), iamdomain.KindSeat,
-				"sarah-chen", person, "op-unbind", "moved teams")
+			unbound := ""
+			_, err := rig.writer.SetIdentity(t.Context(), iamdomain.IdentityEdit{
+				PersonID: person, Seat: &unbound, OpID: "op-unbind",
+				Reason: "moved teams"})
 			return err
 		}, iamdomain.Moved{Seats: true, People: []string{person},
 			Logins: []string{"sarah.chen"}}},
 		{"a bind names the person bound", func() error {
-			_, err := rig.writer.Claim(t.Context(), iamdomain.KindSeat,
-				"sarah-chen", person, "op-rebind")
+			seat := "sarah-chen"
+			_, err := rig.writer.SetIdentity(t.Context(), iamdomain.IdentityEdit{
+				PersonID: person, Seat: &seat, OpID: "op-rebind"})
 			return err
 		}, iamdomain.Moved{Seats: true, People: []string{person},
 			Logins: []string{"sarah.chen"}}},
 		{"a rename names the person, the login it took and the one it left",
 			func() error {
-				_, err := rig.writer.Rename(t.Context(), person, "sarah.chen",
-					"sarah.c", "op-rename", "married")
+				login := "sarah.c"
+				_, err := rig.writer.SetIdentity(t.Context(), iamdomain.IdentityEdit{
+					PersonID: person, Login: &login, OpID: "op-rename",
+					Reason: "married"})
 				return err
 			}, iamdomain.Moved{People: []string{person},
 				Logins: []string{"sarah.c", "sarah.chen"}}},

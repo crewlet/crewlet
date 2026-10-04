@@ -130,13 +130,12 @@ func TestAnUnknownOutcomeIsNeverBuiltOnOrAnnounced(t *testing.T) {
 
 // AN ENROLMENT NOBODY CAN CONFIRM IS NOT A PERSON: NOTHING BUILT ON IT.
 //
-// The enrolment this surface performs is a sequence — enrol, then spend the
-// invitation that authorised it, then sign the new person in — and each step
-// after the first was built on an enrolment answered `unknown`. The op id is
+// The redemption is one record — the person, and the link spent — and the
+// session after it was built on an enrolment answered `unknown`. The op id is
 // derived from what the caller presented (the invitation), so the answer
 // names the id the retry lands under by construction.
 //
-// Mutation: drop the route's outcome check and it spends the link and
+// Mutation: drop the route's outcome check and it signs the person in and
 // answers 200.
 func TestAnEnrolmentNobodyCanConfirmBuildsNothing(t *testing.T) {
 	t.Parallel()
@@ -154,9 +153,9 @@ func TestAnEnrolmentNobodyCanConfirmBuildsNothing(t *testing.T) {
 			t.Errorf("op id %v, want %q — the id a retry of this very "+
 				"credential lands under", body["op_id"], wantOp)
 		}
-		if len(writer.spent) != 0 {
-			t.Errorf("spent a credential on an enrolment nobody can confirm: "+
-				"%+v", writer.spent)
+		if opened := writer.opened(); len(opened) != 0 {
+			t.Errorf("opened a session on an enrolment nobody can confirm: "+
+				"%+v", opened)
 		}
 		for _, c := range rec.Result().Cookies() {
 			if c.MaxAge >= 0 && c.Value != "" {

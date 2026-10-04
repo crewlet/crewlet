@@ -31,18 +31,12 @@ import (
 // # What is not moved, and why that is enough
 //
 // An OUTSTANDING INVITATION's address is not re-sealed: the only record that
-// could carry it again is a re-issue, which the address's own claim refuses
-// while the invitation is open, and it stops being redeemable when it expires
-// anyway. So it is COUNTED ([SealedCount.Invitations]) and a rotation waits
+// could carry it again is a re-issue, which the directory refuses while the
+// invitation is open — one open invitation per address — and it stops being
+// redeemable when it expires anyway. So it is COUNTED ([SealedCount.Invitations]) and a rotation waits
 // for it to be redeemed or to lapse before dropping the old key, exactly as it
 // waits out the session lifetime for the cookies the old key signed. One that
 // has lapsed is not counted: nothing opens its address again.
-//
-// A RESERVATION — the claims of an enrolment that has not finished — is not
-// moved or counted: it has no document for a record to carry, and nothing
-// opens its address. The enrolment's retry writes the address afresh under
-// the active key, and one that never finishes is what `/iam/check` names as an
-// orphaned reservation.
 //
 // THE TRAIL is not moved either: an authentication-trail row carries the
 // record that wrote it, and nothing ever opens the payload inside — the trail
@@ -98,10 +92,10 @@ func (r *Reader) SealedKeys(ctx context.Context, now time.Time) (SealedCount, er
 		}{
 			{"names and addresses", `
 				SELECT name_sealed FROM iam_people
-				WHERE kind <> '' AND length(name_sealed) > 0
+				WHERE length(name_sealed) > 0
 				UNION ALL
 				SELECT email_sealed FROM iam_people
-				WHERE kind <> '' AND length(email_sealed) > 0`,
+				WHERE length(email_sealed) > 0`,
 				out.People},
 			{"second factors", `
 				SELECT verifier FROM iam_credentials WHERE method = 'totp'`,
@@ -224,9 +218,9 @@ func (r *Reader) sealedOutside(ctx context.Context, active string) ([]string, er
 	err := r.withTx(ctx, func(tx *sql.Tx) error {
 		for _, query := range []string{
 			`SELECT id, name_sealed FROM iam_people
-			 WHERE kind <> '' AND length(name_sealed) > 0`,
+			 WHERE length(name_sealed) > 0`,
 			`SELECT id, email_sealed FROM iam_people
-			 WHERE kind <> '' AND length(email_sealed) > 0`,
+			 WHERE length(email_sealed) > 0`,
 			`SELECT person_id, verifier FROM iam_credentials WHERE method = 'totp'`,
 		} {
 			rows, err := tx.QueryContext(ctx, query)
