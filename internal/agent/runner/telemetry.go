@@ -1274,9 +1274,8 @@ func toolExecutions(execs []toolloop.Execution) []types.ToolExecution {
 			"success":   !ex.Failed,
 			"round":     ex.Round,
 		}
-		// ONLY WHAT WAS MEASURED. An execution nobody timed — a
-		// pre-suspend row an older build wrote, an agent-mode run's
-		// bridged call — has no start, and writing `duration_ms: 0` for
+		// ONLY WHAT WAS MEASURED. An execution nobody timed — an
+		// agent-mode run's bridged call — has no start, and writing `duration_ms: 0` for
 		// it would state an instant call. Absent is the honest spelling of
 		// "not recorded", and it is the one every reader already treats
 		// that way.
