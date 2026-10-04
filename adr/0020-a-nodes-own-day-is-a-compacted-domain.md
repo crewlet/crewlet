@@ -10,7 +10,7 @@
 ## The decision
 
 What each node's seats and schedules did each company day is the state-log
-framework's **sixth domain**, `usage`, and its second **compacted** one: stream
+framework's **fifth domain**, `usage`, and its second **compacted** one: stream
 `CREWLET_USAGE_LOG`, one message per subject, a 181-day age bound. Its answer to
 "who has to agree on it?" is *every node, and only the current value* — the
 compacted-changelog answer of ADR-0014, applied to aggregates rather than to a
