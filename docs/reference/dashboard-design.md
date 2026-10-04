@@ -5780,8 +5780,8 @@ node's Tier A labels joined to the directory rows holding their logins
 (`/iam/node-tokens`): a token whose login nobody holds acts as itself, unbound,
 and the row says so — a label mistyped on either side otherwise looks bound
 until the token presses something. The directory's own report (`/iam/check`)
-names a binding whose seat is gone, a claim held twice and a person nobody can
-sign in as. The org chart's report (`/chart/check`) gives the two findings
+names a binding whose seat is gone, a person nobody can sign in as, a grant
+this node's ceiling withholds, and a company nobody left can administer. The org chart's report (`/chart/check`) gives the two findings
 about people, under their own kinds because they have different remedies:
 `seat_unheld`, a human seat nobody in the directory holds, and
 `seat_unreachable`, one with no contact identity, which no agent can reach.

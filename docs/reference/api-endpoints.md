@@ -963,12 +963,6 @@ judge** — it runs no company yet. They are neither reported as dangling nor
 left out silently, so a report answered before the node's first apply does not
 read as a clean directory; ask a node that runs the company.
 
-A row marked `reserved` is an enrolment whose claims landed and whose person
-record has not: it holds its address, login or seat and has no kind, no stage
-and no grants. It is how an administrator whose enrolment was refused as
-claimed by an id they do not recognise finds what claimed it; it acts as
-nobody everywhere, and is never a reason for a 503.
-
 #### `GET /iam/node-tokens` joins this node's Tier A labels to the directory
 
 A Tier A token acts under its own login, `token:<id>`, and a directory row
