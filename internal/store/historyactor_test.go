@@ -6,8 +6,8 @@ import (
 	"testing"
 )
 
-// A HISTORY ROW NAMES ITS AUTHOR ONCE, and 0048 is what takes the second copy
-// away.
+// A HISTORY ROW NAMES ITS AUTHOR ONCE, and replicated migration 0031 is what
+// takes the second copy away.
 //
 // 0026 added `tracker_history.actor_seat` for the operator-id binding, which
 // this build does not have: a person bound to a seat is recorded as the seat
@@ -18,7 +18,7 @@ import (
 // columns that carry the author survive the drop, and the drop took nothing
 // else with it.
 //
-// Mutation: delete 0048's statement, and the column is reported.
+// Mutation: delete 0031's `DROP COLUMN actor_seat`, and the column is reported.
 func TestAHistoryRowCarriesNoSeatBesideItsActor(t *testing.T) {
 	t.Parallel()
 

@@ -34,7 +34,7 @@ type Revision struct {
 	// to be, which held the credential and so named, for a revision written
 	// through a person's machine token, a token whose row the identity
 	// sweep collects a week after it lapses. See
-	// `0041_a_write_names_its_author_beside_its_credential.sql`.
+	// node migration `0038_identity_and_access.sql`.
 	//
 	// THE KIND IS [iam.ActorKind], the vocabulary every other trail in the
 	// engine records an author in, rather than a second one of this

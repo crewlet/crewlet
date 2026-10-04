@@ -55,8 +55,7 @@ func TestTheShippedSchemaAcceptsTheFrameworksOwnStatements(t *testing.T) {
 	}
 }
 
-// A PROJECT CARRIES THE ACTIVATION ITS CHART-OWNED FIELDS CAME FROM, AND NO LOG
-// POSITION.
+// A PROJECT CARRIES THE ACTIVATION ITS CHART-OWNED FIELDS CAME FROM.
 //
 // schema_migrations keys on the FILENAME, so editing a migration that has
 // already run silently never re-runs it: every database that applied it keeps
@@ -64,7 +63,7 @@ func TestTheShippedSchemaAcceptsTheFrameworksOwnStatements(t *testing.T) {
 // guard the tracker's applier compares before any chart-owned field of a
 // project, so it has to be in the shipped estate rather than in a later file
 // a database might never run.
-func TestAProjectCarriesItsActivationStampAndNoLogPosition(t *testing.T) {
+func TestAProjectCarriesItsActivationStamp(t *testing.T) {
 	t.Parallel()
 
 	db := openReplicated(t)
@@ -73,15 +72,6 @@ func TestAProjectCarriesItsActivationStampAndNoLogPosition(t *testing.T) {
 		t.Error("tracker_projects does not carry chart_epoch — an applied " +
 			"migration is history, not source, so no later file can add it to a " +
 			"database that has already run this one")
-	}
-	// AND THE ONE IT REPLACED IS GONE. A guard column with no writer is
-	// worse than an absent one: it reads as a fact about the row, a later
-	// reconcile is tempted to compare it, and what it held was a log
-	// position in a number space no activation stamp shares.
-	if slices.Contains(cols, "chart_position") {
-		t.Error("tracker_projects still carries chart_position — nothing writes " +
-			"it, and a column no writer fills is a value every reader is " +
-			"entitled to misread")
 	}
 }
 
@@ -147,9 +137,10 @@ func TestEachDomainDeclaresExactlyTheTablesItShips(t *testing.T) {
 // THE IAM OPS LEDGER TAKES THE FRAMEWORK'S FIVE COLUMNS TOO, and no `kind`.
 // This ledger DOES keep a second horizon — a session's operations go after an
 // hour, everything else after the framework's month — but it is keyed on the
-// SUBJECT the framework already stores (`0038`'s index over it), and the loss
-// each horizon leaves is recorded per kind by the framework (`0045`), so the
-// shorter sweep never moves the table-wide watermark. A `kind` column would be
+// SUBJECT the framework already stores (the `(subject, applied_at)` index
+// shipped beside it), and the loss each horizon leaves is recorded per kind by
+// the framework (`statelog_ops_lost_kind`), so the shorter sweep never moves
+// the table-wide watermark. A `kind` column would be
 // a second copy of what the subject already says, and one nothing populates.
 func TestTheIamOpsLedgerCarriesTheFrameworksFiveColumns(t *testing.T) {
 	t.Parallel()
@@ -180,10 +171,10 @@ func TestTheIamOpsLedgerCarriesTheFrameworksFiveColumns(t *testing.T) {
 //
 // schema_migrations keys on the FILENAME, so editing a migration that has
 // already run silently never re-runs it. Every column here is one the applier
-// fills from the FIRST record it ever writes — the three claims it denormalises
-// onto a person's row so the duplicate report can scan them, and the bucket
-// every table's sweep seeks on — so they have to ship in the migration that
-// creates the table rather than in the one that starts using them.
+// fills from the FIRST record it ever writes — the three directory values on a
+// person's row, which the directory's lookups seek on, and the bucket every
+// table's sweep seeks on — so they have to ship in the migration that creates
+// the table rather than in the one that starts using them.
 func TestTheIamTablesShipTheColumnsAMigrationCannotAddLater(t *testing.T) {
 	t.Parallel()
 
@@ -206,44 +197,27 @@ func TestTheIamTablesShipTheColumnsAMigrationCannotAddLater(t *testing.T) {
 			}
 		}
 	}
-	// AND A BINDING CARRIES NO CHART POSITION. Nothing writes the column
-	// once a seat is resolved against the running organisation, and a
-	// column no writer fills is a value every reader is entitled to misread
-	// as the position a bind was decided at.
-	if cols := columnsOf(t, db, "iam_people"); slices.Contains(cols, "chart_position") {
-		t.Error("iam_people still carries chart_position — nothing writes it " +
-			"since a seat binding stopped recording the chart's position")
-	}
-	// AND NO SCOPED STAMP BESIDE THE VERSION. It was the column a claim on
-	// another subject stamped a person's row with; every record that writes
-	// the row now advances `version`, so a second stamp would be a value
-	// every reader is entitled to fold into the wrong comparison.
-	if cols := columnsOf(t, db, "iam_people"); slices.Contains(cols, "scoped_through") {
-		t.Error("iam_people still carries scoped_through — nothing writes it " +
-			"since the directory decided every login, address and seat on one " +
-			"subject")
-	}
 }
 
 // THE DIRECTORY'S LOOKUPS SEARCH AN INDEX, AND NEVER SCAN THE PEOPLE.
 //
 // A sign-in resolves a login or an address blind to its row, and every
 // directory decision asks whether anybody else holds the value it is about to
-// give — each a query with a BOUND value. 0034's indexes over those two columns
-// were PARTIAL, over the rows whose value is not empty, which a bound value
-// cannot be proved to satisfy: measured on this driver, both lookups were a
-// SCAN of every person. 0053 replaced them with plain indexes. The plan is
-// read as the driver reports it, for the shapes the directory runs — its
-// uniqueness check and the sign-in's sighting.
+// give — each a query with a BOUND value. An index over those two columns that
+// is PARTIAL, over the rows whose value is not empty, is one a bound value
+// cannot be proved to satisfy: measured on this driver, both lookups were then
+// a SCAN of every person, so the estate ships plain ones. The plan is read as
+// the driver reports it, for the shapes the directory runs — its uniqueness
+// check and the sign-in's sighting.
 //
 // The listing of every binding is the other direction: a non-empty `seat_id`
 // IS the seat's partial index's predicate, so it walks that index — the bound
 // people, in seat order — where without it the read is every person plus a
 // sort, on every alarm heartbeat and every party-registry rebuild.
 //
-// Mutation: take 0053 out and the login and address rows read
-// `SCAN iam_people`; drop `iam_people_seat_claim_idx` in it and the listing
-// does.
+// Mutation: make the login and address indexes partial over their non-empty
+// rows and those rows read `SCAN iam_people`; drop `iam_people_seat_claim_idx`
+// and the listing does.
 func TestTheDirectoryLookupsSearchAnIndex(t *testing.T) {
 	t.Parallel()
 	db := openReplicated(t)
@@ -363,59 +337,4 @@ func replicatedDDL(t *testing.T) string {
 		all.WriteByte('\n')
 	}
 	return all.String()
-}
-
-// THE CHART'S LOG LEAVES NOTHING BEHIND: no table of its domain in the
-// replicated estate, no staged chart in the node's, and no column a revision
-// kept about it.
-//
-// The chart is the company document's again, so these are tables no applier
-// writes and columns no writer fills — and the estate is derived, so a table
-// left behind is one a snapshot carries to every node that joins. The
-// controls are the tracker's own table and the revision's payload, which a
-// migration that dropped too much would take with it.
-func TestTheChartLeavesNoTableAndNoColumnBehind(t *testing.T) {
-	t.Parallel()
-	db := openReplicated(t)
-	names := func(estate *store.DB, query string) []string {
-		var out []string
-		if err := estate.Read(t.Context(), func(tx *sql.Tx) error {
-			rows, err := tx.QueryContext(t.Context(), query)
-			if err != nil {
-				return err
-			}
-			defer func() { _ = rows.Close() }()
-			for rows.Next() {
-				var name string
-				if err := rows.Scan(&name); err != nil {
-					return err
-				}
-				out = append(out, name)
-			}
-			return rows.Err()
-		}); err != nil {
-			t.Fatalf("%s: %v", query, err)
-		}
-		return out
-	}
-	const tables = `SELECT name FROM sqlite_schema WHERE type = 'table'`
-	replicated, node := names(db.Replicated(), tables), names(db, tables)
-	if !slices.Contains(replicated, "tracker_projects") {
-		t.Fatalf("the replicated estate lists %v, without the tracker's projects", replicated)
-	}
-	for _, name := range append(slices.Clone(replicated), node...) {
-		if strings.HasPrefix(name, "chart_") {
-			t.Errorf("%s is still shipped — nothing writes or reads it since the "+
-				"chart went back into the company document", name)
-		}
-	}
-	cols := names(db, `SELECT name FROM pragma_table_info('company_config')`)
-	if !slices.Contains(cols, "payload") {
-		t.Fatalf("company_config has columns %v, without its payload", cols)
-	}
-	for _, gone := range []string{"chart_position", "scrubbed_at"} {
-		if slices.Contains(cols, gone) {
-			t.Errorf("company_config still carries %s, which nothing writes", gone)
-		}
-	}
 }

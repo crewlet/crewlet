@@ -2644,7 +2644,7 @@ handle no agent seat answers to — a human seat's, or nobody's — is refused
 `bad_params`, because there is no id it could match and an empty page would
 read as an agent that has done nothing; a person's events are the ones they
 acted in, under `actor`. The index was keyed on names before node migration
-`0042`, and a counterpart or a delivery's recipient named before it is not in
+`0038`, and a counterpart or a delivery's recipient named before it is not in
 the related view for the rest of the retention window.
 
 The persistent store retains 30 days, and
