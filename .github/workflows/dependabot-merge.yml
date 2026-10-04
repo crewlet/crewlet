@@ -77,74 +77,35 @@ jobs:
       # what decides whether this lands. A step whose outputs nothing reads is
       # a gate that is not there, and it reads like one that is.
 
-      # APPROVE ONLY WHILE GITHUB STILL SAYS ONE IS NEEDED. The guard above lets
-      # through only what Dependabot itself does to the pull request: it opens
-      # it, and then rebases or recreates it each time a push to `main` puts it
-      # in conflict (the bundle commit dependabot-dashboard.yml pushes is made by another
-      # account, so the run it triggers is skipped and never gets here). Under a
-      # rule that keeps approvals across pushes, which `main` has today, every
-      # one of those after the first finds the pull request already approved:
-      # approving again stacks a review on the timeline for each rebase and
-      # changes nothing about whether it merges.
-      #
-      # `reviewDecision` is GitHub's own answer, computed against the rule that
-      # governs the base branch, so it covers what counting APPROVED reviews
-      # cannot: how many approvals are required, an approval that does not
-      # count because of who pushed last, a required reviewer. An approval a
-      # rule has since dismissed reads as REVIEW_REQUIRED, and this approves
-      # again. Two values skip. APPROVED is the point of the check.
-      # CHANGES_REQUESTED is somebody's standing objection, which this account's
-      # approval does not clear.
-      #
-      # Everything else approves, and that includes an EMPTY decision, on
-      # purpose. GitHub leaves it empty when nothing requires a review, and it
-      # has been reported to stay empty while a requirement that comes from a
-      # ruleset still blocks the merge (radius-project/radius#13111); whether
-      # `main`'s own ruleset does has not been observed here. In the first case
-      # an approval is harmless; in the second it is what unblocks the merge.
-      # Skipping on anything but a positive APPROVED would let a doubt stall
-      # every bump with nothing red to show for it, where a redundant review
-      # costs one line on the timeline.
-      #
-      # The commit THIS run was started for is named, and that is what makes
-      # the approval mean anything. `gh pr review --approve` sends no commit,
-      # and GitHub then attaches the review to whatever the head is at that
-      # moment. So a run whose approve step executes after a push has landed
-      # (dependabot-dashboard.yml pushes a rebuilt bundle a minute or two after
-      # `opened`), or a maintainer re-running an old run (a re-run keeps
-      # `github.actor`, so it passes the guard above), would approve a commit
-      # no event named: the bundle commit, or one a person pushed onto the
-      # branch. Named explicitly, an approval of a commit that is no longer the
-      # head is stale from the moment it is made, which is how a protection
-      # rule that dismisses stale approvals is meant to see it.
+      # Approve only while GitHub still says a review is needed. This runs on
+      # `opened` and on each push Dependabot makes (a rebase), and under a rule
+      # that keeps approvals across pushes every run after the first would stack
+      # another review for nothing. `reviewDecision` is GitHub's own answer for the
+      # rule that governs the base branch: APPROVED means nothing to do, and
+      # CHANGES_REQUESTED is somebody's objection this approval would not clear.
+      # Anything else approves, an EMPTY decision included. GitHub leaves it empty
+      # when nothing requires a review, and has been reported to leave it empty
+      # while a ruleset's requirement still blocks the merge
+      # (radius-project/radius#13111), so a skip on doubt could stall every bump
+      # with nothing red to show for it.
       - name: approve, if one is still needed
         run: |
           decision="$(gh pr view "$PR_URL" --json reviewDecision --jq .reviewDecision)"
           case "$decision" in
-            APPROVED | CHANGES_REQUESTED)
-              echo "Review decision is ${decision}: nothing to approve."
-              exit 0
-              ;;
+            APPROVED | CHANGES_REQUESTED) echo "Review decision is ${decision}: nothing to approve." ;;
+            *) gh pr review --approve "$PR_URL" ;;
           esac
-          echo "Review decision is '${decision}': approving ${HEAD_SHA}."
-          gh api --method POST \
-            "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}/reviews" \
-            -f event=APPROVE -f commit_id="$HEAD_SHA"
         env:
           PR_URL: ${{ github.event.pull_request.html_url }}
-          PR_NUMBER: ${{ github.event.pull_request.number }}
-          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       # --squash, not --merge: a pull request lands as ONE commit whose subject
       # is the pull request title (CONTRIBUTING.md), and that same title is the
       # line the generated release notes carry.
       #
-      # --auto queues the merge behind the checks `main` requires. Drop it and,
-      # while that rule stands, this step goes red and nothing merges, because
-      # the hold is the rule's and `gh pr merge` refuses a pull request it
-      # blocks; with no such rule it would merge on the spot, before a single
-      # check has reported, which is the case the header warns about.
+      # --auto queues the merge behind the checks `main` requires. Without it this
+      # step goes red while that rule stands, and with no such rule it would merge
+      # on the spot, before a single check has reported.
       - name: queue auto-merge
         run: gh pr merge --auto --squash "$PR_URL"
         env:

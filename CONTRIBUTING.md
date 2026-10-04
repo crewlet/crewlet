@@ -589,35 +589,15 @@ request unapproved, because the run your click triggered is skipped;
 and recovers it. (Not `rebase`: the merge commit your click made is one
 Dependabot did not write, and it will not rebase a branch that holds one.)
 
-The approval is given only while GitHub still says one is needed. The guard
-lets through only what Dependabot itself does to a pull request: it opens it,
-and then rebases or recreates it each time a push to `main` puts it in conflict.
-(The bundle
-commit [`dependabot-dashboard.yml`](.github/workflows/dependabot-dashboard.yml)
-pushes is made by another account, so the run it triggers is skipped.) Under a
-rule that keeps approvals across pushes, the one `main` has today, every one of
-those after the first finds the pull request already approved, and approving
-again stacks a review on the timeline for each rebase and changes nothing about
-whether it merges. The job reads `reviewDecision`, GitHub's own answer for the
-rule that governs the base branch, and skips on `APPROVED` and on
-`CHANGES_REQUESTED` (somebody's standing objection, which this account's
-approval would not clear). Everything else approves, an empty answer included,
-and on purpose: GitHub leaves the decision empty when nothing requires a review,
-and it has been reported to stay empty while a requirement that comes from a
-ruleset still blocks the merge (radius-project/radius#13111); whether `main`'s
-own ruleset does has not been observed here. A redundant approval costs one line
-on the timeline; a skip on doubt could stall every bump with nothing red to show
-for it. An approval a rule
-has since dismissed reads as `REVIEW_REQUIRED`, so the next push is approved
-again, which is what `synchronize` is in the trigger for.
-
-The approval names the commit the run was started for. `gh pr review --approve`
-sends no commit, and GitHub then attaches the review to whatever the head is at
-that moment — so a run whose approve step executes after a push has landed, or
-a maintainer re-running an old one (a re-run keeps its actor, so it passes the
-guard), would approve a commit no event named. Named explicitly, an approval of
-a commit that is no longer the head is stale from the moment it is made, which
-is how a rule that dismisses stale approvals is meant to see it.
+The approval is given only while GitHub still says one is needed. The job runs on
+`opened` and on each push Dependabot makes, and under a rule that keeps approvals
+across pushes (the one `main` has today) every run after the first would stack
+another review for nothing. It reads `reviewDecision` and skips on `APPROVED` and
+on `CHANGES_REQUESTED`, which this account's approval would not clear. Everything
+else approves, an empty decision included: GitHub leaves it empty when nothing
+requires a review, and has been reported to leave it empty while a ruleset's
+requirement still blocks the merge (radius-project/radius#13111), so a skip on
+doubt could stall every bump with nothing red to show for it.
 
 Because nothing retitles a bump before it becomes a permanent subject line, each
 entry in `.github/dependabot.yml` pins the prefix its commits carry, and every
@@ -637,8 +617,8 @@ of them fails silently — the workflow keeps running, it just starts running on
 the wrong pull requests (drop `--auto` and, while `main` requires the checks, the
 merge step goes red instead, because the hold is the rule's; with no such rule it
 would merge before a check has reported) — and the job holds `contents: write`
-and `pull-requests: write`. Read the `if:`, the commit
-the approval names and the merge command on any diff that touches
+and `pull-requests: write`. Read the `if:`, the approval's condition and the
+merge command on any diff that touches
 [`.github/workflows/dependabot-merge.yml`](.github/workflows/dependabot-merge.yml).
 
 ### A dashboard bump brings its own bundle
@@ -646,247 +626,120 @@ the approval names and the merge command on any diff that touches
 [`.github/workflows/dependabot-dashboard.yml`](.github/workflows/dependabot-dashboard.yml)
 runs when Dependabot opens or updates a pull request that touches `dashboard/`.
 It does what the failing `dashboard` job tells a person to do — `make dashboard`
-— and, if `static/dashboard` came out different (a changed file, a dropped one
-or a new one), commits the result onto Dependabot's branch as `build(dashboard):
-rebuild the bundle for this dependency bump`, signed off like every other
-commit. ci.yml then runs on that new head as it runs on anything else, and the
-drift gate that failed on the first commit passes on the second. A bump that
+— and, if `static/dashboard` came out different, commits the result onto
+Dependabot's branch as `build(dashboard): rebuild the bundle for this dependency
+bump`, signed off like every other commit. ci.yml then runs on that new head and
+the drift gate that failed on the first commit passes on the second. A bump that
 leaves the output as it was pushes nothing.
 
 It is two jobs because one of them runs somebody else's code. `npm ci` and the
-bundler execute whatever a dependency published this week, so that job holds a
-read-only token that is not left in the checkout and no secrets, and passes the
-next job nothing but a directory of files. The second job holds the credential
-and runs nothing the bump brought in: the runner's own `git`, `gh`, `find`, `cp`
-and `rm`, and two actions pinned to full commit SHAs — unlike the major tags
-used everywhere else, because a tag is re-pointed at each release and this is
-the job with the token in its environment. It checks the bundle's file *names*
-against an allowlist of the kinds of file the bundle is made of (`static/dashboard`
-sits inside the Go module and is embedded, so a stray `zz_test.go` would be run
-by every `go test ./...`), refuses hidden names, replaces `static/dashboard`
-wholesale and pushes without `--force`, so a branch Dependabot has moved since
-the run began is refused rather than overwritten. A new kind of file in the
-bundle has to be added to that allowlist on purpose. The untrusted job checks
-the other half — that nothing in the tree is a symlink, a special file or
-executable, none of which survives being zipped into an artifact — because a
-commit that could not match what ci.yml rebuilds would leave the gate red.
+bundler execute whatever a dependency published this week, so that job holds no
+secret and a read-only token, and passes the next job nothing but a directory of
+files. The second job holds the credential and runs only the runner's own tools
+and two actions pinned to full commit SHAs (a tag is re-pointed at each release,
+and this is the job with the token in its environment). It checks the bundle's
+file *names* against an allowlist, because `static/dashboard` sits inside the Go
+module and a stray `zz_test.go` would be run by every `go test ./...`, replaces
+the directory and pushes without `--force`, so a branch Dependabot has moved
+since the run began is refused rather than overwritten. A new kind of file in the
+bundle has to be added to that allowlist on purpose.
 
-A pull request that touches nothing under `dashboard/` never starts the workflow.
-That keeps the release an *open* GitHub Action bump proposes from running beside
-the credential; it does not stop one that has already merged, which is what the
-SHA pins are for and which they narrow rather than remove.
+The push is made with a personal access token, not `GITHUB_TOKEN`: a push made
+with the workflow's own token leaves the pull request's runs waiting for someone
+to click *Approve workflows to run*, and the auto-merge queued behind those
+checks waits with them. Two things outside this repository's files have to exist:
 
-**The push is made with a personal access token, not by `GITHUB_TOKEN`**, and
-that is where the setup cost is. A push made with the workflow's own token does
-start the pull request's runs, but GitHub holds them in an approval-required
-state until someone with write access clicks *Approve workflows to run* —
-deliberately, so that automation cannot recurse without a person. Every bundle
-commit would wait for that click before `ci` ran on it, and the auto-merge
-queued behind those checks would wait with it. A push made with a personal
-access token starts them at once. Two things outside this repository's files
-have to exist:
+- **A fine-grained personal access token**, preferably of an account made for the
+  purpose. Resource owner: the organisation. Repository access: this repository
+  only. One permission: **Contents, read and write** — not Workflows (its absence
+  is what stops this credential rewriting a workflow file), not Pull requests,
+  and not a classic token, whose `repo` scope reaches every repository the
+  account can. The account needs Write access, and an owner has to approve the
+  token where the organisation asks for that. Contents: write can create a tag,
+  so keep `v*` behind a tag ruleset the account is not on the bypass list of. A
+  fine-grained token expires, a year at most; put the date in a calendar.
+- **That token as a Dependabot secret**, `DASHBOARD_BUNDLE_TOKEN`, under Settings
+  → Secrets and variables → **Dependabot**. Not an Actions secret: a run
+  Dependabot starts cannot see the Actions ones, so a secret put on the wrong tab
+  is empty there. The job fails naming the secret when it is.
 
-- **A fine-grained personal access token, preferably of an account made for the
-  purpose.** The commit is attributed to whoever owns the token (the job asks
-  GitHub who that is; if GitHub declines to say, it warns and uses
-  `github-actions[bot]`, since only a 401 means the token is bad), so a person's
-  token puts a person's name on what a workflow did. Resource owner: the
-  organisation. Repository access: this repository only. One permission:
-  **Contents, read and write.** Not Workflows — its absence is what stops this
-  credential rewriting a workflow file — and not Pull requests or
-  Administration. The account needs Write access to the repository, and an owner
-  has to approve the token where the organisation asks for that. Not a classic
-  token: its `repo` scope reaches every repository the account can, and the job
-  warns when it sees one. Contents: write can still create a tag, and a push made
-  with a token starts workflows, so keep `v*` behind a tag ruleset the account is
-  not on the bypass list of: without one, a leaked token can push a tag and run
-  the release pipeline. A fine-grained token expires, a year at most. Put the
-  date in a calendar: after it the job fails on the next bump, saying the token
-  is expired, revoked or mistyped.
-- **That token as a Dependabot secret**, `DASHBOARD_BUNDLE_TOKEN`, under
-  Settings → Secrets and variables → **Dependabot**. Not an Actions secret: a run
-  Dependabot triggers reads its own store and cannot see the Actions one, so a
-  secret put on the wrong tab is empty there.
-
-The job fails naming the secret when it is empty, and asks GitHub who the token
-is, which is how an expired or revoked one is met by name. It cannot see the
-permissions of a fine-grained token: one without Contents: write fails at the
-push, with git's own error.
-
-This is a token and not a GitHub App, and the price is worth knowing. An App's
-installation token lives an hour and belongs to no person; this one lives until
-it expires, belongs to an account and carries that account's role on the
-repository. What limits it is the same either way: one repository, Contents
-only, and an account that exists for this and holds nothing else.
-
-What the workflow does not do is decide anything. It approves nothing and queues
-no merge: [`dependabot-merge.yml`](.github/workflows/dependabot-merge.yml) queued
-the auto-merge when the pull request opened, approved the commit Dependabot
-wrote, and `main`'s protection rule still decides whether it lands. Two settings
-there matter more than they did, because the bundle commit is a push nobody has
-approved. If the rule **dismisses stale approvals when new commits are pushed**,
-or **requires approval of the most recent reviewable push**, a bump that changed
-the bundle waits for a person; with both off it merges itself once CI is green.
-
-**Today both are off** (the ruleset asks for one approval and keeps it across
-pushes), and that has a consequence beyond this workflow: the approval
-`dependabot-merge.yml` gives on `opened` stands, and the auto-merge it queued
-stands with it, so *anything* pushed onto an open Dependabot branch merges once
-CI is green — a bundle, but equally a commit from a person with write access or
-from whoever holds this token. CI is the only gate, which is the premise of
-that workflow, and the token's single permission is what keeps its reach to
-Dependabot's branches. If you would rather a person look at what lands, turn on
-**Dismiss stale pull request approvals when new commits are pushed**; the price
-is that every bump that changes the bundle then waits for an approval too.
+The workflow decides nothing. [`dependabot-merge.yml`](.github/workflows/dependabot-merge.yml)
+approved the commit Dependabot wrote, and `main`'s ruleset decides whether the
+bundle commit on top of it lands. With *dismiss stale approvals* and *require
+approval of the most recent push* both off — **as they are today** — a bump
+merges itself once CI is green, and so does *anything* pushed onto an open
+Dependabot branch: a bundle, but equally a commit from a person with write access
+or from whoever holds this token. Turning on **Require approval of the most
+recent reviewable push** puts a person in front of that, at the price that a bump
+whose bundle was rebuilt then waits for one.
 
 **When one bump merges the others conflict**, because each carries its own
 rebuilt bundle and the emitted names are content-hashed. Dependabot rebases a
-conflicted bump by itself after a push to `main`, with no comment from anyone —
-#167 conflicted when #168 merged and was rebased two minutes later — but only
-while every commit on the branch is its own or carries `[dependabot skip]`,
-GitHub's documented marker for "Dependabot may force-push over this commit".
-That is why the bundle commit carries it. Each rebase starts from Dependabot's
-commit alone, the bundle commit is gone, the workflow runs again and pushes a
-fresh one: two bumps that both changed the bundle stop colliding by being
-rebuilt, never merged.
+conflicted bump by itself — #167 conflicted when #168 merged and was rebased two
+minutes later — but only while every commit on the branch is its own or carries
+`[dependabot skip]`, GitHub's marker for "Dependabot may force-push over this
+commit", which is why the bundle commit carries it. Each rebase starts from
+Dependabot's commit alone: the bundle commit is gone, the workflow runs again and
+pushes a fresh one. What Dependabot will not rebase is a branch holding a commit
+without the marker, or a bump left open for 30 days; the next section is what
+asks again.
 
-What Dependabot will not rebase is a branch holding a commit *without* the
-marker (a person's, or the merge commit **Update branch** makes) or a bump left
-open for 30 days, where GitHub documents that it stops trying by itself. It
-answers `@dependabot rebase` on an edited branch with "edited by someone other
-than Dependabot", and a conflicted pull request runs no workflows, so the bundle
-workflow cannot help one either. The next section asks Dependabot again for the
-second case, and for a bump it simply missed; a bump holding a person's commit is
-named and left to that person.
-
-Nothing checks any of this for you, and `dependabot-dashboard.yml` holds a
-credential that can write to a branch. Read the `if:` on both of its jobs, each
-job's `permissions:`, the pins on the actions in the second one and the token's
-scope on any diff that touches
+Nothing checks any of this for you, and the workflow holds a credential that can
+write to a branch. Read the `if:` on both jobs, each job's `permissions:`, the
+pins on the actions in the second one and the token's scope on any diff that
+touches
 [`.github/workflows/dependabot-dashboard.yml`](.github/workflows/dependabot-dashboard.yml).
 
 ### A conflicted bump is asked to rebase
 
 [`.github/workflows/dependabot-rebase.yml`](.github/workflows/dependabot-rebase.yml)
-comments `@dependabot rebase` on an open Dependabot pull request that is *still*
-in conflict with `main` after Dependabot has had its chance to rebase it itself.
-That chance is real: Dependabot rebased #167 two minutes after #168 merged, and
-its rebases after a merge here have taken from about 20 seconds (#153 then #152)
-to about four and a half minutes (#161 then #163). What is left for a workflow is
-a bump that is still conflicting well after that: one Dependabot missed, or one
-past its 30 days, where it still obeys a manual `@dependabot rebase`.
+runs when a person merges to `main`, or by hand from the Actions tab. It waits ten
+minutes, then comments `@dependabot rebase` on every open Dependabot pull request
+that is still in conflict. The wait is the point: Dependabot rebases a conflicted
+bump itself within minutes (up to about four and a half in this repository's
+history), so what is still conflicting after ten is a bump it missed, one past its
+30 days, or one holding a commit it will not touch. It asks once per head commit,
+so a bump that stays stuck is not asked again until its branch changes.
 
-**It waits before it asks.** Nothing is judged until `main`'s tip is 30 minutes
-old, a little over six times the slowest rebase seen. A run started by a person's
-merge sleeps out the difference, and reads the tip again after every sleep,
-because the merges that matter most are the bumps' own, which start no workflow
-and so cannot cancel a run that is already waiting: if `main` moved while it
-slept, it sleeps again, up to ninety minutes in all (the longest run of bump
-merges seen here took 36, and the grace comes after its last), and then leaves
-the bumps to the next run. (A newer push by a person does cancel it and starts
-the wait from its own tip.) Asking within seconds would race Dependabot's own rebase and put a
-second command, and a second force-push, on every bump it was about to fix.
+It comments `rebase` and not `recreate` because rebase cannot destroy anything:
+Dependabot refuses to rebase a branch holding somebody else's commit ("edited by
+someone other than Dependabot"), where `recreate` would delete it. A bump it
+refuses is the signal that it needs a person: rebase it yourself, or comment
+`@dependabot recreate` and accept losing the commit.
 
-**It runs on every push to `main`, and by hand** (Actions → the workflow → Run
-workflow). There is no schedule: a conflict is made by a merge, so looking when
-`main` moves is the whole of it. The blind spot is the merges the bumps make
-themselves. A bump that merges itself is queued with `GITHUB_TOKEN`, and GitHub
-starts no workflow for an event that token caused — the merge commits of #167,
-#170, #171 and #173 have no push-event run — so a conflict a bump's merge makes
-is not looked at until a person merges next or someone runs it by hand. That is
-acceptable because those are the conflicts Dependabot rebases on its own within
-minutes; what it misses waits.
-
-**It comments `rebase` and not `recreate`**, because rebase is the one that
-cannot destroy anything. `recreate` throws away every commit on the branch, and
-a decision to send one made here would rest on a list read before Dependabot
-acts on it, so a commit pushed in that gap is gone. A rebase makes Dependabot
-look when it acts, and it refuses rather than overwrite a commit that is neither
-its own nor marked. The workflow still checks first, but only to avoid posting a
-command Dependabot will refuse: a bump holding anything that is not Dependabot's
-own or marked `[dependabot skip]` (any of the four spellings Dependabot reads, in
-any case; a commit whose author GitHub cannot resolve to an account counts as a
-person's) is named in the run's summary with a warning and left to whoever added
-the commit. To clear a conflict by hand, rebase the branch yourself; to throw the
-commit away, comment `@dependabot recreate`.
-
-**Once per head commit, and only a person's word counts.** A `rebase` or
-`recreate` request from an owner, member or collaborator, newer than the head
-commit, means the question has been put; a stranger's comment does not, because
-Dependabot ignores it and it must not switch this off. That is judged by the job
-that holds the personal token, with that token: GitHub works out who counts as a
-member from what the reader can see, and the workflow's own token cannot see a
-private organisation member, so it would read this account's own comment as a
-stranger's and ask again on every run. A comment from a read-only collaborator
-counts too, though Dependabot ignores it; the failure below is what names that.
-When Dependabot rebases the branch the head is new and the bump is eligible
-again. A bump that is closed, mergeable, or whose mergeability GitHub has not yet
-computed is left alone, and it is read once more just before the comment is
-posted. A request that stands unanswered for 12 hours fails the run, by name: a
-warning on a run that passes notifies nobody, and the one thing only a live run
-shows is whether Dependabot acts on this account.
-
-The comment has to come from a user account. Dependabot answers that command
-from `github-actions[bot]`, or from any GitHub App, with "Sorry, only users with
-push access can use that command"
+The comment has to come from a user account. Dependabot answers a command from
+`github-actions[bot]`, or from any GitHub App, with "Sorry, only users with push
+access can use that command"
 ([dependabot-core#9147](https://github.com/dependabot/dependabot-core/issues/9147)),
-and obeys an account with push access. So the comment is made with a second
-credential, **`DEPENDABOT_REBASE_TOKEN`**, which is deliberately not
-`DASHBOARD_BUNDLE_TOKEN`. Three things have to exist outside this repository's
-files:
+and obeys an account with push access. So it is made with a second credential,
+`DEPENDABOT_REBASE_TOKEN`, and deliberately not `DASHBOARD_BUNDLE_TOKEN`: one
+token that could both push to a branch and approve could land anything on its own.
+Two things outside this repository's files have to exist:
 
-- **A fine-grained personal access token with Pull requests: read and write and
-  nothing else.** Resource owner: the organisation. Repository access: this
-  repository only. An owner has to approve the token where the organisation asks
-  for that. The account needs Write access to the repository, because that is
-  what Dependabot checks in the commenter; the account that owns
-  `DASHBOARD_BUNDLE_TOKEN` will do. It is not Issues: a pull request is an issue
-  to the comments API and GitHub lists both permissions for that route, but it
-  checks the permission against what is being commented on, and a comment on a
-  pull request has been reported refused to a token that held only Issues. The price is
-  worth reading twice. Pull requests: write also covers **approving** a pull
-  request (an approval from an account with write access counts toward `main`'s
-  required review), **dismissing** anyone's review, editing, closing or
-  retargeting any pull request (its title is the release note), and having GitHub
-  merge `main` into any pull request's branch; the same account can issue any
-  Dependabot command (`@dependabot ignore this dependency` closes a bump and
-  stops its future ones) and edit or delete comments. It cannot push content of
-  its own. The scope cannot contain a leaked token, so the next two do what they
-  can.
-- **An environment, `dependabot-rebase`, whose deployment branches are limited
-  to the selected branch `main`, with the token as its secret** (Settings →
-  Environments). Not "Protected branches only": `main` is protected by a ruleset,
-  and that mode counts classic branch protection. An ordinary Actions secret can
-  be read by anyone who can push a branch and run a workflow from it, which is
-  every writer; an environment secret is released only to a run on `main`, which
-  keeps it from a branch that has not been merged. It does not keep it from a
-  workflow that reaches `main` unreviewed, and **`main`'s ruleset allows that
-  today**: with *dismiss stale approvals* and *require approval of the most recent
-  push* both off, anything pushed onto an approved Dependabot branch merges once
-  CI is green (see the section above). Turn on **Require approval of the most
-  recent reviewable push** and a writer can no longer land a workflow nobody else
-  saw; the price is the one already named, that a bump whose bundle was rebuilt
-  waits for a person. Create the environment **before** the workflow reaches
-  `main`: a workflow that names one that does not exist creates it, open to every
-  branch. The `find` job therefore reads the environment's deployment-branch
-  policy before anything else and fails by name unless it is exactly the selected
-  branch `main`, and the `ask` job, the only one that declares the environment
-  and holds the token, runs only after that has passed; the `find` job itself
-  holds no secret and hands over pull request numbers and commit SHAs. It is not
-  a Dependabot secret, the opposite of the bundle token, because this run is
-  started by a merge or the clock and not by Dependabot. Which secret is in the
-  environment is not something the workflow can read.
-- **A calendar entry for the token's expiry.** An empty secret fails every run by
-  name, and an expired one fails at the next run with a 401 named the same way. A
-  token that was never granted this repository, lacks Pull requests: write, still
-  awaits the organisation's approval or belongs to an account without Write cannot
-  be told from a good one by reading a public repository, so it shows at the first
-  comment (a 403 naming the permission) or, if GitHub accepts the comment and
-  Dependabot ignores it, as the 12-hour failure.
+- **A fine-grained personal access token**: resource owner the organisation, this
+  repository only, **Pull requests: read and write** and nothing else, owned by an
+  account with Write access (the bundle token's account will do). Not Issues: a
+  comment on a pull request has been reported refused to a token that held only
+  Issues. This scope also covers approving and dismissing reviews, and an
+  approval from an account with write access counts toward `main`'s required
+  review, which is why the next item is not optional.
+- **An environment**, `dependabot-rebase`, whose deployment branches are limited
+  to the selected branch `main`, holding the token as its secret (Settings →
+  Environments). An ordinary Actions secret can be read by anyone who can push a
+  branch and run a workflow from it, which is every writer; an environment secret
+  is released only to a run on `main`. Create it **before** the workflow reaches
+  `main`: a workflow that names an environment that does not exist creates it,
+  open to every branch. It does not keep the token from a workflow that reaches
+  `main` unreviewed, which the ruleset allows today (see the section above).
 
-Nothing checks the rest of this for you. Read the grace and its re-read, the
-filter that spares a person's commits, which job declares the environment, the
-command it posts and the token's scope on any diff that touches
+The workflow cannot see inside that setting, so check it yourself. Not covered: a
+bump merges itself with `GITHUB_TOKEN`, and GitHub starts no workflow for an event
+that token caused (the merge commits of #167, #170, #171 and #173 have no push-event
+run), so a conflict a bump's merge makes waits for the next merge by a person, or
+for a manual run. Those are the conflicts Dependabot rebases itself.
+
+Nothing checks any of this for you. Read the wait, the command it posts, the
+environment and the token's scope on any diff that touches
 [`.github/workflows/dependabot-rebase.yml`](.github/workflows/dependabot-rebase.yml).
 
 ## Releasing
