@@ -9,6 +9,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
+	"github.com/crewlet/crewlet/internal/jsprovision"
 	"github.com/crewlet/crewlet/internal/pages"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/store/storetest"
@@ -357,5 +358,35 @@ func TestTheReportShowsANodeEvictedOnlyOnceEveryLogHoldsIt(t *testing.T) {
 	}
 	if got := fleetTombstones(nil); got != nil {
 		t.Fatalf("no log at all produced tombstones %+v", got)
+	}
+}
+
+// THE GATE'S BUDGETS COVER WHAT EACH PHASE WAITS ON.
+//
+// The judgement reads coordination — which one complete election of the
+// coordination store's group may stall once, for jsprovision's clustered ask
+// term — and then this node's own copy. Each log is one append through this
+// node's own write authority, whose two waits are each a resolve budget, behind
+// at most one election of the log's stream group. A budget at or under what
+// its phase waits on cuts short a gesture that would have finished — for the
+// logs, one left half-written — and the answer budget, which the command line
+// and the dashboard wait past, is the two phases end to end.
+func TestTheGateBudgetsCoverWhatEachPhaseWaitsOn(t *testing.T) {
+	t.Parallel()
+	election := jsprovision.AskTerm(true)
+	if GateJudgeBudget <= election {
+		t.Errorf("GateJudgeBudget is %v, which one election's stall (%v) spends before "+
+			"the judgement's first read answers", GateJudgeBudget, election)
+	}
+	if waits := election + 2*statelog.DefaultResolveBudget; GateLogBudget <= waits {
+		t.Errorf("GateLogBudget is %v, and one log's append behind an election waits %v",
+			GateLogBudget, waits)
+	}
+	if GateBudget != GateLogBudget {
+		t.Errorf("GateBudget is %v, want the logs' own budget %v", GateBudget, GateLogBudget)
+	}
+	if want := GateJudgeBudget + GateLogBudget; GateAnswerBudget != want {
+		t.Errorf("GateAnswerBudget is %v, want the judgement and the logs end to end, %v",
+			GateAnswerBudget, want)
 	}
 }

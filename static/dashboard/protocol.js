@@ -866,11 +866,10 @@ var RestError = class extends Error {
 	*
 	* WHAT A WRITE'S CALLER NEEDS BEFORE IT READS A REFUSAL AS ONE. A refusal
 	* the engine wrote means nothing was done; this means nobody here knows. A
-	* reverse proxy's default read timeout is a minute, shorter than the minute
-	* and a quarter the engine allows a node gate past its judgement (a minute
-	* for the logs, a quarter of one for the estate map's part), so a slow
-	* eviction reached the browser as a 504 — and read as a refusal, its
-	* operation id was dropped with it.
+	* reverse proxy whose read timeout is shorter than the fifty seconds the
+	* engine takes to answer a node gate (`engine.GateAnswerBudget`) hands a slow
+	* eviction to the browser as a 504 — and read as a refusal, its operation id
+	* was dropped with it.
 	*/
 	get unanswered() {
 		return this.status === 0 || this.code === "" || this.code === "unreadable_body";
@@ -924,9 +923,9 @@ function offline(err) {
 * It is the DEFAULT, not the only deadline: a call whose path is genuinely
 * longer passes [RequestOptions.timeoutMs] rather than removing the deadline.
 * Two do. A backup copies the whole store before it answers. And the node
-* gate takes up to a minute and a half to answer a gesture (half a minute to
-* judge it, a minute to write every log), so thirty seconds gave up on a
-* gesture the node went on to finish, holding nothing to finish it with.
+* gate takes up to fifty seconds to answer a gesture (twenty to judge it,
+* thirty to write every log), so thirty seconds gave up on a gesture the node
+* went on to finish, holding nothing to finish it with.
 */
 var REQUEST_TIMEOUT_MS = 3e4;
 /** A deadline as a person would say it: seconds under two minutes, else

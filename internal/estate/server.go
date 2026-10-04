@@ -195,14 +195,9 @@ func (s server) answer(ctx context.Context, raw []byte) []byte {
 // partitionOf is the one partition a request addresses at this node: the one
 // it names, or — for a request from a build that predates partitions, which
 // names none — the one the operation's arguments resolve to under this node's
-// layout. An operation no such build sends ([opSpec.named]) is never resolved
-// in the request's stead: one naming no partition is malformed.
+// layout.
 func (s server) partitionOf(ctx context.Context, spec *opSpec, req request) (statelog.PartitionID, error) {
 	var parts []statelog.PartitionID
-	if len(req.Partitions) == 0 && spec.named {
-		return statelog.PartitionID{}, fmt.Errorf("the request names no partition, and every "+
-			"request for %s names the one it addresses", spec.name)
-	}
 	if len(req.Partitions) > 0 {
 		for _, name := range req.Partitions {
 			p, err := statelog.ParsePartitionID(name)

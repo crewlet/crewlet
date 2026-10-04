@@ -960,14 +960,8 @@ The command prints the watermark before and after and the instant the
 eviction takes effect: **the node stays counted for about a minute**, so a live
 one is certain to have read its own tombstone before the trim passes it.
 
-Where the node you ran it on does not serve the estate itself — its copy out
-of service, or behind — it sends that log's record to another data node, which
-writes it under the same operation id, so one command reaches every log; such a
-line names the node that wrote it, whose standing its hint is about:
-
-```
-  tracker: applied at CREWLET_TRACKER_LOG 918100012 (written by node-q)
-```
+The node you ran it on writes every log itself: every data node holds the
+whole estate, so one command reaches every log.
 
 The gesture is **judged once, before either log is written**. A node that still
 holds a live presence lease is refused with `409 eviction_refused` — it is
@@ -1026,10 +1020,10 @@ because the dashboard renders the same answer; the line under it is this
 command's rendering of the node's `actions` (see
 [the gate answer](api-endpoints.md#the-three-retention-gestures-that-write)).
 
-The command mints the operation id **before** it asks, and waits two minutes
-for the answer — past the minute and a half the node takes at most to answer
-one gesture (half a minute to judge it and a minute to write every log), which it finishes even if the
-connection drops. So a gesture that got
+The command mints the operation id **before** it asks, and waits a minute for
+the answer — past the fifty seconds the node takes at most to answer one
+gesture (twenty to judge it and thirty to write every log), which it finishes
+even if the connection drops. So a gesture that got
 no answer at all still prints the `-op-id` that finishes it — and so does one
 whose answer the node did not write: a reverse proxy's 504 page, any status
 carrying no engine error code, or a 200 cut off part way through, each of
@@ -1078,14 +1072,11 @@ position is a heartbeat old, so a node that has only just caught up can be
 refused once more; run the command again.
 
 A readmission that cannot be **judged** is refused as well, with nothing
-written: `503 readmission_unjudged` — for instance when no data node serving
-the estate could give a log's readmission bound, the floor the writing node's
-fence holds the node to.
-
-The node's position is not what is wrong there, so it is not told to catch up.
-Anything else the judgement could not read — the positions register, a
-published floor — is asked again, on this node or through another
-(`-url <that node>`). And either gesture on a node in a
+written: `503 readmission_unjudged`, when the positions register, a published
+floor or a log's first surviving sequence could not be read. The node's
+position is not what is wrong there, so it is not told to catch up: the
+command is asked again, on this node or through another (`-url <that node>`).
+And either gesture on a node in a
 [capacity window](../guides/retention.md#changing-a-logs-ceiling) is refused `409 not_publishing`
 before anything is judged; its line points at `crewlet retention status`, which
 leads with the window while it is open, since nothing is written to any log

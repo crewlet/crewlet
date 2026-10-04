@@ -250,11 +250,11 @@ func engineCode(body []byte) string {
 // # Why it is a noAnswer and not a refusal
 //
 // Because a refusal the node wrote means nothing was done, and this does not:
-// the gate route takes up to a minute and a quarter past its judgement
-// (engine.GateBudget: a minute for the logs, a quarter of one for the estate
-// map's part), a proxy's default read timeout is a minute, and the node
-// finishes a gesture whatever happens to the connection. Read as a refusal, the eviction printed no -op-id, so the
-// only way on was a second gesture over every log the first one reached.
+// the gate route answers within fifty seconds (engine.GateAnswerBudget), a
+// proxy configured below that cuts it off, and the node finishes a gesture
+// whatever happens to the connection. Read as a refusal, the eviction printed
+// no -op-id, so the only way on was a second gesture over every log the first
+// one reached.
 func notTheNode(path string, status int, body []byte) error {
 	said := textcut.Ellipsis(strings.TrimSpace(string(body)), maxRefusalTextBytes)
 	if said == "" {
@@ -315,10 +315,11 @@ func (e *nodeRefusal) answered() string {
 // cannot serve that", which is what a draining node and one built without a
 // route's backend mean. A gesture that could not be judged answers 503 too
 // (`readmission_unjudged`, `eviction_unjudged`), and is about something else
-// entirely — a partition no node serves, a listing nobody could read — which
-// another node answers the same way. Introduced as this node's inability, the
-// refusal contradicted its own hint; framed as the answer it is, as every 409
-// gate refusal is, its code, hint and actions say what it is.
+// entirely — a lease listing or a positions register nobody could read, which
+// the refusal's own hint and actions say how to get past. Introduced as this
+// node's inability, the refusal contradicted its own hint; framed as the answer
+// it is, as every 409 gate refusal is, its code, hint and actions say what it
+// is.
 func (e *nodeRefusal) asJudgement() *nodeRefusal {
 	out := *e
 	out.msg = e.answered()

@@ -18,7 +18,6 @@ import (
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/engine"
-	"github.com/crewlet/crewlet/internal/estate"
 	"github.com/crewlet/crewlet/internal/httpx"
 	"github.com/crewlet/crewlet/internal/httpx/httpxtest"
 	"github.com/crewlet/crewlet/internal/logging"
@@ -718,38 +717,6 @@ func TestAGateGestureThatMissedALogSaysHowToFinishIt(t *testing.T) {
 	}
 }
 
-// A LOG ANOTHER NODE WROTE SAYS WHICH NODE.
-//
-// A log of a partition the node asked does not serve is written for it by a
-// node that does, and the line names that node — and an unknown it could not
-// vouch for is that node's, never "this node", which wrote nothing there.
-func TestAGateGestureNamesTheNodeThatWroteALog(t *testing.T) {
-	node := newFakeRetentionNode(t)
-	base := bootstrapForURL(t, node.server.URL)
-	gesture := statelog.NewOpID(time.Now().Add(-time.Minute), "evict-node-4")
-	node.gateResult = &engine.GateResult{Domains: []engine.DomainGate{
-		{Domain: "tracker@tracker.001", Stream: "CREWLET_TRACKER_001_LOG",
-			OpID: gesture + ".evict.tracker", Outcome: statelog.OutcomeApplied, Writer: "node-q",
-			Position: statelog.Position{Stream: "CREWLET_TRACKER_001_LOG", Seq: 12}},
-		{Domain: "pages@pages.000", Stream: "CREWLET_PAGES_000_LOG",
-			OpID: gesture + ".evict.pages", Outcome: statelog.OutcomeUnknown, Unvouched: true,
-			Writer: "node-q"},
-	}}
-	stdout, _, _ := cli(t, "retention", "evict", "node-4", base,
-		"-confirm", "node-4", "-op-id", gesture)
-	for _, want := range []string{
-		"tracker@tracker.001: applied at CREWLET_TRACKER_001_LOG 12 (written by node-q)",
-		"pages@pages.000: unknown — node node-q cannot tell whether the record is on the log",
-	} {
-		if !strings.Contains(stdout, want) {
-			t.Errorf("the output never says %q:\n%s", want, stdout)
-		}
-	}
-	if strings.Contains(stdout, "this node cannot tell") {
-		t.Errorf("an unknown another node gave is printed as this node's:\n%s", stdout)
-	}
-}
-
 // A REFUSED EVICTION SAYS HOW TO GET PAST IT IN THIS COMMAND'S OWN FLAGS.
 //
 // The node names what to do as actions and a sentence spelling no flag, since
@@ -785,27 +752,25 @@ func TestARefusedEvictionNamesTheFlagThatForcesIt(t *testing.T) {
 // A REFUSAL'S `wait` SAYS WHAT THAT REFUSAL WAITS ON, NOT WHAT ITS VERB USUALLY
 // DOES.
 //
-// Four refusals carry `wait`, each for something different. Rendered by the
-// verb, a readmission refused `readmission_unjudged` — a partition nobody
-// serves — was told to watch the node's SEQ catch up, a number that had already
-// caught up, directly under the node's own hint naming the partition; and
-// either gesture refused `not_publishing` was sent to a lease or a position
-// that had nothing to do with the capacity window it was waiting out. Each is
-// rendered here by the route's own renderer from the engine's own error, so the
-// codes this command switches on are the codes a node sends.
+// Three refusals carry `wait`, each for something different. Rendered by the
+// verb, either gesture refused `not_publishing` was sent to a lease or a
+// position that had nothing to do with the capacity window it was waiting out.
+// Each is rendered here by the route's own renderer from the engine's own
+// error, so the codes this command switches on are the codes a node sends —
+// and a refusal that carries no `wait` carries none of their lines.
 //
 // AND A 503 GATE REFUSAL IS THE NODE'S ANSWER, not "this node cannot serve
-// that": a partition nobody serves is refused the same way by every node.
+// that": a readmission whose register nobody could read is the judgement's
+// own answer, and its hint says how to get past it.
 func TestAGateRefusalsWaitNamesWhatItWaitsOn(t *testing.T) {
 	node := newFakeRetentionNode(t)
 	base := bootstrapForURL(t, node.server.URL)
 	// advice is each refusal's own line, which no other refusal's answer
 	// may carry.
 	advice := map[string]string{
-		"eviction_refused":     "LIVE column in `crewlet retention status`",
-		"readmission_refused":  "says when it has caught up",
-		"readmission_unjudged": "did not answer for the log",
-		"not_publishing":       "leads with the capacity window",
+		"eviction_refused":    "LIVE column in `crewlet retention status`",
+		"readmission_refused": "says when it has caught up",
+		"not_publishing":      "leads with the capacity window",
 	}
 	for _, c := range []struct {
 		name, verb, code string
@@ -818,11 +783,10 @@ func TestAGateRefusalsWaitNamesWhatItWaitsOn(t *testing.T) {
 				NodeID: "node-4", Domain: "tracker", Published: true, Generation: 1, Seq: 1200,
 				Bound: statelog.ReadmissionBound{Domain: "tracker", Generation: 1,
 					Floor: 9000, First: 8800}})},
-		{"a partition nobody serves", "readmit", "readmission_unjudged",
+		{"a register nobody could read", "readmit", "readmission_unjudged",
 			fmt.Errorf("engine: readmit node node-4: %w", &engine.ReadmissionUnjudged{
-				Node: "node-4", Log: "tracker@tracker.007",
-				Err: fmt.Errorf("read its readmission bound: %w",
-					&estate.ErrPartitionUnserved{Partition: "tracker.007"})})},
+				Node: "node-4",
+				Err:  errors.New("read the positions register: coordination is unreachable")})},
 		{"an eviction in a capacity window", "evict", "not_publishing",
 			fmt.Errorf("%w: an eviction appends a record to the state log, and this "+
 				"node runs in seal mode", engine.ErrNotPublishing)},
@@ -897,10 +861,9 @@ func TestAGateTheNodeNeverAnsweredNamesItsOperation(t *testing.T) {
 }
 
 // AN ANSWER THE NODE DID NOT WRITE IS NOT A REFUSAL. A reverse proxy's read
-// timeout — a 504 with an HTML page, at a minute, which is shorter than the
-// minute and a quarter the node gives a gesture past its judgement — and a 200
-// cut off part way through
-// both leave what the node did unknown, and the node finishes a gesture
+// timeout — a 504 with an HTML page, from a proxy set shorter than the fifty
+// seconds the node takes to answer a gesture — and a 200 cut off part way
+// through both leave what the node did unknown, and the node finishes a gesture
 // whatever happens to the connection. Read as a refusal, the eviction printed
 // no -op-id, and the only way on was a second gesture over every log the first
 // one reached.

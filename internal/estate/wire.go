@@ -326,19 +326,6 @@ type opSpec struct {
 	// is not the log's rows at a position — see [opWorkSearch].
 	floorless bool
 
-	// oneAppend operations are ONE APPEND on one log, decided and resolved
-	// inside the write authority's own budgets — so one attempt at one is
-	// [AppendAttempt] whatever deadline its caller has ([Router.budgetFor]),
-	// and a holder silent for that long is passed for the next under the
-	// same operation id rather than waited on until the caller gives up.
-	oneAppend bool
-
-	// named operations' requests always NAME their partition: no build from
-	// before partitions sends one, so the serving node never resolves its
-	// arguments in the request's stead, and a request naming none is
-	// malformed rather than an older asker's.
-	named bool
-
 	// covered operations' answers report what they covered
 	// ([statelog.Coverage]): the partitions they addressed and the cut each
 	// was read at, which the serving node measures before it runs the read
@@ -490,20 +477,6 @@ func (o op[A, R]) ungated() op[A, R] {
 // [opSpec.floorless].
 func (o op[A, R]) floorless() op[A, R] {
 	o.spec.floorless = true
-	return o
-}
-
-// appends declares that this operation is one append on one log — see
-// [opSpec.oneAppend].
-func (o op[A, R]) appends() op[A, R] {
-	o.spec.oneAppend = true
-	return o
-}
-
-// named declares that every request for this operation names its partition —
-// see [opSpec.named].
-func (o op[A, R]) named() op[A, R] {
-	o.spec.named = true
 	return o
 }
 

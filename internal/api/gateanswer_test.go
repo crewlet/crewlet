@@ -14,7 +14,6 @@ import (
 
 	"github.com/crewlet/crewlet/internal/api"
 	"github.com/crewlet/crewlet/internal/engine"
-	"github.com/crewlet/crewlet/internal/estate"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
@@ -56,13 +55,6 @@ func gateAnswerScenarios() map[string]engine.GateResult {
 		"unknown": result(engine.DomainGate{Outcome: statelog.OutcomeUnknown}),
 		"unvouched": result(engine.DomainGate{Outcome: statelog.OutcomeUnknown,
 			Unvouched: true}),
-		// A LOG THIS NODE DOES NOT SERVE, sent to a holder of its partition
-		// that wrote it on this node's behalf: the answer names that node,
-		// and so does any refusal or unknown it gave.
-		"written_elsewhere": result(engine.DomainGate{Outcome: statelog.OutcomeApplied,
-			Position: at, Writer: "node-q"}),
-		"unvouched_elsewhere": result(engine.DomainGate{Outcome: statelog.OutcomeUnknown,
-			Unvouched: true, Writer: "node-q"}),
 		"log_full": result(engine.DomainGate{Err: fmt.Errorf("pages: %w",
 			&statelog.Unavailable{Reason: statelog.ReasonLogFull,
 				Detail: "the broker refused to store it"})}),
@@ -83,9 +75,9 @@ func gateRefusalScenarios() map[string]error {
 		"eviction_unjudged": &engine.GateUnjudged{Node: "node-4",
 			Err: errors.New("list the live nodes: coordination is unreachable")},
 		"readmission_unjudged": fmt.Errorf("engine: readmit node node-4: %w",
-			&engine.ReadmissionUnjudged{Node: "node-4", Log: "tracker@tracker.007",
-				Err: fmt.Errorf("read its readmission bound: %w",
-					&estate.ErrPartitionUnserved{Partition: "tracker.007"})}),
+			&engine.ReadmissionUnjudged{Node: "node-4", Log: "tracker",
+				Err: errors.New("read its readmission bound: engine: read tracker's " +
+					"first surviving sequence: the stream has no leader")}),
 		"readmission_unjudged_register": fmt.Errorf("engine: readmit node node-4: %w",
 			&engine.ReadmissionUnjudged{Node: "node-4",
 				Err: errors.New("read the positions register: coordination is unreachable")}),
@@ -248,10 +240,9 @@ func TestEveryGateRefusalCarriesItsActions(t *testing.T) {
 		"eviction_unjudged":   {statelog.GateRetrySameOp, statelog.GateForce},
 		"readmission_refused": {statelog.GateWait},
 		"not_publishing":      {statelog.GateWait},
-		// A LOG NO NODE SERVES is waited out — no retry serves it — and
-		// anything else a judgement could not read is asked again, here
-		// or through another node.
-		"readmission_unjudged":          {statelog.GateWait},
+		// WHATEVER A JUDGEMENT COULD NOT READ — a log's bound or the
+		// fleet's register — is asked again, here or through another node.
+		"readmission_unjudged":          {statelog.GateRetrySameOp, statelog.GateOtherNode},
 		"readmission_unjudged_register": {statelog.GateRetrySameOp, statelog.GateOtherNode},
 	}
 	for name, err := range gateRefusalScenarios() {

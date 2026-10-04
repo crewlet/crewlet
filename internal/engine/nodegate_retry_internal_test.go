@@ -13,7 +13,6 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/coord"
-	"github.com/crewlet/crewlet/internal/estate"
 	"github.com/crewlet/crewlet/internal/pages"
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/queue/jetstream"
@@ -575,39 +574,14 @@ func TestAGateLogIsAdvisedARetryOnlyWhereOneCanFinishIt(t *testing.T) {
 		"a later gate, another node's copy": {gate: copied(statelog.Reason("a_later_gate")),
 			actions: []statelog.GateAction{retry},
 			detail:  "applies nowhere because a gate dropped it (a_later_gate) — a fact about node node-x"},
-		// THIS NODE'S OWN WRITE REFUSED BY GATE 3 — the partition moved off
-		// it, or its holding could not be read, between the gesture choosing
-		// to write here and the write — is the same gesture's again: run
-		// again, it sends the record to a node that serves the partition.
-		"not holder": {gate: refused(statelog.ReasonNotHolder), actions: []statelog.GateAction{retry},
-			detail: "sends the record to one that does"},
+		// THIS NODE'S OWN WRITE REFUSED BY GATE 3 — it did not serve the
+		// partition, or could not tell whether it did — landed nothing:
+		// the same gesture finishes it here once it does, or through a
+		// node that does.
+		"not holder": {gate: refused(statelog.ReasonNotHolder),
+			actions: []statelog.GateAction{retry, other}, detail: "here once it does"},
 		"holding unknown": {gate: refused(statelog.ReasonHoldingUnknown),
-			actions: []statelog.GateAction{retry}, detail: "could not tell"},
-		// NO HOLDER WROTE IT: every node the router sent the record to ran
-		// nothing or did not answer, so nothing landed under the id.
-		"unserved": {gate: DomainGate{Stream: "CREWLET_PAGES_LOG",
-			Err: fmt.Errorf("estate: statelog.gate: %w",
-				&estate.ErrPartitionUnserved{Partition: "pages.000"})},
-			actions: []statelog.GateAction{retry}, detail: "no node that serves the partition"},
-		// A REFUSAL ANOTHER NODE'S AUTHORITY GAVE, for a log this node sent
-		// it: the remedy is about that node, and never calls it this one.
-		"evicted, written by another node": {gate: DomainGate{Stream: "CREWLET_PAGES_LOG",
-			Writer: "node-q", Err: &statelog.Unavailable{Reason: statelog.ReasonEvicted}},
-			actions: []statelog.GateAction{other},
-			detail:  "node node-q, which serves the partition and wrote this log for the gesture, is evicted itself"},
-		"behind, written by another node": {gate: DomainGate{Stream: "CREWLET_PAGES_LOG",
-			Writer: "node-q", Err: &statelog.Unavailable{Reason: statelog.ReasonBehind}},
-			actions: []statelog.GateAction{retry}, detail: "node node-q, which serves"},
-		"wrong stream, written by another node": {gate: DomainGate{Stream: "CREWLET_PAGES_LOG",
-			Writer: "node-q", Err: &statelog.Unavailable{Reason: statelog.ReasonWrongStream}},
-			actions: []statelog.GateAction{statelog.GateReanchor},
-			detail:  "is not the one node node-q's rows were derived from"},
-		"evicted, another node's copy, written by another node": {gate: DomainGate{
-			Stream: "CREWLET_PAGES_LOG", Duplicates: 2 * time.Minute, Writer: "node-q",
-			Err: &statelog.Unavailable{Reason: statelog.ReasonEvicted, CopyWriter: "node-x",
-				Position: statelog.Position{Stream: "CREWLET_PAGES_LOG", Generation: 1, Seq: 7}}},
-			actions: []statelog.GateAction{retry},
-			detail:  "which node node-q's own write was collapsed onto, and it applies nowhere because that node is evicted — a fact about node node-x and not about node node-q"},
+			actions: []statelog.GateAction{retry, other}, detail: "could not tell"},
 		"wrong stream": {gate: refused(statelog.ReasonWrongStream),
 			actions: []statelog.GateAction{statelog.GateReanchor}, detail: "re-anchor"},
 		"log full": {gate: refused(statelog.ReasonLogFull),
@@ -627,12 +601,6 @@ func TestAGateLogIsAdvisedARetryOnlyWhereOneCanFinishIt(t *testing.T) {
 		// node whose ledger reaches back that far — never round the loop.
 		"unvouched": {gate: DomainGate{Outcome: statelog.OutcomeUnknown, Unvouched: true},
 			actions: []statelog.GateAction{other}, detail: "cannot tell"},
-		// ONE ANOTHER NODE COULD NOT VOUCH FOR, after the router asked every
-		// holder that answered: another node sends the record to the same
-		// holders, so the remedy is the same gesture, which asks them again.
-		"unvouched, written by another node": {gate: DomainGate{Stream: "CREWLET_PAGES_LOG",
-			Outcome: statelog.OutcomeUnknown, Unvouched: true, Writer: "node-q"},
-			actions: []statelog.GateAction{retry}, detail: "node node-q, which serves the partition"},
 	} {
 		remedy := tc.gate.Remedy()
 		if !slices.Equal(remedy.Actions, tc.actions) {
@@ -644,9 +612,6 @@ func TestAGateLogIsAdvisedARetryOnlyWhereOneCanFinishIt(t *testing.T) {
 		if (remedy.Detail == "") != (tc.detail == "") ||
 			!strings.Contains(remedy.Detail, tc.detail) {
 			t.Errorf("%s: detail = %q, want it to name %q", name, remedy.Detail, tc.detail)
-		}
-		if tc.gate.Writer != "" && strings.Contains(remedy.Detail, "this node") {
-			t.Errorf("%s: detail %q calls the node that wrote it this one", name, remedy.Detail)
 		}
 		for _, flag := range []string{"-op-id", "-url", "-force", "crewlet "} {
 			if strings.Contains(remedy.Detail, flag) {
@@ -688,8 +653,8 @@ func (w *gateWrites) sorted() []string {
 
 // fakeGate is a gate over two logs that record which were written, judging an
 // eviction against a lease listing that answers nothing held — or listErr.
-// The logs come back beside it, and the gate answers whatever they hold at each
-// gesture, so a case may replace one's write.
+// The logs come back beside it, sharing the gate's own, so a case may replace
+// one's write.
 func fakeGate(wrote *gateWrites, listErr error) (*NodeGate, []gateLog) {
 	write := func(domain string) func(context.Context, string, string, string,
 		bool) (statelog.Result, error) {
@@ -706,7 +671,7 @@ func fakeGate(wrote *gateWrites, listErr error) (*NodeGate, []gateLog) {
 		live:         func(context.Context) ([]statelog.Presence, error) { return nil, listErr },
 		readmissible: func(context.Context, string) error { return nil },
 		publishing:   normalMode.appends,
-		logs:         gateLogs(logs...),
+		logs:         logs,
 	}, logs
 }
 
@@ -773,7 +738,7 @@ func recordingGate(t *testing.T, e *Engine, back *Backends) (*NodeGate, []gateLo
 		logs = append(logs, gl)
 		recs[name] = rec
 	}
-	g.logs = gateLogs(logs...)
+	g.logs = logs
 	return g, logs, recs
 }
 
@@ -840,10 +805,10 @@ func TestAnUnvouchedGateLogIsSentToAnotherNode(t *testing.T) {
 		}
 	}
 	g := &NodeGate{
-		logs: gateLogs(
-			gateLog{domain: "tracker", stream: "CREWLET_TRACKER_LOG", write: answer(false)},
-			gateLog{domain: "pages", stream: "CREWLET_PAGES_LOG", write: answer(true)},
-		),
+		logs: []gateLog{
+			{domain: "tracker", stream: "CREWLET_TRACKER_LOG", write: answer(false)},
+			{domain: "pages", stream: "CREWLET_PAGES_LOG", write: answer(true)},
+		},
 		live:       func(context.Context) ([]statelog.Presence, error) { return nil, nil },
 		publishing: normalMode.appends,
 	}

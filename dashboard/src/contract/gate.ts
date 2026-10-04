@@ -54,12 +54,12 @@ export const GATE_ACTIONS_KEEPING_OPERATION = [
  * held above `engine.GateAnswerBudget` by
  * `internal/api.TestTheDashboardWaitsPastTheGateBudget`.
  *
- * TWO MINUTES, the command line's own `gateRequestTimeout` and for its
- * reason: the engine answers one gesture within `engine.GateAnswerBudget` — a
- * minute and a half: half a minute to judge it and a minute to write every
- * log — and the rest is the request's round trip. Waiting past the node's own bound is what makes its
- * answer — every log's outcome — reach the operator rather than a client
- * timeout that knows none of it. The default thirty seconds gave up on a
- * gesture the node went on to finish.
+ * ONE MINUTE, the command line's own `gateRequestTimeout` and for its reason:
+ * the engine answers one gesture within `engine.GateAnswerBudget` — fifty
+ * seconds: twenty to judge it and thirty to write every log — and the ten
+ * beyond it are the request's round trip. Waiting past the node's own bound is
+ * what makes its answer — every log's outcome — reach the operator rather than
+ * a client timeout that knows none of it. The default thirty seconds gave up on
+ * a gesture the node went on to finish.
  */
-export const GATE_REQUEST_TIMEOUT_MS = 120_000;
+export const GATE_REQUEST_TIMEOUT_MS = 60_000;

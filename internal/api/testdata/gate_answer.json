@@ -178,68 +178,6 @@
           "hint": "this node cannot tell whether the record landed: its operation ledger may have lost the record of this operation, which was minted before it adopted a snapshot or swept its ledger, so the same gesture here answers the same way every time. Run it through a node whose ledger reaches back that far, under the same operation id"
         }
       ]
-    },
-    "unvouched_elsewhere": {
-      "node": "node-4",
-      "evicted": true,
-      "op_id": "01a0c450-6c00-7170-b8e5-7908c2cd9718.evict-node-4",
-      "complete": false,
-      "domains": [
-        {
-          "domain": "tracker",
-          "stream": "CREWLET_TRACKER_LOG",
-          "op_id": "01a0c450-6c00-7170-b8e5-7908c2cd9718.evict-node-4.evict.tracker:node-4",
-          "outcome": "applied",
-          "position": {
-            "stream": "CREWLET_TRACKER_LOG",
-            "generation": 1,
-            "seq": 918280002
-          }
-        },
-        {
-          "domain": "pages",
-          "stream": "CREWLET_PAGES_LOG",
-          "op_id": "01a0c450-6c00-7170-b8e5-7908c2cd9718.evict-node-4.evict.pages:node-4",
-          "outcome": "unknown",
-          "unvouched": true,
-          "writer": "node-q",
-          "actions": [
-            "retry_same_op"
-          ],
-          "hint": "node node-q, which serves the partition CREWLET_PAGES_LOG is on, cannot tell whether the record landed, and neither could any other holder of it that answered: each one's operation ledger may have lost the record of this operation, which was minted before it adopted a snapshot or swept its ledger. The same gesture under the same operation id asks every holder again, and one that did not answer this time may vouch for it"
-        }
-      ]
-    },
-    "written_elsewhere": {
-      "node": "node-4",
-      "evicted": true,
-      "op_id": "01a0c450-6c00-7170-b8e5-7908c2cd9718.evict-node-4",
-      "complete": true,
-      "domains": [
-        {
-          "domain": "tracker",
-          "stream": "CREWLET_TRACKER_LOG",
-          "op_id": "01a0c450-6c00-7170-b8e5-7908c2cd9718.evict-node-4.evict.tracker:node-4",
-          "outcome": "applied",
-          "position": {
-            "stream": "CREWLET_TRACKER_LOG",
-            "generation": 1,
-            "seq": 918280002
-          }
-        },
-        {
-          "domain": "pages",
-          "stream": "CREWLET_PAGES_LOG",
-          "op_id": "01a0c450-6c00-7170-b8e5-7908c2cd9718.evict-node-4.evict.pages:node-4",
-          "outcome": "applied",
-          "writer": "node-q",
-          "position": {
-            "stream": "CREWLET_PAGES_LOG",
-            "generation": 1,
-            "seq": 4410
-          }
-        }
-      ]
     }
   },
   "refusals": {
@@ -308,12 +246,13 @@
       "status": 503,
       "body": {
         "actions": [
-          "wait"
+          "retry_same_op",
+          "other_node"
         ],
-        "detail": "engine: the readmission of node-4 cannot be judged on tracker@tracker.007: read its readmission bound: estate: no node serves tracker.007 right now",
+        "detail": "engine: the readmission of node-4 cannot be judged on tracker: read its readmission bound: engine: read tracker's first surviving sequence: the stream has no leader",
         "error": "readmission_unjudged",
-        "hint": "no node serving tracker.007 answered, so the standing of its log tracker@tracker.007 cannot be read, and the readmission could not be written there either. Run it again once the estate is served: when a data node returns or answers — or, where its only copy is the one node-4 kept through its eviction, which nobody writes while the node is gated, once another data node has adopted that copy from node-4, which offers it while it keeps it; if there is no other data node, add one",
-        "log": "tracker@tracker.007",
+        "hint": "this node could not read what the readmission of node-4 is judged against, and wrote nothing: ask again once it answers, or through another node",
+        "log": "tracker",
         "node": "node-4",
         "op_id": "01a0c450-6c00-79ad-8c62-c1a2d6774ed0.readmit-node-4"
       }

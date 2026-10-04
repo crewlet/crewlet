@@ -287,7 +287,7 @@ test("a node with an unfinished gesture offers to finish it rather than start af
   const held = {
     opId: "01a0c450-6c00-7011-a233-445566778899.evict-node-a",
     force: false,
-    unanswered: "the engine did not answer within 75 seconds",
+    unanswered: "the engine did not answer within 60 seconds",
   };
   expect(gateAction(node(), { "node-a:evict": held })).toEqual({
     evict: true,

@@ -19,7 +19,6 @@ import (
 
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
-	"github.com/crewlet/crewlet/internal/estate"
 	"github.com/crewlet/crewlet/internal/jsprovision"
 	"github.com/crewlet/crewlet/internal/maintenance"
 	"github.com/crewlet/crewlet/internal/pages"
@@ -1782,61 +1781,29 @@ func (s *stateLog) logEndsOf(domain string, l *jetstream.DomainLog,
 //
 // HERE, because this is the one object holding all three inputs — the
 // positions register the node's own heartbeat writes, the floor the trim
-// publishes, and the logs — and each log's bound is read exactly as the write
-// fence of the node that WRITES its readmission reads it: the floor through
-// [floorFor] at the generation that node runs the log at, and the stream's
-// first sequence beside it, the higher of the two bounding what may be gone
-// ([stateLog.readmissionBound]). A readmission judged against a different
-// bound from the fence the node is about to be subject to would clear it for
-// writes that fence refuses.
-//
-// SO A LOG THIS NODE DOES NOT WRITE IS JUDGED WHERE IT IS WRITTEN. The gesture
-// sends such a log's record to a node serving its partition ([countedGateLogs]),
-// and its bound is read there, through the same router
-// ([estate.Router.ReadmissionBound]) — all of them at once, before anything is
-// written. Judged only on the logs this node runs, a readmission on a node
-// running few of them was refused on none of the rest and then written on every
-// one, through their holders: the pin the eviction was run to lift, put back
-// with nobody told. A bound no holder could give refuses, like every other
-// read here.
+// publishes, and every log — and each log's bound is read exactly as this
+// node's write fence reads it: the floor through [floorFor] at the generation
+// this node runs the log at, and the stream's first sequence beside it, the
+// higher of the two bounding what may be gone ([stateLog.readmissionBound]). A
+// readmission judged against a different bound from the fence the node is
+// about to be subject to would clear it for writes that fence refuses. And this
+// node writes the readmission on every log itself ([NodeGate]), so the fence
+// that holds the readmitted node is this one's.
 //
 // IDENTITY-CLAIMING DOMAINS ONLY. The floor theorem is about an expectation of
 // zero, which only a domain that claims identity can form; a compacted domain
 // has no such write, and a node behind in one is a coverage figure rather
-// than a node that cannot resume.
+// than a node that cannot resume. Every one of them, because every data node
+// holds the one estate: a readmitted node is counted on every identity log.
 //
-// AND ONLY THE LOGS THE NODE WOULD BE COUNTED ON ([stateLog.countedOn]):
-// those whose partition holders names it a holder of, in any state, and those
-// its positions row names — the logs the trim would count it on once
-// readmitted — chosen from the very reading of the register they are then
-// judged against. Under layout 0 that is every identity log, as it always
-// was. Under a divided layout a node is counted only where it holds or has
-// reported, and judged everywhere a node with no row was refused on every
-// trimmed log — at position zero — for partitions it holds nothing of and
-// would come back to only by adopting a copy, so it could never be readmitted
-// at all.
+// ONE READING OF EACH: the register, the floors, and each log's bound, read
+// once and judged together, so no two readings of one input can disagree about
+// the node.
 //
-// BUT EVERY LOG IT WRITES IS ASKED, judged or not. A readmission is written on
-// every identity-claiming log ([countedGateLogs]), since where the node is
-// evicted is a fact only each log's rows hold. So a log
-// whose partition no node serves is one no readmission can finish, whether or
-// not the node would be counted there. Asked only on the logs it is judged on,
-// a readmission with an unserved partition elsewhere was written on every
-// other log and left the map waiting on the one nobody could write, offering a
-// retry that answered the same until that partition was served — the node
-// counted again on the logs it had reached while the map still barred it.
-// Asked here, the same partition refuses the readmission before anything is
-// written ([ReadmissionUnjudged]), saying what it waits on. The question is
-// the judged logs' own read ([estate.Router.ReadmissionBound]) with its bound
-// not judged: a node serving the log answered for it, which is what the
-// write is about to need.
-//
-// Every read that fails is an error and REFUSES: a register nobody could list
-// is not a register without the node in it, a holder table nobody could read
-// is not one that names nobody, and a floor nobody could read is not a low one.
-func (s *stateLog) Readmissible(ctx context.Context, nodeID string, holders partitionHolders,
-	route boundRoute) error {
-
+// Every read that fails is an error and REFUSES ([ReadmissionUnjudged]): a
+// register nobody could list is not a register without the node in it, and a
+// floor nobody could read is not a low one.
+func (s *stateLog) Readmissible(ctx context.Context, nodeID string) error {
 	unjudged := func(log string, err error) error {
 		return &ReadmissionUnjudged{Node: nodeID, Log: log, Err: err}
 	}
@@ -1844,79 +1811,26 @@ func (s *stateLog) Readmissible(ctx context.Context, nodeID string, holders part
 		return unjudged("", errors.New("this node reads no positions register, so it "+
 			"cannot tell where the node stands against the trim floor"))
 	}
-	// ONE READING OF THE REGISTER chooses the logs and judges them: see
-	// [stateLog.countedOn].
 	register, err := s.positions(ctx)
 	if err != nil {
 		return unjudged("", fmt.Errorf("read the positions register: %w", err))
-	}
-	counted, err := s.countedOn(ctx, holders, nodeID, register)
-	if err != nil {
-		return unjudged("", fmt.Errorf("which logs the node would be counted on: %w", err))
 	}
 	floors, err := s.floors(ctx)
 	if err != nil {
 		return unjudged("", fmt.Errorf("read the published trim floors: %w", err))
 	}
-	// EVERY LOG IT WRITES, each read where it is written: this node's own
-	// copy where it writes the log, and a holder of the log's partition
-	// where the gesture sends the record there — read all at once, as the
-	// gesture then writes them. A log the node would be counted on is
-	// judged on the bound read; any other is only ASKED, because its
-	// record is written there all the same ([countedGateLogs]) and a log
-	// nobody serves is one no readmission can finish — see the doc.
-	writes, err := s.identityLogs()
-	if err != nil {
-		return unjudged("", fmt.Errorf("which logs the readmission writes: %w", err))
-	}
-	bounds := make([]statelog.ReadmissionBound, len(writes))
-	judged := make([]bool, len(writes))
-	errs := make([]error, len(writes))
-	var wg sync.WaitGroup
-	for i, id := range writes {
-		judged[i] = slices.Contains(counted, id)
-		if running := s.gateWrites(id); running != nil {
-			// THIS NODE WRITES IT, so it is served: only a log it is
-			// judged on has anything to read here.
-			if judged[i] {
-				bounds[i], errs[i] = s.readmissionBound(ctx, running, floors)
-			}
+	var bounds []statelog.ReadmissionBound
+	for _, running := range s.running() {
+		if !running.domain.ClaimsIdentity() {
 			continue
 		}
-		if route == nil {
-			errs[i] = fmt.Errorf("this node does not write %s and has no route to a "+
-				"node that does", id)
-			continue
+		bound, err := s.readmissionBound(ctx, running, floors)
+		if err != nil {
+			return unjudged(running.key, fmt.Errorf("read its readmission bound: %w", err))
 		}
-		wg.Go(func() {
-			bound, err := route.ReadmissionBound(ctx, logRef(s.layout, id))
-			// THE REGISTER'S KEY, which is what the judgement looks the
-			// node's position up by, whatever the holder named it.
-			bound.Domain = id.String()
-			bounds[i], errs[i] = bound, err
-		})
+		bounds = append(bounds, bound)
 	}
-	wg.Wait()
-	var judging []statelog.ReadmissionBound
-	for i, err := range errs {
-		switch {
-		case err != nil && judged[i]:
-			return unjudged(writes[i].String(), fmt.Errorf("read its readmission "+
-				"bound: %w", err))
-		case err != nil:
-			return unjudged(writes[i].String(), fmt.Errorf("ask a node serving it, "+
-				"which writes the readmission there: %w", err))
-		case judged[i]:
-			judging = append(judging, bounds[i])
-		}
-	}
-	return statelog.PermitReadmission(nodeID, register, judging)
-}
-
-// boundRoute reads a log's readmission bound on a node that serves the log's
-// partition: the estate's router ([estate.Router.ReadmissionBound]).
-type boundRoute interface {
-	ReadmissionBound(ctx context.Context, l estate.LogRef) (statelog.ReadmissionBound, error)
+	return statelog.PermitReadmission(nodeID, register, bounds)
 }
 
 // readmissionBound is running's bound as this node's write fence reads it
@@ -1938,29 +1852,6 @@ func (s *stateLog) readmissionBound(ctx context.Context, running *runningLog,
 	return statelog.ReadmissionBound{
 		Domain: running.key, Generation: generation, Floor: floor, First: first,
 	}, nil
-}
-
-// partitionBounds is p's half of the `statelog.readmission_bound` operation: for
-// each of p's identity-claiming logs this node runs, the bound a readmission is
-// judged against on this node's copy ([stateLog.readmissionBound]) — the one
-// this node's fence holds a node it writes the readmission for to. None for a
-// log it does not run right now, which is "no native backend here", and the
-// request moves on.
-func (s *stateLog) partitionBounds(p statelog.PartitionID) func(domain string) estate.BoundReader {
-	return func(domain string) estate.BoundReader {
-		running := s.Log(statelog.LogID{Domain: domain, Partition: p}.String())
-		if running == nil || !running.domain.ClaimsIdentity() {
-			return nil
-		}
-		return func(ctx context.Context) (statelog.ReadmissionBound, error) {
-			floors, err := s.floors(ctx)
-			if err != nil {
-				return statelog.ReadmissionBound{}, fmt.Errorf("engine: read the "+
-					"published trim floors: %w", err)
-			}
-			return s.readmissionBound(ctx, running, floors)
-		}
-	}
 }
 
 // observeStream hands one live reading of a domain log's state to its runner —

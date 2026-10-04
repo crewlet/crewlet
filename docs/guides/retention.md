@@ -551,20 +551,15 @@ nothing — a node behind on it is a coverage figure — and gets none.) Every
 node running the state log can make the gesture, whichever backends the
 company uses: a company on an external tracker still runs both logs.
 
-**Each log is written by a node that serves the estate.** The node you run
-the gesture on writes the logs itself where its own copy serves; where it does
-not — its copy is out of service, or behind — it sends that log's record to
-another data node, which writes it under the same operation id on its behalf,
-so one gesture on any data node reaches every log. Such a log's line names the
-node that wrote it (`written by node-q`), and its hint is about that node: a
-refusal it gave — evicted, behind, a log rebuilt under it — is its standing,
-never the standing of the node you ran the gesture on. Each data node is given
-fifteen seconds before the next is asked; where none of them wrote the record
-the line says so, and the same `-op-id` finishes it once one does. A
-readmission is **judged** on every log it writes before any is written, and a
-log whose bound — the floor and first surviving sequence the writing node's
-fence holds a node to — no data node could give refuses the readmission rather
-than passing it unjudged: `readmission_unjudged`, with nothing written.
+**The node you run the gesture on writes every log itself**: every data node
+holds the whole estate, so one gesture on any data node reaches every log. A
+readmission is **judged** on every log before any is written, against the
+bound this node's own write fence holds a node to — the published floor and
+the log's first surviving sequence — and an input it cannot read (the
+positions register, a floor, a log's first sequence) refuses the readmission
+rather than passing it unjudged: `readmission_unjudged`, with nothing written.
+The same gesture, here once the read answers or through another node, finishes
+it.
 
 It is **judged once, before anything is written**: a node that still holds a
 live presence lease is refused, because it is still reaching the fleet and
@@ -581,13 +576,14 @@ alphanumeric first, then letters, digits, `.`, `_` or `-`, at most 64
 characters) is refused before anything is judged.
 
 Past the judgement the record goes to every log at once, and each answers on
-its own line — the tracker's logs, then the pages logs — with the [three-valued outcome](replication.md#a-write-has-three-outcomes)
+its own line — the tracker's log, then the pages log — with the [three-valued outcome](replication.md#a-write-has-three-outcomes)
 every write has — `applied`, `pending` or `unknown` — or `not written` with the
 reason that stopped that log. A log that answered holds its record whatever
 the other did, and the gesture runs to its end **whatever happens to the
 command**: once the first record is about to be written the node finishes the
-gesture under its own budget — a minute for the logs — so a dropped connection or a client timeout does not
-leave the node evicted on one log and counted on the other.
+gesture under its own budget — thirty seconds for the logs — so a dropped
+connection or a client timeout does not leave the node evicted on one log and
+counted on the other.
 
 When **not every log holds it**, the command exits non-zero, and under each
 log it did not finish prints what to do. Where running the gesture again can
@@ -646,25 +642,17 @@ restarted, and the first id would answer `superseded` to anyone finishing it.
   served the estate when it tried: once the duplicate window (two minutes
   from when the record landed) has passed, run the gesture again with the same
   `-op-id` through the same node.
-- `not_holder` or `holding_unknown` — the node you ran it on stopped serving
-  the estate, or could not tell whether it serves it, between choosing to
-  write the log itself and writing it, so it wrote nothing there: run the
-  gesture again with the same `-op-id`, which sends the record to a data node
-  that serves the estate now.
-- **No node that serves the estate wrote it** — every data node the record
-  was sent to did not serve it, could not run it, or did not answer: run the
-  gesture again with the same `-op-id` once one does.
+- `not_holder` or `holding_unknown` — the node you ran it on did not serve
+  the estate, or could not tell whether it serves it, when it wrote the log,
+  so it wrote nothing there: run the gesture again with the same `-op-id` once
+  it does, or through a data node that does (`-url`).
 - `unknown` that **this node cannot tell** — its operation ledger may have
   lost the row the operation needs, because the id was minted before the node
   adopted a peer's snapshot or before the ledger's sweep reached it. The node
   published nothing and answers the same gesture the same way every time, so
   it is not offered as a retry: run it, under the same `-op-id`, through a node
   whose ledger reaches back that far (`-url`). The dashboard says the same and
-  sends you to another node's dashboard. Where the line names **another node**
-  as the writer, every data node that answered could not tell, and another
-  node would send the record to the same data nodes: run the same
-  gesture again, which asks them all again — one that did not answer this
-  time may vouch for it.
+  sends you to another node's dashboard.
 - `wrong_stream` — the log was rebuilt under this node:
   [re-anchor it](#re-anchoring-a-recreated-or-restored-log) first, then run the
   gesture again with the same `-op-id`.
@@ -696,11 +684,10 @@ written and what to do.
 - The dialog **mints the operation id in the browser before its first
   request**, in the engine's grammar and on the browser's clock, and keeps it
   for the whole gesture. So a request that timed out or dropped still holds
-  the id — the dialog waits two minutes, past the minute and a half the node
-  takes at most to answer one: half a minute to judge it and a minute to write
-  every log — and the dialog
-  offers **Finish this gesture**, which sends the same request under the same
-  id and reads every log's answer. So does an
+  the id — the dialog waits a minute, past the fifty seconds the node takes at
+  most to answer one: twenty to judge it and thirty to write every log — and
+  the dialog offers **Finish this gesture**, which sends the same request under
+  the same id and reads every log's answer. So does an
   answer the node did not write: a reverse proxy's 504 page, any status with no
   engine error code in it, or a 200 cut off part way through. Only a refusal
   carrying the engine's own code is read as one.

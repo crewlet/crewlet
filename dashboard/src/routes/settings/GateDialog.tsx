@@ -40,10 +40,9 @@
  * request, the same id, force carried — for a request nobody answered and for
  * a log whose remedy keeps the id ([keepsOperation]). "Nobody answered"
  * includes an answer the ENGINE did not write ([RestError.unanswered]): a
- * reverse proxy's read timeout is a minute by default, shorter than the
- * node's own budget for a gesture past its judgement, so a slow gesture
- * reaches this page as a gateway's 504 — and read as a refusal it dropped the
- * id of a gesture the node went on to finish. The
+ * reverse proxy whose read timeout is shorter than the node's own answer
+ * budget hands a slow gesture to this page as a gateway's 504 — and read as a
+ * refusal it dropped the id of a gesture the node went on to finish. The
  * gesture is lifted into the screen ([GateGesture]), so closing the dialog and
  * opening it again offers Finish rather than a fresh gesture — and so does a
  * COMPLETE one, until the report behind the dialog shows it (or, from a node
@@ -637,22 +636,17 @@ function holds(d: RetentionGateDomain): boolean {
  * reached the log at all.
  */
 function DomainAnswer({ d }: { d: RetentionGateDomain }) {
-  // WHO WROTE IT, where that is not this node: a log of a partition it does not
-  // serve, written for it by a node that does — whose answer this is.
-  const by = d.writer ? <> (written by {d.writer})</> : null;
   if (d.error) {
     return (
       <span className="t-caption">
-        not written{d.reason && <> ({d.reason})</>}
-        {by} — {d.error}
+        not written{d.reason && <> ({d.reason})</>} — {d.error}
       </span>
     );
   }
   if (d.outcome === "unknown" && d.unvouched) {
     return (
       <span className="t-caption">
-        <Tag variant="danger">unknown</Tag> {d.writer ? `node ${d.writer}` : "this node"} cannot
-        tell whether the record is on the log
+        <Tag variant="danger">unknown</Tag> this node cannot tell whether the record is on the log
       </span>
     );
   }
@@ -660,7 +654,7 @@ function DomainAnswer({ d }: { d: RetentionGateDomain }) {
     return (
       <span className="t-caption">
         <Tag variant="danger">{d.outcome ?? "no outcome"}</Tag> the record may or may not be on the
-        log{by}
+        log
       </span>
     );
   }
@@ -668,7 +662,6 @@ function DomainAnswer({ d }: { d: RetentionGateDomain }) {
     <span className="t-caption">
       <Tag variant={d.outcome === "applied" ? "success" : "warning"}>{d.outcome}</Tag> at{" "}
       {d.position.stream} {d.position.seq}
-      {by}
     </span>
   );
 }
@@ -713,21 +706,15 @@ function actionWords(
     case "restore":
       return "Restore the store and the stream from one backup.";
     case "wait":
-      // KEYED ON THE REFUSAL, NEVER THE GESTURE: four refusals send `wait`
-      // and each waits on something else. A readmission nobody could judge
-      // waits on a partition being served again, which is nothing about the
-      // node's own position — told to watch it catch up, an operator watched
-      // a number that had already caught up while the gesture stayed
-      // refused — and either gesture refused `not_publishing` waits on the
-      // fleet's capacity window, which neither a lease nor a position says
-      // anything about.
+      // KEYED ON THE REFUSAL, NEVER THE GESTURE: three refusals send `wait`
+      // and each waits on something else. Either gesture refused
+      // `not_publishing` waits on the fleet's capacity window, which neither
+      // a lease nor a position says anything about.
       switch (code) {
         case "eviction_refused":
           return "Wait for its presence lease to lapse — its row stops showing it live — then evict it again.";
         case "readmission_refused":
           return "Wait for it to catch up — its position on this screen says when — then readmit it again.";
-        case "readmission_unjudged":
-          return "Wait until the partition the engine names above is served again, then readmit it again.";
         case "not_publishing":
           return `Wait until the fleet is back in normal mode — the retention screen's banner says while its capacity window is open — then ${
             evict ? "evict" : "readmit"

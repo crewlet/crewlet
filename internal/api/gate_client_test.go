@@ -43,16 +43,15 @@ func TestTheDashboardKeepsTheGesturesOwnIDWhereTheEngineDoes(t *testing.T) {
 // The node finishes a gesture under its own budget whatever the connection
 // does, and a dialog that gave up first — the default thirty seconds did —
 // reported "did not answer" about a gesture the node went on to finish. The
-// bound is the node's whole answer: its judgement, the logs and the estate
-// map's part.
+// bound is the node's whole answer: its judgement and then the logs.
 func TestTheDashboardWaitsPastTheGateBudget(t *testing.T) {
 	t.Parallel()
 	raw, err := clientsource.Scalar(clientsource.Tree(t), "GATE_REQUEST_TIMEOUT_MS")
 	if err != nil {
 		t.Fatal(err)
 	}
-	// Base 0 reads the literal as TypeScript spells it: `75_000` is
-	// seventy-five thousand, never a parse failure.
+	// Base 0 reads the literal as TypeScript spells it: `60_000` is sixty
+	// thousand, never a parse failure.
 	ms, err := strconv.ParseInt(raw, 0, 64)
 	if err != nil {
 		t.Fatalf("GATE_REQUEST_TIMEOUT_MS = %q is not a number: %v", raw, err)

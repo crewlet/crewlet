@@ -123,25 +123,6 @@ test("an unvouched log says this node cannot tell and sends the gesture elsewher
   expect(screen.queryByText(/may or may not be on the log/)).toBeNull();
 });
 
-// A LOG ANOTHER NODE WROTE NAMES IT: the node asked does not serve that log's
-// partition, so a node that does wrote the record for it — and an unknown that
-// node could not vouch for is that node's, never "this node", which wrote
-// nothing there. Every holder that answered was asked already, so the remedy
-// is the same gesture again rather than another node's dashboard.
-test("a log another node wrote names that node, and its unvouched unknown is its own", () => {
-  render(<GateOutcome result={answer("written_elsewhere")} evict />);
-  expect(screen.getByText(/CREWLET_PAGES_LOG 4410/).textContent).toContain("(written by node-q)");
-  cleanup();
-
-  const result = answer("unvouched_elsewhere");
-  render(<GateOutcome result={result} evict />);
-  expect(screen.getByText(/node node-q cannot tell whether the record is on the log/)).toBeTruthy();
-  expect(screen.queryByText(/this node cannot tell/)).toBeNull();
-  expect(screen.getByText(result.domains[1]!.hint!)).toBeTruthy();
-  expect(screen.queryByText(/Open this dashboard on a node the fleet still counts/)).toBeNull();
-  expect(finishable({ opId: result.op_id, force: false, answer: result })).toBe(true);
-});
-
 // A FULL LOG IS NOT TOLD TO RETRY — the same request is refused the same way
 // until its ceiling moves — and it shows the engine's own sentence. But its
 // gesture is still finished under its OWN id once there is room, so it is kept.
@@ -286,16 +267,18 @@ test("a refused readmission renders its reason and its remedy, and no outcome", 
   expect(screen.queryByText(/is readmitted/)).toBeNull();
 });
 
-// A READMISSION NOBODY COULD JUDGE renders the engine's sentence for what it
-// waits on — a partition being served again — and never the catch-up advice a
-// refusal below the floor gets: the node's position is not what is wrong.
-test("an unjudged readmission says it waits on a partition, not on the node", async () => {
+// A READMISSION NOBODY COULD JUDGE renders the engine's sentence and its way
+// past — the same request again, here or on another node — and never the
+// catch-up advice a refusal below the floor gets: the node's position is not
+// what is wrong, a read the judgement needed is.
+test("an unjudged readmission offers to ask again, not to wait for the node", async () => {
   const refusal = golden.refusals["readmission_unjudged"]!;
   engine(refusal);
   render(<GateDialog node="node-4" evict={false} onHeld={() => {}} onClose={() => {}} />);
   confirmAndPress("node-4", "Readmit");
   await waitFor(() => expect(screen.getByText(String(refusal.body.hint))).toBeTruthy());
-  expect(screen.getByText(/served again, then readmit it again/)).toBeTruthy();
+  expect(screen.getByText(/Send it again once what stopped it has cleared/)).toBeTruthy();
+  expect(screen.getByText(/Open this dashboard on a node the fleet still counts/)).toBeTruthy();
   expect(screen.queryByText(/Wait for it to catch up/)).toBeNull();
   expect(screen.queryByText(/is readmitted/)).toBeNull();
 });
@@ -360,9 +343,9 @@ test("a gesture that times out keeps its op id and offers to finish it", async (
   expect(sent[1]!.query.get("op_id")).toBe(opId);
 });
 
-// AN ANSWER THE ENGINE DID NOT WRITE IS NOT A REFUSAL. A reverse proxy's read
-// timeout is a minute by default — shorter than the node's own budget for a
-// gesture past its judgement — so a slow eviction reached the browser as a
+// AN ANSWER THE ENGINE DID NOT WRITE IS NOT A REFUSAL. A reverse proxy whose
+// read timeout is shorter than the fifty seconds the node takes to answer a
+// gesture (`engine.GateAnswerBudget`) hands a slow eviction to the browser as a
 // gateway's 504 with an HTML page, and a 200 can be cut off part way through.
 // Read as a refusal, the dialog never held the gesture, offered no Finish, and
 // closing it lost the id of a gesture the node went on to finish.

@@ -4,6 +4,7 @@
 
 import { afterEach, describe, expect, test, vi } from "vitest";
 
+import { GATE_REQUEST_TIMEOUT_MS } from "../contract/gate.ts";
 import { isAbort, REQUEST_TIMEOUT_MS, rest, RestError, retryAfterSeconds } from "./index.ts";
 
 afterEach(() => {
@@ -102,12 +103,15 @@ test("a caller with a longer path keeps the request past the ordinary deadline",
 
 // A CALL WITH A LONGER PATH SAYS SO, AND ITS REFUSAL NAMES ITS OWN DEADLINE.
 //
-// The node gate takes up to a minute and three quarters to answer a gesture,
-// and the fixed thirty seconds gave up on a gesture the node went on to finish.
-// A per-call deadline replaces the default for that call only — it is not
-// abandoned at the default, it IS abandoned at its own, and the sentence says
-// which deadline ran out rather than the default's.
+// The node gate takes up to fifty seconds to answer a gesture
+// (`engine.GateAnswerBudget`), and the fixed thirty seconds gave up on a
+// gesture the node went on to finish. A per-call deadline replaces the default
+// for that call only — it is not abandoned at the default, it IS abandoned at
+// its own, and the sentence says which deadline ran out rather than the
+// default's. The deadline is the gate's own (`GATE_REQUEST_TIMEOUT_MS`) rather
+// than a copy of it: a literal here outlived the constant it was copied from.
 test("a per-call deadline replaces the default for that call", async () => {
+  expect(GATE_REQUEST_TIMEOUT_MS).toBeGreaterThan(REQUEST_TIMEOUT_MS);
   vi.useFakeTimers();
   vi.stubGlobal(
     "fetch",
@@ -123,7 +127,10 @@ test("a per-call deadline replaces the default for that call", async () => {
 
   let done = false;
   const settled = rest
-    .request("POST", "/work/retention/evict/node-4", { body: {}, timeoutMs: 75_000 })
+    .request("POST", "/work/retention/evict/node-4", {
+      body: {},
+      timeoutMs: GATE_REQUEST_TIMEOUT_MS,
+    })
     .catch((err: unknown) => err)
     .finally(() => {
       done = true;
@@ -131,11 +138,11 @@ test("a per-call deadline replaces the default for that call", async () => {
   await vi.advanceTimersByTimeAsync(REQUEST_TIMEOUT_MS + 1);
   expect(done).toBe(false);
 
-  await vi.advanceTimersByTimeAsync(75_000 - REQUEST_TIMEOUT_MS);
+  await vi.advanceTimersByTimeAsync(GATE_REQUEST_TIMEOUT_MS - REQUEST_TIMEOUT_MS);
   const err = await settled;
   expect(err).toBeInstanceOf(RestError);
   expect((err as RestError).status).toBe(0);
-  expect((err as RestError).detail).toContain("within 75 seconds");
+  expect((err as RestError).detail).toContain("within 60 seconds");
 });
 
 describe("the whole answer", () => {

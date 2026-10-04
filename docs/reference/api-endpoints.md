@@ -3318,7 +3318,7 @@ letting it write again are not reads, whatever a laptop deployment allows.
 |---|---|
 | `POST /work/retention/ack?stream=NAME&position=N` | Publishes an operator backup floor. Refused `400` naming both when either is missing, and `404` when the stream is not one this node runs, which on a node running no state log is every stream. The point is stamped with **that stream's own generation**, read from the running log: a bare sequence at another log's generation names a number space the copy does not cover. |
 | `POST /work/retention/evict/{node}?confirm={node}` | Installs the eviction gate on every identity-claiming log — the tracker's and the pages log; the vector log counts no node and gets none. **Refused `409 eviction_refused`**, with nothing written to either log, while the node still holds a live presence lease: it is still reaching the fleet, and an eviction would drop everything it writes. The body carries `detail`, `hint`, `op_id` and `actions` — `["wait", "force"]`: stop the node and let its lease lapse, or force it. `force=true` overrides that refusal for a node wedged in a way that still renews its lease. A node that cannot read the presence leases at all answers **`503 eviction_unjudged`** — a judgement nobody could make is not one that came back clear — with a `hint` and `actions` `["retry_same_op", "force"]`; `force=true` takes the eviction past that too, since the leases are the judgement's only input, and the node logs `retention_eviction_forced_unjudged`. A node in a [capacity window](../guides/retention.md#changing-a-logs-ceiling) answers **`409 not_publishing`**, before anything is judged, with `detail`, `hint` and `actions` `["wait"]`: a gate record is an append, and the window's mode appends nothing; readmission answers the same. |
-| `POST /work/retention/readmit/{node}?confirm={node}` | The inverse commit, on every one of those logs. **Refused `409 readmission_refused`**, with nothing written to either log, when in the tracker's or the pages log the node has not applied every record up to the one just before the higher of that log's published floor (at the log's current generation) and its first surviving sequence — its last published position is more than one below that bound — or its last published position is from a generation the log has since left. The body carries the sentence (`detail`), what to do (`hint`, and `actions` `["wait"]`), and the numbers: `domain`, `position`, `generation`, `floor`, `first_seq`, `floor_generation`, and `published` — false for a node that has never published a position and is judged as holding nothing. A judgement that could not be made at all refuses too, with nothing written, as **`503 readmission_unjudged`**: the register, a floor or the live data nodes unreadable, this node behind a reanchor the fleet has made, or — each log being asked where it is written — no data node serving the estate to give a log's bound. The body carries `detail`, `hint`, `actions` and, where one log could not be judged, that `log`; `actions` is `["wait"]` where no data node serves the estate, whose `hint` says what it waits on — a data node returning — and `["retry_same_op", "other_node"]` for anything else. `force` has no effect here and nothing overrides this refusal: the floor is a fact about what the node holds, not a lease it might be wedged into renewing. |
+| `POST /work/retention/readmit/{node}?confirm={node}` | The inverse commit, on every one of those logs. **Refused `409 readmission_refused`**, with nothing written to either log, when in the tracker's or the pages log the node has not applied every record up to the one just before the higher of that log's published floor (at the log's current generation) and its first surviving sequence — its last published position is more than one below that bound — or its last published position is from a generation the log has since left. The body carries the sentence (`detail`), what to do (`hint`, and `actions` `["wait"]`), and the numbers: `domain`, `position`, `generation`, `floor`, `first_seq`, `floor_generation`, and `published` — false for a node that has never published a position and is judged as holding nothing. A judgement that could not be made at all refuses too, with nothing written, as **`503 readmission_unjudged`**: the register or a floor unreadable, a log's first surviving sequence unreadable, or this node behind a reanchor the fleet has made. The body carries `detail`, `hint`, `actions` `["retry_same_op", "other_node"]` and, where one log could not be judged, that `log`. `force` has no effect here and nothing overrides this refusal: the floor is a fact about what the node holds, not a lease it might be wedged into renewing. |
 
 `confirm` echoes the node id, and a mismatch is `400`. A node id no node could
 run under — the [`node.id`](../concepts/configuration.md#nodeid) rule, since the
@@ -3328,11 +3328,11 @@ judged or written. A request carrying no operator identity is
 the gesture and `crewlet retention status` prints it beside the eviction.
 
 **The gesture is judged once, before any log is written**, and then its record
-goes to every identity-claiming log it concerns at once. The trim counts nodes
-per log, so a record on one log lifts that log's pin and no other. Each is
-written by a data node that serves the estate — this one where its own copy
-serves, another where it does not ([the retention guide](../guides/retention.md#eviction)).
-A `200` answers **per log**:
+goes to every identity-claiming log at once, each written by the node the
+request reached through its own write authority — every data node holds the
+whole estate ([the retention guide](../guides/retention.md#eviction)). The
+trim counts nodes per log, so a record on one log lifts that log's pin and no
+other. A `200` answers **per log**:
 
 ```json
 {
@@ -3364,25 +3364,13 @@ written**, and `reason` names why in the vocabulary every write refusal uses
 (`log_full`, `evicted`, …). A log that answered holds its record whatever the
 other did.
 
-An entry carries **`writer`** where a node other than this one wrote it: a log
-this node cannot write right now — its copy does not serve the estate — is
-sent to a data node that does, which writes the record under the same `op_id`
-on this node's behalf — so one request reaches every log. Its `outcome`,
-`error` and `hint` are that node's, and `writer` is absent where this node
-wrote the log itself. Each such node is given fifteen seconds before the next
-data node is asked; where none wrote the record, the entry's `error` says no
-node that serves the estate did, and offers `retry_same_op`.
-
-An `unknown` entry may also carry **`"unvouched": true`**: the writing node's
+An `unknown` entry may also carry **`"unvouched": true`**: this node's
 operation ledger may have lost the row the operation needs — it was minted
 before the node adopted a peer's snapshot, or before the ledger's own sweep
 reached it — so the node published nothing and cannot tell whether the record
-landed, and the same request through it answers the same way every time. Such
-an entry offers `other_node` rather than `retry_same_op`: send the same request,
-with the same `op_id`, through a node whose ledger reaches back that far. With
-a `writer`, every data node that answered was asked already and none could
-tell, and another node would ask the same data nodes: it offers
-`retry_same_op`, which asks them all again.
+landed, and the same request here answers the same way every time. Such an
+entry offers `other_node` rather than `retry_same_op`: send the same request,
+with the same `op_id`, through a node whose ledger reaches back that far.
 
 A log the gesture did not finish also carries **`actions`** — what to do, in
 order — and **`hint`**, the sentence saying why. Both are absent on a log that
@@ -3398,13 +3386,13 @@ a fresh one is equally safe.
 
 | Action | What the operator does | Where the gate answers it |
 |---|---|---|
-| `retry_same_op` | Send the same request again with the answer's `op_id` | An `unknown` outcome (unless it is `unvouched` by this node itself), a lost race, a failure before the write answered, a log no node that serves the estate wrote, and a refusal that clears on its own (`behind`, `deferred`, `floor_unknown`, `below_floor`, `not_holder`, `holding_unknown` — the last two an estate this node stopped serving, or could not tell it serves, as it wrote, which the same request sends to a node that serves it); a gate refusal — `evicted`, `overtaken`, `abandoned` — of **another node's copy** of the operation, which this node's append was collapsed onto (`hint` names that node): the reason is that node's standing, not this one's, so this node finishes it once the log's duplicate window (two minutes from when the copy landed) has passed; `503 eviction_unjudged`; and `503 readmission_unjudged` for anything the judgement could not read but an estate nobody serves (beside `other_node`) |
+| `retry_same_op` | Send the same request again with the answer's `op_id` | An `unknown` outcome (unless it is `unvouched`), a lost race, a failure before the write answered, and a refusal that clears on its own (`behind`, `deferred`, `floor_unknown`, `below_floor`, `not_holder`, `holding_unknown` — the last two beside `other_node`); a gate refusal — `evicted`, `overtaken`, `abandoned` — of **another node's copy** of the operation, which this node's append was collapsed onto (`hint` names that node): the reason is that node's standing, not this one's, so this node finishes it once the log's duplicate window (two minutes from when the copy landed) has passed; `503 eviction_unjudged`; and `503 readmission_unjudged` (beside `other_node`) |
 | `new_gesture` | Start a new gesture, without `op_id` | `superseded` — the operation's record landed and a later gate record on the same node has undone it since (an eviction retried after a readmission) — and `op_reused`, an operation id that already names a record on another object |
 | `force` | Send the eviction again with `force=true` | `409 eviction_refused`, `503 eviction_unjudged` |
-| `other_node` | Send it, with the same `op_id`, through another node the fleet still counts | Of this node's own standing or its own record: `evicted` (this node is evicted itself), `overtaken` and `abandoned` (this node wrote the record from rows a reanchor left behind — send it through a node on the log's current generation), an `unvouched` unknown this node gave (its ledger cannot say whether the record landed), and beside `retry_same_op` on `deferred`, `below_floor` and a `503 readmission_unjudged` that is not an estate nobody serves. With a `writer`, each of these is that node's standing rather than this one's, and `hint` names it. An `overtaken` or `abandoned` refusal, and an `evicted` one that names a `position`, is a record that landed and applies nowhere: it holds the `op_id` on that log for the log's duplicate window (two minutes) from when it landed, and the same `op_id` sent sooner — through any node — is answered the same way again, so `hint` says to wait that out first |
+| `other_node` | Send it, with the same `op_id`, through another node the fleet still counts | Of this node's own standing or its own record: `evicted` (this node is evicted itself), `overtaken` and `abandoned` (this node wrote the record from rows a reanchor left behind — send it through a node on the log's current generation), an `unvouched` unknown (this node's ledger cannot say whether the record landed), and beside `retry_same_op` on `deferred`, `below_floor`, `not_holder`, `holding_unknown` and `503 readmission_unjudged`. An `overtaken` or `abandoned` refusal, and an `evicted` one that names a `position`, is a record that landed and applies nowhere: it holds the `op_id` on that log for the log's duplicate window (two minutes) from when it landed, and the same `op_id` sent sooner — through any node — is answered the same way again, so `hint` says to wait that out first |
 | `reanchor` | [Re-anchor the log](../guides/retention.md#re-anchoring-a-recreated-or-restored-log) first, then send the same request with the same `op_id` | `wrong_stream` |
 | `set_capacity` | [Raise the log's ceiling](../guides/retention.md#changing-a-logs-ceiling), then send the same request with the same `op_id` | `log_full` — a gate record is admitted into the log's [gate reserve](../guides/retention.md#the-gate-reserve), so this is a log full to its broker ceiling past even that |
-| `wait` | Wait for what `hint` names to clear on its own, then run it again — what that is depends on the refusal, so a client reads the answer's `error` beside the action | `409 eviction_refused` (the lease to lapse), `409 readmission_refused` (the node to catch up), `503 readmission_unjudged` (a data node to serve the estate again), `409 not_publishing` (the fleet to leave its capacity window) |
+| `wait` | Wait for what `hint` names to clear on its own, then run it again — what that is depends on the refusal, so a client reads the answer's `error` beside the action | `409 eviction_refused` (the lease to lapse), `409 readmission_refused` (the node to catch up), `409 not_publishing` (the fleet to leave its capacity window) |
 | `restore` | Restore the store and the stream from one backup | `skew` |
 
 A log with a `hint` and **no** `actions` is one no gesture clears — a record
@@ -3453,13 +3441,14 @@ cleaned, because a retry has to send back the id it holds, byte for byte; every
 id an answer carries already fits.
 
 **The gesture does not stop when its caller does.** The judgement runs under
-the request, within half a minute, so a request abandoned before it wrote
+the request, within twenty seconds, so a request abandoned before it wrote
 nothing; once the first record is about to be written the node finishes the
-gesture under its own budget — a minute for the logs — so a dropped connection
-or a client timeout never leaves a node evicted on one log and counted on the
-other. A node answers one gesture within **ninety seconds** at most — the
-judgement and the logs together — so a client waiting two minutes, as both of
-the engine's own do, always reads the node's own answer. A caller that sends its own
+gesture under its own budget — thirty seconds for the logs — so a dropped
+connection or a client timeout never leaves a node evicted on one log and
+counted on the other. A node answers one gesture within **fifty seconds** at
+most — the judgement and the logs together — so a client waiting a minute, as
+both of the engine's own do, always reads the node's own answer, and so does a
+reverse proxy at its usual sixty-second read timeout. A caller that sends its own
 `op_id` — `crewlet retention evict` and the dashboard both do — can ask again
 with it and read every log's answer; one that let the route mint it has lost
 the id with the answer that never arrived.

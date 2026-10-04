@@ -7,7 +7,6 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
-	"sync"
 	"testing"
 	"time"
 
@@ -464,7 +463,7 @@ func TestAnotherLayoutsRecordsUnderThisLogsKeyAreNotThisLogs(t *testing.T) {
 			"not on this log", reported, running.key, want)
 	}
 	// THE READMISSION BOUND.
-	if err := s.Readmissible(t.Context(), "node-back", fixedHolders{}, nil); err != nil {
+	if err := s.Readmissible(t.Context(), "node-back"); err != nil {
 		t.Errorf("a node holding every record of this layout's logs is refused "+
 			"readmission: %v", err)
 	}
@@ -474,110 +473,6 @@ func TestAnotherLayoutsRecordsUnderThisLogsKeyAreNotThisLogs(t *testing.T) {
 		t.Errorf("the fence reads %s's floor as %d (%v); another layout's floor "+
 			"is not this log's, and this layout has published none", running.key, floor, err)
 	}
-}
-
-// A READMISSION IS JUDGED ONLY WHERE THE NODE WOULD BE COUNTED.
-//
-// Under a divided layout a node is counted on a log only where the map names it
-// a holder of the log's partition or its own row names the log. A node with no
-// row that holds nothing is counted nowhere, and readmitting it counts it
-// nowhere either — it comes back to a partition only by adopting a copy — so a
-// trimmed log is no reason to refuse it; judged on every log at position zero,
-// it was refused on each, and since the readmission is what puts it back in the
-// estate map it could never be put back. Named a holder of a trimmed log's
-// partition, it IS counted there at zero, and is refused.
-func TestAReadmissionIsJudgedOnlyWhereTheNodeWouldBeCounted(t *testing.T) {
-	t.Parallel()
-	_, s, _ := aPartitionedStateLog(t)
-	running := s.Log("tracker@tracker.000")
-	at := running.runner.Committed()
-	if err := s.fleet.PutFloor(t.Context(), coord.TrimFloor{
-		Domain: running.key, Layout: s.layout.Number, Generation: at.Generation,
-		TrimTo: 1000, Floor: 1000,
-	}); err != nil {
-		t.Fatalf("publish a floor on %s: %v", running.key, err)
-	}
-	if err := s.Readmissible(t.Context(), "node-stranger", fixedHolders{}, nil); err != nil {
-		t.Errorf("a node with no row that holds nothing is refused readmission: %v", err)
-	}
-	other := statelog.PartitionID{Space: statelog.SpaceTracker, Index: 1}
-	elsewhere := fixedHolders{other: {{NodeID: "node-stranger"}}}
-	if err := s.Readmissible(t.Context(), "node-stranger", elsewhere, nil); err != nil {
-		t.Errorf("a holder of an untrimmed partition only is refused on a log it is "+
-			"not counted on: %v", err)
-	}
-	here := fixedHolders{running.id.Partition: {{NodeID: "node-stranger"}}}
-	var refusal *statelog.ReadmissionRefusal
-	if err := s.Readmissible(t.Context(), "node-stranger", here, nil); !errors.As(err, &refusal) ||
-		refusal.Domain != running.key {
-		t.Errorf("a holder of a trimmed partition with no row = %v, want refused on %s",
-			err, running.key)
-	}
-}
-
-// A READMISSION CHOOSES THE LOGS IT JUDGES FROM THE READING IT JUDGES THEM ON.
-//
-// Which logs a node would be counted on comes from its positions row, and the
-// judgement reads that row's positions: two readings of the register can
-// disagree, and a decision formed across them is one no reading supports. Here
-// the register answers its first reading with the node's row naming a log at
-// the floor — readmissible — and every later one without the row. Chosen from
-// the first and judged on the second, the log judged the node at position zero
-// against a floor above it, and refused a readmission the register never once
-// said to refuse; and in the other order a row landing between the two readings
-// named a log the node was never judged on. One reading answers both.
-func TestAReadmissionIsDecidedOnOneReadingOfTheRegister(t *testing.T) {
-	t.Parallel()
-	_, s, _ := aPartitionedStateLog(t)
-	running := s.Log("tracker@tracker.000")
-	linearizableRead(t, running)
-	at := running.runner.Committed()
-	if err := s.fleet.PutFloor(t.Context(), coord.TrimFloor{
-		Domain: running.key, Layout: s.layout.Number, Generation: at.Generation,
-		TrimTo: at.Seq + 1, Floor: at.Seq + 1,
-	}); err != nil {
-		t.Fatalf("publish a floor on %s: %v", running.key, err)
-	}
-	row := coord.NodePositions{NodeID: "node-back", At: time.Now().UTC(), Layout: s.layout.Number,
-		Domains: map[string]coord.DomainPosition{running.key: {
-			Generation: at.Generation, Seq: at.Seq, AppliedThrough: at.Seq}}}
-	register := &readingsRegister{fleetRegister: s.fleet,
-		readings: [][]coord.NodePositions{{row}, nil}}
-	// The same running logs, judged against the register above.
-	judge := &stateLog{layout: s.layout, fleet: register, nodeID: s.nodeID, holding: s.holding}
-	judge.logs = s.held()
-
-	if err := judge.Readmissible(t.Context(), "node-back", fixedHolders{}, nil); err != nil {
-		t.Errorf("a node whose row holds %s at its floor is refused readmission: %v",
-			running.key, err)
-	}
-	if got := register.read(); got != 1 {
-		t.Errorf("the judgement read the register %d times, want once", got)
-	}
-}
-
-// readingsRegister is a positions register that answers each reading with the
-// next of its readings, and the last from then on.
-type readingsRegister struct {
-	fleetRegister
-	mu       sync.Mutex
-	readings [][]coord.NodePositions
-	reads    int
-}
-
-func (r *readingsRegister) Positions(context.Context) ([]coord.NodePositions, error) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	answer := r.readings[min(r.reads, len(r.readings)-1)]
-	r.reads++
-	return slices.Clone(answer), nil
-}
-
-// read is how many readings the register has answered.
-func (r *readingsRegister) read() int {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	return r.reads
 }
 
 // A RECOVERY LOCKS ITS PARTITIONS AND NO OTHERS, IN ONE ORDER.
