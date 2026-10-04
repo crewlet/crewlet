@@ -502,9 +502,12 @@ repairs: each finding is somebody's decision.
 A login, an address or a seat two people hold is not a finding: every one is
 decided on one subject against every row, so ordinary traffic never produces
 one. A node holding a record it cannot decode, or a restore, can leave two rows
-holding one; a sign-in, a lookup or a seat listing that meets them answers
-`503` rather than picking either, and changing the value on all but one of
-them (`rename`, `bind`) is the repair.
+holding one. A lookup or a seat listing that meets them answers `503` rather
+than picking either; a sign-in is refused like any failed sign-in and the node
+logs `api_sign_in_lookup_failed`. A duplicated login or seat is repaired by
+changing it on all but one of them — a login through `PATCH /iam/people/{id}`,
+a seat with `bind` or `unbind` — and a duplicated address, which no gesture
+changes, with `remove` on the extra person.
 
 ## `crewlet secrets`
 

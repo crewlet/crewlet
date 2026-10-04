@@ -2092,8 +2092,11 @@ rather than taking one.
 **Two rows holding one value are an answer nobody can give.** Ordinary traffic
 never produces one. A node that retained the record moving somebody off a login
 and applied a later one giving it to somebody else holds both until it
-reprocesses the first, and a restore can bring one back. A sign-in or a lookup
-that meets two rows answers `503` — ask another node — rather than picking one.
+reprocesses the first, and a restore can bring one back. A lookup or a seat
+listing that meets two rows answers `503` — ask another node — rather than
+picking one. A sign-in that meets them is refused exactly like any other failed
+sign-in, because a sign-in that answered differently would say the name exists;
+the node logs `api_sign_in_lookup_failed`.
 
 > **If you are reading the schema and reaching for a unique index as a
 > backstop: don't.** A duplicate cannot arise from ordinary traffic, and it
@@ -2101,8 +2104,10 @@ that meets two rows answers `503` — ask another node — rather than picking o
 > lookup that meets one answers `503` rather than either row, as above. A
 > unique index would convert an anomaly an operator can repair into an outage
 > nobody can: a violation inside an apply would stop that node's log for good.
-> The engine never picks who keeps a duplicated value; you do, and you change
-> it on the others.
+> The engine never picks who keeps a duplicated value; you do. A duplicated
+> login or seat is changed on the others — a new login, another seat or none;
+> an address has no change gesture, so a duplicated one is repaired by removing
+> the extra person.
 
 ### What is in the clear, and what is not
 

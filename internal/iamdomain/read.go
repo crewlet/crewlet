@@ -581,8 +581,9 @@ func (r *Reader) sighting(ctx context.Context, column, token string) (Sighting, 
 // — the one that moved somebody off a login — and then applied a later one
 // that gave the freed login to somebody else holds both rows until the first
 // is reprocessed. That node cannot say which of the two is the holder, so it
-// answers neither: an error, which every caller serves as "ask another node",
-// and never an arbitrary pick, which would sign somebody in as somebody else.
+// answers neither: an error, which a lookup serves as "ask another node" and
+// a sign-in as its ordinary refusal, and never an arbitrary pick, which would
+// sign somebody in as somebody else.
 // A restore that copies duplicate rows back lands here the same way.
 func sightingIn(ctx context.Context, tx *sql.Tx, column, token string,
 	out *Sighting) error {
