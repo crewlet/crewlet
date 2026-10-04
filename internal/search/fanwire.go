@@ -36,8 +36,7 @@ type slicePayload struct {
 	Dim        int      `json:"dim,omitempty"`
 
 	// Methods are the rankers the asker wants run — see
-	// [FanQuery.Methods]. Absent is both, which is what every build that
-	// predates modes sends and means.
+	// [FanQuery.Methods]. Absent is both.
 	Methods []Method `json:"methods,omitempty"`
 
 	// Table is the whole assignment, so a node reads its OWN row and
