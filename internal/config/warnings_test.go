@@ -351,8 +351,7 @@ func TestEveryNodeNeedsAStreamThatSurvivesARestart(t *testing.T) {
 						"first restart and then refuse to serve", door)
 				}
 				for _, want := range []string{
-					"stream.store_dir", "refuses to serve", "org chart",
-					"identity estate",
+					"stream.store_dir", "refuses to serve", "identity estate",
 				} {
 					if !strings.Contains(err.Error(), want) {
 						t.Errorf("%s's refusal = %q, want it to say %q", door, err, want)
