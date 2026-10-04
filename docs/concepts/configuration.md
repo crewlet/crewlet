@@ -27,10 +27,14 @@ whole (`PUT` / `PATCH /config`) or one seat or unit at a time
 
 **A seat's handle and a unit's key are its identity, and they never change.**
 Every write mints the ones a document leaves out — a seat's `handle` from its
-`name`, a unit's `id` from its name — before the revision is stored, so a later
-correction to a name changes what people read and nothing else: the seat keeps
-its agent id, its mailbox and its memory. A different handle is a different
-seat. See [Handles and keys](organization-model.md#handle-based-identity).
+`name`, a unit's `id` from its name — before the revision is stored. An edit
+that starts from the stored document (the org builder, `GET` then `PUT
+/config`, `PATCH /config`, the per-entity routes) carries them, so correcting a
+name there changes what people read and nothing else: the seat keeps its agent
+id, its mailbox and its memory. A **file** is minted afresh on every import, so
+correcting a name in one that leaves the `handle` or `id` out replaces that
+seat or unit — declare both in any file you keep. A different handle is a
+different seat. See [Handles and keys](organization-model.md#handle-based-identity).
 
 **Removing a human seat somebody holds is refused.** A revision that takes a
 human seat out of the company — or turns it into an agent seat — while the

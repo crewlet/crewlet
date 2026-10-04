@@ -1129,8 +1129,12 @@ Every write that stores a revision (`PUT`, `PATCH`, a per-entity `PUT`, a reload
 
 **Every seat's handle and every unit's key is written into the stored
 document.** A seat that declares no `handle` is stored with the one its `name`
-derives, and a unit with no `id` with one minted from its name, so a later
-correction to a name never moves the identity.
+derives, and a unit with no `id` with one minted from its name, so a write
+built from the stored document — `GET` then `PUT`, `PATCH`, the per-entity
+routes — never moves the identity when it corrects a name. A body that leaves
+them out is minted again from the names it carries, so a `PUT` of a file whose
+names changed and whose handles or keys are absent replaces those seats and
+units.
 
 **A write that takes a human seat away while somebody holds it is refused.**
 Removing a human seat — or making it an agent's — while the identity directory

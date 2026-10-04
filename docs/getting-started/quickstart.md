@@ -230,10 +230,16 @@ units:
 > the chart above resolves. So changing a handle, *or the company `name`*,
 > mints a new id and orphans that seat's diary, onboarding markers and
 > counterparty profiles. It keeps working, but it has lost its memory.
-> Leaving `handle` unset derives it from the role name once: every write
-> stores the handle it minted, so a later change to the `name` keeps it. A
-> seat's `name` is display and is referenced by nothing, so renaming one is
-> free. See
+> A seat that leaves `handle` unset gets one derived from its `name`, and
+> every write stores it — so an edit of the *stored* company (the org
+> builder, `PATCH /config`, the per-entity routes) keeps it when a name is
+> corrected. A *file* does not: every import of one (`crewlet config import`,
+> `crewlet run -import-company`) mints a missing handle afresh from the name
+> the file holds, so correcting a name in a file
+> that leaves the handle out replaces the seat. Declare `handle` on every
+> seat, and `id` on every unit, in any file you keep. With its handle
+> declared, a seat's `name` is display and referenced by nothing, so renaming
+> one is free. See
 > [Agent Runtime](../concepts/agent-runtime.md#seat-definition-and-the-runner).
 
 ### LLM options

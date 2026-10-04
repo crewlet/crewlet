@@ -48,7 +48,9 @@ type Role struct {
 	// THIS SEAT RESOLVES: a unit's `lead:` and every `manages:` entry. A
 	// document that declares none has one written in when it is read
 	// ([MintIdentities]), derived from Name, so every stored revision carries
-	// it and editing the name never moves it.
+	// it and an edit of the stored document's name never moves it. A FILE is
+	// read afresh on every import, so one that leaves it out is minted from
+	// whatever name it holds that time.
 	//
 	// IMMUTABLE: the seat's durable id is derived from the company name and
 	// this handle, so changing it is a removal and a creation — the old
@@ -849,8 +851,10 @@ func (u *Unit) requireIDs(path Path) error {
 // MintIdentities writes every unit's key and every seat's handle into the
 // document, at any depth, where it declares none: a unit's key minted from its
 // name ([MintUnitID]) and a seat's the handle its name derives ([org.Slugify]),
-// so a unit or a seat whose name later changes keeps the identity it was
-// created under.
+// so a unit or a seat whose name is later corrected IN THE STORED DOCUMENT
+// keeps the identity it was created under. A file is minted afresh on every
+// import, from the names it holds then, which is why a file somebody keeps
+// should state both.
 //
 // EVERY WRITE CALLS IT BEFORE THE DOCUMENT IS STORED: [ParseCompanyNode] for a
 // file and a whole-document write, and the config surface for a per-entity

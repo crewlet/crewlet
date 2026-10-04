@@ -83,8 +83,12 @@ names nobody, for example) and the `derived` hierarchy it will run. See
 **Every seat's handle and every unit's key is written into the stored
 document.** A seat that declares no `handle` gets the one its `name` derives,
 and a unit with no `id` gets one minted from its name, before the revision is
-stored — so a later correction to a name keeps the identity, and the seat its
-agent id, mailbox and memory.
+stored — so a correction to a name made by editing the stored document (`GET`
+then `PUT`, `PATCH`, the per-entity routes below) keeps the identity, and the
+seat its agent id, mailbox and memory. A file you import is minted afresh each
+time: correct a name in one that leaves the `handle` or `id` out and the import
+replaces that seat or unit. Declare both in any file you keep, or start it
+from `crewlet config export`, which writes every one of them.
 
 To check a document without writing it, send the same request with
 `?dry_run=true`. Nothing is stored or activated, no summary is needed, and the

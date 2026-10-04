@@ -344,7 +344,7 @@ roles:
     handle: sr-eng        # Override auto-derived "senior-engineer"
 ```
 
-**Removing a seat, and adding one back.** Because identity is the handle, what a removed agent seat leaves behind is keyed by it too. Its **mailbox**, and the mail still addressed to it, is kept for 24 hours after the seat leaves the running company's agent seats and then retired, so a seat restored within a day finds its backlog and a seat added under the same handle later starts with an empty mailbox. Its **coding runs** are kept for the same 24 hours and ended when the mailbox is retired, each one announced as lost. Its **memory** (diary, episodes, counterparty profiles, onboarding markers) is kept, and because it is keyed by the handle or by the agent id derived from it, a seat added again under the same handle reattaches to it. A handle never changes in place: every write mints the handle a seat leaves out and stores it, so correcting a seat's `name` keeps its handle, and a document that gives a seat a different handle removes the old seat and adds a new one. The same 24 hours apply to an agent seat made a person's, which is the one departure that can be reversed: made an agent's again within them, it is the same seat and comes back to its backlog. A human seat a person is bound to cannot be removed at all until they are unbound or removed: the write is refused `409 seat_held` naming them. See [Seat Ownership § The removed seat](seat-ownership.md#the-removed-seat).
+**Removing a seat, and adding one back.** Because identity is the handle, what a removed agent seat leaves behind is keyed by it too. Its **mailbox**, and the mail still addressed to it, is kept for 24 hours after the seat leaves the running company's agent seats and then retired, so a seat restored within a day finds its backlog and a seat added under the same handle later starts with an empty mailbox. Its **coding runs** are kept for the same 24 hours and ended when the mailbox is retired, each one announced as lost. Its **memory** (diary, episodes, counterparty profiles, onboarding markers) is kept, and because it is keyed by the handle or by the agent id derived from it, a seat added again under the same handle reattaches to it. A handle never changes in place: a document that gives a seat a different handle removes the old seat and adds a new one. Every write mints the handle a seat leaves out and stores it, so correcting a seat's `name` by editing the stored document — the org builder, `GET` then `PUT /config`, `PATCH /config`, the per-entity routes — keeps its handle. A **file** is minted afresh on every import: correcting a seat's `name` in a file that leaves its `handle` out, and importing it again, replaces the seat with no warning for an agent seat. Declare `handle` on every seat in a file you keep, or start the file from `crewlet config export`, which writes every handle out. The same 24 hours apply to an agent seat made a person's, which is the one departure that can be reversed: made an agent's again within them, it is the same seat and comes back to its backlog. A human seat a person is bound to cannot be removed at all until they are unbound or removed: the write is refused `409 seat_held` naming them. See [Seat Ownership § The removed seat](seat-ownership.md#the-removed-seat).
 
 ### Handles and keys are unique; names are not
 
@@ -380,19 +380,23 @@ name it by, and what everything durable — which team a work item is filed
 into, which team's lead hears about it, which unit a project belongs to — is
 filed under. Every unit has one: a document that declares no `id` has a key
 minted from the unit's name on every write, lower-cased with whitespace as a
-hyphen, and stored, and re-importing the same file mints the same keys.
+hyphen, and stored, and re-importing the same file unchanged mints the same
+keys.
 
 ```yaml
 units:
   - name: Engineering
-    id: eng            # optional in a file; minted as `engineering` otherwise
+    id: eng            # minted as `engineering` when left out — on every import
     project: ENG
 ```
 
-So **renaming a unit moves nothing** — nothing is filed under its name. Its
-**key** never changes in place: every write mints the key a unit leaves out and
-stores it, and a document that gives a unit a different key removes the old
-unit and adds a new one.
+So **renaming a unit moves nothing** — nothing is filed under its name — as
+long as its key stays. Its **key** never changes in place: a document that
+gives a unit a different key removes the old unit and adds a new one. Every
+write mints the key a unit leaves out and stores it, so a rename made by
+editing the stored document keeps the key; a file is minted afresh on every
+import, so a unit renamed in a file that leaves its `id` out gets the key its
+new name mints. Declare `id` on every unit in a file you keep.
 
 **Every spelling names the team, everywhere a stored reference is resolved** —
 a `unit` on `create_work_item`, a `routing_unit`, every `unit=` filter, a
