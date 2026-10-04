@@ -258,16 +258,15 @@ doing the thing, or starts doing more — so read the file when you touch it:
   starts no `push` workflow, so a conflict a bump's merge makes waits for the
   next person's merge or a manual run. An empty or expired secret fails the run;
   weakening the wait, the environment or the token's scope leaves it green.
-- **`.github/workflows/dependabot-dashboard.yml`'s guard, its two-job split, its
-  pins and the token's scope.** The `push` job holds a personal access token that
-  can write to a branch; its `if:` (author AND actor both Dependabot, repeated on
-  the job that holds the token and not only the one that builds) stops a run a
-  person triggered reaching it. The `build` job runs a dependency's install
-  scripts, so it must keep `contents: read`, no secrets and no persisted checkout
-  credential. The `push` job's two actions stay pinned to full commit SHAs (a
-  major tag is re-pointed at each release) and its allowlist of file names stays
-  an allowlist: `static/dashboard` is inside the Go module, so a `.go` file in it
-  would run on every contributor's machine. The token stays fine-grained, for this
+- **`.github/workflows/dependabot-dashboard.yml`'s guard, its two-job split and
+  the token's scope.** The `push` job holds a personal access token that can
+  write to a branch; its `if:` (author AND actor both Dependabot, repeated on the
+  job that holds the token and not only the one that builds) stops a run a person
+  triggered reaching it. The `build` job runs a dependency's install scripts, so
+  it must keep `contents: read`, no secrets and no persisted checkout credential.
+  The `push` job's allowlist of file names stays an allowlist:
+  `static/dashboard` is inside the Go module, so a `.go` file in it would run on
+  every contributor's machine. The token stays fine-grained, for this
   repository alone, at Contents: read and write — Workflows would let it rewrite
   workflows, a classic token reaches every repository its account can, Pull
   requests would let it approve them — and `v*` needs a tag ruleset its account

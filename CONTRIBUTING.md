@@ -636,13 +636,12 @@ It is two jobs because one of them runs somebody else's code. `npm ci` and the
 bundler execute whatever a dependency published this week, so that job holds no
 secret and a read-only token, and passes the next job nothing but a directory of
 files. The second job holds the credential and runs only the runner's own tools
-and two actions pinned to full commit SHAs (a tag is re-pointed at each release,
-and this is the job with the token in its environment). It checks the bundle's
-file *names* against an allowlist, because `static/dashboard` sits inside the Go
-module and a stray `zz_test.go` would be run by every `go test ./...`, replaces
-the directory and pushes without `--force`, so a branch Dependabot has moved
-since the run began is refused rather than overwritten. A new kind of file in the
-bundle has to be added to that allowlist on purpose.
+and two of GitHub's own actions. It checks the bundle's file *names* against an
+allowlist, because `static/dashboard` sits inside the Go module and a stray
+`zz_test.go` would be run by every `go test ./...`, replaces the directory and
+pushes without `--force`, so a branch Dependabot has moved since the run began
+is refused rather than overwritten. A new kind of file in the bundle has to be
+added to that allowlist on purpose.
 
 The push is made with a personal access token, not `GITHUB_TOKEN`: a push made
 with the workflow's own token leaves the pull request's runs waiting for someone
@@ -685,9 +684,8 @@ without the marker, or a bump left open for 30 days; the next section is what
 asks again.
 
 Nothing checks any of this for you, and the workflow holds a credential that can
-write to a branch. Read the `if:` on both jobs, each job's `permissions:`, the
-pins on the actions in the second one and the token's scope on any diff that
-touches
+write to a branch. Read the `if:` on both jobs, each job's `permissions:` and the
+token's scope on any diff that touches
 [`.github/workflows/dependabot-dashboard.yml`](.github/workflows/dependabot-dashboard.yml).
 
 ### A conflicted bump is asked to recreate
