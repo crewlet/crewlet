@@ -10,26 +10,19 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
-// EVERY RECORD THE WRITER BUILDS IS STAMPED THE VERSION IT HAS ALWAYS HAD.
+// EVERY RECORD THE WRITER BUILDS IS STAMPED AT THE BASE VERSION.
 //
 // A peer decides by the version alone whether to apply a record or retain it,
 // so the version a record of each kind travels at is a contract between the
-// builds of one rolling upgrade, and moving it in either direction is a fault:
-// one higher and every older node retains what it could have applied — every
-// sign-in, if it is a session start — one lower and an older node applies, by
-// rules that drop it, a field or a predicate it does not know. The table is
-// that contract, stated as numbers rather than computed: a gate is 1 for ever,
-// a sweep 2, a record naming the credential its actor acted through 3, a
-// session start that may only enrol and every invitation 4, and everything
-// else the base. Every op is built through the writer's own funnel
-// ([Writer.record]) with the payload its gesture carries, by a party that acted
-// through a credential and by one that did not — the node's own, which writes
-// every sign-in and every duty — and the two records nothing decides are
-// encoded as the framework asks for them.
-//
-// Mutation: drop a row from the field table, or the sweep's marker, or stamp
-// every record at [RecordVersion], and a row here fails.
-func TestEveryRecordTheWriterBuildsKeepsItsVersion(t *testing.T) {
+// builds of one rolling upgrade: one higher than its fields need and every
+// older node retains what it could have applied — every sign-in, if it is a
+// session start. The field table is empty, so every record of every op is
+// stamped at the base, whoever writes it: a party that acted through a
+// credential and one that did not — the node's own, which writes every sign-in
+// and every duty — and the two records nothing decides are encoded as the
+// framework asks for them. Mutation: stamp every record at a version above the
+// base, and a row here fails.
+func TestEveryRecordTheWriterBuildsIsStampedAtTheBase(t *testing.T) {
 	t.Parallel()
 	const (
 		via    = "pat:0192f00d-0000-7000-8000-00000000000a"
@@ -57,47 +50,42 @@ func TestEveryRecordTheWriterBuildsKeepsItsVersion(t *testing.T) {
 		scope   ScopeSet
 		person  string
 		payload any
-		// base and operated are the versions a record of this build is
-		// stamped at by a party acting through no credential and by one
-		// acting through a machine token.
-		base, operated int
 	}
 	builds := []build{
 		{"an invitation", OpInvite, DirectorySubject(), BucketScope(BucketOf(blind)),
-			"", invitation(""), 4, 4},
+			"", invitation("")},
 		{"an invitation that binds a seat", OpInvite, DirectorySubject(),
-			BucketScope(BucketOf(blind)), "", invitation("0192f00d-0000-7000-8000-0000000000cc"),
-			4, 4},
+			BucketScope(BucketOf(blind)), "", invitation("0192f00d-0000-7000-8000-0000000000cc")},
 		{"an enrolment", OpEnrol, DirectorySubject(), PeopleScope(person), person,
 			Enrolled{V: DocumentVersion, Person: document,
-				Holds: Identifiers{EmailBlind: blind, Login: "sarah.chen"}}, 1, 3},
+				Holds: Identifiers{EmailBlind: blind, Login: "sarah.chen"}}},
 		{"a redemption", OpEnrol, DirectorySubject(),
 			BucketScope(bucket, BucketOf(blind)), person,
 			Enrolled{V: DocumentVersion, Person: document,
 				Holds:      Identifiers{EmailBlind: blind, Login: "sarah.chen"},
-				Invitation: "inv-1"}, 1, 3},
+				Invitation: "inv-1"}},
 		{"an identity change", OpIdentity, DirectorySubject(), PeopleScope(person),
-			person, IdentityChange{V: DocumentVersion, Login: "sarah.c"}, 1, 3},
+			person, IdentityChange{V: DocumentVersion, Login: "sarah.c"}},
 		{"a person's update", OpUpdate, PersonSubject(person), PeopleScope(person), person,
-			document, 1, 3},
+			document},
 		{"a stage change", OpStatus, PersonSubject(person), PeopleScope(person), person,
-			nil, 1, 3},
+			nil},
 		{"a revocation", OpRevoke, PersonSubject(person), PeopleScope(person), person,
-			nil, 1, 3},
+			nil},
 		{"a removal", OpRemove, DirectorySubject(), PeopleScope(person), person,
-			nil, 1, 1},
+			nil},
 		{"a session start", OpOpen, SessionSubject("lineage-1"), PeopleScope(person), person,
-			session(false), 1, 3},
+			session(false)},
 		{"a session start that may only enrol", OpOpen, SessionSubject("lineage-2"),
-			PeopleScope(person), person, session(true), 4, 4},
+			PeopleScope(person), person, session(true)},
 		{"a session end", OpClose, SessionSubject("lineage-1"), PeopleScope(person), person,
-			nil, 1, 3},
+			nil},
 		{"an invalidation", OpInvalidate, InvalidationSubject(), RootScope(), "",
-			nil, 1, 1},
+			nil},
 		{"a sweep", OpSweep, SweepSubject(bucket), BucketScope(bucket), "",
-			Sweep{V: DocumentVersion, Bucket: bucket, Expired: now()}, 2, 2},
+			Sweep{V: DocumentVersion, Bucket: bucket, Expired: now()}},
 		{"an eviction", OpEviction, EvictionSubject("node-z"), RootScope(), "",
-			Eviction{V: GateRecordVersion, By: "suite"}, 1, 1},
+			Eviction{V: DocumentVersion, By: "suite"}},
 	}
 	covered := map[OpKind]bool{OpBarrier: true, OpGeneration: true}
 	for _, b := range builds {
@@ -105,12 +93,11 @@ func TestEveryRecordTheWriterBuildsKeepsItsVersion(t *testing.T) {
 		for _, party := range []struct {
 			name   string
 			writer *Writer
-			want   int
 		}{
 			{"the node's own writer", &Writer{Actor: "node-a",
-				ActorKind: iam.KindMachine, Now: now}, b.base},
+				ActorKind: iam.KindMachine, Now: now}},
 			{"a party acting through a token", &Writer{Actor: "ana.admin",
-				ActorKind: iam.KindPerson, OperatorID: via, Now: now}, b.operated},
+				ActorKind: iam.KindPerson, OperatorID: via, Now: now}},
 		} {
 			got, err := stampedAsWritten(party.writer, b.subject, b.op, b.person,
 				b.scope, b.payload)
@@ -118,9 +105,9 @@ func TestEveryRecordTheWriterBuildsKeepsItsVersion(t *testing.T) {
 				t.Errorf("%s by %s: %v", b.name, party.name, err)
 				continue
 			}
-			if got != party.want {
-				t.Errorf("%s by %s is stamped version %d, and it has always been "+
-					"%d", b.name, party.name, got, party.want)
+			if got != BaseRecordVersion {
+				t.Errorf("%s by %s is stamped version %d, want the base %d",
+					b.name, party.name, got, BaseRecordVersion)
 			}
 		}
 	}
@@ -153,7 +140,7 @@ func TestEveryRecordTheWriterBuildsKeepsItsVersion(t *testing.T) {
 			t.Fatalf("decode %s: %v", name, err)
 		}
 		if env.V != BaseRecordVersion {
-			t.Errorf("%s is stamped version %d, and it has always been %d", name,
+			t.Errorf("%s is stamped version %d, want the base %d", name,
 				env.V, BaseRecordVersion)
 		}
 	}

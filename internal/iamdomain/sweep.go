@@ -146,42 +146,26 @@ func (a *Applier) applySweep(ctx context.Context, tx *sql.Tx, at applyContext) (
 					WHERE bucket = ? AND redeemed_at = 0
 					  AND expires_at > 0 AND expires_at < ?
 					LIMIT ?)`},
+			// WHAT WAS SPENT, and not only what lapsed: a redeemed
+			// invitation is as unpresentable as an expired one, and kept
+			// it would be every address anybody was ever invited at,
+			// sealed, in every node's estate.
+			{"redeemed invitations", `
+				DELETE FROM iam_invites WHERE rowid IN (
+					SELECT rowid FROM iam_invites
+					WHERE bucket = ? AND redeemed_at > 0 AND redeemed_at < ?
+					LIMIT ?)`},
 		} {
 			if err := spend(collect.what, collect.sql, bucket, expired); err != nil {
 				return int(written), err
 			}
 		}
-	}
-	if expired <= 0 || at.record.V < SweepRecordVersion {
-		// A VERSION-1 SWEEP collects what version 1 said and nothing
-		// more — replay meets records written before version 2 existed,
-		// and applying them with a clause they never stated would delete
-		// rows the nodes that applied them live never deleted.
-		return int(written), nil
-	}
-
-	// VERSION 2: WHAT WAS SPENT, and not only what lapsed. A redeemed
-	// invitation is as unpresentable as an expired one, and version 1 kept
-	// them for ever — every address anybody was ever invited at, sealed, in
-	// every node's estate.
-	for _, collect := range []struct {
-		what, sql string
-	}{
-		{"redeemed invitations", `
-			DELETE FROM iam_invites WHERE rowid IN (
-				SELECT rowid FROM iam_invites
-				WHERE bucket = ? AND redeemed_at > 0 AND redeemed_at < ?
-				LIMIT ?)`},
-	} {
-		if err := spend(collect.what, collect.sql, bucket, expired); err != nil {
-			return int(written), err
-		}
-	}
-	if budget > 0 {
-		n, err := collectCredentials(ctx, tx, at, bucket, expired, budget)
-		written += n
-		if err != nil {
-			return int(written), err
+		if budget > 0 {
+			n, err := collectCredentials(ctx, tx, at, bucket, expired, budget)
+			written += n
+			if err != nil {
+				return int(written), err
+			}
 		}
 	}
 	return int(written), nil

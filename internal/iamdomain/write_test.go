@@ -1068,7 +1068,7 @@ func invalidationRecord(t *testing.T, generation, seq uint64) statelog.Record {
 		},
 		Actor: "operator", ActorKind: iam.KindPerson,
 		Mutation: mustJSON(t, iamdomain.Invalidation{
-			V: iamdomain.GateRecordVersion, Generation: generation,
+			V: iamdomain.DocumentVersion, Generation: generation,
 			By: "operator",
 		}),
 	})

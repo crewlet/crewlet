@@ -255,14 +255,14 @@ func pagesEviction(t *testing.T, node string) []byte {
 func iamEviction(t *testing.T, node string) []byte {
 	t.Helper()
 	body, err := iamdomain.EncodeEviction(iamdomain.Eviction{
-		V: iamdomain.GateRecordVersion, By: "operator",
+		V: iamdomain.DocumentVersion, By: "operator",
 	})
 	if err != nil {
 		t.Fatalf("encode the eviction: %v", err)
 	}
 	payload, err := iamdomain.Encode(iamdomain.MutationRecord{
 		RecordEnvelope: iamdomain.RecordEnvelope{
-			V: iamdomain.GateRecordVersion, OpID: "op-evict-" + node,
+			V: iamdomain.RecordVersion, OpID: "op-evict-" + node,
 			Subject: iamdomain.EvictionSubject(node), Op: iamdomain.OpEviction,
 			Writer: "node-peer", CreatedAt: time.Now().UTC(),
 			Scope: iamdomain.RootScope(),

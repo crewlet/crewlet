@@ -68,15 +68,9 @@ func redeemAs(t *testing.T, rig *writeRig, issued iamdomain.InviteIssued,
 // and the one question a reader can ask of the row is whether a presented
 // secret is the one.
 //
-// It is issued at [iamdomain.ConditionRecordVersion], which is the only thing
-// that stops a node running an older build — one that knows neither the
-// verifier nor the seat — from applying it during a rolling upgrade and then
-// redeeming it by its id alone.
-//
 // Mutation: store the secret itself as the verifier and the document case
 // fails; compare without the hash, or admit an empty verifier, and Admits
-// answers the wrong way; drop the verifier's row from the field table
-// (`versionedFields`) and the version case fails.
+// answers the wrong way.
 func TestAnInvitationKeepsItsLinksSecretOnlyAsAVerifier(t *testing.T) {
 	t.Parallel()
 	rig := newWriteRig(t)
@@ -86,15 +80,6 @@ func TestAnInvitationKeepsItsLinksSecretOnlyAsAVerifier(t *testing.T) {
 	}
 	if issued.Secret == "" {
 		t.Fatal("the issue handed back no secret: the link would carry the id alone")
-	}
-	// AT THE VERSION THAT STATES A CONDITION, so a node running an older
-	// build DEFERS the record rather than applying an invitation it would
-	// redeem on its id alone, with no secret and no seat.
-	if env := rig.lastEnvelope(); env.Op != iamdomain.OpInvite ||
-		env.V != iamdomain.ConditionRecordVersion {
-		t.Errorf("the invitation was written as op %s at version %d, want %s "+
-			"at %d — an older build would apply it and redeem it on its id",
-			env.Op, env.V, iamdomain.OpInvite, iamdomain.ConditionRecordVersion)
 	}
 	documents := rig.column(`SELECT document FROM iam_invites WHERE id = ?`, issued.ID)
 	if len(documents) != 1 {

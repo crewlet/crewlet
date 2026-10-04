@@ -170,10 +170,9 @@ func (w *Writer) ReadmitNode(ctx context.Context, opID, nodeID string) (statelog
 // row in the same snapshot ([statelog.GateStanding]).
 //
 // THE AUTHOR IS THE WRITER'S PARTY, on the record and on the payload's `by` —
-// the column an operator reads first on an eviction they did not expect. The
-// credential it acted through is not on the record: an eviction writes no
-// trail row, and a gate is pinned at [GateRecordVersion], which predates the
-// field ([namesOperator]).
+// the column an operator reads first on an eviction they did not expect — with
+// the credential it acted through beside it on the record, as on every log's
+// eviction.
 func (w *Writer) gateNode(ctx context.Context, opID, nodeID string,
 	readmit bool) (statelog.Result, error) {
 
@@ -188,10 +187,10 @@ func (w *Writer) gateNode(ctx context.Context, opID, nodeID string,
 	if err := w.mayOperate(OpEviction); err != nil {
 		return statelog.Result{}, err
 	}
-	// PINNED AT [GateRecordVersion], as every gate record is: a node must
-	// never be able to defer the record that gates it.
+	// A GATE STAYS AT THE BASE VERSION ([MutationRecord.readByEveryBuild]):
+	// a node must never be able to defer the record that gates it.
 	mutation, err := EncodeEviction(Eviction{
-		V: GateRecordVersion, Readmit: readmit, By: w.Actor,
+		V: DocumentVersion, Readmit: readmit, By: w.Actor,
 	})
 	if err != nil {
 		return statelog.Result{}, err
@@ -261,9 +260,8 @@ func (GenerationRecord) GenerationSubject(gen uint32) (statelog.Subject, bool) {
 // replay writes on every node carries — who moved the log is the one fact a
 // later reader of `iam_log_generations` is asking. A reanchor nobody named is
 // the node's own, and is recorded as the node's writer is ([generationActor]).
-// The credential is not on the record: a generation writes no trail row, so a
-// field carried for it would be read by nothing while deferring the record on
-// every older node ([namesOperator]).
+// The credential is not on the record: a generation writes no trail row, so
+// nothing would read it.
 //
 // PINNED AT THE BASE VERSION, which [Encode] holds it to: a generation record
 // is not a gate, and a version a peer cannot read would defer the very record

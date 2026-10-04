@@ -1586,16 +1586,6 @@ sweep rewrites the person's row without the collected credentials in the same
 transaction. How somebody joined outlives the redeemed invitation too: the
 redemption is on the change trail, kept for its own horizon.
 
-**A sweep record carries a version, and an older node waits for it.** Collecting
-what was spent is the second version of the sweep record. A sweep deletes by a
-rule every node evaluates for itself, so a node running a build that did not
-know the new clauses would delete less than its peers from the same record —
-and the copies would stay different after the upgrade, because a record is
-never applied twice. So an older node **defers** a version-2 sweep, holds back
-later identity records for the same bucket behind it, and applies all of them
-once it is upgraded. During a rolling upgrade that is a bucket's worth of
-people whose changes reach that node late, and never a node that disagrees.
-
 The identity domain's **operation ledger** keeps the 30-day horizon every
 other domain's does, and one hour for its session subjects, which is not a
 contradiction with the two above: a ledger answers "did my write land" and is

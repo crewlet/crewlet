@@ -598,17 +598,10 @@ for ever: a version whose field is gone is **retired** and stays empty rather
 than being given to the next field. The conformance suite every domain passes
 holds each table to the records its encoder actually writes.
 
-In the **tracker** and the **knowledge base**, the table is empty: version 1 is
-everything they write, so every record is stamped 1. The first release that
-adds a field to one gives it version 2, and from then on an older node holds
-back exactly the records carrying it.
-
-In the **identity estate**, version 2 is the retention sweep that collects what
-was spent as well as what lapsed, version 3 a record naming the credential its
-actor acted through, and version 4 the conditions — a session that may only
-enrol a second factor, an invitation's verifier and the seat it binds — which a
-build reading 3 would apply as a whole session, or redeem on the invitation's
-id alone.
+Every domain's table is **empty today**: version 1 is everything this build
+writes, so every record is stamped 1. The first release that adds a field to a
+record gives it version 2, and from then on an older node holds back exactly
+the records carrying it.
 
 ### Values the engine computes are recomputed once
 

@@ -319,17 +319,10 @@ func (r *sweepRigT) trail() []string {
 	return r.column(`SELECT id FROM iam_history ORDER BY id`)
 }
 
-// sweepRecord wraps one sweep payload as the framework delivers it, at the
-// version the publisher writes.
+// sweepRecord wraps one sweep payload as the framework delivers it.
 func sweepRecord(t *testing.T, sweep iamdomain.Sweep) statelog.Record {
 	t.Helper()
-	return sweepRecordAt(t, iamdomain.SweepRecordVersion, sweep)
-}
-
-// sweepRecordAt is [sweepRecord] at a record version of the case's choosing —
-// the version a sweep already on the log may have been written at.
-func sweepRecordAt(t *testing.T, version int, sweep iamdomain.Sweep) statelog.Record {
-	t.Helper()
+	const version = iamdomain.RecordVersion
 	subject := iamdomain.SweepSubject(sweep.Bucket)
 	payload, err := iamdomain.Encode(iamdomain.MutationRecord{
 		RecordEnvelope: iamdomain.RecordEnvelope{
@@ -385,26 +378,19 @@ func equalRows(a, b []string) bool {
 
 var _ = context.Background
 
-// A VERSION-2 SWEEP COLLECTS WHAT WAS SPENT, from the rows AND the document.
+// A SWEEP COLLECTS WHAT WAS SPENT, from the rows AND the document.
 //
-// Version 1 kept every redeemed invitation — with the sealed address it was
-// for — and every revoked or expired credential, verifier and all, for the
-// life of the company. Version 2 collects each a week
-// past the moment it stopped being presentable, which the record's own instant
-// says; anything that stopped more recently, and anything still presentable,
-// stays.
+// A redeemed invitation — with the sealed address it was for — and a revoked or
+// expired credential, verifier and all, are collected a week past the moment
+// each stopped being presentable, which the record's own instant says; anything
+// that stopped more recently, and anything still presentable, stays.
 //
 // A CREDENTIAL IS COLLECTED FROM THE PERSON'S DOCUMENT TOO, and the last step
 // is why: credentials travel whole on the document and the rows are derived
 // from it, so the next change to somebody's credentials — which forms the new
 // set from the document — would republish a credential a sweep had deleted only
 // from the rows.
-//
-// And the CONTROL is the same record at version 1, which is how every sweep
-// already on the log was written: replayed, it must collect exactly what
-// version 1 said, or a node rebuilding from the log holds different rows from a
-// node that applied it live.
-func TestAVersionTwoSweepCollectsWhatWasSpent(t *testing.T) {
+func TestASweepCollectsWhatWasSpent(t *testing.T) {
 	t.Parallel()
 	// THE PUBLISHER'S OWN CLOCK IS brokerAt, so its collection instant is a
 	// week before it; "long ago" is past that by more than the slack, which
@@ -466,10 +452,6 @@ func TestAVersionTwoSweepCollectsWhatWasSpent(t *testing.T) {
 		}
 		return rig, person
 	}
-	sweep := func(person string) iamdomain.Sweep {
-		return iamdomain.Sweep{V: iamdomain.DocumentVersion,
-			Bucket: iamdomain.BucketOf(person), Expired: cutoff}
-	}
 	held := func(rig *sweepRigT, person string) (rows, document []string) {
 		rows = rig.column(`SELECT id FROM iam_credentials WHERE person_id = ?
 			ORDER BY id`, person)
@@ -487,26 +469,9 @@ func TestAVersionTwoSweepCollectsWhatWasSpent(t *testing.T) {
 		slices.Sort(document)
 		return rows, document
 	}
-	everything := []string{"expired-long-ago", "live-token", "password",
-		"revoked-long-ago", "revoked-recently"}
 	kept := []string{"live-token", "password", "revoked-recently"}
 
-	t.Run("version 1 collects none of it", func(t *testing.T) {
-		t.Parallel()
-		rig, person := spent(t)
-		rig.apply(sweepRecordAt(t, iamdomain.BaseRecordVersion, sweep(person)),
-			brokerAt)
-		rows, document := held(rig, person)
-		if !slices.Equal(rows, everything) || !slices.Equal(document, everything) {
-			t.Errorf("a version-1 sweep left rows %v and document %v, want every "+
-				"credential in both — replay would diverge from live", rows, document)
-		}
-		if got := rig.column(`SELECT id FROM iam_invites ORDER BY id`); len(got) != 2 {
-			t.Errorf("a version-1 sweep collected a redeemed invitation: %v", got)
-		}
-	})
-
-	t.Run("version 2 collects what was spent a week ago", func(t *testing.T) {
+	t.Run("it collects what was spent a week ago", func(t *testing.T) {
 		t.Parallel()
 		rig, person := spent(t)
 		// THROUGH THE PUBLISHER, so the record is the one a node writes and
@@ -580,15 +545,12 @@ func TestAVersionTwoSweepCollectsWhatWasSpent(t *testing.T) {
 	})
 }
 
-// THE PUBLISHER WRITES A SWEEP AT THE VERSION THAT STATES ITS PREDICATE, and
-// finds a bucket due for what only that version collects.
+// THE PUBLISHER FINDS A BUCKET DUE FOR WHAT WAS SPENT, and collects it.
 //
-// Written at the base version, a sweep's new clauses would be evaluated by the
-// nodes that know them and skipped by the ones that do not — the same record
-// deleting different rows on different nodes. And a bucket whose only due row
-// is a credential revoked a week and a day ago is due: were the publisher's
-// probes version 1's, it would never publish the record that collects it.
-func TestTheSweepPublisherWritesTheVersionThatStatesItsPredicate(t *testing.T) {
+// A bucket whose only due row is a credential revoked a week and a day ago is
+// due: were the publisher's probes only the lapsed rows', it would never
+// publish the record that collects it.
+func TestTheSweepPublisherFindsABucketDueForWhatWasSpent(t *testing.T) {
 	t.Parallel()
 	rig := newWriteRig(t)
 	person := uuid.Must(uuid.NewV7()).String()
@@ -629,10 +591,8 @@ func TestTheSweepPublisherWritesTheVersionThatStatesItsPredicate(t *testing.T) {
 			"want the revoked token's bucket %s", report.Published, want)
 	}
 	rig.drain()
-	if env := rig.lastEnvelope(); env.Op != iamdomain.OpSweep ||
-		env.V != iamdomain.SweepRecordVersion {
-		t.Errorf("the sweep was written as op %s at version %d, want a sweep at "+
-			"%d", env.Op, env.V, iamdomain.SweepRecordVersion)
+	if env := rig.lastEnvelope(); env.Op != iamdomain.OpSweep {
+		t.Errorf("the newest record is op %s, want the sweep", env.Op)
 	}
 	if got := rig.column(`SELECT id FROM iam_credentials WHERE person_id = ?`,
 		person); len(got) != 0 {

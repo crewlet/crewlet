@@ -91,17 +91,10 @@ type Writer struct {
 	// [iam.Actor.OperatorID], a machine token's `pat:<id>` beside the owner
 	// it acts as, a browser session's `session:<lineage>` — so a token's
 	// gesture is told apart from its owner's in both trails: on every
-	// event this writer announces, and on every record that writes an
-	// `iam_history` row ([MutationRecord.OperatorID]).
+	// event this writer announces, and on every record it writes
+	// ([MutationRecord.OperatorID]).
 	//
-	// NOT ON A GATE. A removal and an invalidation are pinned at
-	// [GateRecordVersion] for ever, so their trail rows name the actor
-	// alone and the events announcing them carry the credential; and a
-	// record that carries one is written at [OperatorRecordVersion], which
-	// an older node defers — see there for what that buys and costs.
-	//
-	// EMPTY ON THE NODE'S OWN WRITER, which acts through no credential, so
-	// the sign-in surface's and the duties' records stay at the base.
+	// EMPTY ON THE NODE'S OWN WRITER, which acts through no credential.
 	//
 	// Set on a party [Writer.As] derived, and never carried by As from the
 	// writer it cloned: it is the party's, like the grants.
@@ -548,18 +541,10 @@ func (w *Writer) record(subject Subject, op OpKind, person string,
 			"trail beside the op that caused it, so it says WHICH cause fired "+
 			"rather than narrating", ErrInvalid, op, len(reason), MaxReason)
 	}
-	// THE CREDENTIAL RIDES ONLY WHERE IT IS READ — a record that writes a
-	// trail row and is not a gate — and only where there is one.
-	operator := ""
-	if namesOperator(op) {
-		operator = w.OperatorID
-	}
 	rec := MutationRecord{
 		RecordEnvelope: RecordEnvelope{
 			// THE VERSION IS LEFT TO THE ENCODER, which stamps the lowest
-			// that carries what the record holds ([Encode]): a credential
-			// at the version that names it, a condition at the version
-			// that states it, everything else at the base. See
+			// that carries what the record holds ([Encode]). See
 			// [RecordVersion] for why never the ceiling.
 			Subject:   subject,
 			Op:        op,
@@ -570,16 +555,8 @@ func (w *Writer) record(subject Subject, op OpKind, person string,
 		Person:     person,
 		Actor:      w.Actor,
 		ActorKind:  w.ActorKind,
-		OperatorID: operator,
+		OperatorID: w.OperatorID,
 		Reason:     reason,
-		// THE SWEEP STATES THE PREDICATE IT IS WRITTEN WITH, which is
-		// version 2's: see [MutationRecord.CollectsSpent].
-		CollectsSpent: op == OpSweep,
-	}
-	if rec.InstallsGate() {
-		// A GATE IS PINNED FOR EVER, whatever a later version adds: see
-		// [GateRecordVersion].
-		rec.V = GateRecordVersion
 	}
 	return rec, nil
 }

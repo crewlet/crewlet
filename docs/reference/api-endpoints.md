@@ -1008,14 +1008,7 @@ machine token acting as its owner, `session:<lineage>` for one of their
 browser sessions, a Tier A token's own login. A token acts as its owner, so
 `actor` is the owner either way, and `operator_id` is what tells their token's
 gesture from their own. It is absent from an entry the sign-in surface or a
-duty wrote (the node acts on nobody's credential), from a removal and a
-company-wide invalidation (their records are gates, pinned at their first
-version for ever; `iam_session_ended` and `iam_session_generation_bumped`
-carry it), and from every entry written before the field existed. During a
-rolling upgrade an older node **defers** a record that names a credential —
-it has no column to write it into — and applies it once upgraded, so the
-directory changes somebody made through `/iam` reach an older node late
-rather than without their credential.
+duty wrote: the node acts on nobody's credential.
 
 ### `/config/*` — live config management (auth-gated)
 

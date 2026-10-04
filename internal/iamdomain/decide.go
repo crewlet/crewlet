@@ -865,7 +865,7 @@ func (w *Writer) InvalidateAll(ctx context.Context, opID, reason string) (
 		}
 		generation = current + 1
 		rec.Mutation, err = EncodeInvalidation(Invalidation{
-			V: GateRecordVersion, Generation: generation,
+			V: DocumentVersion, Generation: generation,
 			By: w.Actor,
 		})
 		return err
@@ -953,7 +953,7 @@ func (w *Writer) Remove(ctx context.Context, personID, opID, reason string) (
 		if err != nil {
 			return nil, err
 		}
-		return EncodeRemoval(Removal{V: GateRecordVersion, Released: held})
+		return EncodeRemoval(Removal{V: DocumentVersion, Released: held})
 	}
 	return w.publishDirectory(ctx, OpRemove, personID, opID, reason, scopeOf,
 		decide)
@@ -1023,11 +1023,6 @@ func (w *Writer) OpenSession(ctx context.Context, in SessionStart) (
 			return err
 		}
 		opened = SessionOpened{Epoch: epoch, Generation: generation}
-		// A RESTRICTED SESSION TRAVELS AT THE VERSION THAT STATES THE
-		// RESTRICTION — its `enrolment_only` row in [versionedFields] —
-		// so a node that cannot read it defers it rather than serving it
-		// whole; an ordinary one carries no such key and stays at the
-		// base. See [ConditionRecordVersion].
 		rec.Mutation, err = EncodeSession(Session{
 			V: DocumentVersion, Person: in.Person, Epoch: epoch,
 			AbsoluteExpiresAt: in.AbsoluteExpiresAt,
@@ -1130,8 +1125,7 @@ type SessionStart struct {
 
 	// EnrolmentOnly opens a session that may do nothing but enrol a second
 	// factor — see [Session.EnrolmentOnly]. The SIGN-IN decides it, from
-	// what it proved and the deployment's own `api.auth.local.totp`, and
-	// the record carrying it is written at [ConditionRecordVersion].
+	// what it proved and the deployment's own `api.auth.local.totp`.
 	EnrolmentOnly bool
 
 	// NoWait asks for the answer the broker's acknowledgement already
@@ -1916,11 +1910,8 @@ func (w *Writer) Invite(ctx context.Context, in InviteMint) (
 		return InviteIssued{}, fmt.Errorf("iamdomain: seal an "+
 			"invitation's address: %w", err)
 	}
-	// EVERY INVITATION STATES A CONDITION an older build would drop — the
-	// secret its redemption must present, and the seat it binds — and its
-	// `verifier` row in [versionedFields] makes it travel at the version
-	// that says so: an older node defers it and answers the link 410,
-	// rather than redeeming it on its id.
+	// EVERY INVITATION STATES ITS CONDITIONS — the secret its redemption
+	// must present, and the seat it binds.
 	mutation, err := EncodeInvitation(Invitation{
 		V: DocumentVersion, ID: id, EmailBlind: blind, Sealed: sealed,
 		InvitedBy: w.Actor, Grants: in.Grants,
@@ -1997,7 +1988,7 @@ func (w *Writer) Invite(ctx context.Context, in InviteMint) (
 //     applied it is answered in full.
 //   - APPLIED HERE, and no row: the row existed and the retention sweep has
 //     COLLECTED it, which it does only to an invitation that was redeemed or
-//     aged out ([SweepRecordVersion]) — so the link the key issued admits
+//     aged out ([Writer.Sweep]) — so the link the key issued admits
 //     nobody, and the answer is the one the decide gives the row it would
 //     have found: [ErrOperationReused]. Read as "not applied yet" it told the
 //     caller to retry the same key, which found the same absence on every

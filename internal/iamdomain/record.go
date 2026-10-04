@@ -23,189 +23,49 @@ import (
 // [versionedFields], because a record a peer cannot read is deferred on that
 // peer: written at the ceiling for no reason, every record of a rolling upgrade
 // would be deferred on every older node. It moves only with that table, and
-// exactly to its highest version. Two is [SweepRecordVersion], three is
-// [OperatorRecordVersion], four is [ConditionRecordVersion], and nothing else
-// has moved.
-const RecordVersion = 4
+// exactly to its highest version.
+//
+// Version 1 is every shape this domain has: no build that wrote anything else
+// was ever released.
+const RecordVersion = 1
 
-// BaseRecordVersion is what every record carries whose meaning has not changed
-// since this domain landed: every op but a sweep, written by a party that
-// acted through no credential of its own.
+// BaseRecordVersion is version 1, the base format: what every build there will
+// ever be reads, and what a record carrying no versioned field is stamped at.
+// A gate, the read index's barrier and a reanchor's generation stay at it
+// ([MutationRecord.readByEveryBuild]).
 const BaseRecordVersion = 1
-
-// SweepRecordVersion is what a sweep record carries.
-//
-// VERSION 2 COLLECTS MORE: beside what version 1 does, the credentials and
-// the redeemed invitations that stopped being presentable before the record's
-// collection instant ([Writer.Sweep]).
-//
-// A VERSION AND NOT A FIELD, because a sweep deletes by a predicate every node
-// evaluates for itself. A clause an older build does not know would be carried
-// past as an unknown field and evaluated nowhere on that node, so the same
-// record would delete rows on some nodes and not on others — the estate's
-// byte-identical copies disagreeing for as long as the rollout lasts and after
-// it, since a record is never applied twice. At version 2 an older node
-// DEFERS the record and applies it once it is upgraded, under the semantics it
-// was written with; and a version-1 sweep already on the log is still applied
-// as version 1, because replay is the one reader that meets both. The record
-// says which predicate it states with a marker ([MutationRecord.CollectsSpent])
-// whose row in [versionedFields] is what stamps it.
-const SweepRecordVersion = 2
-
-// OperatorRecordVersion is what a record carries that names the credential its
-// actor acted THROUGH ([MutationRecord.OperatorID]).
-//
-// VERSION 3 NAMES THE CREDENTIAL, so the trail row a gesture writes tells a
-// machine token's gesture, or a browser session's, from the person's own —
-// where it used to record the owner alone, and `GET /iam/audit` showed
-// whatever somebody's token did to the directory as done by them.
-//
-// A VERSION AND NOT JUST A FIELD, for [SweepRecordVersion]'s reason one table
-// over. The trail row is in this domain's identity claim, and an older build
-// cannot write the field it does not know: it has no column to put it in, and
-// it carries the field into the row's document in a different key order from a
-// build that knows it. The same record would leave two different rows on two
-// builds, and a record is never applied twice, so the copies would stay
-// different after the upgrade. At version 3 an older node DEFERS the record,
-// holds back what follows it in its bucket, and applies it once upgraded.
-//
-// ONLY A RECORD THAT HAS A CREDENTIAL TO NAME, which is the lowest-version rule
-// again: the node's own writer acts through none — every sign-in, sign-out,
-// step-up and enrolment the sign-in surface writes, and every duty — so those
-// stay at the base, and what a rolling upgrade defers is the administrative
-// gestures somebody made through `/iam`. See [namesOperator] for which records
-// carry one.
-const OperatorRecordVersion = 3
-
-// ConditionRecordVersion is what a record carries that states a CONDITION on
-// what it permits — a condition an older build does not know, would carry past
-// as an unknown field, and would therefore apply as permitting MORE than its
-// writer said.
-//
-// Two records state one:
-//
-//   - a SESSION START that may only enrol a second factor
-//     ([Session.EnrolmentOnly]): an older node would apply it as a whole
-//     session, and its rows — its session listing, and anything that reads
-//     the row — would say the session may do everything. The bearer carries
-//     the restriction too, in a form an older build refuses outright
-//     ([session.Bearer.EnrolmentOnly]); the version is what keeps that
-//     build's ROWS from saying the opposite.
-//   - an INVITATION that is redeemable only with its link's secret and that
-//     binds a seat when it is redeemed ([Invitation.Verifier],
-//     [Invitation.Seat]): an older node would redeem it on its id alone, which
-//     every snapshot and backup holds in the clear, and enrol the person with
-//     no seat.
-//
-// A VERSION AND NOT JUST A FIELD, for [SweepRecordVersion]'s reason turned
-// round: there a field an older build skipped made two nodes' rows differ,
-// and here it would make one node's rows say a condition does not exist. At
-// version 4 an older node DEFERS the record, and a deferred record is the
-// unknown arm on every read of its bucket — a 503 on a restricted session or
-// an invitation there, never the wider answer.
-//
-// ONLY THE RECORDS THAT CARRY A CONDITION: an ordinary session start stays at
-// the base, or every sign-in of a rolling upgrade would be deferred on every
-// older node. The versions are cumulative, so a version-4 record that also
-// names a credential needs nothing more.
-const ConditionRecordVersion = 4
 
 // versionedFields is every field an identity record has gained since the base
 // format, and the version a reader must be at to apply a record carrying it —
 // the one statement of which record travels at which version, read by [Encode]
 // for every record a writer leaves unstamped.
 //
+// EMPTY, because the base format is everything this build writes.
+//
 // # Adding a field to any record or payload is adding a row here
 //
 // A field an older build has no home for is decoded AROUND: the build reads the
 // version, finds it readable, applies what it understands and drops the rest,
 // so its rows differ from every upgraded node's for good, on tables the
-// identity claim compares byte for byte — or, for a condition, say it does not
-// exist. The row is what makes the encoder stamp a version that build retains
-// instead. A new field takes the next version above [RecordVersion], which
-// moves with it, and the domain's statelogtest candidate gains a record
-// carrying it, which certifies the path is where the encoder writes it.
+// identity claim compares byte for byte — or, for a CONDITION on what a record
+// permits, say the condition does not exist and permit more than its writer
+// said. The row is what makes the encoder stamp a version that build retains
+// instead. A field added after a release takes the next version above
+// [RecordVersion], which moves with it, and the domain's statelogtest
+// candidate gains a record carrying it, which certifies the path is where the
+// encoder writes it.
 //
 // # And a new predicate is a row too
 //
-// A sweep's version-2 clause is a rule the applier reads off the record's
-// VERSION, with no field of its own to carry it, so the record states it with
-// a marker on its root ([MutationRecord.CollectsSpent]) — the tracker's
-// `keeps_place` precedent — and the marker's row stamps it.
-var versionedFields = statelog.RecordFields{
-	// THE SWEEP'S VERSION-2 PREDICATE, which collects what was spent as well
-	// as what lapsed. A build reading 1 would delete less from the same
-	// record than every upgraded node does. Scoped to the sweep, the one op
-	// that collects anything.
-	{Name: "MutationRecord.CollectsSpent", Since: SweepRecordVersion,
-		Op: string(OpSweep), Path: []string{"collects_spent"}},
-	// THE CREDENTIAL AN ACTOR ACTED THROUGH, at version 3. A build reading 2
-	// has no trail column for it and carries it into the row's document
-	// under another key order. Every op, because the trail row every
-	// recorded op writes is where it lands; a gate never carries it
-	// ([namesOperator]), which [Encode] refuses besides.
-	{Name: "MutationRecord.OperatorID", Since: OperatorRecordVersion,
-		Path: []string{operatorField}},
-	// THE CONDITIONS, at version 4. A build reading 3 would apply a session
-	// that may only enrol as a whole one, and redeem an invitation on its
-	// id alone and bind no seat. Each scoped to the one op whose payload is
-	// the document that carries it.
-	{Name: "Session.EnrolmentOnly", Since: ConditionRecordVersion,
-		Op: string(OpOpen), Path: []string{"mutation", "enrolment_only"}},
-	{Name: "Invitation.Verifier", Since: ConditionRecordVersion,
-		Op: string(OpInvite), Path: []string{"mutation", "verifier"}},
-	{Name: "Invitation.Seat", Since: ConditionRecordVersion,
-		Op: string(OpInvite), Path: []string{"mutation", "seat"}},
-}
+// A rule the applier would read off the record's VERSION, with no field of its
+// own to carry it — a sweep that collects more than its predecessor did — is
+// stated with a marker on the record's root that the writer sets, and the
+// marker's row stamps it.
+var versionedFields = statelog.RecordFields{}
 
 // VersionedFields is the table, for the conformance suite and for an operator
 // surface that names why a record was held back.
 func VersionedFields() statelog.RecordFields { return slices.Clone(versionedFields) }
-
-// namesOperator reports whether a record of op carries the credential its actor
-// acted through: every record that writes a trail row, except a gate.
-//
-// THE TRAIL IS WHAT THE FIELD IS FOR, so a record that writes no row carries
-// none — a sweep, a barrier, an eviction and a generation are facts about the
-// log, and a credential on one would be read by nothing while still deferring
-// it on every older node.
-//
-// AND A GATE CARRIES NONE, because a gate is pinned at [GateRecordVersion] for
-// ever and a field it cannot have belongs somewhere else: a removal's and an
-// invalidation's trail rows name their actor alone, and the events announcing
-// them — `iam_session_ended` (reason `person_removed`) and
-// `iam_session_generation_bumped` — carry the credential.
-func namesOperator(op OpKind) bool {
-	if _, recorded := ClassOf(op); !recorded {
-		return false
-	}
-	switch op {
-	case OpRemove, OpEviction, OpInvalidate:
-		return false
-	}
-	return true
-}
-
-// GateRecordVersion is the version every gate-installing record carries, FOR
-// EVER.
-//
-// A removal whose version this build could not read would be deferred, and a
-// deferred gate does not postpone one record's effect on one node: it licenses
-// every later record about the person it removed, with no inverse that repairs
-// it — and in THIS domain that is not a stale row, it is a person who has been
-// off-boarded still signing in on one node. So [OpRemove]'s payload is pinned
-// at 1 and never evolves; a field it needs that it cannot have is a field that
-// belongs on a record that is not a gate.
-//
-// [OpEviction] is pinned at the same version for the same shape of reason one
-// layer up: a node that deferred an eviction goes on applying records every
-// peer is dropping, and the rows it writes from them have no later record that
-// corrects them.
-//
-// [OpInvalidate] is the third, and it is the removal's reason at the widest
-// blast radius this domain has: a node that deferred it goes on honouring
-// every session bearer in the company after somebody ended them all.
-const GateRecordVersion = 1
 
 // OpKind is what a record does.
 type OpKind string
@@ -345,8 +205,6 @@ const (
 
 	// OpEviction gates a node's records on this log, or readmits it. Its
 	// subject is [KindEviction].
-	//
-	// PINNED AT [GateRecordVersion], like [OpRemove].
 	OpEviction OpKind = "eviction"
 
 	// OpGeneration is a reanchor's own record, on [KindGeneration].
@@ -506,26 +364,10 @@ type MutationRecord struct {
 	// `pat:<id>`, a browser session's `session:<lineage>`, a Tier A token's
 	// own login — which is what tells a token's gesture from its owner's
 	// when Actor names the owner either way. Empty where the party acted
-	// through none, which is the node's own writer.
-	//
-	// ONLY AT [OperatorRecordVersion] AND ABOVE, and never on a gate: see
-	// there, and [namesOperator]. [Decode] carries one found on a record
-	// below that version exactly as a build that predates the field would,
-	// rather than reading it.
+	// through none, which is the node's own writer — every sign-in,
+	// sign-out, step-up and enrolment the sign-in surface writes, and every
+	// duty.
 	OperatorID string `json:"operator_id,omitempty"`
-
-	// CollectsSpent says this sweep states version 2's predicate
-	// ([SweepRecordVersion]): it collects the redeemed invitations and the
-	// revoked or expired credentials that stopped being presentable before
-	// its collection instant, beside what lapsed.
-	//
-	// A MARKER AND NOT A VALUE, read through the record's VERSION rather than
-	// by the applier — the tracker's `keeps_place` precedent: the predicate
-	// has no field of its own, so a sweep stamped by what it carries would be
-	// version 1 and an older build would apply it with the smaller predicate.
-	// Set by the writer on every sweep it builds ([Writer.record]); never on
-	// any other op.
-	CollectsSpent bool `json:"collects_spent,omitempty"`
 
 	// Reason is why, in at most [MaxReason] bytes, for the operations
 	// whose motive is not recoverable from their effect.
@@ -633,30 +475,8 @@ func Decode(payload []byte) (MutationRecord, error) {
 			"decode the record on %s: %w", env.Subject, err)
 	}
 	rec.Extra = extra
-	if rec.V < OperatorRecordVersion && rec.OperatorID != "" {
-		// A FIELD IS READ AT THE VERSION THAT DEFINED IT. No writer puts
-		// a credential on a record below [OperatorRecordVersion], and
-		// one that did would be applied by a build that predates the
-		// field — every node of the rolling upgrade that version exists
-		// to protect — as an unknown key it carries. So this build does
-		// exactly that, rather than writing a column those nodes do not
-		// have and a document in a key order they do not write.
-		var all map[string]json.RawMessage
-		if err := json.Unmarshal(payload, &all); err != nil {
-			return MutationRecord{RecordEnvelope: env}, fmt.Errorf("iamdomain: "+
-				"decode the record on %s: %w", env.Subject, err)
-		}
-		if rec.Extra == nil {
-			rec.Extra = map[string]json.RawMessage{}
-		}
-		rec.Extra[operatorField] = all[operatorField]
-		rec.OperatorID = ""
-	}
 	return rec, nil
 }
-
-// operatorField is [MutationRecord.OperatorID]'s name on the wire.
-const operatorField = "operator_id"
 
 // Encode renders a record, stamping it with the lowest version that reads it
 // and carrying back whatever a newer build wrote.
@@ -664,10 +484,9 @@ const operatorField = "operator_id"
 // A ZERO VERSION IS "STAMP IT": the writer leaves V unset on every record it
 // builds and this computes the minimum over [versionedFields] from the bytes it
 // is about to publish, so the stamp cannot drift from what the record carries.
-// A version the caller DID set is kept — a gate is pinned at
-// [GateRecordVersion], a barrier and a generation at [BaseRecordVersion], and a
-// relay re-encodes a record at the version its writer gave it — but is refused
-// when it is below what the record's own fields need, because that record
+// A version the caller DID set is kept — a relay re-encodes a record at the
+// version its writer gave it — but is refused when it is below what the
+// record's own fields need, because that record
 // would be applied, lossily, by exactly the builds the stamp exists to hold it
 // back from. A record every build must read
 // ([MutationRecord.readByEveryBuild]) is refused whenever it carries a
@@ -737,11 +556,15 @@ func (rec MutationRecord) encodeWith(fields statelog.RecordFields) ([]byte, erro
 }
 
 // readByEveryBuild reports a record every build there will ever be must be
-// able to read: a gate, pinned at [GateRecordVersion] so an undecodable one is
-// a stop rather than a deferral, and the read index's barrier and a reanchor's
-// generation, pinned at [BaseRecordVersion] because an older node RETAINS a
-// record it cannot read — a barrier is then a linearizable read on that node
-// that waits for ever, and a generation a transition it never makes.
+// able to read, and so one that stays at [BaseRecordVersion] and never carries
+// a versioned field: a gate, so an undecodable one is a stop rather than a
+// deferral — a deferred removal is somebody off-boarded still signing in on
+// that node, a deferred invalidation every bearer the company ended still
+// honoured there, a deferred eviction every record the evicted node appends
+// still applied — and its shape may therefore only ever grow by addition; and
+// the read index's barrier and a reanchor's generation, because an older node
+// RETAINS a record it cannot read — a barrier is then a linearizable read on
+// that node that waits for ever, and a generation a transition it never makes.
 func (rec MutationRecord) readByEveryBuild() bool {
 	return rec.InstallsGate() || rec.Op == OpBarrier || rec.Op == OpGeneration
 }
