@@ -750,7 +750,7 @@ func (c *Coordinator) charge(ctx context.Context, run PendingRun, result Result)
 // Telemetry never fails the tail: a record that could not be published is
 // logged, and the run is resumed exactly as it would have been.
 func (c *Coordinator) publishPhase(ctx context.Context, run PendingRun, result Result) LaunchRecord {
-	facts := run.LaunchFacts()
+	facts := run.Launch
 	if facts.Published {
 		log.InfoContext(ctx, "sandbox_phase_already_published",
 			"turn_id", run.TurnID, "launch_id", run.LaunchID)
@@ -765,7 +765,7 @@ func (c *Coordinator) publishPhase(ctx context.Context, run PendingRun, result R
 			"turn_id", run.TurnID, "launch_id", run.LaunchID, "error", err.Error())
 		return run.Launch
 	}
-	facts.ID, facts.Published = run.LaunchID, true
+	facts.Published = true
 	return facts
 }
 
@@ -785,7 +785,7 @@ func (c *Coordinator) publishPhase(ctx context.Context, run PendingRun, result R
 func runPhase(run PendingRun, facts LaunchRecord, result Result, collected time.Time) types.AgentPhaseCompleted {
 	rec := types.AgentPhaseCompleted{
 		Agent: run.AgentID, RoleName: run.Role,
-		TurnID: run.TurnID, WorkKey: run.UnitOfWork(),
+		TurnID: run.TurnID, WorkKey: run.WorkKey,
 		Iteration: facts.Iteration, Phase: types.PhaseSandbox,
 		Model: facts.Model,
 		// Redacted again, at the publish, although the runner redacts at
@@ -806,7 +806,7 @@ func runPhase(run PendingRun, facts LaunchRecord, result Result, collected time.
 		SandboxID:          run.SandboxID,
 		CostUSD:            result.CostUSD,
 		DeliveredRefs:      result.DeliveredRefs,
-		ConversationKey:    run.Conversation(),
+		ConversationKey:    run.ConversationKey,
 	}
 	if !facts.StartedAt.IsZero() {
 		rec.StartedAt = facts.StartedAt.UTC()
@@ -867,13 +867,12 @@ func runPhase(run PendingRun, facts LaunchRecord, result Result, collected time.
 func (c *Coordinator) park(ctx context.Context, run PendingRun, result Result) error {
 	announcement := types.SandboxClarificationRequested{
 		Agent: run.AgentID, AgentHandle: run.AgentHandle, RoleName: run.Role,
-		// UnitOfWork, never the raw field: see [PendingRun.UnitOfWork].
-		TurnID: run.TurnID, WorkKey: run.UnitOfWork(), SandboxID: run.SandboxID,
+		TurnID: run.TurnID, WorkKey: run.WorkKey, SandboxID: run.SandboxID,
 		Question: redact.Secrets(result.Question), Audience: result.AskTo,
 		// THE IDENTITY, like the launch announcement: this event is
 		// display, and the durable thread is what a person reading the
 		// feed means by the run's conversation.
-		ConversationKey: run.Conversation(),
+		ConversationKey: run.ConversationKey,
 		// The item the run recorded at launch, so the question is shown
 		// against the work it is about.
 		WorkItem: run.WorkItem,
@@ -1053,12 +1052,10 @@ func (c *Coordinator) TryResumeFromAnswer(ctx context.Context, handle string, co
 	// FOUR VALUES, BECAUSE THE MATCH HAS TWO ENDS. The delivery's pair and
 	// the row's pair together are what say WHICH row won and WHY: a row
 	// whose conversation equals the delivery's was admitted on the
-	// identity, a row with no conversation at all was matched on the
-	// partition fallback because it predates the split, and two questions
-	// parked on one direct-message line are told apart by the partitions
-	// alone — [ConversationRef.Best] prefers the row whose batch the reply
-	// arrived in. Logging the identity by itself left every one of those
-	// indistinguishable from the others.
+	// identity, and two questions parked on one direct-message line are
+	// told apart by the partitions alone — [ConversationRef.Best] prefers
+	// the row whose batch the reply arrived in. Logging the identity by
+	// itself left the two indistinguishable.
 	log.InfoContext(ctx, "sandbox_clarification_answered",
 		"turn_id", claimed.TurnID,
 		"conversation", conv.Identity, "partition", conv.Partition,
@@ -1245,7 +1242,7 @@ func (c *Coordinator) announceAnswered(ctx context.Context, run PendingRun,
 ) {
 	payload := types.SandboxRunAnswered{
 		Agent: run.AgentID, AgentHandle: run.AgentHandle, RoleName: run.Role,
-		TurnID: run.TurnID, WorkKey: run.UnitOfWork(), WorkItem: run.WorkItem,
+		TurnID: run.TurnID, WorkKey: run.WorkKey, WorkItem: run.WorkItem,
 		Via: via, Outcome: outcome,
 		AnsweredBy: by.by, AnsweredByKind: by.kind, OperatorID: by.operatorID,
 	}
@@ -1287,8 +1284,6 @@ func (c *Coordinator) resumeAndSettle(ctx context.Context, run PendingRun,
 		// [StatusLaunching] until its conversation is written, and a
 		// launching run is not claimable — which is exactly why it stays:
 		// it is the assertion that the launching state is doing its job.
-		// What can still land here is a row a build predating that state
-		// wrote, read by this one across a rolling upgrade.
 		log.WarnContext(ctx, "sandbox_resume_no_execute_state",
 			"turn_id", run.TurnID, "claimed_from", run.ClaimedFrom,
 			"detail", "the row carried no suspended conversation; the turn "+
@@ -1589,7 +1584,7 @@ func (c *Coordinator) unclaim(ctx context.Context, run PendingRun, counted bool,
 	to := claimedFrom(run)
 	released, err := c.pending.ReleaseClaim(ctx, run.TurnID, Release{
 		Launch: run.LaunchID, To: to, Charged: run.Charged,
-		Published: run.LaunchFacts().Published, Fence: fenceOf(run),
+		Published: run.Launch.Published, Fence: fenceOf(run),
 	})
 	switch {
 	case err != nil:
@@ -1740,8 +1735,7 @@ func (c *Coordinator) FailRun(ctx context.Context, turnID, reason, detail string
 func (c *Coordinator) announceFailure(ctx context.Context, run PendingRun, reason, detail string) {
 	failed := types.SandboxRunFailed{
 		Agent: run.AgentID, AgentHandle: run.AgentHandle, RoleName: run.Role,
-		// UnitOfWork, never the raw field: see [PendingRun.UnitOfWork].
-		TurnID: run.TurnID, WorkKey: run.UnitOfWork(), SandboxID: run.SandboxID,
+		TurnID: run.TurnID, WorkKey: run.WorkKey, SandboxID: run.SandboxID,
 		CodingAgent: run.CodingAgent,
 		Reason:      reason, Detail: redact.Secrets(detail),
 	}

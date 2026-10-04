@@ -5316,8 +5316,7 @@ reclaimed, work preserved on a pushed branch) is listed on both.
 `launch_id` names the job the row holds now. A turn can launch more than
 one — a resumed executor that calls `run_sandbox` again reuses the row — and
 `sandbox_tail` is asked by it, so a run's page polls the live
-output of the job it shows rather than of whichever replaced it. It is empty
-on a row an older build wrote, and such a run has no live output to ask for.
+output of the job it shows rather than of whichever replaced it.
 
 `box_exists` and `paused_at` stand in for the sandbox id: a board wants to
 know that a box exists and that it is currently paused (and being billed

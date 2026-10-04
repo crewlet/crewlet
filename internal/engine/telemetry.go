@@ -615,8 +615,8 @@ func (e *Engine) describeResume(ctx context.Context, company *Company, in resume
 		// does the instant it began, without which the resumed half of the
 		// turn would derive different operation ids from the first half.
 		runID:     in.Run.TurnID,
-		workKey:   in.Run.UnitOfWork(),
-		workSince: in.Run.WorkBegan(),
+		workKey:   in.Run.WorkKey,
+		workSince: in.Run.WorkSince,
 		// AND EACH CONVERSATION VALUE FROM ITS OWN FIELD: the resumed
 		// turn's events are tagged with the conversation it reports back
 		// to and is answered on, while the partition it was launched from
@@ -633,7 +633,7 @@ func (e *Engine) describeResume(ctx context.Context, company *Company, in resume
 		// message apart: with no partition to agree with, both rows fall
 		// through to recency and the reply to the question in one thread
 		// resumes the run waiting in the other.
-		convKey:   in.Run.Conversation(),
+		convKey:   in.Run.ConversationKey,
 		partKey:   in.Run.PartitionKey,
 		startedAt: time.Now().UTC(),
 		role:      in.Run.Role,
@@ -666,8 +666,8 @@ func (e *Engine) describeResume(ctx context.Context, company *Company, in resume
 	t.resumed, t.launchID = true, in.Run.LaunchID
 	t.jobInput, t.jobOutput = in.InputTokens, in.OutputTokens
 	t.uncharged = in.State.Uncharged
-	// Re-derived from the org when the row predates a rename, so a resumed
-	// turn is still attributed to a seat that exists.
+	// Re-derived from the org, so a resumed turn names its seat's role as
+	// the running company calls it now.
 	if role, agentID := seatIdentity(company, in.Run.AgentHandle); role != "" {
 		t.role = role
 		if agentID != "" {

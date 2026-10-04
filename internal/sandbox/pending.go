@@ -7,7 +7,6 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/events/types"
-	"github.com/crewlet/crewlet/internal/workkey"
 )
 
 // The durable state of a detached coding job.
@@ -199,65 +198,6 @@ type BridgeCall struct {
 	At     time.Time `json:"at"`
 }
 
-// UnitOfWork is the identity this run's once-per-unit-of-work writes collapse
-// on, or "" when the run has none.
-//
-// NOT the raw field, because nothing rewrites a parked row: a run suspended by
-// a build from before ADR-0017 carries no work key at all, and its TurnID IS
-// one. A resume days later reads that row and has no trigger left to
-// re-derive from, so without this its conversation entry and its tracker
-// writes would dedupe against an empty key.
-//
-// ON SHAPE rather than on absence, for the reason [workkey.IsDerived] gives:
-// a post-split run with no ledgerable trigger is also missing the field, and
-// answering it with a run id would arm a dedupe guard with a value that means
-// nothing.
-func (r PendingRun) UnitOfWork() string {
-	if r.WorkKey != "" {
-		return r.WorkKey
-	}
-	if workkey.IsDerived(r.TurnID) {
-		return r.TurnID
-	}
-	return ""
-}
-
-// WorkBegan is the instant every operation id this run derives from its unit
-// of work ([PendingRun.UnitOfWork]) carries, or the zero instant when the run
-// has no unit of work.
-//
-// THE ROW'S OWN work_since WHERE IT HAS ONE, which is the instant the first
-// half of the turn derived its ids with, so the resumed half derives the same.
-//
-// A FIXED INSTANT OFF THE ROW WHERE IT HAS NOT. Nothing rewrites a parked row,
-// so a run parked by a build from before that field carries a unit of work and
-// no instant, and the zero instant reads as older than every loss the
-// operation ledger has recorded: on any node whose ledger had swept once, every
-// write the resumed turn made answered `unknown`, and the run's whole second
-// half was lost. Such a row answers its own CreatedAt — when the launch wrote
-// it — which is safe on every count the instant has to meet:
-//
-//   - it is FIXED, so every resume of the row derives the same ids, and a
-//     resume that is itself retried is idempotent against the first;
-//   - it cannot collide with the first half, whose ids the older build derived
-//     another way, so a write repeated across the upgrade is a second write
-//     rather than a lost one — the same cost as a crash re-run with no ledger;
-//   - it is no LATER than any write made under it, since every such write is
-//     the resume's, after the launch — which is all the ledger's vouching needs
-//     of an operation's instant (see statelog's Publisher.vouches).
-//
-// Zero where the row has no unit of work either, which is the documented
-// "nothing to collapse" case: those ids are fresh anyway.
-func (r PendingRun) WorkBegan() time.Time {
-	switch {
-	case !r.WorkSince.IsZero():
-		return r.WorkSince.UTC()
-	case r.UnitOfWork() == "":
-		return time.Time{}
-	}
-	return r.CreatedAt.UTC()
-}
-
 // MaxBridgeCalls bounds the durable log of a bridged run.
 //
 // The row is ONE VALUE in the coordination store, read and written whole on
@@ -286,9 +226,9 @@ type PendingRun struct {
 	// WorkKey is the unit of work that run was dispatched for. It rides
 	// the row so a resumed turn keeps the identity its writes have to be
 	// idempotent against — the resume re-enters the loop mid-round, with
-	// no trigger left to re-derive it from. Empty on a row written before
-	// this field existed, and on a turn with no ledgerable trigger, which
-	// is the documented "nothing to collapse" case.
+	// no trigger left to re-derive it from. Empty on a turn with no
+	// ledgerable trigger, which is the documented "nothing to collapse"
+	// case.
 	WorkKey string `json:"work_key,omitempty"`
 
 	// WorkSince is when that unit of work began, and it rides the row for
@@ -297,8 +237,7 @@ type PendingRun struct {
 	// could not reproduce it would derive DIFFERENT ids for the same
 	// writes, and the state log reads it to refuse deciding again an
 	// operation minted before its node adopted a donated snapshot.
-	// Zero on a row written before this field existed — read it through
-	// [PendingRun.WorkBegan], never raw.
+	// Zero exactly when WorkKey is empty.
 	WorkSince time.Time `json:"work_since,omitzero"`
 
 	AgentHandle string `json:"agent_handle"`
@@ -316,8 +255,7 @@ type PendingRun struct {
 	// configuration may have been applied again in between. Reconnecting to
 	// a remote box through the local backend does not error usefully — it
 	// reports a box that has vanished, and a run that is still going is
-	// abandoned as gone. A row written before this field existed decodes
-	// empty, which the manager reads as the provider default.
+	// abandoned as gone. Empty is the provider default.
 	Placement string `json:"placement,omitempty"`
 	CommandID string `json:"command_id"`
 	Status    string `json:"status"`
@@ -332,15 +270,11 @@ type PendingRun struct {
 	// See [Tail].
 	//
 	// Minted by the store and never by the caller, for the reason the
-	// status is: a caller that could choose it could reuse one. Empty on a
-	// row a build that predates it wrote, and a completion from such a
-	// build carries none, so the two still match each other and nothing
-	// else.
+	// status is: a caller that could choose it could reuse one.
 	LaunchID string `json:"launch_id,omitempty"`
 
 	// Launch is what the run's own phase record needs about the job named
-	// by LaunchID — see [LaunchRecord]. Read only through
-	// [PendingRun.LaunchFacts], which refuses a record kept for another job.
+	// by LaunchID — see [LaunchRecord].
 	Launch LaunchRecord `json:"launch_record,omitzero"`
 
 	// Owner is the process INCARNATION that owns this run's seat, and
@@ -386,23 +320,7 @@ type PendingRun struct {
 	// parked from two threads of it are admitted by a reply in either, and
 	// this is the only field that says which thread each was asked in. See
 	// [ConversationRef.Best].
-	//
-	// It is also written for two PEER reasons of its own. It is the only
-	// conversation value a row from before the split carries, so it is what
-	// such a row degrades to matching on; and a node still running that
-	// build matches every row — including the ones written here — on it by
-	// equality, so dropping it would strand a run whose answer lands on the
-	// other half of a mixed fleet.
-	//
-	// THE GO NAME MOVED WITH THE CONCEPT; THE WIRE STRING DID NOT. This
-	// field was ConversationKey and its column is still "conversation_key",
-	// because the value is what two builds exchange through one
-	// coordination record while the name is only what this build calls it:
-	// a peer that predates the split writes and matches on that column, and
-	// a parked row outlives any upgrade window by design, since it is
-	// waiting for a person. Same trade [notify.PartitionField] makes for
-	// the event payload's copy of it.
-	PartitionKey string `json:"conversation_key"`
+	PartitionKey string `json:"partition_key"`
 
 	// ConversationKey is the durable conversation this run belongs
 	// to: what the resumed turn's ledger entry is filed under, and — since
@@ -418,18 +336,8 @@ type PendingRun struct {
 	// ledger row the next turn never looked up, and matching on it lost
 	// the answer outright.
 	//
-	// ITS COLUMN IS conversation_identity, which is the name the split gave
-	// it on the wire and the one a peer already writes; only the Go name
-	// moved, onto the concept it holds and away from the partition beside
-	// it. See [PartitionKey], which made the same trade in the other
-	// direction.
-	//
-	// ADDITIVE on this row, which is what a coordination-KV record needs:
-	// nothing rewrites a parked run, so a run launched by an older build
-	// decodes with this empty and BOTH readers fall back to the field that
-	// is there — [PendingRun.Conversation] for the report-back and
-	// [ConversationRef.Answers] for the match. Omitted when empty for the
-	// same reason.
+	// Empty on a run launched by a schedule tick or an A2A wake, which
+	// names no conversation; such a run is answered by nothing.
 	ConversationKey string `json:"conversation_identity,omitempty"`
 
 	// Branch is the pushed WIP branch: the durable half of the work, and
@@ -524,10 +432,8 @@ type PendingRun struct {
 	// Empty for exactly as long as the run is [StatusLaunching], which is
 	// the state that says so: the launch starts the job, and the turn
 	// writes this when its frame unwinds. Nothing polls or claims a run in
-	// that window, so a claimed run always has one — and a claimed run
-	// WITHOUT one can now only mean the row was written by a build that
-	// predates the launching state, which the coordinator fails rather
-	// than resuming into nothing.
+	// that window, so a claimed run always has one — and the coordinator
+	// fails one without rather than resuming into nothing.
 	ExecuteState map[string]any `json:"execute_state"`
 
 	// BridgeCalls is what a run made through the MCP bridge, in order.
@@ -832,28 +738,10 @@ type PendingStore interface {
 	//
 	// The rule is [ConversationRef.Best] and lives there rather than in an
 	// implementation, because it is a statement about two VALUES that every
-	// store has to make the same way — which rows a delivery may answer,
-	// which of them it answers when several may, and what either does with a
-	// row written before the conversation identity existed. A store lists
-	// the seat's parked runs and decides none of it.
+	// store has to make the same way — which rows a delivery may answer, and
+	// which of them it answers when several may. A store lists the seat's
+	// parked runs and decides none of it.
 	FindAwaitingByConversation(ctx context.Context, handle string, conv ConversationRef) (PendingRun, bool, error)
-}
-
-// Conversation is the durable conversation this run reports back to.
-//
-// FALLS BACK to the partition key, for the peer reason
-// [notify.ConversationIdentityOf] gives about the event it mirrors: a row
-// parked by a build from before the split carries only conversation_key, and
-// that value is what such a build would have reported back under. Reading the
-// absence as "no conversation" instead would make a resumed turn record
-// nothing at all — the very gap [Engine.recordResume] exists to close — and a
-// parked run outlives any upgrade window by design, because it waits for a
-// person to answer.
-func (r PendingRun) Conversation() string {
-	if r.ConversationKey != "" {
-		return r.ConversationKey
-	}
-	return r.PartitionKey
 }
 
 // ConversationRef is where an arriving delivery came from, as a parked run is
@@ -861,8 +749,7 @@ func (r PendingRun) Conversation() string {
 // partition it arrived in.
 //
 // TWO VALUES, AND EACH DECIDES A DIFFERENT HALF. The identity decides WHICH
-// runs a delivery may answer, because that is where a person answers and it is
-// the only value a row from before the split can be read as. The partition
+// runs a delivery may answer, because that is where a person answers. The partition
 // decides WHICH OF THEM it answers when several may: the identity is coarse on
 // purpose — every run parked on one direct message shares it — so without the
 // batch the two halves of a DM's clarification are told apart by nothing but
@@ -910,78 +797,18 @@ type ConversationRef struct {
 // — and admitting is not choosing: [ConversationRef.Best] picks between what
 // this admits, on the partition first and recency second.
 //
-// A ROW WITH NO IDENTITY IS A ROW FROM BEFORE THE SPLIT, and it degrades to
-// today's behaviour rather than to a run nobody can answer: its one value is
-// compared against the PARTITION, which is what the build that wrote it
-// derived and compared. It is compared against the identity too, and that is
-// not a second spelling of one rule — such a row launched from a top-level DM
-// holds the bare channel, which is precisely what this build calls the
-// identity, so reading it that way is what repairs the rows already stranded
-// by the defect. Nothing rewrites a parked run and one waits for a person, so
-// this row shape outlives any upgrade window.
-//
-// A DELIVERY WITH NO IDENTITY IS AN EVENT FROM BEFORE THE SPLIT, which is the
-// third peer direction and the one neither field's doc covers: a wake
-// published by a peer that predates it carries only the partition, so
-// [notify.ConversationIdentityOf] falls back to that value and this ref
-// arrives with both fields holding the one string that peer derived.
-//
-// IT IS NEVER NARROWER than the match that peer would have made, and that is
-// the fallback earning its place: against a pre-split row both clauses
-// compare that string to the row's one value, which is the old equality
-// exactly, so reading the absence as "no conversation" instead would refuse
-// every one of those answers and leave the box waiting out its pause TTL with
-// the reply sitting in the seat's inbox.
-//
-// IT IS SOMETIMES WIDER, and where it widens it repairs. A peer that predates
-// the split derives the bare channel for a TOP-LEVEL direct message — that is
-// the partition rule both builds share — and the bare channel is precisely
-// what this build calls the identity of that line. So such a delivery answers
-// a run this build parked from a thread on it, which its own publisher could
-// never have matched. What it cannot repair is that peer's DM THREAD REPLY:
-// it stamped the thread and derived no identity for anyone to read, so this
-// build reads the thread as the identity and only a run parked in that same
-// thread matches. That is the pre-split behaviour, and it is unreachable from
-// this end however the reader is written.
-//
-// It never widens ACROSS conversations either way: every clause compares
-// against a value that peer derived from the same channel, so a reply on a
-// different line still fails all of them.
-//
 // AN EMPTY VALUE NEVER MATCHES, on either side. A run launched by a schedule
 // tick or an A2A wake stored no conversation, and a wake that could not name
-// one carries none — so the one explicit check below is the one place two
-// absences would otherwise compare equal and make every such delivery the
-// answer to every such run. Everywhere else an empty value simply fails the
-// comparison, which is why there is no second guard: a clause that cannot
-// decide anything is a claim, not a check.
-//
-// THE IDENTITY BRANCH ALSO ACCEPTS THE PARTITION, which admits nothing new for
-// a well-formed row and rescues one that is not. A row this build wrote from a
-// delivery whose partition refines its identity is matched by the identity
-// already — equal partitions imply equal identities there, so the second
-// clause never decides anything. What it rescues is a row whose stored
-// identity is PARTITION-GRAINED: a pre-split row this build resumed and
-// re-parked carries the value that build derived in a field this one reads as
-// the identity, so a reply in the very thread the question was asked in would
-// otherwise match nothing at all — strictly worse than the equality this
-// replaced, which would still have found it.
+// one carries none — so two absences comparing equal would make every such
+// delivery the answer to every such run.
 func (c ConversationRef) Answers(run PendingRun) bool {
-	if run.ConversationKey != "" {
-		return run.ConversationKey == c.Identity || c.sameBatch(run)
-	}
-	if run.PartitionKey == "" {
-		return false
-	}
-	return run.PartitionKey == c.Identity || run.PartitionKey == c.Partition
+	return run.ConversationKey != "" && run.ConversationKey == c.Identity
 }
 
 // sameBatch reports whether this delivery arrived in the very batch the run
 // was launched from.
 //
-// The empty check is the one [ConversationRef.Answers] explains: two absences
-// comparing equal would make every conversation-less delivery the answer to
-// every conversation-less run.
+// The empty check is the one [ConversationRef.Answers] explains.
 func (c ConversationRef) sameBatch(run PendingRun) bool {
 	return c.Partition != "" && run.PartitionKey == c.Partition
 }
@@ -1110,22 +937,9 @@ type Suspension struct {
 // the row says: when it started, which executor iteration launched it, the
 // model it ran on, and whether that record has already been published.
 //
-// KEYED ON THE JOB, by [LaunchRecord.ID], and every reader goes through
-// [PendingRun.LaunchFacts], which answers the zero record for any other job.
-// The row is the TURN's and outlives each job on it, and it is shared by every
-// build in a rolling upgrade: a build that predates this field carries it
-// through its own read-modify-write untouched ([PendingRun.Extra]) — including
-// across the relaunch it performs itself, which it cannot know to clear. A
-// record that named no job would then tell the NEXT job it had been launched
-// at the previous one's instant and already published. Keyed, a stale record
-// is simply not this job's.
-//
-// ONE FIELD RATHER THAN FOUR for the same reason: there is one key to check,
-// and a fact added here later is scoped to its job by construction.
+// THE JOB'S, NOT THE TURN'S: the row outlives each job on it, so
+// [PendingStore.BeginLaunch] starts a fresh record with every launch.
 type LaunchRecord struct {
-	// ID is the [PendingRun.LaunchID] this record belongs to.
-	ID string `json:"launch_id"`
-
 	// StartedAt is when the job was launched, on the store's clock —
 	// written by [PendingStore.BeginLaunch], the moment the launch exists.
 	StartedAt time.Time `json:"started_at,omitzero"`
@@ -1150,13 +964,4 @@ type LaunchRecord struct {
 	// RELEASE ([Release.Published]), the one write through which a retry
 	// reaches the publish again.
 	Published bool `json:"published,omitempty"`
-}
-
-// LaunchFacts is the [LaunchRecord] of the job this row holds now, and the
-// zero record when what the row carries belongs to another job or to none.
-func (r PendingRun) LaunchFacts() LaunchRecord {
-	if r.Launch.ID == "" || r.Launch.ID != r.LaunchID {
-		return LaunchRecord{}
-	}
-	return r.Launch
 }

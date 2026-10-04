@@ -259,14 +259,14 @@ func Launch(ctx context.Context, m *Manager, store PendingStore, q Publisher, re
 	// its job's record by, and what a request for its live output names.
 	// Best effort like the announcement itself — a row that cannot be read
 	// back costs the pairing, not the run.
-	var launch LaunchRecord
-	if row, ok, err := store.Get(ctx, req.Turn.TurnID); err != nil {
+	var row PendingRun
+	if read, ok, err := store.Get(ctx, req.Turn.TurnID); err != nil {
 		log.WarnContext(ctx, "sandbox_launch_unread", "turn_id", req.Turn.TurnID, "error", err.Error())
 	} else if ok {
-		launch = row.LaunchFacts()
+		row = read
 	}
 	started := types.SandboxRunStarted{
-		LaunchID: launch.ID, StartedAt: launch.StartedAt,
+		LaunchID: row.LaunchID, StartedAt: row.Launch.StartedAt,
 		Agent: req.Turn.AgentID, AgentHandle: req.Turn.AgentHandle,
 		RoleName: req.Turn.Role, TurnID: req.Turn.TurnID, WorkKey: req.Turn.WorkKey,
 		SandboxID: box.ID(), CodingAgent: req.Spec.CodingAgent,

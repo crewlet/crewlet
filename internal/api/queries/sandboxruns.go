@@ -159,10 +159,8 @@ func serialiseRun(run sandbox.PendingRun) map[string]any {
 		"turn_id": run.TurnID,
 		// The unit of work behind that run, so a board row links back to
 		// the trigger rather than only to the one execution that detached.
-		// THROUGH THE ACCESSOR, because nothing rewrites a parked row: a
-		// run suspended before the identities were split carries the key
-		// in its turn id instead. Empty when the run genuinely has none.
-		"work_key": run.UnitOfWork(),
+		// Empty when the run has none.
+		"work_key": run.WorkKey,
 		// THE ITEM THE LAUNCHING TURN WAS CHARGED TO, which the row has
 		// carried since runs named one and this answer never served — so a
 		// parked run's question reached a person with no task beside it.
@@ -172,8 +170,7 @@ func serialiseRun(run sandbox.PendingRun) map[string]any {
 		// THE JOB THE ROW HOLDS NOW, which is what `sandbox_tail` is asked
 		// by: a turn can launch more than one, and the run's own page polls
 		// the live output of the job it is showing rather than of whichever
-		// replaced it. Empty on a row a build that predates it wrote, and
-		// such a run has no live output to ask for.
+		// replaced it.
 		"launch_id":    run.LaunchID,
 		"role":         run.Role,
 		"status":       run.Status,
@@ -181,8 +178,8 @@ func serialiseRun(run sandbox.PendingRun) map[string]any {
 		// WHERE the run is, which became an operator question the moment
 		// providers.sandbox became a catalogue: one company now runs some
 		// seats on the engine host and others in a remote box, and "is
-		// this job on my machine" has no other surface. Empty on a row
-		// written before the field existed.
+		// this job on my machine" has no other surface. Empty is the
+		// provider default.
 		"placement":        run.Placement,
 		"task_description": run.TaskDescription,
 		"question":         run.Question,
@@ -205,7 +202,7 @@ func serialiseRun(run sandbox.PendingRun) map[string]any {
 		"pause_ttl_seconds":  run.PauseTTLSeconds,
 		"started_at":         isoOrEmpty(run.CreatedAt),
 		"updated_at":         isoOrEmpty(run.UpdatedAt),
-		"answerable_in_chat": answerableInChat(run.Conversation()),
+		"answerable_in_chat": answerableInChat(run.ConversationKey),
 		// WHO IS WAITING, which is the question a board full of parked
 		// runs exists to answer and had no field for. Persisted rather
 		// than re-derived precisely because the resumed turn does not see

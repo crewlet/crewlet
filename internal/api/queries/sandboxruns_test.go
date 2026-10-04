@@ -224,20 +224,18 @@ func TestARunNoChatCanAnswerSaysSo(t *testing.T) {
 		// stored.
 		sandbox.PendingRun{TurnID: "none", AgentHandle: "swe", Status: sandbox.StatusAwaiting,
 			CreatedAt: runBase.Add(2 * time.Minute)},
-		// A ROW FROM BEFORE THE SPLIT carries only the partition key, and
-		// the column is answered off the conversation — so the identity
-		// read has to fall back to it or every parked run written by an
-		// older build is reported unanswerable while a person is in fact
-		// waiting in that thread.
-		sandbox.PendingRun{TurnID: "presplit", AgentHandle: "swe", Status: sandbox.StatusAwaiting,
+		// A ROW NAMING ONLY A PARTITION is answered off its conversation,
+		// which it does not have — and the coordinator matches a reply on
+		// the conversation alone, so no reply could resume it.
+		sandbox.PendingRun{TurnID: "partitiononly", AgentHandle: "swe", Status: sandbox.StatusAwaiting,
 			PartitionKey: "chat:D1:1699.9", CreatedAt: runBase.Add(3 * time.Minute)},
 	)
-	for _, id := range []string{"chat", "eventkey", "none", "presplit"} {
+	for _, id := range []string{"chat", "eventkey", "none", "partitiononly"} {
 		if err := store.SetStatus(t.Context(), id, sandbox.StatusAwaiting, sandbox.Fence{}); err != nil {
 			t.Fatalf("SetStatus: %v", err)
 		}
 	}
-	want := map[string]bool{"chat": true, "eventkey": false, "none": false, "presplit": true}
+	want := map[string]bool{"chat": true, "eventkey": false, "none": false, "partitiononly": false}
 	for _, row := range askRuns(t, store) {
 		id := row["turn_id"].(string)
 		if row["answerable_in_chat"] != want[id] {

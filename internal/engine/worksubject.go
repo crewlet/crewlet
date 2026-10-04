@@ -115,8 +115,8 @@ func workItemOfEvent(ev *events.Event) (*types.WorkItem, types.WorkItemBasis) {
 
 // resumedWorkItem is rule 3: the item a parked run recorded at launch.
 //
-// A run recorded by a build that predates the field carries none, and resumes
-// on nothing — which is what that turn's first half was charged to as well.
+// A run launched by a turn charged to no item carries none, and resumes on
+// nothing — which is what that turn's first half was charged to as well.
 func resumedWorkItem(run sandbox.PendingRun) (*types.WorkItem, types.WorkItemBasis) {
 	if run.WorkItem == nil || run.WorkItem.ID == "" {
 		return nil, ""

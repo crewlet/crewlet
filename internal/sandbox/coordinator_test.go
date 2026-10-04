@@ -921,10 +921,10 @@ func TestANodeThatCannotResumeSaysSoRatherThanSettling(t *testing.T) {
 // A row with nothing to re-enter cannot continue its turn, and the seat must
 // not stay parked on it.
 //
-// No LIVE path produces one any more — a run holds [StatusLaunching] until its
+// No LIVE path produces one — a run holds [StatusLaunching] until its
 // conversation is written and a launching run is not claimable — so this
-// reaches the state the only way left: a row written by a build that predates
-// that state, read by this one across a rolling upgrade.
+// reaches the state by flipping the status by hand: the check is the
+// assertion that the launching state is doing its job.
 func TestARunWithNoSuspendedConversationIsFailedAndFreed(t *testing.T) {
 	rig := newCoordRig(t)
 	run := rig.launching("t1")
@@ -2506,12 +2506,10 @@ func TestAnAnswerOutsideTheQuestionsPartitionStillResumesTheRun(t *testing.T) {
 //
 // The match has two keys on each side, and which one decided is the whole
 // diagnosis: a row whose conversation equals the delivery's was admitted on
-// the identity, a row with no conversation was matched on the partition
-// fallback because it predates the split, and two questions parked on one
-// direct-message line are told apart by the partitions alone. Logging the
-// identity by itself — which is what this line did once the match moved onto
-// it — left all three indistinguishable, on the exact path where the two
-// values differ and an operator is asking why THIS run woke.
+// the identity, and two questions parked on one direct-message line are told
+// apart by the partitions alone. Logging the identity by itself left the two
+// indistinguishable, on the exact path where the two values differ and an
+// operator is asking why THIS run woke.
 func TestTheAnsweredLineNamesBothKeysOfBothEnds(t *testing.T) {
 	logs := captureLogs(t)
 	rig := newCoordRig(t)
@@ -2770,8 +2768,8 @@ func TestAnAnswerForATerminallyGoneRunBecomesAnOrdinaryMessage(t *testing.T) {
 				inner: rig.pending, refuse: []string{"ReleaseClaim"},
 			}
 		},
-		// A row from a build that predates the launching state: claimable,
-		// with nothing to resume into, so the run is failed.
+		// A claimable row with nothing to resume into, so the run is
+		// failed.
 		"a row with no suspended conversation": func(rig *coordRig) {
 			rig.coordinator.pending = statelessStore{PendingStore: rig.pending}
 		},
@@ -3758,58 +3756,4 @@ func (w *finishWitness) Finish(ctx context.Context, turnID string, fence Fence, 
 	w.finished = true
 	w.killedFirst = slices.Contains(w.provider.KilledIDs(), w.box)
 	return w.PendingStore.Finish(ctx, turnID, fence, whileIn)
-}
-
-// EVERY ANNOUNCEMENT CARRIES THE UNIT OF WORK, and a run parked before
-// ADR-0017 carries it in its turn id.
-//
-// A coding run is detached: the row is written by one build and read, minutes
-// or days later and possibly on another node, by whatever is running then.
-// Nothing rewrites a parked row, so a run suspended before the split has no
-// WorkKey field at all and its TurnID IS the work key — which is why
-// [PendingRun.UnitOfWork] exists and why no publisher may reach for the raw
-// field. Reaching for it announced an empty unit of work for exactly the runs
-// that outlived the upgrade, and the completion, the question and the failure
-// are the three gestures a resumed turn's identity travels on.
-func TestAnAnnouncementCarriesTheUnitOfWorkOfAPreSplitRun(t *testing.T) {
-	// A DERIVED-SHAPED TURN ID: 32 lowercase hex, which is what
-	// workkey.Derive produces and what a pre-split build put in TurnID.
-	const preSplit = "0123456789abcdef0123456789abcdef"
-
-	t.Run("clarification", func(t *testing.T) {
-		rig := newCoordRig(t)
-		rig.launch(preSplit)
-		rig.coordinator.countRun("swe", StatusRunning)
-		rig.runner.Finish(Result{
-			NeedsInput: true, Question: "which branch?", AskTo: "requester",
-		})
-		payload, ev := rig.completion(preSplit)
-		if err := rig.coordinator.OnCompleted(t.Context(), payload, ev); err != nil {
-			t.Fatalf("OnCompleted: %v", err)
-		}
-		asked := rig.questions()
-		if len(asked) != 1 {
-			t.Fatalf("%d questions announced, want one", len(asked))
-		}
-		if asked[0].WorkKey != preSplit {
-			t.Errorf("WorkKey = %q, want the pre-split run's unit of work %q",
-				asked[0].WorkKey, preSplit)
-		}
-	})
-
-	t.Run("failure", func(t *testing.T) {
-		rig := newCoordRig(t)
-		rig.launching(preSplit)
-		if err := rig.coordinator.RecoverSeat(t.Context(), "swe", "node-2", 7); err != nil {
-			t.Fatalf("RecoverSeat: %v", err)
-		}
-		failed := rig.failures()
-		if len(failed) != 1 {
-			t.Fatalf("%d failures announced, want one", len(failed))
-		}
-		if failed[0].WorkKey != preSplit {
-			t.Errorf("WorkKey = %q, want the pre-split run's unit of work %q",
-				failed[0].WorkKey, preSplit)
-		}
-	})
 }
