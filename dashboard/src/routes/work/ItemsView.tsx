@@ -292,16 +292,16 @@ export function ItemsView({
   // here on: it narrows the query, it carries a chip, and the chip takes it
   // off.
   const [unit] = useParam("unit", "");
-  const [groupBy, setGroupBy] = useParam("group_by", "");
+  const [groupBy] = useParam("group_by", "");
   const [groupBy2, setGroupBy2] = useParam("group_by2", "");
   // THE COLUMN NARROWING IS THREE-VALUED and `useParam` cannot say so: its
   // value is "the key, or the fallback", which reads an ABSENT key and a
   // PRESENT EMPTY one as the same string — and the empty one is a real column,
   // the one holding the rows with no value on this axis. So the value is read
-  // off the whole query, the way [useFieldFilters] reads the custom fields, and
-  // the setter is kept for the one gesture that CLEARS it. See
-  // [TrackerFilters.group].
-  const [, setGroup] = useParam("group", "");
+  // off the whole query, the way [useFieldFilters] reads the custom fields,
+  // and the one gesture that CLEARS it is the group-by's own patch
+  // ([onGroupBy]), which takes the narrowing off with the axis it belongs to.
+  // See [TrackerFilters.group].
   const [sort, setSort] = useParam("sort", "");
   const [blocked] = useParam("blocked", "");
   const [due] = useParam("due", "");

@@ -16,7 +16,7 @@ import { outcomeOf, problemCount, turnFacts, type TurnView } from "./Turn.tsx";
 // second one — two LANDING instants subtracted, which drops the first phase's
 // own length — so the two are one function and one set of cases.
 import { turnSpan } from "~/lib/phases.ts";
-import type { PhaseRecord, Timed } from "~/lib/phases.ts";
+import type { Timed } from "~/lib/phases.ts";
 import type { EventRecord } from "~/protocol/index.ts";
 import { tellStory } from "~/lib/turnstory.ts";
 import { phaseRecord } from "~/test/phaseRecord.ts";

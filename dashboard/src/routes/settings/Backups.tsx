@@ -20,7 +20,7 @@
  * `backups` answers both; neither is derived from the other here.
  */
 
-import { useMemo, useState } from "react";
+import { useState } from "react";
 import {
   Button,
   Card,
@@ -44,8 +44,8 @@ import { CoverageNote } from "~/components/CoverageNote.tsx";
 import { PageNote } from "~/app/frame/PageNote.tsx";
 import { PageActions } from "~/app/frame/PageActions.tsx";
 import { DataGrid } from "~/app/frame/DataGrid.tsx";
-import { DateCell, KeyCell, SeatCell, SeatLabel, StatusCell } from "~/app/frame/cells.tsx";
-import { useEngineHealth, useOrg } from "~/lib/store-hooks.ts";
+import { DateCell, KeyCell, StatusCell } from "~/app/frame/cells.tsx";
+import { useEngineHealth } from "~/lib/store-hooks.ts";
 import { useQuery } from "~/lib/useQuery.ts";
 import { useNow } from "~/lib/clock.ts";
 import {

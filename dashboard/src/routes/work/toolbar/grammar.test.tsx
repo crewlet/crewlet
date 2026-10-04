@@ -68,11 +68,12 @@ afterEach(() => {
  * Every URL key this screen reads or writes.
  *
  * `useParam` IS THE WHOLE GRAMMAR of it — a key nothing reads is a key nothing
- * can act on — plus the one family read off the whole query rather than one
- * key at a time, because the set of a company's own fields is the company's
- * and there is no key for a build to ask for. Both spellings of the column key
- * arrive through [colsParam], so they are recognised in that form rather than
- * as literals the screen does not contain.
+ * can act on — plus what is read off the whole query rather than through it:
+ * the one family whose keys are the company's own fields, since there is no
+ * key for a build to ask for, and a key whose absence and emptiness are two
+ * values (`route.query.get`), which `useParam` reads as one. Both spellings of
+ * the column key arrive through [colsParam], so they are recognised in that
+ * form rather than as literals the screen does not contain.
  */
 function screenKeys(): string[] {
   const out = new Set<string>();
@@ -81,6 +82,9 @@ function screenKeys(): string[] {
   )) {
     if (literal) out.add(literal);
     if (shape) out.add(colsParam(shape as (typeof GRID_SHAPES)[number]));
+  }
+  for (const [, key] of SOURCE.matchAll(/route\.query\.get\("([^"]+)"\)/g)) {
+    if (key) out.add(key);
   }
   for (const [, prefix] of SOURCE.matchAll(/key\.startsWith\("([^"]+)"\)/g)) {
     if (prefix) out.add(prefix);

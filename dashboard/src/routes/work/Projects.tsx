@@ -49,7 +49,6 @@
 import { useMemo } from "react";
 import { usePanelAlign } from "~/lib/media.ts";
 import { buildHash, useParam, useRoute } from "~/app/router.tsx";
-import { PageNote } from "~/app/frame/PageNote.tsx";
 import { usePageCoverage } from "~/app/Shell.tsx";
 import {
   ColumnChooser,

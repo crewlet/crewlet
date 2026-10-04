@@ -3,7 +3,7 @@ import { DATA_COLOR_OTHER, dataColor } from "@crewlethq/ui";
 
 import { bandColor, bandLabel, bandsOf, phaseColor, spentOnly, unbandedTokens } from "./spend.ts";
 import { BANDS, PHASE_BANDS } from "~/contract/spend.ts";
-import type { Bucket, SeriesPoint, TokenSeries } from "~/protocol/types.ts";
+import type { Bucket, TokenSeries } from "~/protocol/types.ts";
 
 function bucket(total: number, extra: Partial<Bucket> = {}): Bucket {
   return {
@@ -31,11 +31,6 @@ function series(over: Partial<TokenSeries> = {}): TokenSeries {
     grouped: bucket(0),
     ...over,
   };
-}
-
-/** One day's point. */
-function point(at: string, b: Bucket, over: Partial<SeriesPoint> = {}): SeriesPoint {
-  return { ...b, at, window: at.slice(0, 10), days: 1, groups: {}, other: bucket(0), ...over };
 }
 
 describe("the legend", () => {

@@ -75,25 +75,6 @@ const JANE = {
   kind: "human",
   acts: EVERY_TOOL,
 };
-/** A token no seat is bound to: it may read, and every write says why not. */
-const UNBOUND = {
-  login: "U0OPS",
-  grants: [
-    "config:read",
-    "config:write",
-    "secrets:write",
-    "fleet:operate",
-    "people:manage",
-    "audit:read",
-    "state:read",
-    "work:write",
-    "knowledge:write",
-  ],
-  handle: "",
-  owner: "U0OPS",
-  name: "",
-  acts: [],
-};
 
 const ORG = {
   name: "Acme",

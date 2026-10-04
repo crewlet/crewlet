@@ -42,7 +42,7 @@ import { RaiseBudgetButton } from "~/components/budgetWrite.tsx";
 import { useAct } from "~/lib/useAct.ts";
 import { useQuery } from "~/lib/useQuery.ts";
 import { PERIOD_ADJECTIVE } from "~/lib/budget.ts";
-import { plainText, renderMarkdown, safeHref } from "~/lib/markdown.ts";
+import { renderMarkdown, safeHref } from "~/lib/markdown.ts";
 import { fmtDateTime, humanize, relTime } from "~/lib/format.ts";
 import { reasonPhrase, reasonWhy } from "~/lib/reasons.ts";
 import type { OrgIndex } from "~/lib/seats.ts";

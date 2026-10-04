@@ -29,17 +29,7 @@ import { href, useNavigator, useParam } from "~/app/router.tsx";
 import { QueryState } from "~/components/common.tsx";
 import { useWriteAccess } from "~/lib/useWriteAccess.ts";
 import { NewPageDialog } from "./NewPage.tsx";
-import {
-  Button,
-  Card,
-  cx,
-  EmptyState,
-  FilterChip,
-  Input,
-  Select,
-  Skeleton,
-  Tag,
-} from "@crewlethq/ui";
+import { Button, Card, EmptyState, FilterChip, Input, Select, Skeleton, Tag } from "@crewlethq/ui";
 // OURS, DELIBERATELY. `SegmentedControl` welds keyboard ACTIVATION to its
 // `semantics`: `radio` selects as the arrows move, `tabs` is manual but
 // demands a `panelId` naming a TabPanel neither of these rows controls. Both
@@ -61,12 +51,11 @@ import {
 } from "@crewlethq/icons/glyphs";
 import { useQuery } from "~/lib/useQuery.ts";
 import { useOrg } from "~/lib/store-hooks.ts";
-import { indexOrg, seatLookup } from "~/lib/seats.ts";
-import { fmtDateTime, plural, relTime, tsKey } from "~/lib/format.ts";
+import { indexOrg } from "~/lib/seats.ts";
+import { plural, relTime, tsKey } from "~/lib/format.ts";
 import { useNow } from "~/lib/clock.ts";
 import { PageActions } from "~/app/frame/PageActions.tsx";
 import type { Page, PageDetail, PageRevision, PageSummary } from "~/protocol/index.ts";
-import { usePageLabels } from "~/app/Shell.tsx";
 import { usePagedPages } from "./usePagedPages.ts";
 import { PageNote } from "~/app/frame/PageNote.tsx";
 
