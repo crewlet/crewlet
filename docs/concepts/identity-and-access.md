@@ -1927,8 +1927,8 @@ authenticate by their own means, so what they carry is not the guard's to
 count: the Atlassian Forge relay sends its own signed JWT as a bearer on
 every Jira and Confluence delivery, and a browser loading the sign-in page
 may still hold a cookie signed under a key the deployment has since retired.
-Neither is a failed sign-in, and neither is an open dashboard tab re-checking
-the credential it connected with. A refusal is counted where a route that
+Neither is a failed sign-in, and neither is an open dashboard tab deciding
+again the credential it connected with. A refusal is counted where a route that
 needs a credential answered `401` because of it.
 
 When the minute has closed, the engine publishes **one `iam_login_failures`
@@ -1965,8 +1965,8 @@ both rows on every request instead. It is off by default and meant for the
 credential a company has decided to watch individually: break-glass. See
 [Configuration § Auth](../getting-started/configuration.md).
 
-A dashboard socket re-checking the credential it was opened with is not a use;
-only a request is.
+A dashboard socket deciding again the credential it was opened with — when an
+identity record names it, or at its deadline — is not a use; only a request is.
 
 ### What has no event at all
 
