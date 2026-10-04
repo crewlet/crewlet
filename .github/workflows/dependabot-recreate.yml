@@ -1,20 +1,24 @@
-name: dependabot-rebase
+name: dependabot-recreate
 
-# When a person merges to `main`, ask Dependabot to rebase any bump that is STILL
-# in conflict. Dependabot rebases a conflicted bump itself within minutes (#167,
-# two minutes after #168 merged) while every commit on it is its own or marked
-# `[dependabot skip]`, which the bundle commit is, and it stops trying after 30
-# days. So this waits ten minutes for that, and for GitHub to work out who
-# conflicts, and comments on whatever is left.
+# When a person merges to `main`, ask Dependabot to recreate any bump that is
+# STILL in conflict. Dependabot rebases a conflicted bump itself within minutes
+# (#167, two minutes after #168 merged) while every commit on it is its own or
+# marked `[dependabot skip]`, which the bundle commit is, and it stops trying
+# after 30 days. So this waits ten minutes for that, and for GitHub to work out
+# who conflicts, and comments on whatever is left.
 #
-# It comments `rebase`, never `recreate`: Dependabot refuses to rebase a branch
-# holding somebody else's commit, where recreate would delete it. A bump is
-# asked once per head commit, so one that stays stuck is not asked again until
-# its branch changes.
+# It comments `recreate`, not `rebase`, because what is left is mostly a branch
+# Dependabot will not touch: once it holds a commit that is neither Dependabot's
+# nor marked, Dependabot skips the automatic rebase and answers `@dependabot
+# rebase` with "edited by someone other than Dependabot", so the bump stays stuck
+# for good. Recreate is the command that works on it, and it OVERWRITES EVERY
+# COMMIT ON THE BRANCH, a person's included. That is the price, paid by a bump
+# that is still conflicting ten minutes after a merge. A bump is asked once per
+# head commit.
 #
 # The comment has to come from a person. Dependabot ignores commands written by
 # `github-actions[bot]` or by a GitHub App (dependabot-core#9147). So it is made
-# with DEPENDABOT_REBASE_TOKEN: a fine-grained personal access token for this
+# with DEPENDABOT_RECREATE_TOKEN: a fine-grained personal access token for this
 # repository, Pull requests: read and write, owned by an account with Write
 # access. That scope can also approve pull requests, so the secret belongs to an
 # ENVIRONMENT limited to the branch `main` (Settings -> Environments), which
@@ -36,16 +40,16 @@ permissions: {}
 
 # A newer merge replaces a run that is still waiting, instead of both commenting.
 concurrency:
-  group: dependabot-rebase
+  group: dependabot-recreate
   cancel-in-progress: true
 
 jobs:
-  rebase:
+  recreate:
     name: comment on the bumps still in conflict
     runs-on: ubuntu-latest
     # A fork has no secret and would fail on every push to its own `main`.
     if: ${{ !github.event.repository.fork }}
-    environment: dependabot-rebase
+    environment: dependabot-recreate
     timeout-minutes: 20
     steps:
       - run: |
@@ -65,21 +69,22 @@ jobs:
             sleep 15
           done
 
-          # Conflicting, and nobody has asked since the branch last changed. Both
-          # timestamps are UTC ISO-8601, which compares as text.
+          # Conflicting, and nobody has asked for a recreate since the branch last
+          # changed. A refused `rebase` does not count: it left the branch as it was.
+          # Both timestamps are UTC ISO-8601, which compares as text.
           jq -r '.[]
             | select(.mergeable == "CONFLICTING")
             | select((.commits[-1].committedDate) as $head
                 | any(.comments[];
-                    (.body | test("^@dependabot (rebase|recreate)"))
+                    (.body | test("^@dependabot recreate"))
                     and .createdAt > $head)
                 | not)
             | .number' <<<"$prs" |
             while read -r n; do
               gh api "repos/$GITHUB_REPOSITORY/issues/$n/comments" \
-                -f body='@dependabot rebase' --silent
-              echo "asked Dependabot to rebase #$n"
+                -f body='@dependabot recreate' --silent
+              echo "asked Dependabot to recreate #$n"
             done
         env:
-          GH_TOKEN: ${{ secrets.DEPENDABOT_REBASE_TOKEN }}
+          GH_TOKEN: ${{ secrets.DEPENDABOT_RECREATE_TOKEN }}
           GH_REPO: ${{ github.repository }}

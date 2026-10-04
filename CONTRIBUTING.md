@@ -690,29 +690,35 @@ pins on the actions in the second one and the token's scope on any diff that
 touches
 [`.github/workflows/dependabot-dashboard.yml`](.github/workflows/dependabot-dashboard.yml).
 
-### A conflicted bump is asked to rebase
+### A conflicted bump is asked to recreate
 
-[`.github/workflows/dependabot-rebase.yml`](.github/workflows/dependabot-rebase.yml)
+[`.github/workflows/dependabot-recreate.yml`](.github/workflows/dependabot-recreate.yml)
 runs when a person merges to `main`, or by hand from the Actions tab. It waits ten
-minutes, then comments `@dependabot rebase` on every open Dependabot pull request
-that is still in conflict. The wait is the point: Dependabot rebases a conflicted
-bump itself within minutes (up to about four and a half in this repository's
-history), so what is still conflicting after ten is a bump it missed, one past its
-30 days, or one holding a commit it will not touch. It asks once per head commit,
-so a bump that stays stuck is not asked again until its branch changes.
+minutes, then comments `@dependabot recreate` on every open Dependabot pull
+request that is still in conflict. The wait is the point: Dependabot rebases a
+conflicted bump itself within minutes (up to about four and a half in this
+repository's history), so what is still conflicting after ten is a bump it
+missed, one past its 30 days, or one holding a commit it will not touch. It asks
+once per head commit, so a bump that stays stuck is not asked again until its
+branch changes.
 
-It comments `rebase` and not `recreate` because rebase cannot destroy anything:
-Dependabot refuses to rebase a branch holding somebody else's commit ("edited by
-someone other than Dependabot"), where `recreate` would delete it. A bump it
-refuses is the signal that it needs a person: rebase it yourself, or comment
-`@dependabot recreate` and accept losing the commit.
+It comments `recreate` and not `rebase` because the bumps still stuck after ten
+minutes are mostly the ones holding somebody else's commit, and Dependabot
+answers `@dependabot rebase` on those with "edited by someone other than
+Dependabot" and does nothing. `recreate` is the command that works there, and
+**it overwrites every commit on the branch, a person's included**. That is the
+price, and it falls on a bump that is still conflicting ten minutes after a
+merge. The force-push is recorded in the pull request's timeline and the old head
+is still in the clone of whoever pushed it, but if you have work on a Dependabot
+branch you mean to keep, move it to a branch of your own before you merge
+anything to `main`.
 
 The comment has to come from a user account. Dependabot answers a command from
 `github-actions[bot]`, or from any GitHub App, with "Sorry, only users with push
 access can use that command"
 ([dependabot-core#9147](https://github.com/dependabot/dependabot-core/issues/9147)),
 and obeys an account with push access. So it is made with a second credential,
-`DEPENDABOT_REBASE_TOKEN`, and deliberately not `DASHBOARD_BUNDLE_TOKEN`: one
+`DEPENDABOT_RECREATE_TOKEN`, and deliberately not `DASHBOARD_BUNDLE_TOKEN`: one
 token that could both push to a branch and approve could land anything on its own.
 Two things outside this repository's files have to exist:
 
@@ -723,7 +729,7 @@ Two things outside this repository's files have to exist:
   Issues. This scope also covers approving and dismissing reviews, and an
   approval from an account with write access counts toward `main`'s required
   review, which is why the next item is not optional.
-- **An environment**, `dependabot-rebase`, whose deployment branches are limited
+- **An environment**, `dependabot-recreate`, whose deployment branches are limited
   to the selected branch `main`, holding the token as its secret (Settings →
   Environments). An ordinary Actions secret can be read by anyone who can push a
   branch and run a workflow from it, which is every writer; an environment secret
@@ -740,7 +746,7 @@ for a manual run. Those are the conflicts Dependabot rebases itself.
 
 Nothing checks any of this for you. Read the wait, the command it posts, the
 environment and the token's scope on any diff that touches
-[`.github/workflows/dependabot-rebase.yml`](.github/workflows/dependabot-rebase.yml).
+[`.github/workflows/dependabot-recreate.yml`](.github/workflows/dependabot-recreate.yml).
 
 ## Releasing
 
