@@ -307,3 +307,58 @@ func replicatedDDL(t *testing.T) string {
 	}
 	return all.String()
 }
+
+// THE CHART'S LOG LEAVES NOTHING BEHIND: no table of its domain in the
+// replicated estate, no staged chart in the node's, and no column a revision
+// kept about it.
+//
+// The chart is the company document's again, so these are tables no applier
+// writes and columns no writer fills — and the estate is derived, so a table
+// left behind is one a snapshot carries to every node that joins. The
+// controls are the tracker's own table and the revision's payload, which a
+// migration that dropped too much would take with it.
+func TestTheChartLeavesNoTableAndNoColumnBehind(t *testing.T) {
+	t.Parallel()
+	db := openReplicated(t)
+	names := func(estate *store.DB, query string) []string {
+		var out []string
+		if err := estate.Read(t.Context(), func(tx *sql.Tx) error {
+			rows, err := tx.QueryContext(t.Context(), query)
+			if err != nil {
+				return err
+			}
+			defer func() { _ = rows.Close() }()
+			for rows.Next() {
+				var name string
+				if err := rows.Scan(&name); err != nil {
+					return err
+				}
+				out = append(out, name)
+			}
+			return rows.Err()
+		}); err != nil {
+			t.Fatalf("%s: %v", query, err)
+		}
+		return out
+	}
+	const tables = `SELECT name FROM sqlite_schema WHERE type = 'table'`
+	replicated, node := names(db.Replicated(), tables), names(db, tables)
+	if !slices.Contains(replicated, "tracker_projects") {
+		t.Fatalf("the replicated estate lists %v, without the tracker's projects", replicated)
+	}
+	for _, name := range append(slices.Clone(replicated), node...) {
+		if strings.HasPrefix(name, "chart_") {
+			t.Errorf("%s is still shipped — nothing writes or reads it since the "+
+				"chart went back into the company document", name)
+		}
+	}
+	cols := names(db, `SELECT name FROM pragma_table_info('company_config')`)
+	if !slices.Contains(cols, "payload") {
+		t.Fatalf("company_config has columns %v, without its payload", cols)
+	}
+	for _, gone := range []string{"chart_position", "scrubbed_at"} {
+		if slices.Contains(cols, gone) {
+			t.Errorf("company_config still carries %s, which nothing writes", gone)
+		}
+	}
+}
