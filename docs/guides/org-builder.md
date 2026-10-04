@@ -572,10 +572,9 @@ would do before it does it:
 - **What changes:** the units and seats added, removed, renamed, moved and
   edited, and the charter fields.
 - **What follows:** the consequences a reader can work out from the chart's
-  own rows: a new address for a seat or a unit (which keeps its identity, and
-  whose old address goes on reaching it), seats that onboard again and why,
-  where onboarding pages are looked up after a unit is renamed, the tool
-  credentials a seat gains or loses (names only), fields a kind change
+  own rows: a changed handle or unit key (which removes the seat or unit and
+  creates another, carrying nothing over), seats that onboard again and why,
+  the tool credentials a seat gains or loses (names only), fields a kind change
   removes, references a removal clears, the Datadog fallback seat and GitLab
   access levels. Who reports to whom, the lead and channel a unit inherits
   and where unrouted work goes are derived by the engine once the chart is

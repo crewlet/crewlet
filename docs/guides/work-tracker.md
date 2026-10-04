@@ -212,9 +212,9 @@ Every item carries two units, and they answer different questions.
 
 - **Filed into** — the team the work belongs to. It is set once, at the
   create, and nothing rewrites it: it is a record of what was true, so it may
-  name a team the chart has since renamed or dropped. It is what `unit=`
-  filters on and what a board's `unit` axis groups by, and a board heads that
-  column with the team's current name.
+  name a team the chart has since dropped, a unit given another key
+  included. It is what `unit=` filters on and what a board's `unit` axis
+  groups by, and a board heads that column with the team's current name.
 - **Routes to** — whose lead hears about the item *now*. It starts equal to
   the filed unit and moves when somebody re-routes the item
   (`update_work_item` with `routing_unit`).
@@ -268,14 +268,15 @@ resolves to the team, and a filter or a board's `unit` axis matches the work
 filed under its key and its name alike — see
 [what a board groups on](#what-a-board-groups-on).
 
-**Renaming a team's key does not rewrite the work already filed.** A task's
+**Changing a team's key does not rewrite the work already filed.** A task's
 filed unit is a record of what was true and nothing in the engine rewrites
 one — these rows are derived from the ordered log every node replays, so a
 repair would have to publish a record per task claiming the team was called
-something it was not. The rows filed before the rename keep the key they were
-filed under. Project rows carry the unit too, and those are chart-owned — the
-next time the node brings its projects up to the chart it rewrites each of
-them to the current key on its own.
+something it was not. A document that gives a unit another key removes the
+unit and adds a new one, so the rows filed before the change keep the old key,
+which is marked as above. Project rows carry the unit too, and those are
+chart-owned — the next time the node brings its projects up to the chart it
+rewrites each of them to the key of the unit that declares the project.
 
 A unit reference that names no team in the chart is **refused at a write**
 (naming the team, so a typo is visible) and **matches nothing at a read**,

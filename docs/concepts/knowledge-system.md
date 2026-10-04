@@ -709,7 +709,7 @@ A search's `query` is clipped to 200 bytes on a character boundary (with a trail
 
 ## Onboarding markers
 
-The `mark_onboarded` builtin records that an agent has read its team's Onboarding pages so the onboarding hint stops re-rendering on every turn. Markers live in their own small table, `agent_onboarding_markers`, keyed by `agent_id` with UPSERT semantics (so re-onboarding never accumulates stale rows). The marker carries a `chain_hash` over the agent's org chain (`learning.ChainHash`); a chain change (role moved units, ancestor renamed, new unit inserted) silently invalidates the marker, and the dedicated onboarding pass runs again until the agent re-reads and re-marks. The same row holds the cross-process pass lease that stops two turns onboarding one seat at once.
+The `mark_onboarded` builtin records that an agent has read its team's Onboarding pages so the onboarding hint stops re-rendering on every turn. Markers live in their own small table, `agent_onboarding_markers`, keyed by `agent_id` with UPSERT semantics (so re-onboarding never accumulates stale rows). The marker carries a `chain_hash` over the agent's org chain (`learning.ChainHash`); a chain change (role moved units, an ancestor unit replaced by one under another key, new unit inserted) silently invalidates the marker, and the dedicated onboarding pass runs again until the agent re-reads and re-marks. The same row holds the cross-process pass lease that stops two turns onboarding one seat at once.
 
 A dedicated table, because `learning.Onboarding.Onboarded` answers with one indexed equality lookup instead of a per-agent metadata-filter scan.
 

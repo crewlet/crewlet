@@ -2606,8 +2606,8 @@ is the store's own constant and not a promise this page makes. Once a
 cursor crosses that floor every page is empty — which is why a client
 must distinguish it from quiet, rather than drawing the gap as silence.
 
-`seat` narrows the log to the events ONE agent seat published, named by any
-handle it answers to and resolved on the server to the derived agent id every
+`seat` narrows the log to the events ONE agent seat published, named by its
+handle and resolved on the server to the derived agent id every
 seat-level event carries and every row names as its own `agent_id` — the live
 `event` push and a stored row alike, so a client merging the two filters both
 by the same id. It is what a seat's own "all
