@@ -109,7 +109,7 @@ import {
   type HttpAnswer,
 } from "./model/transport.ts";
 import type { DraftStorage } from "./model/persistence.ts";
-import { clearDraft } from "./model/persistence.ts";
+import { clearDraft, keptScope } from "./model/persistence.ts";
 import { deriveChanges } from "./model/changes.ts";
 import { seatsWithoutContact } from "./model/templates.ts";
 import type { KeySource } from "./model/keys.ts";
@@ -682,10 +682,15 @@ function BuilderScreen({
   // `config:write` who leads a unit — one unit they lead (see the module doc):
   // the one they chose, else the one holding the node the address they
   // arrived at names, else the first.
+  //
+  // A RELOAD CHOOSES THE UNIT A KEPT DRAFT WAS MADE OF. Nothing else holds
+  // which unit a lead chose — the toolbar writes no address, and a seat the
+  // draft added has none the chart knows — and opened on another unit, the
+  // kept draft would be discarded as that unit's (`useDraftKeeping`).
   const leads = useLeadScope();
   const writesCompany = viewer.grants.includes(CONFIG_WRITE_GRANT);
   const undecided = viewer.asking || (!writesCompany && viewer.handle !== "" && !orgKnown);
-  const [chosen, setChosen] = useState<string | null>(null);
+  const [chosen, setChosen] = useState<string | null>(() => keptScope(storage));
   const [arrivedAt] = useState(() => ({ unit: unitParam, seat: seatParam }));
   const scope =
     writesCompany || leads.tops.length === 0

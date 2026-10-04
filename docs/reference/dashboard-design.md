@@ -6505,7 +6505,10 @@ while the screen binds the real chart, table, editor and dialogs, and
   decided.** `useDraftKeeping.ts` reads the kept draft once the base is loaded,
   offers Keep or Discard for the same revision (and, for a lead, the same
   unit; read-only until answered), restores through the update flow for
-  another, and discards one kept for the other mode or another unit. It
+  another, and discards one kept for the other mode or another unit. A lead's
+  builder opens the unit a kept draft was made of while they still lead it
+  (`persistence.keptScope`, read before the unit is chosen and deciding
+  nothing), so another unit means one they no longer lead. It
   writes nothing before that decision, because the plan for an empty log is to
   clear. A change of reader or a refused credential clears it and withdraws
   an offer — but not a step-up the reader declined, which is the same person

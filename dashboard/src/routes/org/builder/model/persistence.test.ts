@@ -21,6 +21,7 @@ import {
   clearDraft,
   isOperation,
   keepDraft,
+  keptScope,
   markPendingWrite,
   parseKeptDraft,
   persistencePlan,
@@ -246,6 +247,24 @@ describe("keeping and restoring", () => {
     expect(clearDraft(refusing)).toBe("refused");
     expect(keepDraft(null, kept())).toBe("unavailable");
     expect(restoreDraft(null)).toEqual({ kind: "unavailable" });
+  });
+});
+
+// THE UNIT A KEPT DRAFT WAS MADE OF is read before the builder knows which
+// unit to open, and decides nothing: an unreadable draft stays stored for the
+// restore that discards it and says so.
+describe("keptScope", () => {
+  test("names a lead's unit, nothing for a company's, and leaves an unreadable draft alone", () => {
+    const storage = new MemoryStorage();
+    keepDraft(storage, kept({ scope: "ops" }));
+    expect(keptScope(storage)).toBe("ops");
+    keepDraft(storage, kept());
+    expect(keptScope(storage)).toBeNull();
+    storage.setItem(DRAFT_STORAGE_KEY, "{");
+    expect(keptScope(storage)).toBeNull();
+    expect(storage.items.get(DRAFT_STORAGE_KEY)).toBe("{");
+    expect(keptScope(new RefusingStorage())).toBeNull();
+    expect(keptScope(null)).toBeNull();
   });
 });
 

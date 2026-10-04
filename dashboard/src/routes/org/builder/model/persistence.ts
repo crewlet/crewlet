@@ -190,6 +190,22 @@ export function restoreDraft(storage: DraftStorage | null): Restored {
   return { kind: "discarded" };
 }
 
+/**
+ * The unit a kept draft was made of, or `null` for none and for a whole
+ * company's. A READ AND NOTHING MORE: the builder asks it before it knows which
+ * unit to open, and what a kept draft is offered as is decided once that unit
+ * has loaded ([restoreDraft], [restoreOffer]) — so an unreadable draft answers
+ * `null` here and is left to that decision, which discards it and says so.
+ */
+export function keptScope(storage: DraftStorage | null): string | null {
+  try {
+    const raw = storage?.getItem(DRAFT_STORAGE_KEY);
+    return raw ? (parseKeptDraft(JSON.parse(raw))?.scope ?? null) : null;
+  } catch {
+    return null;
+  }
+}
+
 /** What to offer when a kept draft meets the company that was just loaded. */
 export type RestoreOffer =
   /** Same mode and revision: offer Keep or Discard. */

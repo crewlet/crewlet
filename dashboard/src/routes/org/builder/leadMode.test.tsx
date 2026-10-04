@@ -17,6 +17,7 @@ import { act, cleanup, fireEvent, screen, waitFor, within } from "@testing-libra
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import type { CompanyDocument, OrgProjection } from "~/protocol/index.ts";
 import { Engine, json, mountBuilder, type SentRequest } from "./testkit.tsx";
+import { DRAFT_STORAGE_KEY } from "./model/persistence.ts";
 import { fixtureDerived } from "./model/testkit.ts";
 
 beforeEach(() => {
@@ -311,6 +312,37 @@ describe("a lead's draft", () => {
     expect(await screen.findByText("SRE")).toBeDefined();
     expect(screen.queryByText("Dev")).toBeNull();
     expect(screen.getByRole("button", { name: "Editing Ops as its lead" })).toBeDefined();
+  });
+
+  // A RELOAD REOPENS THE UNIT THE KEPT DRAFT WAS MADE OF. Which unit a lead
+  // chose is in no address, so the second unit's work would otherwise meet the
+  // first unit on reload and be discarded as another unit's.
+  test("a reload reopens the unit a kept draft was made of, and offers it", async () => {
+    const engine = new Engine(leadCompany());
+    mountLead(engine);
+    await screen.findByText("No problems");
+    fireEvent.click(screen.getByRole("button", { name: "Editing Engineering as its lead" }));
+    const menu = await screen.findByRole("menu", { name: "Units you lead" });
+    fireEvent.click(within(menu).getByRole("menuitemradio", { name: /Ops/ }));
+    await screen.findByText("SRE");
+    fireEvent.click(screen.getByRole("button", { name: "Edit SRE" }));
+    await waitFor(() =>
+      expect(sessionStorage.getItem(DRAFT_STORAGE_KEY)).toContain('"scope":"ops"'),
+    );
+
+    // A reload starts the page afresh, which no longer knows the draft as the
+    // one it kept a moment ago, so the draft is offered rather than restored.
+    cleanup();
+    const kept = JSON.parse(sessionStorage.getItem(DRAFT_STORAGE_KEY)!) as { savedAt: number };
+    sessionStorage.setItem(
+      DRAFT_STORAGE_KEY,
+      JSON.stringify({ ...kept, savedAt: kept.savedAt - 1 }),
+    );
+    mountLead(engine);
+    expect(await screen.findByText(/This tab kept a draft with 1 change/)).toBeDefined();
+    expect(screen.getByText("SRE")).toBeDefined();
+    expect(screen.queryByText("Dev")).toBeNull();
+    expect(sessionStorage.getItem(DRAFT_STORAGE_KEY)).toContain('"scope":"ops"');
   });
 
   test("a reader who leads nothing is told the grant, and that a lead edits here", async () => {

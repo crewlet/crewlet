@@ -710,8 +710,10 @@ When the builder opens and finds a kept draft:
   update described below, and **Discard the kept draft** removes it instead.
 - **Made for creating a company, where a company now exists** (or the other
   way around): it is discarded, and the builder says so.
-- **Made of another unit than the one open now** (a lead's draft): it is
-  discarded, and the builder says so.
+- **Made of a unit you no longer lead** (a lead's draft): it is discarded,
+  and the builder says so. While you still lead it, the builder opens that
+  unit for it, whichever unit a link names, so a reload never loses a draft
+  of your second unit.
 
 The kept draft is removed when you save, when you discard, when the reader
 changes, and when the engine refuses the credential, because each of those
