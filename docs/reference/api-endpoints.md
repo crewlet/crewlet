@@ -4801,7 +4801,7 @@ with it and read every log's answer; one that let the route mint it has lost
 the id with the answer that never arrived.
 
 Every node running the state log serves both routes, whichever backends the
-company uses: a company on an external tracker still runs all four logs. A
+company uses: a company on an external tracker still runs all three logs. A
 node with no log to write a gate to answers `503` rather than `404` — the
 routes exist on this build, and telling an operator they do not sends them
 looking for a version mismatch that is not there.

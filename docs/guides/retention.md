@@ -607,7 +607,7 @@ usage log count nothing and get none: a node behind on the vectors is a
 coverage figure, and an evicted node's usage is still what its seats did.) Every
 node running the state log can make the gesture, whichever backends the
 company uses: every node runs every one of those logs, and a company on an
-external tracker still runs all four.
+external tracker still runs all three.
 
 It is **judged once, before anything is written**: a node that still holds a
 live presence lease is refused, because it is still reaching the fleet and
@@ -787,7 +787,7 @@ the log has already lost or is licensed to lose.
 
 The comparison is the one the node's own [write fence](#the-trim-floor) makes,
 made once for every log before any is written: its last published position
-in each of the four logs, against the higher of each log's published floor and
+in each of the three logs, against the higher of each log's published floor and
 its first surviving sequence. A node that has never published a position is
 judged as holding nothing. Nothing is written to any log on a refusal, and the node needs nothing from you but time: start it if it
 is not running, and it [catches up on its own](#the-join-runbook) — replaying

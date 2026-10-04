@@ -156,9 +156,9 @@ node:
 | `workers` | The company-wide singleton duties: the scheduler tick, the maintenance sweep (retention and removed-seat mailbox retirement), the sandbox waiter, the integration reconcile loop, and the learning passes (skill clustering, curation, episode compaction, promotion) on one lease |
 
 Roles decide what a node serves and which duties it holds, and **nothing
-about which state logs it applies**. Every node applies all six — the
-tracker, the vectors, the knowledge base, the org chart, the identity
-directory and the usage history — whatever its roles, so a seats-only
+about which state logs it applies**. Every node applies all five — the
+tracker, the vectors, the knowledge base, the identity directory and the
+usage history — whatever its roles, so a seats-only
 satellite holds a copy of your people, the verifiers of their credentials
 and their sessions like every other member; see
 [what a satellite holds](satellite-nodes.md#what-a-satellite-holds) for why,

@@ -588,7 +588,7 @@ indistinguishable, which is the one question a reader has about a fleet that
 did not form. Lines carry `server=` from `stream.cluster.name`'s member
 identity; a solo broker has no name to carry and the attribute is empty.
 
-**And it needs room for the state logs.** The six state logs reserve their
+**And it needs room for the state logs.** The five state logs reserve their
 byte ceilings against the account's JetStream storage limit when their streams
 are created, and the node sizes them to half of what that limit has left. An
 untiered limit counts every replica, so a `replicas: 3` fleet needs three

@@ -1212,7 +1212,7 @@ check that quietly proves nothing.
 A target whose ordinary ceiling is at or below what the log already holds is
 refused before the window opens, naming both numbers and the least target that
 would do: that ceiling would refuse every ordinary append the moment it
-applied. On the four identity logs the ordinary ceiling is the target less
+applied. On the three identity logs the ordinary ceiling is the target less
 its [gate reserve](../guides/retention.md#the-gate-reserve) — the larger of a
 sixteenth of it and seven of the log's largest records with a mebibyte beside
 them; on the vector changelog and the usage log, which hold no gate, it is the
