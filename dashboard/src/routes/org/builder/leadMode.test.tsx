@@ -94,6 +94,9 @@ describe("a lead's draft", () => {
     // was is no lead's write.
     expect(await screen.findByText("No problems")).toBeDefined();
     expect(engine.checks()).toHaveLength(0);
+    // The unit is read once to open it and once as its check: the transport
+    // its scope brings starts the check, and nothing asks for it again.
+    expect(engine.sent("GET", "/config/units/engineering")).toHaveLength(2);
     expect(screen.getByRole("button", { name: "Editing Engineering as its lead" })).toBeDefined();
     // The draft holds no settings, so it says nothing about the providers.
     expect(screen.queryByText(/No model provider is configured/)).toBeNull();

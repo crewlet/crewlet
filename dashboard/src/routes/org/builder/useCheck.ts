@@ -82,6 +82,7 @@ export function useCheck({
   loadedRef.current = loaded;
   const [machine, setMachine] = useState<CheckState>(INITIAL_CHECK);
   const resetPending = useRef(false);
+  const previous = useRef(state);
 
   useEffect(() => {
     const created = new CheckRunner({
@@ -93,15 +94,21 @@ export function useCheck({
     });
     runner.current = created;
     // A remount of a loaded Builder starts a fresh runner, and the draft on
-    // screen has not been checked by it.
-    if (loadedRef.current) created.reset(stateRef.current.generation);
+    // screen has not been checked by it. So does a new transport — a lead's
+    // draft opening its unit — whose state change would otherwise reset the
+    // runner a second time below, sending the same check twice: this reset
+    // answers that state, and any reset it had asked for.
+    if (loadedRef.current) {
+      created.reset(stateRef.current.generation);
+      previous.current = stateRef.current;
+      resetPending.current = false;
+    }
     return () => {
       created.dispose();
       if (runner.current === created) runner.current = null;
     };
   }, [clock, transport, dispatch, stateRef]);
 
-  const previous = useRef(state);
   useEffect(() => {
     const prev = previous.current;
     previous.current = state;
