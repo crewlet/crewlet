@@ -28,7 +28,7 @@ import (
 // every fresh fleet.
 
 // A BINDING TO AN AGENT'S SEAT FIRES `iam_binding_dangling` — through the real
-// directory, the real chart view and the real alarm tracker.
+// directory, the real seat view and the real alarm tracker.
 func TestTheDanglingBindingAlarmFiresOnARunningNode(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()

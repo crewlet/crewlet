@@ -669,10 +669,12 @@ func TestOneEpochIsRetriedABoundedNumberOfTimes(t *testing.T) {
 	if err := p.recon.Tick(t.Context()); err != nil {
 		t.Fatalf("the fixed revision was refused: %v", err)
 	}
-	// THE SETTINGS, which is what a revision carries: the seats come from
-	// the chart's own log and a config apply never moves them.
+	// The fixed revision's settings AND its seats: a revision carries both.
 	if got := dayCeiling(p.engine.Company()); got != 4242 {
 		t.Errorf("token budget = %d, want the fixed revision's", got)
+	}
+	if got := p.seats(t); len(got) != 3 {
+		t.Errorf("seats = %v, want the fixed revision's three", got)
 	}
 }
 
@@ -1237,12 +1239,14 @@ func TestAPeerConvergesOnARevisionItHasNeverSeen(t *testing.T) {
 			"%s/human/%s from the fleet", adopted.CreatedBy, adopted.CreatedByKind,
 			adopted.OperatorID, adopted.Source, revisionAuthor, revisionCredential)
 	}
-	// The SETTINGS of the revision it converged on, not the one it booted
-	// with. Not its seats: those come from the chart's own log, which a
-	// config apply does not carry and never moves.
+	// The settings and the seats of the revision it converged on, not the
+	// one it booted with.
 	if got := dayCeiling(peer.engine.Company()); got != 4242 {
 		t.Errorf("the peer's token budget is %d, want the revision it "+
 			"converged on", got)
+	}
+	if seats := peer.seats(t); !slices.Contains(seats, "designer") {
+		t.Errorf("the peer's seats are %v, want the revision it converged on", seats)
 	}
 }
 

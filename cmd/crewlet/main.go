@@ -1774,7 +1774,7 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 			// inbox was answered 503 on every retry, on every node.
 			Chart: engine.ChartAuthorityOf(e),
 			// AND WHOSE RECORD SOMEBODY ELSE'S LOGIN NAMES, through the
-			// same directory and chart view a request of theirs resolves
+			// same directory and seat view a request of theirs resolves
 			// through — so a lead reading a report's inbox by login reads
 			// the record the report's own screen reads, and not an empty
 			// one under the login.

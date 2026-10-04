@@ -85,10 +85,11 @@ func (e *Engine) workerDuty(name string, ttl time.Duration) schedule.DutyFunc {
 // caller. See [schedule.HoldNamedDuty].
 //
 // UNDER THIS PROCESS'S INCARNATION rather than the node's lease owner, because
-// a hold is taken before the node exists: the chart's seed runs at boot and
-// mints the company's blind-index key, and a hold that needed the node there
-// answered nil — the single-node answer — on every member of a fleet booting
-// at once, which is precisely when two of them mint.
+// a hold may be taken before the node exists: the identity estate runs from
+// boot, company or none, and mints the company's blind-index key on its first
+// use there, and a hold that needed the node answered nil — the single-node
+// answer — on every member of a fleet booting at once, which is precisely when
+// two of them mint.
 func (e *Engine) workerHold(name string, ttl time.Duration) schedule.HoldFunc {
 	if e.backends == nil {
 		return nil

@@ -422,10 +422,10 @@ func register() []registration {
 			Domain: iamdomain.Domain{},
 			NewApplier: func(s *stateLog) (statelog.Applier, error) {
 				// THE DIRECTORY'S SIGNAL, the party registry's second
-				// rebuild trigger beside the chart view's: a suspension
-				// withdraws a seat's contact identities with no chart
-				// record, so nothing on the publish path would ever see
-				// it. See directory.go.
+				// rebuild trigger beside a published company: a
+				// suspension withdraws a seat's contact identities with
+				// no configuration change, so nothing on the publish
+				// path would ever see it. See directory.go.
 				return iamdomain.NewApplier(s.nodeID, s.nudgeDirectory), nil
 			},
 			NewSeams: func(s *stateLog, appendTo *jetstream.DomainLog,

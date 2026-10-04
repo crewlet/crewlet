@@ -154,7 +154,7 @@ func TestAnEngineWithNoNativeRuntimeIsChartOnly(t *testing.T) {
 // THE TWO REBUILD TRIGGERS SWAP WHOLE REGISTRIES, never a half-built one and
 // never a diff, however they interleave.
 //
-// A published company (the chart view's trigger) and a directory signal both
+// A published company (an apply's trigger) and a directory signal both
 // rebuild one pointer, and the second rebuilds for the SAME company the first
 // built for. Run together under the race detector, with a reader resolving the
 // seat the directory never touches on every registry it can see: that seat
