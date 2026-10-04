@@ -1,20 +1,20 @@
 name: dependabot-recreate
 
-# When a person merges to `main`, ask Dependabot to recreate any bump that is
-# STILL in conflict. Dependabot rebases a conflicted bump itself within minutes
-# (#167, two minutes after #168 merged) while every commit on it is its own or
-# marked `[dependabot skip]`, which the bundle commit is, and it stops trying
-# after 30 days. So this waits ten minutes for that, and for GitHub to work out
-# who conflicts, and comments on whatever is left.
+# When a person merges to `main`, ask Dependabot to recreate every bump that is
+# in conflict, once per head commit. It does not wait for Dependabot's own rebase
+# (a few minutes: #167, two minutes after #168 merged), so a bump Dependabot
+# would have rebased by itself is recreated instead, which ends in the same
+# branch for the price of one more force-push and CI run. A wait would only save
+# that, and a job that sleeps ten minutes printing nothing reads as hung.
 #
-# It comments `recreate`, not `rebase`, because what is left is mostly a branch
-# Dependabot will not touch: once it holds a commit that is neither Dependabot's
-# nor marked, Dependabot skips the automatic rebase and answers `@dependabot
-# rebase` with "edited by someone other than Dependabot", so the bump stays stuck
-# for good. Recreate is the command that works on it, and it OVERWRITES EVERY
-# COMMIT ON THE BRANCH, a person's included. That is the price, paid by a bump
-# that is still conflicting ten minutes after a merge. A bump is asked once per
-# head commit.
+# It comments `recreate`, not `rebase`, because the bumps that stay stuck are
+# the ones Dependabot will not touch: once a branch holds a commit that is
+# neither Dependabot's nor marked `[dependabot skip]`, Dependabot skips the
+# automatic rebase and answers `@dependabot rebase` with "edited by someone
+# other than Dependabot", so the bump stays stuck for good. Recreate is the
+# command that works on it, and it OVERWRITES EVERY COMMIT ON THE BRANCH, a
+# person's included. That is the price, paid by any bump in conflict after a
+# merge.
 #
 # The comment has to come from a person. Dependabot ignores commands written by
 # `github-actions[bot]` or by a GitHub App (dependabot-core#9147). So it is made
@@ -38,7 +38,10 @@ on:
 
 permissions: {}
 
-# A newer merge replaces a run that is still waiting, instead of both commenting.
+# A newer merge cancels a run still in flight. That run listed the bumps before
+# the merge, and what it already posted is on the pull requests' own comments,
+# which the newer run reads, so nothing is lost by stopping it. At worst a comment
+# was sent as the cancel arrived and the bump is asked twice.
 concurrency:
   group: dependabot-recreate
   cancel-in-progress: true
@@ -50,14 +53,19 @@ jobs:
     # A fork has no secret and would fail on every push to its own `main`.
     if: ${{ !github.event.repository.fork }}
     environment: dependabot-recreate
-    timeout-minutes: 20
+    # A hang detector: two minutes of retries at most, plus a few API calls.
+    timeout-minutes: 5
     steps:
       - run: |
           set -euo pipefail
 
-          # Ten minutes: Dependabot's own rebase has taken up to four and a half
-          # here. A run started by hand has nothing to wait for.
-          if [ "$GITHUB_EVENT_NAME" = push ]; then sleep 600; fi
+          # An empty secret is the failure this job is expected to meet on its
+          # first run, and gh's own message for it names neither the secret nor
+          # the environment it has to live in.
+          if [ -z "$GH_TOKEN" ]; then
+            echo "::error::DEPENDABOT_RECREATE_TOKEN is empty. It is a secret of the dependabot-recreate ENVIRONMENT (Settings -> Environments), not an ordinary Actions secret. See the header of .github/workflows/dependabot-recreate.yml."
+            exit 1
+          fi
 
           # GitHub works out whether a pull request conflicts when it is first
           # asked, and answers UNKNOWN until it has. Ask until every bump has an
