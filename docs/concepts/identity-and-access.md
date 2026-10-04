@@ -116,11 +116,10 @@ invitation's form — the first person's included — arrives with one
 and `jane@example.com` proposes `jane.example`, borrowing the domain's first
 label because a login without a dot is not a login. The person keeps it or
 changes it; nothing is derived silently. A login is never cleared afterwards,
-only renamed — and a rename **claims the new login before it gives up the old
-one**, so one refused by its holder's grammar or by somebody else holding it
-changes nothing. Moving a person between seats takes the same order. (Releasing
-first used to leave a refused rename with no login at all, which recorded the
-person as nobody and silently unbound a Tier A token from its seat.)
+only renamed — and a rename, or a move between seats, is **one record** that
+states the login and the seat the person holds from then on, so one refused by
+its holder's grammar or by somebody else holding the value changes nothing,
+and the old value is free the moment the new one is taken.
 
 ---
 

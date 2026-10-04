@@ -480,10 +480,11 @@ and is run again as a new mint, and the one that may have landed is a token
 nobody holds, which expires.
 
 **An edit refused partway says what landed.** `bind`, `suspend` and the rest
-are one `PATCH`, which moves a seat before a login and both before the stage
-and the grants; everything the node can judge is refused before the
-first record, and what only a record can decide — a login somebody took a
-moment ago — fails listing the changes that did land before it.
+are one `PATCH`, which moves the login and the seat in one record before the
+stage and the grants; a login or a seat somebody else holds refuses that first
+record with nothing changed, everything else the node can judge is refused
+before it, and what only a later record can decide fails listing the changes
+that did land before it.
 
 ### `crewlet iam check`
 
