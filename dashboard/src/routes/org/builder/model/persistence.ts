@@ -6,7 +6,7 @@
  * of that log is out, and nothing else: never the base document, the draft
  * or the problems. The document holds contact
  * identities, emails, policies and `${VAR}` names; kept in storage it would
- * outlive the operator's token and be offered to whoever uses the tab next.
+ * outlive the operator's session and be offered to whoever uses the tab next.
  * The log refers to the company only by keys and the values its own edits
  * wrote, and on restore the base is fetched again, so what is replayed is
  * always replayed onto what the engine holds now.
