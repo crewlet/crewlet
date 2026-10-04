@@ -331,7 +331,16 @@ func (s *suite) runCore(t *testing.T) {
 			return queue.Ack()
 		})
 
-		publish(published, t, q, "topic.publisher_stops", newEvent("t"))
+		// The publish may itself report the publisher's cancellation: a
+		// broker may deliver BEFORE it acknowledges the publish, so the
+		// handler can stop the publisher while Publish still waits for its
+		// acknowledgement. That is the case being certified, and only that
+		// is excused — a cancellation before the delivery was in hand, or
+		// any other error, means nothing was published.
+		if err := q.Publish(published, "topic.publisher_stops", newEvent("t")); err != nil &&
+			(!errors.Is(err, context.Canceled) || attempts.Load() == 0) {
+			t.Fatalf("Publish(topic.publisher_stops): %v", err)
+		}
 
 		j.await(t, "the redelivery", func(seen []string) bool { return len(seen) == 1 })
 		j.await(t, "the redelivery to run under a live context", func(seen []string) bool {
