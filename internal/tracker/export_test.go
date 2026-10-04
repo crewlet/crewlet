@@ -27,11 +27,8 @@ func (w *Writer) Admit(ctx context.Context, rows int) (func(), error) {
 	return w.admit(ctx, rows)
 }
 
-// The record versions a purge's and a release's apply changed at, for the
-// cases that hold each rule to its own version. Named rather than spelled as
-// numbers, because a merge that renumbers them leaves a literal asserting the
-// old one.
-const (
-	RewriteVersion = rewriteVersion
-	ReleaseVersion = releaseVersion
-)
+// The record version a rank order's and a purge's apply changed at, for the
+// cases that hold each rule to its own version. Named rather than spelled as a
+// number, because a merge that renumbers it leaves a literal asserting the old
+// one.
+const RewriteVersion = rewriteVersion

@@ -52,11 +52,7 @@ func runEvictions(t *testing.T, new Factory) {
 // eviction's own position and the broker's own instant (the gate compares
 // against the first, the fence window is measured from the second), a
 // readmission kept as a row rather than deleted, and a re-eviction that clears
-// it — and then the node's own RELEASE of the log, listed as the release it is
-// at its own position, and lifted by a readmission exactly as an eviction is.
-// The kind is the half the trim does not need and every caller does: the two
-// gate alike, and one is the operator's judgement of a machine while the other
-// is a node that left a partition.
+// it.
 //
 // EXPORTED AND RETURNING THE VERDICT, for [Declaration]'s reason.
 func Evictions(t *testing.T, new Factory) error {
@@ -81,10 +77,6 @@ func Evictions(t *testing.T, new Factory) error {
 	case c.EncodeGate == nil:
 		return fmt.Errorf("%s claims identity and supplies no eviction record, "+
 			"so nothing can show its rows answer for one", name)
-	case c.EncodeRelease == nil:
-		return fmt.Errorf("%s claims identity and supplies no release record, "+
-			"so nothing can show its rows answer for a node that left the "+
-			"log's partition", name)
 	}
 
 	db := openEstate(t, c)
@@ -97,27 +89,13 @@ func Evictions(t *testing.T, new Factory) error {
 	const node = "suite-node-away"
 	base := time.Unix(1_700_000_000, 0).UTC()
 	var seq uint64
-	var applyGate func(body []byte) (statelog.Position, time.Time)
 	apply := func(readmit bool) (statelog.Position, time.Time) {
 		t.Helper()
+		seq++
 		body, err := c.EncodeGate(node, readmit)
 		if err != nil {
 			t.Fatalf("encode %s's gate record: %v", name, err)
 		}
-		return applyGate(body)
-	}
-	release := func() statelog.Position {
-		t.Helper()
-		body, err := c.EncodeRelease(node)
-		if err != nil {
-			t.Fatalf("encode %s's release record: %v", name, err)
-		}
-		at, _ := applyGate(body)
-		return at
-	}
-	applyGate = func(body []byte) (statelog.Position, time.Time) {
-		t.Helper()
-		seq++
 		env, err := c.Domain.Envelope(body)
 		if err != nil {
 			t.Fatalf("envelope of %s's gate record: %v", name, err)
@@ -172,10 +150,6 @@ func Evictions(t *testing.T, new Factory) error {
 		return fmt.Errorf("%s lists %s's eviction above %d, want its own "+
 			"position %d — the gate drops records by comparing against exactly "+
 			"this", name, node, row.From, evicted.Packed())
-	case row.Kind != statelog.EvictionKindEviction:
-		return fmt.Errorf("%s lists %s's eviction as a %q — an operator's "+
-			"eviction is reported as one, and the node's own fence refuses "+
-			"only that", name, node, row.Kind)
 	case !row.At.Equal(at):
 		return fmt.Errorf("%s lists %s's eviction at %s, want the broker's "+
 			"own instant %s — the fence window is measured from it, and a "+
@@ -203,36 +177,6 @@ func Evictions(t *testing.T, new Factory) error {
 		return fmt.Errorf("%s lists %s after a second eviction as %+v, want "+
 			"evicted again above %d — a re-eviction clears the readmission",
 			name, node, row, again.Packed())
-	}
-
-	// THE NODE'S OWN RELEASE, once the operator has taken it back: the gate
-	// an eviction installs, recorded as the node's.
-	apply(true)
-	left := release()
-	if row, err = standing(); err != nil {
-		return err
-	}
-	switch {
-	case row.Back || row.From != uint64(left.Packed()):
-		return fmt.Errorf("%s lists %s after its release as %+v, want it out "+
-			"above its release's own position %d — the gate drops what the "+
-			"node wrote after it left by comparing against exactly this",
-			name, node, row, left.Packed())
-	case row.Kind != statelog.EvictionKindRelease:
-		return fmt.Errorf("%s lists %s's release as a %q — a node that left a "+
-			"partition is not one the fleet evicted, and a write the release "+
-			"dropped is refused %q rather than %q", name, node, row.Kind,
-			statelog.ReasonReleased, statelog.ReasonEvicted)
-	}
-	back, _ := apply(true)
-	if row, err = standing(); err != nil {
-		return err
-	}
-	if !row.Back || row.Readmitted != uint64(back.Packed()) || row.From != uint64(left.Packed()) {
-		return fmt.Errorf("%s lists %s after the readmission that follows its "+
-			"release as %+v, want its row kept, the release at %d and the "+
-			"readmission at %d — a readmission lifts a release as it lifts an "+
-			"eviction", name, node, row, left.Packed(), back.Packed())
 	}
 	return nil
 }

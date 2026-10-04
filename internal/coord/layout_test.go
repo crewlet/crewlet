@@ -172,12 +172,6 @@ func TestAPartitionsReportHasOnePlacePerLayout(t *testing.T) {
 			Layout: 1, Domains: domains, SnapshotSkip: "lagging"}},
 		"an unnamed partition": {refused: true, row: coord.NodePositions{NodeID: "n", Layout: 1,
 			Domains: domains, Partitions: map[string]coord.PartitionReport{"": {State: "serving"}}}},
-		"a released log": {row: coord.NodePositions{NodeID: "n", Layout: 1,
-			Domains: map[string]coord.DomainPosition{"tracker@tracker.001": {
-				Seq: 3, AppliedThrough: 3, State: coord.LogReleased}}}},
-		"a log in a state nobody knows": {refused: true, row: coord.NodePositions{NodeID: "n",
-			Layout: 1, Domains: map[string]coord.DomainPosition{"tracker@tracker.001": {
-				Seq: 3, AppliedThrough: 3, State: "leaving"}}}},
 	} {
 		err := tc.row.Validate()
 		if refused := err != nil; refused != tc.refused {

@@ -125,9 +125,9 @@ func gatedLine(t *testing.T, domain statelog.Domain, offer func(h *applyHarness)
 //
 // The line is a dropped record's only witness, and the guide's row is what an
 // operator reads it by — the row the `statelog_write_gated` row and the
-// records-gated alarm both send them to. It named three gates of seven, every
-// one the framework's, so an operator following a `released` refusal to the
-// drop behind it read that the line never carries that gate; and it named no
+// records-gated alarm both send them to. It named only the framework's own
+// gates, so an operator following an `evicted` refusal to the drop behind it
+// read that the line never carries that gate; and it named no
 // key but `log` and `belongs_to`, so nothing said the line names the node that
 // wrote the record, the one fact the alarm's remedy says to read it for.
 //
@@ -140,7 +140,7 @@ func TestTheReplicationGuideSaysWhatTheRecordGatedLineCarries(t *testing.T) {
 	lines := []map[string]any{
 		// A DOMAIN'S GATE, which every node asks of its own rows.
 		gatedLine(t, probeDomain{}, func(h *applyHarness) {
-			h.applier.gate, h.applier.gated[1] = statelog.ReasonReleased, true
+			h.applier.gate, h.applier.gated[1] = statelog.ReasonEvicted, true
 			h.fetch.offer(1, env(1, "edit", "a", "op-1", 1))
 		}),
 		// THE PARTITION'S, which also names the log and where the record

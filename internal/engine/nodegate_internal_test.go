@@ -118,14 +118,6 @@ func TestAnEvictionStopsEveryIdentityLogCountingTheNode(t *testing.T) {
 		if !read {
 			t.Fatalf("%s's evictions could not be read", running.domain.Name())
 		}
-		for _, tomb := range tombs {
-			// THE GATE IT IS, off the log's own row: the report renders a
-			// release as a node that left, never as one somebody evicted.
-			if tomb.NodeID == away && tomb.Kind != statelog.EvictionKindEviction {
-				t.Fatalf("%s's tombstone for %s reads as a %q, want the eviction "+
-					"it is", running.domain.Name(), away, tomb.Kind)
-			}
-		}
 		set := statelog.CountedSet(at, reportedPositions(positions(), running.domain.Name()),
 			nil, tombs)
 		return slices.ContainsFunc(set, func(n statelog.NodePosition) bool {
@@ -346,24 +338,22 @@ func TestTheReportShowsANodeEvictedOnlyOnceEveryLogHoldsIt(t *testing.T) {
 	t.Parallel()
 	at := time.Date(2031, 4, 2, 3, 0, 0, 0, time.UTC)
 	tomb := func(node string, offset time.Duration) statelog.Tombstone {
-		return statelog.Tombstone{NodeID: node, At: at.Add(offset), By: "operator",
-			Kind: statelog.EvictionKindEviction}
+		return statelog.Tombstone{NodeID: node, At: at.Add(offset), By: "operator"}
 	}
-	// THE LATEST IS THE NODE'S, whole: a node that released the one log after
-	// an operator evicted it from the other left last, and says so.
-	released := tomb("both", 30*time.Second)
-	released.By, released.Kind = "both", statelog.EvictionKindRelease
+	// THE LATEST IS TAKEN WHOLE: the eviction that reached the last log is
+	// the one that made it the fleet's, so it names who ran that one.
+	latest := tomb("both", 30*time.Second)
+	latest.By = "ops-2"
 	got := fleetTombstones([][]statelog.Tombstone{
 		{tomb("both", 0), tomb("tracker-only", 0), tomb("both", 0)},
-		{released, tomb("pages-only", 0)},
+		{latest, tomb("pages-only", 0)},
 	})
 	if len(got) != 1 || got[0].NodeID != "both" {
 		t.Fatalf("tombstones = %+v, want only the node every log holds", got)
 	}
-	if !got[0].At.Equal(at.Add(30*time.Second)) || got[0].Kind != statelog.EvictionKindRelease ||
-		got[0].By != "both" {
-		t.Fatalf("the tombstone is %+v, want the latest of the logs' — the release "+
-			"at %s, by the node itself", got[0], at.Add(30*time.Second))
+	if !got[0].At.Equal(at.Add(30*time.Second)) || got[0].By != "ops-2" {
+		t.Fatalf("the tombstone is %+v, want the latest of the logs' — the "+
+			"eviction at %s, by ops-2", got[0], at.Add(30*time.Second))
 	}
 	if got := fleetTombstones(nil); got != nil {
 		t.Fatalf("no log at all produced tombstones %+v", got)

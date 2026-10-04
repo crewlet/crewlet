@@ -42,17 +42,17 @@ func peerCopyIn(t *testing.T, h *harness, writer, opID string, gen uint32) state
 // A WRITE COLLAPSED ONTO ANOTHER NODE'S GATED COPY OF ITS OPERATION IS TOLD
 // THAT COPY'S GATE — AND WHOSE IT IS.
 //
-// A node that left a partition while one of its writes was in flight has that
-// write on the log above its release, applying nowhere — and holding the
-// operation id in the broker's duplicate window. A node that serves the
-// partition, handed the same operation inside the window, has its append
-// collapsed onto that record. Its resolution finds no ledger row, and whether
-// a gate dropped the record is a question about the record's WRITER: asked
-// about itself, the serving node found nothing, trusted a ledger that vouched,
-// and reported a contract violation for a record that was only ever gated.
+// A node evicted while one of its writes was in flight has that write on the
+// log above its eviction, applying nowhere — and holding the operation id in
+// the broker's duplicate window. Another node, handed the same operation
+// inside the window, has its append collapsed onto that record. Its resolution
+// finds no ledger row, and whether a gate dropped the record is a question
+// about the record's WRITER: asked about itself, the other node found nothing,
+// trusted a ledger that vouched, and reported a contract violation for a
+// record that was only ever gated.
 //
 // And the refusal names that writer, because the reason is then its standing
-// and not the refusing node's: read as this node's own `released`, an operator
+// and not the refusing node's: read as this node's own `evicted`, an operator
 // was sent away from the one node that can finish the write. A copy this node
 // wrote itself, on an earlier attempt, is its own standing, and names nobody.
 func TestACollapsedWriteIsJudgedByTheWriterOfTheCopy(t *testing.T) {
@@ -66,19 +66,19 @@ func TestACollapsedWriteIsJudgedByTheWriterOfTheCopy(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			h := newHarness(t)
-			at := peerCopy(t, h, tc.writer, "op-left")
-			h.gates.holdWriter(tc.writer, statelog.ReasonReleased)
+			at := peerCopy(t, h, tc.writer, "op-evicted")
+			h.gates.holdWriter(tc.writer, statelog.ReasonEvicted)
 
-			res, err := h.write(probeSubject("a"), "op-left", "mine")
+			res, err := h.write(probeSubject("a"), "op-evicted", "mine")
 			var refusal *statelog.Unavailable
 			if !errors.As(err, &refusal) {
-				t.Fatalf("a write collapsed onto %s's released copy = (%+v, %v), "+
-					"want a refusal %q", tc.writer, res, err, statelog.ReasonReleased)
+				t.Fatalf("a write collapsed onto %s's evicted copy = (%+v, %v), "+
+					"want a refusal %q", tc.writer, res, err, statelog.ReasonEvicted)
 			}
-			if refusal.Reason != statelog.ReasonReleased || refusal.Position != at ||
-				refusal.OpID != "op-left" {
-				t.Fatalf("refusal = %+v, want %q at %s under op-left", refusal,
-					statelog.ReasonReleased, at)
+			if refusal.Reason != statelog.ReasonEvicted || refusal.Position != at ||
+				refusal.OpID != "op-evicted" {
+				t.Fatalf("refusal = %+v, want %q at %s under op-evicted", refusal,
+					statelog.ReasonEvicted, at)
 			}
 			if refusal.CopyWriter != tc.named {
 				t.Errorf("the refusal names %q as the copy's writer, want %q",
@@ -153,10 +153,10 @@ func TestTheReplicationGuideSaysWhatTheWriteGatedLineCarries(t *testing.T) {
 	t.Parallel()
 	logs := &lockedBuffer{}
 	h := newHarnessLogging(t, probeDomain{}, slog.New(slog.NewJSONHandler(logs, nil)))
-	peerCopy(t, h, "node-b", "op-left")
-	h.gates.holdWriter("node-b", statelog.ReasonReleased)
-	if _, err := h.write(probeSubject("a"), "op-left", "mine"); !errors.Is(err, statelog.ErrUnavailable) {
-		t.Fatalf("a write collapsed onto node-b's released copy = %v, want a refusal", err)
+	peerCopy(t, h, "node-b", "op-evicted")
+	h.gates.holdWriter("node-b", statelog.ReasonEvicted)
+	if _, err := h.write(probeSubject("a"), "op-evicted", "mine"); !errors.Is(err, statelog.ErrUnavailable) {
+		t.Fatalf("a write collapsed onto node-b's evicted copy = %v, want a refusal", err)
 	}
 	lines := logRecords(t, logs.Bytes(), "statelog_write_gated")
 	if len(lines) != 1 {
@@ -198,7 +198,6 @@ type reasonDecision struct{ gate, blames bool }
 var reasonDecisions = map[statelog.Reason]reasonDecision{
 	// Gates that drop a record for what its WRITER was or did.
 	statelog.ReasonEvicted:        {gate: true, blames: true},
-	statelog.ReasonReleased:       {gate: true, blames: true},
 	statelog.ReasonAbandoned:      {gate: true, blames: true},
 	statelog.ReasonOvertaken:      {gate: true, blames: true},
 	statelog.ReasonWrongPartition: {gate: true, blames: true},
@@ -273,7 +272,7 @@ func TestACollapsedWriteWhoseCopyCannotBeReadIsUnknown(t *testing.T) {
 	t.Parallel()
 	h := newHarness(t)
 	peerCopy(t, h, "node-b", "op-unread")
-	h.gates.holdWriter("node-b", statelog.ReasonReleased)
+	h.gates.holdWriter("node-b", statelog.ReasonEvicted)
 	h.records.fail(errors.New("no response from stream"))
 
 	res, err := h.write(probeSubject("a"), "op-unread", "mine")

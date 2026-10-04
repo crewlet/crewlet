@@ -60,8 +60,8 @@ type roundTrip struct {
 	// builds over the same store ([roundTrip.lossyWriter]).
 	nodeID string
 
-	// holding is whether this node serves the log's partition, which a case
-	// about a node leaving it moves.
+	// holding is whether this node serves the log's partition, shared by
+	// every writer a case builds over this node ([roundTrip.writerOver]).
 	holding *statelogtest.Holding
 }
 

@@ -122,16 +122,11 @@ func TestTheRunningLayoutZeroRuntimeIsTodaysEstate(t *testing.T) {
 	if mine.Layout != 0 {
 		t.Errorf("the layout-0 node's row says layout %d", mine.Layout)
 	}
-	// NOTHING A DIVIDED LAYOUT ADDS: no map epoch, no per-partition report,
-	// no log's state — its one partition's snapshot stays on the row.
+	// NOTHING A DIVIDED LAYOUT ADDS: no map epoch and no per-partition
+	// report — its one partition's snapshot stays on the row.
 	if mine.MapEpoch != 0 || mine.Partitions != nil {
 		t.Errorf("the layout-0 row carries map epoch %d and partitions %v, which no "+
 			"earlier build wrote", mine.MapEpoch, mine.Partitions)
-	}
-	for key, pos := range mine.Domains {
-		if pos.State != "" {
-			t.Errorf("the layout-0 row names %s in state %q", key, pos.State)
-		}
 	}
 	// AND ITS DUTIES AND ITS ARTEFACTS ARE WHERE THEY ALWAYS WERE: the trim's
 	// and the embedding's leases keep their names, and the one partition's

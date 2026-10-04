@@ -92,15 +92,14 @@ var controlLog = statelog.LogID{
 
 func control() statelogtest.Candidate {
 	return statelogtest.Candidate{
-		Domain:        controlDomain{},
-		Layout:        controlLayout(),
-		Log:           controlLog,
-		Applier:       controlApplier{},
-		Kinds:         []string{"widget"},
-		Rows:          rowsOver(controlDomain{}),
-		Write:         controlWrite(func(s statelog.Stamp) statelog.Stamp { return s }),
-		EncodeGate:    encodeControlGate,
-		EncodeRelease: encodeControlRelease,
+		Domain:     controlDomain{},
+		Layout:     controlLayout(),
+		Log:        controlLog,
+		Applier:    controlApplier{},
+		Kinds:      []string{"widget"},
+		Rows:       rowsOver(controlDomain{}),
+		Write:      controlWrite(func(s statelog.Stamp) statelog.Stamp { return s }),
+		EncodeGate: encodeControlGate,
 		Migrate: func(ctx context.Context, db store.PartitionHandle) error {
 			return db.Tx(ctx, func(tx *sql.Tx) error {
 				_, err := tx.ExecContext(ctx, controlDDL)
@@ -210,18 +209,13 @@ CREATE TABLE control_evictions (
     at                  INTEGER NOT NULL,
     by                  TEXT    NOT NULL DEFAULT '',
     from_position       INTEGER NOT NULL,
-    readmitted_position INTEGER,
-    kind                TEXT    NOT NULL DEFAULT 'eviction'
+    readmitted_position INTEGER
 );
 `
 
 // controlGateKind is the control domain's eviction record, and controlGate its
-// shape: the envelope every build reads, plus the node and the direction. A
-// release is the same kind under controlReleaseOp, written by the node itself.
-const (
-	controlGateKind  = "eviction"
-	controlReleaseOp = "release"
-)
+// shape: the envelope every build reads, plus the node and the direction.
+const controlGateKind = "eviction"
 
 type controlGate struct {
 	statelog.Envelope
@@ -237,26 +231,12 @@ func encodeControlGate(node string, readmit bool) ([]byte, error) {
 	}
 	return json.Marshal(controlGate{
 		Envelope: statelog.Envelope{
-			V: 1, Kind: controlGateKind, Op: "evict",
+			V: 1, Kind: controlGateKind,
 			Subject: statelog.Subject{Kind: controlGateKind, ID: node},
 			OpID:    op, Gen: 1, Writer: "control",
 			Scope: statelog.ScopeSet{Paths: []string{controlGateKind}},
 		},
 		Node: node, Readmit: readmit,
-	})
-}
-
-// encodeControlRelease is the control domain's release: a node's own statement,
-// written by it, that it has left the log's partition.
-func encodeControlRelease(node string) ([]byte, error) {
-	return json.Marshal(controlGate{
-		Envelope: statelog.Envelope{
-			V: 1, Kind: controlGateKind, Op: controlReleaseOp,
-			Subject: statelog.Subject{Kind: controlGateKind, ID: node},
-			OpID:    "gate-release-" + node, Gen: 1, Writer: node,
-			Scope: statelog.ScopeSet{Paths: []string{controlGateKind}},
-		},
-		Node: node,
 	})
 }
 
@@ -341,7 +321,7 @@ func (controlDomain) Tables() map[string]statelog.TableClass {
 	return tables
 }
 
-// EvictionSubject, Evicts and Releases read the control's node gates off its
+// EvictionSubject and Evicts read the control's node gates off its
 // log, as every identity-claiming domain must be able to.
 func (controlDomain) EvictionSubject(node string) statelog.Subject {
 	return statelog.Subject{Kind: controlGateKind, ID: node}
@@ -355,16 +335,12 @@ func (controlDomain) Evicts(payload []byte) (bool, error) {
 	return !gate.Readmit, nil
 }
 
-func (controlDomain) Releases(env statelog.Envelope) bool {
-	return env.Kind == controlGateKind && env.Op == controlReleaseOp
-}
-
 // Evictions answers from this log's own rows, as a real domain does.
 func (controlDomain) Evictions(ctx context.Context, db store.PartitionReader) ([]statelog.EvictionRow, error) {
 	var out []statelog.EvictionRow
 	err := db.Read(ctx, func(tx *sql.Tx) error {
 		rows, err := tx.QueryContext(ctx, `
-			SELECT node_id, at, by, from_position, readmitted_position, kind
+			SELECT node_id, at, by, from_position, readmitted_position
 			FROM control_evictions ORDER BY node_id`)
 		if err != nil {
 			return err
@@ -375,12 +351,10 @@ func (controlDomain) Evictions(ctx context.Context, db store.PartitionReader) ([
 				e          statelog.EvictionRow
 				at, from   int64
 				readmitted sql.NullInt64
-				kind       string
 			)
-			if err := rows.Scan(&e.NodeID, &at, &e.By, &from, &readmitted, &kind); err != nil {
+			if err := rows.Scan(&e.NodeID, &at, &e.By, &from, &readmitted); err != nil {
 				return err
 			}
-			e.Kind = statelog.EvictionKind(kind)
 			e.At, e.From = store.DecodeTime(at), uint64(from)
 			e.Readmitted = uint64(readmitted.Int64)
 			e.Back = readmitted.Valid && readmitted.Int64 > from
@@ -467,20 +441,15 @@ func applyControlGate(ctx context.Context, tx *sql.Tx, rec statelog.Record,
 			UPDATE control_evictions SET readmitted_position = ?
 			WHERE node_id = ? AND from_position < ?`, at, gate.Node, at)
 	default:
-		kind := statelog.EvictionKindEviction
-		if rec.Op == controlReleaseOp {
-			kind = statelog.EvictionKindRelease
-		}
 		res, err = tx.ExecContext(ctx, `
 			INSERT INTO control_evictions
-				(node_id, at, by, from_position, readmitted_position, kind)
-			VALUES (?, ?, ?, ?, NULL, ?)
+				(node_id, at, by, from_position, readmitted_position)
+			VALUES (?, ?, ?, ?, NULL)
 			ON CONFLICT (node_id) DO UPDATE SET
 				at = excluded.at, by = excluded.by,
-				from_position = excluded.from_position, readmitted_position = NULL,
-				kind = excluded.kind
+				from_position = excluded.from_position, readmitted_position = NULL
 			WHERE excluded.from_position > control_evictions.from_position`,
-			gate.Node, store.EncodeTime(rec.StoredAt), "control", at, string(kind))
+			gate.Node, store.EncodeTime(rec.StoredAt), "control", at)
 	}
 	if err != nil {
 		return 0, fmt.Errorf("control: apply the gate at %s: %w", rec.Position, err)
@@ -629,12 +598,6 @@ func TestTheSuiteCatchesADomainThatMisdeclaresItself(t *testing.T) {
 		},
 		"an identity-claiming candidate with no eviction record": func(c *statelogtest.Candidate) {
 			c.EncodeGate = nil
-		},
-		"an identity-claiming candidate with no release record": func(c *statelogtest.Candidate) {
-			c.EncodeRelease = nil
-		},
-		"an applier that records a release as an eviction": func(c *statelogtest.Candidate) {
-			c.Applier = releaseAsEviction{}
 		},
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -913,19 +876,6 @@ func (d deletingApplier) Apply(ctx context.Context, tx *sql.Tx, rec statelog.Rec
 	return d.controlApplier.Apply(ctx, tx, rec, opts)
 }
 
-// releaseAsEviction applies a node's release as though an operator had evicted
-// it — the gate right, the row naming the wrong one.
-type releaseAsEviction struct{ controlApplier }
-
-func (d releaseAsEviction) Apply(ctx context.Context, tx *sql.Tx, rec statelog.Record,
-	opts statelog.ApplyOptions) (int, error) {
-
-	if rec.Kind == controlGateKind && rec.Op == controlReleaseOp {
-		rec.Op = "evict"
-	}
-	return d.controlApplier.Apply(ctx, tx, rec, opts)
-}
-
 // listingCompacted claims no identity and answers for evictions anyway.
 type listingCompacted struct{ compactedControl }
 
@@ -966,18 +916,6 @@ func TestTheSuiteCatchesADomainThatMisnamesItsNodeGate(t *testing.T) {
 			mutate: func(c *statelogtest.Candidate) { c.EncodeGate = nil },
 			names:  "supplies no eviction record",
 		},
-		"an identity-claiming candidate with no release record": {
-			mutate: func(c *statelogtest.Candidate) { c.EncodeRelease = nil },
-			names:  "supplies no release record",
-		},
-		"a domain whose release is no release": {
-			mutate: func(c *statelogtest.Candidate) { c.Domain = releaseNotARelease{} },
-			names:  "does not call a node's release of its log a release",
-		},
-		"a domain that calls its eviction a release": {
-			mutate: func(c *statelogtest.Candidate) { c.Domain = evictionARelease{} },
-			names:  "calls its eviction of a node a release",
-		},
 		"an identity-claiming domain that reads no node gate off its log": {
 			mutate: func(c *statelogtest.Candidate) { c.Domain = unprobed{controlBase{}} },
 			names:  "cannot read its node gates off its log",
@@ -997,18 +935,6 @@ func TestTheSuiteCatchesADomainThatMisnamesItsNodeGate(t *testing.T) {
 		})
 	}
 }
-
-// releaseNotARelease calls nothing a release, so the publisher could not hold
-// its release to naming the node that publishes it.
-type releaseNotARelease struct{ controlDomain }
-
-func (releaseNotARelease) Releases(statelog.Envelope) bool { return false }
-
-// evictionARelease calls every node gate a release, an operator's eviction of
-// another node among them.
-type evictionARelease struct{ controlDomain }
-
-func (evictionARelease) Releases(env statelog.Envelope) bool { return env.Kind == controlGateKind }
 
 // unprobed claims identity, gates its evictions, and cannot read them off its
 // log — the base with the control's gate answers and none of its probe.

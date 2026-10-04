@@ -230,14 +230,6 @@ type NodePosition struct {
 
 	// At is when it last reported.
 	At time.Time
-
-	// Released reports that the node's row names this log as one it has LEFT
-	// (coord.LogReleased): its release is on the log and applied, so every
-	// record it could still publish there is gated and its position will
-	// never move again. [CountedSet] counts it nowhere — not at this
-	// position, and not at zero as the partition's holder it may still be
-	// named until the map lets it go.
-	Released bool
 }
 
 // Hold is one live pin on the log's tail.

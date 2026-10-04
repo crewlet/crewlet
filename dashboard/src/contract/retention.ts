@@ -28,11 +28,3 @@ export type RetentionIdentityCause =
  * space that no longer exists.
  */
 export type RetentionGenerationState = "current" | "left" | "ahead" | "unknown";
-
-/**
- * Which gate put a node out of the logs — `statelog.EvictionKind`: an
- * operator's `eviction`, or the node's own `release` of the logs it left. A
- * release is shown as "left", never as "evicted by" the node itself, which
- * sends an operator after a gesture nobody made.
- */
-export type RetentionEvictionKind = "eviction" | "release";

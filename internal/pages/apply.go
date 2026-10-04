@@ -112,11 +112,10 @@ func (a *Applier) Committed(context.Context) {
 // from the state the record would have applied against rather than from a
 // cache that may be a heartbeat old:
 //
-//  1. THE EVICTION GATE. A record written by a node the fleet evicted — or
-//     that released this log as it left the log's partition — before the
-//     record's own position is dropped everywhere. It depends on nothing but
-//     the log's own order, which is what makes it the fence that holds when
-//     coordination cannot be reached at all.
+//  1. THE EVICTION GATE. A record written by a node the fleet evicted before
+//     the record's own position is dropped everywhere. It depends on nothing
+//     but the log's own order, which is what makes it the fence that holds
+//     when coordination cannot be reached at all.
 //  2. THE DELETION GATE. A record about a page a purge destroyed applies
 //     nowhere, for ever — otherwise a redelivery months later would resurrect
 //     a page an operator deliberately removed.
@@ -125,36 +124,26 @@ func (a *Applier) Gated(ctx context.Context, tx *sql.Tx, rec statelog.Record) (
 
 	if rec.Writer != "" {
 		var from, readmitted sql.NullInt64
-		var kind string
 		err := tx.QueryRowContext(ctx, `
-			SELECT from_position, readmitted_position, kind
+			SELECT from_position, readmitted_position
 			FROM pages_evictions WHERE node_id = ?`, rec.Writer).
-			Scan(&from, &readmitted, &kind)
+			Scan(&from, &readmitted)
 		switch {
 		case errors.Is(err, sql.ErrNoRows):
 		case err != nil:
 			return "", false, fmt.Errorf("pages: read the eviction gate for "+
 				"node %s: %w", rec.Writer, err)
 		default:
-			gate, err := gateKind(kind)
-			if err != nil {
-				return "", false, err
-			}
 			at := rec.Position.Packed()
 			// THE WINDOW IS HALF-OPEN AT BOTH ENDS, and both ends
 			// matter: a record at or below the eviction's own
 			// position was written while the node was still counted,
 			// and one at or above a readmission is written by a node
 			// the fleet has taken back.
-			//
-			// AND A RELEASE IS THE SAME WINDOW: the node's own statement
-			// that it left this log's partition, so a write it had in
-			// flight that landed after it is dropped here as on every
-			// holder — named `released` rather than `evicted`.
 			evicted := from.Valid && at > from.Int64
 			back := readmitted.Valid && at >= readmitted.Int64
 			if evicted && !back {
-				return gate.Reason(), true, nil
+				return statelog.ReasonEvicted, true, nil
 			}
 		}
 	}
@@ -307,9 +296,7 @@ type applyContext struct {
 // subject is the record's own subject.
 func (c applyContext) subject() Subject { return c.record.Subject }
 
-// applyEviction records a node's removal from this log — an operator's
-// eviction, or the node's own release of the log ([OpRelease]), the same
-// window recorded as the gate it is — or the readmission that lifts either.
+// applyEviction records a node's removal from this log, or its readmission.
 //
 // A READMISSION IS AN INVERSE COMMIT rather than a delete, so an eviction's
 // whole history survives a replay — and a node that was evicted, readmitted
@@ -344,23 +331,17 @@ func (a *Applier) applyEviction(ctx context.Context, tx *sql.Tx, at applyContext
 	// A SECOND EVICTION CLEARS THE READMISSION, which is what makes the
 	// evicted-readmitted-evicted sequence read as three facts rather than
 	// as one window with a hole in it.
-	gate := statelog.EvictionKindEviction
-	if at.record.Op == OpRelease {
-		gate = statelog.EvictionKindRelease
-	}
 	res, err := tx.ExecContext(ctx, `
 		INSERT INTO pages_evictions
-			(node_id, at, by, from_position, readmitted_position, version, kind)
-		VALUES (?, ?, ?, ?, NULL, ?, ?)
+			(node_id, at, by, from_position, readmitted_position, version)
+		VALUES (?, ?, ?, ?, NULL, ?)
 		ON CONFLICT (node_id) DO UPDATE SET
 			at = excluded.at, by = excluded.by,
 			from_position = excluded.from_position,
 			readmitted_position = NULL,
-			version = excluded.version,
-			kind = excluded.kind
+			version = excluded.version
 		WHERE excluded.version > pages_evictions.version`,
-		e.NodeID, store.EncodeTime(at.brokerAt), e.EvictedBy, at.packed, at.packed,
-		string(gate))
+		e.NodeID, store.EncodeTime(at.brokerAt), e.EvictedBy, at.packed, at.packed)
 	if err != nil {
 		return 0, fmt.Errorf("pages: evict node %s at %s: %w",
 			e.NodeID, at.position, err)

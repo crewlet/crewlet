@@ -3281,8 +3281,8 @@ happens during exactly the outage somebody is running this in. Without the flag
 a renderer prints the impossible one.
 
 A node row's **`evicted`** is its tombstone once every log holds one, dated
-from the latest, and its **`kind`** says which gate that latest one is:
-`eviction`, an operator's.
+from the latest and naming in `by` the operator whose eviction reached the last
+of them.
 
 **`evictions_unreadable`** is `true` on the tracker's or the pages log's row
 when the answering node could not read that log's evictions as it assembled

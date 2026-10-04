@@ -30,10 +30,7 @@ import (
 //   - 1: every shape this domain has.
 //   - 2: a container's settings carry the chart epoch they were written from
 //     ([ContainerPayload.ChartEpoch]).
-//   - 3: a node's RELEASE of the log ([OpRelease]), an eviction-kind record
-//     whose apply records the gate as the node's own ([releaseVersion]) —
-//     the one row a gate may carry ([statelog.VersionedField.Gate]).
-const RecordVersion = 3
+const RecordVersion = 2
 
 // baseRecordVersion is version 1, the base format: what every build there has
 // ever been reads, and what a record carrying no versioned field is stamped at.
@@ -84,46 +81,20 @@ var versionedFields = statelog.RecordFields{
 	// no page patch carries `chart_epoch`.
 	{Name: "ContainerPayload.ChartEpoch", Since: 2, Op: string(OpPatch),
 		Path: []string{"mutation", "chart_epoch"}},
-	// A NODE'S RELEASE OF THE LOG, at version 3 ([releaseVersion]). An
-	// eviction's bytes under an op an older build does not know, whose
-	// apply records the gate as the node's own: a GATE that row carries, so
-	// a build reading 2 halts at it rather than record it as an operator's
-	// eviction.
-	{Name: "Op=release", Since: releaseVersion, Op: string(OpRelease),
-		Path: []string{"op"}, Equals: string(OpRelease), Gate: true},
 }
 
 // VersionedFields is the table, for the conformance suite.
 func VersionedFields() statelog.RecordFields { return slices.Clone(versionedFields) }
 
-// GateRecordVersion is the SHAPE version every gate-installing record's payload
-// carries, FOR EVER, and the record version an eviction and a purge are written
-// at.
+// GateRecordVersion is the version every gate-installing record carries, FOR
+// EVER.
 //
-// A gate record this build cannot read is never deferred: the framework knows
-// it for a gate from its envelope ([Domain.InstallsGate]) and HALTS the applier
-// at it, because a deferred gate would leave this node's own gate table empty
-// while it went on applying every record the evicted node appends, with no
-// inverse that repairs it — and a halt takes the node out of the fleet until it
-// is upgraded. So no mere change of SHAPE may raise a gate record's version:
-// the payload grows only by addition, and every build reads every one.
-//
-// WHAT DOES RAISE IT is a change to what a gate's APPLY does, which no older
-// build can honour — applied the old way it leaves rows every newer node does
-// not hold. Such a record is written at a record version above every build
-// that predates it, so that build halts there: the release at
-// [releaseVersion]. It keeps the eviction's kind so an older build still knows
-// it for a gate; one under a kind that build did not know would not be a gate
-// to it at all.
+// An eviction whose version this build could not read would be deferred, and a
+// deferred gate leaves this node's own gate table empty while it goes on
+// applying every record the evicted node appends — with no inverse that
+// repairs it. So the two gate kinds are pinned at 1 and never evolve: a field
+// they need that they cannot have is a field that belongs somewhere else.
 const GateRecordVersion = 1
-
-// releaseVersion is the version a node's RELEASE of the log is written at
-// ([OpRelease]): the row on its op in [versionedFields]. A release carries an
-// eviction's bytes under the eviction's kind, so a build from before it would
-// read it as an eviction — the same gate, recorded as the wrong one, which
-// every newer node holds as a release. At this version that build halts at it
-// instead ([GateRecordVersion]).
-const releaseVersion = 3
 
 // OpKind is what a record does.
 type OpKind string
@@ -174,14 +145,6 @@ const (
 	// OpEviction is a node's eviction from this log, or its readmission.
 	OpEviction OpKind = "eviction"
 
-	// OpRelease is a node's RELEASE of this log: its own statement, as it
-	// leaves the log's partition, that nothing it publishes here afterwards
-	// applies anywhere. Under the eviction's kind and subject and carrying
-	// the eviction's payload, so it is a node gate and installs an apply
-	// gate as an eviction does, and a readmission lifts it the same way
-	// ([statelog.EvictionKindRelease]).
-	OpRelease OpKind = "release"
-
 	// OpGeneration is a reanchor's record.
 	OpGeneration OpKind = "generation"
 
@@ -189,10 +152,10 @@ const (
 	OpBarrier OpKind = "barrier"
 )
 
-// OpKinds are the eleven, in the order they are documented.
+// OpKinds are the ten, in the order they are documented.
 var OpKinds = []OpKind{
 	OpCreate, OpPatch, OpRename, OpRetitle, OpTombstone, OpRestore, OpPurge,
-	OpEviction, OpRelease, OpGeneration, OpBarrier,
+	OpEviction, OpGeneration, OpBarrier,
 }
 
 // Valid reports whether an op off the wire is one this build knows.
@@ -457,8 +420,7 @@ func Decode(payload []byte) (MutationRecord, error) {
 // and a generation their pinned [baseRecordVersion] — and refused when it is
 // below what the record carries. A record every build must read
 // ([RecordEnvelope.readByEveryBuild]) is refused whenever it carries a
-// versioned field, stamped or set, that its own gate rows do not already
-// raise it to ([statelog.RecordFields.Ungated]).
+// versioned field at all, stamped or set.
 func Encode(rec MutationRecord) ([]byte, error) { return encodeWith(rec, versionedFields) }
 
 // encodeWith is [Encode] under a named field table — the seam the stamping
@@ -478,20 +440,13 @@ func encodeWith(rec MutationRecord, fields statelog.RecordFields) ([]byte, error
 	if err != nil {
 		return nil, fmt.Errorf("pages: stamp the record on %s: %w", rec.Subject, err)
 	}
-	refused := fields.Carried(string(rec.Op), data)
-	if rec.InstallsGate() {
-		refused = fields.Ungated(string(rec.Op), data)
-	}
 	switch {
-	case rec.readByEveryBuild() && minimum > baseRecordVersion && len(refused) > 0:
-		// THE ONE KIND A GATE MAY CARRY is a change to its own apply
-		// ([statelog.VersionedField.Gate]), at which an older node halts —
-		// the tracker's rule, stated at [RecordEnvelope.readByEveryBuild].
+	case rec.readByEveryBuild() && minimum > baseRecordVersion:
 		return nil, fmt.Errorf("pages: the %s record on %s must be readable by "+
-			"every build for ever — an older node halts at a gate, and retains a "+
+			"every build for ever — an older node defers a gate, and retains a "+
 			"barrier or a generation, that it cannot read — and it carries %s, "+
 			"so a field it needs belongs somewhere else", rec.Op, rec.Subject,
-			strings.Join(refused, ", "))
+			strings.Join(fields.Carried(string(rec.Op), data), ", "))
 	case rec.V >= minimum:
 	case stamp:
 		rec.V = minimum

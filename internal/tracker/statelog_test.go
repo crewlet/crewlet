@@ -47,21 +47,13 @@ func TestTheTrackerIsACertifiedDomain(t *testing.T) {
 			// fields built through the writer's own encoder — which is
 			// what proves each row's path is where that field is
 			// actually written.
-			Fields:        tracker.VersionedFields(),
-			Carrying:      carryingSuiteField,
-			Rows:          tracker.NewRows,
-			Write:         suiteWrite,
-			EncodeGate:    encodeSuiteGate,
-			EncodeRelease: encodeSuiteRelease,
+			Fields:     tracker.VersionedFields(),
+			Carrying:   carryingSuiteField,
+			Rows:       tracker.NewRows,
+			Write:      suiteWrite,
+			EncodeGate: encodeSuiteGate,
 		}
 	})
-}
-
-// encodeSuiteRelease is a node's release of this log, written by the node
-// itself as it leaves the log's partition.
-func encodeSuiteRelease(node string) ([]byte, error) {
-	return gateSuiteRecord(tracker.EvictionSubject(node), tracker.OpRelease,
-		node, "suite-release-"+node, gateSuiteEviction(node, false))
 }
 
 // carryingSuiteField builds a valid record carrying exactly one versioned
@@ -319,20 +311,6 @@ func carryingSuiteField(field statelog.VersionedField) ([]byte, error) {
 			Kind: tracker.ChangePurged, Mutation: body,
 			Actor: "founder", ActorKind: tracker.AuthorHuman,
 		}.Encode()
-	case "Op=release":
-		// A NODE'S RELEASE OF THE LOG: an eviction's bytes under its own op.
-		body, err := json.Marshal(gateSuiteEviction("suite-node", false))
-		if err != nil {
-			return nil, err
-		}
-		return tracker.MutationRecord{
-			RecordEnvelope: tracker.RecordEnvelope{
-				OpID: "suite-carrying", Subject: tracker.EvictionSubject("suite-node"),
-				Op: tracker.OpRelease, CreatedAt: at, Writer: "suite-node",
-				Scope: tracker.ScopeSet{Subject: true},
-			},
-			Mutation: body, Actor: "suite-node", ActorKind: tracker.AuthorSystem,
-		}.Encode()
 	default:
 		return nil, fmt.Errorf("the suite has no record carrying %s — add one "+
 			"beside the field's row", field.Name)
@@ -517,10 +495,6 @@ func TestTheTrackersGateReaderKeepsTheSharedRule(t *testing.T) {
 			Readmit: func(node, writer, opID string) ([]byte, error) {
 				return gateSuiteRecord(tracker.EvictionSubject(node), tracker.OpEviction,
 					writer, opID, gateSuiteEviction(node, true))
-			},
-			Release: func(node, opID string) ([]byte, error) {
-				return gateSuiteRecord(tracker.EvictionSubject(node), tracker.OpRelease,
-					node, opID, gateSuiteEviction(node, false))
 			},
 		}
 	})

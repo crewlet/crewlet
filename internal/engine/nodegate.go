@@ -53,14 +53,14 @@ import (
 // and each answers with its own three-valued outcome, reported in the
 // register's order of domains ([stateLog.identityLogs]). An eviction writes
 // every log the node is COUNTED ON — every identity-claiming log, since every
-// data node holds the one estate, or one whose key its positions row names and
-// has not released (contract §E4): exactly the logs the trim waits for it on
-// ([stateLog.countedOnLogs]). A readmission writes every
-// identity-claiming log of the layout, because where the node is evicted is a
-// fact each log's own rows hold and nothing outside them can list — a holder
-// evicted before it first reported was counted on a log its row never named,
-// and the map has let it go since — and a readmission on a log that never
-// evicted the node changes no row there.
+// data node holds the one estate, or one whose key its positions row names
+// (contract §E4): exactly the logs the trim waits for it on
+// ([stateLog.countedOnLogs]). A readmission writes every identity-claiming log
+// of the layout, because where the node is evicted is a fact each log's own
+// rows hold and nothing outside them can list — a holder evicted before it
+// first reported was counted on a log its row never named, and the map has let
+// it go since — and a readmission on a log that never evicted the node changes
+// no row there.
 //
 // Each log is written by a node SERVING its partition: this one, where it
 // serves it and runs the log; for every other log the record is sent, as the
@@ -347,10 +347,10 @@ type DomainGate struct {
 	OpID string
 
 	// Duplicates is the log's duplicate window: how long the broker holds an
-	// operation id on the record it first landed, collapsing the same id
-	// sent again onto it. A record of this gesture's that landed and applies
-	// nowhere — refused `evicted` or `released` with a position — keeps the
-	// gesture's id spent on this log for that long, which the remedy says.
+	// operation id on the record it first landed, collapsing the same id sent
+	// again onto it. A record of this gesture's that landed and applies nowhere
+	// — refused `evicted` with a position — keeps the gesture's id spent on
+	// this log for that long, which the remedy says.
 	Duplicates time.Duration
 
 	// Outcome is the write's own three-valued answer — applied, pending or
@@ -479,13 +479,6 @@ func (d DomainGate) Remedy() statelog.GateRemedy {
 			return only(statelog.GateOtherNode, d.who()+" is evicted itself and "+
 				"writes nothing to any log: run the gesture through a node the fleet "+
 				"still counts, under the same operation id")
-		case statelog.ReasonReleased:
-			// ALWAYS A RECORD THAT LANDED: a node that has begun to leave
-			// is refused `not_holder` before anything is appended, so a
-			// release gate only ever drops a write already on its way.
-			return only(statelog.GateOtherNode, fmt.Sprintf("%s released %s "+
-				"when it left that log's partition, and ", d.who(), d.Stream)+
-				d.landedNowhere(refusal.Position, "a node that serves the partition"))
 		case statelog.ReasonOvertaken:
 			// A RECORD A RESTORED REANCHOR OVERTOOK: this node wrote from
 			// rows the reanchor did not keep, before it learned of the move.
@@ -599,21 +592,21 @@ func (d DomainGate) Remedy() statelog.GateRemedy {
 // wrote, which this node's append was collapsed onto
 // ([statelog.Unavailable.CopyWriter]) and a gate dropped: an operation id
 // carried to this node inside the log's duplicate window from a node that had
-// already written under it, and has since been evicted or left the partition,
-// or wrote it in a generation a reanchor abandoned or from rows one overtook.
+// already written under it, and has since been evicted, or wrote it in a
+// generation a reanchor abandoned or from rows one overtook.
 //
-// # Why those four gates and no others
+// # Why those three gates and no others
 //
 // A copy's writer is named only under a gate that blames it
 // ([statelog.Reason.BlamesWriter]), and of those a GATE RECORD meets exactly
-// four. It is never `wrong_partition`: an eviction, a readmission and a release
-// are the log's own records, which both identity-claiming domains place in no
+// three. It is never `wrong_partition`: an eviction and a readmission are the
+// log's own records, which both identity-claiming domains place in no
 // partition — their PartitionOf answers none for the eviction kind, which
 // statelogtest.Placement holds both to — so no copy of one is ever on the
 // wrong log. And never `deleted`, which blames no writer and is asked only of
 // a task or a page. The fallback names the reason of a gate a later build adds
 // to that set without a sentence here, rather than describing it as one of the
-// four.
+// three.
 //
 // # Why here, and not another node
 //
@@ -629,8 +622,6 @@ func (d DomainGate) anotherNodesCopy(refusal *statelog.Unavailable) string {
 	switch refusal.Reason {
 	case statelog.ReasonEvicted:
 		why = "that node is evicted"
-	case statelog.ReasonReleased:
-		why = fmt.Sprintf("that node released %s when it left that log's partition", d.Stream)
 	case statelog.ReasonOvertaken:
 		why = "that node wrote it from rows a restored reanchor had overtaken"
 	case statelog.ReasonAbandoned:
@@ -1041,7 +1032,7 @@ func (s *stateLog) gateWrites(id statelog.LogID) *runningLog {
 // countedOnLogs is every identity-claiming log of this node's layout that node
 // is COUNTED on, in [stateLog.identityLogs]' order (contract §E4's "eviction gesture's
 // logs"): a log whose partition the fleet says node holds — in any state —
-// or whose key its positions row names and has not released.
+// or whose key its positions row names.
 //
 // UNDER LAYOUT 0, EVERY IDENTITY-CLAIMING LOG. Its one partition is held by
 // every data node whether or not it is running now, which is the answer the
@@ -1109,8 +1100,7 @@ func (s *stateLog) countedOn(ctx context.Context, holders partitionHolders,
 		})
 		var reported bool
 		if row != nil {
-			at, names := row.Domains[id.String()]
-			reported = names && at.State != coord.LogReleased
+			_, reported = row.Domains[id.String()]
 		}
 		if holds || reported {
 			out = append(out, id)

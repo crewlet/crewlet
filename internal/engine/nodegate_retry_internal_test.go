@@ -546,10 +546,6 @@ func TestAGateLogIsAdvisedARetryOnlyWhereOneCanFinishIt(t *testing.T) {
 		// would write every other log's record again.
 		"evicted, landed": {gate: landed(statelog.ReasonEvicted), actions: []statelog.GateAction{other},
 			detail: "duplicate window, 2m0s, from when it landed. Once that has passed, run the gesture through a node the fleet still counts under the same operation id"},
-		// A NODE THAT LEFT THE LOG'S PARTITION writes nothing that applies
-		// there — and its record is always one that landed.
-		"released": {gate: landed(statelog.ReasonReleased), actions: []statelog.GateAction{other},
-			detail: "duplicate window, 2m0s, from when it landed. Once that has passed, run the gesture through a node that serves the partition under the same operation id"},
 		// A RECORD A REANCHOR'S RULE VOIDED landed too, from rows the
 		// reanchor did not keep: another node finishes it once the window
 		// has passed.
@@ -566,9 +562,6 @@ func TestAGateLogIsAdvisedARetryOnlyWhereOneCanFinishIt(t *testing.T) {
 		"evicted, another node's copy": {gate: copied(statelog.ReasonEvicted),
 			actions: []statelog.GateAction{retry},
 			detail:  "node node-x's copy, which this node's own write was collapsed onto, and it applies nowhere because that node is evicted — a fact about node node-x and not about this one. The broker holds its operation id for the log's duplicate window, 2m0s, from when it landed. Once that has passed, the same gesture under the same operation id finishes it here"},
-		"released, another node's copy": {gate: copied(statelog.ReasonReleased),
-			actions: []statelog.GateAction{retry},
-			detail:  "because that node released CREWLET_PAGES_LOG when it left that log's partition — a fact about node node-x"},
 		"overtaken, another node's copy": {gate: copied(statelog.ReasonOvertaken),
 			actions: []statelog.GateAction{retry},
 			detail:  "because that node wrote it from rows a restored reanchor had overtaken"},
@@ -577,7 +570,7 @@ func TestAGateLogIsAdvisedARetryOnlyWhereOneCanFinishIt(t *testing.T) {
 			detail:  "because that node wrote it in a generation a reanchor abandoned"},
 		// A GATE A LATER BUILD ADDS to those that blame a writer, with no
 		// sentence here yet: still this node's to finish, and named by its
-		// reason rather than described as one of the four a gate record's
+		// reason rather than described as one of the three a gate record's
 		// copy meets today.
 		"a later gate, another node's copy": {gate: copied(statelog.Reason("a_later_gate")),
 			actions: []statelog.GateAction{retry},

@@ -42,23 +42,13 @@ import (
 // domain with no eviction gate has no subject to read, and a node's standing
 // there is nothing at all.
 type EvictionProbe interface {
-	// EvictionSubject is the subject a node's evictions, releases and
-	// readmissions are published on, in the domain's own naming.
+	// EvictionSubject is the subject a node's evictions and readmissions
+	// are published on, in the domain's own naming.
 	EvictionSubject(node string) Subject
 
 	// Evicts decodes one record from that subject, reporting true for an
-	// eviction or a release — either puts the node's later records out of
-	// the log — and false for a readmission.
+	// eviction and false for a readmission.
 	Evicts(payload []byte) (bool, error)
-
-	// Releases reports whether a record is a node's RELEASE of the log
-	// ([EvictionKindRelease]), answered from the envelope alone for
-	// [Domain.NodeGate]'s reason: it is the half every build reads. A
-	// release is a node gate and installs an apply gate, as an eviction
-	// does; what this tells apart is that a release is the node's OWN
-	// statement, which the write authority holds to naming the node that
-	// publishes it ([Publisher.stamped]).
-	Releases(env Envelope) bool
 }
 
 // StandingLog is a log as a standing read needs it: the per-subject probe and a

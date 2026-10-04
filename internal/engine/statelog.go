@@ -1807,14 +1807,14 @@ func (s *stateLog) logEndsOf(domain string, l *jetstream.DomainLog,
 //
 // AND ONLY THE LOGS THE NODE WOULD BE COUNTED ON ([stateLog.countedOn]):
 // those whose partition holders names it a holder of, in any state, and those
-// its positions row names and has not released — the logs the trim would
-// count it on once readmitted — chosen from the very reading of the register
-// they are then judged against. Under layout 0 that is every identity log, as
-// it always was. Under a divided layout a node is counted only where it holds
-// or has reported, and judged everywhere a node with no row was refused on
-// every trimmed log — at position zero — for partitions it holds nothing of
-// and would come back to only by adopting a copy, so it could never be
-// readmitted at all.
+// its positions row names — the logs the trim would count it on once
+// readmitted — chosen from the very reading of the register they are then
+// judged against. Under layout 0 that is every identity log, as it always
+// was. Under a divided layout a node is counted only where it holds or has
+// reported, and judged everywhere a node with no row was refused on every
+// trimmed log — at position zero — for partitions it holds nothing of and
+// would come back to only by adopting a copy, so it could never be readmitted
+// at all.
 //
 // BUT EVERY LOG IT WRITES IS ASKED, judged or not. A readmission is written on
 // every identity-claiming log ([countedGateLogs]), since where the node is
@@ -4056,10 +4056,9 @@ const snapshotSkipRetry = 30 * time.Second
 // which is what decides whether there is anybody to donate an artefact of p to
 // at all — anybody but this node, which a barred machine keeping a copy is not
 // one of ([recipientsOn]): THE TRIM'S OWN COUNTED SET, log by log
-// ([statelog.CountedSet]) —
-// every node whose positions row names the log and has not released it, UNION
-// every holder of p, LESS the tombstones past their window — so the loop and
-// the trim's snapshot term ask one question of one set.
+// ([statelog.CountedSet]) — every node whose positions row names the log,
+// UNION every holder of p, LESS the tombstones past their window — so the loop
+// and the trim's snapshot term ask one question of one set.
 //
 // # The holders, and not the register alone
 //
@@ -4071,12 +4070,11 @@ const snapshotSkipRetry = 30 * time.Second
 // Under layout 0 the holders are the live data nodes, so a data node joining
 // is counted from its presence rather than its first row.
 //
-// # Less the tombstones, and not a released row
+// # Less the tombstones
 //
-// A row never expires, so an evicted node's row outlives the machine, and a
-// node that left p keeps naming p's logs, released, until it forgets them:
-// counted from rows alone, a partition with one server beside either took a
-// full copy every interval for a peer the trim no longer waits for.
+// A row never expires, so an evicted node's row outlives the machine: counted
+// from rows alone, a partition with one server beside it took a full copy
+// every interval for a peer the trim no longer waits for.
 //
 // # From the watched views, and unknown is the register's half
 //

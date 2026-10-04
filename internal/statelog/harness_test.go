@@ -540,8 +540,8 @@ type fakeGates struct {
 	gated  bool
 
 	// writer, when set, is the one writer the gate holds — a writer's gate
-	// is an eviction or a release, which drops a record by who wrote it —
-	// and asked is every writer the publisher asked about, in order.
+	// is an eviction, which drops a record by who wrote it — and asked is
+	// every writer the publisher asked about, in order.
 	writer string
 	asked  []string
 }

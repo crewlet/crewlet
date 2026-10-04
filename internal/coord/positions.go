@@ -113,35 +113,7 @@ type DomainPosition struct {
 	// it while this says so, as it does for a peer whose position is past the
 	// log's end, until the operator decides which history the fleet keeps.
 	LogDiverged bool `json:"log_diverged,omitempty"`
-
-	// State is what this node is doing with the log, EMPTY while it runs it
-	// — which is every log of every row a build before the field wrote, and
-	// every log of a layout-0 row, byte for byte.
-	//
-	// [LogReleased] is a log this node has LEFT: its release is on the log
-	// and applied, and the node is about to stop naming it. The trim stops
-	// counting the node on the log the moment the row says so, rather than
-	// once the row forgets the log, because between the two the position is
-	// one the node will never move again — and a counted position that never
-	// moves pins the log it names for as long as the row keeps it.
-	State LogState `json:"state,omitempty"`
 }
-
-// LogState is what a node says it is doing with one log on its positions row.
-//
-// THE ZERO VALUE IS A STATE — running the log, which is what naming it has
-// always meant — so a row that says nothing about a log's state says the one
-// thing every earlier row meant.
-type LogState string
-
-// LogReleased is a log the node has left: see [DomainPosition.State].
-const LogReleased LogState = "released"
-
-// Valid reports whether a node may WRITE this state: running (the zero value)
-// or released. A reader meeting a state it does not know — a newer build's —
-// counts the node as running the log, the direction that keeps a tail rather
-// than trims past one.
-func (s LogState) Valid() bool { return s == "" || s == LogReleased }
 
 // PartitionReport is what a node says about one PARTITION it holds, beside its
 // logs' positions: how far its copy is, and its snapshot of the partition.
@@ -365,10 +337,6 @@ func (p NodePositions) Validate() error {
 			return fmt.Errorf("coord: node %s reports domain %q applied through "+
 				"%d with a checkpoint of %d: a node cannot have applied past "+
 				"what it has consumed", p.NodeID, name, d.AppliedThrough, d.Seq)
-		}
-		if !d.State.Valid() {
-			return fmt.Errorf("coord: node %s reports the log %q in the state %q; "+
-				"a log is running (no state) or %q", p.NodeID, name, d.State, LogReleased)
 		}
 	}
 	// ONE PLACE PER LAYOUT FOR A PARTITION'S REPORT. Layout 0's is the row's

@@ -34,7 +34,6 @@ func TestAClosedRecordVersionGainsNoField(t *testing.T) {
 		11: {"TaskPatch.Moving"},
 		12: {"Subject.Kind=file"},
 		13: {"Op=purge", "RankOrder.Placements"},
-		14: {"Op=release"},
 	}
 	got := map[int][]string{}
 	for _, field := range tracker.VersionedFields() {

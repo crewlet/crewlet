@@ -203,16 +203,7 @@ func blockedReport() *statelog.Report {
 				Seq: 918000000, AppliedThrough: 918000000,
 			}},
 			Evicted: &statelog.EvictionReport{
-				Kind: statelog.EvictionKindEviction,
-				By:   "sre@example.com", At: stamp("2031-04-01T12:00:00Z"),
-				EffectiveAt: stamp("2031-04-01T12:01:00Z"), Effective: true,
-			},
-		}, {
-			NodeID: "node-5", Counted: false, Live: true,
-			At: stamp("2031-04-02T03:13:58Z"),
-			Evicted: &statelog.EvictionReport{
-				Kind: statelog.EvictionKindRelease,
-				By:   "node-5", At: stamp("2031-04-01T12:00:00Z"),
+				By: "sre@example.com", At: stamp("2031-04-01T12:00:00Z"),
 				EffectiveAt: stamp("2031-04-01T12:01:00Z"), Effective: true,
 			},
 		}, {
@@ -260,8 +251,6 @@ func TestRetentionStatusLeadsWithTheBlockingTermInProse(t *testing.T) {
 		"918280001",                  // node-1's own tracker position
 		"918279004",                  // the applied term's sequence
 		"evicted by sre@example.com", // node-4's tombstone
-		// AND A RELEASE AS THE NODE'S OWN LEAVING, never "evicted by" it.
-		"left, releasing its logs itself",
 		// THE GATE RESERVE, beside the ceiling it is kept under: without
 		// it a headroom of 0% reads as a log nothing can be written to,
 		// when an eviction still lands there.

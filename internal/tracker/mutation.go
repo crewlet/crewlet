@@ -56,12 +56,10 @@ import (
 // dispatch. Version 13 is a rank order and a purge whose APPLY changed — each
 // writes every OTHER task it changes into that task's document as well as its
 // rows, and a purge destroys what the purged task's own records wrote beside
-// its rows ([rewriteVersion]). Version 14 is a node's RELEASE of the log
-// ([OpRelease]), an eviction-kind record whose apply records the gate as the
-// node's own ([releaseVersion]). The purge's and the release's rows are the
-// two a GATE may carry ([statelog.VersionedField.Gate]): an older build halts
-// at either rather than apply it the old way.
-const RecordVersion = 14
+// its rows ([rewriteVersion]). The purge's row is the one a GATE may carry
+// ([statelog.VersionedField.Gate]): an older build halts at it rather than
+// apply it the old way.
+const RecordVersion = 13
 
 // baseRecordVersion is version 1, the base format: what every build there has
 // ever been reads, and what a record carrying no versioned field is stamped at.
@@ -120,21 +118,6 @@ const fileVersion = 12
 // is a gate ([GateRecordVersion]) — the two answers a build has for a record it
 // cannot apply, and neither of them is applying it the old way.
 const rewriteVersion = 13
-
-// releaseVersion is the version a node's RELEASE of the log is written at
-// ([OpRelease]): the row on its op in [versionedFields].
-//
-// # Why a release raises the record where its shape does not
-//
-// A release carries exactly the bytes an eviction does, under the eviction's
-// own kind, so a build from before it would decode it without complaint and
-// apply it as an eviction: the same gate, and a row that names the wrong gate
-// — which every newer node holds as a release, so the rows the identity claim
-// says are identical would differ once that build migrated. Written at this
-// version, that build knows it for a gate by its kind ([Domain.InstallsGate])
-// and HALTS at it rather than apply it the old way — the answer
-// [GateRecordVersion] gives every change to what a gate's apply does.
-const releaseVersion = 14
 
 // keepsPlaceVersion is the record version from which a task write takes the
 // task's rank from its ROW rather than from its document.
@@ -311,17 +294,10 @@ var versionedFields = statelog.RecordFields{
 	// its apply now also takes the purged task out of every other task's
 	// document and destroys what the task's own records wrote. A purge is a
 	// GATE, which an older build cannot defer and must not apply the old
-	// way, so this is one of the two rows a gate may carry: a build reading
-	// 12 HALTS at it ([GateRecordVersion]).
+	// way, so this is the one row a gate may carry: a build reading 12
+	// HALTS at it ([GateRecordVersion]).
 	{Name: "Op=purge", Since: rewriteVersion, Op: string(OpPurge),
 		Path: []string{"op"}, Equals: string(OpPurge), Gate: true},
-	// A NODE'S RELEASE OF THE LOG, at version 14 ([releaseVersion]). An
-	// eviction's bytes under an op an older build does not know, whose
-	// apply records the gate as the node's own: the other row a gate may
-	// carry, so a build reading 13 halts at it rather than record it as an
-	// operator's eviction.
-	{Name: "Op=release", Since: releaseVersion, Op: string(OpRelease),
-		Path: []string{"op"}, Equals: string(OpRelease), Gate: true},
 }
 
 // VersionedFields is the table, for the conformance suite and for an operator
@@ -374,22 +350,14 @@ const (
 	// OpEviction is a node's eviction or readmission.
 	OpEviction OpKind = "eviction"
 
-	// OpRelease is a node's RELEASE of the log: its own statement, as it
-	// leaves the log's partition, that nothing it publishes on the log
-	// afterwards applies anywhere. Published under the eviction's kind and
-	// subject, so it is a node gate and installs an apply gate as an
-	// eviction does, and a readmission lifts it the same way
-	// ([statelog.EvictionKindRelease]).
-	OpRelease OpKind = "release"
-
 	// OpBarrier is the read index's append, which writes nothing anywhere.
 	OpBarrier OpKind = "barrier"
 )
 
-// OpKinds are the ten, in the order they are documented.
+// OpKinds are the nine, in the order they are documented.
 var OpKinds = []OpKind{
 	OpCreate, OpPatch, OpTombstone, OpRestore, OpPurge,
-	OpTurn, OpGeneration, OpEviction, OpRelease, OpBarrier,
+	OpTurn, OpGeneration, OpEviction, OpBarrier,
 }
 
 // Valid reports whether an op off the wire is one this build knows.

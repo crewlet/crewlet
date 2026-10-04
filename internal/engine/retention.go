@@ -54,9 +54,9 @@ import (
 // ONE DUTY PER PARTITION (§F3), `worker:retention@<partition>` — and for
 // layout 0's one partition `worker:retention`, the lease it has always been
 // ([partitionDutyName]). A partition's trim reads the partition's own applied
-// eviction and release rows, which only a node holding it has, so only a node
-// SERVING the partition may claim it ([Engine.partitionDuty]); a node offline
-// on one partition stops that partition's trim and nobody else's; and the
+// eviction rows, which only a node holding it has, so only a node SERVING the
+// partition may claim it ([Engine.partitionDuty]); a node offline on one
+// partition stops that partition's trim and nobody else's; and the
 // partitions' duties spread over their servers. One tick still reads the
 // register ONCE, for every log whose partition's duty it holds.
 
@@ -400,9 +400,9 @@ func (r *retention) tick(ctx context.Context) {
 //
 // # A singleton per partition
 //
-// The trim of a partition's logs reads the partition's own applied eviction and
-// release rows ([retention.tombstones]), which only a node holding the partition
-// has; so its duty is claimable only by a node SERVING the partition, and each
+// The trim of a partition's logs reads the partition's own applied eviction
+// rows ([retention.tombstones]), which only a node holding the partition has;
+// so its duty is claimable only by a node SERVING the partition, and each
 // partition's is its own lease. A node that serves nothing claims nothing; a
 // node offline on one partition stops that partition's trim and nobody else's;
 // and the duties of a fleet's partitions spread over its servers rather than
@@ -729,9 +729,7 @@ func (r *retention) publish(ctx context.Context, name string, generation uint32,
 }
 
 // reportedPositions is every node's committed position on one log, keyed as
-// the register keys it: every register row that names the log, each marked
-// [statelog.NodePosition.Released] where the row says the node has left it —
-// which [statelog.CountedSet] counts nowhere.
+// the register keys it: every register row that names the log.
 func reportedPositions(rows []coord.NodePositions, domain string) []statelog.NodePosition {
 	out := make([]statelog.NodePosition, 0, len(rows))
 	for _, row := range rows {
@@ -759,7 +757,6 @@ func reportedPositions(rows []coord.NodePositions, domain string) []statelog.Nod
 			// its artefact still names the old one.
 			SnapshotGeneration: at.SnapshotGeneration,
 			At:                 row.At,
-			Released:           at.State == coord.LogReleased,
 		})
 	}
 	return out
@@ -882,8 +879,8 @@ var (
 	_ evictionLister = tracker.Domain{}
 	_ evictionLister = pages.Domain{}
 
-	// AND BOTH READ THEIR GATE RECORDS OFF THE LOG — an eviction, a release
-	// and the readmission of either — which [stateLog.startLog] refuses a
+	// AND BOTH READ THEIR GATE RECORDS OFF THE LOG — an eviction and the
+	// readmission that lifts it — which [stateLog.startLog] refuses a
 	// registered identity-claiming domain for lacking.
 	_ statelog.EvictionProbe = tracker.Domain{}
 	_ statelog.EvictionProbe = pages.Domain{}
@@ -911,10 +908,10 @@ func (r *retention) tombstones(ctx context.Context, running *runningLog,
 	return logTombstones(ctx, r.db, running.domain, running.id.Partition, generation)
 }
 
-// logTombstones is every eviction and release this node has applied on
-// domain's log in partition p, each stamped with generation — see
-// [retention.tombstones], which the snapshot loop's count reads through too
-// ([Engine.countedOn]), so the two subtract one set of tombstones.
+// logTombstones is every eviction this node has applied on domain's log in
+// partition p, each stamped with generation — see [retention.tombstones],
+// which the snapshot loop's count reads through too ([Engine.countedOn]), so
+// the two subtract one set of tombstones.
 func logTombstones(ctx context.Context, db *store.DB, domain statelog.Domain,
 	p statelog.PartitionID, generation uint32) (tombs []statelog.Tombstone, read bool) {
 
@@ -961,9 +958,6 @@ func logTombstones(ctx context.Context, db *store.DB, domain statelog.Domain,
 		}
 		out = append(out, statelog.Tombstone{
 			NodeID: row.NodeID, At: row.At, By: row.By, Generation: generation,
-			// WHICH GATE, off the row, so a node that left the log is
-			// never reported as one an operator evicted.
-			Kind: row.Kind,
 		})
 	}
 	return out, true

@@ -31,8 +31,7 @@
  *   - `n/a` rather than `0` for a term a domain does not have.
  *   - `evicted` carrying its `effective_at` while the fence window is open,
  *     because an operator who cannot see that the exclusion is PENDING runs
- *     the gesture twice — and `left` for a node whose tombstone is its own
- *     release, which nobody evicted.
+ *     the gesture twice.
  *   - the snapshot block's OWN blocked reason: a stalled snapshot tier and a
  *     stalled trim are different problems with different remedies, and the
  *     first is silent until a node tries to join.
@@ -478,27 +477,24 @@ export function RetentionPanels({ thisNode }: { thisNode?: string }) {
 }
 
 /**
- * A node's tombstone on its row: evicted, or LEFT.
+ * A node's tombstone on its row.
  *
- * THE FENCE WINDOW IS THE POINT. A tombstone is not immediate — the node stays
+ * THE FENCE WINDOW IS THE POINT. An eviction is not immediate — the node stays
  * counted until `effective_at` so a live one is certain to have noticed — and
- * an operator who cannot see that runs the gesture twice. And a RELEASE is the
- * node's own word as it left the logs' partitions: rendered as "evicted by"
- * the node itself, it sends an operator looking for a gesture nobody made.
+ * an operator who cannot see that runs the gesture twice.
  */
 export function Tombstone({ evicted, now }: { evicted: RetentionEviction; now: number }) {
-  const left = evicted.kind === "release";
-  const who = left ? "released its logs itself as it left" : `evicted by ${evicted.by}`;
+  const who = `evicted by ${evicted.by}`;
   if (!evicted.effective) {
     return (
       <Tag variant="warning" title={`${who}; takes effect ${fmtDateTime(evicted.effective_at)}`}>
-        {left ? "left" : "evicted"} in {fmtDuration(Date.parse(evicted.effective_at) - now)}
+        evicted in {fmtDuration(Date.parse(evicted.effective_at) - now)}
       </Tag>
     );
   }
   return (
-    <Tag variant={left ? "neutral" : "danger"} title={who}>
-      {left ? "left" : "evicted"}
+    <Tag variant="danger" title={who}>
+      evicted
     </Tag>
   );
 }

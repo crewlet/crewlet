@@ -184,7 +184,7 @@ func TestAGateRecordPassesAWedgedHolderAfterOneAppend(t *testing.T) {
 // backend sees it, and the refusal keeps its identity back across the wire.
 func TestAGateRecordOfAKindThisNodeDoesNotWriteIsRefused(t *testing.T) {
 	t.Parallel()
-	for _, kind := range []GateKind{"", "release", "readmit-all"} {
+	for _, kind := range []GateKind{"", "quarantine", "readmit-all"} {
 		f := newFleet(t, "data-1")
 		r := f.router(t, "node-x", nil)
 		record := aGateRecord

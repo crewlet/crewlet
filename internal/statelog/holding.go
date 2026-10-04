@@ -27,8 +27,7 @@ import (
 // behalf could overwrite a committed record the trim had removed.
 //
 // The publisher asks it before a write takes its snapshot and again before the
-// append ([Deps.Holding]), and a node's RELEASE of a log is the one record it
-// inverts the rule for ([Request.Release]).
+// append ([Deps.Holding]).
 type Holding interface {
 	// Serving reports whether this node serves p now.
 	//
@@ -44,18 +43,6 @@ type Holding interface {
 // node that serves the partition takes the write; a refusal carrying it is
 // [ReasonNotHolder].
 var ErrNotHolder = errors.New("statelog: this node does not serve that partition")
-
-// ErrReleaseWhileServing reports a release asked of a node that still serves
-// the log's partition.
-//
-// A PROGRAMMING ERROR IN THE LEAVE, never a state to wait out: a node stops
-// deciding writes for a partition before it releases the partition's logs, so
-// that everything it decided is on the log below its release. A release
-// published while it still serves is one its own later writes land above —
-// every one of them dropped on every holder, and every caller told `released`
-// about a node that had not yet left.
-var ErrReleaseWhileServing = errors.New("statelog: a release is published after " +
-	"the node stops serving the partition, never while it serves it")
 
 // Copies is which partitions THIS node keeps an established copy of: the ones
 // it takes snapshots of and offers a joiner ([DonorDeps.Keeps]).
@@ -75,8 +62,8 @@ var ErrReleaseWhileServing = errors.New("statelog: a release is published after 
 //
 // A copy is kept from the moment it is adopted and catching up until the node
 // begins to give it up: never while a fetched file is being installed over it,
-// never once its leave has begun to drain or release it, and never once it has
-// faulted, since a copy that diverged is not one to hand on.
+// and never once it has faulted, since a copy that diverged is not one to hand
+// on.
 type Copies interface {
 	// Keeps reports whether this node keeps an established copy of p now.
 	//

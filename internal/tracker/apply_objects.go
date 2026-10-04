@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/store"
 )
 
@@ -445,14 +444,11 @@ func (a *Applier) applyRankOrder(ctx context.Context, tx *sql.Tx, c applyContext
 	return rows, nil
 }
 
-// applyEviction writes the gate that drops a node's records: an operator's
-// eviction, or the node's own release of the log ([OpRelease]) — the same
-// window, recorded as the gate it is.
+// applyEviction writes the gate that drops a node's records.
 //
 // A READMISSION IS THE INVERSE COMMIT rather than a delete, so an eviction's
 // whole history survives a replay — and a node that was evicted, readmitted
-// and evicted again reads correctly rather than as one long absence. It lifts
-// a release exactly as it lifts an eviction.
+// and evicted again reads correctly rather than as one long absence.
 func (a *Applier) applyEviction(ctx context.Context, tx *sql.Tx, c applyContext) (int, error) {
 	var eviction Eviction
 	if err := decodePayload(c.record.Mutation, &eviction); err != nil {
@@ -471,22 +467,17 @@ func (a *Applier) applyEviction(ctx context.Context, tx *sql.Tx, c applyContext)
 		}
 		return affected(res)
 	}
-	gate := statelog.EvictionKindEviction
-	if c.record.Op == OpRelease {
-		gate = statelog.EvictionKindRelease
-	}
 	res, err := tx.ExecContext(ctx, `
 		INSERT INTO tracker_evictions
 			(node_id, log_stream, from_position, at, by, readmitted_position,
-			 readmitted_at, kind)
-		VALUES (?,?,?,?,?,NULL,NULL,?)
+			 readmitted_at)
+		VALUES (?,?,?,?,?,NULL,NULL)
 		ON CONFLICT (node_id, log_stream) DO UPDATE SET
 			from_position = excluded.from_position, at = excluded.at,
-			by = excluded.by, readmitted_position = NULL, readmitted_at = NULL,
-			kind = excluded.kind
+			by = excluded.by, readmitted_position = NULL, readmitted_at = NULL
 		WHERE excluded.from_position > tracker_evictions.from_position`,
 		eviction.NodeID, c.position.Stream, c.packed,
-		store.EncodeTime(c.brokerAt), eviction.EvictedBy, string(gate))
+		store.EncodeTime(c.brokerAt), eviction.EvictedBy)
 	if err != nil {
 		return 0, fmt.Errorf("tracker: evict node %s at %s: %w",
 			eviction.NodeID, c.position, err)

@@ -37,7 +37,7 @@ const node = (over: Partial<RetentionNode> = {}): RetentionNode => ({
   ...over,
 });
 
-const evicted = { kind: "eviction" as const, by: "ops", at: "", effective_at: "", effective: true };
+const evicted = { by: "ops", at: "", effective_at: "", effective: true };
 
 /** One identity-claiming log's row, its evictions read unless it says not. */
 const logRow = (domain: string, over: Partial<RetentionDomain> = {}): RetentionDomain => ({

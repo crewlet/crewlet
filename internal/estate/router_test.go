@@ -1485,12 +1485,12 @@ func TestAGateThreeRefusalMovesOnUnderTheSameOperation(t *testing.T) {
 	f := newFleet(t, "data-a", "data-b")
 	_, first := f.first(t, f.client)
 	first.set(func(n *fakeNode) {
-		n.refusal = &statelog.Unavailable{Reason: statelog.ReasonReleased, OpID: "op-c",
+		n.refusal = &statelog.Unavailable{Reason: statelog.ReasonEvicted, OpID: "op-c",
 			CopyWriter: "data-z"}
 	})
 	_, err := f.client.WriterAs(swe).CreateTask(t.Context(), "op-c", tracker.Task{Project: "ENG"}, nil)
 	var refusal *statelog.Unavailable
-	if !errors.As(err, &refusal) || refusal.Reason != statelog.ReasonReleased ||
+	if !errors.As(err, &refusal) || refusal.Reason != statelog.ReasonEvicted ||
 		refusal.CopyWriter != "data-z" {
 		t.Fatalf("a refusal naming another node's copy answered %v, want it whole", err)
 	}

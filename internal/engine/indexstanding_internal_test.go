@@ -80,8 +80,7 @@ func TestTheIndexDutyAsksEveryNodeTheVectorLogCounts(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(tombs) != 1 || tombs[0].NodeID != "node-old" ||
-		tombs[0].Kind != statelog.EvictionKindEviction {
+	if len(tombs) != 1 || tombs[0].NodeID != "node-old" {
 		t.Fatalf("the fleet's evictions read as %+v, want node-old's eviction", tombs)
 	}
 	// AN EVICTION STILL GOING ROUND THE LOGS is not yet the fleet's word: one

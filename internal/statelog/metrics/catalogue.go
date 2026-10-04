@@ -163,9 +163,6 @@ func Catalogue() []Instrument {
 				"undid it) — both answered by a NEW operation under a fresh " +
 				"id, never by a retry. A record that landed and a gate dropped " +
 				"is counted under the gate that dropped it — `evicted`, " +
-				"`released` (written by a node after it released the log as it " +
-				"left the log's partition — a node that serves the partition " +
-				"takes the write), " +
 				"`deleted`, `retired` (a kind this build no longer applies), " +
 				"`abandoned` (written in a generation a reanchor abandoned), " +
 				"`overtaken` (written after a restored reanchor, below its " +
@@ -331,8 +328,7 @@ func Catalogue() []Instrument {
 			Name: StatelogRecordsGated, Kind: KindCounter, Unit: UnitCount,
 			Attributes: []string{"gate", "subject_kind"},
 			Shows: "Records an apply gate dropped, by the gate that dropped " +
-				"each — the domain's own (`evicted`, `released`, `deleted`, " +
-				"`retired`) or " +
+				"each — the domain's own (`evicted`, `deleted`, `retired`) or " +
 				"the framework's (`abandoned`, `overtaken`, `wrong_partition`). " +
 				"Each node counts a record once, where its own applier drops it, " +
 				"when the transaction that drops it commits — never once per " +

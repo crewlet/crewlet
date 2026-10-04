@@ -100,10 +100,10 @@
 // other rows than this call did.
 //
 // A copy the broker collapsed an append onto need not be this node's at all:
-// an operation handed to another node — a write refused `released` or
-// `evicted` by one that left, retried through one that serves — lands on the
-// first copy while the window lasts, and when that copy applied nowhere there
-// is no ledger row to answer from. Whether a gate dropped it is a question
+// an operation handed to another node — a write refused `evicted` by one the
+// fleet put out, retried through one it still counts — lands on the first copy
+// while the window lasts, and when that copy applied nowhere there is no
+// ledger row to answer from. Whether a gate dropped it is a question
 // about the node that WROTE it, so the resolution reads the record off the log
 // and asks the gates about its writer, answering that writer's refusal; asked
 // about itself, the retrying node found no gate and a ledger that vouched, and
@@ -285,13 +285,10 @@
 // (iii) An evicted node's records are dropped by the applier's eviction gate
 // whatever it manages to publish, so the conclusion holds even when (i) and
 // (ii) are both defeated — by a frozen clock, or by a coordination read that
-// answered stale. The same gate holds a node that RELEASED the log as it left
-// the log's partition ([EvictionKindRelease]): its own record, published on the
-// log, above which nothing it writes applies anywhere. This clause depends on
-// nothing but the log's own order and on the gate record being decodable by
-// the applier that must obey it, which is why a gate is a stop rather than a
-// deferral, and why it is the layer that makes the fence complete rather than
-// merely deep.
+// answered stale. This clause depends on nothing but the log's own order and
+// on the gate record being decodable by the applier that must obey it, which
+// is why a gate is a stop rather than a deferral, and why it is the layer
+// that makes the fence complete rather than merely deep.
 //
 // Given all three: suppose a commit at sequence S on this object's subject
 // has been trimmed. Then S < F <= C+1, so S <= C, and by (i) it has been
@@ -479,33 +476,18 @@
 //     serve the partition never decides from its rows, and again before the
 //     append, so a write still deciding when its node began to leave is not
 //     appended; it refuses `not_holder` ([ErrNotHolder]), or `holding_unknown`
-//     where the node cannot tell — never a guess. The one record it inverts the
-//     rule for is the node's RELEASE ([Request.Release]), written only once the
-//     node has stopped serving ([ErrReleaseWhileServing]).
-//   - THE RELEASE GATE, clause (iii) for a node that LEAVES a partition. As it
-//     leaves, the node publishes a release on each identity-claiming log of
-//     the partition — its own statement, flagged a node gate, written under
-//     its domain's eviction subject — and every holder records it where an
-//     eviction is recorded ([EvictionRow.Kind]): every record the node
-//     publishes above it, with no readmission since, is dropped on every
-//     holder (`released`), identically by determinism, and the write that
-//     published it is told so rather than applied or lost. It depends on
-//     nothing but the log's order, so it holds when the leaving node's view of
-//     the fleet is stale. A release is only ever the publisher's own — the
-//     publisher refuses one naming another node, which would be an eviction
-//     nobody judged — and the node's own write fence does not read one as an
-//     eviction: it left a partition, and the fleet did not remove it.
+//     where the node cannot tell — never a guess.
 //
-// The framework's own tests certify all three and the release gate on layout
-// 0, with probe domains that place a record kind or a scope path in a
-// partition their one log is not in, and a holding the test moves.
+// The framework's own tests certify all three on layout 0, with probe domains
+// that place a record kind or a scope path in a partition their one log is not
+// in, and a holding the test moves.
 //
 // Under layout 0 every record and every path a domain of this build writes is
 // in the one partition, `estate.000`, which every data node serves from boot
 // and which no node joins or leaves while it runs — and a node without `data`
 // serves nothing and runs no publisher. So no gate refuses anything a fleet
-// before layouts wrote, and nothing releases a log: they are the rules the
-// partitioned layout's writes are held to from its first record.
+// before layouts wrote: they are the rules the partitioned layout's writes are
+// held to from its first record.
 //
 // # A read across partitions is answered at a CUT
 //
@@ -548,10 +530,10 @@
 // the one a running fleet already holds, byte for byte, and every key is the
 // domain's own name.
 //
-// An EVICTION or a RELEASE is not a coordination record at all, and needs no
-// such name: it is a record on the very log it gates, applied into that log's
-// rows in its partition's own file, so it is about that log by construction —
-// the same way a checkpoint, an anchor and a generation are.
+// An EVICTION is not a coordination record at all, and needs no such name: it
+// is a record on the very log it gates, applied into that log's rows in its
+// partition's own file, so it is about that log by construction — the same way
+// a checkpoint, an anchor and a generation are.
 //
 // # The alarm table borrows every threshold it fires at
 //

@@ -51,7 +51,6 @@ import type {
 import type { PushKind, SeatActivity, StoppedReason } from "../contract/wire.ts";
 import type { WorkViewShape } from "../contract/work.ts";
 import type {
-  RetentionEvictionKind,
   RetentionGenerationState,
   RetentionIdentityCause,
   RetentionTrimFloorState,
@@ -1674,10 +1673,6 @@ export interface RetentionNodeDomain {
 }
 
 export interface RetentionEviction {
-  /** A release is the node's own word as it left: shown as "left", never as
-   *  "evicted by" the node itself, which sends an operator after a gesture
-   *  nobody made. */
-  kind: RetentionEvictionKind;
   by: string;
   at: string;
   /** When the trim stops counting the node — one fence window after the

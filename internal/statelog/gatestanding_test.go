@@ -28,17 +28,11 @@ func TestAGateRetryStandsOnlyWhileItsRecordIsInForce(t *testing.T) {
 	}
 	packed := func(seq uint64) uint64 { return uint64(at(seq).Packed()) }
 	evicted := func(from uint64) statelog.EvictionRow {
-		return statelog.EvictionRow{NodeID: node, From: packed(from),
-			Kind: statelog.EvictionKindEviction}
-	}
-	released := func(from uint64) statelog.EvictionRow {
-		return statelog.EvictionRow{NodeID: node, From: packed(from),
-			Kind: statelog.EvictionKindRelease}
+		return statelog.EvictionRow{NodeID: node, From: packed(from)}
 	}
 	back := func(from, readmitted uint64) statelog.EvictionRow {
 		return statelog.EvictionRow{NodeID: node, From: packed(from),
-			Readmitted: packed(readmitted), Back: readmitted > from,
-			Kind: statelog.EvictionKindEviction}
+			Readmitted: packed(readmitted), Back: readmitted > from}
 	}
 
 	for _, tc := range []struct {
@@ -62,19 +56,6 @@ func TestAGateRetryStandsOnlyWhileItsRecordIsInForce(t *testing.T) {
 		{name: "an eviction a later eviction replaced is superseded",
 			landed: 7, row: evicted(12), found: true,
 			wantReason: statelog.ReasonSuperseded, wantDetail: "a later eviction"},
-		// NAMED AS THE RELEASE IT IS: the node left the log itself, and an
-		// operator told "a later eviction" goes looking for a gesture
-		// nobody made.
-		{name: "an eviction the node's own later release replaced is superseded by the release",
-			landed: 7, row: released(12), found: true,
-			wantReason: statelog.ReasonSuperseded, wantDetail: "a later release"},
-		{name: "a readmission the node's own later release undid is superseded by the release",
-			readmit: true, landed: 9, row: released(14), found: true,
-			wantReason: statelog.ReasonSuperseded, wantDetail: "a later release"},
-		{name: "a row naming a gate this build does not know is not judged at all",
-			landed: 7, row: statelog.EvictionRow{NodeID: node, From: packed(7),
-				Kind: "from_a_newer_build"}, found: true,
-			wantErr: "does not know"},
 		{name: "an eviction whose own row is missing is not judged at all",
 			landed: 7, wantErr: "no eviction row"},
 		{name: "an eviction row older than the record is not judged at all",
@@ -85,7 +66,7 @@ func TestAGateRetryStandsOnlyWhileItsRecordIsInForce(t *testing.T) {
 			readmit: true, landed: 9},
 		{name: "a readmission a later eviction undid is superseded",
 			readmit: true, landed: 9, row: evicted(14), found: true,
-			wantReason: statelog.ReasonSuperseded},
+			wantReason: statelog.ReasonSuperseded, wantDetail: "a later eviction"},
 		{name: "a readmission a later readmission replaced is superseded",
 			readmit: true, landed: 9, row: back(12, 15), found: true,
 			wantReason: statelog.ReasonSuperseded},

@@ -31,10 +31,9 @@
 // A record's scope is the COMPLETE set of objects its apply may write, stated
 // by the writer (see [ScopeSet]), and a purge is the record that writes the
 // most objects that are not its subject. Every one of them is a CROSS-OBJECT
-// effect, listed here so a layout that splits tasks across partitions can route
-// each one rather than rediscover it. What each effect writes is a DOCUMENT
-// change as well as a row change from [rewriteVersion] on,
-// and a task reached by several of them is rewritten once with all of them:
+// effect the purge's scope has to name. What each effect writes is a DOCUMENT
+// change as well as a row change from [rewriteVersion] on, and a task reached
+// by several of them is rewritten once with all of them:
 //
 //   - its DEPENDENTS: their `waiting_on` relation to it is taken out of their
 //     documents, and their dependency edges naming it deleted;
@@ -52,32 +51,9 @@
 // A purge below [rewriteVersion] writes the rows alone, and leaves the blockers'
 // mirror rows standing, as every build before it did ([purgeDeletes]).
 //
-// Within one estate the writer names all of them ([purgeReach]) and the decide
-// refuses a purge whose scope comes up short of the rows it decides on.
-//
-// # What the partitioned layout has to carry for it
-//
-// Under the partitioned layout a scope may not cross partitions, so the first
-// four effects on a task in ANOTHER partition have to be facts the purge's
-// partition hands to that one, decided there under its own scope — while the
-// subtree stays inside the purge's own partition, because that layout refuses a
-// parent in another project. (Today it is not refused, which is why a
-// descendant in another project is named at its own project's path here.)
-//
-// THE PROPAGATION FEED THAT LAYOUT PLANS FOR DEPENDENCIES DOES NOT CARRY THEM.
-// Its blocker-state fact rewrites the target's dependency ROWS naming a
-// blocker, and nothing in it touches a document; so a dependent in another
-// partition would get the purged blocker's edge back from its own document on
-// its next record, and a blocker or a related task there would go on naming
-// the purged task in its document and its rows. What the layout needs is a
-// fact of its own — the purged task's id, decided in the target partition by
-// taking it out of every document there that names it (the relations, the
-// dependents mirror) and out of the rows those documents derive. The same fact
-// has to clear the REFERENCES there too: a reference across partitions is
-// stored by the key it names rather than by the task's id, so the purged
-// task's partition cannot delete it, and left behind it is a link to a key
-// that resolves to nothing — the dangling link a reader cannot tell from a
-// typo, which within one partition the purge already removes.
+// The writer names all of them, each at its own project's path — a descendant
+// may be filed in another project than the purged task ([purgeReach]) — and the
+// decide refuses a purge whose scope comes up short of the rows it decides on.
 //
 // WHAT NO SCOPE CAN NAME is a task that comes to name the purged one AFTER the
 // purge was decided and before it lands — a relation, a dependency or a child
@@ -89,6 +65,7 @@
 // package shares ([Writer.scopeForDependents] has it for a dependent arriving
 // the same way); only a write that contended with the purge's own subject
 // could close it.
+//
 // # Every new field is version-gated, and every new derived column re-derived
 //
 // The version a record carries is the LOWEST one that reads it — the highest
@@ -202,19 +179,12 @@ const (
 	// exactly one wins.
 	KindGeneration ObjectKind = "generation"
 
-	// KindEviction is a node's eviction, its RELEASE of the log as it
-	// leaves the log's partition ([OpRelease]), or the readmission that
-	// lifts either — three records under one kind, told apart by the op.
+	// KindEviction is a node's eviction or its readmission.
 	//
-	// ONE OF THE TWO KINDS THAT INSTALL A GATE, which is why its payload's
-	// SHAPE version is pinned at [GateRecordVersion] for ever: a node that
-	// deferred one would leave its own gate table empty and go on applying
-	// every record the node it names appends, and there is no inverse that
-	// repairs it. What does move is the RECORD version, and only for a
-	// change to what the gate's apply does: the release is written at
-	// [releaseVersion], so a build from before it halts there rather than
-	// record it as an eviction. It keeps this kind so that build still
-	// knows it for a gate.
+	// ONE OF THE TWO KINDS THAT INSTALL A GATE, which is why its version
+	// is pinned at 1 for ever: a node that deferred an eviction would
+	// leave its own gate table empty and go on applying every record the
+	// evicted node appends, and there is no inverse that repairs it.
 	KindEviction ObjectKind = "eviction"
 
 	// KindRankOrder is a project's manual order.

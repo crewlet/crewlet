@@ -338,22 +338,6 @@ type Request struct {
 	// [Publisher.stamped]).
 	NodeGate bool
 
-	// Release marks a node's RELEASE of this log ([EvictionKindRelease]):
-	// the one write a node makes on a partition's log after it has stopped
-	// serving the partition, and the only one it may. A node leaves by
-	// ceasing to decide first and releasing second, so that everything it
-	// decided is on the log below its release — and every write it had in
-	// flight that lands above is dropped on every holder by the gate the
-	// release installs.
-	//
-	// So it inverts gate 3 for this one record ([Holding]): a release is
-	// refused while this node serves the log's partition
-	// ([ErrReleaseWhileServing]) and every other write is refused while it
-	// does not ([ErrNotHolder]). A release is a node gate, so a Release write
-	// is a NodeGate write, and the publisher holds the flag to the record in
-	// both directions, as it holds NodeGate ([Publisher.stamped]).
-	Release bool
-
 	// Standing judges a retry this node's ledger already answers
 	// ([Snap.Held]), for a write whose landed record a LATER write can
 	// undo: nil when the operation's record is still the one in force, a
@@ -696,11 +680,6 @@ func (p *Publisher) publish(ctx context.Context, req Request) (Result, error) {
 	if err := p.withinPartition("the write", req.Subject, req.Scope); err != nil {
 		return Result{}, err
 	}
-	if req.Release && !req.NodeGate {
-		return Result{}, fmt.Errorf("statelog: the write on %s is flagged a release "+
-			"and not a node gate — a release is a node's gate record, excused the "+
-			"fences every node gate is, so it is flagged both", req.Subject)
-	}
 	// GATE 3, BEFORE STEP 0: only a node that serves the log's partition
 	// decides a write for it, so one that does not is refused before it
 	// reads a row — a decision taken from the rows of a partition this node
@@ -1027,31 +1006,6 @@ func (p *Publisher) stamped(req Request, snap Snap) error {
 			"node gate is excused",
 			p.domain.Name(), req.Subject, env.Kind, env.Op)
 	}
-	if releases := p.releases(env); releases != req.Release {
-		// THE RELEASE FLAG IS HELD TO THE RECORD IN BOTH DIRECTIONS, for
-		// the node gate's reason: it is what gate 3 inverts, so a release
-		// the flag did not declare would have been refused as a write from
-		// a node that stopped serving — or allowed where the node still
-		// serves — and a flagged write that is not a release would be an
-		// ordinary record written by a node that no longer serves.
-		return fmt.Errorf("statelog: the %s record decided for %s is %s, and the "+
-			"write is %s — a release is flagged as one, and only a release is",
-			p.domain.Name(), req.Subject, releaseWord(releases),
-			releaseWord(req.Release))
-	}
-	if probe, gates := p.domain.(EvictionProbe); gates && probe.Releases(env) &&
-		env.Subject != probe.EvictionSubject(p.nodeID) {
-		// A RELEASE IS THE NODE'S OWN STATEMENT, and the one gate record no
-		// operator judges: it takes effect on the node it names with no
-		// live-lease refusal between them, because a node leaving is
-		// alive by definition. So it may only ever name its publisher —
-		// one naming another node would be an eviction nobody permitted.
-		return fmt.Errorf("statelog: the %s record decided for %s is a release "+
-			"published on %s by %s — a release is a node's own statement that "+
-			"it has left the log, so it names the node that publishes it; an "+
-			"operator puts another node out with an eviction",
-			p.domain.Name(), req.Subject, env.Subject, p.nodeID)
-	}
 	// GATE 1, ON WHAT THE DEFERRAL WILL BE FILED UNDER: a holder that cannot
 	// decode this record indexes it by the RECORD's scope, not the request's,
 	// so both are held to this partition — a decision that widened its own
@@ -1105,37 +1059,17 @@ func (p *Publisher) withinPartition(what string, subject Subject, scope ScopeSet
 	return nil
 }
 
-// serves is gate 3 — whether this node may make this write on its log's
-// partition now: a release only once it has stopped serving the partition, and
-// every other write only while it serves it ([Request.Release]). An unknown
-// answer refuses both.
+// serves is gate 3 — whether this node may make a write on its log's partition
+// now, which it may only while it serves it. An unknown answer refuses it.
 func (p *Publisher) serves(req Request) error {
 	serving, err := p.holding.Serving(p.logID.Partition)
 	switch {
 	case err != nil:
 		return refuseHoldingUnknown(p.logID, req.OpID, err)
-	case req.Release && serving:
-		return fmt.Errorf("%w: %s still serves %s, and was asked to release %s",
-			ErrReleaseWhileServing, p.nodeID, p.logID.Partition, p.logID)
-	case !req.Release && !serving:
+	case !serving:
 		return refuseNotHolder(p.logID, req.OpID)
 	}
 	return nil
-}
-
-// releases reports whether a record is a node's release of the log, which only
-// a domain that reads its node gates off its log can say ([EvictionProbe]).
-func (p *Publisher) releases(env Envelope) bool {
-	probe, gates := p.domain.(EvictionProbe)
-	return gates && probe.Releases(env)
-}
-
-// releaseWord names which a record or a write is, for a refusal.
-func releaseWord(release bool) string {
-	if release {
-		return "a release"
-	}
-	return "not a release"
 }
 
 // partitionOf names a partition for a refusal, or says the layout has none: a
@@ -1191,10 +1125,8 @@ func (p *Publisher) attempt(ctx context.Context, req Request, snap Snap, expect 
 		return Result{Rounds: round}, dispDone, err
 	}
 	// GATE 3 AGAIN, BEFORE THE APPEND, for fence 0's reason: a node that
-	// began to leave the partition while this write was deciding has
-	// stopped serving it, and the write it decided must not be appended —
-	// the leave's release is how a write that got past this check is kept
-	// out, and this is what keeps that to the writes already in flight.
+	// stopped serving the partition while this write was deciding must not
+	// append the write it decided.
 	if err := p.serves(req); err != nil {
 		return Result{Rounds: round}, dispDone, err
 	}
@@ -1621,23 +1553,22 @@ const (
 //
 // # Whose record the gates are asked about
 //
-// A writer's gate — an eviction, a release — drops a record by its WRITER, so
-// the question is about whoever wrote the record at p, and landed says how
-// much of that this call already knows. Its own acknowledged append is its
-// own. Anything else is READ off the log, because a record this call did not
-// put there may be another node's: a write that node published under this
-// operation and that landed after the node left the partition is on the log,
-// applies nowhere, and holds the operation id in the broker's duplicate
-// window — so a node that serves the partition, handed the same operation,
-// has its append collapsed onto it. Asked about ITS OWN standing, that node
-// found no gate, no ledger row and a ledger that vouched, and reported a
-// contract violation for a record that was only ever gated; the answer is the
-// gate of the record's own writer, which is what holds the operation — and
-// the refusal NAMES that writer ([Unavailable.CopyWriter]) whenever the gate
-// that answers blames it ([Reason.BlamesWriter]), since the reason is then its
-// standing and not this node's. The deletion marker blames nobody: it holds
-// every writer's record on the object, this node's included, so a copy it
-// dropped is refused `deleted` naming no writer.
+// A writer's gate — an eviction — drops a record by its WRITER, so the question
+// is about whoever wrote the record at p, and landed says how much of that this
+// call already knows. Its own acknowledged append is its own. Anything else is
+// READ off the log, because a record this call did not put there may be another
+// node's: a write that node published under this operation and that landed
+// above the node's eviction is on the log, applies nowhere, and holds the
+// operation id in the broker's duplicate window — so another node, handed the
+// same operation, has its append collapsed onto it. Asked about ITS OWN
+// standing, that node found no gate, no ledger row and a ledger that vouched,
+// and reported a contract violation for a record that was only ever gated; the
+// answer is the gate of the record's own writer, which is what holds the
+// operation — and the refusal NAMES that writer ([Unavailable.CopyWriter])
+// whenever the gate that answers blames it ([Reason.BlamesWriter]), since the
+// reason is then its standing and not this node's. The deletion marker blames
+// nobody: it holds every writer's record on the object, this node's included,
+// so a copy it dropped is refused `deleted` naming no writer.
 //
 // A record the read shows is ANOTHER operation's — the ambiguous path found it
 // newest on the subject — is not this operation's landing, and the gates are
@@ -1790,14 +1721,13 @@ func (p *Publisher) resolve(ctx context.Context, req Request, at Position, lande
 			detail = fmt.Sprintf("the record at %s was durable and applied "+
 				"nowhere — %s", at, spent)
 		}
-		// AND WHOSE STANDING THE REASON STATES, when it is not this
-		// node's: the gate held the writer of a copy this node's append
-		// was collapsed onto, and a caller reading `evicted` or
-		// `released` as this node's own would send the write away from
-		// the one node that has just shown it can make it. ONLY A GATE
-		// THAT BLAMES THE WRITER: a deletion marker holds this node's
-		// own record as surely as the copy, and a writer named beside
-		// `deleted` read as a retry here that meets the marker for ever.
+		// AND WHOSE STANDING THE REASON STATES, when it is not this node's: the
+		// gate held the writer of a copy this node's append was collapsed onto,
+		// and a caller reading `evicted` as this node's own would send the
+		// write away from the one node that has just shown it can make it. ONLY
+		// A GATE THAT BLAMES THE WRITER: a deletion marker holds this node's
+		// own record as surely as the copy, and a writer named beside `deleted`
+		// read as a retry here that meets the marker for ever.
 		var copyWriter string
 		if writer != p.nodeID && reason.BlamesWriter() {
 			copyWriter = writer

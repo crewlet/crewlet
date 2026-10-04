@@ -203,25 +203,6 @@ const (
 	// operation id once the window has passed, or under a fresh one sooner.
 	ReasonEvicted Reason = "evicted"
 
-	// ReasonReleased — the record's writer RELEASED this log before the
-	// record's position and had not been readmitted: it left the log's
-	// partition, and its release is its own statement that nothing it
-	// publishes on the log afterwards applies anywhere ([EvictionKindRelease]).
-	// A record that landed after it — a write that was in flight while the
-	// node left — is dropped on every holder, which is what lets the node
-	// leave without a coordination round trip anybody has to trust.
-	//
-	// ALWAYS A RECORD THAT LANDED, and it holds its operation id for the
-	// log's duplicate window: the same id sent inside it — by any node,
-	// one that serves the partition included — is collapsed onto the
-	// record and refused `released` again. A node that serves the
-	// partition takes the write under a fresh id, or under this one once
-	// the window has passed; neither can apply twice, because the record
-	// in the way applies nowhere. The node that refused is one of those
-	// when [Unavailable.CopyWriter] names the record's writer: the release
-	// was that node's, and this one's append was collapsed onto its copy.
-	ReasonReleased Reason = "released"
-
 	// ReasonNotHolder — this node does not serve the partition of the log the
 	// write would go to ([Holding], [ErrNotHolder]): it never held the
 	// partition, or it has begun to leave it. Only a partition's serving
@@ -385,12 +366,12 @@ const (
 // is checked against this list ([TestEveryRefusalReasonIsInTheMetricsReference]).
 //
 // A RECORD A GATE DROPPED is refused under the gate that dropped it — evicted,
-// released, deleted, retired, abandoned, overtaken or wrong_partition — rather
-// than under a generic word, because the gate is what says why: which is why
-// there is no `gated` here.
+// deleted, retired, abandoned, overtaken or wrong_partition — rather than
+// under a generic word, because the gate is what says why: which is why there
+// is no `gated` here.
 func Reasons() []Reason {
 	return []Reason{
-		ReasonEvicted, ReasonReleased, ReasonNotHolder, ReasonHoldingUnknown,
+		ReasonEvicted, ReasonNotHolder, ReasonHoldingUnknown,
 		ReasonDeferred, ReasonBehind, ReasonBelowFloor, ReasonFloorUnknown,
 		ReasonDeleted, ReasonRetired, ReasonAbandoned, ReasonOvertaken,
 		ReasonWrongPartition, ReasonLogFull, ReasonSkew, ReasonOpReused,
@@ -403,11 +384,11 @@ func Reasons() []Reason {
 func (r Reason) Valid() bool { return slices.Contains(Reasons(), r) }
 
 // BlamesWriter reports whether a gate answering r dropped a record for what its
-// WRITER was or did — evicted, released, stamped with a generation a reanchor
-// voided (abandoned, overtaken), or put on a log its own domain does not place
-// it on (wrong_partition) — rather than for something every writer's record
-// meets alike: the object's permanent deletion marker (deleted), or a kind the
-// domain no longer applies (retired). False for a reason that is not a gate's.
+// WRITER was or did — evicted, stamped with a generation a reanchor voided
+// (abandoned, overtaken), or put on a log its own domain does not place it on
+// (wrong_partition) — rather than for something every writer's record meets
+// alike: the object's permanent deletion marker (deleted), or a kind the domain
+// no longer applies (retired). False for a reason that is not a gate's.
 //
 // # What it decides
 //
@@ -429,7 +410,7 @@ func (r Reason) Valid() bool { return slices.Contains(Reasons(), r) }
 // quietly blaming nobody.
 func (r Reason) BlamesWriter() bool {
 	switch r {
-	case ReasonEvicted, ReasonReleased, ReasonAbandoned, ReasonOvertaken, ReasonWrongPartition:
+	case ReasonEvicted, ReasonAbandoned, ReasonOvertaken, ReasonWrongPartition:
 		return true
 	}
 	return false
@@ -463,16 +444,16 @@ type Unavailable struct {
 	Position Position
 	OpID     string
 
-	// CopyWriter names ANOTHER node when the record at Position is that
-	// node's copy of this operation rather than this node's own, AND the
-	// gate that dropped it blames the copy's writer ([Reason.BlamesWriter]):
-	// an eviction, a release, a reanchor's rule, the partition. The broker
-	// collapsed this node's append onto the copy inside the log's duplicate
-	// window, or a write whose answer was lost found it newest on its
-	// subject. The reason then states THE COPY'S WRITER's standing, and not
-	// the standing of the node that refused — which passed its own fences
-	// and serves the log's partition, and takes the write itself under the
-	// same operation id once the window has let go of it.
+	// CopyWriter names ANOTHER node when the record at Position is that node's
+	// copy of this operation rather than this node's own, AND the gate that
+	// dropped it blames the copy's writer ([Reason.BlamesWriter]): an eviction,
+	// a reanchor's rule, the partition. The broker collapsed this node's append
+	// onto the copy inside the log's duplicate window, or a write whose answer
+	// was lost found it newest on its subject. The reason then states THE
+	// COPY'S WRITER's standing, and not the standing of the node that refused —
+	// which passed its own fences and serves the log's partition, and takes the
+	// write itself under the same operation id once the window has let go of
+	// it.
 	//
 	// A FIELD rather than a sentence in Detail, because the remedy turns on
 	// it: read as this node's own `evicted`, the operator was told the node

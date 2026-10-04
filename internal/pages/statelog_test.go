@@ -52,18 +52,8 @@ func TestThePagesDomainIsACertifiedDomain(t *testing.T) {
 			// and a table for and no writer — so the trim never learned an
 			// evicted node had left this log.
 			EncodeGate: encodeSuiteGate,
-			// AND A NODE'S OWN RELEASE of the log as it leaves the log's
-			// partition, which the same table records as its own gate.
-			EncodeRelease: encodeSuiteRelease,
 		}
 	})
-}
-
-// encodeSuiteRelease is a node's release of this log, written by the node
-// itself as it leaves the log's partition.
-func encodeSuiteRelease(node string) ([]byte, error) {
-	return gateSuiteRecord(pages.EvictionSubject(node), pages.OpRelease, node,
-		"suite-release-"+node, gateSuiteEviction(node, false))
 }
 
 // encodeSuiteGate is the eviction record a peer's store publishes onto this
@@ -130,23 +120,6 @@ func carryingSuiteField(field statelog.VersionedField) ([]byte, error) {
 				Writer: "suite-node",
 			},
 			Mutation: body, Actor: "suite", ActorKind: pages.AuthorOperator,
-		})
-	case "Op=release":
-		// A NODE'S RELEASE OF THE LOG: an eviction's bytes under its own op.
-		body, err := marshal(gateSuiteEviction("suite-node", false))
-		if err != nil {
-			return nil, err
-		}
-		return pages.Encode(pages.MutationRecord{
-			RecordEnvelope: pages.RecordEnvelope{
-				OpID:      "suite-carrying-" + field.Name,
-				Subject:   pages.EvictionSubject("suite-node"),
-				Op:        pages.OpRelease,
-				Scope:     pages.ScopeSet{Subject: true},
-				CreatedAt: time.Unix(1_700_000_000, 0).UTC(), Gen: 1,
-				Writer: "suite-node",
-			},
-			Mutation: body, Actor: "suite-node", ActorKind: pages.AuthorOperator,
 		})
 	}
 	return nil, fmt.Errorf("no suite record carries %s — add a case that sets it "+
@@ -294,10 +267,6 @@ func TestThePagesGateReaderKeepsTheSharedRule(t *testing.T) {
 			Readmit: func(node, writer, opID string) ([]byte, error) {
 				return gateSuiteRecord(pages.EvictionSubject(node), pages.OpEviction,
 					writer, opID, gateSuiteEviction(node, true))
-			},
-			Release: func(node, opID string) ([]byte, error) {
-				return gateSuiteRecord(pages.EvictionSubject(node), pages.OpRelease,
-					node, opID, gateSuiteEviction(node, false))
 			},
 		}
 	})

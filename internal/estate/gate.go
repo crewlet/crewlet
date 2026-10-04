@@ -33,7 +33,7 @@ import (
 // The holder that takes it publishes the record through its own write
 // authority on that log ([Backend.Gates]) — the judgement was made once, on
 // the node the operator asked, and is not made again — and the router reports
-// WHICH node wrote it, because what a refusal says (evicted, released, behind,
+// WHICH node wrote it, because what a refusal says (evicted, behind,
 // unvouched) is about the node whose authority published, and an operator told
 // "this node" of a refusal another node gave is sent to the wrong machine.
 //
@@ -128,8 +128,7 @@ type GateArgs struct {
 // holder: a newer kind is written once every node counted on the log reads it
 // (the record versions each advertises), so the asking node reports which
 // holder refused it, and the same gesture finishes once that holder runs the
-// newer build. A RELEASE never travels here: a leaving node publishes its own
-// (contract §F8).
+// newer build.
 type GateKind string
 
 const (

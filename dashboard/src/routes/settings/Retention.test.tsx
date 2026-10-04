@@ -304,7 +304,7 @@ test("a node with an unfinished gesture offers to finish it rather than start af
   expect(
     gateAction(
       node({
-        evicted: { kind: "eviction", by: "o", at: "", effective_at: "", effective: true },
+        evicted: { by: "o", at: "", effective_at: "", effective: true },
       }),
       {},
     ),
@@ -380,27 +380,25 @@ test("a refused domain names its refusal, the finding and the sentence", () => {
   expect(screen.getByText("log_truncated")).toBeTruthy();
 });
 
-// A RELEASE IS A NODE THAT LEFT, NOT ONE SOMEBODY EVICTED. Both tombstones
-// gate alike and the trim stops counting both alike, but a release is the
-// node's own word as it left the logs' partitions — "evicted by" the node
-// itself sends an operator looking for a gesture nobody made.
-test("a node that released its logs reads as left, and an evicted one as evicted", () => {
+// AN EVICTION NAMES WHO RAN IT, AND IS NOT IMMEDIATE. The node stays counted
+// until `effective_at`, and an operator who cannot see that reads the
+// unchanged watermark as a failure and runs the gesture twice.
+test("an evicted node names its operator, and counts down until it takes effect", () => {
   const at = "2031-04-01T12:00:00Z";
+  const effectiveAt = "2031-04-01T12:01:00Z";
   const { rerender } = render(
     <Tombstone
-      evicted={{ kind: "release", by: "node-a", at, effective_at: at, effective: true }}
+      evicted={{ by: "ops", at, effective_at: effectiveAt, effective: false }}
       now={Date.parse(at)}
     />,
   );
-  expect(screen.getByText("left")).toBeTruthy();
-  expect(screen.getByTitle(/released its logs itself/)).toBeTruthy();
-  expect(screen.queryByText("evicted")).toBeNull();
-  expect(screen.queryByTitle(/evicted by/)).toBeNull();
+  expect(screen.getByText(/^evicted in /)).toBeTruthy();
+  expect(screen.getByTitle(/^evicted by ops; takes effect /)).toBeTruthy();
 
   rerender(
     <Tombstone
-      evicted={{ kind: "eviction", by: "ops", at, effective_at: at, effective: true }}
-      now={Date.parse(at)}
+      evicted={{ by: "ops", at, effective_at: effectiveAt, effective: true }}
+      now={Date.parse(effectiveAt)}
     />,
   );
   expect(screen.getByText("evicted")).toBeTruthy();

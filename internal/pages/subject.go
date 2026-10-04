@@ -81,19 +81,12 @@ const (
 	// record goes to the page's own subject as [OpRetitle].
 	KindTitle ObjectKind = "title"
 
-	// KindEviction is a node's eviction from THIS log, its RELEASE of the
-	// log as it leaves the log's partition ([OpRelease]), or the
-	// readmission that lifts either — three records under one kind, told
-	// apart by the op.
+	// KindEviction is a node's eviction from THIS log, or its readmission.
 	//
 	// Its own record here rather than the tracker's, because an eviction
 	// fences records above a POSITION and positions on different streams
 	// name different number spaces. One of the two kinds that install a
-	// gate, which is why its payload's SHAPE version is pinned at
-	// [GateRecordVersion] for ever; the RECORD version moves only for a
-	// change to what the gate's apply does — the release, written at
-	// [releaseVersion] so that a build from before it halts there rather
-	// than record it as an eviction.
+	// gate, which is why its version is pinned for ever.
 	KindEviction ObjectKind = "eviction"
 
 	// KindGeneration is a reanchor's record, create-only at an expectation

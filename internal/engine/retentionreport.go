@@ -222,9 +222,8 @@ func (r *retention) reportHolders(ctx context.Context, live []statelog.Presence,
 // The window is measured from the latest tombstone because the node stops
 // being counted on every log only once the last of them has aged past it; the
 // earliest would call the eviction effective while one log still counts it.
-// And the latest is taken WHOLE — who wrote it and which gate it is — so a node
-// whose last word on the logs was its own release is shown as one that left,
-// never as evicted by itself.
+// And the latest is taken WHOLE, so the operator it names is the one whose
+// gesture made the eviction the fleet's.
 //
 // No log at all — a report assembled with no identity-claiming domain — is no
 // tombstone.
