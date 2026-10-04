@@ -122,7 +122,7 @@ node:
 |---|---|---|
 | `ingress` | Serves the HTTP API: webhooks, the dashboard, the REST endpoints | No integration can reach the company, and there is nothing to look at |
 | `seats` | Claims seat leases and runs agents, and serves their agent-mode tool bridge (`/mcp/{token}`) when `CREWLET_MCP_BRIDGE_URL` is set | Every trigger queues up unread |
-| `workers` | The company-wide singleton duties: the scheduler tick, the maintenance sweep (retention and removed-seat mailbox retirement), the sandbox waiter, the integration reconcile loop, and the learning background passes (episode lifecycle, skill curation, clustering and promotion) | Nothing fires on a schedule, no sandbox run is collected, no table is swept, no integration is reconciled |
+| `workers` | The company-wide [singleton duties](seat-ownership.md#singleton-duties): the scheduler tick, the maintenance sweep (retention and removed-seat mailbox retirement), the sandbox waiter, the integration reconcile loop, the learning background passes (episode lifecycle, skill curation, clustering and promotion), the state logs' trim, the embedding duty and the identity sweep | Nothing fires on a schedule, no sandbox run is collected, no table is swept, no integration is reconciled, no state log is trimmed (each grows until its ordinary writes are refused `log_full`), no knowledge is embedded for semantic search, and the identity estate's retention never runs |
 
 Subtracting a role subtracts it from **this node, never from the
 company**, so the fleet as a whole still needs every role somewhere. That

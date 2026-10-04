@@ -183,6 +183,12 @@ func plantPlaintext(t *testing.T, dir string, document []byte) string {
 // A PLAINTEXT REVISION IS REFUSED BY EVERY READER, a rekey included, and the
 // refusal names the import that brings its document back sealed: nothing
 // vouches for who wrote a plaintext payload.
+//
+// AND THE IMPORT IT NAMES WORKS. The import opened the active revision to ask
+// whether the file already matched it, and met the same refusal — naming
+// itself — so the remedy every reader gave was a loop. The document imported
+// here is byte for byte the planted one, so an import that compared against
+// the plaintext rather than replacing it would write nothing either.
 func TestAPlaintextRevisionIsRefusedNamingTheImport(t *testing.T) {
 	dir := t.TempDir()
 	plantPlaintextRevision(t, dir)
@@ -195,6 +201,19 @@ func TestAPlaintextRevisionIsRefusedNamingTheImport(t *testing.T) {
 		}
 		if !strings.Contains(err.Error(), "crewlet config import") {
 			t.Errorf("%s's refusal does not name the command that fixes it: %v", command, err)
+		}
+	}
+
+	if _, errs, err := configCmd(t, keyed, "import",
+		companyFile(t, dir, "company.yaml", nil)); err != nil {
+		t.Fatalf("the import every refusal names was refused: %v (%s)", err, errs)
+	}
+	if got, sealed := activeKeyOf(t, keyed); !sealed || got != "k1" {
+		t.Errorf("the imported revision is sealed under %q (sealed %v), want k1", got, sealed)
+	}
+	for _, command := range []string{"show", "rekey"} {
+		if _, errs, err := configCmd(t, keyed, command); err != nil {
+			t.Errorf("%s after the import: %v (%s)", command, err, errs)
 		}
 	}
 }

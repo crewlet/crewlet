@@ -99,9 +99,9 @@ const (
 	// SESSIONS DOMINATE. People, credentials and invitations are hundreds
 	// of records a year at any company that fits on one broker. A session
 	// writes one record when it opens
-	// and one when it closes and nothing in between, because a rotation id
-	// is DERIVED from the lineage and the session's age rather than
-	// recorded; so the rate is about (people × sign-ins a day × 2).
+	// and one when it closes and nothing in between, because a re-issue
+	// moves a deadline inside the signed bearer rather than recording one;
+	// so the rate is about (people × sign-ins a day × 2).
 	//
 	// At the reference company docs/guides/retention.md forecasts — whose
 	// 3 000 turns a day and 50 projects put it in the low hundreds of

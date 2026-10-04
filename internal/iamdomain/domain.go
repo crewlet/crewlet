@@ -43,11 +43,11 @@ func (Domain) Name() string { return "iam" }
 //
 // A SESSION OPERATION RE-ASKED PAST THE HOUR IS NOT DECIDED AGAIN. The sweep
 // that takes these rows records that THIS KIND lost them, apart from the
-// table's month (migration 0045), so the publisher answers an operation minted
-// before that instant whose row is gone `unknown` without publishing it
-// ([statelog.Result.Unvouched]) — never a second start of a session, never a
-// close decided on rows that may already hold the first — while every other
-// kind's retry is still vouched for across the month.
+// table's month (replicated migration 0031), so the publisher answers an
+// operation minted before that instant whose row is gone `unknown` without
+// publishing it ([statelog.Result.Unvouched]) — never a second start of a
+// session, never a close decided on rows that may already hold the first —
+// while every other kind's retry is still vouched for across the month.
 const SessionOpsRetention = time.Hour
 
 // IamLogMaxBytes is the ceiling this domain declares for its log, which is
@@ -69,8 +69,9 @@ const SessionOpsRetention = time.Hour
 // SESSIONS. People, credentials and invitations are hundreds of records a year
 // at any company that fits on one broker — an org chart's order of magnitude. A
 // session is a record when it opens and a record when it closes, and nothing
-// in between, because a rotation id is DERIVED rather than recorded; so the
-// domain's write rate is roughly (people × sign-ins a day × 2).
+// in between, because a re-issue moves a deadline inside the signed bearer
+// rather than recording one; so the domain's write rate is roughly (people ×
+// sign-ins a day × 2).
 //
 // At the reference company — the one docs/guides/retention.md forecasts, whose
 // 3 000 turns a day and 50 projects put it at a low hundreds of people — a
@@ -249,13 +250,13 @@ func (Domain) ScopeIndex() string { return "iam_log_deferred_scope" }
 //
 // THE FRAMEWORK'S COLUMNS AND NOTHING ELSE — the operation, its subject, where
 // it landed, when this node applied it and the broker's instant for the record
-// that did (migration 0044) — and TWO HORIZONS, stated rather than hidden in a
-// column: a session subject's rows go after [SessionOpsRetention] and every
-// other kind's after the framework's month. The sweep of the hour is a range
-// over the stored SUBJECT, which already carries the kind (migration 0038),
-// and it records that kind's loss APART from the table's (migration 0045), so
-// the publisher holds a session operation to the hour and every other kind to
-// the month. One watermark moved hourly would have answered every identity
+// that did — and TWO HORIZONS, stated rather than hidden in a column: a session
+// subject's rows go after [SessionOpsRetention] and every other kind's after
+// the framework's month. The sweep of the hour is a range over the stored
+// SUBJECT, which already carries the kind, and it records that kind's loss
+// APART from the table's (replicated migration 0031 ships both), so the
+// publisher holds a session operation to the hour and every other kind to the
+// month. One watermark moved hourly would have answered every identity
 // operation minted more than an hour earlier — a redemption, a create retried
 // under its key — `unknown` without publishing it; an unmarked sweep would have
 // let a session operation whose row the hour took be decided again.

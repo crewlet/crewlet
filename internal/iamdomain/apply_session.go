@@ -11,9 +11,9 @@ import (
 // applySession dispatches the ops on [KindSession].
 //
 // TWO OPS AND NO MORE, which is what keeps this log's volume proportional to
-// SIGN-INS rather than to requests: a rotation id is an HMAC over the lineage
-// and the session's age, so the busiest thing a signed-in person does writes
-// nothing here at all.
+// SIGN-INS rather than to requests: a re-issue moves the idle deadline inside
+// the signed bearer and records nothing, so the busiest thing a signed-in
+// person does writes nothing here at all.
 func (a *Applier) applySession(ctx context.Context, tx *sql.Tx, at applyContext) (int, error) {
 	switch at.record.Op {
 	case OpOpen:

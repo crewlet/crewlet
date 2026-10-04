@@ -98,10 +98,11 @@ func TestAReanchorsHighWaterMarkIsReadInItsOwnGeneration(t *testing.T) {
 			Generation: own.Generation, Seq: own.Seq + 900,
 			StreamCreatedAt: running.runner.KeyedTo().Add(time.Hour),
 		}},
-		// THIS GENERATION, further along than this node, on a row that
-		// names no stream — a build that did not publish one — which is
-		// weighed as though it could be this node's.
-		{"ahead", coord.DomainPosition{Generation: own.Generation, Seq: own.Seq + 50}},
+		// THIS GENERATION ON THIS NODE'S STREAM, further along than it.
+		{"ahead", coord.DomainPosition{
+			Generation: own.Generation, Seq: own.Seq + 50,
+			StreamCreatedAt: running.runner.KeyedTo(),
+		}},
 	} {
 		if err := e.backends.Fleet.PutPositions(t.Context(), coord.NodePositions{
 			NodeID: row.node, At: time.Now().UTC(),

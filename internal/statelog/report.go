@@ -533,8 +533,8 @@ type NodeDomainReport struct {
 	// are keyed to, and CheckpointStoredAt the broker's instant for the
 	// record its checkpoint stands on — what a reanchor weighs to tell a
 	// peer on the lost stream from one on the live one, and a peer whose
-	// history is the log's from one holding history the log lost. ABSENT
-	// where the node did not publish them.
+	// history is the log's from one holding history the log lost.
+	// CheckpointStoredAt is ABSENT where the checkpoint names no record.
 	StreamCreatedAt    time.Time `json:"stream_created_at,omitzero"`
 	CheckpointStoredAt time.Time `json:"checkpoint_stored_at,omitzero"`
 }
@@ -1187,8 +1187,8 @@ func (in ReportInputs) alarms(domains []DomainReport) []Alarm {
 // that is not empty starts at the log's first record, which is present.
 //
 // ZERO WHERE NOTHING IS KNOWN: a stream this node could not read carries no
-// bounds, an empty log holds nothing, and a published floor with no known age
-// term (one from a build that did not publish it) has nothing to compare.
+// bounds, an empty log holds nothing, and a domain with no published floor has
+// no age term to compare.
 func pastWindow(d DomainReport) uint64 {
 	if d.LastSeq == 0 || d.LastSeq < d.FirstSeq {
 		return 0

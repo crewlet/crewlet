@@ -1026,12 +1026,13 @@ type Stream struct {
 	// SESSIONS ARE WHAT SIZE IT. People, credentials and invitations are
 	// hundreds of records a year at any company that fits on one broker. A
 	// session is one record when it opens and one when it closes and
-	// nothing in between — a rotation id is DERIVED rather than recorded —
-	// so the rate is roughly (people × sign-ins a day × 2). At the
-	// reference company a pessimistic three sign-ins per person per day is
-	// about 285 MB a year with everything else folded in, so this default
-	// is around eighteen months of a COMPLETELY BLOCKED trim at that rate
-	// and about five years at a realistic one.
+	// nothing in between — a re-issue moves a deadline inside the signed
+	// bearer and records nothing — so the rate is roughly (people ×
+	// sign-ins a day × 2). At the reference company a pessimistic three
+	// sign-ins per person per day is about 285 MB a year with everything
+	// else folded in, so this default is around eighteen months of a
+	// COMPLETELY BLOCKED trim at that rate and about five years at a
+	// realistic one.
 	//
 	// THE FLOOR IS 64 MiB rather than the gibibyte the corpus-sized logs
 	// take, because the broker grants a stream its whole ceiling

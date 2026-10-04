@@ -153,7 +153,7 @@ node:
 |---|---|
 | `ingress` | Serves the HTTP API: webhooks from every integration, the dashboard, the REST endpoints |
 | `seats` | Claims seat leases, spawns the agents, consumes their inboxes, runs turns. Serves its own seats' `/mcp/{token}` tool bridge when `CREWLET_MCP_BRIDGE_URL` is set, because a bridged session lives in the process that opened it |
-| `workers` | The company-wide singleton duties: the scheduler tick, the maintenance sweep (retention and removed-seat mailbox retirement), the sandbox waiter, the integration reconcile loop, and the learning passes (skill clustering, curation, episode compaction, promotion) on one lease |
+| `workers` | The company-wide [singleton duties](../concepts/seat-ownership.md#singleton-duties): the scheduler tick, the maintenance sweep (retention and removed-seat mailbox retirement), the sandbox waiter, the integration reconcile loop, the learning passes (skill clustering, curation, episode compaction, promotion) on one lease, the state logs' trim, the embedding duty and the identity sweep |
 
 Roles decide what a node serves and which duties it holds, and **nothing
 about which state logs it applies**. Every node applies all five — the

@@ -285,10 +285,16 @@ func importConfig(ctx context.Context, cs *configStore, path string,
 	if found {
 		//nolint:govet // shadow: scoped to this block; see .golangci.yml
 		current, err := openStored(cs.cipher, active)
-		if err != nil {
+		switch {
+		case errors.Is(err, secrets.ErrUnsealedWithKey):
+			// AN UNSEALED ACTIVE REVISION IS REPLACED, NEVER COMPARED: this
+			// import is the remedy every reader's refusal of one names
+			// ([refuseUnsealed]), so refusing it here too left a store
+			// whose active revision is plaintext with no way out at all.
+			// Nothing is read from it — it is only the new one's parent.
+		case err != nil:
 			return err
-		}
-		if bytes.Equal(current, document) {
+		case bytes.Equal(current, document):
 			fmt.Fprintf(stdout,
 				"%s already matches the active revision %s; nothing imported\n",
 				path, active.ID)

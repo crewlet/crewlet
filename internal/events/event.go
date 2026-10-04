@@ -111,9 +111,9 @@ type Event struct {
 	// so each node's database holds what that node published and nothing
 	// else; a reader holding a row — or a live frame — has only this to
 	// say which node's store holds the rest of that node's record, and
-	// where the work it describes ran. Empty on an event a build predating
-	// the field published, and on one published through a queue client
-	// built with no node, which only a test harness builds.
+	// where the work it describes ran. Empty only on an event published
+	// through a queue client built with no node, which only a test harness
+	// builds.
 	Node string `json:"node,omitempty"`
 
 	// Data is the typed body, non-nil when Type is registered in this

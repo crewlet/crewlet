@@ -700,13 +700,13 @@ func (d *duty) finishMoves(ctx context.Context, now, _ time.Time) (int64, error)
 // and a real root.
 //
 // THE PARTIAL INDEX'S OWN WHERE, SPELLED OUT, because this engine's planner
-// does not infer it from a query that omits it (migration 0046). The root's
-// three conditions are each a reason there is nothing to do: a root in the
-// TRASH is frozen until its restore; a MARKED root is a walk the abandoned-move
-// job owns, whose pass carries a straggler as well; and a root with a PARENT is
-// no root at all but where a cycle's walk stopped, which is the `cycle` flag's
-// to report and no move's to repair. Selected anyway, each would hold the gate
-// open on every tick for work this job refuses.
+// does not infer it from a query that omits it (replicated migration 0031).
+// The root's three conditions are each a reason there is nothing to do: a root
+// in the TRASH is frozen until its restore; a MARKED root is a walk the
+// abandoned-move job owns, whose pass carries a straggler as well; and a root
+// with a PARENT is no root at all but where a cycle's walk stopped, which is
+// the `cycle` flag's to report and no move's to repair. Selected anyway, each
+// would hold the gate open on every tick for work this job refuses.
 const strandedFrom = `
 	FROM tracker_tasks t JOIN tracker_tasks r ON r.id = t.root_id
 	WHERE t.inconsistent_project = 1 AND t.removed_at IS NULL
@@ -715,7 +715,7 @@ const strandedFrom = `
 
 // pendingStragglers reads whether any live task sits in another project than
 // its root with nothing walking that root — see [duty.carryStragglers]. ONE
-// PROBE on the partial index migration 0046 ships for it.
+// PROBE on the partial index replicated migration 0031 ships for it.
 func (d *duty) pendingStragglers(ctx context.Context) (bool, error) {
 	var found int
 	err := d.deps.DB.Replicated().Read(ctx, func(tx *sql.Tx) error {

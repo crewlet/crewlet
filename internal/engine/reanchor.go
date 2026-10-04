@@ -524,13 +524,13 @@ func (e *Engine) restoredTail(ctx context.Context, running *runningDomain, c *co
 // sameStream reports whether a peer's position can be on the stream this node's
 // rows are keyed to.
 //
-// UNKNOWN COUNTS AS THE SAME: a row that names no instant was written by a build
-// that did not publish one, and the comparison it feeds is the refusal that
+// A NODE WITH NO CHECKPOINT is keyed to no stream, and every peer's position
+// counts as though it were on this node's: the comparison feeds the refusal that
 // keeps a node that is not the most caught-up from discarding what a peer
-// applied — so a row nothing can place is weighed as though it could be ahead.
+// applied. A peer's row always names its stream ([statelog.Runner.KeyedTo] is
+// never zero).
 func sameStream(peer, keyed time.Time) bool {
-	return peer.IsZero() || keyed.IsZero() ||
-		statelog.IdentityOf(keyed, peer, true) == statelog.StreamSame
+	return keyed.IsZero() || statelog.IdentityOf(keyed, peer, true) == statelog.StreamSame
 }
 
 // ErrUnknownStream reports a stream that is not a domain log this node runs —

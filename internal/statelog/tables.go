@@ -401,7 +401,7 @@ func (t tables) purgeOps(ctx context.Context, db Estate, cutoff time.Time) (int6
 // as the table's, an hourly sweep of one kind would tell the publisher the
 // whole ledger lost everything older than an hour, and every other kind's
 // operation minted before that would be answered `unknown` without being
-// published — see migration 0045.
+// published — see replicated migration 0031.
 func (t tables) purgeOpsOfKind(ctx context.Context, db Estate, kind string,
 	cutoff time.Time) (int64, error) {
 
@@ -532,7 +532,7 @@ func (t tables) markLost(ctx context.Context, tx *sql.Tx, before time.Time) erro
 // KIND applied before before, in the caller's transaction — the one that loses
 // them — and monotone for [tables.markLost]'s reason. It is the watermark of a
 // kind whose rows a domain sweeps sooner than the rest ([OpsHorizon.Kinds]);
-// see migration 0045.
+// see replicated migration 0031.
 func (t tables) markLostKind(ctx context.Context, tx *sql.Tx, kind string,
 	before time.Time) error {
 
@@ -554,7 +554,7 @@ func (t tables) markLostKind(ctx context.Context, tx *sql.Tx, kind string,
 
 // lostBefore answers the instant before which the ops table may have lost
 // rows of an operation on a subject of this kind, reporting false when it has
-// lost none — see [Rows.LostBefore] and migrations 0017 and 0045.
+// lost none — see [Rows.LostBefore] and replicated migrations 0017 and 0031.
 //
 // THE LATER OF TWO WATERMARKS: the table's, which every kind shares, and the
 // kind's own where a sweep of that kind alone has run. An empty kind asks the
