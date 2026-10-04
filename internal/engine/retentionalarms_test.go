@@ -123,7 +123,7 @@ func TestTheAlarmEvaluationLeavesTheHardwareMeasurementToTheTrimTick(t *testing.
 		pooled: map[string]poolCounters{
 			"index.db": {count: -4, waited: -2 * time.Second},
 		},
-		claim: func(context.Context, statelog.PartitionID) (bool, error) { return false, nil },
+		claim: func(context.Context) (bool, error) { return false, nil },
 	}
 	measured := func() (poolWaits uint64, holds bool) {
 		for _, snapshot := range recorder.Read() {

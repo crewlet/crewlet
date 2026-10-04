@@ -11,15 +11,13 @@
 // must agree with its replay protocol, the apply that must produce the same
 // rows twice, the envelope that must not fail on a version this build cannot
 // read, the version a record is stamped at — the lowest that reads what it
-// carries, because an older build decides by it — the record that must belong
-// to the partition of the log it is on — and the framework's own records to
-// none, since each of the domain's logs carries them alike — the record that
-// must name the node that wrote it and the generation it was decided in, the
-// evictions a domain that claims identity must be able to list — because the
-// trim counts nodes per log, and a log whose evictions nothing reads counts an
-// evicted node for ever — and the node gate that is the domain's own eviction
-// and nothing else, because a write flagged one is excused the fences and the
-// reserve every other write is held to.
+// carries, because an older build decides by it — the record that must name
+// the node that wrote it and the generation it was decided in,
+// the evictions a domain that claims identity must be able to list — because
+// the trim counts nodes per log, and a log whose evictions nothing reads
+// counts an evicted node for ever — and the node gate that is the domain's
+// own eviction and nothing else, because a write flagged one is excused the
+// fences and the reserve every other write is held to.
 //
 // # Bringing up a new domain: if a case fails, suspect the case
 //
@@ -133,12 +131,6 @@ type Candidate struct {
 	// framework's stamp.
 	Write func(ctx context.Context, pub *statelog.Publisher, db store.PartitionReader) error
 
-	// Generation is the domain's generation record — the one a reanchor opens
-	// a generation with — or nil for a domain that keeps none. What the
-	// suite reads of it is the record's kind: a generation record is the
-	// framework's, on whichever log it is appended to ([Placement]).
-	Generation statelog.GenerationEncoder
-
 	// EncodeGate builds the record that evicts nodeID from this domain's log
 	// — or, with readmit, takes it back — as the domain's own writer
 	// publishes it. Required of a domain that claims identity, whose log the
@@ -174,7 +166,6 @@ type Factory func(t *testing.T) Candidate
 func Run(t *testing.T, new Factory) {
 	t.Helper()
 	t.Run("declaration", func(t *testing.T) { runDeclaration(t, new) })
-	t.Run("placement", func(t *testing.T) { runPlacement(t, new) })
 	t.Run("tables", func(t *testing.T) { runTables(t, new) })
 	t.Run("envelope", func(t *testing.T) { runEnvelope(t, new) })
 	t.Run("apply", func(t *testing.T) { runApply(t, new) })

@@ -281,13 +281,10 @@ type DonorDeps struct {
 	// installing a fetched file holds no copy yet, and one whose leave has
 	// begun to drain is giving it up. An error answers nothing.
 	//
-	// NOT whether it may write the partition ([Holding]): what a donor
-	// hands over is a copy, which is the same on every node that applies
-	// the log, and the copy a partition is short of is often one nobody
-	// may write — a barred machine back with its files, the last server
-	// of a partition the map is moving. Held to the write rule, a joiner
-	// of such a partition had no donor, and the partition never had a
-	// serving holder again.
+	// NOT whether it may write: what a donor hands over is a copy, which
+	// is the same on every node that applies the log, and the copy the
+	// fleet is short of is often one nobody may write — a barred machine
+	// back with its files. Held to the write rule, a joiner had no donor.
 	Keeps func(p PartitionID) (bool, error)
 
 	// Dial opens the transfer's own connection.

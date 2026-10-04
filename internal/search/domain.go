@@ -98,34 +98,6 @@ func (Domain) StreamShape() statelog.StreamShape {
 	}
 }
 
-// PartitionOf is the partition a vector record belongs to: the one partition
-// that carries the vector domain's log ([statelog.Layout.OnlyPartition]).
-//
-// EVERY RECORD THIS LOG CARRIES IS THE DOMAIN'S OWN — an embed, a forget, and
-// the index's centroids, reassign and measure records — because it keeps no
-// eviction and no generation record and has no read index to append a
-// barrier. A barrier is still answered as the framework's, belonging to
-// whichever log it is on, so the answer does not depend on which domains
-// happen to read linearizably. This build keys no source to a partition, so a
-// layout that divides the vectors places nothing: every record answers the
-// zero partition, which no log carries, rather than being guessed onto a log.
-func (Domain) PartitionOf(l statelog.Layout, env statelog.Envelope) (statelog.PartitionID, bool) {
-	if env.Kind == statelog.BarrierKind {
-		return statelog.PartitionID{}, false
-	}
-	return l.OnlyPartition(Domain{}.Name()), true
-}
-
-// ScopePartition is the partition a scope path lies in — where
-// [Domain.PartitionOf] places its record — or none for the domain's own root,
-// which names every vector on whichever log the record is written to.
-func (Domain) ScopePartition(l statelog.Layout, path string) (statelog.PartitionID, bool) {
-	if path == ScopeRoot {
-		return statelog.PartitionID{}, false
-	}
-	return l.OnlyPartition(Domain{}.Name()), true
-}
-
 // RecordVersion is the record shape this build reads.
 func (Domain) RecordVersion() int { return RecordVersion }
 

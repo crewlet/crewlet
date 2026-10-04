@@ -89,33 +89,6 @@ func arbitratedKinds() []string {
 	return out
 }
 
-// PartitionOf is the partition a record belongs to: the one partition that
-// carries the knowledge base's log ([statelog.Layout.OnlyPartition]) — or,
-// for the framework's own records, none.
-//
-// This build keys no container to a partition, so a layout that divides the
-// knowledge base places nothing: every record answers the zero partition,
-// which no log carries, rather than being guessed onto a log. A barrier, an eviction or readmission and a generation record are each
-// log's own, and name no partition — see the tracker's [Domain.PartitionOf]
-// for why.
-func (Domain) PartitionOf(l statelog.Layout, env statelog.Envelope) (statelog.PartitionID, bool) {
-	switch ObjectKind(env.Kind) {
-	case KindBarrier, KindEviction, KindGeneration:
-		return statelog.PartitionID{}, false
-	}
-	return l.OnlyPartition(Domain{}.Name()), true
-}
-
-// ScopePartition is the partition a scope path lies in — where
-// [Domain.PartitionOf] places its object — or none for the domain term, which
-// names everything on whichever log the record is written to.
-func (Domain) ScopePartition(l statelog.Layout, path string) (statelog.PartitionID, bool) {
-	if path == pathDomain {
-		return statelog.PartitionID{}, false
-	}
-	return l.OnlyPartition(Domain{}.Name()), true
-}
-
 // RecordVersion is the record shape this build reads.
 func (Domain) RecordVersion() int { return RecordVersion }
 

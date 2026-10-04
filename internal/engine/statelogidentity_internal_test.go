@@ -577,9 +577,6 @@ func aProvisionedTrackerLog(t *testing.T) (*stateLog, *jetstream.Queue, *jetstre
 	s := &stateLog{
 		layout: LayoutZero(), mode: statelog.ModeNormal, nodeID: "node-a", db: db,
 		ceilings: ceilings, run: t.Context(),
-		// A DATA NODE'S, which serves layout 0's partition as the runtime's
-		// own start makes it.
-		holding: holdingOf(nil, LayoutZero()),
 	}
 	// THE PARTITION FIRST, as the runtime's own start opens it before any
 	// log's checkpoint is read.

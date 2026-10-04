@@ -415,21 +415,6 @@ func (d DomainGate) Remedy() statelog.GateRemedy {
 			return only(statelog.GateOtherNode, "this node wrote in a generation a "+
 				"reanchor abandoned, and "+d.landedNowhere(refusal.Position,
 				"a node the fleet still counts"))
-		case statelog.ReasonNotHolder:
-			// REFUSED BY GATE 3: this node did not serve the partition the
-			// log is on when it wrote, and only a node that serves a
-			// partition writes its logs. Nothing landed, so the same
-			// operation id finishes it wherever the partition is served.
-			return retry(fmt.Sprintf("this node did not serve the partition %s is on "+
-				"when the gesture wrote it, and only a node that serves a partition "+
-				"writes its logs: the same gesture under the same operation id finishes "+
-				"it here once it does, or through a node that does", d.Stream),
-				statelog.GateOtherNode)
-		case statelog.ReasonHoldingUnknown:
-			return retry(fmt.Sprintf("this node could not tell whether it serves "+
-				"the partition %s is on when it wrote: the same gesture under the same "+
-				"operation id finishes it here once it can tell, or through a node "+
-				"that serves the partition", d.Stream), statelog.GateOtherNode)
 		case statelog.ReasonWrongStream:
 			return only(statelog.GateReanchor, fmt.Sprintf("the log under %s's name "+
 				"is not the one this node's rows were derived from: re-anchor it "+
@@ -498,25 +483,20 @@ func (d DomainGate) Remedy() statelog.GateRemedy {
 // # Why those three gates and no others
 //
 // A copy's writer is named only under a gate that blames it
-// ([statelog.Reason.BlamesWriter]), and of those a GATE RECORD meets exactly
-// three. It is never `wrong_partition`: an eviction and a readmission are the
-// log's own records, which both identity-claiming domains place in no
-// partition — their PartitionOf answers none for the eviction kind, which
-// statelogtest.Placement holds both to — so no copy of one is ever on the
-// wrong log. And never `deleted`, which blames no writer and is asked only of
-// a task or a page. The fallback names the reason of a gate a later build adds
-// to that set without a sentence here, rather than describing it as one of the
-// three.
+// ([statelog.Reason.BlamesWriter]), and those are exactly these three. Never
+// `deleted`, which blames no writer and is asked only of a task or a page. The
+// fallback names the reason of a gate a later build adds to that set without a
+// sentence here, rather than describing it as one of the three.
 //
 // # Why here, and not another node
 //
 // The gate is about the copy's writer. This node passed its own fences — it is
-// counted, and it serves the partition — before it appended, so it is exactly
-// the node that finishes the gesture: once the broker has let go of the id,
-// the same gesture under it here writes afresh, and cannot apply twice because
-// the copy in the way applies nowhere. Read as this node's own `evicted`, the
-// operator was told the node they ran it on was evicted and sent to another,
-// with the node that could finish it a minute later in front of them.
+// counted — before it appended, so it is exactly the node that finishes the
+// gesture: once the broker has let go of the id, the same gesture under it
+// here writes afresh, and cannot apply twice because the copy in the way
+// applies nowhere. Read as this node's own `evicted`, the operator was told
+// the node they ran it on was evicted and sent to another, with the node that
+// could finish it a minute later in front of them.
 func (d DomainGate) anotherNodesCopy(refusal *statelog.Unavailable) string {
 	why := fmt.Sprintf("a gate dropped it (%s)", refusal.Reason)
 	switch refusal.Reason {

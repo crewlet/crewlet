@@ -174,35 +174,6 @@ type Domain interface {
 	// trim's `feed_ack_floor` term reads, so the log's trim stalls behind
 	// the replay.
 	FeedGroup() string
-
-	// PartitionOf is the partition of layout l a record BELONGS to, read
-	// from its envelope alone, or false for a FRAMEWORK kind — a barrier,
-	// an eviction or readmission, a generation record — which belongs to
-	// whichever log it is on.
-	//
-	// FROM THE ENVELOPE, for [Domain.InstallsGate]'s reason: the half every
-	// build reads, so a node that cannot decode a record can still say
-	// whether it is on the right log. A record whose answer is another
-	// partition is on the wrong log, and one no probe of its own
-	// partition's deferrals can see — which is why the answer must be the
-	// domain's, from what the record says, and never the log's.
-	//
-	// A PARTITION NO LOG OF l CARRIES — the zero value among them — is the
-	// honest answer from a domain that cannot place the record under l.
-	// It is "another partition" for every log there is, so a reader of it
-	// can only ever keep the record off a log, never guess it onto one.
-	PartitionOf(l Layout, env Envelope) (PartitionID, bool)
-
-	// ScopePartition is the partition of layout l a scope path lies in, or
-	// false for a path that names the LOG itself — a domain or family term
-	// — which lies in whichever log it is written to.
-	//
-	// It is asked of the paths a write declares, because a scope is what a
-	// deferral is filed under and probed by, and the probe runs in one
-	// partition's file: a path naming another partition's object is a
-	// deferral that partition could never see. The same reading of a
-	// partition no log carries holds here.
-	ScopePartition(l Layout, path string) (PartitionID, bool)
 }
 
 // ReplayProtocol is how a domain's stream behaves under replay, and the

@@ -203,22 +203,6 @@ const (
 	// operation id once the window has passed, or under a fresh one sooner.
 	ReasonEvicted Reason = "evicted"
 
-	// ReasonNotHolder — this node does not serve the partition of the log the
-	// write would go to ([Holding], [ErrNotHolder]): it never held the
-	// partition, or it has begun to leave it. Only a partition's serving
-	// holders write its logs, because they are the writers the trim counts
-	// there. Another node that serves the partition takes the write, under
-	// the same operation id: nothing was appended under it here.
-	ReasonNotHolder Reason = "not_holder"
-
-	// ReasonHoldingUnknown — whether this node serves the log's partition
-	// could not be established ([Holding] answered an error). The third
-	// value, and it BLOCKS, for [ReasonFloorUnknown]'s reason: a write
-	// decided by a node the trim may not be counting is a lost update, which
-	// nothing recovers. It clears when the node can tell again, and a node
-	// that serves the partition can take the write meanwhile.
-	ReasonHoldingUnknown Reason = "holding_unknown"
-
 	// ReasonDeferred — this node holds a record it cannot decode whose
 	// scope covers this object, so its rows are stale and any decision
 	// taken from them is unsafe. Another node can serve this write.
@@ -285,17 +269,6 @@ const (
 	// the reanchor did not keep — the copy's age. It produces rows nowhere the
 	// reanchor's checkpoint is followed from — see [ReanchorPlan.StaleAfter].
 	ReasonOvertaken Reason = "overtaken"
-
-	// ReasonWrongPartition — the record's own domain places it in another
-	// partition than the log it is on ([Domain.PartitionOf]), so it is
-	// dropped on every holder of this log: applied here it would write rows
-	// this partition does not own, filed under a scope no probe of the
-	// partition it belongs to ever reads. Deterministic — every holder asks
-	// the same function of the same envelope — so no copy diverges. Only an
-	// applier's: the write authority refuses such a record before it is
-	// appended ([ErrWrongPartition]), so one on a log is another build's or
-	// another writer's, and nothing republishing it changes where it belongs.
-	ReasonWrongPartition Reason = "wrong_partition"
 
 	// ReasonLogFull — the log is at its byte ceiling and refuses
 	// appends rather than dropping records. An operator raises the
@@ -366,15 +339,13 @@ const (
 // is checked against this list ([TestEveryRefusalReasonIsInTheMetricsReference]).
 //
 // A RECORD A GATE DROPPED is refused under the gate that dropped it — evicted,
-// deleted, retired, abandoned, overtaken or wrong_partition — rather than
-// under a generic word, because the gate is what says why: which is why there
-// is no `gated` here.
+// deleted, retired, abandoned or overtaken — rather than under a generic word,
+// because the gate is what says why: which is why there is no `gated` here.
 func Reasons() []Reason {
 	return []Reason{
-		ReasonEvicted, ReasonNotHolder, ReasonHoldingUnknown,
-		ReasonDeferred, ReasonBehind, ReasonBelowFloor, ReasonFloorUnknown,
-		ReasonDeleted, ReasonRetired, ReasonAbandoned, ReasonOvertaken,
-		ReasonWrongPartition, ReasonLogFull, ReasonSkew, ReasonOpReused,
+		ReasonEvicted, ReasonDeferred, ReasonBehind, ReasonBelowFloor,
+		ReasonFloorUnknown, ReasonDeleted, ReasonRetired, ReasonAbandoned,
+		ReasonOvertaken, ReasonLogFull, ReasonSkew, ReasonOpReused,
 		ReasonLogTruncated, ReasonWrongStream, ReasonSuperseded,
 	}
 }
@@ -384,9 +355,8 @@ func Reasons() []Reason {
 func (r Reason) Valid() bool { return slices.Contains(Reasons(), r) }
 
 // BlamesWriter reports whether a gate answering r dropped a record for what its
-// WRITER was or did — evicted, stamped with a generation a reanchor voided
-// (abandoned, overtaken), or put on a log its own domain does not place it on
-// (wrong_partition) — rather than for something every writer's record meets
+// WRITER was or did — evicted, or stamped with a generation a reanchor voided
+// (abandoned, overtaken) — rather than for something every writer's record meets
 // alike: the object's permanent deletion marker (deleted), or a kind the domain
 // no longer applies (retired). False for a reason that is not a gate's.
 //
@@ -394,13 +364,13 @@ func (r Reason) Valid() bool { return slices.Contains(Reasons(), r) }
 //
 // Whose standing a refusal of ANOTHER node's copy of an operation states
 // ([Unavailable.CopyWriter]). Under a reason that blames the writer, the node
-// that refused passed its own fences before it appended, stamps its own
-// generation and placed its own record: the gate holds the copy and not it, so
-// it finishes the write itself once the duplicate window lets go of the
-// operation id. Under one that does not, its own record meets the same gate — a
-// purged task stays purged for every writer, for ever — and a copy's writer
-// named there told every reader the refusal was about somebody else, which a
-// surface reads as "retry here" and which is never true of it.
+// that refused passed its own fences before it appended and stamps its own
+// generation: the gate holds the copy and not it, so it finishes the write
+// itself once the duplicate window lets go of the operation id. Under one that
+// does not, its own record meets the same gate — a purged task stays purged
+// for every writer, for ever — and a copy's writer named there told every
+// reader the refusal was about somebody else, which a surface reads as "retry
+// here" and which is never true of it.
 //
 // A PROPERTY OF THE REASON rather than a case in the one resolution that asks
 // it, so a gate added later is classified where its reason is declared. A
@@ -410,7 +380,7 @@ func (r Reason) Valid() bool { return slices.Contains(Reasons(), r) }
 // quietly blaming nobody.
 func (r Reason) BlamesWriter() bool {
 	switch r {
-	case ReasonEvicted, ReasonAbandoned, ReasonOvertaken, ReasonWrongPartition:
+	case ReasonEvicted, ReasonAbandoned, ReasonOvertaken:
 		return true
 	}
 	return false
@@ -446,14 +416,13 @@ type Unavailable struct {
 
 	// CopyWriter names ANOTHER node when the record at Position is that node's
 	// copy of this operation rather than this node's own, AND the gate that
-	// dropped it blames the copy's writer ([Reason.BlamesWriter]): an eviction,
-	// a reanchor's rule, the partition. The broker collapsed this node's append
-	// onto the copy inside the log's duplicate window, or a write whose answer
-	// was lost found it newest on its subject. The reason then states THE
-	// COPY'S WRITER's standing, and not the standing of the node that refused —
-	// which passed its own fences and serves the log's partition, and takes the
-	// write itself under the same operation id once the window has let go of
-	// it.
+	// dropped it blames the copy's writer ([Reason.BlamesWriter]): an eviction
+	// or a reanchor's rule. The broker collapsed this node's append onto the
+	// copy inside the log's duplicate window, or a write whose answer was lost
+	// found it newest on its subject. The reason then states THE COPY'S
+	// WRITER's standing, and not the standing of the node that refused — which
+	// passed its own fences, and takes the write itself under the same
+	// operation id once the window has let go of it.
 	//
 	// A FIELD rather than a sentence in Detail, because the remedy turns on
 	// it: read as this node's own `evicted`, the operator was told the node

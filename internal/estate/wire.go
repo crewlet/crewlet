@@ -48,9 +48,8 @@ type Actor struct {
 //
 // EVERY CLASS MOVES ON FROM A NODE THAT RAN NOTHING — one whose copy is out of
 // service, that runs no backend for it, is not serving yet or is behind the
-// caller's floor, and a write refused by the write authority's gate 3
-// (`not_holder`, `holding_unknown`), which appends nothing. What differs is
-// what may be repeated once a node MAY have run it.
+// caller's floor. What differs is what may be repeated once a node MAY have
+// run it.
 type opClass int
 
 const (

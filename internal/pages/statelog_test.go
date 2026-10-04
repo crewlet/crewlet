@@ -26,8 +26,7 @@ func TestThePagesDomainIsACertifiedDomain(t *testing.T) {
 	t.Parallel()
 	statelogtest.Run(t, func(t *testing.T) statelogtest.Candidate {
 		return statelogtest.Candidate{
-			Domain:     pages.Domain{},
-			Generation: pages.GenerationRecord{},
+			Domain: pages.Domain{},
 			// A NIL SKILL DETECTOR, which is the case the Divergent
 			// class exists for: this build has no parser wired, so it
 			// writes skill = 0 where a build with one writes 1, and

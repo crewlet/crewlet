@@ -139,9 +139,7 @@ type RunnerDeps struct {
 
 	// Layout and LogID are where Spec's log sits: the layout this node runs
 	// and which of its logs this is. REQUIRED, and held to Spec
-	// ([Layout.Places]), because the applier drops a record whose domain
-	// places it in another partition than this log's — a question about
-	// the layout that the stream's name cannot answer.
+	// ([Layout.Places]).
 	Layout Layout
 	LogID  LogID
 
@@ -259,10 +257,6 @@ type Runner struct {
 	opts    ApplyOptions
 	nodeID  string
 	evicted func(ctx context.Context, node string) (bool, error)
-
-	// layout and logID are where this runner's log sits ([RunnerDeps.LogID]).
-	layout Layout
-	logID  LogID
 
 	waiters waiters
 
@@ -563,8 +557,6 @@ func NewRunner(d RunnerDeps) (*Runner, error) {
 		db:      d.DB,
 		tables:  t,
 		spec:    spec,
-		layout:  d.Layout,
-		logID:   d.LogID,
 		metrics: d.Metrics,
 		logger:  logger,
 		now:     now,
@@ -2698,16 +2690,6 @@ func (r *Runner) applyRun(ctx context.Context, w *store.Writer, run []Record) ([
 			}
 
 			switch {
-			case r.misplaced(rec.Envelope):
-				// A RECORD THAT BELONGS TO ANOTHER PARTITION IS GATED
-				// WHATEVER ITS VERSION, and before the version is asked:
-				// retained, it would be filed under a scope this
-				// partition's probe reads and the partition it belongs to
-				// never does — the one deferral clause (i) of the floor
-				// theorem cannot see. The partition is read from the
-				// envelope, which every build decodes.
-				tally.drop(rec, ReasonWrongPartition)
-
 			case !rec.ReadableBy(r.domain.RecordVersion()):
 				if r.domain.InstallsGate(rec.Envelope) {
 					// A GATE IS A STOP, and it is the one
@@ -2924,24 +2906,16 @@ func (r *Runner) Commits() float64 {
 func (r *Runner) applyOne(ctx context.Context, tx *sql.Tx, rec Record, opts ApplyOptions) (int, Reason, bool, error) {
 	started := r.now()
 	opts.StoredAt = rec.StoredAt
-	// THE FRAMEWORK'S OWN GATES FIRST, and the partition's before the rest:
-	// a record its own domain places in another partition than this log's
-	// is not this log's record at all, whatever else is true of it — which
-	// the loop asks before a record is retained, and asks again here for a
-	// retained record reprocessed by a build that reads it.
-	//
-	// Then a record written in a generation the reanchor that placed this
-	// checkpoint abandoned, and one a restored reanchor overtook — after its
-	// generation record, in a generation below the one it opened. They are
-	// the framework's because both rules are the checkpoint's, and each is
-	// asked of the record's OWN generation — the writer's stamp — never of
-	// the position the loop composed, which is this checkpoint's generation
-	// for every record.
+	// THE FRAMEWORK'S OWN GATES FIRST: a record written in a generation the
+	// reanchor that placed this checkpoint abandoned, and one a restored
+	// reanchor overtook — after its generation record, in a generation below
+	// the one it opened. They are the framework's because both rules are the
+	// checkpoint's, and each is asked of the record's OWN generation — the
+	// writer's stamp — never of the position the loop composed, which is this
+	// checkpoint's generation for every record.
 	var reason Reason
 	var gated bool
 	switch {
-	case r.misplaced(rec.Envelope):
-		reason, gated = ReasonWrongPartition, true
 	case r.void.abandons(rec.Gen):
 		reason, gated = ReasonAbandoned, true
 	case r.void.overtakes(rec.Position.Seq, rec.Gen):
@@ -2992,21 +2966,6 @@ func (r *Runner) Voided(gen uint32, seq uint64) (Reason, bool) {
 	return "", false
 }
 
-// misplaced reports whether a record's own domain places it in another
-// partition than this log's — the partition gate, [ReasonWrongPartition], and
-// the second of the three the floor theorem is held by per log (the package
-// doc's "who may write a log").
-//
-// FROM THE ENVELOPE ALONE, the half every build decodes, so a record this build
-// cannot read is judged too — and by the same function of the same bytes on
-// every holder, so every copy drops it alike. A FRAMEWORK record (a barrier, a
-// node gate, a generation) names no partition and belongs to whichever log it
-// is on, so it is never misplaced.
-func (r *Runner) misplaced(env Envelope) bool {
-	p, placed := r.domain.PartitionOf(r.layout, env)
-	return placed && p != r.logID.Partition
-}
-
 // gatedRecord says, where an operator looks, that a durable record applies
 // nowhere, and under which gate.
 //
@@ -3027,23 +2986,9 @@ func (r *Runner) misplaced(env Envelope) bool {
 // per record this node's rows skip for good; a drop an attempt rolled back is
 // reported by the attempt that commits it.
 func (r *Runner) gatedRecord(ctx context.Context, rec Record, reason Reason) {
-	attrs := []any{
+	r.logger.WarnContext(ctx, "statelog_record_gated",
 		"domain", r.domain.Name(), "position", rec.Position.String(),
-		"kind", rec.Kind, "gate", string(reason), "writer", rec.Writer,
-	}
-	if reason == ReasonWrongPartition {
-		// WHERE IT BELONGS, which is what an operator needs to find the
-		// writer that put it here.
-		// A PARTITION THE LAYOUT DOES NOT CARRY — the zero one among them —
-		// is what a domain that cannot place the record answers, and says so
-		// rather than printing an empty name.
-		belongs := fmt.Sprintf("no partition of layout %d", r.layout.Number)
-		if p, _ := r.domain.PartitionOf(r.layout, rec.Envelope); len(r.layout.Logs(p)) > 0 {
-			belongs = p.String()
-		}
-		attrs = append(attrs, "log", r.logID.String(), "belongs_to", belongs)
-	}
-	r.logger.WarnContext(ctx, "statelog_record_gated", attrs...)
+		"kind", rec.Kind, "gate", string(reason), "writer", rec.Writer)
 	r.countWith(metrics.StatelogRecordsGated, metrics.Attrs{
 		"gate": string(reason), "subject_kind": rec.Subject.Kind,
 	})

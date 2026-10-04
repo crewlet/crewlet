@@ -347,18 +347,16 @@ func TestTheWindowedCountersReachTheAlarmsThatFireOnThem(t *testing.T) {
 // nothing else: no collector series, no log line, no page.
 //
 // AND IT IS EVALUATED ON A NODE THAT HOLDS NO DUTY, which is the other half. A
-// reading describes ONE node, so a table evaluated only where a trim's
+// reading describes ONE node, so a table evaluated only where the trim's
 // singleton lease happens to sit would report the lease holder's health as the
-// fleet's — and the wedged node is the one nobody hears from. The node here
-// runs no log at all, so it holds no partition's trim duty and is asked for
-// none: the table is evaluated all the same.
+// fleet's — and the wedged node is the one nobody hears from.
 func TestTheAlarmTableIsEvaluatedOnANodeThatHoldsNoDuty(t *testing.T) {
 	t.Parallel()
 	recorder, err := metrics.New()
 	if err != nil {
 		t.Fatalf("recorder: %v", err)
 	}
-	asked := 0
+	refused := 0
 	r := &retention{
 		fleet:   coordmem.NewFleet(),
 		state:   &stateLog{},
@@ -366,16 +364,16 @@ func TestTheAlarmTableIsEvaluatedOnANodeThatHoldsNoDuty(t *testing.T) {
 		metrics: recorder,
 		alarms:  statelog.NewTracker(recorder, nil),
 		pooled:  map[string]poolCounters{},
-		claim: func(context.Context, statelog.PartitionID) (bool, error) {
-			asked++
-			return true, nil
+		claim: func(context.Context) (bool, error) {
+			refused++
+			return false, nil
 		},
 	}
 	r.tick(t.Context())
 
-	if asked != 0 {
-		t.Fatalf("a node running no log was asked for %d partition duties; it "+
-			"holds no partition, so it has none to claim", asked)
+	if refused != 1 {
+		t.Fatalf("the duty was asked for %d time(s); this test is not "+
+			"exercising the path it names", refused)
 	}
 	var series int
 	for _, snapshot := range recorder.Read() {

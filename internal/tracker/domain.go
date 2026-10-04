@@ -2,7 +2,6 @@ package tracker
 
 import (
 	"fmt"
-	"strings"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/statelog"
@@ -71,44 +70,6 @@ func arbitratedKinds() []string {
 		}
 	}
 	return out
-}
-
-// PartitionOf is the partition a record belongs to: the one partition that
-// carries the tracker's log ([statelog.Layout.OnlyPartition]) — or, for the
-// framework's own records, none.
-//
-// # Unkeyed, so a layout that divides the tracker places nothing
-//
-// This build keys no tracker object to a partition, so the only layout it can
-// place a record in is one that gives the tracker a single log — layout 0's
-// estate. Under a layout that divides it, every record answers the zero
-// partition, which no log carries — "another partition" for every log there
-// is — rather than a guess putting a project's records on a log its
-// neighbours' reads never probe.
-//
-// # The framework's kinds belong to whichever log they are on
-//
-// A barrier, a node's eviction or readmission, and a reanchor's generation
-// record are appended to a log as the log's own — each of the domain's logs
-// has its own — so they name no partition: a partition named for one would
-// say every other log it is appended to holds it wrongly.
-func (Domain) PartitionOf(l statelog.Layout, env statelog.Envelope) (statelog.PartitionID, bool) {
-	switch ObjectKind(env.Kind) {
-	case KindBarrier, KindEviction, KindGeneration:
-		return statelog.PartitionID{}, false
-	}
-	return l.OnlyPartition(Domain{}.Name()), true
-}
-
-// ScopePartition is the partition a scope path lies in — where
-// [Domain.PartitionOf] places its object — or none for a path that names the
-// log itself: the domain term, and a family term, which names every object of
-// a family on whichever log the record is written to.
-func (Domain) ScopePartition(l statelog.Layout, path string) (statelog.PartitionID, bool) {
-	if path == pathDomain || strings.HasPrefix(path, pathDomain+statelog.ScopeSeparator+pathFamily+statelog.ScopeSeparator) {
-		return statelog.PartitionID{}, false
-	}
-	return l.OnlyPartition(Domain{}.Name()), true
 }
 
 // RecordVersion is the record shape this build reads.

@@ -116,12 +116,10 @@ func newRoundTripOn(t *testing.T, log *js.DomainLog, db store.PartitionHandle,
 	if err != nil {
 		t.Fatalf("build the gate reserve: %v", err)
 	}
-	holding := statelogtest.NewHolding(statelog.EstatePartition)
 	publisher, err := statelog.NewPublisher(statelog.Deps{
 		Domain: pages.Domain{}, Spec: statelog.EstateStream(pages.Domain{}), Layout: statelog.EstateLayout(pages.Domain{}.Name()), LogID: statelog.EstateLog(pages.Domain{}), Log: log, Records: log, Rows: rows, Fence: fence,
 		Gates: pages.NewGates(db.Reader()), Waiter: waiter, Voids: waiter, Identity: waiter, NodeID: nodeID,
 		Admission:     reserve,
-		Holding:       holding,
 		Generation:    func() uint32 { return 0 },
 		ResolveBudget: 2 * time.Second,
 	})

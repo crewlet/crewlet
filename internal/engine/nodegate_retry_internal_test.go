@@ -553,11 +553,10 @@ func TestAGateLogIsAdvisedARetryOnlyWhereOneCanFinishIt(t *testing.T) {
 		"abandoned": {gate: landed(statelog.ReasonAbandoned), actions: []statelog.GateAction{other},
 			detail: "run the gesture through a node the fleet still counts under the same operation id"},
 		// ANOTHER NODE'S COPY, which this node's append was collapsed onto:
-		// the gate is about that node, and this one — counted, and serving
-		// the partition, or it would have been refused before appending —
-		// finishes the gesture itself once the window has passed. Sent to
-		// another node, the operator was told the node they ran it on was
-		// evicted when it was not.
+		// the gate is about that node, and this one — counted, or it would
+		// have been refused before appending — finishes the gesture itself
+		// once the window has passed. Sent to another node, the operator was
+		// told the node they ran it on was evicted when it was not.
 		"evicted, another node's copy": {gate: copied(statelog.ReasonEvicted),
 			actions: []statelog.GateAction{retry},
 			detail:  "node node-x's copy, which this node's own write was collapsed onto, and it applies nowhere because that node is evicted — a fact about node node-x and not about this one. The broker holds its operation id for the log's duplicate window, 2m0s, from when it landed. Once that has passed, the same gesture under the same operation id finishes it here"},
@@ -574,14 +573,6 @@ func TestAGateLogIsAdvisedARetryOnlyWhereOneCanFinishIt(t *testing.T) {
 		"a later gate, another node's copy": {gate: copied(statelog.Reason("a_later_gate")),
 			actions: []statelog.GateAction{retry},
 			detail:  "applies nowhere because a gate dropped it (a_later_gate) — a fact about node node-x"},
-		// THIS NODE'S OWN WRITE REFUSED BY GATE 3 — it did not serve the
-		// partition, or could not tell whether it did — landed nothing:
-		// the same gesture finishes it here once it does, or through a
-		// node that does.
-		"not holder": {gate: refused(statelog.ReasonNotHolder),
-			actions: []statelog.GateAction{retry, other}, detail: "here once it does"},
-		"holding unknown": {gate: refused(statelog.ReasonHoldingUnknown),
-			actions: []statelog.GateAction{retry, other}, detail: "could not tell"},
 		"wrong stream": {gate: refused(statelog.ReasonWrongStream),
 			actions: []statelog.GateAction{statelog.GateReanchor}, detail: "re-anchor"},
 		"log full": {gate: refused(statelog.ReasonLogFull),

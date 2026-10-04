@@ -30,9 +30,8 @@ func TestTheVectorDomainIsACertifiedDomain(t *testing.T) {
 	t.Parallel()
 	statelogtest.Run(t, func(t *testing.T) statelogtest.Candidate {
 		return statelogtest.Candidate{
-			Domain:     search.Domain{},
-			Generation: search.GenerationRecord{},
-			Applier:    search.NewApplier(),
+			Domain:  search.Domain{},
+			Applier: search.NewApplier(),
 			// Migrate is nil: these tables ship in the replicated
 			// estate's own migration, so a fresh store already has
 			// them. A domain that created its tables from test code

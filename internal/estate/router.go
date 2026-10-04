@@ -460,8 +460,6 @@ func (r *Router) tryLocal(ctx context.Context, spec *opSpec, x exchange, acceptL
 			w.laggingHere = true
 		}
 		w.note("%s: %s", r.self, why)
-	case appendedNothing(ran):
-		w.note("%s: %v", r.self, ran)
 	case unvouched(spec, value, ran):
 		w.fallback = &held{value: value, err: ran}
 	default:
@@ -507,9 +505,8 @@ func (r *Router) silent(ctx context.Context, spec *opSpec, node string, w *walk)
 }
 
 // settle is what one node's reply decides: final when it is the answer, and
-// otherwise noted on the walk — a node that ran nothing, a write gate 3
-// refused, which appended nothing, or an answer not final for its class, kept
-// in case no node gives a better one.
+// otherwise noted on the walk — a node that ran nothing, or an answer not final
+// for its class, kept in case no node gives a better one.
 func (r *Router) settle(spec *opSpec, x exchange, node string, rep reply, w *walk) (
 	value any, final bool, err error) {
 
@@ -523,11 +520,7 @@ func (r *Router) settle(spec *opSpec, x exchange, node string, rep reply, w *wal
 	r.markAnswered(node)
 	if rep.Err != nil {
 		failure := decodeError(rep.Err)
-		switch {
-		case appendedNothing(failure):
-			w.note("%s: %v", node, failure)
-			return nil, false, nil
-		case unvouched(spec, nil, failure):
+		if unvouched(spec, nil, failure) {
 			w.fallback = &held{err: failure}
 			w.note("%s: unvouched", node)
 			return nil, false, nil
@@ -717,15 +710,6 @@ func (r *Router) markAnswered(node string) {
 	defer r.mu.Unlock()
 	r.sticky = node
 	delete(r.suspect, node)
-}
-
-// appendedNothing reports a write the write authority refused at gate 3 —
-// `not_holder` or `holding_unknown`. Nothing was appended under the
-// operation's id, so every class moves on to the next data node with it.
-func appendedNothing(err error) bool {
-	var refusal *statelog.Unavailable
-	return errors.As(err, &refusal) && (refusal.Reason == statelog.ReasonNotHolder ||
-		refusal.Reason == statelog.ReasonHoldingUnknown)
 }
 
 // unvouched reports an idempotent write's answer that is NOT final: an

@@ -59,10 +59,6 @@ type roundTrip struct {
 	// nodeID is which node this harness is, for the second writer a case
 	// builds over the same store ([roundTrip.lossyWriter]).
 	nodeID string
-
-	// holding is whether this node serves the log's partition, shared by
-	// every writer a case builds over this node ([roundTrip.writerOver]).
-	holding *statelogtest.Holding
 }
 
 func newRoundTrip(t *testing.T) *roundTrip {
@@ -138,8 +134,7 @@ func newRoundTripOn(t *testing.T, q *js.Queue, log *js.DomainLog, node *store.DB
 	// THE HARNESS EXISTS BEFORE THE WRITER, because the writer's authored
 	// clock reads a field on it that a case may move.
 	r := &roundTrip{t: t, broker: q, node: node, db: db, log: log, at: wednesday,
-		claims: memory.New(), nodeID: nodeID,
-		holding: statelogtest.NewHolding(statelog.EstatePartition)}
+		claims: memory.New(), nodeID: nodeID}
 
 	fence := tracker.NewFence(db.Reader(), nodeID)
 	// The published trim floor is zero on a fleet that has never trimmed,
@@ -182,7 +177,6 @@ func newRoundTripOn(t *testing.T, q *js.Queue, log *js.DomainLog, node *store.DB
 		Gates: tracker.NewGates(db.Reader()), Waiter: waiter, Voids: waiter, Identity: waiter, NodeID: nodeID,
 		Metrics:       recorder,
 		Admission:     reserve,
-		Holding:       r.holding,
 		Generation:    func() uint32 { return 0 },
 		ResolveBudget: 2 * time.Second,
 	})

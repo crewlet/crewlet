@@ -1157,26 +1157,6 @@ func TestTheNodeThatAnsweredLastIsAskedFirstUntilItGoesSilent(t *testing.T) {
 	}
 }
 
-// A WRITE THIS NODE'S OWN WRITE AUTHORITY REFUSED AT GATE 3 is taken to a peer
-// under the same operation id, exactly as a remote node's refusal is: it
-// appended nothing, and another data node can take it.
-func TestALocalGateThreeRefusalMovesOnUnderTheSameOperation(t *testing.T) {
-	t.Parallel()
-	for _, reason := range []statelog.Reason{statelog.ReasonNotHolder, statelog.ReasonHoldingUnknown} {
-		f := newFleet(t, "data-a")
-		local := &fakeNode{name: "data-self", units: chartOf("self"),
-			refusal: &statelog.Unavailable{Reason: reason, OpID: "op-l", Cause: statelog.ErrNotHolder}}
-		r := f.router(t, "data-self", local)
-		written, err := r.WriterAs(swe).CreateTask(t.Context(), "op-l", tracker.Task{Project: "ENG"}, nil)
-		if err != nil || written.Key != "ENG-1" {
-			t.Fatalf("%s: create = (%+v, %v), want the peer's answer", reason, written, err)
-		}
-		if got := f.nodes["data-a"].ops(); !slices.Equal(got, []string{"op-l"}) {
-			t.Fatalf("%s: the peer ran %v, want [op-l]", reason, got)
-		}
-	}
-}
-
 // A COPY OUT OF SERVICE is never asked in-process — its seats are answered by
 // the other data nodes — and answers another node's request `out_of_service`,
 // having run nothing; the asker moves to the next data node.
@@ -1249,29 +1229,12 @@ func TestAnUnvouchedWriteIsAskedOfTheNextHolderUnderTheSameOperation(t *testing.
 	}
 }
 
-// A GATE-3 REFUSAL APPENDED NOTHING, so every class moves on from it under the
-// same operation id: the write authority refused at its holding gate, and
-// another data node can take the write. A refusal about another node's COPY is final, and reaches the
-// caller whole: the node that refused passed its own fences, and the remedy —
-// the same operation once the duplicate window lets go — is the caller's.
-func TestAGateThreeRefusalMovesOnUnderTheSameOperation(t *testing.T) {
+// A REFUSAL ABOUT ANOTHER NODE'S COPY IS FINAL, and reaches the caller whole:
+// the node that refused passed its own fences, and the remedy — the same
+// operation once the duplicate window lets go — is the caller's. Taken to
+// another data node, the same operation id would meet the same copy there.
+func TestARefusalOfAnotherNodesCopyIsFinal(t *testing.T) {
 	t.Parallel()
-	for _, reason := range []statelog.Reason{statelog.ReasonNotHolder, statelog.ReasonHoldingUnknown} {
-		f := newFleet(t, "data-a", "data-b")
-		_, first := f.first(t, f.client)
-		first.set(func(n *fakeNode) {
-			n.refusal = &statelog.Unavailable{Reason: reason, OpID: "op-g", Cause: statelog.ErrNotHolder}
-		})
-		written, err := f.client.WriterAs(swe).CreateTask(t.Context(), "op-g",
-			tracker.Task{Project: "ENG"}, nil)
-		if err != nil || written.Key != "ENG-1" {
-			t.Fatalf("%s: create = (%+v, %v), want the next node's answer", reason, written, err)
-		}
-		if got := f.other(first).ops(); !slices.Equal(got, []string{"op-g"}) {
-			t.Fatalf("%s: the next node ran %v, want [op-g]", reason, got)
-		}
-	}
-
 	f := newFleet(t, "data-a", "data-b")
 	_, first := f.first(t, f.client)
 	first.set(func(n *fakeNode) {

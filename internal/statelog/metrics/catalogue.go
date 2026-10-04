@@ -138,12 +138,7 @@ func Catalogue() []Instrument {
 			Shows: "Writes refused before or instead of an append, by `reason`, and " +
 				"EVERY value it carries is here, each with its remedy. The node: " +
 				"`evicted` (this node is removed from the fleet — run the write " +
-				"on another), `not_holder` (it does not serve the log's partition, never " +
-				"having held it or having begun to leave it — a node that serves " +
-				"it writes it), `holding_unknown` (it could not tell whether it " +
-				"serves the partition — clears when it can, and a node that " +
-				"serves it writes meanwhile), `deferred` (it holds a record it " +
-				"cannot decode — a " +
+				"on another), `deferred` (it holds a record it cannot decode — a " +
 				"newer build serves it), `behind` (it has not applied a position " +
 				"the write needs — clears on its own), `below_floor` (it is below " +
 				"the log and must adopt a snapshot — another node writes " +
@@ -164,12 +159,9 @@ func Catalogue() []Instrument {
 				"id, never by a retry. A record that landed and a gate dropped " +
 				"is counted under the gate that dropped it — `evicted`, " +
 				"`deleted`, `retired` (a kind this build no longer applies), " +
-				"`abandoned` (written in a generation a reanchor abandoned), " +
+				"`abandoned` (written in a generation a reanchor abandoned) or " +
 				"`overtaken` (written after a restored reanchor, below its " +
-				"generation) or `wrong_partition` (its own domain places it in " +
-				"another partition than the log it is on — another writer's, " +
-				"since this one refuses such a record before appending it) — " +
-				"and is never re-decided, because republishing " +
+				"generation) — and is never re-decided, because republishing " +
 				"makes another record nothing applies. Such a record holds its " +
 				"operation id for the log's duplicate window, so the same id sent " +
 				"inside it, by any node, is collapsed onto the record and refused " +
@@ -329,7 +321,7 @@ func Catalogue() []Instrument {
 			Attributes: []string{"gate", "subject_kind"},
 			Shows: "Records an apply gate dropped, by the gate that dropped " +
 				"each — the domain's own (`evicted`, `deleted`, `retired`) or " +
-				"the framework's (`abandoned`, `overtaken`, `wrong_partition`). " +
+				"the framework's (`abandoned`, `overtaken`). " +
 				"Each node counts a record once, where its own applier drops it, " +
 				"when the transaction that drops it commits — never once per " +
 				"attempt at that transaction. A write refused because its " +
@@ -386,7 +378,7 @@ func Catalogue() []Instrument {
 			Name: StatelogDeferredOldestAgeSeconds, Kind: KindGauge, Unit: UnitSeconds,
 			Attributes: []string{"domain"},
 			Shows: "How long the oldest retained record has been retained, " +
-				"which is what decides whether this node still serves the partition.",
+				"which is what decides whether this node's copy stays in service.",
 		},
 		{
 			Name: StatelogWaiters, Kind: KindGauge, Unit: UnitCount,

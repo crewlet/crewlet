@@ -14,7 +14,6 @@ import (
 	js "github.com/crewlet/crewlet/internal/queue/jetstream"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/statelog/metrics"
-	"github.com/crewlet/crewlet/internal/statelog/statelogtest"
 )
 
 // The fakes below are the framework's own seams and nothing else. A real
@@ -40,17 +39,6 @@ func (probeDomain) StreamShape() statelog.StreamShape {
 		Replay:          statelog.ReplayStrict,
 		ArbitratedKinds: []string{"object"},
 	}
-}
-
-// PartitionOf and ScopePartition place every record and path of a fake in the
-// one partition that carries its log. No case here runs a layout, so what
-// they are asked for is only ever that answer.
-func (d probeDomain) PartitionOf(l statelog.Layout, _ statelog.Envelope) (statelog.PartitionID, bool) {
-	return l.OnlyPartition(d.Name()), true
-}
-
-func (d probeDomain) ScopePartition(l statelog.Layout, _ string) (statelog.PartitionID, bool) {
-	return l.OnlyPartition(d.Name()), true
 }
 
 // logOf is a fake domain's one log, in layout 0's estate — keyed, as every
@@ -718,10 +706,6 @@ type harness struct {
 	// reserve is the log's gate reserve, nil for a domain that keeps none.
 	reserve *statelog.Reserve
 	gen     atomic.Uint32
-
-	// holding is whether this node serves the log's partition — gate 3's
-	// answer, which a case moves.
-	holding *statelogtest.Holding
 }
 
 func newHarness(t *testing.T) *harness { return newHarnessFor(t, probeDomain{}) }
@@ -806,12 +790,8 @@ func newHarnessLogging(t *testing.T, domain statelog.Domain, logger *slog.Logger
 		t.Fatalf("recorder: %v", err)
 	}
 
-	// A NODE SERVING THE LOG'S PARTITION, which a case moves to reach gate
-	// 3's refusals.
-	h.holding = statelogtest.NewHolding(logOf(domain).Partition)
 	deps := statelog.Deps{
 		Domain: domain, Spec: specOf(domain), Layout: layoutOf(domain), LogID: logOf(domain),
-		Holding:       h.holding,
 		Log:           h.appends,
 		Records:       h.records,
 		Rows:          h.rows,
@@ -885,4 +865,26 @@ func (h *harness) anchorAt(subj statelog.Subject, seq uint64) {
 	h.rows.stage(subj, statelog.Position{
 		Stream: probeStream, Generation: h.gen.Load(), Seq: seq,
 	})
+}
+
+// gatedUnder is how many records the runner counted as gated under reason.
+func gatedUnder(h *applyHarness, reason statelog.Reason) uint64 {
+	var total uint64
+	for _, snapshot := range h.metrics.Read() {
+		if snapshot.Name == metrics.StatelogRecordsGated && snapshot.Attrs["gate"] == string(reason) {
+			total += snapshot.Total
+		}
+	}
+	return total
+}
+
+// appliedAs is how many records the runner counted consumed with result.
+func appliedAs(h *applyHarness, result string) uint64 {
+	var total uint64
+	for _, snapshot := range h.metrics.Read() {
+		if snapshot.Name == metrics.StatelogApplyRecords && snapshot.Attrs["result"] == result {
+			total += snapshot.Total
+		}
+	}
+	return total
 }

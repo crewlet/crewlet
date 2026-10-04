@@ -769,10 +769,11 @@ func TestAPartitionKeptAfterTheLoopStartsIsTakenSoon(t *testing.T) {
 // not tell about is named, so its report is kept rather than dropped on a
 // moment's blip.
 //
-// AND NEVER BY WHETHER IT MAY WRITE THEM: the node here serves nothing at all.
-// A copy nobody may write — a machine an eviction barred, back with its files —
-// may be its partition's only one, and a loop that took artefacts only of what
-// the node serves gave that partition's joiner nothing to fetch.
+// AND NEVER BY WHETHER IT MAY WRITE THEM: the loop is told nothing of this
+// node's write standing. A copy nobody may write — a machine an eviction
+// barred, back with its files — may be its partition's only one, and a loop
+// that took artefacts only of what the node could write gave that partition's
+// joiner nothing to fetch.
 func TestTheLoopsScopeIsWhatThisNodeRunsAndKeeps(t *testing.T) {
 	t.Parallel()
 	layout := partitionedTestLayout()
@@ -786,7 +787,7 @@ func TestTheLoopsScopeIsWhatThisNodeRunsAndKeeps(t *testing.T) {
 		runs = append(runs, &runningLog{id: id, key: id.String()})
 	}
 	scopeOf := func(c partitionAnswers) snapshotScope {
-		s := &stateLog{run: t.Context(), layout: layout, holding: statelog.ServesOnly(), copies: c}
+		s := &stateLog{run: t.Context(), layout: layout, copies: c}
 		s.logs = newLogSet(layout, runs)
 		return s.keptPartitions()
 	}
@@ -794,8 +795,8 @@ func TestTheLoopsScopeIsWhatThisNodeRunsAndKeeps(t *testing.T) {
 
 	scope := scopeOf(partitionAnswers{kept: {yes: true}, joining: {}, unknown: {err: stale}})
 	if !slices.Equal(scope.kept, []statelog.PartitionID{kept}) {
-		t.Errorf("the loop takes %v, want the one partition this node keeps a copy of %v "+
-			"— though it serves none", scope.kept, kept)
+		t.Errorf("the loop takes %v, want the one partition this node keeps a copy of %v",
+			scope.kept, kept)
 	}
 	if want := []copyUnknown{{partition: unknown, err: stale}}; !slices.Equal(scope.unknown, want) {
 		t.Errorf("the loop names %v unknown, want the one whose copy could not be "+
@@ -830,14 +831,14 @@ func TestTheLoopsScopeIsWhatThisNodeRunsAndKeeps(t *testing.T) {
 // only for the partitions its node serves left that partition's joiner nothing
 // to fetch — the partition never had a serving holder again, and a readmission
 // of that very machine, which has to reach the partition's log through one,
-// could never be written. The node here serves nothing and keeps one copy.
+// could never be written. The node here keeps one copy, and its donor is told
+// nothing of its write standing.
 func TestTheDonorOffersTheCopiesThisNodeKeeps(t *testing.T) {
 	t.Parallel()
 	layout := partitionedTestLayout()
 	parts := layout.Partitions()
 	kept, other := parts[0], parts[1]
-	s := &stateLog{layout: layout, nodeID: "node-x", holding: statelog.ServesOnly(),
-		copies: statelog.KeepsOnly(kept)}
+	s := &stateLog{layout: layout, nodeID: "node-x", copies: statelog.KeepsOnly(kept)}
 	deps := s.donorDeps(t.TempDir(), func(context.Context) (*nats.Conn, error) {
 		return nil, errors.New("no transfer in this case")
 	})
@@ -847,7 +848,7 @@ func TestTheDonorOffersTheCopiesThisNodeKeeps(t *testing.T) {
 	for p, want := range map[statelog.PartitionID]bool{kept: true, other: false} {
 		got, err := deps.Keeps(p)
 		if err != nil || got != want {
-			t.Errorf("the donor of a node serving nothing answers %s (%v, %v), want "+
+			t.Errorf("the donor of a node keeping one copy answers %s (%v, %v), want "+
 				"%v: it donates what it keeps a copy of", p, got, err, want)
 		}
 	}
@@ -986,16 +987,11 @@ func TestTheSnapshotLoopWarnsOfAnUnknownCopyOnce(t *testing.T) {
 	}
 }
 
-// partitionAnswers answers each partition as it is told to — as a holding and
-// as the copies a node keeps — and a partition it was told nothing of as no.
+// partitionAnswers answers each partition as it is told to — as the copies a
+// node keeps — and a partition it was told nothing of as no.
 type partitionAnswers map[statelog.PartitionID]struct {
 	yes bool
 	err error
-}
-
-func (h partitionAnswers) Serving(p statelog.PartitionID) (bool, error) {
-	a := h[p]
-	return a.yes, a.err
 }
 
 func (h partitionAnswers) Keeps(p statelog.PartitionID) (bool, error) {

@@ -102,7 +102,7 @@ const embedDutyTTL = 3 * search.EmbedInterval
 // ([search.Budget]) because it cannot wedge. What is left between two of them
 // is one of the tick's reads that do not stream — the index's state, a
 // corpus's stale selection, the evaluation's sample (12 µs a source there) —
-// seconds at the largest partition. A tick that shows nothing for five minutes
+// seconds at the largest corpus. A tick that shows nothing for five minutes
 // was waiting on something that did not answer. Cut off, it publishes nothing
 // more and the next tick starts over.
 const embedTickBudget = 5 * time.Minute
@@ -191,13 +191,10 @@ func (e *Engine) newEmbedDuty(s *stateLog) *embedDuty {
 		return nil
 	}
 	return &embedDuty{
-		engine:    e,
-		publisher: running.publisher,
-		corpora:   corpora,
-		// ITS PARTITION'S SINGLETON, claimable only while this node serves
-		// the partition its vector log is in ([Engine.partitionDuty]) —
-		// under layout 0 `worker:embeddings`, the lease it always was.
-		claim:      e.partitionDuty(embedDutyName, embedDutyTTL, running.id.Partition, s.holding),
+		engine:     e,
+		publisher:  running.publisher,
+		corpora:    corpora,
+		claim:      e.workerDuty(embedDutyName, embedDutyTTL),
 		metrics:    e.metrics,
 		log:        running,
 		register:   s.positions,

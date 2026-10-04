@@ -565,8 +565,7 @@ func newEmbedHarness(t *testing.T) *embedHarness {
 	}
 	publisher, err := statelog.NewPublisher(statelog.Deps{
 		Domain: search.Domain{}, Spec: statelog.EstateStream(search.Domain{}), Layout: statelog.EstateLayout(search.Domain{}.Name()), LogID: statelog.EstateLog(search.Domain{}), Log: log, Records: log, Rows: rows,
-		Holding: statelog.ServesOnly(statelog.EstatePartition),
-		Fence:   search.NewFence(), Gates: search.NewGates(), Waiter: &embedWaiter{}, Voids: embedWaiter{},
+		Fence: search.NewFence(), Gates: search.NewGates(), Waiter: &embedWaiter{}, Voids: embedWaiter{},
 		NodeID: "node-a", Generation: func() uint32 { return 0 }, Identity: &embedWaiter{},
 		ResolveBudget: 2 * time.Second,
 	})

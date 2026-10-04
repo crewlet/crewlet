@@ -42,8 +42,7 @@ func TestEveryConstructorGivenNoLoggerWritesThroughThePackagesOwn(t *testing.T) 
 		Domain: loggerProbe{}, Spec: loggerProbeSpec(), Log: struct{ Appender }{},
 		Records: struct{ LogReader }{}, Rows: struct{ Rows }{},
 		Layout: EstateLayout(loggerProbe{}.Name()), LogID: loggerProbeLog,
-		Holding: ServesOnly(loggerProbeLog.Partition),
-		Fence:   struct{ Fence }{}, Gates: struct{ Gates }{},
+		Fence: struct{ Fence }{}, Gates: struct{ Gates }{},
 		Waiter: struct{ Waiter }{}, Voids: struct{ Voids }{}, Identity: struct{ Identity }{},
 		NodeID: "node-a", Generation: func() uint32 { return 1 },
 	})
@@ -140,14 +139,6 @@ func loggerProbeSpec() StreamSpec {
 		SubjectPrefix: "crewlet.loggerprobe.log",
 		StreamShape:   loggerProbe{}.StreamShape(),
 	}
-}
-
-func (loggerProbe) PartitionOf(Layout, Envelope) (PartitionID, bool) {
-	return PartitionID{}, false
-}
-
-func (loggerProbe) ScopePartition(Layout, string) (PartitionID, bool) {
-	return PartitionID{}, false
 }
 
 func (loggerProbe) RecordVersion() int                { return 1 }

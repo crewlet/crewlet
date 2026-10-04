@@ -50,11 +50,9 @@
 // A node that answers "I did not run it" — its copy is out of service, it runs
 // no native backend, its copy lags its logs, or it could not reach the
 // caller's floor in time — did not execute anything, so every class moves on
-// from it; and so does a write the write authority refused at gate 3
-// (`not_holder`, `holding_unknown`), which appended nothing. When no data node
-// runs the operation, it is refused as [ErrUnserved], naming who was asked and
-// what each said — never an empty answer, which would say the company has none
-// of what was asked for.
+// from it. When no data node runs the operation, it is refused as [ErrUnserved],
+// naming who was asked and what each said — never an empty answer, which would
+// say the company has none of what was asked for.
 //
 // # A copy that is WRONG is out of service; one that LAGS is a worse node
 //

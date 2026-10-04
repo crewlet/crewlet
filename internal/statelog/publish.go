@@ -448,14 +448,6 @@ type Publisher struct {
 	metrics  *metrics.Recorder
 	logger   *slog.Logger
 
-	// layout and logID are where this publisher's log sits ([Deps.LogID]).
-	layout Layout
-	logID  LogID
-
-	// holding is whether this node serves that log's partition
-	// ([Deps.Holding]).
-	holding Holding
-
 	// duplicates is the log's duplicate window ([StreamSpec.Duplicates]):
 	// how long the broker collapses an append under an operation id onto the
 	// record the id first landed — which is what a refusal of a record that
@@ -504,18 +496,9 @@ type Deps struct {
 
 	// Layout and LogID are where Spec's log sits: the layout this node runs
 	// and which of its logs this is. REQUIRED, and held to Spec
-	// ([Layout.Places]), because the publisher refuses a record its domain
-	// places in another partition than this log's, and a scope naming one —
-	// questions about the layout that the stream's name cannot answer.
+	// ([Layout.Places]).
 	Layout Layout
 	LogID  LogID
-
-	// Holding answers whether this node serves the log's partition: gate 3,
-	// asked before every write takes its snapshot and again before it is
-	// appended. REQUIRED — a publisher that could not ask would write any
-	// log it is handed, which is the uncounted writer the floor theorem's
-	// premise excludes ([Holding]).
-	Holding Holding
 
 	Log Appender
 
@@ -568,10 +551,6 @@ func NewPublisher(d Deps) (*Publisher, error) {
 	switch {
 	case d.Domain == nil:
 		return nil, fmt.Errorf("statelog: publisher has no domain")
-	case d.Holding == nil:
-		return nil, fmt.Errorf("statelog: publisher has no holding — only a node " +
-			"that serves a partition may write its logs, and a publisher that " +
-			"cannot ask whether this one does would write any log it is handed")
 	case d.Log == nil:
 		return nil, fmt.Errorf("statelog: publisher has no appender")
 	case d.Records == nil:
@@ -629,9 +608,6 @@ func NewPublisher(d Deps) (*Publisher, error) {
 		domain:        d.Domain,
 		stream:        spec.Name,
 		prefix:        spec.SubjectPrefix,
-		layout:        d.Layout,
-		logID:         d.LogID,
-		holding:       d.Holding,
 		duplicates:    spec.Duplicates,
 		log:           d.Log,
 		records:       d.Records,
@@ -671,24 +647,6 @@ func (p *Publisher) publish(ctx context.Context, req Request) (Result, error) {
 		return Result{}, fmt.Errorf("statelog: write on %s declares no scope — an "+
 			"empty scope claims the record makes nothing stale, which is the one "+
 			"claim a record no build may be able to read cannot make", req.Subject)
-	}
-	// GATE 1, ON WHAT THE PROBE WILL BE ASKED: the request's scope is what
-	// step 0 probes this partition's deferrals with, so a path in another
-	// partition is a question this partition's file cannot answer. Before
-	// any fence, because it is the caller's mistake rather than this node's
-	// state, and no fence clearing changes it.
-	if err := p.withinPartition("the write", req.Subject, req.Scope); err != nil {
-		return Result{}, err
-	}
-	// GATE 3, BEFORE STEP 0: only a node that serves the log's partition
-	// decides a write for it, so one that does not is refused before it
-	// reads a row — a decision taken from the rows of a partition this node
-	// is not counted on is the one the floor theorem's premise excludes.
-	// After gate 1, because a scope that crosses partitions is the caller's
-	// mistake wherever it is sent, and routing it to a node that serves the
-	// partition would only meet that refusal there.
-	if err := p.serves(req); err != nil {
-		return Result{}, err
 	}
 
 	// FENCE 0, BEFORE ANYTHING ELSE AND ON EVERY APPEND. Its identity
@@ -981,18 +939,6 @@ func (p *Publisher) stamped(req Request, snap Snap) error {
 			"operation %q and the write is %q — the ledger an ambiguous publish "+
 			"is resolved by is keyed on the record's, so this write could never "+
 			"be answered for", p.domain.Name(), req.Subject, env.OpID, req.OpID)
-	case p.misplaced(env):
-		// GATE 2, AT ITS SOURCE. Every holder of this log would drop the
-		// record `wrong_partition`, so appending it buys a durable record
-		// that applies nowhere — and a resolution that finds no ledger
-		// row, asks gates that know nothing of partitions, reads the
-		// silence as a lost race and decides again, sixteen times, to a
-		// conflict about a colleague that does not exist.
-		at, _ := p.domain.PartitionOf(p.layout, env)
-		return fmt.Errorf("%w: the %s record decided for %s belongs to %s and "+
-			"this is %s — a write is decided and published in the partition its "+
-			"object is in", ErrWrongPartition, p.domain.Name(), req.Subject,
-			partitionOf(p.layout, at), p.logID)
 	case req.NodeGate && !p.domain.NodeGate(env):
 		// A NODE GATE IS JUDGED FROM THE RECORD ITSELF, because the flag
 		// excuses three fences — the passed generation, a peer's truncated
@@ -1006,81 +952,7 @@ func (p *Publisher) stamped(req Request, snap Snap) error {
 			"node gate is excused",
 			p.domain.Name(), req.Subject, env.Kind, env.Op)
 	}
-	// GATE 1, ON WHAT THE DEFERRAL WILL BE FILED UNDER: a holder that cannot
-	// decode this record indexes it by the RECORD's scope, not the request's,
-	// so both are held to this partition — a decision that widened its own
-	// record's scope past the request's is refused here, before the broker.
-	return p.withinPartition("the "+p.domain.Name()+" record decided", req.Subject, env.Scope)
-}
-
-// ErrScopeCrossesPartitions reports a write whose scope — the request's or
-// its record's — names an object in another partition than the log it is
-// published to: gate 1 of the three the floor theorem is held by per log (the
-// package doc's "who may write a log").
-//
-// A PROGRAMMING ERROR, never a refusal about this node: a scope is what a
-// deferral is filed under and what step 0 probes, and both run in one
-// partition's file, so a path naming another partition's object is a deferral
-// that partition's probe never sees. An effect in another partition travels as
-// a write decided there, under a scope of its own.
-var ErrScopeCrossesPartitions = errors.New("statelog: the write's scope names " +
-	"another partition's object")
-
-// ErrWrongPartition reports a record whose own domain places it in another
-// partition than the log it is published to — what every holder of that log
-// would gate `wrong_partition` ([ReasonWrongPartition]), refused before it is
-// appended rather than published to apply nowhere. A programming error, for
-// [ErrScopeCrossesPartitions]'s reason.
-var ErrWrongPartition = errors.New("statelog: the record belongs to another partition")
-
-// misplaced reports whether a record's own domain places it in another
-// partition than this publisher's log — the question the applier's partition
-// gate asks ([Runner.misplaced]), asked here first.
-func (p *Publisher) misplaced(env Envelope) bool {
-	at, placed := p.domain.PartitionOf(p.layout, env)
-	return placed && at != p.logID.Partition
-}
-
-// withinPartition refuses a scope with a path the domain places in another
-// partition than this publisher's log — gate 1, [ErrScopeCrossesPartitions].
-// A path that names the log itself (a domain or family term) lies wherever it
-// is written, and passes.
-func (p *Publisher) withinPartition(what string, subject Subject, scope ScopeSet) error {
-	for _, path := range scope.Paths {
-		at, placed := p.domain.ScopePartition(p.layout, path)
-		if placed && at != p.logID.Partition {
-			return fmt.Errorf("%w: %s on %s declares the path %q, which lies in "+
-				"%s, and it is published to %s — a deferral filed under that path "+
-				"here is one the partition it names never probes; decide the "+
-				"effect there, as a write of its own", ErrScopeCrossesPartitions,
-				what, subject, path, partitionOf(p.layout, at), p.logID)
-		}
-	}
 	return nil
-}
-
-// serves is gate 3 — whether this node may make a write on its log's partition
-// now, which it may only while it serves it. An unknown answer refuses it.
-func (p *Publisher) serves(req Request) error {
-	serving, err := p.holding.Serving(p.logID.Partition)
-	switch {
-	case err != nil:
-		return refuseHoldingUnknown(p.logID, req.OpID, err)
-	case !serving:
-		return refuseNotHolder(p.logID, req.OpID)
-	}
-	return nil
-}
-
-// partitionOf names a partition for a refusal, or says the layout has none: a
-// domain that cannot place a path or a record under a layout answers a
-// partition no log carries — the zero one among them — and printing its empty
-// name would read as a missing word rather than an answer.
-func partitionOf(l Layout, at PartitionID) string {
-	if len(l.Logs(at)) == 0 {
-		return fmt.Sprintf("no partition of layout %d", l.Number)
-	}
-	return at.String()
 }
 
 // disposition is what one append attempt leaves the round loop to do, and
@@ -1122,12 +994,6 @@ func (p *Publisher) attempt(ctx context.Context, req Request, snap Snap, expect 
 	// object, told to a caller this node had refused for a reason of its
 	// own.
 	if err := p.fence0(ctx, req); err != nil {
-		return Result{Rounds: round}, dispDone, err
-	}
-	// GATE 3 AGAIN, BEFORE THE APPEND, for fence 0's reason: a node that
-	// stopped serving the partition while this write was deciding must not
-	// append the write it decided.
-	if err := p.serves(req); err != nil {
 		return Result{Rounds: round}, dispDone, err
 	}
 	// THE RESERVE, for every append but a node gate's, held until the
@@ -1586,13 +1452,12 @@ const (
 // # And the framework's own gates, before the domain's
 //
 // A record a reanchor's rule voided — written in a generation the reanchor
-// abandoned, or one a restored reanchor overtook — or one its own domain places
-// in another partition wrote no ledger row either, and no domain's [Gates]
-// knows those rules: they are the applier's, asked before the domain's gate as
-// the applier asks them ([Voids]). gen is the generation this call
-// stamped its own record with, which is what the rule is asked of for the
-// record this call's own append put at `at`; any other record is asked by the
-// generation it carries.
+// abandoned, or one a restored reanchor overtook — wrote no ledger row either,
+// and no domain's [Gates] knows those rules: they are the applier's, asked
+// before the domain's gate as the applier asks them ([Voids]). gen is the
+// generation this call stamped its own record with, which is what the rule is
+// asked of for the record this call's own append put at `at`; any other
+// record is asked by the generation it carries.
 func (p *Publisher) resolve(ctx context.Context, req Request, at Position, landed landing, gen uint32) (Result, error) {
 	waitCtx, cancel := context.WithTimeout(ctx, p.resolveBudget)
 	defer cancel()
@@ -1646,11 +1511,8 @@ func (p *Publisher) resolve(ctx context.Context, req Request, at Position, lande
 	// questions that make absence mean something other than "somebody else
 	// won" — in the order that makes each answer conclusive.
 	writer, ours := p.nodeID, true
-	var env Envelope
 	if landed != landedOwn {
-		var found bool
-		var err error
-		env, found, err = p.recordAt(ctx, at)
+		env, found, err := p.recordAt(ctx, at)
 		if err != nil || !found {
 			// NOBODY HERE CAN NAME ITS WRITER, so nothing here can say
 			// whether a gate dropped it — and NO POSITION, for the
@@ -1677,7 +1539,7 @@ func (p *Publisher) resolve(ctx context.Context, req Request, at Position, lande
 				at, env.OpID)
 		}
 	}
-	reason, gated, err := p.voided(ctx, req, at, landed, ours, env, writer, gen)
+	reason, gated, err := p.voided(ctx, req, at, ours, writer, gen)
 	if err != nil {
 		return Result{}, err
 	}
@@ -1817,23 +1679,18 @@ func (p *Publisher) resolve(ctx context.Context, req Request, at Position, lande
 	return Result{}, nil
 }
 
-// voided is whether the record at `at` applied nowhere, and the gate that answers
-// for it: the framework's own first — the partition, then a reanchor's rules —
-// as the applier asks them, and then the domain's, about writer.
+// voided is whether the record at `at` applied nowhere, and the gate that
+// answers for it: the framework's own first — a reanchor's rules — as the
+// applier asks them, and then the domain's, about writer.
 //
 // THE FRAMEWORK'S ARE ASKED ONLY OF THIS OPERATION'S OWN RECORD. Another
 // operation's record the ambiguous path found newest on the subject is not
 // this write's landing; the domain's gates are asked about this node for it,
-// whose own copy may be the one below it that a gate dropped. And the partition
-// is asked only of a record this call read: its own append was refused before
-// the broker if its domain placed it elsewhere.
-func (p *Publisher) voided(ctx context.Context, req Request, at Position, landed landing,
-	ours bool, env Envelope, writer string, gen uint32) (Reason, bool, error) {
+// whose own copy may be the one below it that a gate dropped.
+func (p *Publisher) voided(ctx context.Context, req Request, at Position,
+	ours bool, writer string, gen uint32) (Reason, bool, error) {
 
 	if ours {
-		if landed != landedOwn && p.misplaced(env) {
-			return ReasonWrongPartition, true, nil
-		}
 		if reason, gated := p.voids.Voided(gen, at.Seq); gated {
 			return reason, true, nil
 		}

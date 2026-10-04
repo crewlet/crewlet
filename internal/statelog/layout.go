@@ -477,16 +477,15 @@ var ErrUnplacedLog = errors.New("statelog: the log is not the layout's")
 // layout does not carry, one that is not domain d's, or a spec whose stream is
 // not the one the grammar names for it.
 //
-// # Why a runner and a publisher carry their place, and not only their stream
+// # Why the place and the stream are one fact
 //
-// Two of the gates that hold the floor theorem per log judge a record's
-// PARTITION — the applier drops a record whose domain places it in another
-// partition than its log's, and the publisher refuses a write whose record or
-// scope names one — and a partition is a question about the layout, which a
-// stream's name cannot answer. So each is built on the layout and the log as
-// well as the stream, and this is what makes the three one fact: a spec naming
-// another log's stream than the one its gates judge by would drop records that
-// are its own and apply records that are not, on every holder alike.
+// A runner and a publisher are handed the log they serve twice — as the place
+// a node runs it (the layout and the log's key) and as the stream it is
+// created with — and every per-log record the node keeps is keyed by one or the
+// other: the checkpoint and the anchors by the stream, a position row and a
+// floor by the key. A spec naming another log's stream than the key it runs
+// under would file one log's positions under another's name, so the two are
+// held to one fact before either is built.
 //
 // ONLY THE NAMES ARE COMPARED, never the ceiling: the spec a node creates a log
 // with carries the byte share its own Tier A sized, which is the node's to
@@ -527,15 +526,7 @@ func (l Layout) Places(d Domain, log LogID, spec StreamSpec) error {
 
 // OnlyPartition is the one partition that carries the named domain's log, when
 // exactly one does, and otherwise the zero PartitionID — a partition no layout
-// carries.
-//
-// It is the whole partition function of a domain whose records are not keyed
-// to partitions: under a layout that gives the domain a single log there is
-// one place a record of it can belong, and under one that divides the domain
-// there is no answer such a domain can give. The zero value is that answer —
-// "another partition" for every log there is — so a domain answering it from
-// [Domain.PartitionOf] or [Domain.ScopePartition] keeps a record off every
-// log rather than being placed on one by a guess.
+// carries, so a caller looking a log up by it finds none rather than a guess.
 func (l Layout) OnlyPartition(domain string) PartitionID {
 	logs := l.LogsOf(domain)
 	if len(logs) != 1 {

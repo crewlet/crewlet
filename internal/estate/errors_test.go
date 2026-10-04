@@ -108,29 +108,18 @@ func TestATypedRefusalCrossesWithItsFieldsAndItsCause(t *testing.T) {
 	}
 }
 
-// THE ROUTER'S OWN WORDS CROSS TOO, and so does every refusal the router's
+// THE ROUTER'S OWN WORDS CROSS TOO, and so does every answer the router's
 // failover turns on. An estate nobody served says who was asked on the far
-// side of a second hop; and a gate-3 refusal rebuilt from the wire must still
-// read as one that appended nothing, or a router that met it on another node
-// would stop at it rather than take the write, under its operation id, to a
-// holder that can.
+// side of a second hop; and an unvouched step rebuilt from the wire must still
+// read as one another node's ledger may answer, or a router that met it on
+// another node would stop at it rather than ask the next, under its operation
+// id.
 func TestTheRouterReadsARefusalTheWayItWasSent(t *testing.T) {
 	t.Parallel()
 	var unserved *ErrUnserved
 	if !errors.As(throughWire(t, &ErrUnserved{Detail: "data-a: no answer"}), &unserved) ||
 		unserved.Detail != "data-a: no answer" {
 		t.Fatalf("an unserved estate crossed as %+v", unserved)
-	}
-	for _, reason := range []statelog.Reason{statelog.ReasonNotHolder, statelog.ReasonHoldingUnknown} {
-		got := throughWire(t, fmt.Errorf("create: %w", &statelog.Unavailable{
-			Reason: reason, OpID: "op-1", Cause: statelog.ErrNotHolder}))
-		if !appendedNothing(got) {
-			t.Errorf("%s crossed as %v, which the router no longer reads as a "+
-				"refusal that appended nothing", reason, got)
-		}
-		if reason == statelog.ReasonNotHolder && !errors.Is(got, statelog.ErrNotHolder) {
-			t.Errorf("%s lost its cause's identity: %v", reason, got)
-		}
 	}
 	unvouchedStep := throughWire(t, fmt.Errorf("walk: %w", tracker.ErrStepUnvouched))
 	if !unvouched(opCreateTask.spec, nil, unvouchedStep) {

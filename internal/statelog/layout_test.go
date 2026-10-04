@@ -52,7 +52,7 @@ func mustParse(t *testing.T, s string) statelog.PartitionID {
 //
 // A space read off a record is a value, never a panic, and an unknown one is
 // refused rather than carried: a partition of a space this build has no
-// schema or partition function for is one it can neither open nor route to.
+// schema for is one it can neither open nor route to.
 func TestEverySpaceIsValidAndNothingElseIs(t *testing.T) {
 	t.Parallel()
 	if len(statelog.Spaces) != 4 {
@@ -769,11 +769,10 @@ func TestAllLogsWalksEveryPartitionsLogsInOrder(t *testing.T) {
 	}
 }
 
-// ONLY A LAYOUT THAT GIVES A DOMAIN ONE LOG PLACES IT WITHOUT A KEY.
+// ONLY A LAYOUT THAT GIVES A DOMAIN ONE LOG NAMES ITS PARTITION.
 //
-// It is the whole partition function of an unkeyed domain, so the answer under
-// a layout that divides the domain must be a partition no layout carries —
-// never one of the domain's logs picked by a guess.
+// The answer under a layout that divides the domain must be a partition no
+// layout carries — never one of the domain's logs picked by a guess.
 func TestOnlyPartitionAnswersOnlyWhereThereIsOneLog(t *testing.T) {
 	t.Parallel()
 	if got := layoutZero().OnlyPartition("tracker"); got != statelog.EstatePartition {
@@ -855,11 +854,11 @@ func TestASpecOfAnotherShapeIsNotALogOfTheDomain(t *testing.T) {
 // A RUNNER'S AND A PUBLISHER'S PLACE IS THE LAYOUT'S OWN LOG, NAMED AS THE
 // GRAMMAR NAMES IT.
 //
-// The two partition gates judge a record against the log's partition in the
-// layout, and every row the log writes is keyed by the spec's stream — so the
-// three must be one fact. A place the layout does not carry, a log of another
-// domain, or a stream the grammar gives another log each builds a runner whose
-// gate judges by one partition while it applies another's records.
+// A position row and a floor are keyed by the log's place, and every row the
+// log writes by the spec's stream — so the three must be one fact. A place the
+// layout does not carry, a log of another domain, or a stream the grammar gives
+// another log each builds a runner that files one log's positions under
+// another's name.
 func TestAPlaceIsTheLayoutsOwnLogUnderItsOwnName(t *testing.T) {
 	t.Parallel()
 	d := trackerShaped(1 << 30)

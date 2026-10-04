@@ -67,9 +67,9 @@ booted — the one node the trim must not pass. A node evicted from the log stop
 being counted about a minute after that record lands.
 
 **The estate's logs are trimmed by one node**: the holder of the trim duty,
-`worker:retention`. Only a data node that serves the estate may claim it.
-Every node still evaluates its own alarms on every tick, whatever duty it
-holds.
+`worker:retention`. Only a data node may claim it, since the trim reads the
+estate it holds. Every node still evaluates its own alarms on every tick,
+whatever duty it holds.
 
 `feed_ack_floor` is the acknowledgement floor of the durable consumer that each
 log's own change feed opens — the feed's **group** `crewlet-tracker-feed` on
@@ -312,8 +312,8 @@ live data node — so a node joining the fleet is counted before its first
 report, and the lone data node already there takes the artefact that joiner
 needs.
 
-Every skip is published on the node's own register row, so a failed join has
-an answer rather than a silence:
+Every skip is published on the node's own register row, so a failed join has an
+answer rather than a silence:
 
 | Reason | What it means |
 |---|---|
@@ -638,14 +638,10 @@ restarted, and the first id would answer `superseded` to anyone finishing it.
   evicted, or it had written the record from
   rows a reanchor left behind (overtaken or abandoned) — and the node you ran it
   on this time had its append collapsed onto that node's record, which applies
-  nowhere. The refusal is about that node, not this one, which was counted and
-  served the estate when it tried: once the duplicate window (two minutes
-  from when the record landed) has passed, run the gesture again with the same
-  `-op-id` through the same node.
-- `not_holder` or `holding_unknown` — the node you ran it on did not serve
-  the estate, or could not tell whether it serves it, when it wrote the log,
-  so it wrote nothing there: run the gesture again with the same `-op-id` once
-  it does, or through a data node that does (`-url`).
+  nowhere. The refusal is about that node, not this one, which was counted when
+  it tried: once the duplicate window (two minutes from when the record landed)
+  has passed, run the gesture again with the same `-op-id` through the same
+  node.
 - `unknown` that **this node cannot tell** — its operation ledger may have
   lost the row the operation needs, because the id was minted before the node
   adopted a peer's snapshot or before the ledger's sweep reached it. The node

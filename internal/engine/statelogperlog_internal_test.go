@@ -127,13 +127,25 @@ func TestTheRunningLayoutZeroRuntimeIsTodaysEstate(t *testing.T) {
 		t.Errorf("the layout-0 row carries map epoch %d and partitions %v, which no "+
 			"earlier build wrote", mine.MapEpoch, mine.Partitions)
 	}
-	// AND ITS DUTIES AND ITS ARTEFACTS ARE WHERE THEY ALWAYS WERE: the trim's
-	// and the embedding's leases keep their names, and the one partition's
-	// snapshots their directory.
-	for duty, want := range map[string]string{retentionDutyName: "retention", embedDutyName: "embeddings"} {
-		if got := partitionDutyName(duty, statelog.EstatePartition); got != want {
-			t.Errorf("layout 0's %s duty is named %q, and every earlier build claims %q",
-				duty, got, want)
+	// AND ITS DUTIES AND ITS ARTEFACTS ARE WHERE THEY ALWAYS WERE: the trim
+	// and the embedding are one fleet singleton each, on the lease every
+	// earlier build claims — so a node on this build and one on the build
+	// before it contend for ONE lease rather than both running the duty —
+	// and the snapshots stay in their directory.
+	for duty, resource := range map[string]string{
+		retentionDutyName: "worker:retention", embedDutyName: "worker:embeddings",
+	} {
+		claim := e.workerDuty(duty, retentionDutyTTL)
+		if claim == nil {
+			t.Fatalf("the %s duty has no claim on a node running workers in a fleet", duty)
+		}
+		if mine, err := claim(t.Context()); err != nil || !mine {
+			t.Fatalf("the lone node claimed the %s duty = (%v, %v), want it held", duty, mine, err)
+		}
+		lease, err := e.backends.Coord.Get(t.Context(), resource)
+		if err != nil || lease == nil || lease.Owner != e.node.Owner() {
+			t.Errorf("the %s duty holds no lease of this node's at %s: (%+v, %v)",
+				duty, resource, lease, err)
 		}
 	}
 	if root := e.boot.Store.SnapshotDirFor(); statelog.SnapshotDir(root, 0, statelog.EstatePartition) != root {

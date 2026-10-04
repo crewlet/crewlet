@@ -85,11 +85,12 @@ func TestAStopIsWrittenOnceSayingWhatResumesIt(t *testing.T) {
 	}
 }
 
-// gatedLine runs a REAL runner over domain on the records offer puts on its
-// log — the first of which a gate drops — and returns the one
+// gatedLine runs a REAL runner over the probe domain on the records offer puts
+// on its log — the first of which a gate drops — and returns the one
 // `statelog_record_gated` line it wrote for that drop.
-func gatedLine(t *testing.T, domain statelog.Domain, offer func(h *applyHarness)) map[string]any {
+func gatedLine(t *testing.T, offer func(h *applyHarness)) map[string]any {
 	t.Helper()
+	domain := probeDomain{}
 	h := newApplyHarness(t, domain)
 	logs := &lockedBuffer{}
 	runner, err := statelog.NewRunner(statelog.RunnerDeps{
@@ -127,39 +128,28 @@ func gatedLine(t *testing.T, domain statelog.Domain, offer func(h *applyHarness)
 // operator reads it by — the row the `statelog_write_gated` row and the
 // records-gated alarm both send them to. It named only the framework's own
 // gates, so an operator following an `evicted` refusal to the drop behind it
-// read that the line never carries that gate; and it named no
-// key but `log` and `belongs_to`, so nothing said the line names the node that
-// wrote the record, the one fact the alarm's remedy says to read it for.
+// read that the line never carries that gate; and it named none of the line's
+// keys, so nothing said the line names the node that wrote the record, the one
+// fact the alarm's remedy says to read it for.
 //
-// So the row is held to the line itself — every key a domain's gate puts on it
-// and every key the partition's adds — and to every reason that is a gate's
-// ([reasonDecisions]), since the line is logged under whichever one dropped the
-// record.
+// So the row is held to the line itself — every key a gate puts on it — and to
+// every reason that is a gate's ([reasonDecisions]), since the line is logged
+// under whichever one dropped the record.
 func TestTheReplicationGuideSaysWhatTheRecordGatedLineCarries(t *testing.T) {
 	t.Parallel()
-	lines := []map[string]any{
-		// A DOMAIN'S GATE, which every node asks of its own rows.
-		gatedLine(t, probeDomain{}, func(h *applyHarness) {
-			h.applier.gate, h.applier.gated[1] = statelog.ReasonEvicted, true
-			h.fetch.offer(1, env(1, "edit", "a", "op-1", 1))
-		}),
-		// THE PARTITION'S, which also names the log and where the record
-		// belongs.
-		gatedLine(t, placingDomain{}, func(h *applyHarness) {
-			h.fetch.offer(1, env(1, strayKind, "b", "op-2", 1))
-		}),
-	}
+	line := gatedLine(t, func(h *applyHarness) {
+		h.applier.gate, h.applier.gated[1] = statelog.ReasonEvicted, true
+		h.fetch.offer(1, env(1, "edit", "a", "op-1", 1))
+	})
 	row := guideRow(t, "statelog_record_gated")
-	for _, line := range lines {
-		for key := range line {
-			switch key {
-			case slog.TimeKey, slog.LevelKey, slog.MessageKey:
-				continue
-			}
-			if !strings.Contains(row, "`"+key+"`") {
-				t.Errorf("the guide's statelog_record_gated row never names `%s`, a "+
-					"key the line carries under the gate %v: %s", key, line["gate"], row)
-			}
+	for key := range line {
+		switch key {
+		case slog.TimeKey, slog.LevelKey, slog.MessageKey:
+			continue
+		}
+		if !strings.Contains(row, "`"+key+"`") {
+			t.Errorf("the guide's statelog_record_gated row never names `%s`, a "+
+				"key the line carries under the gate %v: %s", key, line["gate"], row)
 		}
 	}
 	for _, reason := range statelog.Reasons() {
@@ -240,7 +230,7 @@ func logRecords(t *testing.T, written []byte, msg string) []map[string]any {
 // the line's own message, and every other is a key on it.
 func TestTheRecordsGatedRemedyNamesWhatItsLineCarries(t *testing.T) {
 	t.Parallel()
-	line := gatedLine(t, probeDomain{}, func(h *applyHarness) {
+	line := gatedLine(t, func(h *applyHarness) {
 		h.applier.gate, h.applier.gated[1] = statelog.ReasonEvicted, true
 		h.fetch.offer(1, env(1, "edit", "a", "op-1", 1))
 	})

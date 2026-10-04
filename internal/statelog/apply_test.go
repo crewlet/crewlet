@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -1514,6 +1515,103 @@ func TestAGatedRecordIsCountedOnceHoweverOftenItsTransactionRuns(t *testing.T) {
 	if n := appliedAs(h, "gated"); n != 1 {
 		t.Errorf("the batch counted %d record(s) consumed as gated, want 1", n)
 	}
+}
+
+// A RETAINED RECORD A GATE DROPS WHEN IT IS REPROCESSED IS GATED, NOT
+// REPROCESSED — counted, logged and released exactly as the live loop drops it.
+//
+// A record is retained by a build that cannot read it, so that build never
+// asked a gate about it; the build that can read it asks at its next boot, and
+// a gate may drop it then — the writer evicted since, a generation a reanchor
+// voided, an object deleted. That drop wrote no row, so a reprocess tally that
+// took every released record for an applied one reported rows this node does
+// not hold, and the records-gated counter, which is a dropped record's only
+// witness, never heard of it. What the gated record held back by scope is
+// released with it, since nothing applied is left to order it behind.
+func TestAReprocessedRecordAGateDropsIsCountedGated(t *testing.T) {
+	t.Parallel()
+	h := newApplyHarness(t, probeDomain{})
+	h.fetch.offer(1, env(1, "edit", "a", "op-1", 1))
+	// ABOVE THE RETAINING BUILD, so it is retained without a gate being asked.
+	h.fetch.offer(2, env(2, "edit", "b", "op-2", 9))
+	// ON THE ROWS 2 WOULD HAVE MADE STALE, so retained behind it.
+	h.fetch.offer(3, env(3, "edit", "b", "op-3", 1))
+	if err := h.run(3); err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	if got := h.retainedCount(); got != 2 {
+		t.Fatalf("the retaining build kept %d record(s), want 2", got)
+	}
+
+	// THE UPGRADE: a build that reads the record, and whose domain gate drops
+	// it — its writer has been evicted since it was retained.
+	h.upgrade(upgradedDomain{reads: 9})
+	h.applier.mu.Lock()
+	h.applier.gate, h.applier.gated[2] = statelog.ReasonEvicted, true
+	h.applier.mu.Unlock()
+	if err := h.boot(0); err != nil {
+		t.Fatalf("the upgraded build's boot: %v", err)
+	}
+	seen := h.applier.seen()
+	if len(seen) != 1 || seen[0].Seq != 3 {
+		t.Fatalf("the upgraded build applied %v, want only the record at 3 — the "+
+			"record at 2 is dropped by the eviction gate, and 3 is released "+
+			"from behind it", seen)
+	}
+	rows := probeRows(t, h)
+	want := []int64{
+		statelog.Position{Stream: probeStream, Generation: 1, Seq: 1}.Packed(),
+		statelog.Position{Stream: probeStream, Generation: 1, Seq: 3}.Packed(),
+	}
+	if !slices.Equal(rows, want) {
+		t.Fatalf("the node holds rows at %v, want %v", rows, want)
+	}
+	if n := gatedUnder(h, statelog.ReasonEvicted); n != 1 {
+		t.Errorf("the upgraded build counted %d record(s) gated %q, want 1 — a "+
+			"dropped record's only witness is this counter", n, statelog.ReasonEvicted)
+	}
+	for op, applied := range map[string]bool{"op-2": false, "op-3": true} {
+		held, err := h.ledgerHolds(op)
+		if err != nil {
+			t.Fatalf("read the ledger: %v", err)
+		}
+		if held != applied {
+			t.Errorf("the ledger holds %s: %v, want %v", op, held, applied)
+		}
+	}
+	// AND COUNTED AS THE LIVE LOOP COUNTS IT: a record a gate dropped wrote no
+	// row, so it is `gated` and not `reprocessed`.
+	for result, want := range map[string]uint64{"reprocessed": 1, "gated": 1} {
+		if got := appliedAs(h, result); got != want {
+			t.Errorf("the upgraded build counted %d record(s) %q, want %d", got,
+				result, want)
+		}
+	}
+}
+
+// probeRows is every position the probe applier has written a row at, in
+// order.
+func probeRows(t *testing.T, h *applyHarness) []int64 {
+	t.Helper()
+	var out []int64
+	if err := h.estate.Read(t.Context(), func(tx *sql.Tx) error {
+		rows, err := tx.QueryContext(t.Context(), `SELECT position FROM probe_rows ORDER BY position`)
+		if err != nil {
+			return err
+		}
+		defer func() { _ = rows.Close() }()
+		for rows.Next() {
+			var at int64
+			if err := rows.Scan(&at); err != nil {
+				return err
+			}
+			out = append(out, at)
+		}
+		return rows.Err()
+	}); err != nil {
+		t.Fatalf("read the probe rows: %v", err)
+	}
+	return out
 }
 
 // TestTheApplierMeasuresItsOwnDrain is the input three answers divide a record

@@ -99,7 +99,7 @@ func (e *Engine) seatHandle(agentID string) (string, bool) {
 }
 
 // usageLog is the usage domain's one log under a layout: the partition that
-// carries it ([usage.Domain.PartitionOf]), or the zero partition where the
+// carries it ([statelog.Layout.OnlyPartition]), or the zero partition where the
 // layout divides it, which no log carries — so nothing is published or read
 // there rather than a guess.
 func usageLog(l statelog.Layout) statelog.LogID {

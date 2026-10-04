@@ -197,37 +197,34 @@ type reasonDecision struct{ gate, blames bool }
 // gate set ([TestTheReplicationGuideSaysWhatTheRecordGatedLineCarries]).
 var reasonDecisions = map[statelog.Reason]reasonDecision{
 	// Gates that drop a record for what its WRITER was or did.
-	statelog.ReasonEvicted:        {gate: true, blames: true},
-	statelog.ReasonAbandoned:      {gate: true, blames: true},
-	statelog.ReasonOvertaken:      {gate: true, blames: true},
-	statelog.ReasonWrongPartition: {gate: true, blames: true},
+	statelog.ReasonEvicted:   {gate: true, blames: true},
+	statelog.ReasonAbandoned: {gate: true, blames: true},
+	statelog.ReasonOvertaken: {gate: true, blames: true},
 	// Gates every writer's record meets alike: the object's marker, a kind
 	// no build applies.
 	statelog.ReasonDeleted: {gate: true},
 	statelog.ReasonRetired: {gate: true},
 	// Not a gate's at all: refusals made before or instead of an append,
 	// about this node, the log or the operation.
-	statelog.ReasonNotHolder:      {},
-	statelog.ReasonHoldingUnknown: {},
-	statelog.ReasonDeferred:       {},
-	statelog.ReasonBehind:         {},
-	statelog.ReasonBelowFloor:     {},
-	statelog.ReasonFloorUnknown:   {},
-	statelog.ReasonLogFull:        {},
-	statelog.ReasonSkew:           {},
-	statelog.ReasonOpReused:       {},
-	statelog.ReasonLogTruncated:   {},
-	statelog.ReasonWrongStream:    {},
-	statelog.ReasonSuperseded:     {},
+	statelog.ReasonDeferred:     {},
+	statelog.ReasonBehind:       {},
+	statelog.ReasonBelowFloor:   {},
+	statelog.ReasonFloorUnknown: {},
+	statelog.ReasonLogFull:      {},
+	statelog.ReasonSkew:         {},
+	statelog.ReasonOpReused:     {},
+	statelog.ReasonLogTruncated: {},
+	statelog.ReasonWrongStream:  {},
+	statelog.ReasonSuperseded:   {},
 }
 
-// ONLY A GATE THAT HOLDS A WRITER BLAMES IT — the five that drop a record for
+// ONLY A GATE THAT HOLDS A WRITER BLAMES IT — the three that drop a record for
 // what its writer was or did, and none of the rest. The set is what decides
 // whether a refusal of another node's copy names that node
 // ([statelog.Unavailable.CopyWriter]), so a gate reason moved across it changes
 // what every surface tells an operator to do.
 //
-// EVERY REASON IS DECIDED HERE, NOT ONLY THE FIVE THAT BLAME.
+// EVERY REASON IS DECIDED HERE, NOT ONLY THE THREE THAT BLAME.
 // [statelog.Reason.BlamesWriter] answers false for anything its switch does not
 // name, so a test listing only the blaming reasons passed a writer-blaming gate
 // added to [statelog.Reasons] and forgotten in the switch — and a collapse onto
@@ -329,8 +326,7 @@ func TestAPublisherIsNotBuiltWithoutAReaderOfItsLog(t *testing.T) {
 	deps := statelog.Deps{
 		Domain: probeDomain{}, Spec: specOf(probeDomain{}),
 		Layout: layoutOf(probeDomain{}), LogID: logOf(probeDomain{}),
-		Holding: statelog.ServesOnly(logOf(probeDomain{}).Partition),
-		Log:     struct{ statelog.Appender }{}, Rows: struct{ statelog.Rows }{},
+		Log: struct{ statelog.Appender }{}, Rows: struct{ statelog.Rows }{},
 		Fence: struct{ statelog.Fence }{}, Gates: struct{ statelog.Gates }{},
 		Waiter: struct{ statelog.Waiter }{}, Voids: struct{ statelog.Voids }{},
 		Identity:  struct{ statelog.Identity }{},
@@ -532,8 +528,7 @@ func TestAPublisherIsNotBuiltWithoutItsReanchorRules(t *testing.T) {
 	deps := statelog.Deps{
 		Domain: probeDomain{}, Spec: specOf(probeDomain{}),
 		Layout: layoutOf(probeDomain{}), LogID: logOf(probeDomain{}),
-		Holding: statelog.ServesOnly(logOf(probeDomain{}).Partition),
-		Log:     struct{ statelog.Appender }{}, Records: struct{ statelog.LogReader }{},
+		Log: struct{ statelog.Appender }{}, Records: struct{ statelog.LogReader }{},
 		Rows: struct{ statelog.Rows }{}, Fence: struct{ statelog.Fence }{},
 		Gates: struct{ statelog.Gates }{}, Waiter: struct{ statelog.Waiter }{},
 		Identity:  struct{ statelog.Identity }{},

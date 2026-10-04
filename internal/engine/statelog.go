@@ -180,16 +180,10 @@ type stateLog struct {
 	// are refused through [stateLog.appends].
 	mode statelog.MaintenanceMode
 
-	// holding is which partitions this node SERVES — the only ones whose
-	// logs its publishers write ([statelog.Holding]). Read once, where the
-	// runtime is built, because under this build nothing joins or leaves a
-	// partition while the node runs ([holdingOf]).
-	holding statelog.Holding
-
 	// copies is which partitions this node KEEPS AN ESTABLISHED COPY of —
 	// the ones its snapshot loop takes artefacts of and its donor offers
-	// ([statelog.Copies]). Not holding: a copy nobody may write is still a
-	// copy, and sometimes a partition's only one ([copiesOf]).
+	// ([statelog.Copies]): a copy nobody may write is still a copy, and
+	// sometimes the fleet's only one ([copiesOf]).
 	copies statelog.Copies
 
 	// logs is every log this node runs ([logSet]), WRITTEN ONCE: where the
@@ -518,8 +512,9 @@ func HeldPartitions(b *config.Bootstrap) ([]store.PartitionFile, error) {
 // ALL OF THEM, because nothing joins or leaves a partition while this build
 // runs: the state log opens every partition of the layout it runs and runs
 // every one of its logs. It is the one rule what a node holds
-// ([HeldPartitions]) and what it serves ([holdingOf]) are read from, so the
-// files a node keeps open and the logs it may write can never be two answers.
+// ([HeldPartitions]) and what it keeps a copy of ([copiesOf]) are read from,
+// so the files a node keeps open and the copies it offers can never be two
+// answers.
 func heldIn(b *config.Bootstrap, layout statelog.Layout) []statelog.PartitionID {
 	if !holdsData(b) {
 		return nil
@@ -527,39 +522,16 @@ func heldIn(b *config.Bootstrap, layout statelog.Layout) []statelog.PartitionID 
 	return layout.Partitions()
 }
 
-// holdingOf is who may write which log on a node configured as b that runs
-// layout — the answer the write authority's gate 3 asks ([statelog.Holding]).
-//
-// SERVING IS HOLDING HERE, because a partition is served from the moment a
-// node's join has established it until its leave stops deciding there, and no
-// partition is joined or left while this build runs: a data node serves every
-// partition it holds from boot — layout 0's estate.000 — and a node without
-// `data` holds nothing and serves nothing, which is what it always was, since
-// it runs no applier and so no publisher. The set is fixed for the life of the
-// runtime for the same reason, so it is read once, where the runtime is built.
-//
-// NOT THE COPY'S OWN STATE — how far it has applied — which may say a copy
-// this node serves is catching up. Nor the presence roster routing reads at
-// any age, so a roster that could not be listed would refuse
-// `holding_unknown` on a node holding the whole estate.
-func holdingOf(b *config.Bootstrap, layout statelog.Layout) statelog.Holding {
-	return statelog.ServesOnly(heldIn(b, layout)...)
-}
-
 // copiesOf is which partitions a node configured as b that runs layout keeps
 // an established copy of — what its snapshot loop takes artefacts of and its
 // donor offers a joiner ([statelog.Copies]).
 //
-// THE SET IT SERVES, HERE, for [holdingOf]'s reason: no partition is joined or
-// left while this build runs, so a data node keeps every partition it holds
-// from boot, and a node without `data` keeps none. Once partitions move the
-// join and leave executor answers this from its own steps, and THEN IT PARTS
-// FROM HOLDING: a copy is kept from its adoption until its leave begins to
-// drain it — so a holder the map moves away, and a machine an eviction barred
-// back with its files, still offers the copy it serves no writes from while the
-// partition's target does not serve it. Answered by the write rule instead, a
-// partition whose only copy was such a one had no donor for its joiner, never
-// had a serving holder again, and no gesture that has to reach its logs — a
+// EVERY PARTITION IT HOLDS, because no partition is joined or left while this
+// build runs: a data node keeps every partition it holds from boot, and a node
+// without `data` keeps none. NOT WHETHER IT MAY WRITE: a machine an eviction
+// barred, back with its files, still offers the copy it writes nothing to — and
+// answered by the write rule instead, a fleet whose only copy was such a one
+// had no donor for its joiner, and no gesture that has to reach its logs — a
 // readmission of that very machine among them — could finish.
 func copiesOf(b *config.Bootstrap, layout statelog.Layout) statelog.Copies {
 	return statelog.KeepsOnly(heldIn(b, layout)...)
@@ -785,7 +757,7 @@ func (e *Engine) startStateLogAt(ctx context.Context, boot *config.Bootstrap,
 	runCtx, cancel := context.WithCancel(context.WithoutCancel(ctx))
 	s := &stateLog{
 		layout: layout, mode: e.Mode(),
-		holding: holdingOf(boot, layout), copies: copiesOf(boot, layout),
+		copies: copiesOf(boot, layout),
 		nodeID: nodeID, db: e.backends.Store, fleet: e.backends.Fleet,
 		metrics: e.metrics,
 		skills:  skillDetector{}, nudgeSkills: e.nudgeSkills,
@@ -1292,9 +1264,7 @@ func (s *stateLog) start(ctx, provisionCtx context.Context, host domainHost, dom
 	}
 	runner, err := statelog.NewRunner(statelog.RunnerDeps{
 		Domain: domain, Spec: spec, Applier: applier, Fetch: consumer,
-		// WHERE THE LOG SITS, which the applier's partition gate reads:
-		// a record its domain places in another partition than this log's
-		// applies nowhere.
+		// WHERE THE LOG SITS, held to the stream it applies.
 		Layout: s.layout, LogID: id,
 		// THE LOG'S PARTITION, not the node's own file. The applier PINS
 		// a connection for the life of its loop, and the pins live on the
@@ -1452,13 +1422,8 @@ func (s *stateLog) publisherOver(domain statelog.Domain, id statelog.LogID, spec
 		// AND THE RULES ITS REANCHORS VOID RECORDS BY, the runner's own, so
 		// a write they dropped is refused under them.
 		Voids: runner,
-		// WHERE THE LOG SITS, which the write authority's partition gates
-		// read: a record or a scope naming another partition is refused
-		// before anything is appended.
+		// WHERE THE LOG SITS, held to the stream it is written to.
 		Layout: s.layout, LogID: id,
-		// AND WHETHER THIS NODE SERVES IT: only a node that serves a
-		// partition writes its logs, which is gate 3.
-		Holding: s.holding,
 		// THE RUNNER IS THE IDENTITY, for the reason it is the waiter:
 		// the positions a write forms its expectation from and resolves
 		// its record against are the runner's, so the answer to "are
@@ -3402,9 +3367,9 @@ func (s snapshotScope) isUnknown(p statelog.PartitionID) bool {
 // nothing itself — the loop says what CHANGED ([reportCopies]), since it asks
 // again every [snapshotSkipRetry] for as long as the answer is withheld.
 //
-// KEPT, NOT SERVED: whether this node may write a partition ([stateLog.holding])
-// is not whether its copy is worth handing on, and the copy a joiner needs is
-// sometimes one nobody may write — see [copiesOf].
+// KEPT, NOT WRITTEN: whether this node may write is not whether its copy is
+// worth handing on, and the copy a joiner needs is sometimes one nobody may
+// write — see [copiesOf].
 func (s *stateLog) keptPartitions() snapshotScope {
 	var out snapshotScope
 	var seen []statelog.PartitionID

@@ -427,68 +427,39 @@
 // # A domain is declared once; a log is what runs
 //
 // A [Domain] declares what every one of its logs shares — its [StreamShape],
-// its tables, its gates, its partition function — and a [Layout] instantiates
-// it once per partition that carries it ([Layout.StreamSpec]). Every piece of
-// per-stream machinery here is therefore PER LOG: a runner, a publisher, a
-// reader and a read index each take one log's [StreamSpec]; the checkpoint,
-// the generation, the anchors and the stream identity are that log's; and a
-// barrier proves where that one log ends, single-flighted per node per log
-// ([ReadIndex]). Under layout 0 each domain has one log, named and keyed as it
-// always was, so a node running it holds exactly the records a fleet before
-// layouts held.
+// its tables, its gates — and a [Layout] instantiates it once per partition
+// that carries it ([Layout.StreamSpec]). Every piece of per-stream machinery
+// here is therefore PER LOG: a runner, a publisher, a reader and a read index
+// each take one log's [StreamSpec]; the checkpoint, the generation, the
+// anchors and the stream identity are that log's; and a barrier proves where
+// that one log ends, single-flighted per node per log ([ReadIndex]). Under
+// layout 0 each domain has one log, named and keyed as it always was, so a
+// node running it holds exactly the records a fleet before layouts held.
 //
-// # Who may write a log, and the gates that hold the proof per log
+// # Who may write a log: every writer is counted by construction
 //
-// The floor theorem above is stated over ONE STREAM, and a partitioned layout
-// keeps that literally true — every log is one stream — but it adds a way to
-// break each clause without breaking any number, so each clause is held per
-// log by a gate of its own. A runner and a publisher are therefore built on
-// their PLACE as well as their stream — the layout and which of its logs this
-// is ([RunnerDeps.LogID], [Deps.LogID]) — and [Layout.Places] holds the three
-// to one fact, since a gate judging by one partition while applying another's
-// stream would drop records that are its own.
+// The floor theorem above rests on a premise none of its three clauses states:
+// EVERY WRITER IS COUNTED — the trim never removes a record that a node which
+// may still decide a write has not applied. It holds by construction, not by a
+// gate a write passes:
 //
-//   - GATE 1, for clause (i): every record's scope lies inside its own
-//     partition. A deferral is filed and probed in one partition's file, so a
-//     path naming another partition's object is a deferral the partition it
-//     names never sees — the write it should have blocked there takes the
-//     retry at zero over it. The publisher asks [Domain.ScopePartition] of every
-//     path in the request's scope, which step 0 probes, and in its record's,
-//     which a holder that cannot decode the record files it under, and refuses
-//     one naming another partition before anything is appended
-//     ([ErrScopeCrossesPartitions], a programming error). An effect in another
-//     partition travels as a write decided there, under a scope of its own.
-//   - GATE 2, for clause (iii): a record belongs to its log's partition. The
-//     applier asks [Domain.PartitionOf] of every record's envelope — before its
-//     version, so one this build cannot read is judged too, and never retained
-//     under a scope only this partition probes — and drops one the domain
-//     places elsewhere on every holder, `wrong_partition`, counted by the
-//     records-gated instrument. Deterministic, because every holder asks the
-//     same function of the same bytes, so no copy diverges; it is the pages
-//     applier's refusal of a record whose address disagrees with its subject,
-//     for partitions. The publisher asks it first and never appends such a
-//     record ([ErrWrongPartition]), so one on a log is another writer's.
-//   - GATE 3, for the premise that every writer is counted: only a node that
-//     SERVES a partition writes its logs ([Holding]). A partition's holders are
-//     counted on its logs from the moment they begin to join, and a node serves
-//     from the moment its join has established every log until its leave stops
-//     deciding — so every writer is a node the trim already waits for. The
-//     publisher asks before a write takes its snapshot, so a node that does not
-//     serve the partition never decides from its rows, and again before the
-//     append, so a write still deciding when its node began to leave is not
-//     appended; it refuses `not_holder` ([ErrNotHolder]), or `holding_unknown`
-//     where the node cannot tell — never a guess.
+//   - A publisher exists only on a node with the `data` role. Such a node holds
+//     the replicated estate and runs every log into it; a node without `data`
+//     holds no estate and builds no publisher, so it has no write to decide —
+//     its tools reach the estate through a data node that does.
+//   - Every live data node is in every log's counted set ([CountedSet]): by
+//     its presence lease from boot, at position zero until its first heartbeat
+//     reports one, and by its positions row after that, which never expires —
+//     until an eviction's tombstone on that log is older than the fence
+//     window. So a node that can decide a write is a node the trim is already
+//     waiting for, from before its first decision.
 //
-// The framework's own tests certify all three on layout 0, with probe domains
-// that place a record kind or a scope path in a partition their one log is not
-// in, and a holding the test moves.
-//
-// Under layout 0 every record and every path a domain of this build writes is
-// in the one partition, `estate.000`, which every data node serves from boot
-// and which no node joins or leaves while it runs — and a node without `data`
-// serves nothing and runs no publisher. So no gate refuses anything a fleet
-// before layouts wrote: they are the rules the partitioned layout's writes are
-// held to from its first record.
+// The one way out of the set while still running is an eviction, and an
+// evicted node's records are what clause (iii) drops on every node, whatever it
+// manages to publish. So nothing a write asks has to say whether this node may
+// write; what refuses a node that should not decide is its own state — an
+// eviction (`evicted`), a stream it is not on (`wrong_stream`), a floor it is
+// below (`below_floor`) — each a fence of the write authority above.
 //
 // # Which log a coordination record is about
 //
