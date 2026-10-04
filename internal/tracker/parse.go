@@ -22,9 +22,7 @@ const (
 
 	// MetaKeyCollision is "true" when [MetaTaskKey] opens ANOTHER task —
 	// one that claimed the key first — so the task is reached by
-	// [MetaTaskID] alone. Absent otherwise, and absent on a wake from a
-	// record whose writer predates [Snapshot.KeyCollision], which then
-	// renders by its key as it always did. Read through [metaAddress].
+	// [MetaTaskID] alone. Absent otherwise. Read through [metaAddress].
 	MetaKeyCollision = "item_key_collision"
 	MetaProject      = "project"
 	MetaStatus       = "status"

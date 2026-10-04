@@ -846,10 +846,7 @@ type abandonedMerge struct {
 	waiting mergeWait
 
 	// reparent is the walk's own intent, carried on the task since the
-	// mark. FALSE for a marker written by a build that predates the
-	// field, which is the conservative direction: a subtree left where it
-	// is can be moved afterwards, and one moved against an explicit
-	// `move_subtasks: false` has to be put back by hand.
+	// mark.
 	reparent bool
 
 	// merging is whether the task still carries the marker as this read
