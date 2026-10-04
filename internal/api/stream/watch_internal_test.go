@@ -39,7 +39,7 @@ func TestARevalidatedWatchIsWithdrawnOnlyByARefusal(t *testing.T) {
 		"a lead's watch of their report never reached the index")
 
 	// UNKNOWN KEEPS IT, across several checks.
-	chart.set(false, errors.New("the chart view is behind"))
+	chart.set(false, errors.New("the running org could not be read"))
 	time.Sleep(4 * testInterval)
 	if got := f.svc.Hub().Watchers("sarah-chen"); got != 1 {
 		t.Fatalf("a chart this node could not read withdrew a watch it had "+

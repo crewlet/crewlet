@@ -213,7 +213,7 @@ func (s *inboxSocket) drainUntilPong(t *testing.T) {
 }
 
 // inboxBindings binds each Tier A token's login to its seat, as an active
-// machine row decided at chart position 1.
+// machine row.
 type inboxBindings map[string]string
 
 func (b inboxBindings) BoundSeat(_ context.Context, login string) (session.PersonRow, error) {
