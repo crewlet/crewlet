@@ -69,8 +69,9 @@ const SessionOpsRetention = time.Hour
 // SESSIONS. People, credentials and invitations are hundreds of records a year
 // at any company that fits on one broker — an org chart's order of magnitude. A
 // session is a record when it opens and a record when it closes, and nothing
-// in between, because a rotation id is DERIVED rather than recorded; so the
-// domain's write rate is roughly (people × sign-ins a day × 2).
+// in between, because a re-issue moves a deadline inside the signed bearer
+// rather than recording one; so the domain's write rate is roughly (people ×
+// sign-ins a day × 2).
 //
 // At the reference company — the one docs/guides/retention.md forecasts, whose
 // 3 000 turns a day and 50 projects put it at a low hundreds of people — a

@@ -47,9 +47,9 @@ var ReproducibleTables = []string{
 	// record of its redemption.
 	"iam_invites",
 
-	// One row per live session lineage. Rotations are NOT rows — a
-	// rotation id is derived — so this table grows with sign-ins rather
-	// than with requests.
+	// One row per live session lineage. Re-issues are NOT rows — the
+	// deadline a re-issue moves is inside the signed bearer — so this
+	// table grows with sign-ins rather than with requests.
 	"iam_sessions",
 
 	// A person's REVOCATION EPOCH, in a table of its own rather than a
