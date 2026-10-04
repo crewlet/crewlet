@@ -214,8 +214,9 @@ What the binding buys:
   somebody between two of your teams, remove a sub-team, restate your team's
   purpose — without `config:write`, and read each of them with
   `GET /config/roles/{handle}` and `GET /config/units/{id}`. Handing your team to
-  somebody else, reaching outside it, a credential, a `${VAR}` in any field
-  and a setting stay `config:write`'s. See [A lead edits their own
+  somebody else, reaching outside it, a project, space, channel, address or
+  contact id — your own seat's included — a credential, a `${VAR}` in any
+  field and a setting stay `config:write`'s. See [A lead edits their own
   team](identity-and-access.md#a-lead-edits-their-own-team).
 
 - **Your writes are the seat's.** A write you make — through the `/work` and

@@ -31,20 +31,15 @@ import (
 //     objects only within their subtree, and cannot remove or move the top
 //     unit they lead, whose parent is not theirs.
 //   - A UNIT ITSELF, before and after, when its own fields change. A lead
-//     edits their own team's name, purpose and channel, while handing the
-//     unit to another `lead:` fails the AFTER side unless they also lead the
-//     unit above it.
+//     edits their own team's name and purpose, while handing the unit to
+//     another `lead:` fails the AFTER side unless they also lead the unit
+//     above it.
 //   - WHAT A NEW REFERENCE NAMES, after: a unit's `lead:` and a seat's
 //     `manages:` entries. Leadership and management are what authority is
 //     derived from, so a lead who could name an outsider as their sub-team's
 //     lead, or make their report the CEO's manager, would be reaching outside
 //     their subtree through the relations it is defined by. A reference that
 //     names nothing reaches the root, which is nobody's.
-//   - WHO ELSE CLAIMS A NEW KEY, before: a project, a page space and a
-//     channel, a seat's email and its contact identities. A lead's authority
-//     over a project or a space is derived from the unit that declares it,
-//     and vendor attribution from an address, so declaring a key another team
-//     already holds would be taking that team's.
 //   - WHO ALREADY NAMES A NEW OBJECT, before: every `lead:` and `manages:`
 //     entry in the document that states the id an added seat or unit takes.
 //     A reference may name nothing — a unit can land before the seat that
@@ -54,22 +49,36 @@ import (
 //     becomes the lead of an outside team whose `lead: ghost` dangled, with
 //     the lead who added it above that whole team.
 //
-// Only what a write CHANGES is judged: a reference or a claim the object
-// already carried was somebody else's decision, and judging it again would
-// make an admin-wired team uneditable by its own lead.
+// Only what a write CHANGES is judged: a reference or a key the object already
+// carried was somebody else's decision, and judging it again would make an
+// admin-wired team uneditable by its own lead.
 //
 // A CREDENTIAL IS NEVER A LEAD'S, AND NEITHER IS A `${VAR}`. Every credential
 // field a change sets, clears or alters — compared whole, so a key with nothing
 // under it counts, since an `mcp_env` key alone starts its server for the seat
 // — and every `${VAR}` reference it sets, clears or alters in ANY field, is
-// listed apart ([OrgChange.Credentials]) and is the company grant's. A reference names any variable the engine's process
-// can resolve — the company's secrets and Tier A's own keyring and tokens alike
-// — and a credential field is not the only place one is resolved: a human
-// seat's `email` and contact identities resolve a whole `${VAR}` too, and are
-// then recited by `lookup_colleague` and a lead's prompt roster and matched by
-// the party registry. So a lead could otherwise read any secret back by naming
-// it as their own Slack id. A setting outside `roles:` and `units:` is listed
+// listed apart ([OrgChange.Credentials]) and is the company grant's. A
+// reference names any variable the engine's process can resolve — the
+// company's secrets and Tier A's own keyring and tokens alike — and a
+// credential field is not the only place one is resolved: a human seat's
+// `email` and contact identities resolve a whole `${VAR}` too, and are then
+// recited by `lookup_colleague` and a lead's prompt roster and matched by the
+// party registry. So a lead could otherwise read any secret back by naming it
+// as their own Slack id. A setting outside `roles:` and `units:` is listed
 // apart for the same grant ([OrgDiff.Settings]).
+//
+// NOR IS A KEY ANOTHER SYSTEM FINDS THE OBJECT BY ([keyed]): a unit's or a
+// seat's tracker project and page space, a unit's channel, a seat's email and
+// contact identities. A project's and a space's lead is whoever leads the unit
+// declaring it (internal/authz/orgchart), a channel's messages are routed to
+// its unit, and a vendor's actions are attributed by an address or an account
+// id — and who else holds the key is not a fact two documents state. A project
+// outlives the unit that declared it, in the tracker with its tasks, and an
+// account exists at its vendor whether or not a seat names it; judged against
+// the document's own objects alone, a lead declaring an orphaned project as
+// their team's became its lead, with authority over every task in it. So a
+// change that sets, clears or alters one is listed apart ([OrgChange.Keys]) for
+// the company grant.
 //
 // PURE, over two documents and never the running company: a node behind on
 // applies decides a write exactly as a current one does.
@@ -143,6 +152,10 @@ type OrgChange struct {
 	// its path inside the object, sorted.
 	Credentials []string
 
+	// Keys is every field another system finds the object by ([keyed])
+	// that the change sets, clears or alters, by JSON name, sorted.
+	Keys []string
+
 	// Touches is every place the change reaches.
 	Touches []OrgTouch
 }
@@ -151,17 +164,16 @@ type OrgChange struct {
 type OrgTouch struct {
 	Side OrgSide
 	// Unit is the key of the unit the place is: the unit holding a seat,
-	// the parent of a unit, the unit a reference names, the unit a claimant
+	// the parent of a unit, the unit a reference names, the unit a referrer
 	// is or sits in. Empty for the company root, which a seat or unit at
 	// the top of the company sits in and a reference naming nothing reaches.
 	Unit string
 	// Why is what about the change reaches it: `place`, `self`, `lead`,
-	// `manages`, the key a claim is about (`project`, `space`, `channel`,
-	// `email`, `contact`), or `named` for another object's reference that
-	// already states the id an added object takes.
+	// `manages`, `named` for another object's reference that already states
+	// the id an added object takes, or `duplicate` for two objects on one id.
 	Why string
-	// Value is the reference or the claimed key, as the change stated it;
-	// empty for `place` and `self`.
+	// Value is the reference or the id, as the change stated it; empty for
+	// `place` and `self`.
 	Value string
 }
 
@@ -215,9 +227,9 @@ func diffObject(kind OrgKind, id string, b, a *surveyed) (OrgChange, bool) {
 	case !had:
 		change.Op = OrgAdded
 		change.Touches = []OrgTouch{{Side: OrgAfter, Unit: is.place, Why: "place"}}
-		for _, referrer := range b.referrers[id] {
+		for _, by := range b.referrers[id] {
 			change.Touches = append(change.Touches, OrgTouch{
-				Side: OrgBefore, Unit: referrer.place, Why: "named", Value: id,
+				Side: OrgBefore, Unit: by.place, Why: "named", Value: id,
 			})
 		}
 	case !has:
@@ -247,6 +259,11 @@ func diffObject(kind OrgKind, id string, b, a *surveyed) (OrgChange, bool) {
 	}
 
 	change.Credentials = credentialsChanged(was.credentials, is.credentials)
+	for _, field := range fieldsChanged(was.document, is.document) {
+		if slices.Contains(keyed[kind], field) {
+			change.Keys = append(change.Keys, field)
+		}
+	}
 	for _, ref := range is.refs {
 		if !slices.Contains(was.refs, ref) {
 			change.Touches = append(change.Touches, OrgTouch{
@@ -254,20 +271,14 @@ func diffObject(kind OrgKind, id string, b, a *surveyed) (OrgChange, bool) {
 			})
 		}
 	}
-	for _, claim := range is.claims {
-		if slices.Contains(was.claims, claim) {
-			continue
-		}
-		for _, holder := range b.claimants[claim] {
-			if holder.kind == kind && holder.id == id {
-				continue
-			}
-			change.Touches = append(change.Touches, OrgTouch{
-				Side: OrgBefore, Unit: holder.place, Why: claim.key, Value: claim.value,
-			})
-		}
-	}
 	return change, true
+}
+
+// keyed is every field, by JSON name, another system finds an object of each
+// kind by — see the file's header.
+var keyed = map[OrgKind][]string{
+	OrgSeat: {"contact", "email", "project", "space"},
+	OrgUnit: {"channel", "project", "space"},
 }
 
 // surveyed is one document, read for a diff.
@@ -275,11 +286,9 @@ type surveyed struct {
 	org *org.Organization
 	// objects is every seat by handle and unit by key.
 	objects map[OrgKind]map[string]object
-	// claimants is who states each claimed key.
-	claimants map[claim][]claimant
 	// referrers is who states each name in a `lead:` or `manages:` entry,
 	// whether or not anything answers to it.
-	referrers map[string][]claimant
+	referrers map[string][]referrer
 	// seatPlaces is the unit holding each seat, by handle; "" for the root.
 	seatPlaces map[string]string
 }
@@ -299,8 +308,6 @@ type object struct {
 	credentials map[string]string
 	// refs is every reference it states to another object.
 	refs []reference
-	// claims is every key it claims.
-	claims []claim
 }
 
 // reference is a name one object states for another: a unit's `lead:`, a
@@ -310,16 +317,8 @@ type reference struct {
 	to  string
 }
 
-// claim is a key an object states as its own, folded so two spellings of one
-// key are one claim.
-type claim struct {
-	key   string
-	value string
-}
-
-// claimant is an object stating a claim or a reference, and the place it
-// reaches.
-type claimant struct {
+// referrer is an object stating a reference, and the place it reaches.
+type referrer struct {
 	kind  OrgKind
 	id    string
 	place string
@@ -331,8 +330,7 @@ func survey(c *Company) *surveyed {
 	s := &surveyed{
 		org:        o,
 		objects:    map[OrgKind]map[string]object{OrgSeat: {}, OrgUnit: {}},
-		claimants:  map[claim][]claimant{},
-		referrers:  map[string][]claimant{},
+		referrers:  map[string][]referrer{},
 		seatPlaces: map[string]string{},
 	}
 	unitParents := map[string]string{}
@@ -369,7 +367,6 @@ func survey(c *Company) *surveyed {
 			for _, entry := range role.Manages {
 				seen.refs = append(seen.refs, reference{why: "manages", to: strings.TrimSpace(entry)})
 			}
-			seen.claims = seatClaims(role)
 		}
 		s.objects[OrgSeat][handle] = seen
 	}
@@ -386,7 +383,6 @@ func survey(c *Company) *surveyed {
 			if lead := strings.TrimSpace(unit.Lead); lead != "" {
 				seen.refs = append(seen.refs, reference{why: "lead", to: lead})
 			}
-			seen.claims = unitClaims(unit)
 		}
 		s.objects[OrgUnit][key] = seen
 	}
@@ -396,11 +392,8 @@ func survey(c *Company) *surveyed {
 			if kind == OrgUnit {
 				place = id
 			}
-			for _, c := range o.claims {
-				s.claimants[c] = append(s.claimants[c], claimant{kind: kind, id: id, place: place})
-			}
 			for _, ref := range o.refs {
-				s.referrers[ref.to] = append(s.referrers[ref.to], claimant{kind: kind, id: id, place: place})
+				s.referrers[ref.to] = append(s.referrers[ref.to], referrer{kind: kind, id: id, place: place})
 			}
 		}
 	}
@@ -421,41 +414,6 @@ func (s *surveyed) placeOfRef(ref reference) string {
 	}
 	return ""
 }
-
-// seatClaims is every key a seat states as its own.
-func seatClaims(r *Role) []claim {
-	claims := claimsOf(map[string]string{
-		"project": r.Project, "space": r.Space, "email": r.Email,
-	})
-	for _, identity := range r.Contact.Identities() {
-		claims = append(claims, claim{key: "contact",
-			value: string(identity.Transport) + ":" + fold(identity.ExternalID)})
-	}
-	return claims
-}
-
-// unitClaims is every key a unit states as its own.
-func unitClaims(u *Unit) []claim {
-	return claimsOf(map[string]string{
-		"project": u.Project, "space": u.Space, "channel": u.Channel,
-	})
-}
-
-// claimsOf is each non-empty value, folded.
-func claimsOf(values map[string]string) []claim {
-	var out []claim
-	for _, key := range slices.Sorted(maps.Keys(values)) {
-		if value := fold(values[key]); value != "" {
-			out = append(out, claim{key: key, value: value})
-		}
-	}
-	return out
-}
-
-// fold is the one spelling two claims are compared in. CASE-FOLDED for every
-// key, which is stricter than some of them need — a channel id is matched as
-// written elsewhere — and that is the safe direction for a check that refuses.
-func fold(value string) string { return strings.ToLower(strings.TrimSpace(value)) }
 
 // encodeFields is an object's own fields as JSON, for comparison.
 func encodeFields(v any) []byte {

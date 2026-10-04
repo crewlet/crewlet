@@ -1720,15 +1720,15 @@ subtree:
 | A seat or unit **removed** | where it was is inside their subtree before — so a lead removes a team beneath them, and not the unit they lead, whose parent is not theirs |
 | A seat or unit **moved** | both where it was and where it lands |
 | A seat **edited** | its unit, before and after |
-| A unit's **own fields** edited | the unit itself, before and after — so a lead renames their own team, restates its purpose or changes its channel, while handing it to another `lead:`, or clearing its lead so it inherits one from above, is refused unless they also lead the unit above it |
+| A unit's **own fields** edited | the unit itself, before and after — so a lead renames their own team or restates its purpose, while handing it to another `lead:`, or clearing its lead so it inherits one from above, is refused unless they also lead the unit above it |
 | A new **`lead:`** or **`manages:`** entry | what it names is inside their subtree afterwards — a lead cannot name an outsider as a sub-team's lead, or make one of their reports the CEO's manager; a name that resolves to nothing is refused too |
 | A seat or unit **added** under a name another object's `lead:` or `manages:` entry already states | that object is inside their subtree before the write. A `lead:` may name a seat nobody has added yet, and a `manages:` entry naming a unit's key resolves to a seat of that handle first, so the addition would take the reference over without the object stating it changing at all — a seat added as `ghost` to the lead's team would lead an outside team whose `lead: ghost` was waiting, with the lead above every member of it |
-| A new **project**, **space**, **channel**, **email** or **contact identity** | no object outside their subtree already claims it — a lead's authority over a project or a space is derived from the unit that declares it, and vendor attribution from an address |
+| A **project**, **space** or **channel**, or a seat's **email** or **contact identity**, set, cleared or changed | never: it takes `config:write`. Each is how something outside the document finds the seat or unit — whoever leads the unit declaring a project or a space leads it, a channel's messages are routed to its unit, and a vendor's actions are attributed by an address or an account id — and who else holds it is not something the company document says: a project outlives the unit that declared it, in the tracker with every task in it, and an account exists at its vendor whether or not a seat names it. A lead declaring an orphaned project as their team's would become its lead |
 | A **credential** set, cleared or changed — a credential field (`mcp_env`, a sandbox's `env`, a setup file, a seat's own app tokens) compared whole, its keys as well as its values, and a `${VAR}` set, cleared or changed in **any** field | never: it takes `config:write`, because a reference names any variable the engine can resolve — the company's secrets and the node's own keyring and tokens alike. Pointing a seat's tools at one hands it to a process the lead configures, and a seat's `email` and contact ids resolve one too and are recited to anybody who looks the seat up, so a lead naming a secret as their own Slack id would read it back. And a key is a grant of its own: an `mcp_env` block naming a per-seat tool server starts that server for the seat, with the environment and headers its template declares, whatever the block holds — `github: {}` included |
 | A **setting** — anything outside `roles:` and `units:` | never: it takes `config:write` |
 | **Nothing** — a write whose document is the one it replaces | never: storing it still makes a new revision and re-activates it on every node, rebuilding every seat's tools, providers and MCP children, which is `POST /config/reload`'s gesture and takes `config:write` |
 
-Only what a write **changes** is judged: a reference or a claim the object
+Only what a write **changes** is judged: a reference or a key the object
 already carried was somebody else's decision, and judging it again would make a
 team an administrator wired to another team's channel uneditable by its own
 lead. A seat edited within the lead's subtree may otherwise change anything —
@@ -1747,8 +1747,7 @@ whole document stays `config:read`'s. Outside their subtree a seat, a unit, a
 seat at the root and a name the company does not have are all refused in the
 same words, so the entity routes are no roster of the company. A refused
 write's `refused` list does name the place each part reaches — which unit a
-seat they named sits in, which team already claims a project — because that
-place is what they are refused on; anybody bound to a seat can learn the
+seat they named sits in — because that place is what they are refused on; anybody bound to a seat can learn the
 chart's shape that way, and nothing more of it. The route admits anybody
 bound to a seat before the body is read, and nobody else; an agent never
 writes the chart, and a lead's write asks for the same recent proof of

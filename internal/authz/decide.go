@@ -103,12 +103,13 @@ const (
 	//
 	// ONE QUESTION PER PLACE, AND THE SURFACE ASKS IT OF EVERY PLACE A
 	// WRITE REACHES, on both sides of it (internal/api/configapi): where a
-	// seat or a unit was, where it is now, what its references name and who
-	// else claims the keys it states. That is what keeps a lead inside
-	// their own team — a lead who could hand their unit to somebody else,
-	// make a report the CEO's manager or claim another team's project would
-	// gain authority outside it through the very relations this package
-	// decides everything else by.
+	// seat or a unit was, where it is now and what its references name,
+	// while a project, space, channel, address or contact id it states is
+	// the company grant's ([ActionConfigWrite]) like a credential. That is
+	// what keeps a lead inside their own team — a lead who could hand their
+	// unit to somebody else, make a report the CEO's manager or declare a
+	// project as their team's would gain authority outside it through the
+	// very relations this package decides everything else by.
 	//
 	// A WRITE NOBODY HAS READ YET ([Object.Unresolved]) is admitted to
 	// anybody bound to a seat, the only kind of principal a unit can name

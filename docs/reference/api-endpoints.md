@@ -1156,9 +1156,8 @@ was and where it lands, a unit's own fields are judged on the unit itself
 before and after (so handing it to another `lead:` is refused), a new `lead:`
 or `manages:` entry has to name something inside it, a seat or unit added
 under a name another object's `lead:` or `manages:` already states has to be
-named only from inside it, and a new project, space, channel, email or
-contact identity may not be one an object outside it already claims. A
-credential, a `${VAR}` in any field and a setting are
+named only from inside it. A project, space or channel, a seat's email or
+contact identity, a credential, a `${VAR}` in any field and a setting are
 never a lead's. The rule, change by change, is in [Identity and
 Access](../concepts/identity-and-access.md#a-lead-edits-their-own-team).
 
@@ -1190,8 +1189,8 @@ stored.
 | `op` | What the write does to the seat or unit: `added`, `removed`, `moved` or `changed` |
 | `side` | `before` (the revision replaced) or `after` (the one proposed): which document the place was read in |
 | `place` | The key of the unit the change reaches; `""` is the company root, which is nobody's subtree |
-| `why` | What reaches it: `place` (where the object sits), `self` (a unit's own fields), `lead` or `manages` (a new reference, with the name in `value`), a claimed key (`project`, `space`, `channel`, `email`, `contact`, with the key in `value`), `named` (another object's `lead:` or `manages:` entry that already states the id an added seat or unit takes, with the id in `value`), `duplicate` (two objects on one id, which only the company grant may write), `credential` (a credential field, compared whole so an `mcp_env` key with nothing under it counts, or a `${VAR}` in any other field, with the field's path in `value`), or `unchanged` (the `document` itself) |
-| `reason` | The authority table's reason: `not_lead` for a place outside the caller's subtree, the company root included, or `no_grant` for a credential, a setting or an unchanged document |
+| `why` | What reaches it: `place` (where the object sits), `self` (a unit's own fields), `lead` or `manages` (a new reference, with the name in `value`), `named` (another object's `lead:` or `manages:` entry that already states the id an added seat or unit takes, with the id in `value`), `duplicate` (two objects on one id, which only the company grant may write), `credential` (a credential field, compared whole so an `mcp_env` key with nothing under it counts, or a `${VAR}` in any other field, with the field's path in `value`), `key` (a `project`, `space`, `channel`, `email` or `contact` set, cleared or changed, with the field in `value`), or `unchanged` (the `document` itself) |
+| `reason` | The authority table's reason: `not_lead` for a place outside the caller's subtree, the company root included, or `no_grant` for a credential, a key, a setting or an unchanged document |
 
 A lead reads what they may write the same way: `GET /config/roles/{handle}`
 and `GET /config/units/{id}` serve a seat or a unit of their subtree, masked

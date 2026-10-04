@@ -26,9 +26,10 @@ import (
 // reaches, and each is asked of the authority table as `config.org.write`
 // against the document it was read in — where an object was, against the
 // revision being replaced; where it lands and what its new references name,
-// against the revision proposed. A setting, a credential and a `${VAR}` in any
-// field are never a lead's: all three are asked as `config.write`, the
-// company's grant.
+// against the revision proposed. A setting, a credential, a `${VAR}` in any
+// field and a key another system finds a seat or unit by — its project, page
+// space, channel, address or contact ids — are never a lead's: all four are
+// asked as `config.write`, the company's grant.
 //
 // A WRITE THAT CHANGES NOTHING IS NOT A LEAD'S EITHER. Storing the document
 // unchanged still makes a new revision and re-activates it on every node,
@@ -51,11 +52,11 @@ import (
 //
 // A refused WRITE says more, and that is the price of the rule rather than an
 // oversight: each refused part names the place it reaches — the unit a named
-// seat sits in, the team already claiming a key — because that place is what
-// the caller is refused on, and whether a claim or a reference is refused at
-// all already depends on what sits outside their subtree. So anybody bound to
-// a seat can learn the chart's SHAPE by naming things in a write of their own;
-// never a seat's or a unit's fields, which only a read serves.
+// seat sits in — because that place is what the caller is refused on, and
+// whether a reference is refused at all already depends on what sits outside
+// their subtree. So anybody bound to a seat can learn the chart's SHAPE by
+// naming things in a write of their own; never a seat's or a unit's fields,
+// which only a read serves.
 //
 // # Before validation, and before the seat-holder check
 //
@@ -90,11 +91,12 @@ type RefusedChange struct {
 	// company root.
 	Place string `json:"place"`
 	// Why is what about the change reaches it — `place`, `self`, `lead`,
-	// `manages`, a claimed key, `named`, `duplicate` — `credential` for a
-	// credential the change sets, clears or alters, or `unchanged` for a
-	// write that changes nothing.
+	// `manages`, `named`, `duplicate` — `credential` for a credential the
+	// change sets, clears or alters, `key` for a key another system finds
+	// the object by, or `unchanged` for a write that changes nothing.
 	Why string `json:"why,omitempty"`
-	// Value is the reference, the claimed key or the credential's path.
+	// Value is the reference, the id, the credential's path or the key's
+	// field.
 	Value string `json:"value,omitempty"`
 	// Reason is the authority table's own reason for refusing it.
 	Reason authz.Reason `json:"reason"`
@@ -150,6 +152,11 @@ func admit(ctx context.Context, p iam.Principal, prior, next *config.Company) er
 				ID: change.ID, Op: string(change.Op), Why: "credential", Value: path,
 				Reason: company.Reason})
 		}
+		for _, field := range change.Keys {
+			refused = append(refused, RefusedChange{Kind: string(change.Kind),
+				ID: change.ID, Op: string(change.Op), Why: "key", Value: field,
+				Reason: company.Reason})
+		}
 		for _, touch := range change.Touches {
 			d := authz.Decide(ctx, p, authz.ActionOrgWrite,
 				authz.Object{Kind: authz.KindUnit, ID: change.ID, Container: touch.Unit},
@@ -181,9 +188,10 @@ func refuseAdmission(w http.ResponseWriter, err *AdmissionError) {
 	detail := authz.RefusalDetail(err.Refused[0].Reason, []iam.Grant{iam.GrantConfigWrite})
 	detail["refused"] = err.Refused
 	detail["hint"] = "a lead may change only the seats and units inside a unit " +
-		"they lead, on both sides of the write, and no setting, credential or " +
-		"${VAR}; a write that changes nothing re-publishes the company and is " +
-		"config:write's; each refused part names the place it reaches"
+		"they lead, on both sides of the write, and no setting, credential, " +
+		"${VAR}, project, space, channel, address or contact id; a write that " +
+		"changes nothing re-publishes the company and is config:write's; each " +
+		"refused part names the place it reaches"
 	httpjson.FailWithFields(w, http.StatusForbidden, httpjson.CodeUnauthorized, detail)
 }
 

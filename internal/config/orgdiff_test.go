@@ -286,36 +286,60 @@ func TestANewReferenceReachesWhatItNames(t *testing.T) {
 	}
 }
 
-// A NEW CLAIM REACHES EVERY OTHER OBJECT ALREADY CLAIMING THE KEY, before the
-// write — whatever the spelling.
-func TestANewClaimReachesItsOtherClaimants(t *testing.T) {
+// A KEY ANOTHER SYSTEM FINDS AN OBJECT BY IS LISTED APART when a change sets,
+// clears or alters it — whoever else holds it, inside the document or not.
+//
+// A project outlives the unit that declared it, so `SALES` here is one no
+// object names and the tracker may still hold with all its tasks: declaring it
+// makes the declaring unit's lead its lead. A key the object already carried is
+// not judged again.
+//
+// Mutation: list only keys another object in the document states and the
+// project nobody names, the channel, the address and the contact id are no
+// change a lead is refused.
+func TestAKeyChangeIsListedApart(t *testing.T) {
 	t.Parallel()
 	base := parse(t, diffBase)
-	change := only(t, config.DiffOrg(base, edit(t, "        purpose: keep the lights on\n",
-		"        purpose: keep the lights on\n        project: dsn\n")))
-	if !slices.Contains(touches(change), "before/design/project/dsn") {
-		t.Errorf("claiming Design's project reached %v, want Design itself", touches(change))
+	const purpose = "        purpose: keep the lights on\n"
+	const sre = "            handle: sre\n"
+	for _, c := range []struct {
+		name, old, replacement string
+		want                   []string
+	}{
+		{"a project nobody in the document names", purpose,
+			purpose + "        project: SALES\n", []string{"project"}},
+		{"a page space and a channel", purpose,
+			purpose + "        space: PLAT\n        channel: platform\n",
+			[]string{"channel", "space"}},
+		{"a project altered", "    project: DSN\n", "    project: DSGN\n", []string{"project"}},
+		{"a project cleared", "    project: DSN\n", "", []string{"project"}},
+		{"a seat's address", sre, sre + "            email: sre@example.com\n",
+			[]string{"email"}},
+		{"a seat's contact id", sre, sre + "            contact: {github_login: octocat}\n",
+			[]string{"contact"}},
+		{"a seat added with an address", "          - name: SRE\n",
+			"          - name: Intern\n            handle: intern\n            llm: zulu\n" +
+				"            email: intern@example.com\n          - name: SRE\n",
+			[]string{"email"}},
+		{"a goal", sre, sre + "            goal: ship\n", nil},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			change := only(t, config.DiffOrg(base, edit(t, c.old, c.replacement)))
+			if !slices.Equal(change.Keys, c.want) {
+				t.Errorf("keys = %v, want %v", change.Keys, c.want)
+			}
+		})
 	}
-	free := only(t, config.DiffOrg(base, edit(t, "        purpose: keep the lights on\n",
-		"        purpose: keep the lights on\n        project: PLAT\n")))
-	for _, touch := range free.Touches {
-		if touch.Why == "project" {
-			t.Errorf("a key nobody claims reached %v", touches(free))
-		}
-	}
-	// AND A CLAIM THE OBJECT ALREADY MADE IS NOT JUDGED AGAIN: Platform and
+	// AND A KEY THE OBJECT ALREADY CARRIED IS NOT JUDGED AGAIN: Platform and
 	// Design sharing a channel somebody else wired is no reason to refuse an
 	// edit of Platform's purpose.
-	shared := strings.Replace(strings.Replace(diffBase,
-		"        purpose: keep the lights on\n",
-		"        purpose: keep the lights on\n        channel: shared\n", 1),
+	shared := strings.Replace(strings.Replace(diffBase, purpose,
+		purpose+"        channel: shared\n", 1),
 		"    project: DSN\n", "    project: DSN\n    channel: shared\n", 1)
 	edited := strings.Replace(shared, "keep the lights on", "ship it", 1)
-	again := only(t, config.DiffOrg(parse(t, shared), parse(t, edited)))
-	for _, touch := range again.Touches {
-		if touch.Why == "channel" {
-			t.Errorf("a claim the unit already made was judged again: %v", touches(again))
-		}
+	if again := only(t, config.DiffOrg(parse(t, shared), parse(t, edited))); len(again.Keys) != 0 {
+		t.Errorf("a key the unit already carried was judged again: %v", again.Keys)
 	}
 }
 

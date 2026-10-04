@@ -307,11 +307,11 @@ curl -X PUT $CREWLET_URL/config/roles/sre -H "$AUTH" \
 
 Everything the write changes has to be inside their team, where it was and
 where it lands: a seat added, edited, moved between two of their teams or
-removed, a sub-team added or removed, their own unit's name, purpose or
-channel. Handing their unit to another `lead:`, removing or moving it,
-naming somebody outside it in a `lead:` or `manages:` entry, claiming another
-team's project, space or channel, changing a credential, naming a `${VAR}` in
-any field, and any setting take `config:write`. A write that reaches past them
+removed, a sub-team added or removed, their own unit's name or purpose.
+Handing their unit to another `lead:`, removing or moving it, naming somebody
+outside it in a `lead:` or `manages:` entry, setting or changing a project,
+space, channel, address or contact id, changing a credential, naming a
+`${VAR}` in any field, and any setting take `config:write`. A write that reaches past them
 is refused whole —
 `403 unauthorized` with a `refused` list naming every part, the place it
 reaches and why; see [A lead edits their own

@@ -201,16 +201,17 @@ func takeSeat(t *testing.T, list []any, handle string) ([]any, any) {
 // removed — and what they may not is anything that reaches outside it on
 // either side of the write: handing Platform to somebody else, removing or
 // moving the unit they lead, moving a seat out, making a seat manage somebody
-// outside, claiming another team's project, touching a root seat, changing
-// a credential — an `mcp_env` key with nothing under it among them, since the
+// outside, touching a root seat, changing a key another system finds a seat
+// or a team by — a project, even one nothing in the company names any more,
+// a channel or a contact id — changing a credential — an `mcp_env` key with nothing under it among them, since the
 // key alone starts that tool server for the seat — or naming a `${VAR}`
 // anywhere — a contact id or an address that names one is resolved from the
 // engine's own environment and recited to whoever looks the seat up.
 //
 // Mutation: decide every place against the document being replaced alone and
 // the cases that only the proposed document refuses — clearing the unit's
-// lead, a seat moved out — are admitted; drop the claim check and the project
-// case is admitted; list only credential fields and the contact id and the
+// lead, a seat moved out — are admitted; drop the key check and the project,
+// the channel and the contact id are admitted; list only credential fields and the contact id and the
 // address naming a variable are admitted; compare a credential field's
 // strings alone and the empty server blocks are admitted.
 func TestALeadWritesInsideTheirSubtreeAndOnlyThere(t *testing.T) {
@@ -244,10 +245,6 @@ func TestALeadWritesInsideTheirSubtreeAndOnlyThere(t *testing.T) {
 			}, true, ""},
 		{"a seat's masked credential sent back as it was read", configapi.EntityRoles,
 			"staff-eng", func(_ *testing.T, e map[string]any) { e["goal"] = "ship" }, true, ""},
-		{"a literal contact id on their own seat", configapi.EntityRoles, "platform-lead",
-			func(_ *testing.T, e map[string]any) {
-				e["contact"] = map[string]any{"slack_user_id": "U0PLATFORM"}
-			}, true, ""},
 
 		{"their own team handed to an outsider", configapi.EntityUnits, "platform",
 			func(_ *testing.T, e map[string]any) { e["lead"] = "data-lead" }, false,
@@ -276,9 +273,19 @@ func TestALeadWritesInsideTheirSubtreeAndOnlyThere(t *testing.T) {
 		{"a seat made to manage the CEO", configapi.EntityRoles, "sre",
 			func(_ *testing.T, e map[string]any) { e["manages"] = []any{"ceo"} }, false,
 			"seat/sre/after//manages/not_lead"},
-		{"another team's project claimed", configapi.EntityUnits, "tooling",
+		{"another team's project declared", configapi.EntityUnits, "tooling",
 			func(_ *testing.T, e map[string]any) { e["project"] = "DSN" }, false,
-			"unit/tooling/before/design/project/not_lead"},
+			"unit/tooling///key/no_grant"},
+		{"a project nothing in the company names", configapi.EntityUnits, "tooling",
+			func(_ *testing.T, e map[string]any) { e["project"] = "SALES" }, false,
+			"unit/tooling///key/no_grant"},
+		{"their own team's channel", configapi.EntityUnits, "platform",
+			func(_ *testing.T, e map[string]any) { e["channel"] = "platform" }, false,
+			"unit/platform///key/no_grant"},
+		{"a literal contact id on their own seat", configapi.EntityRoles, "platform-lead",
+			func(_ *testing.T, e map[string]any) {
+				e["contact"] = map[string]any{"slack_user_id": "U0PLATFORM"}
+			}, false, "seat/platform-lead///key/no_grant"},
 		{"a seat at the root", configapi.EntityRoles, "ceo",
 			func(_ *testing.T, e map[string]any) { e["goal"] = "grow" }, false,
 			"seat/ceo/before//place/not_lead"},

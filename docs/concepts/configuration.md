@@ -691,7 +691,8 @@ What that means in practice:
 The org chart inside this document is also written by its **leads**, who need
 no grant for it: a person who leads a unit may change the seats and units
 inside it, judged change by change on both sides of the write, and never a
-setting, a credential or a `${VAR}` in any field ([A lead edits their own
+setting, a credential, a `${VAR}` in any field, or a project, space, channel,
+address or contact id ([A lead edits their own
 team](identity-and-access.md#a-lead-edits-their-own-team)). What that reaches
 is bounded by what the settings offer, which stay `config:write`'s: a lead may
 point a seat in their team at any model chain the company declares and enable
