@@ -5,9 +5,7 @@ import (
 	"testing"
 )
 
-// THE DOCUMENT WALK STILL REACHES EVERY SEAT IN THE FILE.
-//
-// # Why this is worth its own case now that the walk is unexported
+// THE DOCUMENT WALK REACHES EVERY SEAT IN THE FILE.
 //
 // `crewlet validate` reads an authored file whole, and what its cross-field
 // rules check IS the document — a seat's model chain against the providers
@@ -15,13 +13,7 @@ import (
 // credential against the integration block it belongs to. Every one of those
 // rules is applied by walking this.
 //
-// The walk was unexported because outside this package it answers the wrong
-// question: a company's seats are the org chart's own log, and a stored
-// revision carries no `roles:` and no `units:` at all, so the same call there
-// walks an empty list and exempts every seat with no error and no symptom.
-//
-// What that unexport must NOT have done is narrow the walk itself. A rule
-// that holds for a seat in `roles:` and not for the identical seat one level
+// A rule that holds for a seat in `roles:` and not for the identical seat one level
 // down is not a rule, and the seats it misses are exactly the ones whose
 // mistakes have no run-time symptom to find them by — which is the failure
 // this walk was introduced to fix in the first place.

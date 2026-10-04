@@ -52,10 +52,9 @@ type DerivedSeat struct {
 	// moved into a unit.
 	//
 	// A FACT ABOUT A DOCUMENT, and therefore ABSENT rather than false for
-	// a company that has none. It says where a seat was WRITTEN versus
-	// where it ended up, and a company composed from the org chart's own
-	// rows was written nowhere: each row states its unit directly, so
-	// nothing was moved by a reference at all.
+	// an organisation derived without one. It says where a seat was
+	// WRITTEN versus where it ended up, and an organisation handed over
+	// already built carries no record of where anything was written.
 	//
 	// A POINTER for exactly that reason. "This seat was not moved" and
 	// "there is no document to have moved it in" are different answers,
@@ -167,15 +166,10 @@ func Derive(c *Company) Derived {
 //
 // [Derive] answers about a DOCUMENT and can therefore say where each seat was
 // written; that is what `crewlet validate` and the guarded config reads use
-// the paths for. A running company's seats are rows on the chart's own log and
-// were written at no path at all, so this is the same derivation with the one
-// thing it cannot honestly answer left out — exactly what [Derived.WithoutPaths]
-// produces, and it is the form every live reader already asked for.
-//
-// It exists because the projection the dashboard renders went through the
-// document, and a stored revision carries no seats: every open screen was
-// shown a company with no org chart in it, derived cleanly from bytes that
-// were correct.
+// the paths for. The org projection is handed the organisation this node runs
+// rather than the document, so this is the same derivation with the one thing
+// it cannot answer left out — exactly what [Derived.WithoutPaths] produces,
+// and it is the form every live reader asks for.
 func DeriveFrom(o *org.Organization) Derived {
 	if o == nil {
 		return Derived{}

@@ -12,27 +12,16 @@ import (
 	"github.com/crewlet/crewlet/internal/org"
 )
 
-// THE RULES ONLY A WHOLE FILE CAN CHECK.
+// THE RULES ONLY A WHOLE DOCUMENT CAN CHECK.
 //
 // # Why they are collected rather than scattered
 //
 // Every other rule in this package is a property of the thing it is written
 // beside: a provider key names a provider, a container key is well shaped, a
-// human seat holds no app. The four here are properties of the WHOLE
-// DOCUMENT — they compare one half of it against the other, one seat against
-// every other seat, or the file against what the chart it is about to become
-// will accept — and that is now a distinguishing fact rather
-// than an implementation detail. The org chart is a log, so a per-object
-// chart write sees ONE seat and its own snapshot of the structure; it cannot
-// see the settings half at all, and it cannot see what a second writer is
-// doing to a second seat on a second subject at the same moment. A rule of
-// this class is therefore sound in exactly one place: over an authored file,
-// whole, before it is split.
-//
-// That is what "promoted" means for them. Each was already a real fault; each
-// was caught late, by a consumer, silently, or not at all. What changes is
-// that the file becomes the only honest place to catch them, so they are
-// caught there.
+// human seat holds no app. The three here are properties of the WHOLE
+// DOCUMENT — they compare one part of it against another, or one seat against
+// every other seat — so they run together, over the document whole. Each was
+// a real fault caught late, by a consumer, silently, or not at all.
 //
 // # Why they are ADMISSION rules
 //

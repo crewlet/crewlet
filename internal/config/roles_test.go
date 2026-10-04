@@ -428,8 +428,7 @@ roles:
 // Organization builds a seat from the authored role and normalises it in
 // place. The contact rode along as the SAME pointer, so every read rewrote the
 // document's contact — padded and mixed-case ids trimmed and lowercased under
-// the reader — and two reads at once raced on it. The chart view holds the
-// same rule over its rows ([org.FromRows]).
+// the reader — and two reads at once raced on it.
 func TestReadingTheOrgLeavesTheAuthoredContactAlone(t *testing.T) {
 	t.Parallel()
 	c, err := ParseCompany([]byte("name: Acme\nroles:\n  - name: Sarah\n    kind: human\n" +

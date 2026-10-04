@@ -532,9 +532,8 @@ roles:
 			"  - {name: Edge, children: [{name: Platform}]}\n", "duplicate unit key")
 	})
 
-	// A NAME IS PROSE, the org chart's own rule: two seats or two units may
-	// share one on distinct addresses, which is what every chart write
-	// already accepts and an exported chart can carry.
+	// A NAME IS PROSE: two seats or two units may share one on distinct
+	// addresses, since nothing references either by its name.
 	t.Run("two seats and two units sharing names on distinct addresses", func(t *testing.T) {
 		t.Parallel()
 		c, err := ParseCompany([]byte("name: Acme\n" +
@@ -569,10 +568,7 @@ roles:
 // A HUMAN SEAT WITH NO CONTACT IDENTITY IS A COMPANY THE CONFIG ACCEPTS, on
 // both classes of rule. A person who works through the dashboard is bound to
 // the seat in the identity directory and has no chat account to write down.
-// Refusing the document refused them — and the chart's own writes never asked
-// for a contact, so a company holding such a seat ran, and was refused the
-// moment it went back through a document (`crewlet config import` of its own
-// export). That nobody can be MESSAGED at the seat is a warning, at the seat's
+// Refusing the document refused them. That nobody can be MESSAGED at the seat is a warning, at the seat's
 // `contact` — and the control is the same seat with an identity, which warns
 // about nothing.
 func TestAHumanSeatWithNoContactIsAValidCompany(t *testing.T) {

@@ -31,18 +31,14 @@ const Marker = "[REDACTED:"
 //
 // # Why it is here rather than beside the config document
 //
-// It started in [internal/config], where the masking pass lives, and that was
-// right while a company was one document. It is not any more: the org chart is
-// a log with its own write path, and that path has to recognise the marker to
-// RESTORE it — a write that stored it would replace a working credential with
-// these twelve characters, silently, and the failure would surface hours later
-// at a vendor naming nothing.
-//
-// So two packages compare against it, and `config` cannot be one of their
-// shared imports: the chart is read by the organization model, which the
-// config layer is built on. A constant spelled twice is one that drifts, and
-// the drift here is exactly the outage above — so it lives in the leaf that
-// already owns what redaction looks like on the wire.
+// Two packages need it and neither can import the other's copy: the config
+// layer's masking pass writes it through [internal/secrets], which config is
+// built on, and config's own restore has to recognise it — a write that stored
+// it would replace a working credential with these twelve characters,
+// silently, and the failure would surface hours later at a vendor naming
+// nothing. A constant spelled twice is one that drifts, and the drift here is
+// exactly that outage — so it lives in the leaf that already owns what
+// redaction looks like on the wire.
 //
 // A DISTINCTIVE LITERAL rather than an empty string, because the two mean
 // opposite things: an operator who deliberately stored an EMPTY credential has

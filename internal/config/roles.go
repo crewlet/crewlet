@@ -32,7 +32,7 @@ type Role struct {
 
 	// Kind is agent (the default, a spawned runtime seat) or human (an
 	// addressable-only seat that is never spawned; its contact identities
-	// are optional, and the chart check reports one that has none).
+	// are optional, and [Company.Warnings] names one that has none).
 	Kind org.RoleKind `yaml:"kind,omitempty" json:"kind,omitempty" js:"enum=agent|human" desc:"agent (default) or human."`
 
 	// Contact is a HUMAN seat's external identities — how agents mention

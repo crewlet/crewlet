@@ -170,7 +170,7 @@ func (b *TokenBudget) UnmarshalYAML(node *yaml.Node) error {
 
 // UnmarshalJSON is [TokenBudget.UnmarshalYAML] for the JSON door: a document
 // reaches the engine through it as well — a `PUT /config` body, a stored
-// revision, a seat's chart runtime — and encoding/json's own word on
+// revision — and encoding/json's own word on
 // `"token_budget": 10000000` names a Go type rather than the line to write.
 //
 // LENIENT ABOUT A KEY IT DOES NOT KNOW, where the YAML reader is strict, for
@@ -212,8 +212,7 @@ func (b *TokenBudget) UnmarshalJSON(data []byte) error {
 //
 // THE COMPANY'S OWN BLOCK ONLY, and through internal/org's one rule
 // ([org.TokenCeilings.Faults]), which a seat's budget is held to as well — by
-// [org.Role.Validate], which [Company.Validate] runs over every seat, and by the
-// org chart's runtime check, which no company file passes through. A seat's
+// [org.Role.Validate], which [Company.Validate] runs over every seat. A seat's
 // block is not checked here too: it would report the same key twice, once in
 // each package's words.
 func (b TokenBudget) validate(path Path) error {
@@ -330,14 +329,11 @@ type IdleCeiling struct {
 // IdleUnder is every ceiling in seat that this budget — the company's — leaves
 // idle, in [period.Periods] order.
 //
-// ONE JUDGEMENT FOR BOTH HALVES OF A COMPANY. A company FILE carries its seats
-// beside its settings, and [Company.Warnings] reads them together; a running
-// company keeps a seat's ceilings in the org chart's runtime half and the
-// company's in its settings revision, which two different people write at two
-// different times — so the chart's continuous report asks this same question
-// of the pair it is running. Written twice, the two answers would drift on
-// exactly the boundary cases the rule is about: an equal ceiling, a day under
-// a month, a week that straddles two months.
+// ONE JUDGEMENT, read by [Company.Warnings] over the document's own two
+// ceilings, so a write that leaves a seat's ceiling idle is told so in the
+// answer that stored it. Kept as a method on the company's budget so the
+// boundary cases the rule is about — an equal ceiling, a day under a month, a
+// week that straddles two months — are decided in one place.
 //
 // A ceiling below one on either side is not judged: validation owns a ceiling
 // that cannot be met, and a warning beside that refusal would be advice about
