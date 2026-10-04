@@ -954,8 +954,32 @@ test("a working seat's strip on a task counts its round from one", () => {
         work_item: { backend: "native", id: "i", key: "ENG-412", project: "ENG" },
       },
     }) as unknown as AgentRow;
-  expect(liveOnItems([working(6, 6)]).get("ENG-412")?.doing).toMatch(/round 7 of 25$/);
-  expect(liveOnItems([working(0, 0)]).get("ENG-412")?.doing).toMatch(/round 1 of 25$/);
+  expect(liveOnItems([working(6, 6)]).get("i")?.doing).toMatch(/round 7 of 25$/);
+  expect(liveOnItems([working(0, 0)]).get("i")?.doing).toMatch(/round 1 of 25$/);
+});
+
+// A TURN IS ON ONE TASK, AND A KEY CAN BE TWO. A key another task claimed
+// first is flagged `key_collision` and stays on the task that did not claim
+// it, so two cards can carry one key — and a map keyed on it drew the working
+// seat's strip on both of them. Keyed on the task's id, only the task the turn
+// is charged to finds one.
+test("of two tasks sharing a key, only the one being worked on draws the strip", () => {
+  const row = {
+    role: "SWE",
+    handle: "swe",
+    activity: "working",
+    live_call: {
+      phase: "execute",
+      round_num: 2,
+      rounds_used: 2,
+      max_rounds: 25,
+      work_item: { backend: "native", id: "t-duplicate", key: "ENG-7", project: "ENG" },
+    },
+  } as unknown as AgentRow;
+  const live = liveOnItems([row]);
+  expect(live.get("t-duplicate")?.handle).toBe("swe");
+  expect(live.has("t-claimant")).toBe(false);
+  expect(live.has("ENG-7")).toBe(false);
 });
 
 // ONE READING OF THE ROUND, on the roster's card and in the attention queue

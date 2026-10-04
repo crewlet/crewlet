@@ -40,6 +40,7 @@ import { plural } from "~/lib/format.ts";
 import type { SeatRing } from "~/lib/seats.ts";
 import type { WorkItem, WorkSummary } from "~/protocol/index.ts";
 import { useItemEdits } from "./edit.tsx";
+import { itemPath } from "~/lib/work.ts";
 
 /** The title, drawn as the page's heading and edited in place. */
 export function ItemTitle({ item }: { item: WorkItem }) {
@@ -317,7 +318,7 @@ export function Subtasks({
         <a
           key={row.id}
           className="task-subtask"
-          href={href(["work", row.key])}
+          href={href(itemPath(row))}
           onClick={
             peek
               ? (event) => {

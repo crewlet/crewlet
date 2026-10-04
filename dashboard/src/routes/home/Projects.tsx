@@ -19,6 +19,7 @@ import { useOrg } from "~/lib/store-hooks.ts";
 import { indexOrg } from "~/lib/seats.ts";
 import { companyDateLabel, plural } from "~/lib/format.ts";
 import type { WorkProjectRow } from "~/protocol/index.ts";
+import { projectPath } from "~/lib/work.ts";
 
 /** How many projects the card draws before "All projects". */
 export const PROJECT_ROWS = 3;
@@ -100,7 +101,7 @@ function ProjectRow({ project, leadName }: { project: WorkProjectRow; leadName: 
   const pct = whole > 0 ? Math.round((done / whole) * 100) : null;
   return (
     <li>
-      <a className="project-row" href={href(["work", project.key])}>
+      <a className="project-row" href={href(projectPath(project.key))}>
         <span className="project-row-head">
           <span className="project-key mono">{project.key}</span>
           <span className="project-name">{project.name}</span>

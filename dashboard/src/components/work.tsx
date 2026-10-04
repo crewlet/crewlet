@@ -50,6 +50,8 @@ import {
   STATUS_TONE,
   typeIcon,
   typeName,
+  itemAddress,
+  checklistTask,
 } from "~/lib/work.ts";
 import type {
   WorkChecklistRow,
@@ -860,7 +862,7 @@ export function RowList({
           now={now}
           chrome={chrome}
           href={hrefOf(row)}
-          selected={selected === row.key}
+          selected={selected === itemAddress(row)}
           onOpen={onOpen ? () => onOpen(row) : undefined}
           keyOf={(id) => keys.get(id)}
           ordinal={ordinals ? at + 1 : undefined}
@@ -1094,15 +1096,18 @@ export function ChecklistClaims({
   hrefOf,
 }: {
   rows: readonly WorkChecklistRow[];
-  /** Where a task key goes. The screen owns the address. */
-  hrefOf: (key: string) => string;
+  /**
+   * Where a task goes, by its ADDRESS (`itemAddress`) — the key, unless
+   * another task claimed that key first. The screen owns the route.
+   */
+  hrefOf: (address: string) => string;
 }) {
   if (rows.length === 0) return null;
   return (
     <div className="col">
       {rows.map((item) => (
         <div key={`${item.task}:${item.item}`} className={cx("work-check", item.done && "done")}>
-          <a className="mono t-link" href={hrefOf(item.task_key)}>
+          <a className="mono t-link" href={hrefOf(itemAddress(checklistTask(item)))}>
             {item.task_key}
           </a>
           <span className="work-check-name">{item.name}</span>

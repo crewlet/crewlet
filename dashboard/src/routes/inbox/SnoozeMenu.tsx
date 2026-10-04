@@ -25,6 +25,7 @@ import { usePanelAlign } from "~/lib/media.ts";
 import { useNavigator } from "~/app/router.tsx";
 import { snoozePresets } from "./model.ts";
 import type { WorkInboxNotice } from "~/protocol/index.ts";
+import { itemPath, type ItemRef } from "~/lib/work.ts";
 
 /** Why a row that is not a notice cannot be marked. */
 export const NOT_A_NOTICE =
@@ -32,15 +33,16 @@ export const NOT_A_NOTICE =
 
 export function NoticeActions({
   notices,
-  itemKey,
+  item,
   now,
   zone,
   maxSnoozeAhead,
 }: {
   /** The notices this row stands for; empty for a row that is not one. */
   notices: readonly WorkInboxNotice[];
-  /** The work item the row is on, for "Open", or "". */
-  itemKey: string;
+  /** The work item the row is on, for "Open" — opened at its address
+   *  ([itemPath]) and named by its key — or null. */
+  item: { ref: ItemRef; key: string } | null;
   now: number;
   /** The company's clock, which "tomorrow at nine" is read on. */
   zone: string | undefined;
@@ -78,8 +80,14 @@ export function NoticeActions({
 
   const blockedAll = notices.length === 0 ? NOT_A_NOTICE : undefined;
   const more: MenuEntry[] = [
-    ...(itemKey
-      ? [{ key: "open", label: `Open ${itemKey}`, onSelect: () => nav.to(["work", itemKey]) }]
+    ...(item
+      ? [
+          {
+            key: "open",
+            label: `Open ${item.key || "the task"}`,
+            onSelect: () => nav.to(itemPath(item.ref)),
+          },
+        ]
       : []),
     ...(notices.length > 0 && unread.length === 0
       ? [

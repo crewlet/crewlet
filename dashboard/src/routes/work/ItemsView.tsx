@@ -143,6 +143,8 @@ import {
   type Scope,
   type Shape,
   type TrackerFilters,
+  itemAddress,
+  itemPath,
 } from "~/lib/work.ts";
 import { plural } from "~/lib/format.ts";
 import type { WorkSummary, WorkTaskCounts, WorkView } from "~/protocol/index.ts";
@@ -527,7 +529,7 @@ export function ItemsView({
     [rows, groups, shape, hidden],
   );
   const neighbours = useMemo(
-    () => drawn.map((r) => ({ kind: "item" as const, id: r.key })),
+    () => drawn.map((r) => ({ kind: "item" as const, id: itemAddress(r) })),
     [drawn],
   );
   // AND THE QUESTION, so a task opened through the peek's Open carries it like
@@ -558,9 +560,11 @@ export function ItemsView({
   });
   const waiting = useMemo(() => {
     const out = new Map<string, CardWaiting>();
+    // BY THE TASK'S ID, as `liveOnItems` is: a key two tasks hold would put
+    // one run's wait on both cards.
     for (const item of decisions.data?.items ?? []) {
-      const key = item.run?.work_item?.key;
-      if (item.kind === "run" && key && !out.has(key)) out.set(key, { since: item.run?.paused_at });
+      const id = item.run?.work_item?.id;
+      if (item.kind === "run" && id && !out.has(id)) out.set(id, { since: item.run?.paused_at });
     }
     return out;
   }, [decisions.data]);
@@ -574,8 +578,8 @@ export function ItemsView({
   // when a task on screen loses its running turn, the list asks again then,
   // rather than drawing the task as it was for up to a poll's length.
   const runningHere = drawn
-    .filter((r) => live.has(r.key))
-    .map((r) => r.key)
+    .filter((r) => live.has(r.id))
+    .map((r) => r.id)
     .join(",");
   const wasRunning = useRef("");
   // THE BAR'S RUN, which scrolls on a phone and fades the edge with more past
@@ -672,7 +676,7 @@ export function ItemsView({
   // A TASK OPENED FROM HERE CARRIES THIS LIST'S QUESTION, so its own page can
   // ask where it sits in it (`around=`) and step to the next one.
   const list = useMemo(() => listParam(params), [params]);
-  const itemHref = (row: WorkSummary) => href(["work", row.key], list ? { list } : undefined);
+  const itemHref = (row: WorkSummary) => href(itemPath(row), list ? { list } : undefined);
 
   // WHERE A COLUMN FOOTER GOES, as the link the browser follows on a middle
   // click and shows in the status bar. Built here because this is the only
@@ -975,7 +979,7 @@ export function ItemsView({
                 detail={detail}
                 selected={peek?.kind === "item" ? peek.id : ""}
                 hrefOf={itemHref}
-                onOpen={(row) => openPeek({ kind: "item", id: row.key })}
+                onOpen={(row) => openPeek({ kind: "item", id: itemAddress(row) })}
                 onOverflow={(axis, key) => openOverflow(filterPatchForGroup(axis, key), "push")}
                 overflowHref={boardOverflowHref}
                 facts={facts}
@@ -1020,7 +1024,7 @@ export function ItemsView({
                 workspace={!project}
                 selected={peek?.kind === "item" ? peek.id : ""}
                 hrefOf={itemHref}
-                onOpen={(row) => openPeek({ kind: "item", id: row.key })}
+                onOpen={(row) => openPeek({ kind: "item", id: itemAddress(row) })}
                 onOverflow={(axis, key) => openOverflow({ group_by: axis, group: key }, "replace")}
                 overflowHref={listOverflowHref}
                 removals={inTrash ? removals : undefined}
@@ -1042,7 +1046,7 @@ export function ItemsView({
                 selected={peek?.kind === "item" ? peek.id : ""}
                 now={now}
                 hrefOf={itemHref}
-                onOpen={(row) => openPeek({ kind: "item", id: row.key })}
+                onOpen={(row) => openPeek({ kind: "item", id: itemAddress(row) })}
                 more={pageMore}
               />
             )}
@@ -1053,7 +1057,7 @@ export function ItemsView({
                 month={thisMonth}
                 chrome={chrome}
                 hrefOf={itemHref}
-                onOpen={(row) => openPeek({ kind: "item", id: row.key })}
+                onOpen={(row) => openPeek({ kind: "item", id: itemAddress(row) })}
                 onMonth={setMonth}
                 onToday={() => setMonth("")}
                 dayHref={dayListHref}

@@ -66,6 +66,8 @@ import {
   fmtMinutes,
   statusLabel,
   typeName,
+  itemPath,
+  linkedItem,
 } from "~/lib/work.ts";
 import type {
   WorkFieldDef,
@@ -843,7 +845,10 @@ export function Relations({ detail, chrome }: { detail: WorkItemDetail; chrome: 
     <section className="task-rail-section" aria-label="Relations">
       <div className="task-lbl">Relations</div>
       {(parent || detail.task.parent) && (
-        <a className="task-rail-link" href={href(["work", parent?.key || detail.task.parent!])}>
+        <a
+          className="task-rail-link"
+          href={href(parent ? itemPath(parent) : ["work", detail.task.parent!])}
+        >
           <ArrowUpRightGlyph size="xs" />
           <span className="muted">Part of</span>
           <span className="work-key mono">{parent?.key || detail.task.parent}</span>
@@ -852,7 +857,7 @@ export function Relations({ detail, chrome }: { detail: WorkItemDetail; chrome: 
       )}
       {links.map((link) => (
         <div key={`${link.kind}:${link.other}`} className="task-rail-link-row">
-          <a className="task-rail-link" href={href(["work", link.key || link.other])}>
+          <a className="task-rail-link" href={href(itemPath(linkedItem(link)))}>
             <LinkGlyph size="xs" />
             <span className="muted">{linkHeading(link)}</span>
             <span className="work-key mono">{link.key || link.other}</span>

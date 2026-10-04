@@ -17,19 +17,30 @@
  * ONE neighbour — `before` the card it went above, or `after` the last card of
  * a lane it went to the bottom of — and never an index, which would be a claim
  * about a board somebody else may have rearranged a second ago.
+ *
+ * # A card is its id, and it is sent by its address
+ *
+ * Every card on a board is told apart by its task's ID, never its key: a key
+ * another task claimed first is flagged `key_collision` and stays on the task
+ * that did not claim it, so two cards can carry one key, and a drag that knew
+ * its card by the key lifted the claimant out of whichever lane it was in. What
+ * the engine is SENT is each task's address ([itemAddress]) — the key a person
+ * reads, or the id where the key opens another task — because the tool
+ * resolves a key through the tracker's directory, which answers the claimant.
  */
 
+import { itemAddress } from "~/lib/work.ts";
 import type { WorkGroup, WorkSummary } from "~/protocol/index.ts";
 
 /** Where a card was let go: the lane, and the card it went above, if any. */
 export interface Drop {
-  /** The card being moved. */
-  key: string;
+  /** The card being moved, by its task's id. */
+  id: string;
   /** The lane it was dropped into, by the lane's own key. */
   lane: string;
   /**
-   * The card it was dropped directly ABOVE, or "" for the bottom of the lane.
-   * Never the moved card itself.
+   * The card it was dropped directly ABOVE, by its task's id, or "" for the
+   * bottom of the lane. Never the moved card itself.
    */
   above: string;
 }
@@ -58,36 +69,37 @@ export interface MoveArgs {
  * is still a status change, and a reorder is nothing.
  */
 export function moveFor(drop: Drop, groups: readonly WorkGroup[], axis: string): MoveArgs | null {
-  const from = groups.find((g) => g.rows.some((r) => r.key === drop.key));
-  const card = from?.rows.find((r) => r.key === drop.key);
+  const from = groups.find((g) => g.rows.some((r) => r.id === drop.id));
+  const card = from?.rows.find((r) => r.id === drop.id);
   const to = groups.find((g) => g.key === drop.lane);
   if (!from || !card || !to) return null;
   const crossing = from.key !== to.key;
   if (crossing && axis !== "status") return null;
 
-  const lane = to.rows.filter((r) => r.key !== card.key && r.project === card.project);
-  const out: MoveArgs = { item: card.key, if_match: card.version };
+  const lane = to.rows.filter((r) => r.id !== card.id && r.project === card.project);
+  const out: MoveArgs = { item: itemAddress(card), if_match: card.version };
   if (crossing) out.status = to.key;
 
-  const above = drop.above ? lane.find((r) => r.key === drop.above) : undefined;
+  const above = drop.above ? lane.find((r) => r.id === drop.above) : undefined;
+  const below = !drop.above && lane.length > 0 ? lane[lane.length - 1] : undefined;
   if (above) {
-    out.before = above.key;
+    out.before = itemAddress(above);
   } else if (drop.above && !crossing) {
     // DROPPED ABOVE A CARD OF ANOTHER PROJECT: no neighbour this card can be
     // ranked against, and within its own lane nothing else changes.
     return null;
-  } else if (!drop.above && lane.length > 0) {
-    out.after = lane[lane.length - 1]!.key;
+  } else if (below) {
+    out.after = itemAddress(below);
   }
 
   // A DROP WHERE IT ALREADY WAS moves nothing, and the engine would say so as
   // a refusal ("as sent it moves nothing") — so it is not sent.
   if (!crossing) {
     const rows = from.rows.filter((r) => r.project === card.project);
-    const at = rows.findIndex((r) => r.key === card.key);
-    if (out.before && rows[at + 1]?.key === out.before) return null;
-    if (out.after && rows[at - 1]?.key === out.after && at === rows.length - 1) return null;
-    if (!out.before && !out.after) return null;
+    const at = rows.findIndex((r) => r.id === card.id);
+    if (above && rows[at + 1]?.id === above.id) return null;
+    if (below && rows[at - 1]?.id === below.id && at === rows.length - 1) return null;
+    if (!above && !below) return null;
   }
   return out;
 }
@@ -100,32 +112,32 @@ export function moveFor(drop: Drop, groups: readonly WorkGroup[], axis: string):
  * it sends, so a key and a pointer are one gesture with two inputs.
  */
 export function keyboardDrop(
-  key: string,
+  id: string,
   groups: readonly WorkGroup[],
   direction: "up" | "down" | "left" | "right",
 ): Drop | null {
-  const at = groups.findIndex((g) => g.rows.some((r) => r.key === key));
+  const at = groups.findIndex((g) => g.rows.some((r) => r.id === id));
   if (at < 0) return null;
   const lane = groups[at]!;
   // UP AND DOWN STEP OVER THE CARD'S OWN PROJECT, because a rank is an order
   // within one project ([moveFor]): on the company's board a lane interleaves
   // projects, and a step onto a card of another one would be a move with no
   // neighbour to place it against — a key press that did nothing.
-  const project = lane.rows.find((r) => r.key === key)?.project;
+  const project = lane.rows.find((r) => r.id === id)?.project;
   const own = lane.rows.filter((r) => r.project === project);
-  const i = own.findIndex((r) => r.key === key);
+  const i = own.findIndex((r) => r.id === id);
   if (direction === "up") {
     const prev = own[i - 1];
-    return prev ? { key, lane: lane.key, above: prev.key } : null;
+    return prev ? { id, lane: lane.key, above: prev.id } : null;
   }
   if (direction === "down") {
     const next = own[i + 1];
     if (!next) return null;
-    return { key, lane: lane.key, above: own[i + 2]?.key ?? "" };
+    return { id, lane: lane.key, above: own[i + 2]?.id ?? "" };
   }
   const beside = groups[direction === "left" ? at - 1 : at + 1];
   if (!beside) return null;
-  return { key, lane: beside.key, above: beside.rows[0]?.key ?? "" };
+  return { id, lane: beside.key, above: beside.rows[0]?.id ?? "" };
 }
 
 /**
@@ -148,18 +160,18 @@ export function keyboardDrop(
 export function withDrop(groups: readonly WorkGroup[], drop: Drop | null): WorkGroup[] {
   if (!drop) return groups as WorkGroup[];
   let card: WorkSummary | undefined;
-  for (const g of groups) card ??= g.rows.find((r) => r.key === drop.key);
+  for (const g of groups) card ??= g.rows.find((r) => r.id === drop.id);
   if (!card) return groups as WorkGroup[];
   const moved = card;
-  const from = groups.find((g) => g.rows.some((r) => r.key === drop.key))!.key;
+  const from = groups.find((g) => g.rows.some((r) => r.id === drop.id))!.key;
   const crossing = from !== drop.lane;
   return groups.map((g) => {
-    const rows = g.rows.filter((r) => r.key !== drop.key);
+    const rows = g.rows.filter((r) => r.id !== drop.id);
     if (g.key !== drop.lane) {
       if (rows.length === g.rows.length) return g;
       return { ...g, rows, count: crossing ? Math.max(0, g.count - 1) : g.count };
     }
-    const at = drop.above ? rows.findIndex((r) => r.key === drop.above) : -1;
+    const at = drop.above ? rows.findIndex((r) => r.id === drop.above) : -1;
     const next = [...rows];
     next.splice(at < 0 ? next.length : at, 0, moved);
     return { ...g, rows: next, count: crossing ? g.count + 1 : g.count };

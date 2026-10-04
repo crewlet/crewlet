@@ -17,7 +17,7 @@ import { Mark } from "~/ui/glyph.tsx";
 import { Segmented } from "~/ui/primitives.tsx";
 import { PERIOD_ADJECTIVE } from "~/lib/budget.ts";
 import { plainText } from "~/lib/markdown.ts";
-import { ENGINE_SENTENCES, authorOf, nameAuthor } from "~/lib/work.ts";
+import { ENGINE_SENTENCES, authorOf, nameAuthor, noticeItem, type ItemRef } from "~/lib/work.ts";
 import { fmtDateTime, humanize } from "~/lib/format.ts";
 import type { OrgIndex } from "~/lib/seats.ts";
 import { INBOX_PAGE } from "~/lib/useInboxCounts.ts";
@@ -94,7 +94,39 @@ export function rowWho(row: InboxRow, index: OrgIndex): Who | null {
   return null;
 }
 
-/** The work item a row is on, by key, or "". */
+/**
+ * The work item a row is on, or null — to ADDRESS it ([itemAddress]): a key
+ * another task claimed first opens that task, so a row about the task that did
+ * not claim it links, threads and replies by its id. The engine says so on
+ * every row that carries a key it may not own (`key_collision`,
+ * `subject_key_collision`); a live turn's reference carries no flag, and its
+ * key is the one the turn was charged under.
+ */
+export function rowItem(row: InboxRow): ItemRef | null {
+  switch (row.kind) {
+    case "decision":
+      switch (row.subject.kind) {
+        case "ask":
+          return row.subject.ask;
+        case "run":
+          return row.subject.run.work_item ?? null;
+        case "seat": {
+          const r = row.subject.seat.row;
+          return r.turn?.work_item ?? r.live_call?.work_item ?? null;
+        }
+      }
+      break;
+    case "condition":
+      return null;
+    case "notice": {
+      const item = noticeItem(row.notice);
+      return item.id || item.key ? item : null;
+    }
+  }
+  return null;
+}
+
+/** The work item a row is on, by the key a reader reads, or "". */
 export function rowKey(row: InboxRow): string {
   switch (row.kind) {
     case "decision":

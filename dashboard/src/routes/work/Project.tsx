@@ -89,6 +89,8 @@ import {
   targetLabel,
   typeName,
   unfinished,
+  itemPath,
+  subjectItem,
 } from "~/lib/work.ts";
 import { describeChange, foldChartReapplies, reapplySentence } from "~/lib/work.ts";
 import { filed, ProjectCensus } from "./census.tsx";
@@ -428,7 +430,7 @@ function ProjectFeed({ detail, chrome }: { detail: WorkProjectDetail; chrome: Ro
                   <div className="col gap-1" key={record.id}>
                     <div className="row gap-2">
                       {record.subject_key ? (
-                        <a className="mono t-link" href={href(["work", record.subject_key])}>
+                        <a className="mono t-link" href={href(itemPath(subjectItem(record)))}>
                           {record.subject_key}
                         </a>
                       ) : (

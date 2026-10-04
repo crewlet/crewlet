@@ -134,7 +134,9 @@ export function Activity({
   const [replyTo, setReplyTo] = useState<WorkComment | null>(null);
 
   const { socket } = useClient();
-  const changesAsked = { task: item.key, limit: CHANGES_PAGE };
+  // BY ITS ID, which names this task and no other: a key two tasks hold
+  // reads the history and the comments of whichever claimed it first.
+  const changesAsked = { task: item.id, limit: CHANGES_PAGE };
   const changes = usePaged(
     useQuery("work_activity", changesAsked, { pollMs: ACTIVITY_POLL_MS }),
     changesAsked,
@@ -147,7 +149,7 @@ export function Activity({
     recordId,
     nextCursor,
   );
-  const commentsAsked = { item: item.key, limit: COMMENTS_PAGE };
+  const commentsAsked = { item: item.id, limit: COMMENTS_PAGE };
   const comments = usePaged(
     useQuery("work_comments", commentsAsked, { pollMs: ACTIVITY_POLL_MS }),
     commentsAsked,

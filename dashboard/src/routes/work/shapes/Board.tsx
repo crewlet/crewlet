@@ -70,12 +70,13 @@ import { plural } from "~/lib/format.ts";
 import { GroupMark, headingOf } from "./group.tsx";
 import { keyboardDrop, moveFor, withDrop, type Drop } from "./boardMove.ts";
 import type { WorkGroup, WorkProjectDetail, WorkSummary } from "~/protocol/index.ts";
+import { itemAddress } from "~/lib/work.ts";
 
-/** What the board knows about the seats and runs on its cards, keyed by task key or handle. */
+/** What the board knows about the seats and runs on its cards, keyed by task id or handle. */
 export interface BoardFacts {
-  /** The turn running on a task, by task key. */
+  /** The turn running on a task, by task id — see `liveOnItems`. */
   live: ReadonlyMap<string, CardLive>;
-  /** A coding run on a task parked waiting on the reader, by task key. */
+  /** A coding run on a task parked waiting on the reader, by task id. */
   waiting: ReadonlyMap<string, CardWaiting>;
   /** A holder's state ring, by handle. */
   ring: (handle: string) => SeatRing | undefined;
@@ -183,7 +184,7 @@ export function Board({
     if (!args) return;
     setUnplaced("");
     setDrop({ drop: next, settled: false, against: groups });
-    const result = await move.run(args, { done: `Moved ${args.item}` });
+    const result = await move.run(args, { done: `Moved ${movedName(next, shown)}` });
     if (!result || result.kind === "refused" || result.kind === "unknown") {
       // SNAPPED BACK: the engine refused it, or nobody can say it landed —
       // either way what is drawn is the answer the board last had, and the
@@ -237,8 +238,8 @@ export function Board({
           "aria-describedby": "work-board-move-hint",
           onDragStart: (e: DragEvent<HTMLAnchorElement>) => {
             e.dataTransfer.effectAllowed = "move";
-            e.dataTransfer.setData("text/plain", row.key);
-            setDragging(row.key);
+            e.dataTransfer.setData("text/plain", row.id);
+            setDragging(row.id);
           },
           onDragEnd: () => {
             setDragging("");
@@ -249,7 +250,7 @@ export function Board({
             const direction = ARROWS[e.key];
             if (!direction) return;
             e.preventDefault();
-            const next = keyboardDrop(row.key, shown, direction);
+            const next = keyboardDrop(row.id, shown, direction);
             if (next) void send(next);
           },
         };
@@ -345,11 +346,11 @@ export function Board({
                 }}
                 onDrop={(e) => {
                   e.preventDefault();
-                  const key = e.dataTransfer.getData("text/plain") || dragging;
+                  const id = e.dataTransfer.getData("text/plain") || dragging;
                   const above = over?.lane === group.key ? over.above : "";
                   setDragging("");
                   setOver(null);
-                  if (key) void send({ key, lane: group.key, above: above === key ? "" : above });
+                  if (id) void send({ id, lane: group.key, above: above === id ? "" : above });
                 }}
               >
                 <header className="work-col-head">
@@ -398,9 +399,9 @@ export function Board({
                     <div
                       key={row.id}
                       className="work-col-slot"
-                      data-card={row.key}
+                      data-card={row.id}
                       data-drop-above={
-                        over?.lane === group.key && over.above === row.key ? "true" : undefined
+                        over?.lane === group.key && over.above === row.id ? "true" : undefined
                       }
                     >
                       <WorkCard
@@ -408,12 +409,12 @@ export function Board({
                         now={now}
                         chrome={chrome}
                         href={hrefOf(row)}
-                        selected={selected === row.key}
+                        selected={selected === itemAddress(row)}
                         onOpen={() => onOpen(row)}
-                        live={facts.live.get(row.key)}
-                        waiting={facts.waiting.get(row.key)}
+                        live={facts.live.get(row.id)}
+                        waiting={facts.waiting.get(row.id)}
                         ring={row.assignee ? facts.ring(row.assignee) : undefined}
-                        pending={drop?.drop.key === row.key && !drop.settled}
+                        pending={drop?.drop.id === row.id && !drop.settled}
                         tagName={tagName}
                         drag={dragProps(row)}
                         omit={cardOmit}
@@ -599,3 +600,16 @@ const ARROWS: Record<string, "up" | "down" | "left" | "right"> = {
   ArrowLeft: "left",
   ArrowRight: "right",
 };
+
+/**
+ * The card a drop moves, by the key a person reads on it — its address would
+ * be its id where the key is another task's, and a toast naming a uuid names
+ * nothing a reader can find.
+ */
+function movedName(drop: Drop, groups: readonly WorkGroup[]): string {
+  for (const group of groups) {
+    const card = group.rows.find((row) => row.id === drop.id);
+    if (card) return card.key || card.id;
+  }
+  return "the task";
+}

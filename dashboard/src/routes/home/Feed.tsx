@@ -35,7 +35,7 @@ import { useClient, useOrg } from "~/lib/store-hooks.ts";
 import { indexOrg, type OrgIndex } from "~/lib/seats.ts";
 import { fmtCount, fmtDateCompact, parseUTC, plural, readerDay } from "~/lib/format.ts";
 import { zone } from "~/lib/prefs.ts";
-import type { CompanyFeedAnswer, FeedEntry } from "~/protocol/index.ts";
+import type { CompanyFeedAnswer, FeedEntry, FeedWorkRow } from "~/protocol/index.ts";
 import {
   FEED_FILTERS,
   FEED_PHRASES,
@@ -44,6 +44,7 @@ import {
   scheduleVerb,
   surfaceName,
 } from "./model.ts";
+import { itemPath } from "~/lib/work.ts";
 
 /** One screen of the feed before "Load older". */
 export const FEED_PAGE = 20;
@@ -198,11 +199,15 @@ function nameOf(index: OrgIndex, handle: string | undefined): string {
   return index.byHandle.get(handle)?.name ?? handle;
 }
 
-function Key({ value }: { value: string | undefined }) {
-  if (!value) return null;
+/** The task a row is about: its key as a reader reads it, linked by its address. */
+function Key({ row }: { row: FeedWorkRow }) {
+  if (!row.key && !row.task) return null;
   return (
-    <a className="home-feed-key mono" href={href(["work", value])}>
-      {value}
+    <a
+      className="home-feed-key mono"
+      href={href(itemPath({ id: row.task, key: row.key, key_collision: row.key_collision }))}
+    >
+      {row.key || row.task}
     </a>
   );
 }
@@ -227,7 +232,7 @@ function phrase(row: FeedEntry, index: OrgIndex, now: number) {
           icon: <CircleCheckGlyph size="sm" />,
           text: (
             <>
-              {who} {FEED_PHRASES.completed} <Key value={w.key} /> {w.title}
+              {who} {FEED_PHRASES.completed} <Key row={w} /> {w.title}
               {review}
             </>
           ),
@@ -241,7 +246,7 @@ function phrase(row: FeedEntry, index: OrgIndex, now: number) {
           icon: <PlusGlyph size="sm" />,
           text: (
             <>
-              {who} {FEED_PHRASES.created} <Key value={w.key} /> {w.title}
+              {who} {FEED_PHRASES.created} <Key row={w} /> {w.title}
             </>
           ),
           aside: w.origin ? `from ${surfaceName(w.origin.surface)}` : "",
@@ -251,7 +256,7 @@ function phrase(row: FeedEntry, index: OrgIndex, now: number) {
           icon: <UserGlyph size="sm" />,
           text: (
             <>
-              {who} {FEED_PHRASES.handoff} <Key value={w.key} /> from {nameOf(index, w.from)} to{" "}
+              {who} {FEED_PHRASES.handoff} <Key row={w} /> from {nameOf(index, w.from)} to{" "}
               {nameOf(index, w.to)}
             </>
           ),

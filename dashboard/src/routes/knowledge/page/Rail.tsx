@@ -34,6 +34,7 @@ import type {
   TaskLink,
 } from "~/contract/pages.ts";
 import type { PageRevision, PageSummary } from "~/protocol/index.ts";
+import { itemPath } from "~/lib/work.ts";
 
 type Who = (handle: string) => { name: string; kind?: "agent" | "human" };
 
@@ -375,7 +376,7 @@ export function LinkedFrom({
                 <li key={`t:${row.t.id}`}>
                   <a
                     className="kpage-link"
-                    href={href(["work", row.t.key])}
+                    href={href(itemPath(row.t))}
                     title={row.t.via.map((v) => TASK_VIA[v] ?? v).join(" and ")}
                   >
                     <StatusMark status={row.t.status} />

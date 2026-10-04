@@ -604,7 +604,7 @@ describe("the actions, made as the person", () => {
         tool,
         outcome: "applied",
         position: "CREWLET_TRACKER_LOG@1:5",
-        receipt: { key: "ENG-431" },
+        receipt: { item: "ENG-431", key: "ENG-431" },
       }),
     );
     const p = mount({ answers: TASKS });
@@ -639,7 +639,7 @@ describe("the actions, made as the person", () => {
         tool,
         outcome: "applied",
         position: "CREWLET_TRACKER_LOG@1:6",
-        receipt: { key: "ENG-432" },
+        receipt: { item: "ENG-432", key: "ENG-432" },
       }),
     );
     const p = mount({ answers: TASKS });
@@ -663,7 +663,7 @@ describe("the actions, made as the person", () => {
         tool,
         outcome: "applied",
         position: "CREWLET_TRACKER_LOG@1:6",
-        receipt: { key: "ENG-433" },
+        receipt: { item: "ENG-433", key: "ENG-433" },
       }),
     );
     const p = mount({ answers: TASKS });
@@ -754,7 +754,9 @@ describe("the actions, made as the person", () => {
   // never taken for them. This was a disabled row on every screen that is not
   // a project's, for the founder the seeded company is built around.
   test("a person with no default project chooses where, the top hit's first", async () => {
-    engine((tool) => json({ tool, outcome: "applied", position: "", receipt: { key: "OPS-12" } }));
+    engine((tool) =>
+      json({ tool, outcome: "applied", position: "", receipt: { item: "OPS-12", key: "OPS-12" } }),
+    );
     const p = mount({ viewer: { ...JANE, project: "" }, answers: TASKS });
     await p.type("cluster join");
     const create = p.row(/Create task/);
@@ -778,7 +780,9 @@ describe("the actions, made as the person", () => {
   });
 
   test("an ask with no default project steps through the agent, then the project", async () => {
-    engine((tool) => json({ tool, outcome: "applied", position: "", receipt: { key: "ENG-9" } }));
+    engine((tool) =>
+      json({ tool, outcome: "applied", position: "", receipt: { item: "ENG-9", key: "ENG-9" } }),
+    );
     const p = mount({ viewer: { ...JANE, project: "" }, answers: TASKS });
     await p.type("cluster join");
     await act(async () => {

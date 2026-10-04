@@ -32,6 +32,7 @@ import { useQuery, type QueryResult } from "~/lib/useQuery.ts";
 import { useViewer } from "~/lib/viewer.ts";
 import type { Seat } from "~/lib/seats.ts";
 import type { WorkItemsAnswer } from "~/protocol/index.ts";
+import { itemPath } from "~/lib/work.ts";
 
 export function Work({
   seat,
@@ -92,12 +93,7 @@ export function Work({
           >
             <Card.Title as="h3">Assigned and open</Card.Title>
           </Card.Header>
-          <RowList
-            rows={rows}
-            now={now}
-            chrome={chrome}
-            hrefOf={(row) => href(["work", row.key])}
-          />
+          <RowList rows={rows} now={now} chrome={chrome} hrefOf={(row) => href(itemPath(row))} />
         </Card>
       </QueryState>
 
@@ -140,7 +136,7 @@ export function Work({
             rows={mine.data?.priorities ?? []}
             now={now}
             chrome={chrome}
-            hrefOf={(row) => href(["work", row.key])}
+            hrefOf={(row) => href(itemPath(row))}
           />
           <TaskBlock
             title="Collaborating"
@@ -149,11 +145,11 @@ export function Work({
             rows={mine.data?.collaborating ?? []}
             now={now}
             chrome={chrome}
-            hrefOf={(row) => href(["work", row.key])}
+            hrefOf={(row) => href(itemPath(row))}
           />
           <ChecklistClaims
             rows={mine.data?.checklist_items ?? []}
-            hrefOf={(key) => href(["work", key])}
+            hrefOf={(address) => href(["work", address])}
           />
         </>
       ) : (

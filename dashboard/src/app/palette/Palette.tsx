@@ -92,7 +92,7 @@ import {
   unitRoute,
   type Seat,
 } from "~/lib/seats.ts";
-import { statusLabel } from "~/lib/work.ts";
+import { itemPath, statusLabel } from "~/lib/work.ts";
 import { fmtCount } from "~/lib/format.ts";
 import { renderMarkdown } from "~/lib/markdown.ts";
 import { goSignIn } from "~/lib/session.ts";
@@ -389,11 +389,13 @@ export function CommandPalette({
     const result = await create.run({ title, project: where }, { done: `Created “${title}”` });
     if (!settle(result)) return;
     // THE NEW TASK IS WHERE THE PERSON GOES NEXT: they named it to work on
-    // it. The route change closes the palette. An unknown outcome has no key
-    // to go to, and its toast is what says so.
-    const key =
-      result.kind === "unknown" ? undefined : (result.receipt as { key?: string } | null)?.key;
-    if (key) nav.to(["work", key]);
+    // it. The route change closes the palette. An unknown outcome has no task
+    // to go to, and its toast is what says so. AT THE ADDRESS THE RECEIPT
+    // NAMES (`item`), never its key: a key a restored counter handed out again
+    // is one another task already claimed, and it opens that task.
+    const address =
+      result.kind === "unknown" ? undefined : (result.receipt as { item?: string } | null)?.item;
+    if (address) nav.to(["work", address]);
     else onClose();
   };
 
@@ -512,7 +514,10 @@ export function CommandPalette({
   const taskRows = (cap: number): CommandPaletteItem[] => {
     const hits = taskAnswer.data?.hits ?? [];
     return hits.slice(0, cap).map((item) => ({
-      id: `task-${item.key}`,
+      // THE ITEM'S ID, which is what the list keys an option on: a key is an
+      // ADDRESS two items can hold at once (`key_collision`), and a search that
+      // finds both would draw two options under one key.
+      id: `task-${item.id}`,
       icon: <StatusMark status={item.status} />,
       label: (
         <>
@@ -524,7 +529,9 @@ export function CommandPalette({
         item.assignee ? (index.byHandle.get(item.assignee)?.name ?? item.assignee) : "unassigned",
       ].join(" · "),
       meta: <PriorityMark priority={item.priority} />,
-      onSelect: () => nav.to(["work", item.key]),
+      // AND IT GOES TO THE ITEM'S ADDRESS for the same reason: the key opens
+      // whichever of the two claimed it first.
+      onSelect: () => nav.to(itemPath(item)),
     }));
   };
 

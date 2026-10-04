@@ -82,6 +82,8 @@ import {
   reapplySentence,
   type ChangeLine,
   type LabelContext,
+  itemPath,
+  subjectItem,
 } from "~/lib/work.ts";
 import { FEED_PAGE } from "./feed.tsx";
 import type { WorkActivityAnswer, WorkActivityRecord } from "~/protocol/index.ts";
@@ -621,7 +623,7 @@ function HistoryRow({
       </span>
       <span className="work-log-key">
         {record.subject_key ? (
-          <a className="mono t-link" href={href(["work", record.subject_key])}>
+          <a className="mono t-link" href={href(itemPath(subjectItem(record)))}>
             {record.subject_key}
           </a>
         ) : (

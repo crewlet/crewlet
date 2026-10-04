@@ -53,6 +53,7 @@ import type {
   SandboxRun,
   WorkAskRow,
 } from "~/protocol/index.ts";
+import { itemAddress, itemPath, type ItemRef } from "~/lib/work.ts";
 
 /** A seat the engine stopped for a spent token budget, as a decision. */
 export interface SeatCondition {
@@ -264,11 +265,14 @@ function seatOf(index: OrgIndex, handle: string): { name: string; kind: "agent" 
   return { name: seat?.name ?? handle, kind: seat?.kind ?? "agent" };
 }
 
-/** A key, in the mono face every key is drawn in, linking to its item. */
-function Key({ value }: { value: string }) {
+/**
+ * A key, in the mono face every key is drawn in, linking to its item by its
+ * ADDRESS (`itemAddress`): a key another task claimed first opens that task.
+ */
+function Key({ item }: { item: ItemRef }) {
   return (
-    <a className="decision-key mono" href={href(["work", value])}>
-      {value}
+    <a className="decision-key mono" href={href(itemPath(item))}>
+      {item.key || item.id}
     </a>
   );
 }
@@ -312,7 +316,7 @@ function AskRow({
     .get(askerHandle)
     ?.managers.some((m) => m.handle === decider.handle);
   const sub = joined([
-    <Key key="k" value={ask.key} />,
+    <Key key="k" item={ask} />,
     decision ? `${them ? `${them} is` : "you are"} the ${decision.role}` : `asked ${them ?? "you"}`,
     reports ? `${asker.name} reports to ${them ?? "you"}` : "",
     recommended ? (
@@ -343,7 +347,7 @@ function AskRow({
       actions={
         decision && decision.options.length > 0 ? (
           <AnswerAskButtons
-            item={ask.key}
+            item={itemAddress(ask)}
             comment={ask.comment}
             options={decision.options}
             recommended={decision.recommended}
@@ -353,7 +357,7 @@ function AskRow({
           // other decision on this row: a link elsewhere sent the reader to
           // a pane with nowhere to write.
           <ReplyAskButton
-            item={ask.key}
+            item={itemAddress(ask)}
             comment={ask.comment}
             asker={asker.name}
             question={question}
@@ -366,10 +370,10 @@ function AskRow({
 
 function RunRow({ run, index, now }: { run: SandboxRun; index: OrgIndex; now: number }) {
   const who = seatOf(index, run.agent_handle);
-  const key = run.work_item?.key ?? "";
+  const item = run.work_item ?? null;
   const since = run.paused_at || run.updated_at;
   const sub = joined([
-    key ? <Key key="k" value={key} /> : "",
+    item ? <Key key="k" item={item} /> : "",
     run.question ? `“${run.question}”` : "",
     audienceOf(run, index),
     relTime(since, now),
@@ -424,7 +428,7 @@ function SeatRow({ seat, index, now }: { seat: SeatCondition; index: OrgIndex; n
   const item = seat.row.turn?.work_item ?? seat.row.live_call?.work_item ?? null;
   const period = seat.window ? PERIOD_ADJECTIVE[seat.window.period] : "";
   const sub = joined([
-    item ? <Key key="k" value={item.key} /> : "",
+    item ? <Key key="k" item={item} /> : "",
     item ? "stopped mid-turn" : "",
     seat.at ? relTime(seat.at, now) : "",
   ]);
@@ -439,7 +443,7 @@ function SeatRow({ seat, index, now }: { seat: SeatCondition; index: OrgIndex; n
           {/* RAISED WHERE IT IS REPORTED: the dialog opens on the scope
               that is refusing this seat, the stopped window focused. */}
           <RaiseBudgetButton handle={handle} name={who.name} window={seat.window} />
-          {item && <ReassignItem item={item.key} />}
+          {item && <ReassignItem item={itemAddress(item)} />}
         </>
       }
     />

@@ -42,6 +42,7 @@ import {
   taskFacts,
   windowWords,
 } from "./model.ts";
+import { itemAddress } from "~/lib/work.ts";
 
 /** How many the overview's card lists — the design's three. */
 export const TOP_TASKS = 3;
@@ -49,9 +50,9 @@ export const TOP_TASKS = 3;
 /** How many the list asks for: the tracker's page ceiling for one answer. */
 export const TASK_ROWS = 50;
 
-/** A task's address and its peek: the key where it has one, else its id. */
+/** A task's peek, at its address ([itemAddress]). */
 function itemRef(row: WorkSummary): { kind: "item"; id: string } {
-  return { kind: "item", id: row.key || row.id };
+  return { kind: "item", id: itemAddress(row) };
 }
 
 /**

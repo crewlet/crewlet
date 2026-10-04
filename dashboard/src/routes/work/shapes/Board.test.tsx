@@ -236,14 +236,16 @@ describe("the card", () => {
   test("a running turn and a run waiting on the reader each say so in words", async () => {
     mountBoard({
       props: {
+        // KEYED ON EACH TASK'S ID, as the screen builds them (`liveOnItems`):
+        // a key two tasks hold would put one turn on both cards.
         facts: {
           live: new Map([
             [
-              "ENG-1",
+              "eng-1",
               { handle: "swe", doing: "executing · round 7 of 20", since: "2031-04-16T11:54:00Z" },
             ],
           ]),
-          waiting: new Map([["ENG-3", { since: "2031-04-16T11:22:00Z" }]]),
+          waiting: new Map([["eng-3", { since: "2031-04-16T11:22:00Z" }]]),
           ring: () => undefined,
         },
       },

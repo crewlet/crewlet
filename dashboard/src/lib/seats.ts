@@ -1446,15 +1446,19 @@ export interface CardLive {
   since?: string;
 }
 
-/** Every working seat's turn, keyed on the task key the turn is charged to. */
+/**
+ * Every working seat's turn, keyed on the ID of the task the turn is charged
+ * to — never its key, which two tasks can hold (`key_collision`): keyed on it,
+ * the working seat's strip was drawn on both.
+ */
 export function liveOnItems(rows: readonly AgentRow[]): Map<string, CardLive> {
   const out = new Map<string, CardLive>();
   for (const row of rows) {
     if (row.activity !== "working") continue;
-    const key = row.live_call?.work_item?.key || row.turn?.work_item?.key || "";
+    const id = row.live_call?.work_item?.id || row.turn?.work_item?.id || "";
     const handle = row.handle ?? "";
-    if (!key || !handle) continue;
-    out.set(key, {
+    if (!id || !handle) continue;
+    out.set(id, {
       handle,
       doing: doingWords(row),
       since: row.turn?.started_at ?? row.live_call?.started_at,

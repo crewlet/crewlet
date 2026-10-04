@@ -100,6 +100,7 @@ import {
   type SeatTab,
 } from "./profile.ts";
 import { ModelChain } from "./shared.tsx";
+import { itemPath } from "~/lib/work.ts";
 
 /** The window the tiles count: a week of company days, and the week before. */
 export const ACTIVITY_DAYS = 7;
@@ -531,7 +532,7 @@ function AssignedWork({
       >
         <ul className="prof-rows">
           {rows.slice(0, ASSIGNED_ROWS).map((row) => (
-            <AssignedRow key={row.key} row={row} now={now} />
+            <AssignedRow key={row.id} row={row} now={now} />
           ))}
         </ul>
       </QueryState>
@@ -542,7 +543,7 @@ function AssignedWork({
 function AssignedRow({ row, now }: { row: WorkSummary; now: number }) {
   return (
     <li>
-      <a className="prof-row" href={href(["work", row.key])}>
+      <a className="prof-row" href={href(itemPath(row))}>
         <StatusMark status={row.status} />
         <span className="work-key mono prof-row-key" title={row.key}>
           {row.key}

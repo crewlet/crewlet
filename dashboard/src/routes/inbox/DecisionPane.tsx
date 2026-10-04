@@ -53,12 +53,13 @@ import type {
   WorkDecisionEvidence,
   WorkInboxNotice,
 } from "~/protocol/index.ts";
-import { noticeText, rowKey, rowWho, type Who } from "./NoticeList.tsx";
+import { noticeText, rowItem, rowKey, rowWho, type Who } from "./NoticeList.tsx";
 import { firstLine } from "~/lib/format.ts";
 import { NoticeActions } from "./SnoozeMenu.tsx";
 import { Thread, type ThreadOf } from "./Thread.tsx";
 import { Composer, type ComposeMode, type ComposerHandle } from "~/components/Composer.tsx";
 import type { InboxRow } from "./model.ts";
+import { detailItem, itemAddress, itemPath } from "~/lib/work.ts";
 
 interface PaneProps {
   row: InboxRow | null;
@@ -179,7 +180,12 @@ function OpenPane({
   maxSnoozeAhead,
   onBack,
 }: PaneProps & { row: InboxRow }) {
+  // THE KEY IS WHAT THE PANE PRINTS; THE ADDRESS IS WHAT IT OPENS, THREADS
+  // AND REPLIES BY ([rowItem]) — a key another task claimed first would read
+  // and write the claimant's conversation from a duplicate's notice.
   const itemKey = rowKey(row);
+  const item = rowItem(row);
+  const address = item ? itemAddress(item) : "";
   const who = rowWho(row, index);
   const ask = askOf(row);
   const notices = row.kind === "notice" ? [row.notice] : row.kind === "decision" ? row.notices : [];
@@ -188,7 +194,7 @@ function OpenPane({
   const composer = useRef<ComposerHandle | null>(null);
   const [mode, setMode] = useState<ComposeMode>(() => initialMode(row));
   const kind = paneKind(row);
-  const composes = itemKey !== "" && (ask !== null || row.kind === "notice");
+  const composes = address !== "" && (ask !== null || row.kind === "notice");
 
   const instruct = () => {
     if (!ask) return;
@@ -244,16 +250,16 @@ function OpenPane({
         <Tag variant={kind.tone} appearance="soft" leadingIcon={kind.icon ?? undefined}>
           {kind.label}
         </Tag>
-        {itemKey && (
-          <a className="inbox-pane-key mono" href={href(["work", itemKey])}>
-            {itemKey}
+        {item && (
+          <a className="inbox-pane-key mono" href={href(itemPath(item))}>
+            {itemKey || "Open the task"}
           </a>
         )}
         {title && <span className="inbox-pane-title">{title}</span>}
         <span className="spacer" />
         <NoticeActions
           notices={notices}
-          itemKey={itemKey}
+          item={item ? { ref: item, key: itemKey } : null}
           now={now}
           zone={zone}
           maxSnoozeAhead={maxSnoozeAhead}
@@ -262,8 +268,8 @@ function OpenPane({
       <div className="inbox-pane-scroll">
         <div className="inbox-pane-body">
           {body}
-          {itemKey && (row.kind === "notice" || ask) && (
-            <Thread item={itemKey} of={threadOf(row)} index={index} now={now} onTitle={onTitle} />
+          {address && (row.kind === "notice" || ask) && (
+            <Thread item={address} of={threadOf(row)} index={index} now={now} onTitle={onTitle} />
           )}
         </div>
       </div>
@@ -271,7 +277,7 @@ function OpenPane({
         <div className="inbox-pane-compose">
           <Composer
             ref={composer}
-            item={itemKey}
+            item={address}
             mode={mode}
             to={who?.name ?? "the thread"}
             index={index}
@@ -433,7 +439,7 @@ function OptionCards({
               onPress={() => {
                 setPressed(option.id);
                 void write.run(
-                  { item: ask.key, answers: ask.comment, choice: option.id },
+                  { item: itemAddress(ask), answers: ask.comment, choice: option.id },
                   { done: `Answered ${ask.key}: ${option.label}` },
                 );
               }}
@@ -518,7 +524,10 @@ function TaskEvidence({ id, label }: { id: string; label?: string }) {
   const read = useQuery("work_item", { id });
   const task = read.data?.task;
   return (
-    <a className="inbox-chip" href={href(["work", task?.key ?? id])}>
+    <a
+      className="inbox-chip"
+      href={href(read.data ? itemPath(detailItem(read.data)) : ["work", id])}
+    >
       {task && <StatusMark status={task.status} />}
       <span className="mono">{task?.key ?? "Task"}</span>
       <span className="truncate">{label || task?.title || ""}</span>
@@ -627,7 +636,7 @@ function SeatBody({ seat, who, now }: { seat: SeatCondition; who: Who | null; no
             name={name}
             window={seat.window}
           />
-          {item && <ReassignItem item={item.key} />}
+          {item && <ReassignItem item={itemAddress(item)} />}
         </div>
       </div>
     </>

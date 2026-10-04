@@ -104,7 +104,7 @@ import { plural, relTime } from "~/lib/format.ts";
 import { useViewer, type ViewerState } from "~/lib/viewer.ts";
 import { HoldWrites } from "~/lib/useWriteAccess.ts";
 import { useNow } from "~/lib/clock.ts";
-import { askedByParams, pageCount, type Scope } from "~/lib/work.ts";
+import { askedByParams, pageCount, type Scope, itemPath } from "~/lib/work.ts";
 import { ItemsView, type ItemsHost } from "~/routes/work/ItemsView.tsx";
 import type {
   WorkClaimTotal,
@@ -348,7 +348,7 @@ export function MyWork({ section }: { section: MeSection }) {
   ]);
   const setBy = person.data?.priorities_set_by;
   const setByName = setBy ? (chrome.seatName?.(setBy) ?? setBy) : "";
-  const workHref = (row: WorkSummary) => href(["work", row.key]);
+  const workHref = (row: WorkSummary) => href(itemPath(row));
 
   return (
     <>
@@ -554,7 +554,7 @@ export function MyWork({ section }: { section: MeSection }) {
                   <>
                     <ChecklistClaims
                       rows={mine.checklist_items}
-                      hrefOf={(key) => href(["work", key])}
+                      hrefOf={(address) => href(["work", address])}
                     />
                     <PageFoot
                       shown={mine.checklist_items.length}
@@ -1010,7 +1010,7 @@ function Block({
     <>
       <p className="t-caption">{hint}</p>
       <div className="work-list">
-        <RowList rows={rows} now={now} chrome={chrome} hrefOf={(row) => href(["work", row.key])} />
+        <RowList rows={rows} now={now} chrome={chrome} hrefOf={(row) => href(itemPath(row))} />
       </div>
       <PageFoot shown={rows.length} claim={total} order="recent" />
     </>

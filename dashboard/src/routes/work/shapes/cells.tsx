@@ -39,7 +39,7 @@ import { Assignee, PriorityMark, StatusBadge, type RowChrome } from "~/component
 import { useAct } from "~/lib/useAct.ts";
 import { useQuery } from "~/lib/useQuery.ts";
 import { humanize } from "~/lib/format.ts";
-import { PRIORITIES, STATUSES, statusLabel } from "~/lib/work.ts";
+import { PRIORITIES, STATUSES, statusLabel, itemAddress } from "~/lib/work.ts";
 import type { WorkStatusDef, WorkSummary } from "~/protocol/index.ts";
 
 /** One inline change: the field and its new value. */
@@ -72,7 +72,7 @@ export function InlineEdits({
     (row: WorkSummary, patch: Patch, done: string) => {
       setLost("");
       void write
-        .run({ item: row.key, if_match: row.version, ...patch }, { done })
+        .run({ item: itemAddress(row), if_match: row.version, ...patch }, { done })
         .then((result) => {
           if (result?.kind === "refused" && result.code === "stale_version") setLost(row.key);
         });

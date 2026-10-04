@@ -56,7 +56,7 @@ import {
 import type { OrgIndex } from "~/lib/seats.ts";
 import { relTime } from "~/lib/format.ts";
 import { useNow } from "~/lib/clock.ts";
-import { typeIcon, type LabelContext } from "~/lib/work.ts";
+import { typeIcon, type LabelContext, detailItem, itemAddress, projectPath } from "~/lib/work.ts";
 import { PageActions } from "~/app/frame/PageActions.tsx";
 import { ObjectHeader } from "~/app/frame/ObjectHeader.tsx";
 import { usePeekControls } from "~/app/frame/DetailRail.tsx";
@@ -240,7 +240,11 @@ export function WorkItem({ id }: { id: string }) {
   // "THIS TASK, ON ITS OWN BOARD", with the rail open: the project is a path
   // and the task is the frame's `peek=` token.
   const openOnBoard = () => {
-    if (item) nav.to(["work", item.project], { peek: refToken({ kind: "item", id: item.key }) });
+    if (item && state.data) {
+      nav.to(projectPath(item.project), {
+        peek: refToken({ kind: "item", id: itemAddress(detailItem(state.data)) }),
+      });
+    }
   };
   // AND ON A PHONE IT IS IN THE BAR'S ONE "MORE", beside the star and the
   // link, rather than a second ellipsis next to the frame's.
@@ -261,7 +265,7 @@ export function WorkItem({ id }: { id: string }) {
     <>
       <PageActions>
         {/* WHERE THIS TASK SITS IN THE LIST IT WAS OPENED FROM. */}
-        {item && <ListPosition itemKey={item.key} />}
+        {item && state.data && <ListPosition address={itemAddress(detailItem(state.data))} />}
         {/* WATCH LIVE ONLY WHILE A TURN IS RUNNING ON THIS TASK. */}
         {live && liveTurn && (
           <ButtonLink
@@ -274,7 +278,9 @@ export function WorkItem({ id }: { id: string }) {
           </ButtonLink>
         )}
         {/* A task in the trash is offered the way back. */}
-        {item?.removed && <RestoreButton key={item.key} item={item.key} />}
+        {item?.removed && state.data && (
+          <RestoreButton key={item.id} item={itemAddress(detailItem(state.data))} />
+        )}
         {item && (
           <span className="page-action-folds">
             <Menu
@@ -316,7 +322,7 @@ export function WorkItem({ id }: { id: string }) {
                     chrome={chrome}
                     parent={item.removed ? undefined : item}
                     ringOf={ringFor}
-                    peek={(row: WorkSummary) => openPeek({ kind: "item", id: row.key })}
+                    peek={(row: WorkSummary) => openPeek({ kind: "item", id: itemAddress(row) })}
                   />
                   <Activity item={item} chrome={chrome} index={index} now={now} live={live} />
                 </div>

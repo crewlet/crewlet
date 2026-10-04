@@ -56,7 +56,7 @@ import { useQuery } from "~/lib/useQuery.ts";
 import { useViewer } from "~/lib/viewer.ts";
 import { useAgents, useConnection, useEngineHealth, useOrg } from "~/lib/store-hooks.ts";
 import { indexOrg } from "~/lib/seats.ts";
-import { pageCount, unfinished, viewRun } from "~/lib/work.ts";
+import { pageCount, unfinished, viewRun, projectPath } from "~/lib/work.ts";
 import { routeProject } from "../palette/hits.ts";
 import { useOpenNewTask } from "../newTask.ts";
 import { useStarred } from "~/lib/starred.ts";
@@ -369,7 +369,7 @@ function ProjectsSection({ path }: { path: string[] }) {
           key={p.key}
           label={p.name || p.key}
           lead={p.key}
-          path={["work", p.key]}
+          path={projectPath(p.key)}
           current={inside === p.key}
           count={
             p.task_counts == null ? undefined : { value: unfinished(p.task_counts), label: "open" }

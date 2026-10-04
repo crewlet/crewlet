@@ -28,10 +28,16 @@ import { href, useNavigator, useParam } from "~/app/router.tsx";
 import { useQuery } from "~/lib/useQuery.ts";
 import { aroundParams } from "~/lib/work.ts";
 
-export function ListPosition({ itemKey }: { itemKey: string }) {
+/**
+ * `address` is the task's ADDRESS (`itemAddress`): its key, or its id where
+ * another task claimed the key first — which is what `around=` places, and
+ * what the answer's `prev` and `next` are in turn, so a step from one of two
+ * tasks sharing a key never lands on the other.
+ */
+export function ListPosition({ address }: { address: string }) {
   const [list] = useParam("list", "");
   const nav = useNavigator();
-  const params = aroundParams(list, itemKey);
+  const params = aroundParams(list, address);
   const answer = useQuery("work_items", params ?? undefined, { enabled: params !== null });
   const around = params ? answer.data?.around : undefined;
   // `j` AND `k` STEP THROUGH THE LIST, as they step through a list's rows —

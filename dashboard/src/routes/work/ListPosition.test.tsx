@@ -33,7 +33,7 @@ function mount(hash: string, around: unknown) {
   render(
     <ClientContext.Provider value={{ store, socket }}>
       <Router>
-        <ListPosition itemKey="ENG-4" />
+        <ListPosition address="ENG-4" />
       </Router>
     </ClientContext.Provider>,
   );

@@ -115,6 +115,7 @@ import { useRest, type RestResult } from "~/lib/useRest.ts";
 import { needsSentence } from "~/lib/refusal.ts";
 import { throughOf } from "~/lib/attribution.ts";
 import type { FeedRow, SecretRow, WorkActivityRecord } from "~/protocol/index.ts";
+import { itemPath, subjectItem } from "~/lib/work.ts";
 
 /**
  * The window this screen offers.
@@ -311,7 +312,7 @@ function workSubject(record: WorkActivityRecord): Pick<AuditEntry, "subject" | "
       // A PURGED TASK HAS NO PAGE. Its rows are destroyed and this entry is
       // the only evidence it existed, so a link here would be a NotFound on
       // the one row a reader most wants to follow.
-      path: record.kind === "purged" ? undefined : ["work", record.subject_key],
+      path: record.kind === "purged" ? undefined : itemPath(subjectItem(record)),
     };
   }
   switch (kind) {

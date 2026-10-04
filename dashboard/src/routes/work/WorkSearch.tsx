@@ -83,6 +83,7 @@ import { useOrg } from "~/lib/store-hooks.ts";
 import { indexOrg } from "~/lib/seats.ts";
 import { plainText } from "~/lib/markdown.ts";
 import type { WorkRanked } from "~/protocol/index.ts";
+import { itemAddress } from "~/lib/work.ts";
 
 /**
  * HOW A HIT IS ADDRESSED, in the one spelling every consumer of it uses.
@@ -95,10 +96,6 @@ import type { WorkRanked } from "~/protocol/index.ts";
  * is drawn as the open one. Four spellings of "which item is this" is how the
  * rail comes to highlight a different row from the one it is showing.
  */
-function itemId(hit: WorkRanked): string {
-  return hit.key || hit.id;
-}
-
 export function WorkSearch() {
   // `/` FOCUSES THIS SCREEN'S SEARCH rather than opening the palette over it.
   const searchBox = useRef<HTMLInputElement>(null);
@@ -131,7 +128,7 @@ export function WorkSearch() {
   // it and nothing here re-sorts. Stepping the rail is therefore stepping DOWN
   // THE RANKING, which is the gesture a reader working through hits makes.
   usePeekNeighbours(
-    useMemo(() => rows.map((r) => ({ kind: "item" as const, id: itemId(r) })), [rows]),
+    useMemo(() => rows.map((r) => ({ kind: "item" as const, id: itemAddress(r) })), [rows]),
   );
 
   return (
@@ -221,12 +218,12 @@ export function WorkSearch() {
             // second copy of the route: the rail's `Open ↗` is built from the
             // same reference, so the link a row carries and the way out of the
             // panel it opens can never name different pages.
-            rowHref={(r) => peekHref({ kind: "item", id: itemId(r) })}
+            rowHref={(r) => peekHref({ kind: "item", id: itemAddress(r) })}
             // A PLAIN CLICK PEEKS, because a ranked list is read by working
             // DOWN it: a reader checking whether the third hit is the one they
             // meant should not lose the other nine to find out.
             onRowActivate={(r, e) => {
-              const go = () => openPeek({ kind: "item", id: itemId(r) });
+              const go = () => openPeek({ kind: "item", id: itemAddress(r) });
               // THE GRID HANDS THIS BOTH EVENTS. `rowPeekHandler` is the
               // frame's one copy of "which clicks mean elsewhere" and reads a
               // mouse event; the `enter` chord carries no button at all and is

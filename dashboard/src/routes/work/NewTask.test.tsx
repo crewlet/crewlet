@@ -102,7 +102,7 @@ beforeEach(() => {
       tool: "create_work_item",
       outcome: "applied",
       position: "CREWLET_TRACKER_LOG@1:9",
-      receipt: { key: "ENG-9" },
+      receipt: { item: "ENG-9", key: "ENG-9" },
     },
   };
   vi.stubGlobal(
@@ -343,6 +343,29 @@ test("a lane's status reaches the wire and applied opens the new task", async ()
   ]);
   expect(closed).toBe(1);
   expect(location.hash).toBe("#/work/ENG-9");
+});
+
+// A KEY A RESTORED COUNTER HANDED OUT AGAIN is one another task already
+// claimed, and it opens THAT task — so the new one is opened at the address its
+// receipt names (`item`, its id here), never at its key.
+test("a new task whose key another task claimed opens at the address its receipt names", async () => {
+  reply = {
+    status: 200,
+    body: {
+      tool: "create_work_item",
+      outcome: "applied",
+      position: "CREWLET_TRACKER_LOG@1:9",
+      receipt: { item: "t-new", key: "ENG-7", key_collision: true },
+    },
+  };
+  mount(<NewTaskSheet preset={{ project: "ENG" }} onClose={() => {}} />);
+  await settle();
+  fireEvent.change(screen.getByLabelText("Title"), { target: { value: "Retry PXE boot" } });
+  await act(async () => {
+    fireEvent.click(screen.getByRole("button", { name: "Create task" }));
+  });
+  await settle();
+  expect(location.hash).toBe("#/work/t-new");
 });
 
 // A REFUSAL NAMES THE FIELD, in the engine's own sentence, and the sheet stays
@@ -806,6 +829,7 @@ test("an applied create's warnings are said, not dropped", async () => {
       outcome: "applied",
       position: "CREWLET_TRACKER_LOG@1:9",
       receipt: {
+        item: "ENG-9",
         key: "ENG-9",
         warnings: ['ENG\'s default assignee "ana" is not a seat on the org chart any more.'],
       },

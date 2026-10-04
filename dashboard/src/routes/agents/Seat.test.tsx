@@ -584,14 +584,20 @@ test("Assign task decides whose the task is from the read, not the search's answ
       viewer: { ...OPERATOR, acts: EVERY_ACT },
       work_search: {
         hits: [
-          { key: "ENG-20", title: "Moved away", assignee: "swe" },
-          { key: "ENG-21", title: "Moved here", assignee: "cto" },
+          { id: "t-20", key: "ENG-20", title: "Moved away", assignee: "swe" },
+          { id: "t-21", key: "ENG-21", title: "Moved here", assignee: "cto" },
         ],
         available: true,
         mode: "hybrid",
       },
       work_item: (p: Record<string, unknown>) => ({
-        task: { key: p.id, version: 7, title: "t", assignee: assignee[p.id as string] },
+        task: {
+          id: `t-${String(p.id).slice(4)}`,
+          key: p.id,
+          version: 7,
+          title: "t",
+          assignee: assignee[p.id as string],
+        },
         complete: true,
       }),
     },
