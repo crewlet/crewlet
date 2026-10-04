@@ -23,18 +23,6 @@ name: dependabot-recreate
 on:
   push:
     branches: [main]
-    # A conflict needs both sides to change one file, so only a merge touching
-    # something a Dependabot bump touches can make one. These are the manifests
-    # .github/dependabot.yml watches, plus the bundle a dashboard bump rebuilds.
-    paths:
-      - go.mod
-      - go.sum
-      - dashboard/package.json
-      - dashboard/package-lock.json
-      - static/dashboard/**
-      - Dockerfile
-      - docker-compose.yml
-      - .github/workflows/**
   workflow_dispatch:
     inputs:
       dry_run:

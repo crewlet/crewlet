@@ -691,10 +691,8 @@ token's scope on any diff that touches
 ### A conflicted bump is asked to recreate
 
 [`.github/workflows/dependabot-recreate.yml`](.github/workflows/dependabot-recreate.yml)
-runs when a merge to `main` touches something a Dependabot bump touches (a
-manifest `.github/dependabot.yml` watches, or the dashboard bundle), and by hand
-from the Actions tab, where a **dry run** box reports what it would comment
-without commenting.
+runs on every push to `main`, and by hand from the Actions tab, where a **dry
+run** box reports what it would comment without commenting.
 
 Dependabot rebases a conflicted bump by itself while every commit on it is its
 own or carries `[dependabot skip]`, as the bundle commit does, and while the bump

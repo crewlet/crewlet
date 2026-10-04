@@ -240,14 +240,12 @@ doing the thing, or starts doing more — so read the file when you touch it:
   so a skip on doubt would stall every bump with nothing red to show. Loosening
   the `if:` makes the workflow run *more*; narrowing the approval silently stops
   it approving.
-- **`.github/workflows/dependabot-recreate.yml`'s filter, its `paths`, its
-  command and its environment.** It comments `@dependabot recreate` on a bump in
+- **`.github/workflows/dependabot-recreate.yml`'s filter, its command and its
+  environment.** It comments `@dependabot recreate` on a bump in
   conflict that Dependabot will not rebase by itself: one holding a commit that is
   neither Dependabot's nor marked `[dependabot skip]`. Widen that and it races
   Dependabot on bumps it rebases itself; narrow it and a stuck bump is never
-  asked. Its `paths` must list every manifest `.github/dependabot.yml` watches and
-  the dashboard bundle, or a merge that puts a bump in conflict starts no run.
-  `recreate` overwrites every commit on the branch. Each request carries the head
+  asked. `recreate` overwrites every commit on the branch. Each request carries the head
   it was made for in a hidden marker, which keeps it to one request per head and
   three per bump. The comment must come from a user account, with
   `DEPENDABOT_RECREATE_TOKEN`: fine-grained, this repository alone, Pull requests:
