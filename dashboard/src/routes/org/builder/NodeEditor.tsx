@@ -50,6 +50,7 @@ import { useState, type ReactNode } from "react";
 import { useLeaveGuard } from "~/app/router.tsx";
 import type { CompanyDocument, ConfigRole, ConfigUnit } from "~/protocol/index.ts";
 import { formatPhaseLLM, plural } from "~/lib/format.ts";
+import { handleLabel } from "~/lib/seats.ts";
 import { ConfigField, type FieldChoice } from "~/components/ConfigField.tsx";
 import { BUDGET_WINDOWS } from "~/contract/config.ts";
 import {
@@ -1205,8 +1206,8 @@ function HandleFact({
       </ReadOnlyFact>
       {open && (
         <EditorSection
-          title={`Replace @${handle}`}
-          hint={`This is a new seat: a new mailbox, new memory and a new agent id. ${seat.data.name || "This seat"}'s work, memory and history stay with @${handle}, which stops running once the change is saved. The new seat takes its place and fields, and every lead, manages entry and Datadog fallback naming @${handle} moves to it.`}
+          title={`Replace ${handleLabel(handle)}`}
+          hint={`This is a new seat: a new mailbox, new memory and a new agent id. ${seat.data.name || "This seat"}'s work, memory and history stay with ${handleLabel(handle)}, which stops running once the change is saved. The new seat takes its place and fields, and every lead, manages entry and Datadog fallback naming ${handleLabel(handle)} moves to it.`}
         >
           <Refusal message={refusal} />
           <ConfigField
