@@ -288,45 +288,6 @@ func TestTheTrailPrintsATokensGestureAsOne(t *testing.T) {
 	}
 }
 
-// A DUPLICATED CLAIM NAMES EVERYBODY HOLDING IT, because the report exists so
-// an operator can decide who keeps it — and a row naming one holder, or none,
-// leaves them to find the rest by hand. An address is named by its kind alone:
-// the report carries no form of it, so there is nothing to print.
-func TestTheCheckNamesEveryHolderOfADuplicatedClaim(t *testing.T) {
-	var out bytes.Buffer
-	answer := map[string]any{
-		"position": "iam@12",
-		"findings": []any{
-			map[string]any{
-				"kind": "claim_duplicated", "claim": "login",
-				"login": "ada.lovelace", "people": []any{"p-1", "p-2"},
-				"detail": "held twice",
-			},
-			map[string]any{
-				"kind": "claim_duplicated", "claim": "email",
-				"people": []any{"p-3", "p-4"}, "detail": "held twice",
-			},
-			map[string]any{
-				"kind": "person_without_credential", "person": "p-5",
-				"login": "grace.hopper", "detail": "never signed in",
-			},
-		},
-	}
-	if err := (&iamPrinter{w: &out}).check(answer, nil); err != nil {
-		t.Fatalf("print: %v", err)
-	}
-	got := out.String()
-	for _, want := range []string{
-		"login ada.lovelace: p-1, p-2",
-		"email: p-3, p-4",
-		"grace.hopper",
-	} {
-		if !strings.Contains(got, want) {
-			t.Errorf("the report does not say %q:\n%s", want, got)
-		}
-	}
-}
-
 // A WRITE SAYS WHETHER IT LANDED HERE, read off the answer's outcome.
 //
 // The printer said "applied at" for every 2xx, so a write the node had made

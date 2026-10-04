@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -635,34 +636,52 @@ func (p PersonRow) Binding() SeatBinding {
 }
 
 // HoldersOf is who this node's directory binds to each of seats, read in ONE
-// snapshot: every person with a row, at whatever stage — an invited or
+// snapshot: the person with a row, at whatever stage — an invited or
 // suspended person, an active one — because a removal deletes the row and
 // every other stage is somebody the seat still names. A seat nobody holds is
-// absent from the answer, and a seat two rows hold — which only a record this
-// node retained, or a restore, leaves behind — names both.
+// absent from the answer.
 //
 // It is the company write's question — may this seat leave the company? — so
 // it answers about the seats asked and no others. Three-valued like everything
-// here: an error is the unknown arm, never "nobody".
+// here: an error is the unknown arm, never "nobody" — and so is a seat asked
+// about that two rows hold ([BySeat]).
 func (r *Reader) HoldersOf(ctx context.Context, seats []string) (
-	map[string][]SeatBinding, error) {
+	map[string]SeatBinding, error) {
 
 	if len(seats) == 0 {
-		return map[string][]SeatBinding{}, nil
-	}
-	asked := make(map[string]bool, len(seats))
-	for _, seat := range seats {
-		asked[seat] = true
+		return map[string]SeatBinding{}, nil
 	}
 	bindings, err := r.SeatBindings(ctx)
 	if err != nil {
 		return nil, err
 	}
-	out := map[string][]SeatBinding{}
+	asked := make([]SeatBinding, 0, len(seats))
 	for _, b := range bindings {
-		if asked[b.Seat] {
-			out[b.Seat] = append(out[b.Seat], b)
+		if slices.Contains(seats, b.Seat) {
+			asked = append(asked, b)
 		}
+	}
+	return BySeat(asked)
+}
+
+// BySeat is bindings keyed by their seat, ONE holder per seat.
+//
+// TWO ROWS BINDING ONE SEAT ARE THE UNKNOWN ARM, never a pick. The directory
+// decides every binding on one subject in one snapshot, so ordinary traffic
+// never produces two; a node that retained the record moving somebody off a
+// seat, and applied a later one binding it to somebody else, holds both until
+// it reprocesses the first — as a restore can. That node cannot say who holds
+// the seat, so another node answers.
+func BySeat(bindings []SeatBinding) (map[string]SeatBinding, error) {
+	out := make(map[string]SeatBinding, len(bindings))
+	for _, b := range bindings {
+		if first, twice := out[b.Seat]; twice {
+			return nil, fmt.Errorf("%w: this node holds two rows bound to seat "+
+				"%s (%s and %s), which only a record it retained or a restore "+
+				"leaves behind — another node can answer", statelog.ErrUnavailable,
+				b.Seat, first.Person, b.Person)
+		}
+		out[b.Seat] = b
 	}
 	return out, nil
 }

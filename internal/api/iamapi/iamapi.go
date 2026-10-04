@@ -71,10 +71,6 @@ type Directory interface {
 	// tokens listing asks of every `token:<id>` login.
 	PersonByLogin(ctx context.Context, login string) (iamdomain.Sighting, error)
 
-	// Claims is the claim duty's own reading, which the report shows on
-	// demand: a duplicate or an orphan the duty warns about.
-	Claims(ctx context.Context, now time.Time) (iamdomain.ClaimReport, error)
-
 	// SeatBindings is everybody bound to a seat, in one snapshot, which
 	// the seat listing joins to the running company's human seats.
 	SeatBindings(ctx context.Context) ([]iamdomain.SeatBinding, error)

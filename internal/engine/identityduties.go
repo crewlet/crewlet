@@ -11,42 +11,27 @@ import (
 	"github.com/crewlet/crewlet/internal/schedule"
 )
 
-// THE IDENTITY DUTIES: two fleet singletons that keep the identity estate
-// honest, each on its own lease and its own interval.
+// THE IDENTITY DUTY: the fleet singleton that keeps the identity estate's
+// retention, on its own lease and its own interval.
 //
-//   - THE SWEEP PUBLISHER turns `api.audit`'s two horizons into positions and
-//     publishes a retention record for every bucket that is due
-//     ([iamdomain.Writer.Sweep]). The applier on every node deletes the same
-//     rows; nothing else ever deletes from this estate.
-//   - THE CLAIM REPORT names a duplicate a restore produced and a reservation
-//     an enrolment left behind ([iamdomain.Reader.Claims]). It reports and
-//     never repairs: which of two people keeps an address is a decision.
+// THE SWEEP PUBLISHER turns `api.audit`'s two horizons into positions and
+// publishes a retention record for every bucket that is due
+// ([iamdomain.Writer.Sweep]). The applier on every node deletes the same rows;
+// nothing else ever deletes from this estate. It claims its `worker:` lease
+// through [Engine.workerDuty], which gives it the roles gate and the release
+// on a graceful stop that every singleton has.
 //
-// # Two leases rather than one duty with two jobs
-//
-// They share nothing but the domain. Their costs land on different systems —
-// one publishes to the log, the other only reads the local database — and a
-// lease flap on one should cost that one a skipped interval rather than both. So each claims its own `worker:` lease through
-// [Engine.workerDuty], which also gives each the roles gate and the release on
-// a graceful stop that every singleton has.
-//
-// # Every loop ticks once at start
+// # The loop ticks once at start
 //
 // Unlike the maintenance sweep, which waits a full interval so a rolling
-// deploy does not run it once per replica. Here the first tick is the useful
-// one: the claim report after a boot is how a restore's duplicate is named the
-// moment the restored node is back rather than an hour later; and the one that
-// writes — the sweep — is gated on something being due, so a tick that finds
-// nothing costs reads and no records.
+// deploy does not run it once per replica: the sweep is gated on something
+// being due, so a tick that finds nothing costs reads and no records.
 
 // identityLog is the duties' own voice.
 var identityLog = logging.Get("iam.duty")
 
-// The two duties' lease names.
-const (
-	identitySweepDuty  = "iam_sweep"
-	identityClaimsDuty = "iam_claims"
-)
+// identitySweepDuty is the sweep publisher's lease name.
+const identitySweepDuty = "iam_sweep"
 
 // IdentitySweepInterval is how often the sweep publisher plans.
 //
@@ -59,21 +44,12 @@ const (
 // and no records.
 const IdentitySweepInterval = time.Hour
 
-// IdentityClaimsInterval is how often the claim report runs.
-//
-// AN HOUR. A duplicate arises only from a restore or a reanchor, both of which
-// restart the node that performed them — and the first tick at boot is what
-// names it then. The interval is the cadence of the WARNING that follows: loud
-// enough that a standing duplicate is not forgotten, rare enough that it is
-// not the log.
-const IdentityClaimsInterval = time.Hour
-
 // identityDutyTTL is a duty's lease: three of its intervals, the ratio every
 // singleton here takes, so one slow claim does not hand the duty to a peer and
 // a dead holder's duty moves within about three ticks.
 //
-// EVERY INTERVAL HERE IS AN HOUR OR LESS, so the lease stays inside
-// [coord.MaxDutyTTL]'s three hours and the duty claims once per tick.
+// THE INTERVAL IS AN HOUR, so the lease stays inside [coord.MaxDutyTTL]'s three
+// hours and the duty claims once per tick.
 func identityDutyTTL(every time.Duration) time.Duration { return 3 * every }
 
 // identityDuty is one loop's declaration.
@@ -165,7 +141,7 @@ func (e *Engine) identityDutiesFor(boot *config.Bootstrap) []identityDuty {
 	if c == nil || boot == nil || !e.profile.RunsWorkers() {
 		return nil
 	}
-	reader, writer := c.iamReader, c.iamWriter
+	writer := c.iamWriter
 	horizons := iamdomain.Horizons{
 		Changes:  boot.API.Auth.Audit.Changes(),
 		Sessions: boot.API.Auth.Audit.Sessions(),
@@ -178,9 +154,6 @@ func (e *Engine) identityDutiesFor(boot *config.Bootstrap) []identityDuty {
 	return []identityDuty{
 		duty(identitySweepDuty, IdentitySweepInterval, func(ctx context.Context) {
 			sweepPass(ctx, writer, horizons)
-		}),
-		duty(identityClaimsDuty, IdentityClaimsInterval, func(ctx context.Context) {
-			claimsPass(ctx, reader)
 		}),
 	}
 }
@@ -235,51 +208,4 @@ func sweepPass(ctx context.Context, writer *iamdomain.Writer, horizons iamdomain
 			"sessions_below", report.Plan.Sessions,
 			"expired_before", report.Plan.Expired)
 	}
-}
-
-// claimsPass says every duplicate and orphan this node's rows hold.
-//
-// A WARNING PER FINDING, every tick it stands: each is something an operator
-// has to decide, and a report that said it once would be forgotten by the
-// person who was not looking at the log that hour.
-func claimsPass(ctx context.Context, reader *iamdomain.Reader) {
-	report, err := reader.Claims(ctx, time.Now())
-	if err != nil {
-		identityLog.WarnContext(ctx, "iam_claims_unreadable", "error", err.Error())
-		return
-	}
-	for _, dup := range report.Duplicates {
-		identityLog.WarnContext(ctx, "iam_claim_duplicated",
-			duplicateAttrs(dup, report.At.String())...)
-	}
-	for _, orphan := range report.Orphans {
-		identityLog.WarnContext(ctx, "iam_claim_orphaned",
-			"person", orphan.Person, "holds", orphan.Holds, "since", orphan.Since,
-			"detail", "an enrolment stopped after taking these claims; "+
-				"`crewlet iam remove` on this id releases them")
-	}
-}
-
-// duplicateAttrs is what one duplicated claim's warning says.
-//
-// THE TOKEN ONLY FOR A CLAIM THAT IS IN THE CLEAR ANYWAY — a login and a seat,
-// which the dashboard prints on every row. An address's token is its keyed
-// BLIND, and a log line is the one copy of it that leaves the estate: it is
-// shipped to whatever aggregates the logs, kept on that system's retention
-// rather than this one's, and it is the same value for the same address for the
-// life of the company — a stable pseudonym anybody holding the log can join
-// across every line and every system that ever wrote it, and one guess away from
-// the address for anybody who ever holds the blind key. The holders' ids are
-// what an operator acts on, so the address is named by its KIND alone, which is
-// the directory report's rule too. A WHITELIST rather than a refusal of the
-// address kind, so a claim kind added later is not logged by default.
-func duplicateAttrs(dup iamdomain.DuplicateClaim, at string) []any {
-	attrs := []any{"claim", string(dup.Kind), "people", dup.People, "at", at}
-	switch dup.Kind {
-	case iamdomain.UniqueLogin, iamdomain.UniqueSeat:
-		attrs = append(attrs, "token", dup.Token)
-	}
-	return append(attrs, "detail", "more than one person holds this claim, "+
-		"which the broker cannot produce and a restore or a reanchor can; "+
-		"decide who keeps it and release it from the others — nothing here picks")
 }

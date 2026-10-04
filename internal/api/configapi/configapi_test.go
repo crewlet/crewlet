@@ -87,22 +87,22 @@ type surface struct {
 	// held is who the directory this surface asks binds to each seat, and
 	// directoryDown makes every read of it fail; asked is every list of
 	// seats the surface asked about, in order.
-	held          map[string][]configapi.SeatHolder
+	held          map[string]configapi.SeatHolder
 	directoryDown error
 	asked         [][]string
 }
 
 // holders is the directory a case's surface asks, answering from s.held.
 func (s *surface) holders(_ context.Context, seats []string) (
-	map[string][]configapi.SeatHolder, error) {
+	map[string]configapi.SeatHolder, error) {
 
 	s.asked = append(s.asked, slices.Clone(seats))
 	if s.directoryDown != nil {
 		return nil, s.directoryDown
 	}
-	out := map[string][]configapi.SeatHolder{}
+	out := map[string]configapi.SeatHolder{}
 	for _, seat := range seats {
-		if held := s.held[seat]; len(held) > 0 {
+		if held, ok := s.held[seat]; ok {
 			out[seat] = held
 		}
 	}
@@ -1258,7 +1258,7 @@ func TestNewRefusesAMissingStorePlaneOrKeyring(t *testing.T) {
 	t.Cleanup(func() { _ = db.Close() })
 	fleet, cipher := coordmemory.NewFleet(), testCipher(t)
 
-	nobody := func(context.Context, []string) (map[string][]configapi.SeatHolder, error) {
+	nobody := func(context.Context, []string) (map[string]configapi.SeatHolder, error) {
 		return nil, nil
 	}
 	for field, opts := range map[string]configapi.Options{

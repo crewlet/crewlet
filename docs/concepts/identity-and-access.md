@@ -2098,15 +2098,12 @@ that meets two rows answers `503` — ask another node — rather than picking o
 
 > **If you are reading the schema and reaching for a unique index as a
 > backstop: don't.** A duplicate cannot arise from ordinary traffic, and it
-> *can* arise from a restore or a reanchor. Three **non-unique, partial**
-> indexes — over the address blind, the login and the seat id on a person's
-> row — are what the
-> `iam_claims` duty reads to *report* one — a WARN line each hour it stands,
-> and a `claim_duplicated` finding in `crewlet iam check` naming everybody who
-> holds it. A unique index would convert an anomaly an operator can repair
-> into an outage nobody can: a violation inside an apply would stop that
-> node's log for good. The engine never picks who keeps a duplicated value;
-> you do, and you change it on the others.
+> *can* arise from a restore, a reanchor or a retained record — and every
+> lookup that meets one answers `503` rather than either row, as above. A
+> unique index would convert an anomaly an operator can repair into an outage
+> nobody can: a violation inside an apply would stop that node's log for good.
+> The engine never picks who keeps a duplicated value; you do, and you change
+> it on the others.
 
 ### What is in the clear, and what is not
 

@@ -57,8 +57,10 @@ const SEATS = {
     {
       handle: "jane",
       name: "Jane Founder",
-      holders: [{ person: "p-ana", login: "ana.diaz", stage: "active" }],
+      holder: { person: "p-ana", login: "ana.diaz", stage: "active" },
     },
+    { handle: "sam", name: "Sam Support" },
+    { handle: "lee", name: "Lee Legal" },
   ],
 };
 
@@ -79,9 +81,11 @@ const TOKENS = {
 const CHECK = {
   findings: [
     {
-      kind: "claim_orphaned",
-      claim: "iam.login.ghost",
-      detail: "a reservation holds login ghost and is nobody",
+      kind: "binding_dangling",
+      person: "p-gone",
+      login: "gone.person",
+      seat: "removed-seat",
+      detail: "the seat removed-seat is not in the org chart",
     },
   ],
   people_with_people_manage: 1,
@@ -203,7 +207,11 @@ test("a seat names who holds it and a token what it acts as", async () => {
   expect(within(spare).getByText(TOKEN_ROW_WORDS.none!.label)).toBeTruthy();
   expect(within(spare).getByText(BINDING_WORDS.unbound!.label)).toBeTruthy();
   // The directory's own finding, in the engine's words.
-  expect(screen.getByText("A reservation holds login ghost and is nobody.")).toBeTruthy();
+  expect(screen.getByText("The seat removed-seat is not in the org chart.")).toBeTruthy();
+  // A SEAT IS HELD BY ONE PERSON OR BY NOBODY: two of the three are vacant.
+  const vacant = screen.getByText("Human seats nobody holds").closest(".crewlet-statcard");
+  expect(vacant?.querySelector(".crewlet-statcard__value")?.textContent).toBe("2");
+  expect(within(vacant as HTMLElement).getByText("of 3 human seats")).toBeTruthy();
 });
 
 // A REFUSED DIRECTORY IS NOT AN EMPTY COMPANY: the reader sees the refusal and
@@ -232,11 +240,12 @@ test("a refused reader sees the refusal and its grants, and no tiles", async () 
 test("a reader without config:read is told what reading a seat's surfaces needs", async () => {
   stubIam();
   const { queried } = mount({ login: "ana.diaz", owner: "jane", grants: ["audit:read"] });
+  // ONE SENTENCE PER SEAT, every seat refused alike.
   expect(
-    await screen.findByText(
+    await screen.findAllByText(
       "Reading where a seat is reached needs config:read, which the credential you presented does not carry.",
     ),
-  ).toBeTruthy();
+  ).toHaveLength(3);
   expect(queried).not.toContain("config");
 });
 

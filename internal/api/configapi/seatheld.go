@@ -58,12 +58,12 @@ type SeatHolder struct {
 }
 
 // Holders answers who the identity directory binds to each of seats, at any
-// stage short of removal, keyed by the seat's handle. A seat nobody holds is
-// absent. An error is UNKNOWN, never "nobody".
+// stage short of removal, keyed by the seat's handle — one holder per seat. A
+// seat nobody holds is absent. An error is UNKNOWN, never "nobody".
 //
 // A FUNCTION RATHER THAN THE DIRECTORY, because this surface needs one
 // question of it, and the directory's own types are the identity estate's.
-type Holders func(ctx context.Context, seats []string) (map[string][]SeatHolder, error)
+type Holders func(ctx context.Context, seats []string) (map[string]SeatHolder, error)
 
 // DirectoryHolders is [Holders] over this node's identity directory, or nil
 // when there is none — which [New] refuses by name rather than serving a
@@ -72,51 +72,34 @@ func DirectoryHolders(directory *iamdomain.Reader) Holders {
 	if directory == nil {
 		return nil
 	}
-	return func(ctx context.Context, seats []string) (map[string][]SeatHolder, error) {
+	return func(ctx context.Context, seats []string) (map[string]SeatHolder, error) {
 		held, err := directory.HoldersOf(ctx, seats)
 		if err != nil {
 			return nil, err
 		}
-		out := make(map[string][]SeatHolder, len(held))
-		for seat, bindings := range held {
-			for _, b := range bindings {
-				out[seat] = append(out[seat], SeatHolder{
-					Person: b.Person, Login: b.Login, Stage: b.Stage,
-				})
-			}
+		out := make(map[string]SeatHolder, len(held))
+		for seat, b := range held {
+			out[seat] = SeatHolder{Person: b.Person, Login: b.Login, Stage: b.Stage}
 		}
 		return out, nil
 	}
 }
 
 // SeatHeldError reports a write that would take a human seat out of the
-// company while somebody is bound to it. Held names every such seat and
-// everybody who holds it.
+// company while somebody is bound to it. Held names every such seat and who
+// holds it.
 type SeatHeldError struct {
-	Held map[string][]SeatHolder
+	Held map[string]SeatHolder
 }
 
 func (e *SeatHeldError) Error() string {
 	seats := make([]string, 0, len(e.Held))
-	for seat, holders := range e.Held {
-		names := make([]string, 0, len(holders))
-		for _, h := range holders {
-			names = append(names, h.name())
-		}
-		seats = append(seats, seat+" (held by "+strings.Join(names, ", ")+")")
+	for seat, h := range e.Held {
+		seats = append(seats, seat+" (held by "+h.Login+")")
 	}
 	slices.Sort(seats)
 	return "configapi: this write removes a human seat somebody is bound to: " +
 		strings.Join(seats, "; ")
-}
-
-// name is how a refusal's sentence names a holder: their login, or their id
-// where a reservation has none yet.
-func (h SeatHolder) name() string {
-	if h.Login != "" {
-		return h.Login
-	}
-	return h.Person
 }
 
 // HoldersUnavailableError reports a write that takes a human seat away on a
@@ -145,10 +128,10 @@ func (s *Service) checkHeldSeats(ctx context.Context, prior, next *config.Compan
 	if err != nil {
 		return &HoldersUnavailableError{Seats: leaving, Err: err}
 	}
-	refused := map[string][]SeatHolder{}
+	refused := map[string]SeatHolder{}
 	for _, seat := range leaving {
-		if holders := held[seat]; len(holders) > 0 {
-			refused[seat] = holders
+		if h, ok := held[seat]; ok {
+			refused[seat] = h
 		}
 	}
 	if len(refused) == 0 {

@@ -34,8 +34,7 @@ func TestTheIdentityDutiesAreArmedWhereTheirInputsAre(t *testing.T) {
 		b.Stream.StoreDir = filepath.Join(t.TempDir(), "stream")
 	}
 	want := map[string]time.Duration{
-		"iam_sweep":  engine.IdentitySweepInterval,
-		"iam_claims": engine.IdentityClaimsInterval,
+		"iam_sweep": engine.IdentitySweepInterval,
 	}
 
 	t.Run("a node running the domain", func(t *testing.T) {

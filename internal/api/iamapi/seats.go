@@ -7,6 +7,7 @@ import (
 	"github.com/crewlet/crewlet/internal/api/httpjson"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/iam/session"
+	"github.com/crewlet/crewlet/internal/iamdomain"
 )
 
 // Seats is the company this node runs, as `GET /iam/seats` reads it.
@@ -26,11 +27,9 @@ type SeatRow struct {
 	Name   string `json:"name"`
 	// Unit is the key of the unit the seat sits in, empty at the root.
 	Unit string `json:"unit,omitempty"`
-	// Holders is everybody the directory binds to the seat, at any stage
-	// short of removal — normally one, and empty for a seat nobody holds.
-	// More than one is a duplicate a restore left behind, which
-	// `GET /iam/check` names.
-	Holders []SeatHolding `json:"holders"`
+	// Holder is the person the directory binds to the seat, at any stage
+	// short of removal, and absent for a seat nobody holds.
+	Holder *SeatHolding `json:"holder,omitempty"`
 }
 
 // SeatHolding is one person bound to a seat.
@@ -46,20 +45,22 @@ type SeatHolding struct {
 // # A listing, not a report
 //
 // It answers who sits where, which is what assigning a person to a seat needs.
-// What is WRONG with a binding — a seat gone, a duplicate — is
-// `GET /iam/check`'s, the one place a problem is reported.
+// What is WRONG with a binding — a seat gone — is `GET /iam/check`'s, the one
+// place a problem is reported.
 //
 // # Held is any stage short of removal
 //
 // A suspended person still holds their seat, and so does somebody invited to
-// it or an enrolment that has reserved it — the same rule a company write is
-// held to before it removes a seat. "Unheld" is a seat with nobody at all.
+// it — the same rule a company write is held to before it removes a seat.
+// "Unheld" is a seat with nobody at all.
 //
 // # An unreadable directory is 503, never a list of vacancies
 //
 // The filter is never applied to what could not be read: answered as "nobody
 // holds anything", `?unheld=true` would list every seat in the company under a
-// parameter that promised the vacancies.
+// parameter that promised the vacancies. A seat two rows bind — a record this
+// node retained, or a restore — is the same answer, since this node cannot say
+// which of them holds it ([iamdomain.BySeat]).
 func (s *Service) GetSeats(w http.ResponseWriter, r *http.Request) {
 	unheld := false
 	if raw := r.URL.Query().Get("unheld"); raw != "" {
@@ -84,24 +85,21 @@ func (s *Service) GetSeats(w http.ResponseWriter, r *http.Request) {
 		s.unavailable(w, r, "read the seat bindings", err)
 		return
 	}
-	held := map[string][]SeatHolding{}
-	for _, b := range bindings {
-		held[b.Seat] = append(held[b.Seat], SeatHolding{
-			Person: b.Person, Login: b.Login, Stage: b.Stage,
-		})
+	held, err := iamdomain.BySeat(bindings)
+	if err != nil {
+		s.unavailable(w, r, "read the seat bindings", err)
+		return
 	}
 	rows := []SeatRow{}
 	for _, seat := range seats {
-		holders := held[seat.Handle]
-		if unheld && len(holders) > 0 {
-			continue
+		row := SeatRow{Handle: seat.Handle, Name: seat.Name, Unit: seat.Unit}
+		if b, ok := held[seat.Handle]; ok {
+			if unheld {
+				continue
+			}
+			row.Holder = &SeatHolding{Person: b.Person, Login: b.Login, Stage: b.Stage}
 		}
-		if holders == nil {
-			holders = []SeatHolding{}
-		}
-		rows = append(rows, SeatRow{
-			Handle: seat.Handle, Name: seat.Name, Unit: seat.Unit, Holders: holders,
-		})
+		rows = append(rows, row)
 	}
 	httpjson.Write(w, http.StatusOK, map[string]any{"seats": rows})
 }

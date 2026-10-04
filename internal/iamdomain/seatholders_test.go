@@ -1,6 +1,7 @@
 package iamdomain_test
 
 import (
+	"database/sql"
 	"errors"
 	"testing"
 	"time"
@@ -251,12 +252,15 @@ func TestSeatBindingsIsEveryBindingAndNothingElse(t *testing.T) {
 	}
 }
 
-// WHO HOLDS A SEAT A COMPANY WRITE WOULD TAKE AWAY IS EVERY PERSON WITH A ROW.
+// WHO HOLDS A SEAT A COMPANY WRITE WOULD TAKE AWAY IS THE PERSON WITH A ROW.
 //
 // It is the question a company write asks before it removes a human seat, so
 // a suspended person still holds theirs — suspending somebody is not giving
 // their seat away — while a removed one and an unbound one do not, and a seat
-// the write did not ask about is not answered.
+// the write did not ask about is not answered. A seat two rows bind is the
+// unknown arm: this node cannot say which of them holds it.
+//
+// Mutation: answer the first of two rows and the duplicate is a holder.
 func TestHoldersOfNamesEveryUnremovedHolderOfTheSeatsAsked(t *testing.T) {
 	t.Parallel()
 	rig := newWriteRig(t)
@@ -286,18 +290,31 @@ func TestHoldersOfNamesEveryUnremovedHolderOfTheSeatsAsked(t *testing.T) {
 	if err != nil {
 		t.Fatalf("HoldersOf: %v", err)
 	}
-	if len(held) != 1 || len(held["platform-lead"]) != 1 ||
-		held["platform-lead"][0].Person != priya ||
-		held["platform-lead"][0].Login != "priya.shah" ||
-		held["platform-lead"][0].Stage != iam.StageSuspended {
+	if len(held) != 1 || held["platform-lead"].Person != priya ||
+		held["platform-lead"].Login != "priya.shah" ||
+		held["platform-lead"].Stage != iam.StageSuspended {
 		t.Errorf("HoldersOf = %+v, want the suspended platform lead alone — a "+
 			"removed holder, an unbound one and a seat nobody held hold nothing, "+
 			"and a seat not asked about is not answered", held)
 	}
 	// THE CONTROL: the active holder is answered when asked about.
 	if held, err := reader.HoldersOf(t.Context(), []string{"sarah-chen"}); err != nil ||
-		len(held["sarah-chen"]) != 1 || held["sarah-chen"][0].Person != sarah {
+		held["sarah-chen"].Person != sarah {
 		t.Errorf("HoldersOf(sarah-chen) = %+v (%v), want Sarah", held, err)
+	}
+
+	// TWO ROWS ON ONE SEAT, as a retained record's residue leaves them.
+	if err := rig.db.Replicated().Tx(t.Context(), func(tx *sql.Tx) error {
+		_, err := tx.ExecContext(t.Context(),
+			`UPDATE iam_people SET seat_id = 'sarah-chen' WHERE id = ?`, priya)
+		return err
+	}); err != nil {
+		t.Fatalf("bind Priya's row to Sarah's seat: %v", err)
+	}
+	if held, err := reader.HoldersOf(t.Context(), []string{"sarah-chen"}); !errors.Is(err,
+		statelog.ErrUnavailable) {
+		t.Errorf("HoldersOf a seat two rows bind = %+v (%v), want the unknown arm",
+			held, err)
 	}
 }
 

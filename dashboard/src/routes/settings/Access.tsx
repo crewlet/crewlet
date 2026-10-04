@@ -141,7 +141,8 @@ export interface SeatRow {
   name: string;
   /** The key of the unit the seat sits in, "" at the root. */
   unit?: string;
-  holders: { person: string; login?: string; stage?: string }[];
+  /** Whoever the directory binds to it, absent for a seat nobody holds. */
+  holder?: { person: string; login?: string; stage?: string };
 }
 
 /** One of this node's Tier A tokens, by label, joined to its directory row. */
@@ -166,8 +167,6 @@ export interface DirectoryFinding {
   login?: string;
   seat?: string;
   grant?: string;
-  claim?: string;
-  people?: string[] | null;
   detail: string;
 }
 
@@ -266,8 +265,6 @@ export const FINDING_WORDS: Record<string, { label: string; tone: Tone }> = {
   person_without_credential: { label: "Active, no credential", tone: "warning" },
   binding_dangling: { label: "Seat gone", tone: "warning" },
   grant_clamped_by_ceiling: { label: "Grant withheld here", tone: "neutral" },
-  claim_duplicated: { label: "Held twice", tone: "danger" },
-  claim_orphaned: { label: "Reservation left behind", tone: "warning" },
 };
 
 /** What a credential method is called. */
@@ -387,7 +384,7 @@ export function PeopleAndAccess() {
   const people = useMemo(() => directory.data ?? [], [directory.data]);
   const active = people.filter((p) => p.stage === "active").length;
   const seatRows = useMemo(() => seats.data ?? [], [seats.data]);
-  const unheld = seatRows.filter((s) => s.holders.length === 0).length;
+  const unheld = seatRows.filter((s) => !s.holder).length;
   const tokenRows = useMemo(() => tokens.data ?? [], [tokens.data]);
   const boundTokens = tokenRows.filter((t) => t.binding === "bound").length;
   const openedRow = people.find((p) => p.id === opened) ?? null;
@@ -560,10 +557,10 @@ export function PeopleAndAccess() {
                     },
                   },
                   {
-                    key: "holders",
+                    key: "holder",
                     header: "Held by",
-                    sortValue: (s) => s.holders.length,
-                    cell: (s) => <Holders holders={s.holders} />,
+                    sortValue: (s) => s.holder?.login ?? s.holder?.person ?? "",
+                    cell: (s) => <Holder holder={s.holder} />,
                   },
                   {
                     key: "reach",
@@ -694,21 +691,16 @@ function Grants({ grants }: { grants?: string[] | null }) {
 }
 
 /** Whoever holds a seat, by login and stage — or the plain fact that nobody does. */
-function Holders({ holders }: { holders: SeatRow["holders"] }) {
-  if (holders.length === 0) return <EmptyValue label="Nobody holds it" />;
+function Holder({ holder }: { holder: SeatRow["holder"] }) {
+  if (!holder) return <EmptyValue label="Nobody holds it" />;
   return (
-    <span className="row gap-1" style={{ flexWrap: "wrap" }}>
-      {holders.map((h) => (
-        <Tag
-          key={h.person}
-          size="sm"
-          variant={STAGE_WORDS[h.stage ?? ""]?.tone ?? "neutral"}
-          title={STAGE_WORDS[h.stage ?? ""]?.label ?? h.stage}
-        >
-          <span className="mono">{h.login || h.person}</span>
-        </Tag>
-      ))}
-    </span>
+    <Tag
+      size="sm"
+      variant={STAGE_WORDS[holder.stage ?? ""]?.tone ?? "neutral"}
+      title={STAGE_WORDS[holder.stage ?? ""]?.label ?? holder.stage}
+    >
+      <span className="mono">{holder.login || holder.person}</span>
+    </Tag>
   );
 }
 
@@ -773,7 +765,7 @@ function Findings({ check }: { check: RestResult<DirectoryCheck | null> }) {
           {findings.map((f, i) => {
             const words = FINDING_WORDS[f.kind];
             return (
-              <div key={`${f.kind}:${f.person ?? f.claim ?? f.seat ?? i}`} className="row gap-2">
+              <div key={`${f.kind}:${f.person ?? f.seat ?? i}`} className="row gap-2">
                 <Tag size="sm" variant={words?.tone ?? "neutral"}>
                   {words?.label ?? f.kind}
                 </Tag>

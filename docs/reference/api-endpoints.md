@@ -908,24 +908,25 @@ outage.
 ```json
 {
   "seats": [
-    {"handle": "founder", "name": "Founder", "holders": [
-      {"person": "018f3a9c-…", "login": "jane.doe", "stage": "active"}]},
-    {"handle": "qa-lead", "name": "QA Lead", "unit": "quality", "holders": []}
+    {"handle": "founder", "name": "Founder",
+     "holder": {"person": "018f3a9c-…", "login": "jane.doe", "stage": "active"}},
+    {"handle": "qa-lead", "name": "QA Lead", "unit": "quality"}
   ]
 }
 ```
 
 Every human seat of the company this node runs, in the order the company
-declares them, with everybody the directory binds to each **at any stage short
+declares them, with the person the directory binds to each **at any stage short
 of removal** — a suspended person still holds their seat, and so does somebody
-invited to it. `?unheld=true` keeps the seats nobody holds, which is what an
-invitation's seat picker offers. More than one holder is a duplicate a restore
-left behind, which `GET /iam/check` names.
+invited to it — and no `holder` for a seat nobody holds. `?unheld=true` keeps
+the seats nobody holds, which is what an invitation's seat picker offers.
 
 **A listing, not a report**: what is wrong with a binding is `/iam/check`'s.
 A node that runs no company yet answers `409 no_active_revision`, and one
 that cannot read the directory `503` — never a list of vacancies built from
-what it could not read.
+what it could not read. So does one holding two rows bound to one seat, which
+only a record it retained or a restore leaves behind: it cannot say which of
+them holds the seat, and another node can.
 
 #### `GET /iam/check` walks the whole directory
 
@@ -944,8 +945,8 @@ what it could not read.
 
 `kind` is one of `no_people_manage_holder` (listed first: nobody left who can
 administer the company except through a Tier A token),
-`person_without_credential`, `binding_dangling`,
-`grant_clamped_by_ceiling`, `claim_duplicated` and `claim_orphaned`; the table
+`person_without_credential`, `binding_dangling` and
+`grant_clamped_by_ceiling`; the table
 in [`crewlet iam check`](cli.md#crewlet-iam-check) says what each one means and
 what to do.
 
@@ -2560,7 +2561,7 @@ is the `fleet:operate` [`fleet`](#get-fleet) answer, and what each alarm measure
   "posture": "serve",
   "applied_epoch": 41,
   "seats": ["ceo", "cto"],
-  "identity_duty_seconds": {"iam_sweep": 3600, "iam_claims": 3600},
+  "identity_duty_seconds": {"iam_sweep": 3600},
   "unproven_seconds": {"eng": 312.5},
   "nodes": 3,
   "alarms": {"count": 1, "worst": "trim_blocked", "worst_domain": "tracker"},

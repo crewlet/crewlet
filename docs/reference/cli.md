@@ -435,7 +435,7 @@ variable at all.
 | `revoke-credential ID` | Withdraw one credential, naming its owner with `-person`. Run with a machine token, it withdraws machine tokens only |
 | `reset-mfa ID` | Clear the second factor **and** end every session, because clearing alone leaves the ones opened with it live |
 | `invalidate-all` | Invalidate every session and every machine token in the company. The restore runbook's last step — it ends bearers and nothing else, so a removal, a suspension, a withdrawn credential or a reduced grant the restore rolled back is re-applied by hand before it ([Backups & Restore](../guides/backup.md#the-last-step-is-crewlet-iam-invalidate-all)) — and the token takes `fleet:operate` **and** `people:manage`; the Tier A tokens in the config file are untouched |
-| `check` | What is wrong with this company's access: no administrator, people with no credential, dangling bindings (a seat the running company no longer holds as a human seat), grants this node's ceiling clamps, duplicated and orphaned claims. A binding a node that runs no company yet cannot judge is counted and said first rather than reported either way. See [below](#crewlet-iam-check) |
+| `check` | What is wrong with this company's access: no administrator, people with no credential, dangling bindings (a seat the running company no longer holds as a human seat), grants this node's ceiling clamps. A binding a node that runs no company yet cannot judge is counted and said first rather than reported either way. See [below](#crewlet-iam-check) |
 | `audit` | The identity estate's own trail. `-person`, `-event`, `-since POSITION`, `-at TIME`, `-limit`. The actor column names the credential beside them where the entry records one — `ana.admin (through pat:…)` for something their machine token did |
 
 ### Flags
@@ -497,13 +497,13 @@ repairs: each finding is somebody's decision.
 | `person_without_credential` | Somebody active who cannot sign in: an invitation never redeemed, an enrolment nobody finished | Re-invite them, or remove them |
 | `binding_dangling` | Somebody bound to a seat the org chart no longer holds | `unbind`, or `bind` them elsewhere |
 | `grant_clamped_by_ceiling` | A grant somebody's row declares and this node's `api.auth.max_grants` withholds | Legal while a fleet rolls out a ceiling change; otherwise align the row and the ceiling |
-| `claim_duplicated` | An address, a login or a seat more than one person holds. `WHO` is the claim and every holder; an address is named by its kind alone, because the report carries no form of it | Decide who keeps it, and release it from the others |
-| `claim_orphaned` | Claims an enrolment took before it stopped, held for over an hour by nobody who can use them | `remove` the id, which releases them |
 
-A duplicate cannot come from ordinary traffic — the broker arbitrates every
-claim — and **can** come from a restore or a reanchor. A report that could not
-read the claims answers 503 rather than a clean bill, because it is the only
-place a duplicate is ever named.
+A login, an address or a seat two people hold is not a finding: every one is
+decided on one subject against every row, so ordinary traffic never produces
+one. A node holding a record it cannot decode, or a restore, can leave two rows
+holding one; a sign-in, a lookup or a seat listing that meets them answers
+`503` rather than picking either, and changing the value on all but one of
+them (`rename`, `bind`) is the repair.
 
 ## `crewlet secrets`
 

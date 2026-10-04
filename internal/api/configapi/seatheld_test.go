@@ -62,9 +62,9 @@ func withoutSeat(t *testing.T, name string) string {
 func heldSurface(t *testing.T) (*surface, string) {
 	t.Helper()
 	s := newSurface(t)
-	s.held = map[string][]configapi.SeatHolder{
-		"jane": {{Person: "p-jane", Login: "jane.doe", Stage: iam.StageActive}},
-		"ana":  {{Person: "p-ana", Login: "ana.ruiz", Stage: iam.StageSuspended}},
+	s.held = map[string]configapi.SeatHolder{
+		"jane": {Person: "p-jane", Login: "jane.doe", Stage: iam.StageActive},
+		"ana":  {Person: "p-ana", Login: "ana.ruiz", Stage: iam.StageSuspended},
 	}
 	return s, s.seed(t, heldDoc)
 }
@@ -81,8 +81,8 @@ func assertSeatHeld(t *testing.T, s *surface, before string, code int, body, sea
 		t.Fatal(err)
 	}
 	held, _ := refusal["held"].(map[string]any)
-	holders, _ := held[seat].([]any)
-	if len(holders) != 1 || !strings.Contains(body, login) {
+	holder, _ := held[seat].(map[string]any)
+	if holder["login"] != login {
 		t.Errorf("the refusal's held = %v, want %s held by %s", held, seat, login)
 	}
 	if active := s.activeID(t); active != before {
@@ -135,8 +135,8 @@ func TestRemovingAHeldSeatIsRefusedNamingThePerson(t *testing.T) {
 		s := newSurface(t)
 		earlier := s.seed(t, withoutSeat(t, "Jane Doe"))
 		before := s.seed(t, heldDoc)
-		s.held = map[string][]configapi.SeatHolder{
-			"jane": {{Person: "p-jane", Login: "jane.doe", Stage: iam.StageActive}},
+		s.held = map[string]configapi.SeatHolder{
+			"jane": {Person: "p-jane", Login: "jane.doe", Stage: iam.StageActive},
 		}
 		res := s.do(t, http.MethodPost, "/config/revisions/"+earlier+"/revert", "", nil)
 		assertSeatHeld(t, s, before, res.Code, res.Body.String(), "jane", "jane.doe")
